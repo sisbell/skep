@@ -305,7 +305,9 @@ fn stage_write_composes_into_one_transaction_off_the_working_slice() {
             ));
             let r2 = stage_write(stg.working().content(), &a2, val(b"two"))?;
             stg.push(r2.into());
-            Ok(())
+            // Pins the closure's error parameter: `?` on stage_write only
+            // constrains `E: From<ContentError>`, which infers nothing.
+            Ok::<(), ContentError>(())
         })
         .expect("composite commits");
     let s = k.snapshot();

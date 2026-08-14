@@ -1,0 +1,409 @@
+//! §B/§C — validation, classification, field & containment projection, and
+//! decomposition (ASN-0045; ASN-0034: T4/T4b, T6, T7).
+
+use std::error::Error;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+
+use serde::{Deserialize, Serialize};
+
+use crate::tumbler::{is_prefix, nat_is_zero, Nat, Tumbler};
+
+/// The hierarchical level of a T4-valid address: zeros = 0/1/2/3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Level {
+    Node,
+    Account,
+    Document,
+    Element,
+}
+
+/// Total classification of an arbitrary carrier tumbler (ASN-0045): the four
+/// levels plus the disjoint `Invalid` tag. A five-way sum, not four booleans:
+/// Partition (exactly-one-level) and Off-Domain Vacuity hold *by construction*
+/// because a function is single-valued and `Invalid` is a disjoint tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Class {
+    Node,
+    Account,
+    Document,
+    Element,
+    Invalid,
+}
+
+/// The four T4-validity clauses (T4): no leading zero (`t₁ ≠ 0`), no trailing
+/// zero (`t_{#t} ≠ 0`), no adjacent zeros, and `zeros(t) ≤ 3`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum T4Clause {
+    LeadingZero,
+    TrailingZero,
+    AdjacentZeros,
+    OverDepth,
+}
+
+impl fmt::Display for T4Clause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            T4Clause::LeadingZero => "LeadingZero",
+            T4Clause::TrailingZero => "TrailingZero",
+            T4Clause::AdjacentZeros => "AdjacentZeros",
+            T4Clause::OverDepth => "OverDepth",
+        })
+    }
+}
+
+/// [`validate`] rejection: the violated T4 clause(s) ONLY — it does NOT carry
+/// the rejected `Tumbler` (interface contract: a caller that needs the input
+/// back must clone before calling).
+///
+/// OPEN DECISION (design: "first-failure vs full-set"): carries the **full
+/// set** of violated clauses, each at most once, in `T4Clause` declaration
+/// order — the conservative, information-preserving reading of "clause(s)"
+/// (clauses co-occur: `[0]` violates both `LeadingZero` and `TrailingZero`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct T4Error {
+    /// The violated clauses, in `T4Clause` declaration order.
+    pub clauses: Vec<T4Clause>,
+}
+
+impl fmt::Display for T4Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tumbler is not T4-valid; violated clause(s):")?;
+        for (i, c) in self.clauses.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, " {c}")?;
+        }
+        Ok(())
+    }
+}
+impl Error for T4Error {}
+
+/// One fused left-to-right O(#t) scan with O(1) carried state (design §2):
+/// the separator count plus all four T4 clauses in a single pass — a *scan,
+/// not a parse*, cheap because it streams, not because the input is bounded.
+/// The count is `usize`, unbounded per T0(b): garbage with hundreds of zeros
+/// classifies Invalid, never wraps, never faults. No early exit — `zeros(t)`
+/// must report the true count.
+fn t4_scan(t: &Tumbler) -> (usize, Vec<T4Clause>) {
+    let comps = t.comps();
+    let mut zero_count = 0usize;
+    let mut adjacent = false;
+    let mut prev_zero = false;
+    for c in comps {
+        if nat_is_zero(c) {
+            if prev_zero {
+                adjacent = true;
+            }
+            zero_count += 1;
+            prev_zero = true;
+        } else {
+            prev_zero = false;
+        }
+    }
+    let mut clauses = Vec::new();
+    if nat_is_zero(&comps[0]) {
+        clauses.push(T4Clause::LeadingZero);
+    }
+    if nat_is_zero(&comps[comps.len() - 1]) {
+        clauses.push(T4Clause::TrailingZero);
+    }
+    if adjacent {
+        clauses.push(T4Clause::AdjacentZeros);
+    }
+    if zero_count > 3 {
+        clauses.push(T4Clause::OverDepth);
+    }
+    (zero_count, clauses)
+}
+
+/// Separator (zero-component) count — UNBOUNDED per T0(b): `usize`, never
+/// `u8` (a fixed-width counter could wrap a 259-zero count to 3 and mis-read
+/// garbage as Element).
+pub fn zeros(t: &Tumbler) -> usize {
+    t4_scan(t).0
+}
+
+/// T4 well-formedness: all four clauses hold. The depth ceiling and every
+/// T6/T7 field-read rest entirely on the `zeros ≤ 3` clause checked here —
+/// the only thing stopping a four-separator tumbler from being read as a
+/// phantom fifth level.
+pub fn is_t4_valid(t: &Tumbler) -> bool {
+    t4_scan(t).1.is_empty()
+}
+
+fn level_of_zeros(z: usize) -> Level {
+    match z {
+        0 => Level::Node,
+        1 => Level::Account,
+        2 => Level::Document,
+        3 => Level::Element,
+        _ => unreachable!("T4-valid tumblers have zeros ≤ 3"),
+    }
+}
+
+/// Total classifier (ASN-0045): never faults; garbage yields `Class::Invalid`
+/// — bare, no clause (the total form needs only the tag; diagnostics belong
+/// to [`validate`]). Membership of the level in {0,1,2,3} comes from the
+/// arithmetic bound `zeros ≤ 3`, never from a level-name bijection.
+pub fn classify(t: &Tumbler) -> Class {
+    let (z, clauses) = t4_scan(t);
+    if !clauses.is_empty() {
+        return Class::Invalid;
+    }
+    match z {
+        0 => Class::Node,
+        1 => Class::Account,
+        2 => Class::Document,
+        3 => Class::Element,
+        _ => unreachable!("no clause violated ⇒ zeros ≤ 3"),
+    }
+}
+
+/// Admission constructor — the validate-and-classify front door, one fused
+/// scan (design §2). CONSUMES `t`; on the error path the input is dropped and
+/// [`T4Error`] carries only the violated clause(s) — clone before calling if
+/// you need the rejected tumbler back.
+pub fn validate(t: Tumbler) -> Result<Address, T4Error> {
+    let (z, clauses) = t4_scan(&t);
+    if clauses.is_empty() {
+        Ok(Address {
+            tumbler: t,
+            level: level_of_zeros(z),
+        })
+    } else {
+        Err(T4Error { clauses })
+    }
+}
+
+/// A T4-valid, classified tumbler — the recommended hybrid representation.
+///
+/// INVARIANT: every `Address` is T4-valid. Discharged at each mint site:
+/// *checked* by [`validate`] and [`crate::elem_addr`], *preserved* by
+/// [`parent`], [`document_of`], and [`crate::checked_inc`], and *re-checked*
+/// at the deserialization boundary (the validating `Deserialize` routes
+/// through `validate` and re-derives `level`).
+///
+/// `level` is a **derived constant** on an immutable value — a standing fact,
+/// never a stale-able cache (ASN-0045 level stability). Serde: serializes as
+/// its **bare tumbler** (`level` is never persisted; journal entries stay
+/// flat tumblers exactly as the data model prescribes) and deserializes
+/// through `validate`, so a stored level can never disagree with
+/// [`classify`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "Tumbler", try_from = "Tumbler")]
+pub struct Address {
+    tumbler: Tumbler,
+    level: Level,
+}
+
+/// Identity is the tumbler (T3): `level` is a function of it and cannot
+/// disagree, so hashing the tumbler alone is consistent with `Eq`. (A manual
+/// impl rather than a derive so `Level` need not carry `Hash`, which the
+/// interface does not declare for it.)
+impl Hash for Address {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.tumbler.hash(state);
+    }
+}
+
+/// The tumbler order (T1), delegating to `Tumbler::cmp` — `level` plays no
+/// part (it is a function of the tumbler and cannot disagree). Lets M3's
+/// frontier comparisons and M8's identity-ordered cursors order addresses
+/// directly, with no `.tumbler()` detour.
+impl Ord for Address {
+    fn cmp(&self, other: &Address) -> std::cmp::Ordering {
+        self.tumbler.cmp(&other.tumbler)
+    }
+}
+
+/// Delegates to [`Ord`] (Ord/PartialOrd consistency).
+impl PartialOrd for Address {
+    fn partial_cmp(&self, other: &Address) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Serialization shadow: an `Address` journals as its bare, flat `Tumbler`.
+impl From<Address> for Tumbler {
+    fn from(a: Address) -> Tumbler {
+        a.tumbler
+    }
+}
+
+/// Deserialization mint path (the serde `try_from` shadow): re-validates and
+/// re-derives `level` — no unguarded mint on journal replay.
+impl TryFrom<Tumbler> for Address {
+    type Error = T4Error;
+    fn try_from(t: Tumbler) -> Result<Address, T4Error> {
+        validate(t)
+    }
+}
+
+impl Address {
+    /// The underlying flat tumbler — the storage/journal key form.
+    pub fn tumbler(&self) -> &Tumbler {
+        &self.tumbler
+    }
+
+    /// The derived hierarchical level (ASN-0045 level stability).
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
+    /// 0-based indices of the separator (zero) components — at most 3 for a
+    /// valid address. Recomputed on demand: `#t` is small, and the design
+    /// defers any parsed-field hint until a containment path proves hot.
+    fn separators(&self) -> Vec<usize> {
+        self.tumbler
+            .comps()
+            .iter()
+            .enumerate()
+            .filter(|&(_, c)| nat_is_zero(c))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The field between the `n`-th separator (1-based) and the next
+    /// separator or the end; `None` when fewer than `n` separators exist
+    /// (T4b: present-or-absent is encoded by `Option`, never a sentinel).
+    fn field(&self, n: usize) -> Option<&[Nat]> {
+        let seps = self.separators();
+        if seps.len() < n {
+            return None;
+        }
+        let start = seps[n - 1] + 1;
+        let end = seps.get(n).copied().unwrap_or(self.tumbler.len());
+        Some(&self.tumbler.comps()[start..end])
+    }
+
+    /// T4b `N` — always present: the components before the first separator.
+    pub fn node_field(&self) -> &[Nat] {
+        let comps = self.tumbler.comps();
+        let end = comps.iter().position(nat_is_zero).unwrap_or(comps.len());
+        &comps[..end]
+    }
+
+    /// T4b `U` — `Some` iff zeros ≥ 1.
+    pub fn account_field(&self) -> Option<&[Nat]> {
+        self.field(1)
+    }
+
+    /// T4b `D` — `Some` iff zeros ≥ 2 (the full document field, version
+    /// components included).
+    pub fn document_field(&self) -> Option<&[Nat]> {
+        self.field(2)
+    }
+
+    /// T4b `E` — `Some` iff zeros = 3 (T4 caps zeros at 3, so ≥ 3 ⟺ = 3);
+    /// nonempty for a valid address (no trailing zero).
+    pub fn element_field(&self) -> Option<&[Nat]> {
+        self.field(3)
+    }
+
+    /// `element_field[0]` (T7): the subspace id — 1 = text, 2 = link
+    /// (disjoint by `1 < 2` at this position; no enforcement needed).
+    /// Returns an owned `Nat`, per the interface signature (the component is
+    /// cloned).
+    pub fn subspace(&self) -> Option<Nat> {
+        self.element_field().map(|e| e[0].clone())
+    }
+}
+
+/// T6(a): `N(a) = N(b)` — decidable from the two addresses alone
+/// (`tumbleraccounteq`-style truncate-and-compare; the basis of
+/// coordination-free operation).
+pub fn same_node(a: &Address, b: &Address) -> bool {
+    a.node_field() == b.node_field()
+}
+
+/// T6(b): zeros ≥ 1 on BOTH ∧ N, U equal. FIELD-ABSENCE ⇒ NO: if either
+/// operand lacks an account field the answer is `false` — never
+/// `None == None ⇒ true` (two Node addresses do NOT report "same account").
+pub fn same_account(a: &Address, b: &Address) -> bool {
+    match (a.account_field(), b.account_field()) {
+        (Some(ua), Some(ub)) => same_node(a, b) && ua == ub,
+        _ => false,
+    }
+}
+
+/// T6(c): zeros ≥ 2 on BOTH ∧ N, U, D equal (field-absence ⇒ NO).
+pub fn same_document(a: &Address, b: &Address) -> bool {
+    match (a.document_field(), b.document_field()) {
+        (Some(da), Some(db)) => same_account(a, b) && da == db,
+        _ => false,
+    }
+}
+
+/// T6(d): zeros ≥ 2 on BOTH ∧ `a` lies under `b`'s document prefix
+/// `N·0·U·0·D` (field-absence ⇒ NO). This is the *containment* projection:
+/// the document field records who allocated under whom, NOT what was copied
+/// from what — derivation history is a separate version graph (M3/M5),
+/// explicitly not M1's.
+pub fn under_document(a: &Address, b: &Address) -> bool {
+    if a.document_field().is_none() || b.document_field().is_none() {
+        return false;
+    }
+    let doc_b = document_of(b).expect("document field present ⇒ zeros ≥ 2");
+    is_prefix(doc_b.tumbler(), a.tumbler())
+}
+
+/// §C — the longest T4-valid proper prefix: drop the last component and, if
+/// that exposes a trailing separator, drop it too (at most a two-component
+/// peel — a valid address has no adjacent zeros). A *single structural peel*,
+/// NOT a guaranteed level-coarsening (a full content element peels to its
+/// subspace-base, still Element-class) and NOT the derivation parent. `None`
+/// only for a single-component node. Preserves the Address validity
+/// invariant (routed through [`validate`] defensively).
+pub fn parent(a: &Address) -> Option<Address> {
+    let comps = a.tumbler().comps();
+    if comps.len() == 1 {
+        return None;
+    }
+    let mut end = comps.len() - 1; // drop the last component
+    if nat_is_zero(&comps[end - 1]) {
+        end -= 1; // an exposed trailing separator goes too
+    }
+    let prefix = Tumbler::from_vec(comps[..end].to_vec());
+    Some(validate(prefix).expect("a peeled prefix of a T4-valid address is T4-valid"))
+}
+
+/// §C — the origin **Document** address: the zeros = 2 prefix `N·0·U·0·D`
+/// (the FULL document field, version components included). `None` when
+/// `zeros(a) < 2`; a Document input returns itself. The one-call
+/// level-coarsening M6's SHOWORIGIN attribution needs — address
+/// *construction* stays in M1, so M6 never reassembles from raw
+/// `document_field()` components. Preserves the validity invariant.
+pub fn document_of(a: &Address) -> Option<Address> {
+    let comps = a.tumbler().comps();
+    let mut seps = comps
+        .iter()
+        .enumerate()
+        .filter(|&(_, c)| nat_is_zero(c))
+        .map(|(i, _)| i);
+    seps.next()?; // zeros ≥ 1
+    seps.next()?; // zeros ≥ 2
+    match seps.next() {
+        None => Some(a.clone()), // zeros = 2: already the Document
+        Some(z3) => {
+            let prefix = Tumbler::from_vec(comps[..z3].to_vec());
+            Some(
+                validate(prefix)
+                    .expect("the zeros=2 prefix of a T4-valid address is a valid Document"),
+            )
+        }
+    }
+}
+
+/// §C — `t_{#t}`: the local sibling index at the current field. Total on the
+/// carrier (tumblers are nonempty, T0).
+pub fn ordinal(t: &Tumbler) -> &Nat {
+    t.comps().last().expect("T0: tumblers are nonempty")
+}
+
+/// §C — the hierarchical level enum: an ALIAS of `a.level()`, NOT a numeric
+/// nesting count.
+pub fn depth(a: &Address) -> Level {
+    a.level()
+}

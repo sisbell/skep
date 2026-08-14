@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/skep-namespace",
     "crates/skep-kernel",
     "crates/skep-address",
 ]

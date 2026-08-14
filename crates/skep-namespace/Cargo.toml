@@ -1,0 +1,25 @@
+[package]
+name = "skep-namespace"
+version = "0.1.0"
+edition = "2021"
+description = "M3 — the authoritative permanent name space: single minting authority (frontier allocation), entity registry, and principal registry with ω ownership resolution"
+
+[dependencies]
+# The design's mandated shapes (§Core data model): persistent `im` collections
+# for the three authoritative slices (cheap structurally-shared snapshots; the
+# serde feature because all three fields are ordinary Serialize/Deserialize —
+# none is #[serde(skip)]); num-traits because Nat::zero()/one()/is_zero() are
+# trait fns the frontier math keeps in scope (§1/§2).
+im = { version = "15", features = ["serde"] }
+num-traits = "0.2"
+serde = { version = "1", features = ["derive"] }
+# M1 — M3 holds no address algebra of its own (§Dependencies & seams).
+skep-address = { path = "../skep-address" }
+# M2 — M3 rides the kernel for atomicity, ordering, durability, recovery (§8).
+skep-kernel = { path = "../skep-kernel" }
+
+[dev-dependencies]
+# bincode is M2's actual wire format — the round-trip tests exercise the real
+# journal/checkpoint encoding; tempfile hosts the durable-recovery test.
+bincode = "1.3"
+tempfile = "3"

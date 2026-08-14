@@ -1,0 +1,42 @@
+[package]
+name = "skep-content"
+version = "0.1.0"
+edition = "2021"
+description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to opaque content value, plus the two point queries over it (contains / value_at)"
+
+[features]
+# Open build decision #4 — the optional defensive content-address assertion
+# (level == Element ∧ subspace == s_C) in stage_write/write, plus the
+# NotContentAddress error variant and the S_C_SUBSPACE numeral it compares
+# against. Off by default; when on, the check is a debug_assert! (the design's
+# recommended sub-choice) — fatal in debug/test builds, free in release.
+content-addr-guard = []
+
+[dependencies]
+# The design's mandated slice shape (§Core data model): a persistent HAMT for
+# the address→value map — apply_write shares all untouched structure with the
+# prior slice, so live snapshots pinning old Worlds are nearly free. The serde
+# feature because im::HashMap's Serialize/Deserialize impls are feature-gated
+# and the slice is fully serialized in checkpoints (no skip-serialize).
+im = { version = "15", features = ["serde"] }
+# Open build decision #5: the FixedHasher alias's concrete pick —
+# BuildHasherDefault<FxHasher>, fixed-seed and deterministic, so checkpoint
+# serialization is reproducible across runs.
+rustc-hash = "2"
+# rc for the Arc<[u8]> impls behind Val (§Types & errors).
+serde = { version = "1", features = ["derive", "rc"] }
+# M1 — Tumbler/Address/document_of; M4 holds no address algebra of its own.
+skep-address = { path = "../skep-address" }
+# M2 — M4 rides the kernel for atomicity/ordering/durability/recovery; it
+# owns no journal, replay loop, snapshot, or recovery story of its own.
+skep-kernel = { path = "../skep-kernel" }
+# M3 — ONLY the content-namespace LockKey constructor
+# (M3State::content_lock_key), the workspace's one source of those key bytes;
+# see the OPEN DECISION note at `write`. No M3 state is ever read.
+skep-namespace = { path = "../skep-namespace" }
+
+[dev-dependencies]
+# bincode is M2's actual wire format — the round-trip tests exercise the real
+# journal/checkpoint encoding; tempfile hosts the durable-recovery test.
+bincode = "1.3"
+tempfile = "3"

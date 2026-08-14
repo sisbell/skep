@@ -365,6 +365,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-namespace"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "im",
+ "num-traits",
+ "serde",
+ "skep-address",
+ "skep-kernel",
+ "tempfile",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

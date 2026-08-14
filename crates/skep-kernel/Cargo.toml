@@ -1,0 +1,28 @@
+[package]
+name = "skep-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "M2 — generic transactional substrate: WAL + atomic-install + keyed-serialization + snapshot kernel over an engine-supplied WorldState"
+
+[dependencies]
+# The design's mandated crates (M2 §Dependencies & seams): lock-free root
+# installs (arc-swap), the applier and checkpoint mutexes (parking_lot — non-
+# poisoning, so the §3 unwind guard is the enforcement), the serde bounds on
+# WorldState, and CRC32C for frame crcs and the marker records_checksum.
+arc-swap = "1"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+crc32c = "0.6"
+# Beyond the design's minimal list, of necessity (reported as build decisions):
+# serde alone produces no bytes — bincode 1.x (fixint LE, deterministic) is the
+# concrete wire format for frame payloads, W::Record bytes, and checkpoint
+# bodies; fs2 supplies the advisory flock realizing open()'s exclusive journal
+# ownership (auto-released on process death, unlike a create_new sentinel).
+bincode = "1.3"
+fs2 = "0.4"
+
+[dev-dependencies]
+# The design names `im` for W's persistent slices; M2 itself is generic over W,
+# so im appears only in tests (a realistic structurally-shared toy World).
+im = { version = "15", features = ["serde"] }
+tempfile = "3"

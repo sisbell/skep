@@ -410,6 +410,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-conformance"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-discovery",
+ "skep-engine",
+ "skep-febe",
+ "skep-kernel",
+ "skep-links",
+ "skep-namespace",
+ "skep-retrieval",
+]
+
+[[package]]
 name = "skep-content"
 version = "0.1.0"
 dependencies = [

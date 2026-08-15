@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use skep_address::Address;
 
-use crate::tum::{addr, addr_str, parse_dotted};
+use crate::tum::{addr_str, parse_dotted};
 
 /// One recorded α-failure (a finding, not a panic).
 #[derive(Clone, Debug)]
@@ -83,6 +83,22 @@ impl Alpha {
     /// ordinal⟩`, so the local part carries over structurally). A miss is
     /// recorded as an `alpha-never-bound` finding.
     pub fn translate(&mut self, golden: &str) -> Option<Address> {
+        if let Some(a) = self.peek_translate(golden) {
+            return Some(a);
+        }
+        if parse_dotted(golden).is_some() {
+            self.findings.push(AlphaFinding {
+                class: "alpha-never-bound",
+                detail: format!("reference to never-bound golden address {golden}"),
+            });
+        }
+        None
+    }
+
+    /// [`Alpha::translate`] without the finding on a miss — for the
+    /// comparators' opportunistic-binding pass, where absence is the signal
+    /// that a result-carried address is bindable, not an error yet.
+    pub fn peek_translate(&self, golden: &str) -> Option<Address> {
         if let Some(a) = self.fwd.get(golden) {
             return Some(a.clone());
         }
@@ -112,16 +128,17 @@ impl Alpha {
                 return skep_address::validate(lifted).ok();
             }
         }
-        self.findings.push(AlphaFinding {
-            class: "alpha-never-bound",
-            detail: format!("reference to never-bound golden address {golden}"),
-        });
         None
     }
 
     /// Peek without recording a finding (used where absence is an answer).
     pub fn peek(&self, golden: &str) -> Option<Address> {
         self.fwd.get(golden).cloned()
+    }
+
+    /// Is this skep address already bound to some golden name?
+    pub fn is_bound_skep(&self, a: &Address) -> bool {
+        self.rev.contains_key(&addr_str(a))
     }
 
     /// Render a skep address for the report: its golden name when bound,
@@ -150,9 +167,4 @@ impl CompsVec for skep_address::Tumbler {
 /// string is anything that parses fully as dotted decimal.
 pub fn looks_like_address(s: &str) -> bool {
     parse_dotted(s).is_some()
-}
-
-/// Build an address from raw components (used by translate internals).
-pub fn address_from(comps: &[u64]) -> Option<Address> {
-    addr(comps)
 }

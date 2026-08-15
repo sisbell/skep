@@ -51,3 +51,26 @@ fn harness_integrity() {
     let summary = std::fs::metadata(&out.summary).expect("summary.md written");
     assert!(summary.len() > 0, "summary.md must be non-empty");
 }
+
+/// Determinism: the same scenarios replay to byte-identical report records.
+/// The no-archival policy for reports rests on this — a re-run IS the
+/// archive. A representative slice (every 10th scenario, ≥ one per run) is
+/// played twice into rendered JSONL and compared byte for byte.
+#[test]
+fn report_is_deterministic() {
+    use skep_conformance::allowlist;
+    use skep_conformance::loader::load_all;
+    use skep_conformance::report::render_jsonl;
+    use skep_conformance::runner::run_scenarios;
+
+    let golden = skep_conformance::conformance_dir().join("golden");
+    let allow_path = skep_conformance::conformance_dir().join("allowlist.toml");
+    let scenarios = load_all(&golden).expect("goldens load");
+    let allow = allowlist::load(&allow_path).expect("allowlist loads");
+
+    let subset: Vec<_> = scenarios.into_iter().step_by(10).collect();
+    assert!(!subset.is_empty());
+    let first = render_jsonl(&run_scenarios(&subset, &allow));
+    let second = render_jsonl(&run_scenarios(&subset, &allow));
+    assert_eq!(first, second, "two identical runs must render byte-identical reports");
+}

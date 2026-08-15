@@ -91,4 +91,7 @@ pub struct ScenarioRecord {
     pub first_failure: Option<(usize, String, String)>,
     /// Populated only on `Verdict::Error` — the panic payload.
     pub error: Option<String>,
+    /// Grounding-pre-pass inferences applied before op 0 (implied creates,
+    /// derived initial content, expansion plans) — auditable per scenario.
+    pub groundings: Vec<String>,
 }

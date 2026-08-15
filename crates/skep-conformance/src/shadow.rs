@@ -1,20 +1,20 @@
 //! The golden-side shadow: per golden document, the byte sequence its
 //! content subspace holds after each recorded edit, plus the symbolic-name
-//! registry ("source", "target", "original", "version", "doc1"…) the
-//! recording scripts used in place of addresses.
+//! registry ("source", "target", "doc1"…) and the CURRENT-DOCUMENT REGISTER
+//! the recording scripts kept implicitly (ops without a `doc` field target
+//! the most recently *named* document — named by a create/open/version
+//! result, an explicit doc field, or an expectation's docid).
 //!
 //! The shadow exists ONLY to translate text-denoted references the goldens
-//! use ("source_text": locate a substring; "delete by text"; append-at-end
-//! positions; whole-extent spans). It is computed from the RECORDED ops
-//! alone — never from skep responses — so translation stays independent of
-//! skep's behavior and a skep divergence cannot bend later translations.
-//! It replicates exactly the sequence bookkeeping the recording scripts
-//! themselves did; it adds no semantics of its own.
+//! use. It is computed from the RECORDED ops (plus the grounding pre-pass's
+//! inferred setup) — never from skep responses — so translation stays
+//! independent of skep's behavior and a skep divergence cannot bend later
+//! translations.
 
 use std::collections::BTreeMap;
 
 /// Per-document shadow state, keyed by GOLDEN docid string.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DocShadow {
     /// Content-subspace bytes, ordinal i ↦ text[i-1].
     pub text: Vec<u8>,
@@ -22,18 +22,24 @@ pub struct DocShadow {
     pub links: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Shadow {
     docs: BTreeMap<String, DocShadow>,
     /// Symbolic name → golden docid ("source" → "1.1.0.1.0.1").
     names: BTreeMap<String, String>,
     /// Golden docids in creation order (for "doc1"/"first"/"second" fallbacks).
     pub created: Vec<String>,
-    /// The golden id of the most recently created link (implicit follow_link
-    /// target in some scenarios).
+    /// The current-document register (see module docs).
+    current: Option<String>,
+    /// The golden id of the most recently created link.
     pub last_link: Option<String>,
     /// version source memo: version docid → source docid.
     pub version_of: BTreeMap<String, String>,
+    /// "A->B"-style traversal edges: (from-name, to-name) → golden link id.
+    pub arrow_links: BTreeMap<(String, String), String>,
+    /// Root documents created (drives synthetic golden-id generation for
+    /// `create_documents` ops that recorded no results).
+    root_count: u64,
 }
 
 impl Shadow {
@@ -41,52 +47,127 @@ impl Shadow {
         Shadow::default()
     }
 
+    // ── creation & naming ──
+
     pub fn create_doc(&mut self, golden: &str, name: Option<&str>) {
         self.docs.entry(golden.to_string()).or_default();
         self.created.push(golden.to_string());
+        self.root_count += 1;
         if let Some(n) = name {
             self.bind_name(n, golden);
         }
+        self.current = Some(golden.to_string());
+    }
+
+    /// Synthetic golden id for a create that recorded none: the next root
+    /// ordinal under udanax's default account ("1.1.0.1.0.<n>"), matching
+    /// the numbering later recorded creates in the same scenario continue
+    /// (links/search_multiple_links_selective_removal: 3 unrecorded creates,
+    /// then a recorded "1.1.0.1.0.4").
+    pub fn synthesize_docid(&self) -> String {
+        format!("1.1.0.1.0.{}", self.root_count + 1)
     }
 
     pub fn bind_name(&mut self, name: &str, golden: &str) {
         self.names.entry(name.to_string()).or_insert_with(|| golden.to_string());
     }
 
+    /// The current-document register.
+    pub fn scoped(&self) -> Option<String> {
+        self.current.clone().or_else(|| self.created.last().cloned())
+    }
+
+    /// Point the register at a document (any op that names one calls this).
+    pub fn set_current(&mut self, golden: &str) {
+        if self.docs.contains_key(golden) {
+            self.current = Some(golden.to_string());
+        }
+    }
+
     /// Resolve a doc reference: a dotted address passes through; a symbolic
     /// name resolves via the registry, then via the recording scripts'
-    /// standing conventions (documented here because the JSON leaves them
-    /// implicit): "source"/"doc1"/"doc"/"original" → first created,
-    /// "target"/"doc2" → second, "doc3" → third, "version" → the last
-    /// version created. `None` when nothing fits — the caller records it.
+    /// standing conventions: "source"/"doc1"/"doc"/"original"/A → first
+    /// created, "target"/"doc2"/B → second, "doc3"/C → third, "version" →
+    /// the last version created, "same doc"/"current" → the register.
+    /// `None` when nothing fits — the caller records it.
     pub fn resolve_doc(&self, r: &str) -> Option<String> {
-        if crate::alpha::looks_like_address(r) {
+        if crate::fields::is_link_address(r) {
+            return None; // a link id is never a document reference
+        }
+        if crate::tum::parse_dotted(r).is_some() {
             return Some(r.to_string());
         }
         if let Some(g) = self.names.get(r) {
             return Some(g.clone());
         }
         let nth = |i: usize| self.created.get(i).cloned();
+        // Role names prefer a REGISTERED name containing the role over the
+        // positional convention: a scenario naming its fourth doc
+        // "shared_target" means THAT doc by "target", not doc #2
+        // (links/search_multiple_links_selective_removal).
         match r {
-            "source" | "doc" | "doc1" | "original" | "first" | "home" => nth(0),
-            "target" | "doc2" | "second" | "dest" | "destination" => nth(1),
-            "doc3" | "third" => nth(2),
-            "version" | "copy" => self
-                .version_of
-                .keys()
-                .last()
-                .cloned()
-                .or_else(|| nth(1)),
-            _ => None,
+            "source" | "doc" | "doc1" | "original" | "first" | "home" | "A" | "a" => {
+                self.find_named_containing_role(r).or_else(|| nth(0))
+            }
+            "target" | "doc2" | "second" | "dest" | "destination" | "B" | "b" => {
+                self.find_named_containing_role(r).or_else(|| nth(1))
+            }
+            "doc3" | "third" | "C" | "c" => nth(2),
+            "doc4" | "fourth" | "D" | "d" => nth(3),
+            "same doc" | "current" | "this" | "self" => self.scoped(),
+            "version" | "copy" => self.version_of.keys().last().cloned().or_else(|| nth(1)),
+            _ => {
+                // "sourceN"/"peripheralN" positional group names bound at
+                // group creation; also substring name matches ("target" →
+                // "shared_target") for `by`-clause tokens.
+                self.find_named_containing(r)
+            }
         }
+    }
+
+    /// Role-containment lookup for the standing role words only ("source",
+    /// "target"): single letters and doc-N conventions stay positional.
+    fn find_named_containing_role(&self, role: &str) -> Option<String> {
+        if !matches!(role, "source" | "target" | "dest" | "destination" | "original") {
+            return None;
+        }
+        self.names
+            .iter()
+            .find(|(n, _)| n.contains(role))
+            .map(|(_, g)| g.clone())
+    }
+
+    /// A doc whose registered name equals, contains, or is contained in `t`.
+    pub fn find_named_containing(&self, t: &str) -> Option<String> {
+        if t.len() < 2 {
+            return None;
+        }
+        if let Some(g) = self.names.get(t) {
+            return Some(g.clone());
+        }
+        self.names
+            .iter()
+            .find(|(n, _)| n.contains(t) || t.contains(n.as_str()))
+            .map(|(_, g)| g.clone())
     }
 
     pub fn doc(&self, golden: &str) -> Option<&DocShadow> {
         self.docs.get(golden)
     }
 
+    pub fn knows(&self, golden: &str) -> bool {
+        self.docs.contains_key(golden)
+    }
+
     pub fn text_len(&self, golden: &str) -> u64 {
         self.docs.get(golden).map(|d| d.text.len() as u64).unwrap_or(0)
+    }
+
+    pub fn text_string(&self, golden: &str) -> String {
+        self.docs
+            .get(golden)
+            .map(|d| String::from_utf8_lossy(&d.text).into_owned())
+            .unwrap_or_default()
     }
 
     pub fn link_count(&self, golden: &str) -> u64 {
@@ -96,6 +177,16 @@ impl Shadow {
     /// All docids currently shadowed (creation order).
     pub fn all_docs(&self) -> Vec<String> {
         self.created.clone()
+    }
+
+    /// Docs in creation order that hold content, excluding `not` — the
+    /// "which doc did the script copy from" fallback.
+    pub fn content_docs_except(&self, not: &str) -> Vec<String> {
+        self.created
+            .iter()
+            .filter(|g| g.as_str() != not && self.text_len(g) > 0)
+            .cloned()
+            .collect()
     }
 
     /// Locate `needle` in a document's current content; 1-based ordinal of
@@ -109,14 +200,24 @@ impl Shadow {
             if n.is_empty() || n.len() > t.len() {
                 return None;
             }
-            t.windows(n.len())
-                .position(|w| w == n)
-                .map(|p| (g.to_string(), p as u64 + 1))
+            t.windows(n.len()).position(|w| w == n).map(|p| (g.to_string(), p as u64 + 1))
         };
         match doc {
             Some(g) => hit(g),
             None => self.created.iter().find_map(|g| hit(g)),
         }
+    }
+
+    /// Case-insensitive locate in ONE doc, returning the matched width (the
+    /// label grammar says "after first" for content "First ").
+    pub fn find_text_ci(&self, doc: &str, needle: &str) -> Option<(String, u64, u64)> {
+        let d = self.docs.get(doc)?;
+        let hay = String::from_utf8_lossy(&d.text).to_ascii_lowercase();
+        let n = needle.to_ascii_lowercase();
+        if n.is_empty() {
+            return None;
+        }
+        hay.find(&n).map(|p| (doc.to_string(), p as u64 + 1, n.len() as u64))
     }
 
     // ── the edit mirror (pure sequence bookkeeping, matching the recorded
@@ -188,9 +289,7 @@ impl Shadow {
     }
 
     /// Version: the new doc mirrors the source's text AND link count —
-    /// udanax's CREATENEWVERSION copies both subspaces (the golden
-    /// expectations reflect that; whether skep does is exactly what the
-    /// comparisons will show).
+    /// udanax's CREATENEWVERSION copies both subspaces.
     pub fn version(&mut self, src: &str, new_golden: &str) {
         let (text, links) = match self.docs.get(src) {
             Some(d) => (d.text.clone(), d.links),
@@ -200,9 +299,9 @@ impl Shadow {
         self.created.push(new_golden.to_string());
         self.version_of.insert(new_golden.to_string(), src.to_string());
         self.bind_name("version", new_golden);
-        // Late-bind "original" to the source if nothing claimed it yet.
         let src_owned = src.to_string();
         self.names.entry("original".to_string()).or_insert(src_owned);
+        self.current = Some(new_golden.to_string());
     }
 
     pub fn seat_link(&mut self, home_golden: &str) {

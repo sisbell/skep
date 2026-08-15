@@ -13,8 +13,14 @@
 //! * [`loader`] — dynamic-JSON scenario loading; every op label is either
 //!   normalized to a canonical verb or classified `inexpressible` with the
 //!   label recorded, never silently skipped.
+//! * [`ground`] — the shadow-only pre-pass that reconstructs the recording
+//!   scripts' UNRECORDED setup (implied creates, derived initial content,
+//!   macro-op expansion plans) from the scenario's own recorded evidence;
+//!   every inference is tagged into the report's `groundings` list.
 //! * [`translate`] — the canonical-verb catalogue: one boring arm per verb,
-//!   with every adaptation policy named and recorded per-op.
+//!   with every adaptation policy named and recorded per-op ([`fields`]
+//!   holds the shared field-bag / decorated-description grammar both passes
+//!   read through).
 //! * [`alpha`] — the per-scenario golden↔skep address bijection; the three
 //!   α-failure classes are findings with their own report classes.
 //! * [`compare`] — one comparator per result type; a failed comparison
@@ -31,6 +37,8 @@
 pub mod allowlist;
 pub mod alpha;
 pub mod compare;
+pub mod fields;
+pub mod ground;
 pub mod harness;
 pub mod loader;
 pub mod outcome;

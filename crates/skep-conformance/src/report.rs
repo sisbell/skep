@@ -5,11 +5,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::compare::COLLAPSED_SUBSPACE_ANALYSIS;
 use crate::outcome::{ScenarioRecord, Status, Verdict};
 
 fn status_str(s: &Status) -> &'static str {
@@ -22,13 +22,11 @@ fn status_str(s: &Status) -> &'static str {
     }
 }
 
-pub fn write_reports(records: &[ScenarioRecord], out_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
-    fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
-    let jsonl_path = out_dir.join("report.jsonl");
-    let summary_path = out_dir.join("summary.md");
-
-    let mut jsonl = fs::File::create(&jsonl_path)
-        .map_err(|e| format!("create {}: {e}", jsonl_path.display()))?;
+/// The full JSONL body, one line per scenario — a pure function of the
+/// records, so the determinism test can byte-compare two runs without
+/// touching the report files.
+pub fn render_jsonl(records: &[ScenarioRecord]) -> String {
+    let mut out = String::new();
     for r in records {
         let ops: Vec<serde_json::Value> = r
             .ops
@@ -53,15 +51,29 @@ pub fn write_reports(records: &[ScenarioRecord], out_dir: &Path) -> Result<(Path
             "category": r.category,
             "verdict": r.verdict.as_str(),
             "bijection_size": r.bijection_size,
+            "groundings": r.groundings,
             "first_failure": r.first_failure.as_ref().map(|(i, l, d)| json!({
                 "op_index": i, "label": l, "detail": d,
             })),
             "error": r.error,
             "ops": ops,
         });
-        writeln!(jsonl, "{rec}").map_err(|e| format!("write report.jsonl: {e}"))?;
+        out.push_str(&rec.to_string());
+        out.push('\n');
     }
+    out
+}
 
+pub fn write_reports(
+    records: &[ScenarioRecord],
+    out_dir: &Path,
+) -> Result<(PathBuf, PathBuf), String> {
+    fs::create_dir_all(out_dir).map_err(|e| format!("create {}: {e}", out_dir.display()))?;
+    let jsonl_path = out_dir.join("report.jsonl");
+    let summary_path = out_dir.join("summary.md");
+
+    fs::write(&jsonl_path, render_jsonl(records))
+        .map_err(|e| format!("write {}: {e}", jsonl_path.display()))?;
     let summary = render_summary(records);
     fs::write(&summary_path, &summary)
         .map_err(|e| format!("write {}: {e}", summary_path.display()))?;
@@ -83,9 +95,7 @@ pub fn render_table(records: &[ScenarioRecord]) -> String {
         row[i] += 1;
     }
     let mut s = String::new();
-    s.push_str(
-        "| category | pass | allowlisted | divergent | inexpressible | error | total |\n",
-    );
+    s.push_str("| category | pass | allowlisted | divergent | inexpressible | error | total |\n");
     s.push_str("|---|---:|---:|---:|---:|---:|---:|\n");
     let mut totals = [0usize; 5];
     for (cat, row) in &by_cat {
@@ -146,6 +156,25 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
     }
     if !any {
         s.push_str("(none)\n");
+    }
+
+    // The one standing cluster analysis: surfaced once, with the affected
+    // scenarios listed, so the operators adjudicate it in one sitting.
+    let affected: Vec<&ScenarioRecord> = records
+        .iter()
+        .filter(|r| {
+            r.ops
+                .iter()
+                .any(|o| o.note.as_deref() == Some(COLLAPSED_SUBSPACE_ANALYSIS))
+        })
+        .collect();
+    if !affected.is_empty() {
+        s.push_str("\n## Standing analysis — udanax two-subspace vspanset shape\n\n");
+        s.push_str(COLLAPSED_SUBSPACE_ANALYSIS);
+        s.push_str("\n\nAffected scenarios:\n\n");
+        for r in &affected {
+            s.push_str(&format!("- `{}/{}`\n", r.category, r.name));
+        }
     }
 
     s.push_str("\n## Inexpressible scenarios (first untranslatable op)\n\n");

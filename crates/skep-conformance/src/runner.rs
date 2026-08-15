@@ -1,13 +1,15 @@
-//! The per-scenario loop: one fresh engine per scenario, ops played in
-//! order, α-findings folded into the op they arose on, allowlist grants
-//! applied to disagreements, one verdict per scenario. A harness panic is
-//! caught and becomes verdict `error` — a harness bug, never a finding.
+//! The per-scenario loop: the grounding pre-pass, one fresh engine per
+//! scenario, implied creates + lead-in setup, ops played in order,
+//! α-findings folded into the op they arose on, allowlist grants applied to
+//! disagreements, one verdict per scenario. A harness panic is caught and
+//! becomes verdict `error` — a harness bug, never a finding.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use crate::allowlist::{load as load_allowlist, Allowlist};
 use crate::alpha::Alpha;
+use crate::ground::{ground, SetupStep};
 use crate::harness::Rig;
 use crate::loader::{load_all, Scenario};
 use crate::outcome::{OpOutcome, ScenarioRecord, Status, Verdict};
@@ -38,9 +40,22 @@ pub fn run_all() -> Result<RunOutput, String> {
     let loaded_op_counts: Vec<(String, usize)> =
         scenarios.iter().map(|s| (s.name.clone(), s.operations.len())).collect();
 
+    let records = run_scenarios(&scenarios, &allow);
+
+    let (jsonl, summary) = write_reports(&records, &crate::output_dir())?;
+    eprintln!("\nskep conformance — category × verdict\n");
+    eprintln!("{}", render_table(&records));
+    eprintln!("report:  {}", jsonl.display());
+    eprintln!("summary: {}", summary.display());
+    Ok(RunOutput { records, jsonl, summary, loaded_op_counts })
+}
+
+/// Play a scenario list without touching the report files — the determinism
+/// test replays a subset through this and byte-compares renderings.
+pub fn run_scenarios(scenarios: &[Scenario], allow: &Allowlist) -> Vec<ScenarioRecord> {
     let mut records = Vec::with_capacity(scenarios.len());
-    for scn in &scenarios {
-        let rec = catch_unwind(AssertUnwindSafe(|| run_scenario(scn, &allow)));
+    for scn in scenarios {
+        let rec = catch_unwind(AssertUnwindSafe(|| run_scenario(scn, allow)));
         records.push(match rec {
             Ok(r) => r,
             Err(payload) => {
@@ -57,17 +72,12 @@ pub fn run_all() -> Result<RunOutput, String> {
                     ops: Vec::new(),
                     first_failure: None,
                     error: Some(msg),
+                    groundings: Vec::new(),
                 }
             }
         });
     }
-
-    let (jsonl, summary) = write_reports(&records, &crate::output_dir())?;
-    eprintln!("\nskep conformance — category × verdict\n");
-    eprintln!("{}", render_table(&records));
-    eprintln!("report:  {}", jsonl.display());
-    eprintln!("summary: {}", summary.display());
-    Ok(RunOutput { records, jsonl, summary, loaded_op_counts })
+    records
 }
 
 fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
@@ -82,12 +92,75 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 ops: Vec::new(),
                 first_failure: None,
                 error: Some(format!("rig bootstrap: {e}")),
+                groundings: Vec::new(),
             }
         }
     };
     let mut alpha = Alpha::new();
     let mut shadow = Shadow::new();
     alpha.bind(GOLDEN_DEFAULT_ACCOUNT, &rig.default_account());
+
+    // The grounding pre-pass: shadow-only, derives implied setup from the
+    // scenario's own recorded evidence (see ground.rs module docs).
+    let grounding = ground(&scn.operations);
+    let mut groundings = grounding.tags.clone();
+
+    // Implied creates + lead-in, executed through the same op surface the
+    // scenario uses. A failure here is recorded and the run continues — the
+    // affected ops then disagree honestly.
+    {
+        let mut cx =
+            Cx { rig: &mut rig, alpha: &mut alpha, shadow: &mut shadow, ops: &scn.operations, plans: &grounding.plans };
+        for docid in &grounding.implied_creates {
+            if cx.alpha.peek(docid).is_some() {
+                continue; // already bound (defensive; should not happen)
+            }
+            match cx.rig.exec(skep_febe::Op::CreateNewDocument {
+                account: cx.rig.current_account.clone(),
+            }) {
+                skep_febe::Response::AckAddr { addr, .. } => {
+                    cx.alpha.bind(docid, &addr);
+                    cx.shadow.create_doc(docid, None);
+                }
+                r => groundings.push(format!(
+                    "implied-create FAILED for {docid}: {}",
+                    crate::harness::brief(&r)
+                )),
+            }
+        }
+        for step in &grounding.lead_in {
+            // Lead-in inserts may target docs the scenario creates itself
+            // later only via implied paths; ensure existence first.
+            let doc = match step {
+                SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } => doc.clone(),
+            };
+            if !cx.shadow.knows(&doc) {
+                match cx.rig.exec(skep_febe::Op::CreateNewDocument {
+                    account: cx.rig.current_account.clone(),
+                }) {
+                    skep_febe::Response::AckAddr { addr, .. } => {
+                        cx.alpha.bind(&doc, &addr);
+                        cx.shadow.create_doc(&doc, None);
+                    }
+                    r => {
+                        groundings.push(format!(
+                            "lead-in create FAILED for {doc}: {}",
+                            crate::harness::brief(&r)
+                        ));
+                        continue;
+                    }
+                }
+            }
+            if let Err(e) = cx.exec_setup_step(step) {
+                groundings.push(format!("lead-in FAILED: {e}"));
+            }
+        }
+        // The register belongs to the first document the SCENARIO names,
+        // not the last lead-in target.
+        if let Some(first) = cx.shadow.created.first().cloned() {
+            cx.shadow.set_current(&first);
+        }
+    }
 
     let mut ops: Vec<OpOutcome> = Vec::with_capacity(scn.operations.len());
     for (i, op) in scn.operations.iter().enumerate() {
@@ -99,16 +172,19 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         };
         let adjusted = grants.width_tolerance != 0 || grants.count_delta != 0;
         let mut out = {
-            let mut cx = Cx { rig: &mut rig, alpha: &mut alpha, shadow: &mut shadow };
+            let mut cx = Cx {
+                rig: &mut rig,
+                alpha: &mut alpha,
+                shadow: &mut shadow,
+                ops: &scn.operations,
+                plans: &grounding.plans,
+            };
             run_op(&mut cx, i, op, &grants)
         };
         // Fold α-findings into the op they arose on: they are divergence
         // evidence, not harness failures.
-        let findings: Vec<String> = alpha
-            .findings
-            .drain(..)
-            .map(|f| format!("{}: {}", f.class, f.detail))
-            .collect();
+        let findings: Vec<String> =
+            alpha.findings.drain(..).map(|f| format!("{}: {}", f.class, f.detail)).collect();
         if !findings.is_empty() {
             let joined = findings.join("; ");
             match out.status {
@@ -168,5 +244,6 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         ops,
         first_failure,
         error: None,
+        groundings,
     }
 }

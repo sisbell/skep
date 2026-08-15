@@ -161,9 +161,19 @@ impl Rig {
     /// principal and open its session. `make_current` switches the working
     /// session to it (the `account` op does; `create_node` — udanax's
     /// sub-account mint — does not).
+    ///
+    /// The Delegate request runs under the session of the principal that
+    /// OWNS `parent` (M3's ω check: only the owner may carve its prefix).
+    /// Node [1] belongs to π₀ (the bootstrap session); a scenario account
+    /// belongs to the principal this rig delegated it to.
     pub fn delegate_under(&mut self, parent: &Address, make_current: bool) -> Result<Address, String> {
+        let owner_session = self
+            .sessions
+            .get(&crate::tum::addr_str(parent))
+            .map(|(s, _)| *s)
+            .unwrap_or(self.boot);
         let prefix = match self.op.execute(
-            self.boot,
+            owner_session,
             Request { id: None, op: Op::NextAccountPrefix { parent: parent.clone() } },
         ) {
             Response::MaybeAddr { addr: Some(a), .. } => a,
@@ -172,7 +182,7 @@ impl Rig {
         let id = PrincipalId(self.next_principal);
         self.next_principal += 1;
         let account = match self.op.execute(
-            self.boot,
+            owner_session,
             Request {
                 id: None,
                 op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: id },

@@ -1,0 +1,43 @@
+[package]
+name = "skep-febe"
+version = "0.1.0"
+edition = "2021"
+description = "M10 — Operation Surface (FEBE command layer): the uniform request lifecycle (parse → authorize → linearize → commit-gate → marshal → surface) over a static dispatch table, plus ephemeral session→principal binding and best-effort retry de-duplication"
+
+[dependencies]
+# The design's mandated shapes (§Core data model): non-poisoning locks for the
+# sessions/idem maps (a panic while a lock is held must not break `execute`'s
+# Total contract) and the bounded LRU for the committed-write-ack memo.
+# Pointedly NOT `im`: no M10 field is ever snapshotted or replayed.
+parking_lot = "0.12"
+lru = "0.12"
+# M1 — Address/Tumbler/Span/SpanSet/Nat for request/response payloads;
+# Tumbler::{len, get} in the editlink helper's content-V guard (§4).
+skep-address = { path = "../skep-address" }
+# M2 — snapshot()/current_seq() on every read path, TxnError consumption on
+# every write path; the kernel is reached only through the Stores factory.
+skep-kernel = { path = "../skep-kernel" }
+# M3 — the four entity ops via the Namespace driver, plus the two pure
+# namespace reads (next_account_prefix / principal_prefix) off a snapshot.
+skep-namespace = { path = "../skep-namespace" }
+# M4 — TYPE-ONLY edge (design, Conflicts resolved #4): Val/ContentWrite/
+# ContentError/HasContent are named to satisfy Vstream::insert's public bound;
+# M10 calls no M4 function.
+skep-content = { path = "../skep-content" }
+# M5 — the five editing/versioning ops via the Vstream driver; M5State::resolve
+# + Run::iextent assemble editlink's successor (§4).
+skep-arrangement = { path = "../skep-arrangement" }
+# M6 — the seven content/provenance queries over M10's snapshot; the sole
+# source of variant-carried FaultSite localization (§5).
+skep-retrieval = { path = "../skep-retrieval" }
+# M7 — the five link writes via the LinkStore driver; readlink/followlink off a
+# snapshot; Endset/enc/Link/View for argument construction.
+skep-links = { path = "../skep-links" }
+# M8 — the pure *_on twins for every discovery/window/projection/orphan/lineage
+# read, so M10 owns the snapshot and reports as_of (design, Conflicts #5).
+skep-discovery = { path = "../skep-discovery" }
+
+[dev-dependencies]
+# The test world (the composition contract's assembler role, in miniature)
+# derives Serialize/Deserialize for M2's WorldState bound.
+serde = { version = "1", features = ["derive"] }

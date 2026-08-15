@@ -453,6 +453,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-engine"
+version = "0.1.0"
+dependencies = [
+ "im",
+ "serde",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-coordination",
+ "skep-discovery",
+ "skep-febe",
+ "skep-kernel",
+ "skep-links",
+ "skep-namespace",
+ "skep-retrieval",
+ "tempfile",
+]
+
+[[package]]
 name = "skep-febe"
 version = "0.1.0"
 dependencies = [

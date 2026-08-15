@@ -44,9 +44,11 @@ fn cross_store_lifecycle_under_fsync() {
         {
             let snap = engine.kernel().snapshot();
             let q = Query::new(&snap);
+            // M6's RetrieveError implements Display but not Debug (a store
+            // decision the engine may not edit), so no `.expect` here.
             let delivery = q
                 .retrieve_v(&[Spec { doc: doc.clone(), span: vspan(1, 1, 3) }])
-                .expect("retrieve succeeds");
+                .unwrap_or_else(|e| panic!("retrieve failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected);
         }
 
@@ -83,7 +85,7 @@ fn cross_store_lifecycle_under_fsync() {
             let q = Query::new(&snap);
             let delivery = q
                 .retrieve_v(&[Spec { doc: doc2.clone(), span: vspan(1, 1, 3) }])
-                .expect("retrieve of the version succeeds");
+                .unwrap_or_else(|e| panic!("retrieve of the version failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected, "the version shares the content");
         }
 
@@ -110,7 +112,7 @@ fn cross_store_lifecycle_under_fsync() {
         for d in [&doc, &doc2] {
             let delivery = q
                 .retrieve_v(&[Spec { doc: (*d).clone(), span: vspan(1, 1, 3) }])
-                .expect("retrieve after recovery succeeds");
+                .unwrap_or_else(|e| panic!("retrieve after recovery failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected);
         }
         assert!(snap.world().links().readlink(&link).is_some());

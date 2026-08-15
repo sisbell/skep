@@ -78,3 +78,40 @@ pub fn vspan(subspace: u64, ord: u64, w: u64) -> Option<Span> {
 pub fn span_strings(s: &Span) -> (String, String) {
     (tum_str(s.start()), tum_str(s.width()))
 }
+
+/// The element count of a span whose width is ordinal-level (`[…, 0, n]`
+/// with a single trailing nonzero) — the shape of every content-element
+/// I-extent `Run::iextent` yields. `None` for coarser widths.
+pub fn span_elem_width(s: &Span) -> Option<u64> {
+    let w = s.width();
+    let last: u64 = w.get(w.len()).to_string().parse().ok()?;
+    for i in 1..w.len() {
+        if w.get(i) != &Nat::from(0u64) {
+            return None;
+        }
+    }
+    Some(last)
+}
+
+/// Slice `len` elements starting `off` elements in from a contiguous
+/// element-level span (start's final component advances by `off`; the width
+/// keeps its shape with the final component set to `len`). Sound only for
+/// spans whose elements are consecutive final-component ordinals — exactly
+/// what a single I-extent run is. `None` on shape mismatch or empty result.
+pub fn subspan(s: &Span, off: u64, len: u64) -> Option<Span> {
+    if len == 0 {
+        return None;
+    }
+    let total = span_elem_width(s)?;
+    if off + len > total {
+        return None;
+    }
+    let st = s.start();
+    let mut comps: Vec<u64> =
+        (1..=st.len()).map(|i| st.get(i).to_string().parse().unwrap_or(0)).collect();
+    let last = comps.len() - 1;
+    comps[last] += off;
+    let mut wcomps: Vec<u64> = vec![0; s.width().len().saturating_sub(1)];
+    wcomps.push(len);
+    Span::new(tum(&comps), tum(&wcomps)).ok()
+}

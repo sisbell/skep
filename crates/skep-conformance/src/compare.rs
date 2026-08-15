@@ -146,6 +146,12 @@ pub fn compare_addr_sets(
     let mut want_goldens: Vec<String> = expected_golden.to_vec();
     want_goldens.sort();
     want_goldens.dedup();
+    // The golden listing one address twice is a recording defect
+    // (insert_text_check_both_link_positions's find_links). The set
+    // comparison absorbs it; the tag keeps the defect visible.
+    if want_goldens.len() != expected_golden.len() {
+        adaptations.push("golden-duplicate-result".into());
+    }
 
     // Peek-translate (no findings yet) to split bound from unbound.
     let bound: Vec<Option<Address>> =

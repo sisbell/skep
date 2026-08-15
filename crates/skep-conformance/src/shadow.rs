@@ -289,7 +289,11 @@ impl Shadow {
     }
 
     /// Version: the new doc mirrors the source's text AND link count —
-    /// udanax's CREATENEWVERSION copies both subspaces.
+    /// udanax's CREATENEWVERSION copies both subspaces. The Nth version
+    /// created in a scenario binds the labels `vN`/`versionN` (the recording
+    /// scripts' role names — versions/multiple_versions_same_source refers
+    /// to its two unbound version results as "v1"/"v2"); `version` always
+    /// names the LATEST version.
     pub fn version(&mut self, src: &str, new_golden: &str) {
         let (text, links) = match self.docs.get(src) {
             Some(d) => (d.text.clone(), d.links),
@@ -298,7 +302,10 @@ impl Shadow {
         self.docs.insert(new_golden.to_string(), DocShadow { text, links });
         self.created.push(new_golden.to_string());
         self.version_of.insert(new_golden.to_string(), src.to_string());
-        self.bind_name("version", new_golden);
+        let n = self.version_of.len();
+        self.bind_name(&format!("v{n}"), new_golden);
+        self.bind_name(&format!("version{n}"), new_golden);
+        self.names.insert("version".to_string(), new_golden.to_string());
         let src_owned = src.to_string();
         self.names.entry("original".to_string()).or_insert(src_owned);
         self.current = Some(new_golden.to_string());

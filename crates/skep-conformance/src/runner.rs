@@ -128,26 +128,27 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 )),
             }
         }
-        for step in &grounding.lead_in {
+        'lead_in: for step in &grounding.lead_in {
             // Lead-in inserts may target docs the scenario creates itself
-            // later only via implied paths; ensure existence first.
-            let doc = match step {
-                SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } => doc.clone(),
-            };
-            if !cx.shadow.knows(&doc) {
-                match cx.rig.exec(skep_febe::Op::CreateNewDocument {
-                    account: cx.rig.current_account.clone(),
-                }) {
-                    skep_febe::Response::AckAddr { addr, .. } => {
-                        cx.alpha.bind(&doc, &addr);
-                        cx.shadow.create_doc(&doc, None);
-                    }
-                    r => {
-                        groundings.push(format!(
-                            "lead-in create FAILED for {doc}: {}",
-                            crate::harness::brief(&r)
-                        ));
-                        continue;
+            // later only via implied paths; ensure existence first. (Link
+            // steps live in expansion plans, never the lead-in, but the
+            // match stays total.)
+            if let SetupStep::Insert { doc, .. } | SetupStep::Copy { doc, .. } = step {
+                if !cx.shadow.knows(doc) {
+                    match cx.rig.exec(skep_febe::Op::CreateNewDocument {
+                        account: cx.rig.current_account.clone(),
+                    }) {
+                        skep_febe::Response::AckAddr { addr, .. } => {
+                            cx.alpha.bind(doc, &addr);
+                            cx.shadow.create_doc(doc, None);
+                        }
+                        r => {
+                            groundings.push(format!(
+                                "lead-in create FAILED for {doc}: {}",
+                                crate::harness::brief(&r)
+                            ));
+                            continue 'lead_in;
+                        }
                     }
                 }
             }
@@ -203,11 +204,15 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         }
         // Allowlist: a disagreement with a matching entry is allowlisted; an
         // agreement reached only through a declared adjustment is too (the
-        // entry's existence IS the adjudicated divergence).
+        // entry's existence IS the adjudicated divergence). Every matching
+        // entry class is surfaced so the ruling behind the verdict is
+        // auditable from the report alone.
         let adjudicated =
             out.status == Status::Disagreed || (out.status == Status::Agreed && adjusted);
         if adjudicated && !grants.classes.is_empty() {
-            out.allowlisted = Some(grants.classes[0].clone());
+            let mut classes = grants.classes.clone();
+            classes.dedup();
+            out.allowlisted = Some(classes.join("+"));
         }
         ops.push(out);
     }

@@ -511,6 +511,54 @@ pub fn doc_from_label(label: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The symbolic name a create op binds: an explicit doc/name/label field, or
+/// the role carried by the label itself — `create_target` names its doc
+/// "target" (identity/identity_mixed_sources probes `doc: "target"` though
+/// no field ever bound it), `create_doc2_and_copy` names "doc2". Generic
+/// create labels (create_document, create_documents…) carry no role.
+pub fn create_name_of(op: &Value) -> Option<String> {
+    if let Some(s) = str_field(op, &["doc", "name", "label"]) {
+        if crate::tum::parse_dotted(s).is_none() {
+            return Some(s.to_string());
+        }
+    }
+    let label = label_of(op).to_ascii_lowercase();
+    let role = label.strip_prefix("create_")?;
+    let role = role.split("_and_").next().unwrap_or(role);
+    const GENERIC: &[&str] = &[
+        "document", "documents", "doc", "docs", "version", "node", "link", "links", "chain",
+        "sources", "multiple", "multiple_targets", "and", "new",
+    ];
+    if role.is_empty() || GENERIC.contains(&role) {
+        return None;
+    }
+    Some(role.to_string())
+}
+
+/// An arrow spec carried in a note/comment VALUE — `note: "doc1 -> doc4"`
+/// (links/find_links_homedocids_multiple) names a create_link's endset
+/// roles the way arrow KEYS ("A->B": id) do elsewhere.
+pub fn note_arrow(op: &Value) -> Option<(String, String)> {
+    for key in ["note", "comment", "description"] {
+        if let Some(s) = str_field(op, &[key]) {
+            if let Some((f, t)) = s.split_once("->") {
+                let (f, t) = (f.trim(), t.trim());
+                // Both sides must be short bare references, not prose.
+                if !f.is_empty()
+                    && !t.is_empty()
+                    && !f.contains(' ')
+                    && !t.contains(' ')
+                    && f.len() <= 16
+                    && t.len() <= 16
+                {
+                    return Some((f.to_string(), t.to_string()));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// The document address a link address lives under, textually: strip the
 /// final `0.2.n` local part ("1.1.0.1.0.1.0.2.1" → "1.1.0.1.0.1").
 pub fn link_home_docid(link: &str) -> Option<String> {

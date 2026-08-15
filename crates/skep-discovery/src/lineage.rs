@@ -53,23 +53,27 @@ where
         .map(|c| {
             let ca = validate(c.clone()).expect("every §G key is T4-valid by M3's mint");
             let link = l.readlink(&ca).expect("hit keys are resident links");
+            // Endpoint extraction hoisted into statements: the `addrs()` iterator
+            // borrows `link`, and a tail-expression temporary would outlive it.
+            let old = validate(
+                link.from_slot()
+                    .addrs()
+                    .next()
+                    .expect("[K_sup] F is unit-depth single-address (M7's shape gate)")
+                    .clone(),
+            )
+            .expect("denoted claim endpoints are T4-valid link addresses");
+            let new = validate(
+                link.to_slot()
+                    .addrs()
+                    .next()
+                    .expect("[K_sup] G is unit-depth single-address (M7's shape gate)")
+                    .clone(),
+            )
+            .expect("denoted claim endpoints are T4-valid link addresses");
             SupClaim {
-                old: validate(
-                    link.from_slot()
-                        .addrs()
-                        .next()
-                        .expect("[K_sup] F is unit-depth single-address (M7's shape gate)")
-                        .clone(),
-                )
-                .expect("denoted claim endpoints are T4-valid link addresses"),
-                new: validate(
-                    link.to_slot()
-                        .addrs()
-                        .next()
-                        .expect("[K_sup] G is unit-depth single-address (M7's shape gate)")
-                        .clone(),
-                )
-                .expect("denoted claim endpoints are T4-valid link addresses"),
+                old,
+                new,
                 home: document_of(&ca)
                     .expect("a link address has zeros = 3, so its origin Document exists"), // EL8b
                 active: l.is_active(&ca),

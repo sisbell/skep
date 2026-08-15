@@ -1,0 +1,550 @@
+//! §E/§F/§G — the pure read surface on [`LinkState`]: raw reads (READLINK /
+//! FOLLOWLINK), the typed-relation observers (Observe + the default
+//! predicates + BH1–BH4), ASN-0125 currency, and the discovery primitives
+//! for M8 (`stab` / `match_links` / `type_slice`). All `&self` over any M2
+//! `Snapshot`; nothing here writes.
+
+use std::slice;
+
+use im::OrdSet;
+use skep_address::{
+    classify_spans, document_of, is_prefix, ordinal, validate, Address, Span, SpanRel, SpanSet,
+    Tumbler,
+};
+
+use crate::endset::{coverage_class, enc, single_denoted, CoverageClass, Endset, Link};
+use crate::error::Invalid;
+use crate::registry::{Behavior, Shape, ShippedType};
+use crate::state::LinkState;
+use crate::{FROM, TO};
+
+/// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
+/// `members`/`targets_of`; `observe` and the §G index primitives coerce
+/// `Default → Active` (result-side BH1 filtering is undefined for a raw
+/// index probe).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Audit,
+    Active,
+    Default,
+}
+
+/// One observed typed-relation tuple — endsets are M7's readable [`Endset`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tuple {
+    pub addr: Address,
+    pub from: Endset,
+    pub to: Endset,
+}
+
+/// BH2 head: `Sink` at a successor-free node, `Indeterminate` (⊥) at a
+/// branch or cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Tip {
+    Sink(Address),
+    Indeterminate,
+}
+
+/// EL14 disclosure-not-decision: the operative sink, its OWN activity (a
+/// member can be a current sink yet itself nullified — EL14e), and `claims` =
+/// the FULL operative `out(sink)` — every operative `[K_sup]` claim whose
+/// `new` endpoint is this sink, including one asserted from outside
+/// `reach_o(y)`. Homes recoverable by M1's `document_of` (EL8b). The reader
+/// applies narrowing; M7 decides nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentMember {
+    pub member: Address,
+    pub active: bool,
+    pub claims: Vec<Address>,
+}
+
+/// Overlap for the spanfilade (§6): `ProperOverlap | Containment | Equal` —
+/// NOT `Adjacent` (abutting spans share no tumbler; matching them would
+/// false-positive every link whose slot coverage merely abuts the query) and
+/// never M1's `intersect` (which faults on the mixed-length endpoints M5's
+/// resolve runs routinely produce).
+fn overlaps(a: &Span, b: &Span) -> bool {
+    matches!(
+        classify_spans(a, b),
+        SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
+    )
+}
+
+/// `Tumbler → Address` lift on the way out — infallible, every stored key
+/// being T4-valid by M3's mint (§G return-type convention).
+fn lift(t: &Tumbler) -> Address {
+    validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
+}
+
+/// `Default → Active` for the surfaces where `Default` is undefined.
+fn coerce(v: View) -> View {
+    match v {
+        View::Default => View::Active,
+        other => other,
+    }
+}
+
+impl LinkState {
+    // ───────────────────────── §E — raw reads ─────────────────────────
+
+    /// READLINK (ASN-0111): `Σ.L(a)` verbatim (readable endsets), or `None`
+    /// (= ⊥) on absence. Total; recorded, never resolved; never dereferences
+    /// covered links (RL4/RL6). The persistent map is already the positive
+    /// cache (immutability ⇒ never stale).
+    pub fn readlink(&self, a: &Address) -> Option<Link> {
+        self.links.get(a.tumbler()).cloned()
+    }
+
+    /// FOLLOWLINK (ASN-0114): the recorded slot's coverage as a `SpanSet`
+    /// (the verbatim endset folded — F1/F3 by construction). `Ok(spans)`
+    /// coverage-exact to slot `i`; `Ok(SpanSet::empty())` = ⟨⟩
+    /// (valid-but-empty success); `Err(Invalid)` = ⊥ (link or slot absent).
+    /// The Result/Ok-empty shape makes ⟨⟩ ≠ ⊥ unforgeable (F7).
+    pub fn followlink(&self, a: &Address, i: usize) -> Result<SpanSet, Invalid> {
+        let link = self.links.get(a.tumbler()).ok_or(Invalid)?;
+        let slot = link.slot(i).ok_or(Invalid)?;
+        Ok(slot.to_spanset())
+    }
+
+    // ─────────────── §F — typed reads & the PL surface ────────────────
+
+    /// Observe (ASN-0086): exact ⊆-coverage match over the `v` typed slice —
+    /// every pattern address denoted by the tuple's F (resp. G); an empty
+    /// pattern is no constraint. `Default → Active` (raw Observe never
+    /// filters — ASN-0128).
+    ///
+    /// DEVIATION (recorded): the interface types the patterns `&[Address]`;
+    /// the design's pattern domain is T-wide raw `&[Tumbler]` (ASN-0086 —
+    /// ghosts and non-T4 tumblers admitted). The interface signature is
+    /// binding, so non-T4 probes are inexpressible here; ghost (unallocated
+    /// but valid) addresses remain probe-able.
+    pub fn observe(&self, ty: &Endset, from_pat: &[Address], to_pat: &[Address], v: View) -> Vec<Tuple> {
+        let class = coverage_class(ty);
+        let slice = self.type_slice_class(&class, coerce(v));
+        let mut out = Vec::new();
+        for t in slice.iter() {
+            let link = self.links.get(t).expect("type_class keys are resident links");
+            let f_ok = from_pat.iter().all(|p| link.from_slot().denotes(p.tumbler()));
+            let g_ok = to_pat.iter().all(|p| link.to_slot().denotes(p.tumbler()));
+            if f_ok && g_ok {
+                out.push(Tuple {
+                    addr: lift(t),
+                    from: link.from_slot().clone(),
+                    to: link.to_slot().clone(),
+                });
+            }
+        }
+        out
+    }
+
+    /// D2: exact ACTIVE coverage-membership — some active type-`ty` tuple's
+    /// F denotes the probe. Never a `stab` overlap call (an ancestor pattern
+    /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
+    ///
+    /// DEVIATION (recorded): interface probe type `&Address`; the design's
+    /// membership domain is all of T (`&Tumbler`).
+    pub fn is_k(&self, ty: &Endset, a: &Address) -> bool {
+        let class = coverage_class(ty);
+        self.type_slice_class(&class, View::Active).iter().any(|t| {
+            self.links
+                .get(t)
+                .is_some_and(|l| l.from_slot().denotes(a.tumbler()))
+        })
+    }
+
+    /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
+    /// in Tumbler order. Alone with [`LinkState::targets_of`] honors
+    /// `View::Default` = active ∖ filtered — result-side, lazily, honoring
+    /// the `J ≠ K'` exclusion (no self-subtraction when `ty` IS the shipped
+    /// Retired class).
+    pub fn members(&self, ty: &Endset, v: View) -> Vec<Address> {
+        let class = coverage_class(ty);
+        let subtract = v == View::Default && class != self.shipped_class(ShippedType::Retired);
+        let slice = self.type_slice_class(&class, coerce(v));
+        let mut set: OrdSet<Tumbler> = OrdSet::new();
+        for t in slice.iter() {
+            let link = self.links.get(t).expect("type_class keys are resident links");
+            for m in link.from_slot().addrs() {
+                set.insert(m.clone());
+            }
+        }
+        set.iter()
+            .filter(|m| !(subtract && self.filtered_t(m)))
+            .map(lift)
+            .collect()
+    }
+
+    /// D3: the denoted targets (G.addrs()) of tuples whose F denotes `x`,
+    /// deduplicated, in Tumbler order; `View::Default` subtracts filtered
+    /// results (with the `J ≠ K'` exclusion, as `members`).
+    pub fn targets_of(&self, ty: &Endset, x: &Address, v: View) -> Vec<Address> {
+        let class = coverage_class(ty);
+        let subtract = v == View::Default && class != self.shipped_class(ShippedType::Retired);
+        let slice = self.type_slice_class(&class, coerce(v));
+        let mut set: OrdSet<Tumbler> = OrdSet::new();
+        for t in slice.iter() {
+            let link = self.links.get(t).expect("type_class keys are resident links");
+            if link.from_slot().denotes(x.tumbler()) {
+                for g in link.to_slot().addrs() {
+                    set.insert(g.clone());
+                }
+            }
+        }
+        set.iter()
+            .filter(|g| !(subtract && self.filtered_t(g)))
+            .map(lift)
+            .collect()
+    }
+
+    /// Tuple status by address: resident and not nullified.
+    pub fn is_active(&self, a: &Address) -> bool {
+        self.resident(a.tumbler()) && !self.hints.nullified.contains(a.tumbler())
+    }
+
+    /// Tuple status by address: a resident retraction root (the tombstone
+    /// set; monotone — R3/R6a).
+    pub fn is_nullified(&self, a: &Address) -> bool {
+        self.hints.nullified.contains(a.tumbler())
+    }
+
+    /// BH1 read-filter (§7): membership in the shipped `Retired` class's
+    /// active filter slice — prefix-containment over its roots, computed
+    /// lazily (the filtered subtree is never materialized). Correct
+    /// TYPE-LESS because v1 registers exactly one BH1 type — build-enforced
+    /// (`UnservedSecondFilter`, §B).
+    ///
+    /// DEVIATION (recorded): interface probe type `&Address`; the design's
+    /// probe domain is all of T (`&Tumbler`, the `is_k` membership regime).
+    pub fn is_filtered(&self, a: &Address) -> bool {
+        self.filtered_t(a.tumbler())
+    }
+
+    /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
+    /// filtered to claims ∉ nullified — deduplicated, Tumbler order. v1
+    /// serves the walk family ONLY for the shipped `Supersedes` class
+    /// (build-enforced, §B); any other `ty` yields the empty vec (the
+    /// service-scope guard on arbitrary arguments).
+    pub fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
+        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+            return Vec::new();
+        }
+        self.succs_operative(x.tumbler()).iter().map(lift).collect()
+    }
+
+    /// BH2 chain: the bounded iterative walk over operative successors from
+    /// `x` (inclusive), halting at sink (no successor), branch (≥ 2), or
+    /// cycle (revisit) — the finite link set is the termination bound. Empty
+    /// for a non-`Supersedes` `ty` (v1 serving scope, as `succs`).
+    pub fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
+        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+            return Vec::new();
+        }
+        let (path, _) = self.walk_sup(x.tumbler());
+        path.iter().map(lift).collect()
+    }
+
+    /// BH2 head: `Sink(head)` when the walk halts at a successor-free node;
+    /// `Indeterminate` (⊥) at a branch or cycle — and for a non-`Supersedes`
+    /// `ty` (v1 serving scope: no positive head claim is fabricated).
+    pub fn tip(&self, ty: &Endset, x: &Address) -> Tip {
+        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+            return Tip::Indeterminate;
+        }
+        match self.walk_sup(x.tumbler()).1 {
+            Some(sink) => Tip::Sink(lift(&sink)),
+            None => Tip::Indeterminate,
+        }
+    }
+
+    /// BH3 reverse (§7): sources of active type-`ty` tuples whose G COVERS
+    /// `target` (AM's reverse-lookup rule) — `stab(TO, ·, Audit)` overlap
+    /// prefilter ∩ the active typed slice, exact `denotes` filter
+    /// authoritative, collecting each survivor's F.addrs().
+    pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
+        let class = coverage_class(ty);
+        let pre = self.stab(TO, &enc(slice::from_ref(target)), View::Audit);
+        let slice = self.type_slice_class(&class, View::Active);
+        let mut set: OrdSet<Tumbler> = OrdSet::new();
+        for t in pre.iter().filter(|t| slice.contains(*t)) {
+            let link = self.links.get(t).expect("stab keys are resident links");
+            if link.to_slot().denotes(target.tumbler()) {
+                for f in link.from_slot().addrs() {
+                    set.insert(f.clone());
+                }
+            }
+        }
+        set.iter().map(lift).collect()
+    }
+
+    /// BH3 forward projection (§7): ⊥ unless EXACTLY ONE active type-`ty`
+    /// tuple denotes `source` in F (denotation match — `source ∈ F.addrs()`,
+    /// AM's source-vertex rule) with a single-address-denoting G; returns
+    /// that single target. Restricting to the ACTIVE typed slice is what
+    /// makes "exactly one active K-tuple" exact.
+    pub fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
+        self.target_of_class(&coverage_class(ty), source)
+    }
+
+    /// BH3 join (§7): `target_of` across EVERY BH3-registered Binary type,
+    /// keyed by the public [`coverage_class`] (M9 indexes with
+    /// `coverage_class(ty)`; the registry is private to `LinkState`, which is
+    /// why M7 composes the join).
+    pub fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
+        let mut out = im::HashMap::new();
+        for (class, reg) in self.registry.map.iter() {
+            if reg.shape == Shape::Binary && reg.behaviors.contains(&Behavior::ReverseLookup) {
+                if let Some(t) = self.target_of_class(class, source) {
+                    out.insert(class.clone(), t);
+                }
+            }
+        }
+        out
+    }
+
+    /// BH4 age (§7): `home_count[origin(a)] − ordinal(a)` for a resident
+    /// link, else `None` — a raw home-relative chain distance (ordinal time,
+    /// no clock), meaningful as staleness only for an idem⊥ BH4 type (under
+    /// idem⊤ a renewal dedups to the incumbent and age never resets — which
+    /// is exactly why R-C0 forces BH4 ⇒ idem⊥).
+    pub fn age(&self, a: &Address) -> Option<u64> {
+        if !self.resident(a.tumbler()) {
+            return None;
+        }
+        let origin = document_of(a)?;
+        let count = self
+            .hints
+            .home_count
+            .get(origin.tumbler())
+            .copied()
+            .unwrap_or(0);
+        let ord = u64::try_from(ordinal(a.tumbler())).ok()?;
+        Some(count.saturating_sub(ord))
+    }
+
+    /// BH4 stale set (§7): active type-`ty` tuples with `age > h`, for a
+    /// `ty` REGISTERED with BH4 (Age).
+    ///
+    /// DEVIATION (recorded): the design fences a non-BH4 `ty` with a typed
+    /// `Err(NotBh4)` (served-only-where-declared); the interface signature —
+    /// binding — returns a bare `Vec<Address>`. The fence's SAFETY intent is
+    /// preserved by returning the empty vec for any `ty` not registered with
+    /// BH4 (so `retract_stale` can never be aimed at an idem⊤ class, e.g.
+    /// mass-nullifying old `[K_sup]` claims); the caller loses only the
+    /// ability to distinguish "no stale tuples" from "not a BH4 type".
+    pub fn stale(&self, ty: &Endset, h: u64) -> Vec<Address> {
+        let class = coverage_class(ty);
+        let bh4 = self
+            .registry
+            .registration(&class)
+            .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
+        if !bh4 {
+            return Vec::new();
+        }
+        self.type_slice_class(&class, View::Active)
+            .iter()
+            .filter_map(|t| {
+                let a = lift(t);
+                match self.age(&a) {
+                    Some(g) if g > h => Some(a),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// ASN-0125 currency (EL14, hardwired to `[K_sup]`): the operative sinks
+    /// reachable from `y` via `succ_o` (the `reach_o(y)` fixpoint within the
+    /// finite link set), returned ENTIRE — linear → 1, forked → ≥ 2,
+    /// mutual-supersession standoff → 0, all legitimate. Each sink carries
+    /// its OWN activity and the FULL operative `out(sink)` — computed per
+    /// sink via the `match_links`/`type_slice` composition (§5), NOT by
+    /// walk-side accumulation (which would drop an operative claim targeting
+    /// the sink from outside the closure; the R0a link-address antichain
+    /// makes the `enc` overlap an exact address match). M7 discloses; the
+    /// consumer narrows — no single "latest" is fabricated.
+    pub fn current(&self, y: &Address) -> Vec<CurrentMember> {
+        let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
+        let mut stack = vec![y.tumbler().clone()];
+        while let Some(v) = stack.pop() {
+            for s in self.succs_operative(&v).iter() {
+                if !reach.contains(s) {
+                    reach.insert(s.clone());
+                    stack.push(s.clone());
+                }
+            }
+        }
+        let sup = self.registry.reserved(ShippedType::Supersedes).clone();
+        let mut out = Vec::new();
+        for v in reach.iter() {
+            if !self.succs_operative(v).is_empty() {
+                continue; // not a sink
+            }
+            let member = lift(v);
+            let hits = self.match_links(&[(TO, enc(slice::from_ref(&member)))], View::Active);
+            let sup_slice = self.type_slice(&sup, View::Active);
+            let claims: Vec<Address> = hits
+                .iter()
+                .filter(|t| sup_slice.contains(*t))
+                .map(lift)
+                .collect();
+            out.push(CurrentMember {
+                active: self.is_active(&member),
+                member,
+                claims,
+            });
+        }
+        out
+    }
+
+    /// The genesis-fixed endset of a shipped class — M9 reads
+    /// `PredDef`/`PredStable` here (the registry lookup is internal; this is
+    /// the public read).
+    pub fn reserved_type(&self, t: ShippedType) -> &Endset {
+        self.registry.reserved(t)
+    }
+
+    // ─────────────── §G — discovery primitives for M8 ────────────────
+
+    /// Spanfilade primitive: links whose slot-`i` coverage OVERLAPS `query`
+    /// (overlap = `ProperOverlap | Containment | Equal` — NOT `Adjacent`).
+    /// `query` is M7's READABLE `Endset` (M8 builds it via `enc`/
+    /// `Endset::from_spans`). `v ∈ {Audit, Active}` only (`Default` coerced).
+    /// v1 bootstrap: a brute scan of `links` reading each endset's spans —
+    /// trivially correct, O(n); the deferred interval index swaps in behind
+    /// the same signature and overlap predicate (Open build decisions).
+    pub fn stab(&self, i: usize, query: &Endset, v: View) -> OrdSet<Tumbler> {
+        let v = coerce(v);
+        let mut out = OrdSet::new();
+        for (addr, link) in self.links.iter() {
+            if v == View::Active && self.hints.nullified.contains(addr) {
+                continue;
+            }
+            let Some(slot) = link.slot(i) else { continue };
+            if query.spans().any(|q| slot.spans().any(|s| overlaps(q, s))) {
+                out.insert(addr.clone());
+            }
+        }
+        out
+    }
+
+    /// The AND-of-(per-slot overlap) combiner — findlinks' core, factored
+    /// into M7 (Conflicts §6). `constraints` lists ONLY constrained slots —
+    /// an unconstrained slot is OMITTED, never an empty `Endset`
+    /// (`stab(i, ⟨⟩, ·) = ∅` would empty the AND); empty `constraints` ⇒ the
+    /// whole `v` slice. `v ∈ {Audit, Active}` only (`Default` coerced).
+    pub fn match_links(&self, constraints: &[(usize, Endset)], v: View) -> OrdSet<Tumbler> {
+        let v = coerce(v);
+        let Some(((i0, q0), rest)) = constraints.split_first() else {
+            // No constraint: the whole view slice.
+            let mut out = OrdSet::new();
+            for (addr, _) in self.links.iter() {
+                if v == View::Active && self.hints.nullified.contains(addr) {
+                    continue;
+                }
+                out.insert(addr.clone());
+            }
+            return out;
+        };
+        let mut acc = self.stab(*i0, q0, v);
+        for (i, q) in rest {
+            let s = self.stab(*i, q, v);
+            acc = acc.iter().filter(|t| s.contains(*t)).cloned().collect();
+        }
+        acc
+    }
+
+    /// `L_K` (Audit) / `A_K` (Active) — the typed slice as raw index keys.
+    /// `v ∈ {Audit, Active}` only (`Default` coerced).
+    pub fn type_slice(&self, ty: &Endset, v: View) -> OrdSet<Tumbler> {
+        self.type_slice_class(&coverage_class(ty), coerce(v))
+    }
+
+    // ───────────────────────── internal helpers ─────────────────────────
+
+    /// The typed slice by class: audit from the hint; active = audit ∖
+    /// nullified, derived at query time (the indexes are append-only —
+    /// Active/audit indexing open decision, default taken).
+    pub(crate) fn type_slice_class(&self, class: &CoverageClass, v: View) -> OrdSet<Tumbler> {
+        let base = self.hints.type_class.get(class).cloned().unwrap_or_default();
+        match coerce(v) {
+            View::Active => base
+                .iter()
+                .filter(|t| !self.hints.nullified.contains(*t))
+                .cloned()
+                .collect(),
+            _ => base,
+        }
+    }
+
+    /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to
+    /// `claim ∉ nullified`, deduplicated over `new`.
+    pub(crate) fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
+        match self.hints.sup_fwd.get(x) {
+            None => OrdSet::new(),
+            Some(edges) => edges
+                .iter()
+                .filter(|(_, claim)| !self.hints.nullified.contains(claim))
+                .map(|(new, _)| new.clone())
+                .collect(),
+        }
+    }
+
+    /// The visited-set-bounded forward walk: the traversed path (from `x`,
+    /// inclusive) and `Some(sink)` iff halted at a successor-free node
+    /// (branch and cycle yield `None`).
+    fn walk_sup(&self, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
+        let mut path = vec![x.clone()];
+        let mut visited = OrdSet::unit(x.clone());
+        let mut cur = x.clone();
+        loop {
+            let s = self.succs_operative(&cur);
+            match s.len() {
+                0 => return (path, Some(cur)),
+                1 => {
+                    let next = s.iter().next().expect("len == 1").clone();
+                    if visited.contains(&next) {
+                        return (path, None); // cycle
+                    }
+                    visited.insert(next.clone());
+                    path.push(next.clone());
+                    cur = next;
+                }
+                _ => return (path, None), // branch
+            }
+        }
+    }
+
+    /// The raw-tumbler BH1 filter test: some active `Retired`-class root is
+    /// a prefix of the probe.
+    pub(crate) fn filtered_t(&self, probe: &Tumbler) -> bool {
+        let rc = self.shipped_class(ShippedType::Retired);
+        self.type_slice_class(&rc, View::Active).iter().any(|t| {
+            self.links
+                .get(t)
+                .is_some_and(|l| l.from_slot().addrs().any(|root| is_prefix(root, probe)))
+        })
+    }
+
+    /// `target_of` by class (shared with `targets_keyed`, whose registry walk
+    /// has classes, not endsets).
+    fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
+        let pre = self.stab(FROM, &enc(slice::from_ref(source)), View::Audit);
+        let slice = self.type_slice_class(class, View::Active);
+        let mut survivor: Option<Tumbler> = None;
+        for t in pre.iter() {
+            if !slice.contains(t) {
+                continue;
+            }
+            let link = self.links.get(t).expect("stab keys are resident links");
+            if link.from_slot().addrs().any(|f| f == source.tumbler()) {
+                if survivor.is_some() {
+                    return None; // several active type-ty matches ⇒ ⊥
+                }
+                survivor = Some(t.clone());
+            }
+        }
+        let t = survivor?;
+        let link = self.links.get(&t).expect("survivor is resident");
+        single_denoted(link.to_slot()).map(lift)
+    }
+}

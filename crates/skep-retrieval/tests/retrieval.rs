@@ -27,8 +27,8 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
-    CompareError, Deletions, Delivery, DeliveryItem, ExtentError, FindError, Operand, OriginError,
-    Query, Region, RetrieveError, Spec, SpecFault,
+    CompareError, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError, FindError,
+    Operand, OriginError, Query, Region, RetrieveError, Spec, SpecFault,
 };
 
 // ---- the minimal engine assembly (composition contract) ----

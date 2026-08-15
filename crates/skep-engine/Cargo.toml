@@ -1,0 +1,45 @@
+[package]
+name = "skep-engine"
+version = "0.1.0"
+edition = "2021"
+description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one (reserved, decls) configuration, the pinned recovery order, and the observe dump surface"
+
+[features]
+# `observe` gates the WorldDump surface for the conformance/crash harnesses.
+# Default-ON so the workspace gate (build/clippy/test) exercises the dump path
+# and its tests; a production binary opts out with `default-features = false`.
+default = ["observe"]
+observe = []
+
+[dependencies]
+# The World/Record serde derives satisfying M2's WorldState bounds.
+serde = { version = "1", features = ["derive"] }
+# M1 — Tumbler/Address construction for the standard reserved type addresses
+# and the observe surface's address rendering.
+skep-address = { path = "../skep-address" }
+# M2 — Kernel::open over the assembled World; WorldState is implemented here.
+skep-kernel = { path = "../skep-kernel" }
+# M3–M7 — the four state-contributing store crates: one slice, one record
+# variant, one accessor impl, one fold dispatch apiece.
+skep-namespace = { path = "../skep-namespace" }
+skep-content = { path = "../skep-content" }
+skep-arrangement = { path = "../skep-arrangement" }
+skep-links = { path = "../skep-links" }
+# M9 — the Coordinator is engine-assembled: the factory bodies presuppose the
+# engine can build Vstream/LinkStore from &Kernel<W> (M9's standing assembly
+# obligation), and its catalog projects the engine-built registry.
+skep-coordination = { path = "../skep-coordination" }
+# M10 — the demand side: EngineStores realizes the Stores<World> factory the
+# transport injects into Operation::new. M10 stays generic; only the binary
+# and this assembler ever name World against it.
+skep-febe = { path = "../skep-febe" }
+
+[dev-dependencies]
+# M6/M8 — pure readers (no slice, no record): exercised by the cross-store
+# lifecycle test, never needed by the assembly itself.
+skep-retrieval = { path = "../skep-retrieval" }
+skep-discovery = { path = "../skep-discovery" }
+# App TypeDecl construction (Registration.behaviors is an im::OrdSet).
+im = { version = "15", features = ["serde"] }
+# Fsync journals for the lifecycle/recovery tests.
+tempfile = "3"

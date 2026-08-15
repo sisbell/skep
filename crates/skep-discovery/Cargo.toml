@@ -1,0 +1,36 @@
+[package]
+name = "skep-discovery"
+version = "0.1.0"
+edition = "2021"
+description = "M8 — Link Query & Discovery: the read-only query/presentation layer over the link subsystem — content-region discovery, four-set descriptor queries, counting, windowed pagination, projection, RETRIEVEENDSETS, delete-orphan previews, and supersession lineage — composed from M7/M5/M3 over one M2 snapshot, owning no state and no index"
+
+[dependencies]
+# The internal result-set carrier: M7's §G primitives return im::OrdSet<Tumbler>
+# (address order = ASN-0108's permanent enumeration key), and M8 set-operates on
+# it (union / relative_complement / range) before converting to Vec<Address> at
+# the output boundary. M8 serializes nothing, so no serde feature is needed.
+im = "15"
+# Nat::one()/zero()/is_zero() are trait fns the region/ordinal math keeps in scope.
+num-traits = "0.2"
+# M1 — the value calculus: Tumbler order (the cursor cut), validate (the §G
+# Tumbler → Address lift), document_of (home projection), classify_spans (the
+# one pointwise touch test). M8 holds no address algebra of its own.
+skep-address = { path = "../skep-address" }
+# M2 — one snapshot per operation; M8 writes nothing and owns no ordering,
+# durability, or recovery.
+skep-kernel = { path = "../skep-kernel" }
+# M3 — is_registered_document, the document-existence gate on every V-anchored op.
+skep-namespace = { path = "../skep-namespace" }
+# M5 — resolve (V→I image), project (I→V content), content/link runs and counts
+# (discoverability and the delete-orphan what-if). M8 never reads R.
+skep-arrangement = { path = "../skep-arrangement" }
+# M7 — stab/match_links/type_slice (the matcher M8 presents, never reimplements),
+# readlink/followlink, is_active, reserved_type(Supersedes), enc/Endset.
+skep-links = { path = "../skep-links" }
+
+[dev-dependencies]
+# The assembled test world derives Serialize/Deserialize (M2's WorldState bound).
+serde = { version = "1", features = ["derive"] }
+# Lets the test world drive M5's INSERT so the discovery queries have arranged
+# content to resolve (the skep-links test-scaffold precedent).
+skep-content = { path = "../skep-content" }

@@ -9,17 +9,462 @@
 #   count_delta = <integer>                # optional declared count adjustment
 #   width_tolerance = <integer>            # optional span-width tolerance
 #
-# The one divergence adjudicated so far:
+
+# Retraction-tuple class (D8): adjudicated intended; no golden exercises
+# retraction (88.1 has no link deletion), so no concrete entry — see
+# adjudication/decisions.md.
 #
-# Retraction tuples surface in content-region queries of their home doc:
-# as-built nullify deposits [enc({home}), enc({target}), [R]] and enc is the
-# subtree-span encoding, so document-homed retractions appear in
-# findlinks/count results alongside content links. Adjudicated intended
-# (skep-febe lifecycle test pins it); udanax does not surface them.
-# Applies wherever a scenario nullifies and then counts/lists links.
-#
-# None of the 263 golden scenarios exercises retraction: udanax-green 88.1
-# has no link-deletion operation (the corpus documents this —
-# links/link_permanence_no_delete_operation), so no create_link is ever
-# retracted and no concrete entry is needed. The comment stays as the
-# adjudication record for when a retraction-exercising corpus lands.
+# Pre-registered (ASN-0122): udanax COMPARE under-reports fan-out (merge,
+# not join — self-comparison reports only the diagonal). Any fan-out
+# compare divergence where skep reports MORE pairs takes class
+# udanax-compare-fanout-underreport.
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 6
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 7
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 8
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 9
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 10
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_duplicate_iaddresses"
+op_index = 11
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_link_to_text_subspace"
+op_index = 7
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_link_to_text_subspace"
+op_index = 9
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "createlink_check_text_positions"
+op_index = 4
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "createlink_check_text_positions"
+op_index = 6
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "createnewversion_text_vs_links"
+op_index = 3
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_all_with_links"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_at_root_origin_height_1"
+op_index = 3
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_at_root_origin_height_1"
+op_index = 6
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_from_middle_affects_later_links"
+op_index = 2
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_from_middle_affects_later_links"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_link_subspace"
+op_index = 7
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_partial_text_before_link"
+op_index = 4
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_partial_text_before_link"
+op_index = 7
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_partial_text_before_link"
+op_index = 10
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_text_before_link"
+op_index = 4
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_width_larger_than_content"
+op_index = 2
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_after_source_insert"
+op_index = 1
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_after_source_insert"
+op_index = 3
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_compare_link_ends"
+op_index = 1
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_compare_link_ends"
+op_index = 2
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_compare_link_ends"
+op_index = 3
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "endsets_multispan_link"
+op_index = 3
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_by_type"
+op_index = 10
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_by_type"
+op_index = 11
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_by_type"
+op_index = 12
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_homedocids_multiple"
+op_index = 12
+class = "udanax-degenerate-homedoc-filter"
+rationale = "udanax ignores the homedocids filter — its own goldens' notes read 'expected: 0' / 'expected: 1' while udanax returned everything; skep implements the filter as the scenario author intended. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_homedocids_multiple"
+op_index = 13
+class = "udanax-degenerate-homedoc-filter"
+rationale = "udanax ignores the homedocids filter — its own goldens' notes read 'expected: 0' / 'expected: 1' while udanax returned everything; skep implements the filter as the scenario author intended. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_homedocids_multiple"
+op_index = 14
+class = "udanax-degenerate-homedoc-filter"
+rationale = "udanax ignores the homedocids filter — its own goldens' notes read 'expected: 0' / 'expected: 1' while udanax returned everything; skep implements the filter as the scenario author intended. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_homedocids_no_match"
+op_index = 8
+class = "udanax-degenerate-homedoc-filter"
+rationale = "udanax ignores the homedocids filter — its own goldens' notes read 'expected: 0' / 'expected: 1' while udanax returned everything; skep implements the filter as the scenario author intended. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_links_homedocids_no_match"
+op_index = 9
+class = "udanax-degenerate-homedoc-filter"
+rationale = "udanax ignores the homedocids filter — its own goldens' notes read 'expected: 0' / 'expected: 1' while udanax returned everything; skep implements the filter as the scenario author intended. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_link_allocation_independence"
+op_index = 4
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_link_allocation_independence"
+op_index = 6
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_link_insert_iaddress_gap"
+op_index = 5
+class = "allocation-layout-fragmentation"
+rationale = "allocation-layout fragmentation: udanax interleaves link allocation into the content I-stream splitting correspondence runs (the golden's own comment); skep's subspace-separated gap-free frontiers keep one maximal run — both truthful per ASN-0122 address-equality correspondence. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_text_at_link_subspace"
+op_index = 4
+class = "udanax-no-subspace-confinement"
+rationale = "udanax does not enforce the content/link subspace boundary; skep's subspace-confinement invariant (ASN-0047, ASN-0116; M5 S3-star routing) rejects text placement at link positions. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_text_at_link_subspace"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_text_at_link_subspace"
+op_index = 6
+class = "udanax-no-subspace-confinement"
+rationale = "udanax does not enforce the content/link subspace boundary; skep's subspace-confinement invariant (ASN-0047, ASN-0116; M5 S3-star routing) rejects text placement at link positions. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_text_at_link_subspace"
+op_index = 7
+class = "udanax-no-subspace-confinement"
+rationale = "udanax does not enforce the content/link subspace boundary; skep's subspace-confinement invariant (ASN-0047, ASN-0116; M5 S3-star routing) rejects text placement at link positions. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_text_check_link_positions"
+op_index = 4
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "insert_without_write_token"
+op_index = 2
+class = "golden-recording-defect"
+rationale = "golden recording defect: the FEBE recording client's own status banner captured as document content; udanax never meaningfully ran the op. Excluded as golden-defect. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "isanextensionnd_checks_left_or_right"
+op_index = 2
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "isanextensionnd_checks_left_or_right"
+op_index = 3
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "link_orgl_vposition_observation"
+op_index = 3
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "link_retrieval_via_endsets"
+op_index = 8
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 explicitly rejects udanax's clip-to-region endset reporting: overlap match, spans at full recorded extent (never clipped), whole-endset surfacing — 'clipping would misreport the link's grip'. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "multiple_text_insertions_with_links"
+op_index = 8
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "multiple_text_insertions_with_links"
+op_index = 15
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "pivot_v3_before_v1"
+op_index = 5
+class = "udanax-lenient-rearrange"
+rationale = "udanax accepts non-ascending pivot/swap cuts; skep's NotAscending enforces ASN-0084/ASN-0119 strictly-ascending cut discipline. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "pivot_v3_equals_v1"
+op_index = 5
+class = "udanax-lenient-rearrange"
+rationale = "udanax accepts non-ascending pivot/swap cuts; skep's NotAscending enforces ASN-0084/ASN-0119 strictly-ascending cut discipline. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "pivot_v3_equals_v2"
+op_index = 5
+class = "udanax-lenient-rearrange"
+rationale = "udanax accepts non-ascending pivot/swap cuts; skep's NotAscending enforces ASN-0084/ASN-0119 strictly-ascending cut discipline. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "pivot_v3_inside_source"
+op_index = 5
+class = "udanax-lenient-rearrange"
+rationale = "udanax accepts non-ascending pivot/swap cuts; skep's NotAscending enforces ASN-0084/ASN-0119 strictly-ascending cut discipline. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "pivot_v3_inside_source"
+op_index = 6
+class = "udanax-lenient-rearrange"
+rationale = "udanax accepts non-ascending pivot/swap cuts; skep's NotAscending enforces ASN-0084/ASN-0119 strictly-ascending cut discipline. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "retrieve_vspan_with_links"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 8
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 9
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 10
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 12
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 14
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "search_type_filter_with_removed_endpoints"
+op_index = 16
+class = "udanax-degenerate-type-filter"
+rationale = "udanax's find-links type filter records always-empty (its own defect), and skep's spanfilade discovers by permanent I-coverage after endpoint deletion (D8 family). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "text_insert_preserves_link_vpositions"
+op_index = 8
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "three_links_vspan_growth"
+op_index = 3
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "three_links_vspan_growth"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "three_links_vspan_growth"
+op_index = 7
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "type_c_multiple_crums"
+op_index = 3
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "type_c_multiple_crums"
+op_index = 4
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "type_c_multiple_crums"
+op_index = 5
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "type_c_multiple_crums"
+op_index = 7
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "type_c_multiple_crums"
+op_index = 8
+class = "dense-v-space"
+rationale = "udanax V-space is sparse (insert past extent, hole filled later); skep's V-space is dense by design — ASN-0116 admission ordinal in [1,n+1], M5 contiguity maintenance; monotonicity is load-bearing. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "version_copies_link_subspace"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "version_copies_link_subspace"
+op_index = 8
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "version_copies_what"
+op_index = 5
+class = "udanax-malformed-vspanset"
+rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."

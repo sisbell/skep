@@ -5,9 +5,6 @@
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, shift, union, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::HasM5;
-use skep_content::HasContent;
-use skep_namespace::HasM3;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::helpers::{

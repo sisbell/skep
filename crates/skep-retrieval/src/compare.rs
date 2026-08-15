@@ -7,8 +7,7 @@
 //! finer-than-maximal per-overlap report, fully conforming under R1–R3).
 
 use skep_address::{ordinal, shift, Address, Nat, Tumbler};
-use skep_arrangement::{HasM5, M5State, VPos};
-use skep_namespace::HasM3;
+use skep_arrangement::{M5State, VPos};
 
 use crate::error::{CompareError, Operand};
 use crate::helpers::{gate_vspec, require_registered, S_C};

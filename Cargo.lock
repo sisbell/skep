@@ -413,6 +413,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-retrieval"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "num-traits",
+ "once_cell",
+ "serde",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-kernel",
+ "skep-namespace",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

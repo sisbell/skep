@@ -11,8 +11,13 @@
 //! COMPARE/FINDDOCSCONTAINING); the interface declares ExtentError's and
 //! OriginError's as payload-free — the document is recoverable from the
 //! single-document request — and the interface is the verbatim binding.
+//!
+//! None implements `std::error::Error`: its `Debug` supertrait is exactly
+//! what the derive policy withholds from the `Address`-carrying enums, and
+//! the payload-free fault codes follow suit for one uniform surface. M10
+//! marshals rejections through `Serialize`, never through `dyn Error`;
+//! `Display` alone is provided for human-readable messages.
 
-use std::error::Error;
 use std::fmt;
 
 use serde::Serialize;
@@ -132,8 +137,6 @@ impl fmt::Display for SpecFault {
         })
     }
 }
-impl Error for SpecFault {}
-
 impl fmt::Display for Operand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -155,15 +158,11 @@ impl fmt::Display for RetrieveError {
         }
     }
 }
-impl Error for RetrieveError {}
-
 impl fmt::Display for ExtentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("doc_vspan/doc_vspanset: doc is not a registered document")
     }
 }
-impl Error for ExtentError {}
-
 impl fmt::Display for OriginError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -188,15 +187,11 @@ impl fmt::Display for OriginError {
         }
     }
 }
-impl Error for OriginError {}
-
 impl fmt::Display for DeletionsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("show_deletions: a document is not registered")
     }
 }
-impl Error for DeletionsError {}
-
 impl fmt::Display for CompareError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -223,8 +218,6 @@ impl fmt::Display for CompareError {
         }
     }
 }
-impl Error for CompareError {}
-
 impl fmt::Display for FindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -242,4 +235,3 @@ impl fmt::Display for FindError {
         }
     }
 }
-impl Error for FindError {}

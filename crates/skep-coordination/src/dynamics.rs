@@ -242,8 +242,8 @@ fn analyze_atom(catalog: &TypeCatalog, view: View, widen: bool, a: &Atom) -> Ana
         // monotone); a state-reading argument lands in Neither.
         Atom::IsK(tr, e) => {
             let ae = a1(e);
-            let fp = ae.fp.union(&slice_fp(catalog, key(tr), view));
             let st = view == View::Audit && ae.fp.is_empty();
+            let fp = ae.fp.union(&slice_fp(catalog, key(tr), view));
             Analysis { st, sf: false, grow: false, fp }
         }
         // M_K in an audit-view term is a grow-only set value (V-AUD).

@@ -345,7 +345,7 @@ where
     }
 
     fn flatten_refs(&self, t: &Term, counter: &mut u32) -> Term {
-        use crate::ast::{Atom, Dom, Prim};
+        use crate::ast::{Atom, Prim};
         use std::sync::Arc as A;
         let f = |x: &crate::ast::ArcTerm, c: &mut u32| -> crate::ast::ArcTerm {
             A::new(self.flatten_refs(x, c))
@@ -472,7 +472,7 @@ where
 /// map on free occurrences, and give every internal binder a fresh reserved
 /// name, depth-first left-to-right (PR3's binding-site renaming).
 fn rename(t: &Term, map: &im::HashMap<VarId, VarId>, counter: &mut u32) -> Term {
-    use crate::ast::{Atom, Dom, Prim};
+    use crate::ast::{Atom, Prim};
     use std::sync::Arc as A;
     let fresh = |c: &mut u32| -> VarId {
         let v = crate::ast::EXPANSION_NAME_BASE

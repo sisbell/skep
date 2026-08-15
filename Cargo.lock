@@ -386,6 +386,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-coordination"
+version = "0.1.0"
+dependencies = [
+ "im",
+ "serde",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-kernel",
+ "skep-links",
+ "skep-namespace",
+]
+
+[[package]]
 name = "skep-discovery"
 version = "0.1.0"
 dependencies = [

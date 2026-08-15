@@ -1,0 +1,37 @@
+[package]
+name = "skep-retrieval"
+version = "0.1.0"
+edition = "2021"
+description = "M6 — Content Retrieval & Query: the read-only observer surface over documents — RETRIEVEV, document-extent queries, SHOWORIGIN (V-arity), SHOWDELETIONS, COMPARE, FINDDOCSCONTAINING — each a pure function of one pinned M2 snapshot"
+
+[dependencies]
+# Nat::zero()/one()/is_zero() are trait fns the per-position ordinal math keeps
+# in scope.
+num-traits = "0.2"
+# The design-mandated memoization of the two subspace numerals (§Internal
+# design): Nat = BigUint cannot be `const`, so s_C/s_L are Lazy statics the hot
+# per-position loop compares against by reference.
+once_cell = "1"
+serde = { version = "1", features = ["derive"] }
+# M1 — origin projection (document_of), run-address arithmetic
+# (ElemPos/shift_ordinal/elem_addr/shift), gate primitives (action_point/zeros/
+# is_level_uniform/ordinal), span/span-set synthesis and membership.
+skep-address = { path = "../skep-address" }
+# M2 — the pinned Snapshot every query binds, and its Seq. M6 never writes:
+# no transact, no Kernel handle, no LockKey.
+skep-kernel = { path = "../skep-kernel" }
+# M3 — is_registered_document, the universal allocation gate (registered-empty
+# vs unallocated is M6's owned distinction).
+skep-namespace = { path = "../skep-namespace" }
+# M4 — value_at, RETRIEVEV's content delivery ONLY; COMPARE/extents/
+# containment/deletions never open it.
+skep-content = { path = "../skep-content" }
+# M5 — the workhorse: resolve/point/counts/runs/resolve_coverage/project/
+# docs_containing/deletions, plus VPos (re-exported through M6's surface).
+skep-arrangement = { path = "../skep-arrangement" }
+
+[dev-dependencies]
+# bincode is M2's actual wire format — the marshaling-policy tests serialize
+# M6's Serialize-only result/error types with it (M6 journals nothing, so
+# there is no round trip to test: no Deserialize anywhere by design).
+bincode = "1.3"

@@ -357,6 +357,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-arrangement"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "im",
+ "num-traits",
+ "serde",
+ "skep-address",
+ "skep-content",
+ "skep-kernel",
+ "skep-namespace",
+ "tempfile",
+]
+
+[[package]]
 name = "skep-content"
 version = "0.1.0"
 dependencies = [

@@ -1,4 +1,5 @@
-//! The typed rejections of M7's write surface (§C/§D), plus FOLLOWLINK's ⊥
+//! The typed rejections of M7's write surface (§C/§D) and its staleness
+//! family (§7 — [`NotBh4`], [`RetractStaleError`]), plus FOLLOWLINK's ⊥
 //! marker [`Invalid`]. Variant declaration order is the design's, which is
 //! also each op's check order except where a documented hoist says otherwise
 //! (the home check is hoisted ahead of every gate/dedup short-circuit —
@@ -25,17 +26,14 @@ pub enum MakeLinkError {
     /// M3's mint failed structurally.
     Mint(MintError),
     /// M5's seat step refused (CL-OWN/CL-UNIQ) — unreachable for a freshly
-    /// minted home link, kept typed per the interface.
+    /// minted home link, kept typed per the design.
     Seat(SeatError),
 }
 
-/// Emit_K rejection (ASN-0086/0126/0128; §D).
-///
-/// DEVIATION (recorded): the interface omits `SupersessionClass`; the design
-/// mandates it (Conflicts §10 — the exact parallel of the `[R]` fence, making
-/// `assert_sup`/`editlink` the sole `[K_sup]`-writers so every stored claim
-/// is schema-conformant, which the walk family leans on). The design's fence
-/// is realized; dropping it would admit schema-violating claims silently.
+/// Emit_K rejection (ASN-0086/0126/0128; §D). `SupersessionClass` is the
+/// `[K_sup]` write fence (Conflicts §10) — the exact parallel of the `[R]`
+/// fence, making `assert_sup`/`editlink` the sole `[K_sup]`-writers so every
+/// stored claim is schema-conformant, which the walk family leans on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitError {
     /// `home` is not a registered Document (P0; enforced on hit AND miss —
@@ -101,6 +99,33 @@ pub enum EditLinkError {
     DcViolation,
     /// M3's mint failed structurally.
     Mint(MintError),
+}
+
+/// The staleness family's served-only-where-declared rejection (§7): `ty` is
+/// not registered with BH4 (Age), so `stale` does not serve it. A typed
+/// refusal, never `Ok(vec![])` — so a caller reading an empty stale set is
+/// reading a truthful freshness claim, never "this type does not do
+/// staleness".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotBh4;
+
+/// retract_stale rejection (§7): the pre-transact BH4 fence, or a
+/// constituent nullify's own rejection lifted into the batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetractStaleError {
+    /// `ty` is not registered with BH4 (Age) — rejected before any
+    /// transaction is opened (served only where declared; the fence that
+    /// keeps the batch nullifier off idem⊤ classes).
+    NotBh4,
+    /// A constituent `nullify` transact rejected; earlier nullifies in the
+    /// batch stay committed (append-only, no rollback).
+    Nullify(NullifyError),
+}
+
+impl From<NullifyError> for RetractStaleError {
+    fn from(e: NullifyError) -> Self {
+        RetractStaleError::Nullify(e)
+    }
 }
 
 /// FOLLOWLINK's ⊥: link or slot absent (§E). Distinct from `Ok(⟨⟩)` — a
@@ -243,6 +268,32 @@ impl Error for EditLinkError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             EditLinkError::Mint(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for NotBh4 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("stale: ty is not registered with BH4 (Age) — served only where declared (§7)")
+    }
+}
+impl Error for NotBh4 {}
+
+impl fmt::Display for RetractStaleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RetractStaleError::NotBh4 => f.write_str(
+                "retract_stale: ty is not registered with BH4 (Age) — served only where declared (§7)",
+            ),
+            RetractStaleError::Nullify(e) => write!(f, "retract_stale: {e}"),
+        }
+    }
+}
+impl Error for RetractStaleError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            RetractStaleError::Nullify(e) => Some(e),
             _ => None,
         }
     }

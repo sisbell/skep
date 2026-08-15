@@ -13,7 +13,7 @@ use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, EditLinkError, EmitError, Endset, HasLinks, Link, LinkStore,
-    MakeLinkError, NullifyError, ShippedType, Tip, View,
+    MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, Tip, View,
 };
 
 fn store(k: &skep_kernel::Kernel<World>) -> LinkStore<'_, World> {
@@ -43,11 +43,25 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let all = ls.observe(&rel_ty(), &[], &[], View::Active);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].addr, a1);
-    assert_eq!(ls.observe(&rel_ty(), &[ca(1)], &[ca(2)], View::Active).len(), 1);
-    assert!(ls.observe(&rel_ty(), &[ca(3)], &[], View::Active).is_empty());
+    assert_eq!(
+        ls.observe(
+            &rel_ty(),
+            &[ca(1).tumbler().clone()],
+            &[ca(2).tumbler().clone()],
+            View::Active
+        )
+        .len(),
+        1
+    );
+    assert!(ls
+        .observe(&rel_ty(), &[ca(3).tumbler().clone()], &[], View::Active)
+        .is_empty());
     // Default predicates D1/D2/D3.
-    assert!(ls.is_k(&rel_ty(), &ca(1)));
-    assert!(!ls.is_k(&rel_ty(), &ca(2))); // membership is over F, not G
+    assert!(ls.is_k(&rel_ty(), ca(1).tumbler()));
+    assert!(!ls.is_k(&rel_ty(), ca(2).tumbler())); // membership is over F, not G
+    // The probe domain is all of carrier T: a raw tumbler under subtree(ca1)
+    // — not an element address — is an honest membership probe.
+    assert!(ls.is_k(&rel_ty(), &t(&[1, 0, 1, 0, 1, 0, 1, 1, 5])));
     assert_eq!(ls.members(&rel_ty(), View::Active), vec![ca(1)]);
     assert_eq!(ls.targets_of(&rel_ty(), &ca(1), View::Active), vec![ca(2)]);
     // BH3 endpoint projections.
@@ -201,12 +215,15 @@ fn assert_sup_dedup_walk_and_standoff() {
         assert_eq!(ls.succs(&sup, &x), vec![y.clone()]);
         assert_eq!(ls.chain(&sup, &x), vec![x.clone(), y.clone()]);
         assert_eq!(ls.tip(&sup, &x), Tip::Sink(y.clone()));
-        // is_in_chain is caller-derived (interface): membership in chain's
-        // result list.
-        assert!(ls.chain(&sup, &x).contains(&y));
-        // The walk family serves only the shipped Supersedes class in v1.
+        // is_in_chain: membership in the walk's result list, never a
+        // coverage test; edges run old → new only.
+        assert!(ls.is_in_chain(&sup, &x, &y));
+        assert!(!ls.is_in_chain(&sup, &y, &x));
+        // The walk family serves only the shipped Supersedes class in v1 —
+        // for any other ty the chain is empty, so nothing is a member.
         assert!(ls.succs(&rel_ty(), &x).is_empty());
         assert!(ls.chain(&rel_ty(), &x).is_empty());
+        assert!(!ls.is_in_chain(&rel_ty(), &x, &x));
         assert_eq!(ls.tip(&rel_ty(), &x), Tip::Indeterminate);
     }
     // Dedup excludes home: the same (old, new) from ANOTHER home hits the
@@ -477,7 +494,7 @@ fn stab_and_match_links_overlap_excludes_adjacency() {
 }
 
 #[test]
-fn bh4_age_stale_and_the_dormant_batch_fence() {
+fn bh4_age_stale_and_the_typed_batch_fence() {
     let k = kernel();
     let s = store(&k);
     let snap0 = k.snapshot();
@@ -501,19 +518,37 @@ fn bh4_age_stale_and_the_dormant_batch_fence() {
         assert_eq!(ls.age(&m1), Some(0));
         assert_eq!(ls.age(&ca(1)), None); // non-resident ⇒ None
         // stale = age > h over the ACTIVE type slice, BH4-registered only.
-        assert_eq!(ls.stale(&bh4_ty(), 2), vec![t1.clone()]);
-        assert_eq!(ls.stale(&bh4_ty(), 1), vec![t1.clone(), t2.clone()]);
-        // Served only where declared: a non-BH4 ty yields nothing — even
-        // though its tuples have positive ages.
-        assert!(ls.stale(&multi_ty(), 0).is_empty());
-        assert!(ls.stale(&sup, 0).is_empty());
+        assert_eq!(ls.stale(&bh4_ty(), 2).expect("BH4-registered"), vec![t1.clone()]);
+        assert_eq!(
+            ls.stale(&bh4_ty(), 1).expect("BH4-registered"),
+            vec![t1.clone(), t2.clone()]
+        );
+        // Served only where declared: a non-BH4 ty is a typed rejection —
+        // its tuples have positive ages, but an empty stale set is never
+        // conflated with "not a BH4 type".
+        assert_eq!(ls.stale(&multi_ty(), 0), Err(NotBh4));
+        assert_eq!(ls.stale(&sup, 0), Err(NotBh4));
     }
-    // The batch nullifier is dormant for a non-BH4 ty: no transaction, no
-    // effect (the foot-gun the fence closes — aiming it at an idem⊤/other
-    // class can never mass-nullify).
+    // The batch nullifier rejects a non-BH4 ty PRE-TRANSACT: typed refusal,
+    // no transaction, no effect (the fence that keeps it from ever being
+    // aimed at an idem⊤/other class to mass-nullify).
     let before = k.current_seq();
-    assert_eq!(s.retract_stale(&doc2(), &multi_ty(), 0).expect("dormant"), vec![]);
-    assert_eq!(s.retract_stale(&doc2(), &sup, 0).expect("dormant"), vec![]);
+    assert!(matches!(
+        s.retract_stale(&doc2(), &multi_ty(), 0),
+        Err(TxnError::Rejected(RetractStaleError::NotBh4))
+    ));
+    assert!(matches!(
+        s.retract_stale(&doc2(), &sup, 0),
+        Err(TxnError::Rejected(RetractStaleError::NotBh4))
+    ));
+    // A constituent nullify's rejection lifts through Nullify (nothing
+    // committed here either: the first nullify rejects on P0).
+    assert!(matches!(
+        s.retract_stale(&a(&[1, 0, 1, 0, 7]), &bh4_ty(), 2),
+        Err(TxnError::Rejected(RetractStaleError::Nullify(
+            NullifyError::HomeNotRegistered
+        )))
+    ));
     assert_eq!(k.current_seq(), before);
     // On a BH4 ty it nullifies exactly the stale set snapshotted at entry.
     let out = s.retract_stale(&doc2(), &bh4_ty(), 2).expect("batch");
@@ -538,20 +573,23 @@ fn retired_filter_rewrites_default_views_only() {
     s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("relation");
     {
         let snap = k.snapshot();
-        assert!(!snap.world().links().is_filtered(&ca(1)));
+        assert!(!snap.world().links().is_filtered(ca(1).tumbler()));
     }
     // Retire ca(1) through the shipped Unary/idem⊤ BH1 class.
     s.emit(&doc1(), &retired, &ca(1), &[]).expect("retire ca1");
     let snap = k.snapshot();
     let ls = snap.world().links();
-    assert!(ls.is_filtered(&ca(1)));
-    assert!(!ls.is_filtered(&ca(2)));
+    assert!(ls.is_filtered(ca(1).tumbler()));
+    assert!(!ls.is_filtered(ca(2).tumbler()));
+    // T-wide probe: any tumbler under a retired root is filtered, address
+    // or not.
+    assert!(ls.is_filtered(&t(&[1, 0, 1, 0, 1, 0, 1, 1, 7])));
     // Default = active ∖ filtered — on members/targets_of only.
     assert_eq!(ls.members(&multi_ty(), View::Active), vec![ca(1)]);
     assert!(ls.members(&multi_ty(), View::Default).is_empty());
     assert_eq!(ls.targets_of(&multi_ty(), &ca(1), View::Default), vec![ca(2)]);
     // is_k is never filtered (BH1 Rewrite scope).
-    assert!(ls.is_k(&multi_ty(), &ca(1)));
+    assert!(ls.is_k(&multi_ty(), ca(1).tumbler()));
     // J ≠ K′: the filter class itself is not self-subtracted.
     assert_eq!(ls.members(&retired, View::Default), vec![ca(1)]);
 }

@@ -400,6 +400,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-links"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "im",
+ "serde",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-kernel",
+ "skep-namespace",
+]
+
+[[package]]
 name = "skep-namespace"
 version = "0.1.0"
 dependencies = [

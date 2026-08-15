@@ -13,7 +13,7 @@ use skep_address::{
 };
 
 use crate::endset::{coverage_class, enc, single_denoted, CoverageClass, Endset, Link};
-use crate::error::Invalid;
+use crate::error::{Invalid, NotBh4};
 use crate::registry::{Behavior, Shape, ShippedType};
 use crate::state::LinkState;
 use crate::{FROM, TO};
@@ -109,23 +109,20 @@ impl LinkState {
     // ─────────────── §F — typed reads & the PL surface ────────────────
 
     /// Observe (ASN-0086): exact ⊆-coverage match over the `v` typed slice —
-    /// every pattern address denoted by the tuple's F (resp. G); an empty
-    /// pattern is no constraint. `Default → Active` (raw Observe never
-    /// filters — ASN-0128).
-    ///
-    /// DEVIATION (recorded): the interface types the patterns `&[Address]`;
-    /// the design's pattern domain is T-wide raw `&[Tumbler]` (ASN-0086 —
-    /// ghosts and non-T4 tumblers admitted). The interface signature is
-    /// binding, so non-T4 probes are inexpressible here; ghost (unallocated
-    /// but valid) addresses remain probe-able.
-    pub fn observe(&self, ty: &Endset, from_pat: &[Address], to_pat: &[Address], v: View) -> Vec<Tuple> {
+    /// every pattern tumbler denoted by the tuple's F (resp. G); an empty
+    /// pattern is no constraint. The pattern domain is ALL of carrier T
+    /// (ASN-0086): membership rides [`Endset::denotes`], total on T, so ghost
+    /// (unallocated) addresses and the non-T4 tumblers inside a non-unit
+    /// span's coverage are honest probes. `Default → Active` (raw Observe
+    /// never filters — ASN-0128).
+    pub fn observe(&self, ty: &Endset, from_pat: &[Tumbler], to_pat: &[Tumbler], v: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let slice = self.type_slice_class(&class, coerce(v));
         let mut out = Vec::new();
         for t in slice.iter() {
             let link = self.links.get(t).expect("type_class keys are resident links");
-            let f_ok = from_pat.iter().all(|p| link.from_slot().denotes(p.tumbler()));
-            let g_ok = to_pat.iter().all(|p| link.to_slot().denotes(p.tumbler()));
+            let f_ok = from_pat.iter().all(|p| link.from_slot().denotes(p));
+            let g_ok = to_pat.iter().all(|p| link.to_slot().denotes(p));
             if f_ok && g_ok {
                 out.push(Tuple {
                     addr: lift(t),
@@ -138,17 +135,15 @@ impl LinkState {
     }
 
     /// D2: exact ACTIVE coverage-membership — some active type-`ty` tuple's
-    /// F denotes the probe. Never a `stab` overlap call (an ancestor pattern
+    /// F denotes the probe, which ranges over all of carrier T (`observe`'s
+    /// pattern domain). Never a `stab` overlap call (an ancestor pattern
     /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
-    ///
-    /// DEVIATION (recorded): interface probe type `&Address`; the design's
-    /// membership domain is all of T (`&Tumbler`).
-    pub fn is_k(&self, ty: &Endset, a: &Address) -> bool {
+    pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
-        self.type_slice_class(&class, View::Active).iter().any(|t| {
+        self.type_slice_class(&class, View::Active).iter().any(|addr| {
             self.links
-                .get(t)
-                .is_some_and(|l| l.from_slot().denotes(a.tumbler()))
+                .get(addr)
+                .is_some_and(|l| l.from_slot().denotes(t))
         })
     }
 
@@ -169,7 +164,7 @@ impl LinkState {
             }
         }
         set.iter()
-            .filter(|m| !(subtract && self.filtered_t(m)))
+            .filter(|m| !(subtract && self.is_filtered(m)))
             .map(lift)
             .collect()
     }
@@ -191,7 +186,7 @@ impl LinkState {
             }
         }
         set.iter()
-            .filter(|g| !(subtract && self.filtered_t(g)))
+            .filter(|g| !(subtract && self.is_filtered(g)))
             .map(lift)
             .collect()
     }
@@ -208,15 +203,19 @@ impl LinkState {
     }
 
     /// BH1 read-filter (§7): membership in the shipped `Retired` class's
-    /// active filter slice — prefix-containment over its roots, computed
-    /// lazily (the filtered subtree is never materialized). Correct
-    /// TYPE-LESS because v1 registers exactly one BH1 type — build-enforced
-    /// (`UnservedSecondFilter`, §B).
-    ///
-    /// DEVIATION (recorded): interface probe type `&Address`; the design's
-    /// probe domain is all of T (`&Tumbler`, the `is_k` membership regime).
-    pub fn is_filtered(&self, a: &Address) -> bool {
-        self.filtered_t(a.tumbler())
+    /// active filter slice — some active retired root is a prefix of the
+    /// probe, computed lazily (the filtered subtree is never materialized).
+    /// The probe ranges over all of carrier T (the `is_k` membership regime:
+    /// every tumbler under a retired root is filtered, addresses or not).
+    /// Correct TYPE-LESS because v1 registers exactly one BH1 type —
+    /// build-enforced (`UnservedSecondFilter`, §B).
+    pub fn is_filtered(&self, probe: &Tumbler) -> bool {
+        let rc = self.shipped_class(ShippedType::Retired);
+        self.type_slice_class(&rc, View::Active).iter().any(|t| {
+            self.links
+                .get(t)
+                .is_some_and(|l| l.from_slot().addrs().any(|root| is_prefix(root, probe)))
+        })
     }
 
     /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
@@ -241,6 +240,14 @@ impl LinkState {
         }
         let (path, _) = self.walk_sup(x.tumbler());
         path.iter().map(lift).collect()
+    }
+
+    /// BH2 chain membership: `target ∈ chain(ty, addr)` — membership in the
+    /// walk's result list, never a coverage test. Inherits `chain`'s halting
+    /// rule (branch/cycle truncate the path) and its v1 serving scope: a
+    /// non-`Supersedes` `ty` has an empty chain, so nothing is a member.
+    pub fn is_in_chain(&self, ty: &Endset, addr: &Address, target: &Address) -> bool {
+        self.chain(ty, addr).contains(target)
     }
 
     /// BH2 head: `Sink(head)` when the walk halts at a successor-free node;
@@ -321,26 +328,24 @@ impl LinkState {
         Some(count.saturating_sub(ord))
     }
 
-    /// BH4 stale set (§7): active type-`ty` tuples with `age > h`, for a
-    /// `ty` REGISTERED with BH4 (Age).
-    ///
-    /// DEVIATION (recorded): the design fences a non-BH4 `ty` with a typed
-    /// `Err(NotBh4)` (served-only-where-declared); the interface signature —
-    /// binding — returns a bare `Vec<Address>`. The fence's SAFETY intent is
-    /// preserved by returning the empty vec for any `ty` not registered with
-    /// BH4 (so `retract_stale` can never be aimed at an idem⊤ class, e.g.
-    /// mass-nullifying old `[K_sup]` claims); the caller loses only the
-    /// ability to distinguish "no stale tuples" from "not a BH4 type".
-    pub fn stale(&self, ty: &Endset, h: u64) -> Vec<Address> {
+    /// BH4 stale set (§7): active type-`ty` tuples with `age > h`, served
+    /// only where declared — `Err(NotBh4)` unless `ty` is REGISTERED with
+    /// BH4 (Age). The typed rejection keeps `Ok(vec![])` a truthful
+    /// freshness claim (never conflated with "not a BH4 type") and is the
+    /// read half of the fence `retract_stale` enforces pre-transact, so the
+    /// batch nullifier can never be aimed at an idem⊤ class (e.g.
+    /// mass-nullifying old `[K_sup]` claims).
+    pub fn stale(&self, ty: &Endset, h: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
         let bh4 = self
             .registry
             .registration(&class)
             .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
         if !bh4 {
-            return Vec::new();
+            return Err(NotBh4);
         }
-        self.type_slice_class(&class, View::Active)
+        Ok(self
+            .type_slice_class(&class, View::Active)
             .iter()
             .filter_map(|t| {
                 let a = lift(t);
@@ -349,7 +354,7 @@ impl LinkState {
                     _ => None,
                 }
             })
-            .collect()
+            .collect())
     }
 
     /// ASN-0125 currency (EL14, hardwired to `[K_sup]`): the operative sinks
@@ -512,17 +517,6 @@ impl LinkState {
                 _ => return (path, None), // branch
             }
         }
-    }
-
-    /// The raw-tumbler BH1 filter test: some active `Retired`-class root is
-    /// a prefix of the probe.
-    pub(crate) fn filtered_t(&self, probe: &Tumbler) -> bool {
-        let rc = self.shipped_class(ShippedType::Retired);
-        self.type_slice_class(&rc, View::Active).iter().any(|t| {
-            self.links
-                .get(t)
-                .is_some_and(|l| l.from_slot().addrs().any(|root| is_prefix(root, probe)))
-        })
     }
 
     /// `target_of` by class (shared with `targets_keyed`, whose registry walk

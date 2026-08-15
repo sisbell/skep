@@ -68,15 +68,12 @@ pub struct ReservedAddrs {
     pub retraction: Address,
 }
 
-/// [`TypeRegistry::build`] rejection.
-///
-/// DEVIATION (recorded): the interface enumerates only the first six
-/// variants; the design's v1 serving fence (§B) adds `UnservedWalk` and
-/// `UnservedSecondFilter`, making "declared ⇒ served" a build-time property —
-/// without them an app-declared Walk/ReadFilter behavior would be admitted
-/// and then silently unserved by the v1 read surface. The design's fence is
-/// realized; both rejections lift when the parameterized multi-BH1/multi-BH2
-/// paths land (Open build decisions).
+/// [`TypeRegistry::build`] rejection. `UnservedWalk` and
+/// `UnservedSecondFilter` are the v1 serving fence (§B), making "declared ⇒
+/// served" a build-time property — without them an app-declared
+/// Walk/ReadFilter behavior would be admitted and then silently unserved by
+/// the v1 read surface. Both rejections lift when the parameterized
+/// multi-BH1/multi-BH2 paths land (Open build decisions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistryError {
     /// C0 key uniqueness: two keys (shipped or app) share a coverage class.

@@ -17,7 +17,9 @@ use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 use crate::endset::{
     coverage_class, enc, is_address_denoting, single_denoted, CoverageClass, DedupKey, Endset, Link,
 };
-use crate::error::{AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError};
+use crate::error::{
+    AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, RetractStaleError,
+};
 use crate::registry::{Behavior, Shape, ShippedType, TypeRegistry};
 use crate::state::{LinkRec, LinkState};
 use crate::{s_c, s_l, HasLinks};
@@ -151,6 +153,17 @@ impl From<EmitCoreError> for EditLinkError {
             EmitCoreError::Mint(m) => EditLinkError::Mint(m),
             _ => unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed"),
         }
+    }
+}
+
+/// §7 error mapping: lift a constituent `nullify` transact error into the
+/// batch op's space — a typed rejection rides `RetractStaleError::Nullify`;
+/// kernel-level failures pass through unchanged.
+fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
+    match e {
+        TxnError::Rejected(n) => TxnError::Rejected(n.into()),
+        TxnError::Durability(io) => TxnError::Durability(io),
+        TxnError::Poisoned => TxnError::Poisoned,
     }
 }
 
@@ -609,42 +622,42 @@ where
 
     /// BH4 batch tooling (§7): nullify every stale tuple of `ty` (age >
     /// `horizon` over the type-`ty` active slice), the stale set snapshotted
-    /// at entry. NOT atomic — a sequence of `nullify` transacts; on the
-    /// first `TxnError` it returns `Err`, leaving earlier nullifies
-    /// committed and durable (append-only, no rollback) — a re-run with the
-    /// same `d_retr` is safe (already-nullified targets from this `d_retr`
-    /// dedup; the recomputed stale set excludes them).
-    ///
-    /// Served only where declared: a `ty` not registered with BH4 is dormant
-    /// by construction — v1 ships no BH4 type. DEVIATION (recorded): the
-    /// design rejects that case pre-transact as
-    /// `TxnError::Rejected(RetractStaleError::NotBh4)`; the interface —
-    /// binding — types the error `TxnError<NullifyError>`, which cannot
-    /// carry it, so a non-BH4 `ty` returns `Ok(vec![])` with no transaction
-    /// opened. The fence's safety half survives (the batch nullifier can
-    /// never be aimed at an idem⊤ class — `stale` yields nothing for a
-    /// non-BH4 `ty`); the typed-rejection half is unexpressible.
+    /// at entry. Served only where declared: a `ty` not registered with BH4
+    /// (Age) is rejected PRE-TRANSACT as
+    /// `TxnError::Rejected(RetractStaleError::NotBh4)` — no transaction
+    /// opened, the same channel as `emit`'s pre-transact rejections — so the
+    /// batch nullifier can never be aimed at an idem⊤ class (e.g.
+    /// mass-nullifying old `[K_sup]` claims); v1 ships no BH4 type, so every
+    /// call rejects until an app registers one. NOT atomic — a sequence of
+    /// `nullify` transacts, each failure lifted through
+    /// `RetractStaleError::Nullify`; on the first `TxnError` it returns
+    /// `Err`, leaving earlier nullifies committed and durable (append-only,
+    /// no rollback) — a re-run with the same `d_retr` is safe
+    /// (already-nullified targets from this `d_retr` dedup; the recomputed
+    /// stale set excludes them).
     pub fn retract_stale(
         &self,
         d_retr: &Address,
         ty: &Endset,
         horizon: u64,
-    ) -> Result<Vec<(Address, Seq)>, TxnError<NullifyError>> {
+    ) -> Result<Vec<(Address, Seq)>, TxnError<RetractStaleError>> {
         let bh4 = self
             .registry
             .registration(&coverage_class(ty))
             .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
         if !bh4 {
-            return Ok(Vec::new()); // served only where declared (§7)
+            return Err(TxnError::Rejected(RetractStaleError::NotBh4)); // §7
         }
         let stale: Vec<Address> = {
             let snap = self.kernel.snapshot();
             let world = snap.world();
-            world.links().stale(ty, horizon)
+            world.links().stale(ty, horizon).expect(
+                "BH4 registration checked pre-transact against the same genesis-immutable registry",
+            )
         };
         let mut out = Vec::with_capacity(stale.len());
         for target in &stale {
-            out.push(self.nullify(d_retr, target)?);
+            out.push(self.nullify(d_retr, target).map_err(lift_nullify)?);
         }
         Ok(out)
     }

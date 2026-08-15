@@ -35,19 +35,6 @@
 //! * no `coverage` function — coverage is the query-time `denotes`
 //!   projection, never a stored value.
 //!
-//! ## Interface/design divergences realized here (surfaced, not papered over)
-//!
-//! The M7 interface and the M7 design disagree in places; per the authority
-//! ladder the interface's signatures are followed and the design's semantics
-//! are kept where expressible. Each site carries a `DEVIATION` note:
-//! `EmitError::SupersessionClass` and the registry's two v1 serving-fence
-//! variants are design-mandated additions to the interface's enums;
-//! `stale`/`retract_stale` keep the interface shapes and realize the
-//! design's NotBh4 fence as an empty result; `observe`/`is_k`/`is_filtered`
-//! take the interface's `Address` probes (the design's T-wide `Tumbler`
-//! domain is inexpressible under them); `is_in_chain` is caller-derived
-//! (`chain(ty, addr).contains(target)`), per the interface's explicit note.
-//!
 //! ## Composition
 //!
 //! Per the Engine Composition Contract, M7 never names the concrete
@@ -70,7 +57,8 @@ mod store;
 
 pub use endset::{coverage_class, enc, CoverageClass, Endset, Link};
 pub use error::{
-    AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NullifyError,
+    AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
+    RetractStaleError,
 };
 pub use reads::{CurrentMember, Tip, Tuple, View};
 pub use registry::{

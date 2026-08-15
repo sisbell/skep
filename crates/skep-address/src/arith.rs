@@ -12,8 +12,7 @@
 use std::error::Error;
 use std::fmt;
 
-use crate::address::{validate, zeros, Address, Level};
-use crate::error::{AddPrecond, GateViolation, SubPrecond};
+use crate::address::{validate, Address, Level};
 use crate::tumbler::{nat_is_zero, Nat, Pos, Tumbler};
 
 /// First nonzero index (1-based) — the level at which a displacement acts;
@@ -34,6 +33,17 @@ pub fn sig(t: &Tumbler) -> Pos {
         .rposition(|c| !nat_is_zero(c))
         .map_or(t.len(), |i| i + 1)
 }
+
+/// [`add`] (`⊕`) precondition failure: `¬Pos(w) ∨ actionPoint(w) > #a`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AddPrecond;
+
+impl fmt::Display for AddPrecond {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("⊕ precondition failed: requires Pos(w) and actionPoint(w) ≤ #a")
+    }
+}
+impl Error for AddPrecond {}
 
 /// `⊕` — precondition `Pos(w) ∧ actionPoint(w) ≤ #a`, else `Err(AddPrecond)`.
 /// With `k = actionPoint(w)`: copy `a₁..a_{k-1}`, set `a_k + w_k`, take
@@ -58,6 +68,17 @@ pub fn add(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, AddPrecond> {
 fn padded<'t>(t: &'t Tumbler, i: usize, zero: &'t Nat) -> &'t Nat {
     t.comps().get(i).unwrap_or(zero)
 }
+
+/// [`sub`] (`⊖`) precondition failure: `a < w` (`⊖` requires `a ≥ w`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubPrecond;
+
+impl fmt::Display for SubPrecond {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("⊖ precondition failed: requires a ≥ w")
+    }
+}
+impl Error for SubPrecond {}
 
 /// `⊖` — precondition `a ≥ w`, else `Err(SubPrecond)`. Zero-pad both to
 /// `L = max(#a, #w)`, find the zero-padded divergence, emit zeros before it,
@@ -109,17 +130,30 @@ pub fn inc(t: &Tumbler, k: usize) -> Tumbler {
 
 /// TA5a gate predicate (T10a) — **the minting producer (M3) must consult this
 /// before minting**: true for `k ∈ {0, 1}` always, for `k = 2` iff
-/// `zeros(t) ≤ 2`, never for `k ≥ 3` (adjacent zeros would be appended).
+/// `zeros(t) ≤ 2` — a valid address's level IS its separator count, so this
+/// is read off the level the `Address` already carries (`≤ 2` ⟺ not
+/// Element-level) — never for `k ≥ 3` (adjacent zeros would be appended).
 /// Correctness is owed here; *enforcement* — and the frontier the gate guards
 /// — is M3's obligation: an allocator that skips it emits T4-invalid
 /// addresses and breaks the level determination GlobalUniqueness rests on.
 pub fn inc_preserves_t4(t: &Address, k: usize) -> bool {
     match k {
         0 | 1 => true,
-        2 => zeros(t.tumbler()) <= 2,
+        2 => t.level() != Level::Element,
         _ => false,
     }
 }
+
+/// [`checked_inc`]: the TA5a gate refused — `inc_preserves_t4(t, k)` is false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateViolation;
+
+impl fmt::Display for GateViolation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TA5a gate violation: inc would not preserve T4-validity")
+    }
+}
+impl Error for GateViolation {}
 
 /// `inc` + TA5a gate + reclassify — an `Address` mint site (validity
 /// preserved; routed through [`validate`] defensively).

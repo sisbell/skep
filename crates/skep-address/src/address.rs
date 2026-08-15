@@ -31,6 +31,19 @@ pub enum Class {
     Invalid,
 }
 
+impl Class {
+    /// The Partition embedding (`Class = Level ⊎ {Invalid}`): every level is
+    /// a class; only the classifier can answer `Invalid`.
+    fn of(level: Level) -> Class {
+        match level {
+            Level::Node => Class::Node,
+            Level::Account => Class::Account,
+            Level::Document => Class::Document,
+            Level::Element => Class::Element,
+        }
+    }
+}
+
 /// The four T4-validity clauses (T4): no leading zero (`t₁ ≠ 0`), no trailing
 /// zero (`t_{#t} ≠ 0`), no adjacent zeros, and `zeros(t) ≤ 3`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,15 +162,10 @@ fn level_of_zeros(z: usize) -> Level {
 /// arithmetic bound `zeros ≤ 3`, never from a level-name bijection.
 pub fn classify(t: &Tumbler) -> Class {
     let (z, clauses) = t4_scan(t);
-    if !clauses.is_empty() {
-        return Class::Invalid;
-    }
-    match z {
-        0 => Class::Node,
-        1 => Class::Account,
-        2 => Class::Document,
-        3 => Class::Element,
-        _ => unreachable!("no clause violated ⇒ zeros ≤ 3"),
+    if clauses.is_empty() {
+        Class::of(level_of_zeros(z))
+    } else {
+        Class::Invalid
     }
 }
 
@@ -342,11 +350,13 @@ pub fn same_document(a: &Address, b: &Address) -> bool {
 /// from what — derivation history is a separate version graph (M3/M5),
 /// explicitly not M1's.
 pub fn under_document(a: &Address, b: &Address) -> bool {
-    if a.document_field().is_none() || b.document_field().is_none() {
-        return false;
+    if a.document_field().is_none() {
+        return false; // zeros ≥ 2 is required on BOTH operands; this is a's side
     }
-    let doc_b = document_of(b).expect("document field present ⇒ zeros ≥ 2");
-    is_prefix(doc_b.tumbler(), a.tumbler())
+    match document_of(b) {
+        Some(doc_b) => is_prefix(doc_b.tumbler(), a.tumbler()),
+        None => false, // b's side: zeros(b) < 2
+    }
 }
 
 /// §C — the longest T4-valid proper prefix: drop the last component and, if
@@ -376,18 +386,14 @@ pub fn parent(a: &Address) -> Option<Address> {
 /// *construction* stays in M1, so M6 never reassembles from raw
 /// `document_field()` components. Preserves the validity invariant.
 pub fn document_of(a: &Address) -> Option<Address> {
-    let comps = a.tumbler().comps();
-    let mut seps = comps
-        .iter()
-        .enumerate()
-        .filter(|&(_, c)| nat_is_zero(c))
-        .map(|(i, _)| i);
-    seps.next()?; // zeros ≥ 1
-    seps.next()?; // zeros ≥ 2
-    match seps.next() {
+    let seps = a.separators();
+    if seps.len() < 2 {
+        return None; // zeros < 2: no document prefix exists
+    }
+    match seps.get(2) {
         None => Some(a.clone()), // zeros = 2: already the Document
-        Some(z3) => {
-            let prefix = Tumbler::from_vec(comps[..z3].to_vec());
+        Some(&z3) => {
+            let prefix = Tumbler::from_vec(a.tumbler().comps()[..z3].to_vec());
             Some(
                 validate(prefix)
                     .expect("the zeros=2 prefix of a T4-valid address is a valid Document"),

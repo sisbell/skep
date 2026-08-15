@@ -14,6 +14,16 @@
 //! realizes (T0, T4, S3, …), so a reviewer can walk from code to design
 //! without the documents open.
 //!
+//! ## Errors
+//!
+//! Every rejection type lives beside the one operation that produces it;
+//! [`LevelMismatch`], produced across the span and span-set algebra, is the
+//! one shared error and keeps its own module. Serde bound (design preamble):
+//! the validating `try_from` deserialization shadows require
+//! `TryFrom::Error: Display`, so [`EmptySequence`], [`T4Error`], and
+//! [`T12Clause`] must implement `Display`; every other public error carries
+//! one too, uniformly, ahead of any serde boundary it might ever back.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * the **allocator** — durable monotone frontier, active-allocator set,
@@ -50,16 +60,15 @@ pub use address::{
 };
 pub use arith::{
     action_point, add, checked_inc, displacement, elem_addr, inc, inc_preserves_t4, shift,
-    shift_ordinal, sig, sub, ElemError, ElemPos,
+    shift_ordinal, sig, sub, AddPrecond, ElemError, ElemPos, GateViolation, SubPrecond,
 };
-pub use error::{
-    AddPrecond, EmptySequence, GateViolation, LevelMismatch, SplitError, SubPrecond, WfError,
-};
+pub use error::LevelMismatch;
 pub use span::{
-    classify_spans, difference, intersect, merge, split, subtree_of, Span, SpanRel, T12Clause,
+    classify_spans, difference, intersect, merge, split, subtree_of, Span, SpanRel, SplitError,
+    T12Clause, WfError,
 };
 pub use spanset::{
     canonical_key, cover, difference_sets, equiv, hull, intersect_sets, union, CanonicalForm,
     SpanSet,
 };
-pub use tumbler::{is_prefix, Nat, Pos, Tumbler};
+pub use tumbler::{is_prefix, EmptySequence, Nat, Pos, Tumbler};

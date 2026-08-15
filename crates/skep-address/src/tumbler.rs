@@ -1,10 +1,10 @@
 //! §A — tumbler value, identity, order (ASN-0034: T0–T3, TA-PosDom).
 
 use std::cmp::Ordering;
+use std::error::Error;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
-
-use crate::error::EmptySequence;
 
 /// ℕ. Unbounded component magnitude is T0(a) and non-negotiable: a fixed-width
 /// component would be a spec violation absent a discharged finite-model proof
@@ -24,6 +24,19 @@ pub type Pos = usize;
 pub(crate) fn nat_is_zero(c: &Nat) -> bool {
     c.bits() == 0
 }
+
+/// [`Tumbler::new`] on the empty sequence — T0's carrier is the *nonempty*
+/// finite sequences over ℕ (resolves ASN-0045's empty-tumbler question
+/// upstream: `[]` is not a tumbler at all, so the classifier never sees it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmptySequence;
+
+impl fmt::Display for EmptySequence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("empty component sequence (T0 admits only nonempty tumblers)")
+    }
+}
+impl Error for EmptySequence {}
 
 /// A tumbler: an immutable, **nonempty** sequence of ℕ components with zeros
 /// stored explicitly — the literal component sequence (T0). Canonical identity

@@ -12,7 +12,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::arith::{action_point, add, shift, sub};
-use crate::error::{LevelMismatch, SplitError, WfError};
+use crate::error::LevelMismatch;
 use crate::spanset::SpanSet;
 use crate::tumbler::{Nat, Tumbler};
 
@@ -36,6 +36,27 @@ impl fmt::Display for T12Clause {
     }
 }
 impl Error for T12Clause {}
+
+/// [`Span::from_endpoints`] rejection (WF: `s < r ∧ #s = #r`). The level
+/// clause is checked FIRST (gate-first, design §6): a pair failing both
+/// yields `LevelMismatch`, not `NotIncreasing`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WfError {
+    /// `¬(s < r)` — endpoints not strictly increasing.
+    NotIncreasing,
+    /// `#s ≠ #r` — endpoints in different length classes.
+    LevelMismatch,
+}
+
+impl fmt::Display for WfError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            WfError::NotIncreasing => "WF failed: endpoints not strictly increasing (s < r)",
+            WfError::LevelMismatch => "WF failed: endpoint lengths differ (#s ≠ #r)",
+        })
+    }
+}
+impl Error for WfError {}
 
 /// A half-open interval of the tumbler order: `(start, width)` authoritative
 /// — the spec's form, aligning the edit primitive with the storage primitive
@@ -242,6 +263,26 @@ pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
         Span::from_endpoints(lo, hi).expect("non-separated gated operands give lo < hi"),
     ))
 }
+
+/// [`split`] rejection. The level conditions run FIRST (gate-first, design
+/// §6): `LevelMismatch` wins when both fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitError {
+    /// `¬(start < p < reach)` — the point is not strictly interior.
+    NotInterior,
+    /// σ not level-uniform (S4) or `#start ≠ #p`.
+    LevelMismatch,
+}
+
+impl fmt::Display for SplitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            SplitError::NotInterior => "split failed: point not strictly interior (start < p < reach)",
+            SplitError::LevelMismatch => "split failed: level conditions violated (S4/S6)",
+        })
+    }
+}
+impl Error for SplitError {}
 
 /// S4 — split σ at an interior point. Requires σ itself level-uniform (S4 —
 /// so `reach ⊖ p` shares the common length) AND `#start = #p` AND

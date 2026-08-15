@@ -280,20 +280,24 @@ fn link_lifecycle() {
     assert_eq!(eat2, eat1);
     assert_eq!(fx.op.log_position(), log0);
 
-    // Pre-edit survival preview: both links keep witnesses outside [1,1].
+    // Pre-edit survival preview (the last-witness condition over the active
+    // view): l1/l2/succ keep witnesses at ordinals 2–3, but the pred-def
+    // tuple's only content anchor IS the element being deleted — it alone
+    // is reported dropped from d.
     let rep = orphans(ex(&fx.op, fx.s, Op::DeleteOrphans { d: d.clone(), p: vp(1, 1), width: n(1) }));
-    assert!(rep.orphaned.is_empty());
+    assert_eq!(rep.orphaned, vec![e1.clone()]);
 
     // NULLIFY retracts l2: present-state reads are active-filtered
     // (foundation ∩ active — the region family stabs the link-store index,
-    // so the unseated editlink successor, whose endsets cover the same
-    // I-extents, still surfaces), and discoverable_from is compound
-    // "reachable AND active".
+    // so the unseated editlink successor and the pred-def tuple, whose
+    // endsets cover these I-extents, still surface), and discoverable_from
+    // is compound "reachable AND active".
     ack_addr(ex(&fx.op, fx.s, Op::Nullify { home: d.clone(), target: l2.clone() }));
     assert!(!boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l2.clone(), d: d.clone() })));
     let found = addrs(ex(&fx.op, fx.s, Op::FindLinksV { d: d.clone(), region: region.clone() }));
-    assert!(found.contains(&l1) && found.contains(&succ) && !found.contains(&l2));
-    assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 2);
+    assert!(found.contains(&l1) && found.contains(&succ) && found.contains(&e1));
+    assert!(!found.contains(&l2));
+    assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 3);
 }
 
 /// §5/§6: the typed rejection surface — the session gate, the

@@ -67,8 +67,13 @@ pub fn span_dict(v: &Value) -> Option<(u64, u64, u64)> {
     None
 }
 
+/// One document side of a spec: golden docid + `(subspace, ordinal, width)`
+/// span triples — the parsed shape of a vspec dict, shared by every
+/// endset/search builder in the translator.
+pub type DocSpans = (String, Vec<(u64, u64, u64)>);
+
 /// A golden vspec dict `{docid, spans|span}` → (docid, [(sub, ord, w)]).
-pub fn vspec_dict(v: &Value) -> Option<(String, Vec<(u64, u64, u64)>)> {
+pub fn vspec_dict(v: &Value) -> Option<DocSpans> {
     let o = v.as_object()?;
     let docid = o.get("docid").and_then(Value::as_str)?.to_string();
     if let Some(spans) = o.get("spans").and_then(Value::as_array) {

@@ -79,7 +79,7 @@ use crate::compare::{
 use crate::fields::{
     self, client_side_failure, doc_from_label, expect_spans_raw, expect_strings, expected_failure,
     field, label_of, link_home_docid, locate, parse_python_spec, position_from_label,
-    resolve_position, span_dict, str_field, vspec_dict, RawSpan,
+    resolve_position, span_dict, str_field, vspec_dict, DocSpans, RawSpan,
 };
 use crate::ground::{arrow_results, cuts_of, delete_region, insert_text, SetupStep};
 use crate::harness::Rig;
@@ -740,10 +740,9 @@ fn run_plan(cx: &mut Cx, index: usize, out: &mut OpOutcome) {
     out.adaptations.push(format!("expansion-plan:{}", plan.len()));
     for step in &plan {
         // Copies/inserts target docs the plan may create implicitly.
-        if let SetupStep::Copy { doc, .. } | SetupStep::Insert { doc, .. } = step {
-            if !cx.shadow.knows(doc) {
-                create_one(cx, out, doc, None);
-            }
+        let (SetupStep::Copy { doc, .. } | SetupStep::Insert { doc, .. }) = step;
+        if !cx.shadow.knows(doc) {
+            create_one(cx, out, doc, None);
         }
         if let Err(e) = cx.exec_setup_step(step) {
             out.status = Status::Disagreed;
@@ -1365,11 +1364,7 @@ fn h_pivot_swap(cx: &mut Cx, op: &Value, out: &mut OpOutcome, pivot: bool) {
 // ── links ───────────────────────────────────────────────────────────────────
 
 /// One endset side resolved to golden (doc, spans) pairs.
-fn side_specs(
-    cx: &mut Cx,
-    out: &mut OpOutcome,
-    v: &Value,
-) -> Result<Vec<(String, Vec<(u64, u64, u64)>)>, String> {
+fn side_specs(cx: &mut Cx, out: &mut OpOutcome, v: &Value) -> Result<Vec<DocSpans>, String> {
     if let Some(arr) = v.as_array() {
         let mut sides = Vec::new();
         for item in arr {
@@ -1404,10 +1399,7 @@ fn side_specs(
     }
 }
 
-fn to_vspecs(
-    cx: &mut Cx,
-    sides: &[(String, Vec<(u64, u64, u64)>)],
-) -> Result<Vec<VSpec>, String> {
+fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
     let mut specs = Vec::new();
     for (docid, spans) in sides {
         let Some(sd) = cx.alpha.translate(docid) else {
@@ -1430,7 +1422,7 @@ fn endset_evidence(
     from_index: usize,
     link_golden: &str,
     want_source: bool,
-) -> Option<Vec<(String, Vec<(u64, u64, u64)>)>> {
+) -> Option<Vec<DocSpans>> {
     let writes = ["insert", "delete", "remove", "vcopy", "copy", "pivot", "swap", "rearrange"];
     for op in &cx.ops[from_index + 1..] {
         let label = label_of(op).to_ascii_lowercase();
@@ -1503,7 +1495,7 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         });
 
         // FROM side.
-        let mut from_sides: Vec<(String, Vec<(u64, u64, u64)>)> = Vec::new();
+        let mut from_sides: Vec<DocSpans> = Vec::new();
         let explicit_from = field(op, &["source", "from"]).filter(|v| !v.is_string() || {
             v.as_str().is_some_and(|s| cx.shadow.resolve_doc(s).is_some() || locate(cx.shadow, None, s).is_some())
         });
@@ -1590,7 +1582,7 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         }
 
         // TO side.
-        let mut to_sides: Vec<(String, Vec<(u64, u64, u64)>)> = Vec::new();
+        let mut to_sides: Vec<DocSpans> = Vec::new();
         if let Some((_, t, _)) = &arrow {
             if let Some(doc) = cx.shadow.resolve_doc(t) {
                 let n = cx.shadow.text_len(&doc);
@@ -1866,7 +1858,7 @@ fn follow_compare(
     };
 
     // Shape 1: vspec dicts (possibly several docs) — compare spans per doc.
-    let as_vspecs: Option<Vec<(String, Vec<(u64, u64, u64)>)>> =
+    let as_vspecs: Option<Vec<DocSpans>> =
         expected.as_array().and_then(|arr| arr.iter().map(vspec_dict).collect());
     if let Some(vspecs) = as_vspecs {
         if !vspecs.is_empty() {
@@ -2043,7 +2035,7 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             continue;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
-            fails.push((format!("{link_golden}"), "unresolvable link".into()));
+            fails.push((link_golden.clone(), "unresolvable link".into()));
             continue;
         };
         let (slot, expected) = if let Some(t) = e.get("target_text") {
@@ -2129,7 +2121,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     }
 
     // The search region: vspec array, doc reference, located text.
-    let search_sides: Option<Vec<(String, Vec<(u64, u64, u64)>)>> = (|| {
+    let search_sides: Option<Vec<DocSpans>> = (|| {
         if let Some(v) = field(op, &["search", "specs", "specset", "source_specs"]) {
             if let Some(s) = v.as_str() {
                 if s.contains("NOSPECS") || s == "empty" {
@@ -2163,15 +2155,12 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     }
 
     // Explicit from/to fields (doc names or vspec arrays).
-    let explicit_side = |cx: &mut Cx, out: &mut OpOutcome, keys: &[&str]| -> Option<Vec<(String, Vec<(u64, u64, u64)>)>> {
+    let explicit_side = |cx: &mut Cx, out: &mut OpOutcome, keys: &[&str]| -> Option<Vec<DocSpans>> {
         let v = field(op, keys)?;
-        match side_specs(cx, out, v) {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        }
+        side_specs(cx, out, v).ok()
     };
 
-    let whole_of = |cx: &Cx, d: &str| -> Vec<(String, Vec<(u64, u64, u64)>)> {
+    let whole_of = |cx: &Cx, d: &str| -> Vec<DocSpans> {
         let n = cx.shadow.text_len(d);
         if n == 0 {
             vec![(d.to_string(), Vec::new())]
@@ -2183,8 +2172,8 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let by_is_target = by.as_deref().is_some_and(|b| b.contains("target"));
     let by_is_both = by.as_deref().is_some_and(|b| b.contains("and") || (b.contains("source") && b.contains("target")));
 
-    let mut from_sides: Option<Vec<(String, Vec<(u64, u64, u64)>)>> = None;
-    let mut to_sides: Option<Vec<(String, Vec<(u64, u64, u64)>)>> = None;
+    let mut from_sides: Option<Vec<DocSpans>> = None;
+    let mut to_sides: Option<Vec<DocSpans>> = None;
 
     if let Some(s) = explicit_side(cx, out, &["from", "source", "sources"]) {
         from_sides = Some(s);
@@ -2237,7 +2226,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
         }
     }
 
-    let side_to_slot = |cx: &mut Cx, sides: Option<Vec<(String, Vec<(u64, u64, u64)>)>>, notes: &mut Vec<String>| -> SlotSpec {
+    let side_to_slot = |cx: &mut Cx, sides: Option<Vec<DocSpans>>, notes: &mut Vec<String>| -> SlotSpec {
         match sides {
             None => SlotSpec::Any,
             Some(list) => {
@@ -3084,7 +3073,7 @@ fn orient_pair(
                 continue;
             }
             let s = score_a(ki, di) + score_b(kj, dj);
-            if best.map_or(true, |(_, _, bs)| s > bs) {
+            if best.is_none_or(|(_, _, bs)| s > bs) {
                 best = Some((i, j, s));
             }
         }
@@ -3291,12 +3280,7 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     {
         if out.status == Status::Disagreed && out.expected.as_deref() == Some("[]") {
             // Re-judge as a count comparison.
-            let actual = out
-                .actual
-                .as_deref()
-                .unwrap_or("")
-                .matches("(")
-                .count();
+            let actual = out.actual.as_deref().unwrap_or("").matches('(').count();
             out.comparator = Some("count".into());
             if actual as u64 == n {
                 out.status = Status::Agreed;

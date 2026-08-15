@@ -204,9 +204,9 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
         // Allowlist: a disagreement with a matching entry is allowlisted; an
         // agreement reached only through a declared adjustment is too (the
         // entry's existence IS the adjudicated divergence).
-        if out.status == Status::Disagreed && !grants.classes.is_empty() {
-            out.allowlisted = Some(grants.classes[0].clone());
-        } else if out.status == Status::Agreed && adjusted && !grants.classes.is_empty() {
+        let adjudicated =
+            out.status == Status::Disagreed || (out.status == Status::Agreed && adjusted);
+        if adjudicated && !grants.classes.is_empty() {
             out.allowlisted = Some(grants.classes[0].clone());
         }
         ops.push(out);

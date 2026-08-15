@@ -140,7 +140,7 @@ pub fn compare_addr_sets(
     adaptations: &mut Vec<String>,
 ) -> Verdict {
     let mut got: Vec<Address> = actual.iter().filter(|a| !exclude(a)).cloned().collect();
-    got.sort_by_key(|a| crate::tum::addr_str(a));
+    got.sort_by_key(crate::tum::addr_str);
     got.dedup_by_key(|a| crate::tum::addr_str(a));
 
     let mut want_goldens: Vec<String> = expected_golden.to_vec();
@@ -150,11 +150,7 @@ pub fn compare_addr_sets(
     // Peek-translate (no findings yet) to split bound from unbound.
     let bound: Vec<Option<Address>> =
         want_goldens.iter().map(|g| alpha.peek_translate(g)).collect();
-    let bound_strs: Vec<String> = bound
-        .iter()
-        .flatten()
-        .map(|a| crate::tum::addr_str(a))
-        .collect();
+    let bound_strs: Vec<String> = bound.iter().flatten().map(crate::tum::addr_str).collect();
     let unbound: Vec<&String> = want_goldens
         .iter()
         .zip(&bound)
@@ -182,7 +178,7 @@ pub fn compare_addr_sets(
             None => want.push(format!("unbound:{g}")),
         }
     }
-    let mut got_strs: Vec<String> = got.iter().map(|a| crate::tum::addr_str(a)).collect();
+    let mut got_strs: Vec<String> = got.iter().map(crate::tum::addr_str).collect();
     want.sort();
     want.dedup();
     got_strs.sort();

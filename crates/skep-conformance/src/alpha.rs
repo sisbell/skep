@@ -32,6 +32,12 @@ pub struct Alpha {
     pub findings: Vec<AlphaFinding>,
 }
 
+impl Default for Alpha {
+    fn default() -> Self {
+        Alpha::new()
+    }
+}
+
 impl Alpha {
     pub fn new() -> Alpha {
         Alpha { fwd: BTreeMap::new(), rev: BTreeMap::new(), findings: Vec::new() }

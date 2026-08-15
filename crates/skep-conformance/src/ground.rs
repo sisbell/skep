@@ -32,6 +32,7 @@
 //! whose probes stay inconsistent after inference is left alone — the play
 //! pass then reports the disagreement honestly.
 
+use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -78,8 +79,7 @@ enum Edit {
 }
 
 pub fn ground(ops: &[Value]) -> Grounding {
-    let mut g = Grounding::default();
-    g.implied_creates = implied_creates(ops);
+    let mut g = Grounding { implied_creates: implied_creates(ops), ..Grounding::default() };
     if !g.implied_creates.is_empty() {
         g.tags.push(format!("implied-create: {}", g.implied_creates.join(", ")));
     }
@@ -114,13 +114,14 @@ pub fn ground(ops: &[Value]) -> Grounding {
             sim.step(i, op, ops);
         }
         for doc in sim.link_participants_empty {
-            if !seeds.contains_key(&doc) {
-                let marker = format!("[{doc}]");
+            if let Entry::Vacant(slot) = seeds.entry(doc) {
+                let marker = format!("[{}]", slot.key());
                 g.tags.push(format!(
-                    "implied-setup:placeholder: {doc} participates in a link while empty and no \
-                     recorded probe reveals its content; seeded {marker:?}"
+                    "implied-setup:placeholder: {} participates in a link while empty and no \
+                     recorded probe reveals its content; seeded {marker:?}",
+                    slot.key()
                 ));
-                seeds.insert(doc, marker.into_bytes());
+                slot.insert(marker.into_bytes());
             }
         }
     }
@@ -214,7 +215,7 @@ fn implied_creates(ops: &[Value]) -> Vec<String> {
         c.len() >= 6
             && c[c.len() - 2] == 0
             && c[c.len() - 1] > 0
-            && c.len() % 2 == 0
+            && c.len().is_multiple_of(2)
             && c[c.len() - 1] > created_count
     });
     out
@@ -241,16 +242,29 @@ fn undo_to_initial(probed: &str, edits: &[Edit]) -> Option<Vec<u8>> {
             Edit::Del => return None, // deleted bytes are unrecoverable
             Edit::Pivot { a, b, c } => {
                 // pivot(a,b,c) moved [b,c) before [a,b); inverse is
-                // pivot(a, a+(c-b), c).
-                let mut s = scratch(&cur);
-                s.pivot("x", *a, a + (c - b), *c);
-                cur = s.text_string("x").into_bytes();
+                // pivot(a, a+(c-b), c). Degenerate cuts (zero, non-monotone,
+                // out of range) were a Shadow::pivot no-op in the forward
+                // sim, so the undo mirrors the no-op rather than underflow
+                // on c - b: udanax ACCEPTED such calls with effects the
+                // shadow does not model (rearrange_semantics/
+                // pivot_v3_inside_source records cuts (2,4,3) succeeding),
+                // and the resulting probe mismatch then aborts inference
+                // honestly at the insert undo. Pivot preserves length, so
+                // cur.len() here is the length the forward call saw.
+                if *a > 0 && a <= b && b <= c && *c as usize <= cur.len() + 1 {
+                    let mut s = scratch(&cur);
+                    s.pivot("x", *a, a + (c - b), *c);
+                    cur = s.text_string("x").into_bytes();
+                }
             }
             Edit::Swap { s1, e1, s2, e2 } => {
-                let (w1, w2) = (e1 - s1, e2 - s2);
-                let mut s = scratch(&cur);
-                s.swap("x", *s1, s1 + w2, s2 + w2 - w1, *e2);
-                cur = s.text_string("x").into_bytes();
+                // Same no-op mirror of Shadow::swap's guard as Pivot above.
+                if *s1 > 0 && s1 <= e1 && e1 <= s2 && s2 <= e2 && *e2 as usize <= cur.len() + 1 {
+                    let (w1, w2) = (e1 - s1, e2 - s2);
+                    let mut s = scratch(&cur);
+                    s.swap("x", *s1, s1 + w2, s2 + w2 - w1, *e2);
+                    cur = s.text_string("x").into_bytes();
+                }
             }
         }
     }
@@ -1003,7 +1017,7 @@ fn cover_with_sources(
                 }
             }
             if let Some((ord, len)) = found {
-                if best.as_ref().map_or(true, |(_, _, bl)| len > *bl) {
+                if best.as_ref().is_none_or(|(_, _, bl)| len > *bl) {
                     best = Some((src.clone(), ord, len));
                 }
             }

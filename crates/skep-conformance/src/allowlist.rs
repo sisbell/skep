@@ -37,7 +37,7 @@ impl Allowlist {
     pub fn matching(&self, scenario: &str, op_index: usize) -> Vec<&Entry> {
         self.entries
             .iter()
-            .filter(|e| e.scenario == scenario && e.op_index.map_or(true, |i| i == op_index))
+            .filter(|e| e.scenario == scenario && e.op_index.is_none_or(|i| i == op_index))
             .collect()
     }
 }

@@ -291,13 +291,16 @@ fn link_lifecycle() {
     // (foundation ∩ active — the region family stabs the link-store index,
     // so the unseated editlink successor and the pred-def tuple, whose
     // endsets cover these I-extents, still surface), and discoverable_from
-    // is compound "reachable AND active".
-    ack_addr(ex(&fx.op, fx.s, Op::Nullify { home: d.clone(), target: l2.clone() }));
+    // is compound "reachable AND active". The retraction tuple r itself
+    // surfaces too: nullify deposits [enc({home}), enc({target}), [R]], and
+    // enc is the subtree-span encoding (AD), so a document-homed FROM covers
+    // every content I-extent under d — and r is active.
+    let (r, _) = ack_addr(ex(&fx.op, fx.s, Op::Nullify { home: d.clone(), target: l2.clone() }));
     assert!(!boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l2.clone(), d: d.clone() })));
     let found = addrs(ex(&fx.op, fx.s, Op::FindLinksV { d: d.clone(), region: region.clone() }));
     assert!(found.contains(&l1) && found.contains(&succ) && found.contains(&e1));
-    assert!(!found.contains(&l2));
-    assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 3);
+    assert!(found.contains(&r) && !found.contains(&l2));
+    assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 4);
 }
 
 /// §5/§6: the typed rejection surface — the session gate, the

@@ -1,0 +1,15 @@
+{
+  "name": "account_set",
+  "description": "Set account and verify documents are created under it",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "comment": "Document should be under account 1.1.0.1"
+    }
+  ]
+}

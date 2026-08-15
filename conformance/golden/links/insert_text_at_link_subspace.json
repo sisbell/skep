@@ -1,0 +1,92 @@
+{
+  "name": "insert_text_at_link_subspace",
+  "description": "Test whether INSERT allows text bytes at 2.x V-position (link subspace)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "NormalText"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      },
+      "note": "Before 2.x insert: should be 1.x only"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "2.1",
+      "text": "TextAtLinkPosition",
+      "succeeded": true,
+      "error": null,
+      "note": "CRITICAL: Can INSERT place text at 2.x (link subspace)?"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "After 2.x insert: does 2.x appear?"
+    },
+    {
+      "op": "retrieve_contents",
+      "from": "2.1",
+      "width": "0.19",
+      "result": [
+        "TextAtLinkPosition"
+      ],
+      "succeeded": true,
+      "error": null,
+      "note": "Can we retrieve text from 2.x?"
+    },
+    {
+      "op": "find_documents_containing",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "2.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "result": [],
+      "succeeded": false,
+      "error": "'XuSession' object has no attribute 'find_documents_containing'",
+      "note": "Can FINDDOCSCONTAINING find doc via 2.x content?"
+    }
+  ]
+}

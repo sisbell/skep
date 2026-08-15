@@ -1,0 +1,21 @@
+{
+  "name": "find_documents_empty_spec",
+  "description": "find_documents behavior with empty specset",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Some content"
+    },
+    {
+      "op": "find_documents",
+      "search": "NOSPECS (empty)",
+      "result": [],
+      "error": null,
+      "comment": "Behavior with empty search spec"
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+{
+  "name": "link_types",
+  "description": "Create links with different types (quote, footnote, margin)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Document with multiple link types"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Target content for all links"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "type": "quote",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.15",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.8",
+              "width": "0.7"
+            }
+          ]
+        }
+      ],
+      "type": "footnote",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.29",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.16",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "type": "margin",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.40"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "compare_versions",
+  "description": "Create document, create version, add text to version, compare",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Shared content"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": " plus new text"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "original",
+        "version"
+      ],
+      "shared": [
+        {
+          "original": {
+            "start": "1.1",
+            "width": "0.14"
+          },
+          "version": {
+            "start": "1.1",
+            "width": "0.14"
+          }
+        }
+      ]
+    }
+  ]
+}

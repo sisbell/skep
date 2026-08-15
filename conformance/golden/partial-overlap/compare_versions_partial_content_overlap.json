@@ -1,0 +1,74 @@
+{
+  "name": "compare_versions_partial_content_overlap",
+  "description": "Compare documents with partial content identity overlap",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original text that will be partially shared"
+    },
+    {
+      "op": "create_document",
+      "doc": "partial",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "partial",
+      "text": "New prefix: "
+    },
+    {
+      "op": "vcopy",
+      "from": "original",
+      "to": "partial",
+      "text": "text that will be",
+      "comment": "Transclude only middle portion"
+    },
+    {
+      "op": "insert",
+      "doc": "partial",
+      "text": " with new suffix"
+    },
+    {
+      "op": "contents",
+      "doc": "original",
+      "result": [
+        "Original text that will be partially shared"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "partial",
+      "result": [
+        "New prefix: text that will be with new suffix"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "result": [
+        {
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.10",
+              "width": "0.17"
+            }
+          },
+          "partial": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.13",
+              "width": "0.17"
+            }
+          }
+        }
+      ],
+      "comment": "Only 'text that will be' should have common identity"
+    }
+  ]
+}

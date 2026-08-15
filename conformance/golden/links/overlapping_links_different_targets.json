@@ -1,0 +1,95 @@
+{
+  "name": "overlapping_links_different_targets",
+  "description": "Test overlapping links on same content pointing to different targets",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "The bank can refer to a financial institution or a river bank."
+    },
+    {
+      "op": "create_document",
+      "doc": "finance",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "finance",
+      "text": "Financial institution: accepts deposits, makes loans."
+    },
+    {
+      "op": "create_document",
+      "doc": "geography",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "geography",
+      "text": "River bank: the land alongside a river."
+    },
+    {
+      "op": "create_link",
+      "source_text": "bank (first)",
+      "target_text": "Financial institution",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "source_text": "bank (first, same span)",
+      "target_text": "River bank",
+      "type": "quote",
+      "result": "1.1.0.1.0.1.0.2.2",
+      "comment": "Same source span as link1, different target and type"
+    },
+    {
+      "op": "create_link",
+      "source_text": "bank (second)",
+      "target_text": "River bank",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "find_links",
+      "search_text": "first 'bank'",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2"
+      ],
+      "comment": "Should find both link1 and link2 (overlapping sources)"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        "Financial institution"
+      ],
+      "comment": "Link1 should lead to finance definition"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "target",
+      "result": [
+        "River bank"
+      ],
+      "comment": "Link2 should lead to geography definition"
+    },
+    {
+      "op": "find_links",
+      "search_text": "full document",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ],
+      "comment": "Should find all 3 links"
+    }
+  ]
+}

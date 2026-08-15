@@ -1,0 +1,57 @@
+{
+  "name": "delete_all",
+  "description": "Delete all content from a document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Content to delete"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.17"
+          }
+        ]
+      }
+    },
+    {
+      "op": "remove",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.17"
+      },
+      "comment": "Delete all content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "Should be empty"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

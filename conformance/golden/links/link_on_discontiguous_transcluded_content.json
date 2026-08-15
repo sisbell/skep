@@ -1,0 +1,86 @@
+{
+  "name": "link_on_discontiguous_transcluded_content",
+  "description": "Test creating a link on a V-span that maps to non-contiguous I-addresses",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "AAA"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "BBB"
+    },
+    {
+      "op": "create_document",
+      "doc": "C (composite)",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "A",
+      "to": "C",
+      "text": "AA"
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "C",
+      "text": "BB"
+    },
+    {
+      "op": "contents",
+      "doc": "C",
+      "result": [
+        "AABB"
+      ],
+      "comment": "C has AABB from two different I-address sources"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target"
+    },
+    {
+      "op": "create_link",
+      "comment": "Link source is contiguous V-span 1.1 width 0.4 mapping to non-contiguous I-addresses",
+      "result": "1.1.0.1.0.3.0.2.1",
+      "error": null
+    },
+    {
+      "op": "follow_link",
+      "end": "source",
+      "result": [
+        "AABB"
+      ],
+      "error": null,
+      "comment": "Should return full 'AABB' text"
+    },
+    {
+      "op": "retrieve_endsets",
+      "result": {
+        "source": "<SpecSet [<VSpec in 1.1.0.1.0.3, at 1.1 for 0.2, at 1.3 for 0.2>]>",
+        "target": "<SpecSet []>",
+        "type": "<SpecSet []>"
+      },
+      "error": null,
+      "comment": "KEY: If source has 2+ spans, backend split discontiguous I-addresses"
+    }
+  ]
+}

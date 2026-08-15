@@ -1,0 +1,23 @@
+{
+  "name": "retrieve_empty_specset",
+  "description": "Retrieve with an empty specset",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Content"
+    },
+    {
+      "op": "retrieve_contents",
+      "specset": "empty",
+      "result": {
+        "success": true,
+        "contents": []
+      },
+      "comment": "What happens with no spans specified?"
+    }
+  ]
+}

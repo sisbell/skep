@@ -1,0 +1,36 @@
+{
+  "name": "bert_failure_leaves_ispace_corruption",
+  "description": "Test whether failed INSERT due to BERT leaves ispace corruption",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_attempt",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Leaked bytes",
+      "succeeded": true
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "poom_empty": true
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "note",
+      "message": "If POOM is empty but ispace was modified, I-addresses are orphaned"
+    }
+  ]
+}

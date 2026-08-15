@@ -1,0 +1,65 @@
+{
+  "name": "identity_partial_transclusion",
+  "description": "Identity when transcluding part of already-transcluded content",
+  "operations": [
+    {
+      "op": "create_documents",
+      "docs": {
+        "A": "1.1.0.1.0.3",
+        "B": "1.1.0.1.0.2",
+        "C": "1.1.0.1.0.1"
+      }
+    },
+    {
+      "op": "setup",
+      "description": "C='ABCDEFGHIJ', B=vcopy(C), A=vcopy('DEFGH' from B)"
+    },
+    {
+      "op": "contents",
+      "docs": {
+        "A": [
+          "DEFGH"
+        ],
+        "B": [
+          "ABCDEFGHIJ"
+        ],
+        "C": [
+          "ABCDEFGHIJ"
+        ]
+      }
+    },
+    {
+      "op": "compare_versions",
+      "doc1": "A",
+      "doc2": "C",
+      "shared": [
+        {
+          "A": {
+            "span": {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          },
+          "C": {
+            "span": {
+              "start": "1.4",
+              "width": "0.5"
+            }
+          }
+        }
+      ],
+      "comment": "A and C should share 'DEFGH' even though A transcluded from B"
+    },
+    {
+      "op": "find_documents",
+      "query": "DEF (from C)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ],
+      "expected_count": 3,
+      "comment": "Should find A, B, and C - all have 'DEF'"
+    }
+  ]
+}

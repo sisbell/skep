@@ -1,0 +1,62 @@
+{
+  "name": "vcopy_preserves_identity",
+  "description": "Verify vcopy preserves content identity (compare_versions shows shared)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Shared content that will be transcluded"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "target_doc": "1.1.0.1.0.2",
+      "source_span": {
+        "start": "1.1",
+        "width": "0.14"
+      },
+      "comment": "Transclude 'Shared content' from source"
+    },
+    {
+      "op": "compare_versions",
+      "doc_a": "1.1.0.1.0.1",
+      "doc_b": "1.1.0.1.0.2",
+      "result": [
+        {
+          "a": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          },
+          "b": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.14"
+            }
+          }
+        }
+      ],
+      "comment": "Should find shared content from vcopy"
+    }
+  ]
+}

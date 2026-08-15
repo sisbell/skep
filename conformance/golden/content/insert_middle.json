@@ -1,0 +1,65 @@
+{
+  "name": "insert_middle",
+  "description": "Insert text in the middle of existing content",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "HelloWorld"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.6",
+      "text": ", "
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.12"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "Hello, World"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "pivot_preserves_identity",
+  "description": "Pivot preserves content identity (I-addresses)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDE"
+    },
+    {
+      "op": "vspanset_before",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.5>"
+    },
+    {
+      "op": "pivot",
+      "description": "Swap BC and DE"
+    },
+    {
+      "op": "vspanset_after",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.5>",
+      "comment": "I-addresses should be same, V-addresses changed"
+    },
+    {
+      "op": "retrieve",
+      "result": [
+        "ADEBC"
+      ]
+    }
+  ]
+}

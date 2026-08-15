@@ -1,0 +1,63 @@
+{
+  "name": "delete_destination_multiple_transclusions",
+  "description": "Test spanfilade cleanup with multiple documents transcluding same content",
+  "operations": [
+    {
+      "op": "create_document",
+      "label": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Shared transcluded content"
+    },
+    {
+      "op": "create_and_transclude",
+      "count": 3,
+      "targets": [
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ],
+      "comment": "Three documents all transclude the same source content"
+    },
+    {
+      "op": "find_documents",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ],
+      "comment": "Should find source + 3 targets = 4 documents"
+    },
+    {
+      "op": "remove",
+      "doc": "1.1.0.1.0.3",
+      "text": "transcluded content",
+      "comment": "Delete from target[1] only"
+    },
+    {
+      "op": "find_documents",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ],
+      "comment": "If cleanup works: source + targets[0,2]. If stale: all 4"
+    },
+    {
+      "op": "analysis",
+      "results": {
+        "target1_in_before": true,
+        "target1_in_after": true,
+        "other_targets_still_present": true,
+        "expected_behavior": "target1 removed from results, others remain"
+      }
+    }
+  ]
+}

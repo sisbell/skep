@@ -1,0 +1,39 @@
+{
+  "name": "find_documents_transitive",
+  "description": "Find documents through transitive transclusion chain A\u2192B\u2192C",
+  "operations": [
+    {
+      "op": "create_chain",
+      "chain": "C\u2192B\u2192A",
+      "docs": {
+        "A": "1.1.0.1.0.3",
+        "B": "1.1.0.1.0.2",
+        "C": "1.1.0.1.0.1"
+      }
+    },
+    {
+      "op": "contents",
+      "docs": {
+        "A": [
+          "A: B: Original content"
+        ],
+        "B": [
+          "B: Original content"
+        ],
+        "C": [
+          "Original content from C"
+        ]
+      }
+    },
+    {
+      "op": "find_documents",
+      "query": "Original (from C)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ],
+      "comment": "Should find A, B, and C - content identity is transitive"
+    }
+  ]
+}

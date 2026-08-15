@@ -1,0 +1,47 @@
+{
+  "name": "pivot_v3_after_v2",
+  "description": "Pivot where v\u2083 > v\u2082 (move content later)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "vspanset_before",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>"
+    },
+    {
+      "op": "pivot",
+      "v1": "1.2",
+      "v2": "1.4",
+      "v3": "1.7",
+      "description": "Move BC from [1.2,1.4) toward 1.7"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "ADEFBCGH"
+      ]
+    },
+    {
+      "op": "vspanset_after",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>"
+    }
+  ]
+}

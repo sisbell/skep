@@ -1,0 +1,65 @@
+{
+  "name": "both_versions_modified",
+  "description": "Modify both original and version independently",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Base content"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": " - original edit"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": " - version edit"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "original",
+      "result": [
+        "Base content - original edit"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Base content - version edit"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "original",
+        "version"
+      ],
+      "shared": [
+        {
+          "original": {
+            "start": "1.1",
+            "width": "0.12"
+          },
+          "version": {
+            "start": "1.1",
+            "width": "0.12"
+          }
+        }
+      ],
+      "comment": "Should still share 'Base content'"
+    }
+  ]
+}

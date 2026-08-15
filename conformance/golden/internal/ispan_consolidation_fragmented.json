@@ -1,0 +1,61 @@
+{
+  "name": "ispan_consolidation_fragmented",
+  "description": "10 separate inserts - does compare_versions return 1 or 10 span pairs?",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_loop",
+      "count": 10,
+      "each": "single character"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "source_vspan_count": 1
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "what": "all content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "dest_vspan_count": 1
+    },
+    {
+      "op": "retrieve_contents",
+      "source": [
+        "ABCDEFGHIJ"
+      ],
+      "dest": [
+        "ABCDEFGHIJ"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "shared_span_pairs": 1,
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.10"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        }
+      ],
+      "interpretation": "1 pair = I-space consolidated, 10 pairs = I-space fragmented"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "name": "version_chain",
+  "description": "Create v1->v2->v3 chain and compare v1 with v3",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "v1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v1",
+      "text": "Version 1 text"
+    },
+    {
+      "op": "create_version",
+      "from": "v1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v2",
+      "text": " and v2"
+    },
+    {
+      "op": "create_version",
+      "from": "v2",
+      "result": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v3",
+      "text": " and v3"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "v1",
+        "v3"
+      ],
+      "shared": [
+        {
+          "v1": {
+            "start": "1.1",
+            "width": "0.14"
+          },
+          "v3": {
+            "start": "1.1",
+            "width": "0.14"
+          }
+        }
+      ],
+      "comment": "v3 should share 'Version 1 text' with v1 transitively"
+    }
+  ]
+}

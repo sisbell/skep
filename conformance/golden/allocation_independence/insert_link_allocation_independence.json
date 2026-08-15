@@ -1,0 +1,78 @@
+{
+  "name": "insert_link_allocation_independence",
+  "description": "Verify INSERT and MAKELINK use independent allocation counters",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_1_AAA",
+      "result": {
+        "vspans": [
+          {
+            "start": "1.1",
+            "width": "0.3"
+          }
+        ],
+        "expected": "I-addresses under .0.3.1, .0.3.2, .0.3.3"
+      }
+    },
+    {
+      "op": "makelink_1",
+      "result": {
+        "link": "1.1.0.1.0.1.0.2.1",
+        "links_found": 1,
+        "expected": "Link I-address under .0.2.1"
+      }
+    },
+    {
+      "op": "insert_2_BBB",
+      "result": {
+        "vspans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ],
+        "expected": "I-addresses continue at .0.3.4 (link did not affect text counter)"
+      }
+    },
+    {
+      "op": "makelink_2",
+      "result": {
+        "link": "1.1.0.1.0.1.0.2.2",
+        "links_found": 2,
+        "expected": "Link I-address continues at .0.2.2 (text did not affect link counter)"
+      }
+    },
+    {
+      "op": "insert_3_CCC",
+      "result": {
+        "vspans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ],
+        "content": [
+          "AAABBBCCC"
+        ],
+        "expected": "I-addresses continue at .0.3.7 (links did not affect text counter)"
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "name": "cross_document_transclusion_isolation",
+  "description": "DELETE from doc B (with transcluded content) does not affect docs A or C",
+  "operations": [
+    {
+      "op": "setup",
+      "description": "A has content, B and C transclude from A"
+    },
+    {
+      "op": "docs",
+      "A": "1.1.0.1.0.1",
+      "B": "1.1.0.1.0.2",
+      "C": "1.1.0.1.0.3"
+    },
+    {
+      "op": "snapshot",
+      "label": "before_B_delete",
+      "A_content": [
+        "Shared content"
+      ],
+      "C_content": [
+        "C prefix: Shared content"
+      ]
+    },
+    {
+      "op": "remove",
+      "doc": "B",
+      "span": "1.11 for 0.7 (delete 'Shared ')"
+    },
+    {
+      "op": "contents",
+      "doc": "B",
+      "label": "after_delete",
+      "result": [
+        "B prefix: content"
+      ]
+    },
+    {
+      "op": "snapshot",
+      "label": "after_B_delete",
+      "A_content": [
+        "Shared content"
+      ],
+      "C_content": [
+        "C prefix: Shared content"
+      ]
+    },
+    {
+      "op": "verify",
+      "assertion": "A unchanged",
+      "match": true
+    },
+    {
+      "op": "verify",
+      "assertion": "C unchanged",
+      "match": true,
+      "comment": "F0: DELETE from B only affects B, not source A or sibling C"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "name": "interior_typing_two_characters",
+  "description": "Verify ONMYRIGHTBORDER case for interior typing",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDE",
+      "at": "1.1"
+    },
+    {
+      "op": "initial_state",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.5"
+        }
+      ],
+      "contents": [
+        "ABCDE"
+      ]
+    },
+    {
+      "op": "insert",
+      "text": "X",
+      "at": "1.3",
+      "comment": "First interior insert splits existing crum"
+    },
+    {
+      "op": "after_first_insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "ABXCDE"
+      ],
+      "expected_contents": "ABXCDE"
+    },
+    {
+      "op": "insert",
+      "text": "Y",
+      "at": "1.4",
+      "comment": "Second insert at advancing cursor (v+1)"
+    },
+    {
+      "op": "after_second_insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.7"
+        }
+      ],
+      "contents": [
+        "ABXYCDE"
+      ],
+      "expected_contents": "ABXYCDE",
+      "claim": "If ONMYRIGHTBORDER works as claimed, Y should coalesce with X"
+    }
+  ]
+}

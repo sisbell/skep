@@ -1,0 +1,85 @@
+{
+  "name": "delete_transcluded_content_spanfilade_cleanup",
+  "description": "Test whether DELETE cleans up spanfilade entries for transcluded content",
+  "operations": [
+    {
+      "op": "create_document",
+      "label": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source content to transclude"
+    },
+    {
+      "op": "create_document",
+      "label": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Prefix: "
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "Source content",
+      "comment": "This calls insertspanf to register target's reference"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "target",
+      "label": "after_copy",
+      "result": [
+        "Prefix: Source content"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "Source content",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "comment": "Should include both source and target"
+    },
+    {
+      "op": "remove",
+      "doc": "target",
+      "span": "Source content",
+      "comment": "Delete transcluded content from target"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "target",
+      "label": "after_delete",
+      "result": [
+        "Prefix: "
+      ],
+      "comment": "Should only have 'Prefix: '"
+    },
+    {
+      "op": "find_documents",
+      "search": "Source content",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "comment": "If spanfilade cleaned up: only source. If stale refs: source AND target"
+    },
+    {
+      "op": "analysis",
+      "results": {
+        "target_found_before_delete": true,
+        "target_found_after_delete": true,
+        "spanfilade_cleaned_up": false,
+        "spanfilade_has_stale_refs": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "star_hub_outgoing",
+  "description": "Test star/hub pattern: central hub links TO 3 peripherals",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "hub",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "hub",
+      "text": "Hub with links: ref1 ref2 ref3"
+    },
+    {
+      "op": "create_documents",
+      "doc": "peripherals",
+      "count": 3,
+      "results": [
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ]
+    },
+    {
+      "op": "create_links",
+      "from": "hub",
+      "to": "peripherals",
+      "results": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "hub",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ],
+      "expected_count": 3,
+      "comment": "Should find all 3 links from hub"
+    },
+    {
+      "op": "follow_links_to_targets",
+      "results": [
+        {
+          "link": "1.1.0.1.0.1.0.2.1",
+          "target_text": [
+            "Target document"
+          ]
+        },
+        {
+          "link": "1.1.0.1.0.1.0.2.2",
+          "target_text": [
+            "Target document"
+          ]
+        },
+        {
+          "link": "1.1.0.1.0.1.0.2.3",
+          "target_text": [
+            "Target document"
+          ]
+        }
+      ],
+      "comment": "Each link target should be a different peripheral"
+    }
+  ]
+}

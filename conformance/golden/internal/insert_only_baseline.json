@@ -1,0 +1,43 @@
+{
+  "name": "insert_only_baseline",
+  "description": "Baseline: Two inserts with no intervening operation",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABC"
+    },
+    {
+      "op": "insert",
+      "text": "DEF",
+      "at": "end"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "ABCDEF"
+      ],
+      "expected": "ABCDEF"
+    },
+    {
+      "op": "compare_versions",
+      "shared_span_pairs": 1,
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.6"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        }
+      ],
+      "expected": "1 pair (definitely contiguous)"
+    }
+  ]
+}

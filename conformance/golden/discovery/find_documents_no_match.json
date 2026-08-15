@@ -1,0 +1,36 @@
+{
+  "name": "find_documents_no_match",
+  "description": "find_documents returns only documents with matching content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc1",
+      "text": "First document content"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc2",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "doc2",
+      "text": "Second document content"
+    },
+    {
+      "op": "find_documents",
+      "search_from": "doc1",
+      "search_text": "First",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "expected_count": 1,
+      "comment": "Should only find doc1, not doc2 (no shared content)"
+    }
+  ]
+}

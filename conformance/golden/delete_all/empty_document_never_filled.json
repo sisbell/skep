@@ -1,0 +1,51 @@
+{
+  "name": "empty_document_never_filled",
+  "description": "Baseline: document created but never filled with content",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "comment": "createenf(POOM) creates initial empty enfilade"
+    },
+    {
+      "op": "open_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "empty_state": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "What does the initial empty enfilade look like?"
+    },
+    {
+      "op": "retrieve_contents",
+      "empty": [],
+      "expected": "empty"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "First content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_insert": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.13"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [
+        "First content"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "name": "find_links_empty_document",
+  "description": "Search for links in an empty document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "Empty document - no content"
+    },
+    {
+      "op": "find_links",
+      "from": "empty doc",
+      "result": {
+        "success": true,
+        "links": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "name": "isanextensionnd_checks_left_or_right",
+  "description": "Verify isanextensionnd extends existing crum to the right (checks reach)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "AAA",
+      "at": "1.1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.3"
+        }
+      ]
+    },
+    {
+      "op": "insert",
+      "text": "CCC",
+      "at": "1.7",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.9"
+        }
+      ],
+      "comment": "Creates gap [1.4, 1.7)"
+    },
+    {
+      "op": "insert",
+      "text": "BBB",
+      "at": "1.4",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.12"
+        }
+      ],
+      "contents": [
+        "AAABBBCCC"
+      ],
+      "expected": "AAABBBCCC",
+      "claim": "BBB at 1.4 should extend AAA (reach of AAA = 1.4 = origin of BBB)"
+    }
+  ]
+}

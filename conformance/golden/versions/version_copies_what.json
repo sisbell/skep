@@ -1,0 +1,99 @@
+{
+  "name": "version_copies_what",
+  "description": "Test whether CREATENEWVERSION copies only text (1.x) or includes links (2.x)",
+  "parent_spans": [
+    {
+      "start": "0",
+      "width": "0.1"
+    },
+    {
+      "start": "1",
+      "width": "1"
+    }
+  ],
+  "parent_links": 2,
+  "version_spans": [
+    {
+      "start": "1.1",
+      "width": "0.22"
+    }
+  ],
+  "version_contents": [
+    "Parent text with link",
+    "1.1.0.1.0.1.0.2.1"
+  ],
+  "version_links": 1,
+  "operations": [
+    {
+      "op": "create_document",
+      "role": "parent",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "parent",
+      "text": "Parent text with link"
+    },
+    {
+      "op": "create_document",
+      "role": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "parent",
+      "spans": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ]
+    },
+    {
+      "op": "find_links",
+      "doc": "parent",
+      "count": 2
+    },
+    {
+      "op": "create_version",
+      "from": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "version",
+      "spans": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Parent text with link",
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "doc": "version",
+      "count": 1
+    }
+  ]
+}

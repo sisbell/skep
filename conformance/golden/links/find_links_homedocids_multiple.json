@@ -1,0 +1,171 @@
+{
+  "name": "find_links_homedocids_multiple",
+  "description": "Test find_links with multiple home document IDs in filter",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "text": "First document text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "text": "Second document text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "text": "Third document text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.4",
+      "text": "Fourth document text"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "note": "doc1 -> doc4",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.2",
+      "note": "doc2 -> doc4",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.3",
+      "note": "doc3 -> doc4",
+      "result": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "target": [
+        {
+          "docid": "1.1.0.1.0.4",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.25"
+            }
+          ]
+        }
+      ],
+      "homedocids": null,
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "note": "All links targeting doc4 (expected: 3)"
+    },
+    {
+      "op": "find_links",
+      "target": [
+        {
+          "docid": "1.1.0.1.0.4",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.25"
+            }
+          ]
+        }
+      ],
+      "homedocids": [
+        {
+          "start": "1.1.0.1.0.1",
+          "width": "0.1"
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "note": "Links targeting doc4 homed in doc1 only (expected: 1)"
+    },
+    {
+      "op": "find_links",
+      "target": [
+        {
+          "docid": "1.1.0.1.0.4",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.25"
+            }
+          ]
+        }
+      ],
+      "homedocids": [
+        {
+          "start": "1.1.0.1.0.1",
+          "width": "0.1"
+        },
+        {
+          "start": "1.1.0.1.0.2",
+          "width": "0.1"
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "note": "Links targeting doc4 homed in doc1 or doc2 (expected: 2)"
+    },
+    {
+      "op": "find_links",
+      "target": [
+        {
+          "docid": "1.1.0.1.0.4",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.25"
+            }
+          ]
+        }
+      ],
+      "homedocids": [
+        {
+          "start": "1.1.0.1.0.1",
+          "width": "0.1"
+        },
+        {
+          "start": "1.1.0.1.0.2",
+          "width": "0.1"
+        },
+        {
+          "start": "1.1.0.1.0.3",
+          "width": "0.1"
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "note": "Links targeting doc4 homed in doc1/doc2/doc3 (expected: 3)"
+    }
+  ]
+}

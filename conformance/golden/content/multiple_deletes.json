@@ -1,0 +1,58 @@
+{
+  "name": "multiple_deletes",
+  "description": "Delete multiple non-contiguous regions from a document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "The quick brown fox jumps"
+    },
+    {
+      "op": "remove",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.5",
+        "width": "0.6"
+      },
+      "comment": "Delete 'quick '"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "The brown fox jumps"
+      ]
+    },
+    {
+      "op": "remove",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.11",
+        "width": "0.4"
+      },
+      "comment": "Delete 'fox '"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "The brown jumps"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

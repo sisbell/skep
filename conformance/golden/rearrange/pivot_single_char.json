@@ -1,0 +1,40 @@
+{
+  "name": "pivot_single_char",
+  "description": "Pivot single characters",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABC"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABC"
+      ]
+    },
+    {
+      "op": "pivot",
+      "cut1": "1.1",
+      "cut2": "1.2",
+      "cut3": "1.3",
+      "description": "Swap A and B"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "BAC"
+      ],
+      "expected": "BAC"
+    }
+  ]
+}

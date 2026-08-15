@@ -1,0 +1,60 @@
+{
+  "name": "endsets_after_version",
+  "description": "Retrieve endsets of link after creating a version",
+  "operations": [
+    {
+      "op": "create_link",
+      "source_text": "link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "original",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.17",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "target": []
+    },
+    {
+      "op": "create_version",
+      "from": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "find_links",
+      "in": "version",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Are links inherited by versions?"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "version",
+      "result": {
+        "source": [
+          {
+            "docid": "1.1.0.1.0.1.1",
+            "spans": [
+              {
+                "start": "1.17",
+                "width": "0.4"
+              }
+            ]
+          }
+        ],
+        "target": [],
+        "type": []
+      },
+      "comment": "Endsets in version (if links exist)"
+    }
+  ]
+}

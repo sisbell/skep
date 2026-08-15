@@ -1,0 +1,64 @@
+{
+  "name": "insert_text_check_both_link_positions",
+  "description": "After INSERT at 1.3, check BOTH V-positions 2.1 and 2.3 for the link",
+  "operations": [
+    {
+      "op": "setup",
+      "doc1_text": "ABCDE",
+      "doc2_text": "12345",
+      "link": "doc1[1.2-1.4] -> doc2[1.2-1.4]",
+      "link_id": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "link_at_2_1_before",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "interpretation": "Link I-address should be present at 2.1 before INSERT"
+    },
+    {
+      "op": "INSERT",
+      "at": "1.3",
+      "text": "XY",
+      "comment": "Displacement width = 0.2 in V-dimension"
+    },
+    {
+      "op": "link_at_2_1_after",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "interpretation": "If subspace independent: link STILL at 2.1. If shifted: empty."
+    },
+    {
+      "op": "link_at_2_3_after",
+      "result": [],
+      "interpretation": "If subspace independent: empty. If shifted by +0.2: link here."
+    },
+    {
+      "op": "find_links_after",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "interpretation": "Link should still be discoverable"
+    },
+    {
+      "op": "follow_link",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "result": "<SpecSet [<VSpec in 1.1.0.1.0.2, at 1.2 for 0.2>]>",
+      "interpretation": "Link should still resolve to target endset"
+    },
+    {
+      "op": "full_text_after",
+      "result": [
+        "ABXYCDE"
+      ],
+      "interpretation": "Text should be 'ABXYCDE' (XY inserted at position 3)"
+    }
+  ],
+  "analysis": {
+    "question": "After INSERT at 1.3, is the link at 2.1 or 2.3?",
+    "code_trace": "findaddressofsecondcutforinsert(1.3) returns 2.1 as second blade, which causes insertcutsectionnd to classify the 2.1 crum as case 2 (no shift)",
+    "prediction": "Link remains at 2.1 because the second cut blade IS 2.1"
+  }
+}

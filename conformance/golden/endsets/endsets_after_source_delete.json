@@ -1,0 +1,56 @@
+{
+  "name": "endsets_after_source_delete",
+  "description": "Retrieve endsets after deleting part of linked source region",
+  "operations": [
+    {
+      "op": "create_link",
+      "source_text": "right here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "before",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.7",
+              "width": "0.10"
+            }
+          ]
+        }
+      ],
+      "target": []
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "text": "right ",
+      "comment": "Delete part of link source span"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "after",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.7",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "target": [],
+      "comment": "Has source span shrunk? Or is link broken?"
+    },
+    {
+      "op": "content",
+      "result": [
+        "Click here for info"
+      ]
+    }
+  ]
+}

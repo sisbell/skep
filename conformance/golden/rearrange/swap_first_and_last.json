@@ -1,0 +1,41 @@
+{
+  "name": "swap_first_and_last",
+  "description": "Swap first and last characters",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "HELLO"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "HELLO"
+      ]
+    },
+    {
+      "op": "swap",
+      "cut1": "1.1",
+      "cut2": "1.2",
+      "cut3": "1.5",
+      "cut4": "1.6",
+      "description": "Swap H and O"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "OELLH"
+      ],
+      "expected": "OELLH"
+    }
+  ]
+}

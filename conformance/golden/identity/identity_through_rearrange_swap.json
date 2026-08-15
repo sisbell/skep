@@ -1,0 +1,98 @@
+{
+  "name": "identity_through_rearrange_swap",
+  "description": "Test that swap operation preserves content identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc",
+      "text": "AAA middle BBB"
+    },
+    {
+      "op": "create_version",
+      "doc": "version_before",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "swap",
+      "doc": "doc",
+      "regions": [
+        "AAA",
+        "BBB"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "doc",
+      "label": "after_swap",
+      "result": [
+        "BBB middle AAA"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version_before",
+      "result": [
+        "AAA middle BBB"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "shared": [
+        {
+          "swapped": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.12",
+              "width": "0.3"
+            }
+          }
+        },
+        {
+          "swapped": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.4",
+              "width": "0.8"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.4",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "swapped": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.12",
+              "width": "0.3"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          }
+        }
+      ],
+      "comment": "All content should share identity - rearrange doesn't create new content"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "name": "swap_words_in_sentence",
+  "description": "Swap two words in a sentence",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "The quick brown fox"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "The quick brown fox"
+      ]
+    },
+    {
+      "op": "swap",
+      "cut1": "1.5",
+      "cut2": "1.10",
+      "cut3": "1.11",
+      "cut4": "1.16",
+      "description": "Swap 'quick' and 'brown'"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "The brown quick fox"
+      ],
+      "expected": "The brown quick fox"
+    }
+  ]
+}

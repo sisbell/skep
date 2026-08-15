@@ -1,0 +1,63 @@
+{
+  "name": "link_source_partial_delete",
+  "description": "Test link behavior when part of the linked source span is deleted",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click hyperlink for more"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "hyperlink",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "source",
+      "result": [
+        "hyperlink"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "hyper",
+      "comment": "Delete part of linked span (hyper from hyperlink)"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Click link for more"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "source",
+      "result": [
+        "link"
+      ],
+      "link_survived": true,
+      "comment": "Link source after partial deletion - still 'hyperlink' or truncated?"
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "name": "retrieve_endsets",
+  "description": "Retrieve the endpoint specsets of a link",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Click here to navigate"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Destination content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.7",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "target": [],
+      "type": []
+    }
+  ]
+}

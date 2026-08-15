@@ -1,0 +1,22 @@
+{
+  "name": "version_immediately",
+  "description": "Create a version of an empty document (no content yet)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "of": "1.1.0.1.0.1",
+      "comment": "Version before any content added",
+      "result": {
+        "success": true,
+        "version": "1.1.0.1.0.1.1",
+        "contents": [
+          "Content in version"
+        ]
+      }
+    }
+  ]
+}

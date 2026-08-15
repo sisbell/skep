@@ -1,0 +1,15 @@
+{
+  "name": "create_node",
+  "description": "Create a new node and observe its address",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_node",
+      "account": "1.1.0.1",
+      "result": "1.1.0.1.1"
+    }
+  ]
+}

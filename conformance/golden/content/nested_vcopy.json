@@ -1,0 +1,85 @@
+{
+  "name": "nested_vcopy",
+  "description": "Test nested transclusion: A includes B, B includes C",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "Original from C"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "C",
+      "to": "B",
+      "text": "Original"
+    },
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "A",
+      "text": "all of B"
+    },
+    {
+      "op": "contents",
+      "doc": "C",
+      "result": [
+        "Original from C"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "B",
+      "result": [
+        "B prefix: Original"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "A",
+      "result": [
+        "A prefix: B prefix: Original"
+      ]
+    },
+    {
+      "op": "compare",
+      "docs": [
+        "A",
+        "C"
+      ],
+      "shared": [
+        {
+          "a": {
+            "docid": "1.1.0.1.0.3",
+            "span": {
+              "start": "1.21",
+              "width": "0.8"
+            }
+          },
+          "c": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "comment": "A and C should share 'Original' through transitive transclusion"
+    }
+  ]
+}

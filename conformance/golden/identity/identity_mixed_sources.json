@@ -1,0 +1,69 @@
+{
+  "name": "identity_mixed_sources",
+  "description": "Document with content from multiple sources maintains separate identities",
+  "operations": [
+    {
+      "op": "create_sources",
+      "source1": "1.1.0.1.0.1",
+      "source2": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_target",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy_from_both",
+      "order": [
+        "source1",
+        "source2"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Mixed: From source | From source"
+      ]
+    },
+    {
+      "op": "compare",
+      "label": "target_vs_source1",
+      "shared": [
+        {
+          "a": {
+            "start": "1.8",
+            "width": "0.11"
+          },
+          "b": {
+            "start": "1.1",
+            "width": "0.11"
+          }
+        }
+      ],
+      "comment": "Target shares 'From source' with source1"
+    },
+    {
+      "op": "compare",
+      "label": "target_vs_source2",
+      "shared": [
+        {
+          "a": {
+            "start": "1.22",
+            "width": "0.11"
+          },
+          "b": {
+            "start": "1.1",
+            "width": "0.11"
+          }
+        }
+      ],
+      "comment": "Target shares 'From source' with source2"
+    },
+    {
+      "op": "compare",
+      "label": "source1_vs_source2",
+      "shared": [],
+      "comment": "Sources should NOT share content - independent identities"
+    }
+  ]
+}

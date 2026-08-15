@@ -1,0 +1,59 @@
+{
+  "name": "vcopy_source_modified",
+  "description": "Test vcopy behavior when source is modified after transclusion",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Original content here"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "span": "Original content"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "before_modification",
+      "result": [
+        "Target: Original content"
+      ]
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "address": "1.1",
+      "text": "NEW: ",
+      "comment": "Modify source by prepending"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_modification",
+      "result": [
+        "NEW: Original content here"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "after_source_modification",
+      "result": [
+        "Target: Original content"
+      ],
+      "comment": "Target should still have original content (not affected by source edit)"
+    }
+  ]
+}

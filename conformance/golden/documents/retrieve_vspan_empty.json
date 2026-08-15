@@ -1,0 +1,28 @@
+{
+  "name": "retrieve_vspan_empty",
+  "description": "Retrieve vspan of empty document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "retrieve_vspan",
+      "result": "<VSpan in 1.1.0.1.0.1 at 0 for 0>",
+      "comment": "Empty document extent"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "Empty document span set"
+    }
+  ]
+}

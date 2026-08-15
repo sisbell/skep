@@ -1,0 +1,105 @@
+{
+  "name": "interleaved_insert_delete",
+  "description": "Test I-address allocation behavior across interleaved INSERTs and DELETEs",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_1",
+      "text": "AAA",
+      "result": {
+        "content": [
+          "AAA"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "delete_1",
+      "removed": "1.2",
+      "result": {
+        "content": [
+          "AA"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_2",
+      "text": "BBB",
+      "result": {
+        "content": [
+          "ABBBA"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "delete_2",
+      "removed": "1.3-1.4",
+      "result": {
+        "content": [
+          "ABA"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_3",
+      "text": "CCC",
+      "result": {
+        "content": [
+          "ABCCCA"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "ispan_consolidation_bulk",
+  "description": "Single bulk insert - should produce exactly 1 span pair",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGHIJ",
+      "count": 10
+    },
+    {
+      "op": "retrieve_vspanset",
+      "source_vspan_count": 1
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "dest_vspan_count": 1
+    },
+    {
+      "op": "compare_versions",
+      "shared_span_pairs": 1,
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.10"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        }
+      ],
+      "expected": "exactly 1 span pair (bulk insert = contiguous I-addresses)"
+    }
+  ]
+}

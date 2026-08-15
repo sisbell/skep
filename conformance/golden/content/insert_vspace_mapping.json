@@ -1,0 +1,120 @@
+{
+  "name": "insert_vspace_mapping",
+  "description": "Reveal how INSERT updates the V-to-I mapping",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDE"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "before_middle_insert",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      }
+    },
+    {
+      "op": "content_at_positions",
+      "label": "before_middle_insert",
+      "positions": {
+        "1.1": "A",
+        "1.2": "B",
+        "1.3": "C",
+        "1.4": "D",
+        "1.5": "E"
+      },
+      "interpretation": "V-address 1.1=A, 1.2=B, 1.3=C, 1.4=D, 1.5=E"
+    },
+    {
+      "op": "create_version",
+      "label": "version_before",
+      "result": "1.1.0.1.0.1.1",
+      "comment": "Snapshot I-space identity before modification"
+    },
+    {
+      "op": "insert",
+      "address": "1.3",
+      "text": "XY",
+      "comment": "Insert 'XY' BEFORE character at 1.3 (which is 'C')"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "after_middle_insert",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.7"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "label": "full_content_after",
+      "result": [
+        "ABXYCDE"
+      ]
+    },
+    {
+      "op": "content_at_positions",
+      "label": "after_middle_insert",
+      "positions": {
+        "1.1": "A",
+        "1.2": "B",
+        "1.3": "X",
+        "1.4": "Y",
+        "1.5": "C",
+        "1.6": "D",
+        "1.7": "E"
+      },
+      "interpretation": "Shows how V-addresses shifted"
+    },
+    {
+      "op": "compare_versions",
+      "comparing": "version_before vs current (after insert)",
+      "shared_spans": [
+        {
+          "version_before": {
+            "start": "1.1",
+            "width": "0.2"
+          },
+          "after_insert": {
+            "start": "1.1",
+            "width": "0.2"
+          },
+          "interpretation": "Content at V-1.1 in version shares I-address with content at V-1.1 after insert"
+        },
+        {
+          "version_before": {
+            "start": "1.3",
+            "width": "0.3"
+          },
+          "after_insert": {
+            "start": "1.5",
+            "width": "0.3"
+          },
+          "interpretation": "Content at V-1.3 in version shares I-address with content at V-1.5 after insert"
+        }
+      ],
+      "comment": "Reveals I-space identity preservation - which V-addresses map to same I-address"
+    }
+  ],
+  "analysis": {
+    "v_address_shift": "Content after insertion point has V-addresses shifted by length of inserted text",
+    "i_space_allocation": "New content gets new I-addresses (allocated from bert)",
+    "v_to_i_mapping": "Original content keeps same I-address but V-addresses change; compare_versions reveals this"
+  }
+}

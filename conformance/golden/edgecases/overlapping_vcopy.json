@@ -1,0 +1,38 @@
+{
+  "name": "overlapping_vcopy",
+  "description": "Vcopy overlapping ranges from source to dest",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "span": "ABCD (1-4)"
+    },
+    {
+      "op": "vcopy",
+      "span": "CDEF (3-6)",
+      "comment": "Overlaps with first"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "ABCDCDEF"
+      ],
+      "expected": "ABCDCDEF",
+      "comment": "Both copies maintain identity with overlapping source regions"
+    }
+  ]
+}

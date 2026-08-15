@@ -1,0 +1,46 @@
+{
+  "name": "version_address_allocation",
+  "description": "Test version address allocation: child of document or sibling under account?",
+  "operations": [
+    {
+      "op": "create_document",
+      "label": "doc1",
+      "result": "1.1.0.1.0.1",
+      "comment": "First document under account"
+    },
+    {
+      "op": "create_document",
+      "label": "doc2",
+      "result": "1.1.0.1.0.2",
+      "comment": "Second document under account"
+    },
+    {
+      "op": "create_version",
+      "from": "doc1",
+      "label": "version1",
+      "result": "1.1.0.1.0.1.1",
+      "comment": "If child: doc1.1  If sibling: account.0.2"
+    },
+    {
+      "op": "create_version",
+      "from": "doc1",
+      "label": "version2",
+      "result": "1.1.0.1.0.1.2",
+      "comment": "Second version of doc1 - shows monotonic allocation"
+    },
+    {
+      "op": "create_version",
+      "from": "doc2",
+      "label": "version3",
+      "result": "1.1.0.1.0.2.1",
+      "comment": "Version of different document"
+    },
+    {
+      "op": "create_version",
+      "from": "version1",
+      "label": "version_of_version",
+      "result": "1.1.0.1.0.1.1.1",
+      "comment": "Version chain: shows if versions can be versioned with same mechanism"
+    }
+  ]
+}

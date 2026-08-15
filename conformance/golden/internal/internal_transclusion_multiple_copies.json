@@ -1,0 +1,48 @@
+{
+  "name": "internal_transclusion_multiple_copies",
+  "description": "Three copies of same content in one document - all share identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABC"
+    },
+    {
+      "op": "vcopy",
+      "span": "B",
+      "to": "end",
+      "comment": "First copy"
+    },
+    {
+      "op": "vcopy",
+      "span": "B",
+      "to": "end",
+      "comment": "Second copy"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "ABCBB"
+      ],
+      "expected": "ABCBB"
+    },
+    {
+      "op": "compare_all_pairs",
+      "positions": [
+        "1.2",
+        "1.4",
+        "1.5"
+      ],
+      "results": {
+        "1_2": true,
+        "1_3": true,
+        "2_3": true
+      },
+      "expected": "All three should share identity (all true)",
+      "comment": "Tests I\u2192V mapping with three V-positions for one I-address"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "name": "search_by_both_endpoints_one_removed",
+  "description": "Test find_links(source, target) when source endpoint is deleted",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source endpoint text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target endpoint text"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "source AND target",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Search with both endpoint criteria"
+    },
+    {
+      "op": "delete_all",
+      "doc": "source"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "source AND target",
+      "result": [],
+      "comment": "Both-endpoint search when source is empty"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "target only",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Target-only search for comparison"
+    }
+  ]
+}

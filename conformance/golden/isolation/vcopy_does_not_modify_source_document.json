@@ -1,0 +1,56 @@
+{
+  "name": "vcopy_does_not_modify_source_document",
+  "description": "VCOPY from source to target does not modify source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source content here"
+    },
+    {
+      "op": "snapshot",
+      "doc": "source",
+      "label": "before_vcopy",
+      "content": [
+        "Source content here"
+      ]
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "Source content"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Source content"
+      ]
+    },
+    {
+      "op": "snapshot",
+      "doc": "source",
+      "label": "after_vcopy",
+      "content": [
+        "Source content here"
+      ]
+    },
+    {
+      "op": "verify",
+      "assertion": "source unchanged",
+      "match": true,
+      "comment": "F0: VCOPY is read-only on source, no side effects"
+    }
+  ]
+}

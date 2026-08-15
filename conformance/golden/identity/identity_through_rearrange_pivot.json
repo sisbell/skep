@@ -1,0 +1,87 @@
+{
+  "name": "identity_through_rearrange_pivot",
+  "description": "Test that pivot operation preserves content identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc",
+      "text": "First Second"
+    },
+    {
+      "op": "create_version",
+      "doc": "version_before",
+      "result": "1.1.0.1.0.1.1",
+      "comment": "Snapshot before rearrange"
+    },
+    {
+      "op": "pivot",
+      "doc": "doc",
+      "cuts": [
+        1,
+        7,
+        13
+      ],
+      "comment": "Swap 'First ' and 'Second'"
+    },
+    {
+      "op": "contents",
+      "doc": "doc",
+      "label": "after_pivot",
+      "result": [
+        "SecondFirst "
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version_before",
+      "result": [
+        "First Second"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "doc1": "rearranged",
+      "doc2": "original_version",
+      "shared": [
+        {
+          "rearranged": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.7",
+              "width": "0.6"
+            }
+          }
+        },
+        {
+          "rearranged": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.7",
+              "width": "0.6"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          }
+        }
+      ],
+      "comment": "Content identity should be preserved - same I-addresses, different V-positions"
+    }
+  ]
+}

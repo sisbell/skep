@@ -1,0 +1,71 @@
+{
+  "name": "find_documents_transitive_transclusion",
+  "description": "Find documents through A -> B -> C transclusion chain",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "Original from C"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "C",
+      "to": "B",
+      "text": "Original"
+    },
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "A",
+      "text": "Original"
+    },
+    {
+      "op": "contents",
+      "doc": "A",
+      "result": [
+        "A prefix: Original"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "B",
+      "result": [
+        "B prefix: Original"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "C",
+      "result": [
+        "Original from C"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search_from": "C",
+      "search_text": "Original",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ],
+      "expected_count": 3,
+      "comment": "A, B, and C all share 'Original' content identity"
+    }
+  ]
+}

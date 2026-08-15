@@ -1,0 +1,84 @@
+{
+  "name": "orphaned_link_target_all_deleted",
+  "description": "Test link behavior when ALL content is deleted from target document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source with link text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Short"
+    },
+    {
+      "op": "create_link",
+      "source_text": "Source",
+      "target_text": "Short",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "target",
+      "result": [
+        "Short"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "delete_all",
+      "doc": "target",
+      "comment": "Delete ALL content from target document"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "after_delete",
+      "result": [],
+      "comment": "Target document should now be empty"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link should still be findable from source"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "target",
+      "result": [],
+      "works": true,
+      "comment": "follow_link to target should work but return empty"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "source",
+      "result": [
+        "Source"
+      ],
+      "comment": "Source endpoint should be unaffected"
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "name": "insert_text_does_not_affect_links_in_same_document",
+  "description": "INSERT in text subspace (1.x) does not corrupt link subspace (2.x)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDE"
+    },
+    {
+      "op": "create_link",
+      "from": "ABC",
+      "to": "CD",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_insert",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "before_insert",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "insert",
+      "position": "1.3",
+      "text": "XYZ",
+      "comment": "Insert in text subspace"
+    },
+    {
+      "op": "contents",
+      "label": "after_insert",
+      "result": [
+        "ABXYZCDE"
+      ],
+      "expected": "ABXYZCDE"
+    },
+    {
+      "op": "find_links",
+      "label": "after_insert",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_insert",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            },
+            {
+              "start": "1.6",
+              "width": "0.1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "verify",
+      "assertion": "link still exists",
+      "before_count": 1,
+      "after_count": 1,
+      "match": true,
+      "comment": "Finding 054: two-blade knife isolates text from link subspace"
+    }
+  ]
+}

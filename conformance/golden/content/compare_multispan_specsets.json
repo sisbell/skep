@@ -1,0 +1,74 @@
+{
+  "name": "compare_multispan_specsets",
+  "description": "Compare documents using SpecSets with specific spans",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc1",
+      "text": "AAA unique1 BBB shared CCC unique2 DDD"
+    },
+    {
+      "op": "create_version",
+      "from": "doc1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc2",
+      "address": "1.1",
+      "text": "PREFIX "
+    },
+    {
+      "op": "contents",
+      "doc": "doc1",
+      "result": [
+        "AAA unique1 BBB shared CCC unique2 DDD"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "doc2",
+      "result": [
+        "PREFIX AAA unique1 BBB shared CCC unique2 DDD"
+      ]
+    },
+    {
+      "op": "compare_full",
+      "shared": [
+        {
+          "doc1": {
+            "start": "1.1",
+            "width": "0.38"
+          },
+          "doc2": {
+            "start": "1.8",
+            "width": "0.38"
+          }
+        }
+      ],
+      "comment": "Full document comparison"
+    },
+    {
+      "op": "compare_partial",
+      "doc1_span": "shared (13-18)",
+      "shared": [
+        {
+          "doc1_span": {
+            "start": "1.13",
+            "width": "0.6"
+          },
+          "doc2": {
+            "start": "1.20",
+            "width": "0.6"
+          }
+        }
+      ],
+      "comment": "Compare specific span from doc1 with full doc2"
+    }
+  ]
+}

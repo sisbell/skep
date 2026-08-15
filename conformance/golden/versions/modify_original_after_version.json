@@ -1,0 +1,40 @@
+{
+  "name": "modify_original_after_version",
+  "description": "Create version, then modify original, verify version unchanged",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original text"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": " modified"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "original",
+      "result": [
+        "Original text modified"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Original text"
+      ]
+    }
+  ]
+}

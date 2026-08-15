@@ -1,0 +1,100 @@
+{
+  "name": "orphaned_link_both_endpoints_deleted",
+  "description": "Test link behavior when ALL content is deleted from BOTH source AND target",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "SRC"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "TGT"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "source",
+      "result": [
+        "SRC"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "target",
+      "result": [
+        "TGT"
+      ]
+    },
+    {
+      "op": "delete_all",
+      "doc": "source"
+    },
+    {
+      "op": "delete_all",
+      "doc": "target"
+    },
+    {
+      "op": "vspanset",
+      "doc": "source",
+      "spans": [
+        {
+          "start": "2.1",
+          "width": "0.1"
+        }
+      ]
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "spans": []
+    },
+    {
+      "op": "find_links",
+      "by": "source",
+      "result": [],
+      "comment": "Cannot find link - no source content to match"
+    },
+    {
+      "op": "find_links",
+      "by": "target",
+      "result": [],
+      "comment": "Cannot find link - no target content to match"
+    },
+    {
+      "op": "follow_link",
+      "end": "source",
+      "result": [],
+      "works": true,
+      "comment": "Link still exists - source returns empty"
+    },
+    {
+      "op": "follow_link",
+      "end": "target",
+      "result": [],
+      "comment": "Link still exists - target returns empty"
+    },
+    {
+      "op": "follow_link",
+      "end": "type",
+      "result": [],
+      "comment": "Link type should still be accessible"
+    }
+  ]
+}

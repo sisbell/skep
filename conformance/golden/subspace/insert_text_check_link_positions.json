@@ -1,0 +1,115 @@
+{
+  "name": "insert_text_check_link_positions",
+  "description": "Test whether INSERT in subspace 1.x shifts positions in subspace 2.x",
+  "operations": [
+    {
+      "op": "create_documents",
+      "doc1": "1.1.0.1.0.1",
+      "doc2": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert_text_doc1",
+      "text": "ABCDE",
+      "at": "1.1"
+    },
+    {
+      "op": "insert_text_doc2",
+      "text": "12345",
+      "at": "1.1"
+    },
+    {
+      "op": "create_link",
+      "from": "doc1[1.2-1.4]",
+      "to": "doc2[1.2-1.4]",
+      "comment": "Link should be at position 2.1 in doc1"
+    },
+    {
+      "op": "vspanset_before_insert",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Should show both 1.x (text) and 2.x (link) ranges"
+    },
+    {
+      "op": "text_at_1_3_before",
+      "result": [
+        "C"
+      ],
+      "interpretation": "Should be 'C' (third character)"
+    },
+    {
+      "op": "INSERT",
+      "at": "1.3",
+      "text": "XY",
+      "comment": "Insert in middle of text subspace"
+    },
+    {
+      "op": "vspanset_after_insert",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.5"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Key question: Did the 2.x range shift?"
+    },
+    {
+      "op": "text_at_1_3_after",
+      "result": [
+        "X"
+      ],
+      "interpretation": "Should be 'X' (first inserted character)"
+    },
+    {
+      "op": "text_at_1_5_after",
+      "result": [
+        "C"
+      ],
+      "interpretation": "Should be 'C' (shifted from 1.3 to 1.5)"
+    },
+    {
+      "op": "link_at_2_1_after",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "interpretation": "Critical test: Is link still at 2.1 or did it shift?"
+    },
+    {
+      "op": "full_content_after",
+      "result": [
+        "ABXYCDE"
+      ]
+    },
+    {
+      "op": "links_after_insert",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Verify link still exists and is discoverable"
+    }
+  ],
+  "analysis": {
+    "question": "Are subspaces independent for shift operations?",
+    "hypothesis_independent": "If independent, link remains at 2.1 after INSERT at 1.3",
+    "hypothesis_shared": "If shared, link shifts to 2.3 (same displacement as text)",
+    "displacement_value": "What tumbler value is passed to tumbleradd for shifts?"
+  }
+}

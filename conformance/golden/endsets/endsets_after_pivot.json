@@ -1,0 +1,82 @@
+{
+  "name": "endsets_after_pivot",
+  "description": "Retrieve endsets after rearranging content with pivot",
+  "operations": [
+    {
+      "op": "insert",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "create_link",
+      "source_text": "CD",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "before",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.3",
+              "width": "0.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "content",
+      "before": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "pivot",
+      "description": "Swap regions, moving CD"
+    },
+    {
+      "op": "content",
+      "after": [
+        "ADEBCFGH"
+      ]
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "after",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.2",
+              "width": "0.1"
+            },
+            {
+              "start": "1.2",
+              "width": "0.1"
+            },
+            {
+              "start": "1.5",
+              "width": "0.1"
+            },
+            {
+              "start": "1.5",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "Do endsets track the rearranged content?"
+    },
+    {
+      "op": "find_links",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Is the link still discoverable?"
+    }
+  ]
+}

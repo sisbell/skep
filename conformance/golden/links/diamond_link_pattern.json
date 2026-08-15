@@ -1,0 +1,107 @@
+{
+  "name": "diamond_link_pattern",
+  "description": "Test diamond pattern: A -> B, A -> C, B -> D, C -> D",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "create_document",
+      "doc": "D",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "C",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "D",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "C",
+      "to": "D",
+      "result": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "from": "A",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2"
+      ],
+      "expected_count": 2,
+      "comment": "Should find links to both B and C"
+    },
+    {
+      "op": "find_links",
+      "to": "D",
+      "result": [
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "expected_count": 2,
+      "comment": "Should find links from both B and C"
+    },
+    {
+      "op": "traverse_path",
+      "path": "A->B->D",
+      "result": [
+        {
+          "step": "A->B",
+          "text": [
+            "Path B"
+          ]
+        },
+        {
+          "step": "B->D",
+          "text": [
+            "Destination"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "traverse_path",
+      "path": "A->C->D",
+      "result": [
+        {
+          "step": "A->C",
+          "text": [
+            "Path C"
+          ]
+        },
+        {
+          "step": "C->D",
+          "text": [
+            "Destination"
+          ]
+        }
+      ],
+      "comment": "Both paths should reach the same destination D"
+    }
+  ]
+}

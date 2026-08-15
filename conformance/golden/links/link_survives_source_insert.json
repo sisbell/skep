@@ -1,0 +1,78 @@
+{
+  "name": "link_survives_source_insert",
+  "description": "Test that link survives when text is inserted before the linked span in source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for more"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_insert",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "before_insert",
+      "end": "source",
+      "result": [
+        "here"
+      ]
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "address": "1.1",
+      "text": "PREFIX: ",
+      "comment": "Insert before linked span"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_insert",
+      "result": [
+        "PREFIX: Click here for more"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_insert",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link should still be findable"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_insert",
+      "end": "source",
+      "result": [
+        "here"
+      ],
+      "comment": "Link source should still resolve to 'here'"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "name": "transclude_linked_content",
+  "description": "Transclude content with a link, check if link is discoverable from copy",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for details"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Detail information"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "copy",
+      "text": "here",
+      "comment": "Transclude the linked content"
+    },
+    {
+      "op": "contents",
+      "doc": "copy",
+      "result": [
+        "Transcluded: here"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "source",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Original should find the link"
+    },
+    {
+      "op": "find_links",
+      "from": "copy",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Can transcluded content find the link?"
+    }
+  ]
+}

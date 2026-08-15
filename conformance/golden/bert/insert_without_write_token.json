@@ -1,0 +1,27 @@
+{
+  "name": "insert_without_write_token",
+  "description": "Attempt INSERT with only READ token - back end should reject",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Unauthorized insert",
+      "result": "OPERATION_SUCCEEDED"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

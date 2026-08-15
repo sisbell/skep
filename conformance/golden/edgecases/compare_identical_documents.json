@@ -1,0 +1,32 @@
+{
+  "name": "compare_identical_documents",
+  "description": "Compare a document with itself",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Identical content"
+    },
+    {
+      "op": "compare_versions",
+      "a": "same doc",
+      "b": "same doc",
+      "shared": [
+        {
+          "a": {
+            "start": "1.1",
+            "width": "0.17"
+          },
+          "b": {
+            "start": "1.1",
+            "width": "0.17"
+          }
+        }
+      ],
+      "comment": "Should return full document as shared"
+    }
+  ]
+}

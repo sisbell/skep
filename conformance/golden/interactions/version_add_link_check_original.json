@@ -1,0 +1,48 @@
+{
+  "name": "version_add_link_check_original",
+  "description": "Add link to version, check if original can discover it",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Shared content here"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_link",
+      "on": "version",
+      "source_text": "content",
+      "result": "1.1.0.1.0.1.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "from": "version",
+      "result": [
+        "1.1.0.1.0.1.1.0.2.1"
+      ],
+      "comment": "Version should find its own link"
+    },
+    {
+      "op": "find_links",
+      "from": "original",
+      "result": [
+        "1.1.0.1.0.1.1.0.2.1"
+      ],
+      "comment": "Can original find link added to version? (shared content identity)"
+    }
+  ]
+}

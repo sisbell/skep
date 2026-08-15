@@ -1,0 +1,166 @@
+{
+  "name": "delete_partial_text_before_link",
+  "description": "Test incremental V-position shifting and behavior when shift would go below 1.1",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "12345678901234567890",
+      "note": "20 bytes"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.15",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "note": "Link from 1.5-1.9 to 1.15-1.19"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Initial state"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "note": "Initial endsets"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "start": "1.1",
+      "width": "0.3",
+      "note": "Delete 3 bytes, link should shift from 1.5 to 1.2"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "After small deletion"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.2",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "note": "Endsets after small deletion"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "start": "1.1",
+      "width": "0.10",
+      "note": "Delete 10 more bytes (13 total), link source would shift below 1.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "After large deletion - what happens to link V-positions?"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": []
+        }
+      ],
+      "note": "Final endsets - can position digit go below 1?"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "name": "pivot_cross_subspace_boundary",
+  "description": "Test whether REARRANGE can cross subspace boundaries (1.x to 2.x)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABC"
+    },
+    {
+      "op": "insert",
+      "address": "1.5",
+      "text": "DEF"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABCDEF"
+      ]
+    },
+    {
+      "op": "vspanset_before",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.7>"
+    },
+    {
+      "op": "pivot_attempt",
+      "cut1": "1.1",
+      "cut2": "1.4",
+      "cut3": "2.5",
+      "status": "succeeded",
+      "description": "Attempt to pivot ABC from 1.1-1.4 to 2.2-2.5 (crossing boundary)"
+    },
+    {
+      "op": "retrieve_after_1x",
+      "result": "['DEF']"
+    },
+    {
+      "op": "retrieve_after_2x",
+      "result": "['ABC']"
+    },
+    {
+      "op": "vspanset_after",
+      "result": "<VSpec in 1.1.0.1.0.1, at 0 for 0.2, at 1 for 1>"
+    }
+  ]
+}

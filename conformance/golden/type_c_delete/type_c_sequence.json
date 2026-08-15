@@ -1,0 +1,93 @@
+{
+  "name": "type_c_sequence",
+  "description": "Sequential Type C deletes - observe cumulative fragmentation",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGH",
+      "result": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "retrieve_vspanset",
+      "initial": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "1 crum initially"
+    },
+    {
+      "op": "remove",
+      "span": "1.4 length 1",
+      "comment": "Delete D. \u0394c = +1",
+      "result": [
+        "ABCEFGH"
+      ]
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_delete_1": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.7"
+          }
+        ]
+      },
+      "comment": "Expected: 2 crums"
+    },
+    {
+      "op": "remove",
+      "span": "1.5 length 1",
+      "comment": "Delete F (shifted position). Splits right crum, \u0394c = +1",
+      "result": [
+        "ABCEGH"
+      ]
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_delete_2": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ]
+      },
+      "comment": "Expected: 3 crums"
+    },
+    {
+      "op": "remove",
+      "span": "1.2 length 1",
+      "comment": "Delete B. Splits left crum, \u0394c = +1",
+      "result": [
+        "ACEGH"
+      ]
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_delete_3": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      },
+      "comment": "Expected: 4 crums. Total fragmentation from 3 Type C deletes."
+    }
+  ]
+}

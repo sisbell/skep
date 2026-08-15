@@ -1,0 +1,62 @@
+{
+  "name": "link_with_vcopy_source",
+  "description": "Test link behavior when source span is also transcluded to another document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for details"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Detail information"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "copy",
+      "text": "Copied: "
+    },
+    {
+      "op": "vcopy",
+      "text": "here",
+      "from": "source",
+      "to": "copy"
+    },
+    {
+      "op": "contents",
+      "doc": "copy",
+      "result": [
+        "Copied: here"
+      ]
+    },
+    {
+      "op": "find_links",
+      "search_doc": "copy",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Can we find links from the transcluded content?"
+    }
+  ]
+}

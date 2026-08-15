@@ -1,0 +1,85 @@
+{
+  "name": "link_spanning_multiple_transclusions",
+  "description": "Link source spans content from multiple vcopy origins",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "First part content"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Second part content"
+    },
+    {
+      "op": "create_document",
+      "doc": "combined",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "A",
+      "to": "combined",
+      "text": "First"
+    },
+    {
+      "op": "insert",
+      "doc": "combined",
+      "text": " and "
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "combined",
+      "text": "Second"
+    },
+    {
+      "op": "contents",
+      "doc": "combined",
+      "result": [
+        "First and Second"
+      ]
+    },
+    {
+      "op": "create_link",
+      "source_text": "First and Second",
+      "result": "1.1.0.1.0.3.0.2.1",
+      "comment": "Link source spans A's content, local text, and B's content"
+    },
+    {
+      "op": "find_links",
+      "from": "combined",
+      "result": [
+        "1.1.0.1.0.3.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "A",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Link discoverable from A (its content is part of link source)"
+    },
+    {
+      "op": "find_links",
+      "from": "B",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Link discoverable from B (its content is part of link source)"
+    }
+  ]
+}

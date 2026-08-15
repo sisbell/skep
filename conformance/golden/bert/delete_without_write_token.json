@@ -1,0 +1,42 @@
+{
+  "name": "delete_without_write_token",
+  "description": "Attempt DELETEVSPAN with only READ token - back end should reject",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Content to delete"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "delete_vspan",
+      "doc": "1.1.0.1.0.1",
+      "span": "1.1+1.17",
+      "result": "OPERATION_FAILED: 'XuSession' object has no attribute 'delete_vspan'"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

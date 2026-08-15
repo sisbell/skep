@@ -1,0 +1,60 @@
+{
+  "name": "multiple_documents",
+  "description": "Create and populate multiple independent documents",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Document One"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "Document One"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Document Two"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.2",
+      "result": [
+        "Document Two"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.2"
+    }
+  ]
+}

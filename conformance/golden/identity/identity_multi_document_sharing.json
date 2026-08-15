@@ -1,0 +1,72 @@
+{
+  "name": "identity_multi_document_sharing",
+  "description": "Multiple documents share content from same source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Shared content for all"
+    },
+    {
+      "op": "create_multiple_targets",
+      "count": 4,
+      "results": [
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5"
+      ]
+    },
+    {
+      "op": "contents",
+      "targets": [
+        {
+          "doc": "target_0",
+          "docid": "1.1.0.1.0.2",
+          "contents": [
+            "Doc 0: Shared content"
+          ]
+        },
+        {
+          "doc": "target_1",
+          "docid": "1.1.0.1.0.3",
+          "contents": [
+            "Doc 1: Shared content"
+          ]
+        },
+        {
+          "doc": "target_2",
+          "docid": "1.1.0.1.0.4",
+          "contents": [
+            "Doc 2: Shared content"
+          ]
+        },
+        {
+          "doc": "target_3",
+          "docid": "1.1.0.1.0.5",
+          "contents": [
+            "Doc 3: Shared content"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "find_documents",
+      "query": "Shared content",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5"
+      ],
+      "expected_count": 5,
+      "comment": "Should find source + all 4 targets = 5 documents"
+    }
+  ]
+}

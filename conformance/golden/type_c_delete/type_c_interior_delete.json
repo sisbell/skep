@@ -1,0 +1,67 @@
+{
+  "name": "type_c_interior_delete",
+  "description": "Verify EWD-022 Type C: single-character DELETE in crum interior",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH",
+      "comment": "Creates one crum [1.1, 1.9)"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "before": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "Should be single span: 1.1 width 0.8"
+    },
+    {
+      "op": "retrieve_contents",
+      "before": [
+        "ABCDEFGH"
+      ],
+      "expected": "ABCDEFGH"
+    },
+    {
+      "op": "remove",
+      "span": {
+        "start": "1.4",
+        "width": "0.1"
+      },
+      "comment": "DELETE [1.4, 1.5) - the 'D'. Two cuts at 1.4 and 1.5 split into 3 pieces"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.7"
+          }
+        ]
+      },
+      "comment": "Expected: Two spans after shift [1.1, 1.4) and [1.4, 1.8). \u0394c = +1"
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [
+        "ABCEFGH"
+      ],
+      "expected": "ABCEFGH"
+    },
+    {
+      "op": "close_document"
+    }
+  ]
+}

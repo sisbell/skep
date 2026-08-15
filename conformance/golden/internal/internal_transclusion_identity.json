@@ -1,0 +1,46 @@
+{
+  "name": "internal_transclusion_identity",
+  "description": "Test I\u2192V mapping with internal transclusion (two V-positions, same I-address)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Original text here"
+    },
+    {
+      "op": "vcopy",
+      "from": "positions 10-13 (text)",
+      "to": "end of doc",
+      "comment": "Self-transclusion creates duplicate reference"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "Original text heretext"
+      ],
+      "expected": "Original text heretext"
+    },
+    {
+      "op": "compare_versions",
+      "spec1": "first occurrence of 'text' (1.10-1.13)",
+      "spec2": "second occurrence of 'text' (1.19-1.22)",
+      "shared": [
+        {
+          "first": {
+            "start": "1.10",
+            "width": "0.4"
+          },
+          "second": {
+            "start": "1.19",
+            "width": "0.4"
+          }
+        }
+      ],
+      "comment": "Both should map to same I-addresses, thus share identity"
+    }
+  ]
+}

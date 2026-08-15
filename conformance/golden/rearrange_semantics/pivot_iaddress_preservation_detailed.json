@@ -1,0 +1,50 @@
+{
+  "name": "pivot_iaddress_preservation_detailed",
+  "description": "Detailed verification that pivot preserves I-addresses",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "vspanset_before",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>",
+      "comment": "Record exact V\u2192I mapping before pivot"
+    },
+    {
+      "op": "content_before",
+      "result": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "pivot",
+      "v1": "1.2",
+      "v2": "1.4",
+      "v3": "1.6",
+      "description": "Swap BC and DE"
+    },
+    {
+      "op": "vspanset_after",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>",
+      "comment": "V-positions should change, I-addresses should be same"
+    },
+    {
+      "op": "content_after",
+      "result": [
+        "ADEBCFGH"
+      ],
+      "expected": "ADEBC (+ unchanged FGH)"
+    }
+  ]
+}

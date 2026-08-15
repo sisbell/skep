@@ -1,0 +1,68 @@
+{
+  "name": "multiple_links_same_doc",
+  "description": "Create multiple links from the same source document to different targets",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Source with links to multiple targets"
+    },
+    {
+      "op": "create_documents",
+      "count": 3,
+      "results": [
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ]
+    },
+    {
+      "op": "create_link",
+      "source_text": "Source",
+      "target_doc": 1,
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "source_text": "links",
+      "target_doc": 2,
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "source_text": "targets",
+      "target_doc": 3,
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.40"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    }
+  ]
+}

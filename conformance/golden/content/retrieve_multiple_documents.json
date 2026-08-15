@@ -1,0 +1,28 @@
+{
+  "name": "retrieve_multiple_documents",
+  "description": "Retrieve content from multiple documents in a single SpecSet",
+  "operations": [
+    {
+      "op": "create_documents",
+      "count": 3,
+      "texts": [
+        "Alpha content",
+        "Beta content",
+        "Gamma content"
+      ],
+      "results": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "specset": "First 5 chars from each document",
+      "result": [
+        "AlphaBeta Gamma"
+      ],
+      "comment": "Should contain 'Alpha', 'Beta', 'Gamma'"
+    }
+  ]
+}

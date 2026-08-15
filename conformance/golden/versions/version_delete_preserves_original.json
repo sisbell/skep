@@ -1,0 +1,40 @@
+{
+  "name": "version_delete_preserves_original",
+  "description": "Delete from version, verify original unchanged",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Keep this text"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "delete",
+      "doc": "version",
+      "range": "first 5 chars"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "original",
+      "result": [
+        "Keep this text"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "this text"
+      ]
+    }
+  ]
+}

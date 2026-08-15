@@ -1,0 +1,57 @@
+{
+  "name": "multiple_versions_same_source",
+  "description": "Create two versions of same source, verify independence",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source text"
+    },
+    {
+      "op": "create_version",
+      "from": "source",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v1",
+      "text": " v1"
+    },
+    {
+      "op": "create_version",
+      "from": "source",
+      "result": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "insert",
+      "doc": "v2",
+      "text": " v2"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "source",
+      "result": [
+        "Source text"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "v1",
+      "result": [
+        "Source text v1"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "v2",
+      "result": [
+        "Source text v2"
+      ]
+    }
+  ]
+}

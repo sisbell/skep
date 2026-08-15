@@ -1,0 +1,36 @@
+{
+  "name": "find_documents_basic",
+  "description": "Find all documents containing specific content via FINDDOCSCONTAINING",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Unique content to track"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "Unique content"
+    },
+    {
+      "op": "find_documents",
+      "query": "Unique content from source",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "comment": "Should find both source and target documents"
+    }
+  ]
+}

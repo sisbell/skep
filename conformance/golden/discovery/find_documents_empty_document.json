@@ -1,0 +1,28 @@
+{
+  "name": "find_documents_empty_document",
+  "description": "find_documents behavior with empty documents",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "empty",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "full",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "full",
+      "text": "Has content"
+    },
+    {
+      "op": "find_documents",
+      "search_from": "empty",
+      "result": [],
+      "error": "Empty document has no spans to search",
+      "comment": "Searching from empty document's content"
+    }
+  ]
+}

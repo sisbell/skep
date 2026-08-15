@@ -1,0 +1,131 @@
+{
+  "name": "nested_partial_transclusions",
+  "description": "Chain of transclusions with shrinking subsets",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "origin",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "origin",
+      "text": "ABCDEFGHIJKLMNOP"
+    },
+    {
+      "op": "create_link",
+      "source_text": "FGHIJK",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "level1",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "origin",
+      "to": "level1",
+      "text": "DEFGHIJKLM"
+    },
+    {
+      "op": "create_document",
+      "doc": "level2",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "vcopy",
+      "from": "level1",
+      "to": "level2",
+      "text": "GHIJ"
+    },
+    {
+      "op": "contents",
+      "doc": "origin",
+      "result": [
+        "ABCDEFGHIJKLMNOP"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "level1",
+      "result": [
+        "DEFGHIJKLM"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "level2",
+      "result": [
+        "GHIJ"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "origin",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "level1",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Level1 has FGHIJK (full link source)"
+    },
+    {
+      "op": "find_links",
+      "from": "level2",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Level2 has GHIJ (partial overlap with FGHIJK)"
+    },
+    {
+      "op": "follow_link",
+      "from": "origin",
+      "result": [
+        "FGHIJK"
+      ],
+      "comment": "Full link source FGHIJK"
+    },
+    {
+      "op": "follow_link",
+      "from": "level1",
+      "result": [
+        "FGHIJK"
+      ],
+      "comment": "Full link source FGHIJK (contained in DEFGHIJKLM)"
+    },
+    {
+      "op": "follow_link",
+      "from": "level2",
+      "result": [
+        "FGHIJK"
+      ],
+      "comment": "Only GHIJ visible (overlap of GHIJ and FGHIJK)"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "origin",
+        "level2"
+      ],
+      "result": [
+        {
+          "origin": {
+            "start": "1.7",
+            "width": "0.4"
+          },
+          "level2": {
+            "start": "1.1",
+            "width": "0.4"
+          }
+        }
+      ],
+      "comment": "Only GHIJ shared between origin and level2"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "name": "whereoncrum_boundary_classification",
+  "description": "Verify whereoncrum returns ONMYRIGHTBORDER when cut == reach",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "AAA",
+      "at": "1.1"
+    },
+    {
+      "op": "insert",
+      "text": "BBB",
+      "at": "1.4"
+    },
+    {
+      "op": "insert",
+      "text": "CCC",
+      "at": "1.7"
+    },
+    {
+      "op": "initial_state",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.9"
+        }
+      ],
+      "contents": [
+        "AAABBBCCC"
+      ],
+      "expected": "AAABBBCCC"
+    },
+    {
+      "op": "insert",
+      "text": "X",
+      "at": "1.4",
+      "comment": "Insert at boundary (reach of AAA)"
+    },
+    {
+      "op": "after_boundary_insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.10"
+        }
+      ],
+      "contents": [
+        "AAAXBBBCCC"
+      ],
+      "note": "Position 1.4 is ONMYRIGHTBORDER of AAA, should not split it"
+    }
+  ]
+}

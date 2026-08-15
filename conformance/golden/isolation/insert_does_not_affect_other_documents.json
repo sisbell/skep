@@ -1,0 +1,80 @@
+{
+  "name": "insert_does_not_affect_other_documents",
+  "description": "INSERT in doc A does not modify doc B",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "Document A content"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Document B content"
+    },
+    {
+      "op": "snapshot",
+      "doc": "B",
+      "label": "before_A_insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ],
+      "content": [
+        "Document B content"
+      ]
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "position": "1.10",
+      "text": "INSERTED"
+    },
+    {
+      "op": "contents",
+      "doc": "A",
+      "label": "after_insert",
+      "result": [
+        "Document INSERTEDA content"
+      ]
+    },
+    {
+      "op": "snapshot",
+      "doc": "B",
+      "label": "after_A_insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ],
+      "content": [
+        "Document B content"
+      ]
+    },
+    {
+      "op": "verify",
+      "assertion": "B unchanged",
+      "before": [
+        "Document B content"
+      ],
+      "after": [
+        "Document B content"
+      ],
+      "match": true,
+      "comment": "F0: doc B should be completely unaffected by insert into doc A"
+    }
+  ]
+}

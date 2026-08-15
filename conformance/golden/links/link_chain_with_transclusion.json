@@ -1,0 +1,81 @@
+{
+  "name": "link_chain_with_transclusion",
+  "description": "Test link chain where B transcludes content from A",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "Original content from A with link anchor"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "A",
+      "to": "B",
+      "text": "Original content from A"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": " and B's own link anchor"
+    },
+    {
+      "op": "contents",
+      "doc": "B",
+      "result": [
+        "B prefix: Original content from A  and B's own link anchor"
+      ]
+    },
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "source_text": "link anchor (in A)",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "C",
+      "source_text": "link anchor (in B's own content)",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "traverse_chain",
+      "traversal": [
+        {
+          "step": "A->B",
+          "text": [
+            "B prefix"
+          ]
+        },
+        {
+          "step": "B->C",
+          "text": [
+            "Destination"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "find_links",
+      "via_transcluded_content": true,
+      "result": [],
+      "comment": "Links found when searching via transcluded content in B"
+    }
+  ]
+}

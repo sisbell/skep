@@ -1,0 +1,66 @@
+{
+  "name": "vcopy_source_deleted",
+  "description": "Test vcopy behavior when transcluded content is deleted from source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Keep this. Delete this. Keep end."
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "Delete this."
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "before_delete",
+      "result": [
+        "Keep this. Delete this. Keep end."
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "before_delete",
+      "result": [
+        "Transcluded: Delete this."
+      ]
+    },
+    {
+      "op": "remove",
+      "doc": "source",
+      "text": "Delete this. ",
+      "comment": "Delete the transcluded section from source"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Keep this. Keep end."
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "after_delete",
+      "result": [
+        "Transcluded: Delete this."
+      ],
+      "comment": "Target should still have the content (it references the identity)"
+    }
+  ]
+}

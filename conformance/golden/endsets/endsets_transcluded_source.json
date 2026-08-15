@@ -1,0 +1,56 @@
+{
+  "name": "endsets_transcluded_source",
+  "description": "Link from transcluded content and retrieve endsets",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Original shared text"
+    },
+    {
+      "op": "vcopy",
+      "from": "original",
+      "text": "shared"
+    },
+    {
+      "op": "create_link",
+      "source_text": "shared (transcluded)",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.9",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "target": [],
+      "comment": "Endsets of link from transcluded content"
+    },
+    {
+      "op": "find_links",
+      "from": "original",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Can we find link via original document's content identity?"
+    },
+    {
+      "op": "content",
+      "doc": "1.1.0.1.0.2",
+      "result": [
+        "Prefix: shared"
+      ]
+    }
+  ]
+}

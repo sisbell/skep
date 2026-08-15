@@ -1,0 +1,64 @@
+{
+  "name": "orphaned_link_discovery_by_link_id",
+  "description": "Orphaned links can still be accessed directly by link ID",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Linkable text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "comment": "Save this link ID - it's the only way to access orphaned link later"
+    },
+    {
+      "op": "delete_all",
+      "doc": "source",
+      "comment": "Delete source content - link becomes orphaned"
+    },
+    {
+      "op": "find_links",
+      "result": [],
+      "comment": "find_links returns empty - link is not discoverable"
+    },
+    {
+      "op": "follow_link_by_id",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [],
+      "comment": "Direct access via saved link ID still works"
+    },
+    {
+      "op": "follow_link_by_id",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        "Target"
+      ],
+      "comment": "Target is still accessible"
+    },
+    {
+      "op": "follow_link_by_id",
+      "link_id": "1.1.0.1.0.1.0.2.1",
+      "end": "type",
+      "result": [],
+      "comment": "Type is still accessible"
+    }
+  ]
+}

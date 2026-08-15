@@ -1,0 +1,46 @@
+{
+  "name": "docispan_granularity_insert_contiguous",
+  "description": "Test DOCISPAN granularity for contiguous INSERT",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGHIJ (10 bytes)",
+      "position": "1.1"
+    },
+    {
+      "op": "find_documents",
+      "search": "A (1 byte)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "ABC (3 bytes)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "F (middle byte)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "ABCDEFGHIJ (all 10 bytes)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    }
+  ],
+  "analysis": {
+    "comment": "All searches should find the document regardless of DOCISPAN granularity, because enfilade queries are range-based. The granularity affects storage efficiency, not query results."
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "name": "version_with_links",
+  "description": "Create document with links, then version it, verify link discovery",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for info"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Information content"
+    },
+    {
+      "op": "create_link",
+      "from": "source:here",
+      "to": "target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_version",
+      "from": "source",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "find_links",
+      "doc": "version",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Links discovered via content identity"
+    },
+    {
+      "op": "find_links",
+      "doc": "source",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    }
+  ]
+}

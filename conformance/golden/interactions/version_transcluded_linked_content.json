@@ -1,0 +1,87 @@
+{
+  "name": "version_transcluded_linked_content",
+  "description": "Source has link, doc transcludes it, version doc, modify version",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source with linked text here"
+    },
+    {
+      "op": "create_link",
+      "on": "linked",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "doc",
+      "text": "linked text"
+    },
+    {
+      "op": "create_version",
+      "from": "doc",
+      "result": "1.1.0.1.0.3.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": " (version suffix)"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "result": [
+        "Source with linked text here"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "doc",
+      "result": [
+        "Doc prefix: linked text"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version",
+      "result": [
+        "Doc prefix: linked text (version suffix)"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "source",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Source should find its link"
+    },
+    {
+      "op": "find_links",
+      "from": "doc",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Doc should find link (transcluded linked content)"
+    },
+    {
+      "op": "find_links",
+      "from": "version",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Version should find link (version of transcluded linked content)"
+    }
+  ]
+}

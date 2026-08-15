@@ -1,0 +1,71 @@
+{
+  "name": "delete_all_transcluded_content",
+  "description": "Test cleanup when deleting ALL content from a document (which is all transcluded)",
+  "operations": [
+    {
+      "op": "create_document",
+      "label": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "All transcluded"
+    },
+    {
+      "op": "create_document",
+      "label": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "all",
+      "comment": "Target has ONLY transcluded content, no native content"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "target",
+      "result": [
+        "All transcluded"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ]
+    },
+    {
+      "op": "remove_all",
+      "doc": "target",
+      "comment": "Delete ALL content from target"
+    },
+    {
+      "op": "verify_empty",
+      "doc": "target",
+      "is_empty": true
+    },
+    {
+      "op": "find_documents",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "comment": "Should only find source, not empty target"
+    },
+    {
+      "op": "analysis",
+      "results": {
+        "target_in_before": true,
+        "target_in_after": true,
+        "target_is_empty": true,
+        "expected": "target not in results after deletion"
+      }
+    }
+  ]
+}

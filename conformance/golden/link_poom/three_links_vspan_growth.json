@@ -1,0 +1,58 @@
+{
+  "name": "three_links_vspan_growth",
+  "description": "Track vspan growth pattern for three successive links",
+  "operations": [
+    {
+      "op": "insert",
+      "text": "First, second, and third"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "initial",
+      "spans": [
+        "1.1-0.24"
+      ]
+    },
+    {
+      "op": "create_link",
+      "num": 1,
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "after_link1",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ]
+    },
+    {
+      "op": "create_link",
+      "num": 2,
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "after_link2",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "comment": "If link1's span changed, CREATELINK shifts; if not, it appends"
+    },
+    {
+      "op": "create_link",
+      "num": 3,
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "after_link3",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "comment": "Pattern should be clear by now"
+    }
+  ]
+}

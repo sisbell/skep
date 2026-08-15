@@ -1,0 +1,42 @@
+{
+  "name": "multiple_vcopy_same_source",
+  "description": "Copy the same source content to multiple target documents",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Reusable content block"
+    },
+    {
+      "op": "vcopy_to_multiple",
+      "source_span": {
+        "start": "1.1",
+        "width": "0.8"
+      },
+      "targets": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "contents": [
+            "Target 1: Reusable"
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.3",
+          "contents": [
+            "Target 2: Reusable"
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.4",
+          "contents": [
+            "Target 3: Reusable"
+          ]
+        }
+      ],
+      "comment": "Each target has transcluded copy of 'Reusable'"
+    }
+  ]
+}

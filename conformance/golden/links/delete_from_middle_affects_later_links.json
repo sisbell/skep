@@ -1,0 +1,86 @@
+{
+  "name": "delete_from_middle_affects_later_links",
+  "description": "DELETE 25 bytes, link at 2.1 shifts to 1.85 (still positive)",
+  "operations": [
+    {
+      "op": "insert",
+      "at": "1.1",
+      "text": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "note": "30 bytes"
+    },
+    {
+      "op": "create_link",
+      "source": "1.10-1.14",
+      "target": "1.20-1.24",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "vspan_before",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      }
+    },
+    {
+      "op": "endsets_before",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.10",
+              "width": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "delete",
+      "start": "1.1",
+      "width": "0.25",
+      "note": "Delete 25 bytes"
+    },
+    {
+      "op": "vspan_after",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Link should shift from 2.1 to 1.85"
+    },
+    {
+      "op": "endsets_after",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": []
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "link_position": "2.1",
+    "deletion_width": "0.25",
+    "expected_shift": "2.1 - 0.25 = 1.85",
+    "underflow": "NO"
+  }
+}

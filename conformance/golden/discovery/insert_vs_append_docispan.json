@@ -1,0 +1,42 @@
+{
+  "name": "insert_vs_append_docispan",
+  "description": "Compare INSERT vs APPEND for DOCISPAN creation",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "insert",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "insert",
+      "text": "Via insert"
+    },
+    {
+      "op": "create_document",
+      "doc": "append",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "append",
+      "doc": "append",
+      "text": "Via append"
+    },
+    {
+      "op": "find_documents",
+      "search_from": "insert",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "comment": "INSERT content discoverability"
+    },
+    {
+      "op": "find_documents",
+      "search_from": "append",
+      "result": [
+        "1.1.0.1.0.2"
+      ],
+      "comment": "APPEND content discoverability (DOCISPAN commented out)"
+    }
+  ]
+}

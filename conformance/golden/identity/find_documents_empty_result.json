@@ -1,0 +1,35 @@
+{
+  "name": "find_documents_empty_result",
+  "description": "FINDDOCSCONTAINING with content in only one document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc",
+      "text": "Completely unique content"
+    },
+    {
+      "op": "create_document",
+      "doc": "other",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "other",
+      "text": "Different content"
+    },
+    {
+      "op": "find_documents",
+      "query": "Completely",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "expected_count": 1,
+      "comment": "Should find only the original document"
+    }
+  ]
+}

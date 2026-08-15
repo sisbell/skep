@@ -1,0 +1,25 @@
+{
+  "name": "insert_creates_docispan",
+  "description": "Test if INSERT creates DOCISPAN entries for content discovery",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Inserted text"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Inserted",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "expected_if_docispan": [
+        "1.1.0.1.0.1"
+      ],
+      "comment": "If INSERT creates DOCISPAN, should find this document"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "name": "link_to_transcluded_content",
+  "description": "Test link where target is transcluded content (shared identity)",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Source content in B: important text here"
+    },
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "A",
+      "text": "important text"
+    },
+    {
+      "op": "contents",
+      "doc": "A",
+      "result": [
+        "A contains: important text"
+      ]
+    },
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "C references: see the important text"
+    },
+    {
+      "op": "create_link",
+      "from": "C",
+      "to": "A (transcluded content)",
+      "source_text": "important text",
+      "target_text": "important text (transcluded from B)",
+      "result": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.3.0.2.1",
+      "result": [
+        "important text"
+      ]
+    },
+    {
+      "op": "find_links",
+      "to": "B's original content",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Does link to A's transcluded content appear when searching B?"
+    },
+    {
+      "op": "find_links",
+      "to": "A's transcluded content",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Links targeting A's transcluded content"
+    }
+  ]
+}

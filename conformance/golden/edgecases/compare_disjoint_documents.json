@@ -1,0 +1,32 @@
+{
+  "name": "compare_disjoint_documents",
+  "description": "Compare two documents with no shared content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc1",
+      "text": "First document content"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc2",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "doc2",
+      "text": "Second document content"
+    },
+    {
+      "op": "compare_versions",
+      "shared": [],
+      "expected": "empty list - no shared origin",
+      "comment": "Different origins means no sharing"
+    }
+  ]
+}

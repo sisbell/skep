@@ -1,0 +1,208 @@
+{
+  "name": "multiple_text_insertions_with_links",
+  "description": "Multiple insertions at different positions with links to verify subspace independence",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABC"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.3"
+          }
+        ]
+      },
+      "note": "Step 1: text 1.1-1.3"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "T1"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "note": "Link1 at 2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Step 2: text 1.x + link 2.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.2",
+      "text": "XX"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.4"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Step 3: text 1.1-1.5, link?"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.3",
+      "text": "T2"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.3",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.3",
+              "width": "0.2"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.2",
+      "note": "Link2 at 2.2"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.4"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Step 4: links at 2.1 and 2.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "YY"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Step 5: final state"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "YYAXXBC"
+      ],
+      "note": "Should be 'YYAXXBC'"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+# skep conformance allowlist — ADJUDICATED divergences only.
+#
+# Format (restricted TOML subset, parsed by skep-conformance/src/allowlist.rs):
+#   [[allow]]
+#   scenario = "<golden scenario name>"
+#   op_index = <0-based op index>          # optional; absent = whole scenario
+#   class = "<short divergence class>"
+#   rationale = "<one sentence citing the design doc / drift item / udanax finding>"
+#   count_delta = <integer>                # optional declared count adjustment
+#   width_tolerance = <integer>            # optional span-width tolerance
+#
+# The one divergence adjudicated so far:
+#
+# Retraction tuples surface in content-region queries of their home doc:
+# as-built nullify deposits [enc({home}), enc({target}), [R]] and enc is the
+# subtree-span encoding, so document-homed retractions appear in
+# findlinks/count results alongside content links. Adjudicated intended
+# (skep-febe lifecycle test pins it); udanax does not surface them.
+# Applies wherever a scenario nullifies and then counts/lists links.
+#
+# None of the 263 golden scenarios exercises retraction: udanax-green 88.1
+# has no link-deletion operation (the corpus documents this —
+# links/link_permanence_no_delete_operation), so no create_link is ever
+# retracted and no concrete entry is needed. The comment stays as the
+# adjudication record for when a retraction-exercising corpus lands.

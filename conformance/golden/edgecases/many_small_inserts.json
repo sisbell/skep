@@ -1,0 +1,27 @@
+{
+  "name": "many_small_inserts",
+  "description": "100 single-character inserts",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_loop",
+      "count": 100,
+      "each": "single character"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "span_count": 1,
+      "comment": "How many spans after fragmented inserts?"
+    },
+    {
+      "op": "retrieve_contents",
+      "length": 1,
+      "sample": [
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUV"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "name": "create_version",
+  "description": "Create document, insert text, create version, modify version",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Original text"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.13"
+          }
+        ]
+      }
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "from": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1.1",
+      "result": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.13"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1.1",
+      "text": " with additions"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "original",
+      "result": [
+        "Original text"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Original text with additions"
+      ]
+    }
+  ]
+}

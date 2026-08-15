@@ -1,0 +1,74 @@
+{
+  "name": "vcopy_multiple_spans",
+  "description": "Copy multiple non-contiguous spans in a single vcopy",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "First part. Middle part. Last part."
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "spans": [
+        "First part",
+        "Last part"
+      ],
+      "comment": "Skip middle, copy first and last"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Copied: First partLast part."
+      ]
+    },
+    {
+      "op": "compare",
+      "shared": [
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.10"
+            }
+          },
+          "target": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.10"
+            }
+          }
+        },
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.26",
+              "width": "0.10"
+            }
+          },
+          "target": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.19",
+              "width": "0.10"
+            }
+          }
+        }
+      ],
+      "comment": "Should share 'First part' and 'Last part' but not 'Middle part'"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "name": "multi_hop_reverse_traversal",
+  "description": "Test reverse traversal: starting at D, find path back to A",
+  "operations": [
+    {
+      "op": "create_documents",
+      "count": 4,
+      "results": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ]
+    },
+    {
+      "op": "create_link",
+      "A->B": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "B->C": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "C->D": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "reverse_traversal",
+      "start": "D",
+      "end": "A",
+      "path": [
+        {
+          "at": "D",
+          "found_link_from": "C",
+          "text": [
+            "hop"
+          ]
+        },
+        {
+          "at": "C",
+          "found_link_from": "B",
+          "text": [
+            "hop"
+          ]
+        },
+        {
+          "at": "B",
+          "found_link_from": "A",
+          "text": [
+            " poin"
+          ]
+        },
+        {
+          "at": "A",
+          "links_found": 0,
+          "comment": "Start of chain"
+        }
+      ],
+      "comment": "Should find D<-C<-B<-A by following link sources"
+    }
+  ]
+}

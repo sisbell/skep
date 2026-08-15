@@ -1,0 +1,91 @@
+{
+  "name": "delete_then_recopy",
+  "description": "Test if DELETE + COPY produces same POOM as original INSERT",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "SAMPLE"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "SAMPLE",
+      "comment": "Direct INSERT - creates new I-addresses"
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "comment": "State after INSERT"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "SAMPLE"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "target",
+      "vspan": "1.1 to 1.7"
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [],
+      "comment": "State after DELETE (should be empty)"
+    },
+    {
+      "op": "vcopy_after_delete",
+      "from": "source",
+      "to": "target",
+      "at": "1.1",
+      "result": [
+        "SAMPLE"
+      ],
+      "recopied_vspans": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "comment": "COPY back into fully-deleted document \u2014 tests empty-after-edit state"
+    },
+    {
+      "op": "compare",
+      "insert_vs_recopy": {
+        "insert_vspans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ],
+        "recopied_vspans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ],
+        "same": true
+      },
+      "comment": "Are vspansets identical? (probably NOT, different I-addresses)"
+    }
+  ]
+}

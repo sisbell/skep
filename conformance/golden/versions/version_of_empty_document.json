@@ -1,0 +1,36 @@
+{
+  "name": "version_of_empty_document",
+  "description": "Create version of empty document, add content to version",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "empty",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "from": "empty",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": "Content in version only"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "empty",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Content in version only"
+      ]
+    }
+  ]
+}

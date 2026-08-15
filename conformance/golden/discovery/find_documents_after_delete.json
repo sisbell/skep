@@ -1,0 +1,59 @@
+{
+  "name": "find_documents_after_delete",
+  "description": "find_documents behavior after content deletion",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Findable content"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "text": "Findable"
+    },
+    {
+      "op": "find_documents",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 2,
+      "comment": "Both source and dest have 'Findable'"
+    },
+    {
+      "op": "delete",
+      "doc": "dest",
+      "text": "Findable"
+    },
+    {
+      "op": "contents",
+      "doc": "dest",
+      "result": [
+        "Prefix: "
+      ]
+    },
+    {
+      "op": "find_documents",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 1,
+      "comment": "Only source has 'Findable' now (if delete removes content identity)"
+    }
+  ]
+}

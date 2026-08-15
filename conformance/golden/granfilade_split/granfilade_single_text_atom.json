@@ -1,0 +1,31 @@
+{
+  "name": "granfilade_single_text_atom",
+  "description": "Baseline: single text atom in granfilade",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "HELLO",
+      "address": "1.1"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "HELLO"
+      ],
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      }
+    }
+  ],
+  "expected": "Text stored and retrieved successfully"
+}

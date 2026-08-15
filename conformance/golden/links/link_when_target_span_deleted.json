@@ -1,0 +1,62 @@
+{
+  "name": "link_when_target_span_deleted",
+  "description": "Test link behavior when the linked target span is deleted from the document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for more"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content here"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "target_text": "Target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "target",
+      "result": [
+        "Target"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "target",
+      "span": "Target ",
+      "comment": "Delete the linked target span"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "after_delete",
+      "result": [
+        "content here"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "target",
+      "result": [],
+      "link_survived": true,
+      "comment": "Does link still resolve after target span deleted?"
+    }
+  ]
+}

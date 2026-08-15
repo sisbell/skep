@@ -1,0 +1,45 @@
+{
+  "name": "conflict_copy",
+  "description": "Open a document while already open using CONFLICT_COPY",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Shared document content"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "copy",
+      "result": "1.1.0.1.0.1.1",
+      "comment": "Second open while first still open"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1.1",
+      "result": [
+        "Shared document content"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1.1"
+    }
+  ]
+}

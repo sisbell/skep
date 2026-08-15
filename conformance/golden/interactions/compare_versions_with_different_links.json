@@ -1,0 +1,81 @@
+{
+  "name": "compare_versions_with_different_links",
+  "description": "Original and version have different links, compare content sharing",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Shared text with linkable words"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_link",
+      "on": "original",
+      "source_text": "Shared",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "on": "version",
+      "source_text": "words",
+      "result": "1.1.0.1.0.1.1.0.2.1"
+    },
+    {
+      "op": "contents",
+      "doc": "original",
+      "result": [
+        "Shared text with linkable words"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version",
+      "result": [
+        "Shared text with linkable words"
+      ]
+    },
+    {
+      "op": "compare",
+      "shared": [
+        {
+          "original": {
+            "start": "1.1",
+            "width": "0.31"
+          },
+          "version": {
+            "start": "1.1",
+            "width": "0.31"
+          }
+        }
+      ],
+      "comment": "Should find shared content despite different links"
+    },
+    {
+      "op": "find_links",
+      "from": "original",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.1.0.2.1"
+      ],
+      "comment": "Original's links (may include version's due to shared content)"
+    },
+    {
+      "op": "find_links",
+      "from": "version",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.1.0.2.1"
+      ],
+      "comment": "Version's links (may include original's due to shared content)"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "name": "granfilade_two_inserts",
+  "description": "Insert two text atoms to observe granfilade structure with 2 bottom crums",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "AAAAA",
+      "address": "1.1"
+    },
+    {
+      "op": "retrieve_contents",
+      "label": "after_first",
+      "result": [
+        "AAAAA"
+      ],
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert",
+      "text": "BBBBB",
+      "address": "after first"
+    },
+    {
+      "op": "retrieve_contents",
+      "label": "after_second",
+      "result": [
+        "AAAAABBBBB"
+      ],
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      }
+    }
+  ],
+  "expected": "Both inserts succeed; tree structure adapts to M_b=1 constraint"
+}

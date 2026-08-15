@@ -1,0 +1,47 @@
+{
+  "name": "find_documents_multiple_transclusions",
+  "description": "Find documents when content is transcluded to many destinations",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Shared across many"
+    },
+    {
+      "op": "create_documents",
+      "count": 5,
+      "results": [
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5",
+        "1.1.0.1.0.6"
+      ]
+    },
+    {
+      "op": "vcopy_all",
+      "from": "source",
+      "to": "all destinations",
+      "text": "Shared"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Shared",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5",
+        "1.1.0.1.0.6"
+      ],
+      "expected_count": 6,
+      "comment": "Source + 5 destinations = 6 documents"
+    }
+  ]
+}

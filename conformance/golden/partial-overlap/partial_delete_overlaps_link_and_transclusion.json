@@ -1,0 +1,91 @@
+{
+  "name": "partial_delete_overlaps_link_and_transclusion",
+  "description": "Delete overlaps link source and transcluded content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "copy",
+      "text": "DEFGH"
+    },
+    {
+      "op": "create_link",
+      "source_text": "CDEFG",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "comment": "Link source CDEFG overlaps transclusion DEFGH on DEFG"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "from": "source",
+      "result": [
+        "CDEFG"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "from": "copy",
+      "result": [
+        "CDEFG"
+      ],
+      "comment": "From copy, see DEFG (overlap of DEFGH and CDEFG)"
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "text": "DEF",
+      "comment": "Delete DEF - overlaps both link and transclusion"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "ABCGHIJ"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "copy",
+      "label": "after_delete",
+      "result": [
+        "Copy: DEFGH"
+      ],
+      "comment": "Copy unaffected - references immutable I-space"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "from": "source",
+      "result": [
+        "CG"
+      ],
+      "comment": "Link source shrinks to remaining visible content"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "from": "copy",
+      "result": [
+        "CG"
+      ],
+      "comment": "From copy, still see DEFG (immutable)"
+    }
+  ]
+}

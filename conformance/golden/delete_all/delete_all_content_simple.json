@@ -1,0 +1,76 @@
+{
+  "name": "delete_all_content_simple",
+  "description": "Delete entire V-span in one operation, observe tree state",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Test content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "before_delete": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.12"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "before": [
+        "Test content"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": {
+        "start": "1.1",
+        "width": "0.12"
+      },
+      "comment": "DELETE entire V-span - all content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_delete": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "Is this empty like createenf(POOM)?"
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [],
+      "expected": "empty"
+    },
+    {
+      "op": "insert_after_delete",
+      "address": "1.1",
+      "text": "After delete",
+      "result": [
+        "After delete"
+      ],
+      "reinsert_vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.12"
+          }
+        ]
+      },
+      "comment": "INSERT into fully-deleted document \u2014 tests if empty-after-edit state supports re-insertion"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "name": "adjacent_deletes",
+  "description": "Delete adjacent regions accounting for position shifts",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "remove",
+      "span": "1.3 length 2",
+      "comment": "Delete 'CD'",
+      "result": [
+        "ABEFGH"
+      ],
+      "expected": "ABEFGH"
+    },
+    {
+      "op": "remove",
+      "span": "1.3 length 2",
+      "comment": "Delete 'EF' (shifted position)",
+      "result": [
+        "ABGH"
+      ],
+      "expected": "ABGH"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

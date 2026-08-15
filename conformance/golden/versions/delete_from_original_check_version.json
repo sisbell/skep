@@ -1,0 +1,40 @@
+{
+  "name": "delete_from_original_check_version",
+  "description": "Delete from original after versioning, verify version unchanged",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Text to delete"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "delete",
+      "doc": "original",
+      "range": "first 5 chars"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "original",
+      "result": [
+        "to delete"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "version",
+      "result": [
+        "Text to delete"
+      ]
+    }
+  ]
+}

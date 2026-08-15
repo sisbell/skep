@@ -1,0 +1,44 @@
+{
+  "name": "find_documents_transcluded",
+  "description": "Find documents by transcluded content identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Shared content here"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "text": "Shared content"
+    },
+    {
+      "op": "contents",
+      "doc": "dest",
+      "result": [
+        "Prefix: Shared content"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Shared",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 2,
+      "comment": "Should find both source and dest (shared content identity)"
+    }
+  ]
+}

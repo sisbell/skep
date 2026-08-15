@@ -1,0 +1,49 @@
+{
+  "name": "displacement_tumbler_value",
+  "description": "Determine concrete displacement tumbler for shifts",
+  "operations": [
+    {
+      "op": "insert",
+      "at": "1.1",
+      "text": "ABCDE"
+    },
+    {
+      "op": "pos_1_4_before",
+      "result": [
+        "D"
+      ],
+      "interpretation": "Should be 'D'"
+    },
+    {
+      "op": "insert",
+      "at": "1.3",
+      "text": "XYZ"
+    },
+    {
+      "op": "pos_1_4_after",
+      "result": [
+        "Y"
+      ],
+      "interpretation": "If shift by (0,3): still 'D'. If shift by (1,3): would be 'X'"
+    },
+    {
+      "op": "pos_1_6_after",
+      "result": [
+        "C"
+      ],
+      "interpretation": "Should be 'C' if content shifted by exactly 3 positions"
+    },
+    {
+      "op": "pos_1_7_after",
+      "result": [
+        "D"
+      ],
+      "interpretation": "Should be 'D'"
+    }
+  ],
+  "analysis": {
+    "question": "What displacement value is passed to tumbleradd?",
+    "code_reference": "insertnd.c:162 - tumbleradd(&ptr->cdsp.dsas[V], &width->dsas[V], ...)",
+    "width_dsas_V": "width->dsas[V] is the V-dimension component of the width tumbler"
+  }
+}

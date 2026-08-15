@@ -1,0 +1,311 @@
+{
+  "name": "internal_state",
+  "description": "Capture internal enfilade state after operations",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "dump_state",
+      "state": {
+        "granf": {
+          "depth": 0,
+          "height": 2,
+          "enftype": "GRAN",
+          "wid": [
+            "1.1.0.1.0.1"
+          ],
+          "dsp": [
+            "0"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "1.1.0.1.0.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "1.1.0.1.0.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 0
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 2,
+                  "orgl": {
+                    "depth": 3,
+                    "height": 1,
+                    "enftype": "POOM",
+                    "wid": [
+                      "0",
+                      "0"
+                    ],
+                    "dsp": [
+                      "0",
+                      "0"
+                    ],
+                    "children": [
+                      {
+                        "depth": 4,
+                        "height": 0,
+                        "enftype": "POOM",
+                        "wid": [
+                          "0",
+                          "0"
+                        ],
+                        "dsp": [
+                          "0",
+                          "0"
+                        ],
+                        "homedoc": "0"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "spanf": {
+          "depth": 0,
+          "height": 1,
+          "enftype": "SPAN",
+          "wid": [
+            "0",
+            "0"
+          ],
+          "dsp": [
+            "0",
+            "0"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 0,
+              "enftype": "SPAN",
+              "wid": [
+                "0",
+                "0"
+              ],
+              "dsp": [
+                "0",
+                "0"
+              ],
+              "homedoc": "0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Hello, World!"
+    },
+    {
+      "op": "dump_state",
+      "state": {
+        "granf": {
+          "depth": 0,
+          "height": 2,
+          "enftype": "GRAN",
+          "wid": [
+            "1.1.0.1.0.1.0.1.1"
+          ],
+          "dsp": [
+            "0"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "1.1.0.1.0.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "1.1.0.1.0.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 0
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0.0.0.0.0.0.0.1.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0.0.0.0.0.0.0.1.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 2,
+                  "orgl": {
+                    "depth": 3,
+                    "height": 1,
+                    "enftype": "POOM",
+                    "wid": [
+                      "0.0.0.0.0.0.0.0.13",
+                      "0.13"
+                    ],
+                    "dsp": [
+                      "1.1.0.1.0.1.0.1.1",
+                      "1.1"
+                    ],
+                    "children": [
+                      {
+                        "depth": 4,
+                        "height": 0,
+                        "enftype": "POOM",
+                        "wid": [
+                          "0.0.0.0.0.0.0.0.13",
+                          "0.13"
+                        ],
+                        "dsp": [
+                          "0",
+                          "0"
+                        ],
+                        "homedoc": "0"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 1,
+                  "text": "Hello, World!"
+                }
+              ]
+            }
+          ]
+        },
+        "spanf": {
+          "depth": 0,
+          "height": 1,
+          "enftype": "SPAN",
+          "wid": [
+            "0",
+            "0.0.0.0.0.0.0.0.13"
+          ],
+          "dsp": [
+            "4.1.1.0.1.0.1",
+            "1.1.0.1.0.1.0.1.1"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 0,
+              "enftype": "SPAN",
+              "wid": [
+                "0",
+                "0.0.0.0.0.0.0.0.13"
+              ],
+              "dsp": [
+                "0",
+                "0"
+              ],
+              "homedoc": "1.1.0.1.0.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "Hello, World!"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

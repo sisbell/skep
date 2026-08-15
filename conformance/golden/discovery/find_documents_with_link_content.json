@@ -1,0 +1,42 @@
+{
+  "name": "find_documents_with_link_content",
+  "description": "Find documents containing linked content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for info"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "text": "Click here"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Click here",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.3"
+      ],
+      "expected_count": 2,
+      "comment": "Should find source and dest even with link attached"
+    }
+  ]
+}

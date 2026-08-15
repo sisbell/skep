@@ -1,0 +1,41 @@
+{
+  "name": "internal_transclusion_with_link",
+  "description": "Test link discovery through internal transclusion (I\u2192V mapping)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Original text here"
+    },
+    {
+      "op": "vcopy",
+      "span": "text",
+      "to": "end",
+      "comment": "Creates duplicate reference to same I-addresses"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "Original text heretext"
+      ]
+    },
+    {
+      "op": "create_link",
+      "from": "first occurrence of 'text' (1.10-1.13)",
+      "to": "Original",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "from": "second occurrence of 'text' (1.19-1.22)",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "expected": "Should find the link (same I-address as first occurrence)",
+      "comment": "Tests if I\u2192V mapping returns both V-positions"
+    }
+  ]
+}

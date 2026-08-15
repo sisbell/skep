@@ -1,0 +1,41 @@
+{
+  "name": "swap_non_adjacent",
+  "description": "Swap two non-adjacent regions",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "swap",
+      "cut1": "1.2",
+      "cut2": "1.4",
+      "cut3": "1.6",
+      "cut4": "1.8",
+      "description": "Swap BC and FG"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "AFGDEBCH"
+      ],
+      "expected": "AFGDEBCH (BC and FG swapped)"
+    }
+  ]
+}

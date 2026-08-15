@@ -1,0 +1,47 @@
+{
+  "name": "double_pivot",
+  "description": "Two pivots return content to original order",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDE"
+    },
+    {
+      "op": "retrieve",
+      "original": [
+        "ABCDE"
+      ]
+    },
+    {
+      "op": "pivot",
+      "first": "swap BC and DE"
+    },
+    {
+      "op": "retrieve",
+      "after_first": [
+        "ADEBC"
+      ]
+    },
+    {
+      "op": "pivot",
+      "second": "swap back"
+    },
+    {
+      "op": "retrieve",
+      "after_second": [
+        "ABCDE"
+      ],
+      "expected": "Should match original (ABCDE)"
+    }
+  ]
+}

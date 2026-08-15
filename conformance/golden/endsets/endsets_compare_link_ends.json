@@ -1,0 +1,42 @@
+{
+  "name": "endsets_compare_link_ends",
+  "description": "Compare source and target endsets structure",
+  "operations": [
+    {
+      "op": "create_link",
+      "source": "Source",
+      "target": "Target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "target": [],
+      "type": []
+    },
+    {
+      "op": "follow_link",
+      "direction": "source",
+      "content": [
+        "Source"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "direction": "target",
+      "content": [
+        "Target"
+      ]
+    }
+  ]
+}

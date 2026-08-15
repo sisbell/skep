@@ -1,0 +1,61 @@
+{
+  "name": "version_insert_in_middle",
+  "description": "Insert in middle of versioned content, verify content identity split",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "FirstSecond"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "at": "position 6",
+      "text": " MIDDLE "
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "original",
+        "version"
+      ],
+      "shared": [
+        {
+          "original": {
+            "start": "1.1",
+            "width": "0.5"
+          },
+          "version": {
+            "start": "1.1",
+            "width": "0.5"
+          },
+          "original_width": "0.5",
+          "version_width": "0.5"
+        },
+        {
+          "original": {
+            "start": "1.6",
+            "width": "0.6"
+          },
+          "version": {
+            "start": "1.14",
+            "width": "0.6"
+          },
+          "original_width": "0.6",
+          "version_width": "0.6"
+        }
+      ],
+      "comment": "Should find 'First' and 'Second' as two separate shared regions"
+    }
+  ]
+}

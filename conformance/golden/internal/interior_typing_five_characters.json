@@ -1,0 +1,95 @@
+{
+  "name": "interior_typing_five_characters",
+  "description": "Verify continuous interior typing coalesces (\u0394c = 0 after first char)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGH",
+      "at": "1.1"
+    },
+    {
+      "op": "interior_typing",
+      "chars": "12345",
+      "starting_at": "1.5",
+      "results": [
+        {
+          "char": "1",
+          "position": "1.5",
+          "vspanset": [
+            {
+              "start": "1.1",
+              "width": "0.9"
+            }
+          ],
+          "contents": [
+            "ABCD1EFGH"
+          ]
+        },
+        {
+          "char": "2",
+          "position": "1.6",
+          "vspanset": [
+            {
+              "start": "1.1",
+              "width": "0.10"
+            }
+          ],
+          "contents": [
+            "ABCD12EFGH"
+          ]
+        },
+        {
+          "char": "3",
+          "position": "1.7",
+          "vspanset": [
+            {
+              "start": "1.1",
+              "width": "0.11"
+            }
+          ],
+          "contents": [
+            "ABCD123EFGH"
+          ]
+        },
+        {
+          "char": "4",
+          "position": "1.8",
+          "vspanset": [
+            {
+              "start": "1.1",
+              "width": "0.12"
+            }
+          ],
+          "contents": [
+            "ABCD1234EFGH"
+          ]
+        },
+        {
+          "char": "5",
+          "position": "1.9",
+          "vspanset": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ],
+          "contents": [
+            "ABCD12345EFGH"
+          ]
+        }
+      ]
+    },
+    {
+      "op": "final_state",
+      "contents": [
+        "ABCD12345EFGH"
+      ],
+      "expected_contents": "ABCD12345EFGH",
+      "claim": "All five characters should form one contiguous insertion"
+    }
+  ]
+}

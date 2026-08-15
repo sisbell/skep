@@ -1,0 +1,46 @@
+{
+  "name": "docispan_granularity_copy_contiguous",
+  "description": "Test DOCISPAN granularity for COPY of contiguous span",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "bytes": 10
+    },
+    {
+      "op": "find_documents",
+      "search": "A (1 byte) in dest",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "ABCDEFGHIJ (all 10 bytes) in dest",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ]
+    }
+  ],
+  "analysis": {
+    "comment": "COPY calls insertspanf with ispanset. The ispanset contains I-spans, not individual bytes. So COPY should create one DOCISPAN entry per I-span."
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "name": "delete_at_root_origin_height_1",
+  "description": "Height-1 tree: case-2 child displacement >= deletion width",
+  "operations": [
+    {
+      "op": "insert",
+      "at": "1.1",
+      "text": "123456789012345",
+      "note": "15 bytes"
+    },
+    {
+      "op": "insert",
+      "at": "1.16",
+      "text": "ABCDEFGHIJKLMNO",
+      "note": "15 more bytes"
+    },
+    {
+      "op": "create_link",
+      "source": "1.16-1.20",
+      "target": "1.20-1.24",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "vspan_before",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      }
+    },
+    {
+      "op": "endsets_before",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.16",
+              "width": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "delete",
+      "start": "1.1",
+      "width": "0.15",
+      "note": "Delete first block"
+    },
+    {
+      "op": "vspan_after",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Second block should shift to 1.1"
+    },
+    {
+      "op": "endsets_after",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "note": "Link endsets should shift by -0.15"
+    }
+  ],
+  "analysis": {
+    "tree_height": 1,
+    "case_2_child_dsp": "1.16",
+    "deletion_width": "0.15",
+    "underflow": "NO - dsp (1.16) > w (0.15)"
+  }
+}

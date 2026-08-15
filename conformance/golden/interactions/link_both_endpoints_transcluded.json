@@ -1,0 +1,81 @@
+{
+  "name": "link_both_endpoints_transcluded",
+  "description": "Create link where both source and target are transcluded content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source_origin",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source_origin",
+      "text": "Clickable source text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target_origin",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target_origin",
+      "text": "Target destination text"
+    },
+    {
+      "op": "create_document",
+      "doc": "link_doc",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "source_origin",
+      "to": "link_doc",
+      "text": "Clickable"
+    },
+    {
+      "op": "vcopy",
+      "from": "target_origin",
+      "to": "link_doc",
+      "text": "Target"
+    },
+    {
+      "op": "contents",
+      "doc": "link_doc",
+      "result": [
+        "Link doc: Clickable -> Target"
+      ]
+    },
+    {
+      "op": "create_link",
+      "source": "Clickable (transcluded)",
+      "target": "Target (transcluded)",
+      "result": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "from": "link_doc",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Link doc should find its link"
+    },
+    {
+      "op": "find_links",
+      "from": "source_origin",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Source origin should find link (its content is link source)"
+    },
+    {
+      "op": "find_links",
+      "from": "target_origin",
+      "by": "target",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Target origin should find link by target search"
+    }
+  ]
+}

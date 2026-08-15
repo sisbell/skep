@@ -1,0 +1,64 @@
+{
+  "name": "type_c_boundary_right",
+  "description": "Single-character DELETE at RIGHT crum boundary",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "before": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "before": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": {
+        "start": "1.8",
+        "width": "0.1"
+      },
+      "comment": "DELETE [1.8, 1.9) - at right boundary. Cut at 1.8 = THRUME (split), cut at 1.9 = ONMYRIGHTBORDER (no split)"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.7"
+          }
+        ]
+      },
+      "comment": "Expected: One span [1.1, 1.8). \u0394c = 0?"
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [
+        "ABCDEFG"
+      ],
+      "expected": "ABCDEFG"
+    },
+    {
+      "op": "close_document"
+    }
+  ]
+}

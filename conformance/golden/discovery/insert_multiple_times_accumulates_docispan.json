@@ -1,0 +1,49 @@
+{
+  "name": "insert_multiple_times_accumulates_docispan",
+  "description": "Test if multiple INSERTs create multiple DOCISPAN entries",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "First ",
+      "position": "1.1"
+    },
+    {
+      "op": "insert",
+      "text": "Second ",
+      "position": "after First"
+    },
+    {
+      "op": "insert",
+      "text": "Third",
+      "position": "after Second"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "First",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "comment": "Search for first insertion"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Second",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "comment": "Search for second insertion"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Third",
+      "result": [
+        "1.1.0.1.0.1"
+      ],
+      "comment": "Search for third insertion"
+    }
+  ]
+}

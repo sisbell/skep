@@ -1,0 +1,81 @@
+{
+  "name": "link_to_transcluded_then_version",
+  "description": "Link on transcluded content, then version - can version find link?",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source content to transclude"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "doc",
+      "text": "Source content"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "create_link",
+      "on": "transcluded content",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_version",
+      "from": "doc",
+      "result": "1.1.0.1.0.2.1"
+    },
+    {
+      "op": "contents",
+      "doc": "doc",
+      "result": [
+        "Prefix: Source content"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version",
+      "result": [
+        "Prefix: Source content",
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "doc",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Original doc should find link"
+    },
+    {
+      "op": "find_links",
+      "from": "version",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Version should find link (content identity shared)"
+    },
+    {
+      "op": "find_links",
+      "from": "source",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Can original source find link on its transcluded content?"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "name": "find_links",
+  "description": "Create links and find them by searching source spans",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Document one content"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Document two content"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.20"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "type",
+      "result": []
+    }
+  ]
+}

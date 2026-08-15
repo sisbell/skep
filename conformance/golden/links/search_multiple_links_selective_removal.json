@@ -1,0 +1,72 @@
+{
+  "name": "search_multiple_links_selective_removal",
+  "description": "Test find_links() with multiple links when only some endpoints are removed",
+  "operations": [
+    {
+      "op": "create_documents",
+      "count": 3,
+      "type": "source"
+    },
+    {
+      "op": "create_document",
+      "doc": "shared_target",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "create_links",
+      "count": 3,
+      "results": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "target",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Should find all 3 links"
+    },
+    {
+      "op": "delete_all",
+      "doc": "source2",
+      "comment": "Delete content from second source only"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "target",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Should find all 3 (target intact) or just 2?"
+    },
+    {
+      "op": "find_links",
+      "by": "source1",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "by": "source2 (empty)",
+      "result": [],
+      "comment": "Source2 is empty - can we find its link?"
+    },
+    {
+      "op": "find_links",
+      "by": "source3",
+      "result": [
+        "1.1.0.1.0.3.0.2.1"
+      ]
+    }
+  ]
+}

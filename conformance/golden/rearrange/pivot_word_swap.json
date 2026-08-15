@@ -1,0 +1,40 @@
+{
+  "name": "pivot_word_swap",
+  "description": "Pivot to swap two words",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Hello World"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "Hello World"
+      ]
+    },
+    {
+      "op": "pivot",
+      "cut1": "1.1",
+      "cut2": "1.7",
+      "cut3": "1.12",
+      "description": "Swap 'Hello ' and 'World'"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "WorldHello "
+      ],
+      "expected": "WorldHello  (note space position)"
+    }
+  ]
+}

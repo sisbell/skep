@@ -1,0 +1,67 @@
+{
+  "name": "link_when_source_span_deleted",
+  "description": "Test link behavior when the linked source span is deleted from the document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for more info"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "source",
+      "result": [
+        "here"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "here ",
+      "comment": "Delete the linked span itself"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Click for more info"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "source",
+      "result": [],
+      "link_survived": true,
+      "comment": "Does link still resolve after source span deleted?"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "result": [],
+      "comment": "Can we find the link from the modified document?"
+    }
+  ]
+}

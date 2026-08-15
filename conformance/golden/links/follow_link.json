@@ -1,0 +1,67 @@
+{
+  "name": "follow_link",
+  "description": "Follow a link to retrieve its destination content",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "See the reference for more info"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Reference: This is the detailed explanation."
+    },
+    {
+      "op": "create_link",
+      "source_text": "reference",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.12",
+              "width": "0.32"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "This is the detailed explanation"
+      ],
+      "comment": "The actual text at the link destination"
+    }
+  ]
+}

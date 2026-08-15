@@ -1,0 +1,76 @@
+{
+  "name": "search_spanning_deleted_boundary",
+  "description": "Test find_links() with search spec spanning a deletion point",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Start MIDDLE End link text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "contents",
+      "label": "before_delete",
+      "result": [
+        "Start MIDDLE End link text"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "MIDDLE ",
+      "comment": "Delete middle section of document"
+    },
+    {
+      "op": "contents",
+      "label": "after_delete",
+      "result": [
+        "Start End link text"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "search": "original spec",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Original search spec (may reference non-existent positions)"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "search": "adjusted spec",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Search spec adjusted to new document size"
+    }
+  ]
+}

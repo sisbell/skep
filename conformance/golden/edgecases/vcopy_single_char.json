@@ -1,0 +1,50 @@
+{
+  "name": "vcopy_single_char",
+  "description": "Vcopy (transclude) a single character - minimum transclusion",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "to": "dest",
+      "span": "just 'S'"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "dest",
+      "result": [
+        "S"
+      ],
+      "expected": "S"
+    },
+    {
+      "op": "compare_versions",
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.1"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.1"
+          }
+        }
+      ],
+      "comment": "Single char should share identity"
+    }
+  ]
+}

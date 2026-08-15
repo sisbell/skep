@@ -1,0 +1,57 @@
+{
+  "name": "find_documents_version_chain",
+  "description": "Find documents across version chain v1 -> v2 -> v3",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "v1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v1",
+      "text": "Base content"
+    },
+    {
+      "op": "create_version",
+      "from": "v1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v2",
+      "text": " plus v2"
+    },
+    {
+      "op": "create_version",
+      "from": "v2",
+      "result": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v3",
+      "text": " plus v3"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Base",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1",
+        "1.1.0.1.0.1.1.1"
+      ],
+      "expected_count": 3,
+      "comment": "All versions share 'Base' content"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "plus v2",
+      "result": [
+        "1.1.0.1.0.1.1",
+        "1.1.0.1.0.1.1.1"
+      ],
+      "expected_count": 2,
+      "comment": "Only v2 and v3 have 'plus v2' content"
+    }
+  ]
+}

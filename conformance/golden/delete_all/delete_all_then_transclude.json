@@ -1,0 +1,56 @@
+{
+  "name": "delete_all_then_transclude",
+  "description": "Delete all content, then VCOPY into empty document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source material"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Temporary"
+    },
+    {
+      "op": "remove",
+      "doc": "target",
+      "comment": "Delete all content"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "empty_state": {
+        "docid": "1.1.0.1.0.2",
+        "spans": []
+      }
+    },
+    {
+      "op": "vcopy_after_delete",
+      "from": "source",
+      "to": "target at 1.1",
+      "result": [
+        "Source material"
+      ],
+      "after_vspans": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "VCOPY into fully-deleted document \u2014 tests empty-after-edit state"
+    }
+  ]
+}

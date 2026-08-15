@@ -1,0 +1,62 @@
+{
+  "name": "search_by_target_after_source_removed",
+  "description": "Test find_links() by target specset after source content is deleted",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source text here"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content unchanged"
+    },
+    {
+      "op": "create_link",
+      "source_text": "Source",
+      "target_text": "Target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "target",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "delete_all",
+      "doc": "source",
+      "comment": "Delete all source content - target is intact"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "target",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Can link be found via target when source is gone?"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Target content unchanged"
+      ],
+      "comment": "Target content unchanged"
+    }
+  ]
+}

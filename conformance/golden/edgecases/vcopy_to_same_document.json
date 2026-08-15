@@ -1,0 +1,28 @@
+{
+  "name": "vcopy_to_same_document",
+  "description": "Vcopy content within the same document (self-transclusion)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Original"
+    },
+    {
+      "op": "vcopy",
+      "from": "positions 1-4 (Orig)",
+      "to": "end of doc",
+      "comment": "Self-transclusion"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "OriginalOrig"
+      ],
+      "expected": "OriginalOrig"
+    }
+  ]
+}

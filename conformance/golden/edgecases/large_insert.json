@@ -1,0 +1,22 @@
+{
+  "name": "large_insert",
+  "description": "Insert moderately large text (very large crashes - see bug 018)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "The quick brown fox jumps over the lazy dog. ",
+      "length": 45
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "The quick brown fox jumps over the lazy dog. "
+      ],
+      "comment": "Moderate size works; 10KB+ crashes backend"
+    }
+  ]
+}

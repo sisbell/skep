@@ -1,0 +1,56 @@
+{
+  "name": "delete_all_incrementally",
+  "description": "Delete all content in multiple operations",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGH",
+      "result": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": "1.1 length 3",
+      "comment": "Delete ABC",
+      "remaining": [
+        "DEFGH"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": "1.1 length 3",
+      "comment": "Delete DEF (shifted)",
+      "remaining": [
+        "GH"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": "1.1 length 2",
+      "comment": "Delete GH - last content",
+      "remaining": [],
+      "expected": "empty"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after_all_deletes": {
+        "docid": "1.1.0.1.0.1",
+        "spans": []
+      },
+      "comment": "Final tree state after incremental deletion"
+    },
+    {
+      "op": "insert_after_delete",
+      "text": "Rebuilt",
+      "result": [
+        "Rebuilt"
+      ],
+      "comment": "INSERT into fully-deleted document \u2014 tests empty-after-edit state"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "name": "same_iaddress_multiple_vpositions",
+  "description": "Test if same I-address can appear at multiple V-positions in one POOM",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "XYZ"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "START "
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "at": "1.7",
+      "comment": "First occurrence of XYZ"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": " MIDDLE "
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "comment": "Second occurrence of XYZ"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": " END"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "START XYZ MIDDLE XYZ END"
+      ],
+      "comment": "Should be: START XYZ MIDDLE XYZ END"
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.24"
+        }
+      ],
+      "comment": "How does POOM represent two occurrences of same I-addresses?"
+    }
+  ]
+}

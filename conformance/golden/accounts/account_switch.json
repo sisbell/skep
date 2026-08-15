@@ -1,0 +1,33 @@
+{
+  "name": "account_switch",
+  "description": "Switch between accounts and verify document addresses",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "comment": "First doc under account 1.1.0.1"
+    },
+    {
+      "op": "account",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.2.0.1",
+      "comment": "First doc under account 1.1.0.2"
+    },
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "comment": "Second doc under account 1.1.0.1"
+    }
+  ]
+}

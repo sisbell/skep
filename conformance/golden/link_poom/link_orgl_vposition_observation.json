@@ -1,0 +1,35 @@
+{
+  "name": "link_orgl_vposition_observation",
+  "description": "Observe V-position of link orgl reference in POOM",
+  "operations": [
+    {
+      "op": "insert",
+      "text": "Content for linking"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "before_link",
+      "spans": [
+        "1.1-0.19"
+      ],
+      "comment": "Only text (1.x subspace)"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "label": "after_link",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "new_spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "comment": "Should show link orgl in 2.x subspace"
+    }
+  ]
+}

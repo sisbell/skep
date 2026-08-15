@@ -1,0 +1,81 @@
+{
+  "name": "identity_through_version_chain",
+  "description": "Content identity through a deep version chain (4 versions)",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original text"
+    },
+    {
+      "op": "create_version_chain",
+      "count": 3,
+      "versions": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1",
+        "1.1.0.1.0.1.1.1",
+        "1.1.0.1.0.1.1.1.1"
+      ],
+      "additions": [
+        " v2",
+        " v3",
+        " v4"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "original (v1)",
+      "result": [
+        "Original text"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "final (v4)",
+      "result": [
+        "Original text v2 v3 v4"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "doc1": "original (v1)",
+      "doc2": "final (v4)",
+      "shared": [
+        {
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          },
+          "version": {
+            "docid": "1.1.0.1.0.1.1.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          }
+        }
+      ],
+      "comment": "Original text should be shared across entire version chain"
+    },
+    {
+      "op": "find_documents",
+      "query": "Original",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1",
+        "1.1.0.1.0.1.1.1",
+        "1.1.0.1.0.1.1.1.1"
+      ],
+      "expected_count": 2,
+      "comment": "Should find both original and version"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "name": "delete_text_does_not_affect_links_in_same_document",
+  "description": "DELETE in text subspace (1.x) does not corrupt link subspace (2.x)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_link",
+      "from": "ABCDE",
+      "to": "FGHIJ",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": "1.3 for 0.3 (CDE)"
+    },
+    {
+      "op": "contents",
+      "label": "after_delete",
+      "result": [
+        "ABFGHIJ"
+      ],
+      "expected": "ABFGHIJ"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "verify",
+      "assertion": "link V-position unchanged",
+      "comment": "Finding 055: strongsub exponent guard prevents shift of 2.x from 1.x delete"
+    }
+  ]
+}

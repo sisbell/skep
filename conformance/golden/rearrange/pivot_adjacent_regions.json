@@ -1,0 +1,40 @@
+{
+  "name": "pivot_adjacent_regions",
+  "description": "Pivot swaps two adjacent regions",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDE"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABCDE"
+      ]
+    },
+    {
+      "op": "pivot",
+      "cut1": "1.2",
+      "cut2": "1.4",
+      "cut3": "1.6",
+      "description": "Swap regions BC and DE"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "ADEBC"
+      ],
+      "expected": "ADEBC (regions swapped)"
+    }
+  ]
+}

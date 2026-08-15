@@ -1,0 +1,57 @@
+{
+  "name": "insert_delete_insert_iaddress_gap",
+  "description": "Does DELETE create a gap in I-address allocation?",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABC",
+      "at": "1.1"
+    },
+    {
+      "op": "delete",
+      "span": "1.2+0.1",
+      "comment": "Delete 'B' from middle"
+    },
+    {
+      "op": "insert",
+      "text": "DEF",
+      "at": "end",
+      "comment": "Resume typing at end"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "ACDEF"
+      ],
+      "expected": "ACDEF"
+    },
+    {
+      "op": "vcopy",
+      "to": "new document"
+    },
+    {
+      "op": "compare_versions",
+      "shared_span_pairs": 1,
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.5"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        }
+      ],
+      "interpretation": {
+        "1 pair": "DELETE does NOT create I-address gap (ABC and DEF have contiguous I-addresses)",
+        "2 pairs": "DELETE DOES create I-address gap (ABC and DEF have separate I-address ranges)"
+      }
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "name": "version_preserves_transclusion",
+  "description": "Version of document with transclusion preserves content identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Shared transcluded content"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "doc",
+      "text": "Prefix: "
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "doc",
+      "text": "Shared"
+    },
+    {
+      "op": "create_version",
+      "from": "doc",
+      "result": "1.1.0.1.0.2.1"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "version",
+        "source"
+      ],
+      "shared": [
+        {
+          "version": {
+            "start": "1.9",
+            "width": "0.6"
+          },
+          "source": {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        }
+      ],
+      "comment": "Version should share transcluded content identity with source"
+    }
+  ]
+}

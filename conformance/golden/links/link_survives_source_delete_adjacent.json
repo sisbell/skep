@@ -1,0 +1,70 @@
+{
+  "name": "link_survives_source_delete_adjacent",
+  "description": "Test that link survives when adjacent (non-linked) text is deleted from source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "DELETE_ME Click here for more"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "source",
+      "result": [
+        "here"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "text": "DELETE_ME ",
+      "comment": "Delete text adjacent to (not overlapping) link"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Click here for more"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link should still be findable"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "source",
+      "result": [
+        "here"
+      ],
+      "comment": "Link source should still resolve to 'here'"
+    }
+  ]
+}

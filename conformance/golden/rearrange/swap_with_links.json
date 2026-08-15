@@ -1,0 +1,49 @@
+{
+  "name": "swap_with_links",
+  "description": "Links follow content through swap operations",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "create_link",
+      "source": "BC",
+      "target": "FG",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "before_swap": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "swap",
+      "description": "Swap BC and FG"
+    },
+    {
+      "op": "retrieve",
+      "after": [
+        "AFGDEBCH"
+      ]
+    },
+    {
+      "op": "find_links",
+      "after_swap": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link should still be discoverable at new positions"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "compare_unrelated_documents",
+  "description": "Compare two documents with no shared content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "doc1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "doc1",
+      "text": "First document"
+    },
+    {
+      "op": "create_document",
+      "doc": "doc2",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "doc2",
+      "text": "Second document"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "doc1",
+        "doc2"
+      ],
+      "shared": [],
+      "comment": "Should be empty - no shared content"
+    }
+  ]
+}

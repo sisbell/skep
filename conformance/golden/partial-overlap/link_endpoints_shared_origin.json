@@ -1,0 +1,95 @@
+{
+  "name": "link_endpoints_shared_origin",
+  "description": "Link endpoints share content identity from common origin",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "origin",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "origin",
+      "text": "The shared content text here"
+    },
+    {
+      "op": "create_document",
+      "doc": "source_doc",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "origin",
+      "to": "source_doc",
+      "text": "shared content"
+    },
+    {
+      "op": "create_document",
+      "doc": "target_doc",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "origin",
+      "to": "target_doc",
+      "text": "content text",
+      "comment": "Overlaps source on 'content'"
+    },
+    {
+      "op": "contents",
+      "doc": "source_doc",
+      "result": [
+        "Source: shared content"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target_doc",
+      "result": [
+        "Target: content text"
+      ]
+    },
+    {
+      "op": "create_link",
+      "source": "shared content",
+      "target": "content text",
+      "result": "1.1.0.1.0.2.0.2.1",
+      "comment": "Both endpoints have 'content' from same origin"
+    },
+    {
+      "op": "find_links",
+      "from": "origin",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Link discoverable from origin (shares identity with both endpoints)"
+    },
+    {
+      "op": "find_links",
+      "from": "source_doc",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "source_doc",
+        "target_doc"
+      ],
+      "result": [
+        {
+          "source": {
+            "start": "1.16",
+            "width": "0.7"
+          },
+          "target": {
+            "start": "1.9",
+            "width": "0.7"
+          }
+        }
+      ],
+      "comment": "Source and target share 'content' identity"
+    }
+  ]
+}

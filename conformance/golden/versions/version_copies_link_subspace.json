@@ -1,0 +1,89 @@
+{
+  "name": "version_copies_link_subspace",
+  "description": "Test whether CREATENEWVERSION copies link subspace (2.x) or only text (1.x)",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Text with link"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target"
+    },
+    {
+      "op": "create_link",
+      "source_text": "link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "source",
+      "label": "before_version",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Source vspanset should include both text (1.x) and link (0.x or 2.x) subspaces"
+    },
+    {
+      "op": "create_version",
+      "from": "source",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "version",
+      "label": "after_version",
+      "result": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "CRITICAL: Does version have link subspace? If yes, CREATENEWVERSION copies links. If no, it copies only text."
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "source",
+      "label": "after_version",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Source vspanset unchanged"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "name": "compare_across_version_chain",
+  "description": "Compare v1 with v3 in chain v1->v2->v3",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "v1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v1",
+      "text": "Original from v1"
+    },
+    {
+      "op": "create_version",
+      "from": "v1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v2",
+      "text": " plus v2"
+    },
+    {
+      "op": "create_version",
+      "from": "v2",
+      "result": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "v3",
+      "text": " plus v3"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "v1",
+        "v3"
+      ],
+      "shared": [
+        {
+          "v1": {
+            "start": "1.1",
+            "width": "0.16"
+          },
+          "v3": {
+            "start": "1.1",
+            "width": "0.16"
+          }
+        }
+      ],
+      "comment": "Should share 'Original from v1' transitively"
+    }
+  ]
+}

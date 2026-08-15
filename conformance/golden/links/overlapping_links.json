@@ -1,0 +1,82 @@
+{
+  "name": "overlapping_links",
+  "description": "Create multiple links with overlapping source spans",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "The hypertext pioneer Vannevar Bush described the memex."
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "hypertext: non-linear text. Bush: American engineer. memex: memory extender."
+    },
+    {
+      "op": "create_link",
+      "source_text": "hypertext",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "source_text": "hypertext pioneer",
+      "type": "quote",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "source_text": "Vannevar Bush",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "create_link",
+      "source_text": "memex",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.4"
+    },
+    {
+      "op": "find_links",
+      "search_text": "hypertext",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2"
+      ],
+      "comment": "Should find both overlapping links"
+    },
+    {
+      "op": "find_links",
+      "search_text": "full document",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3",
+        "1.1.0.1.0.1.0.2.4"
+      ],
+      "comment": "Should find all 4 links"
+    }
+  ]
+}

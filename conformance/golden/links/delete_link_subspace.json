@@ -1,0 +1,162 @@
+{
+  "name": "delete_link_subspace",
+  "description": "Test DELETEVSPAN on link subspace (2.x) to see if it removes link references",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Source text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Target text"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Before deletion: 0.x/2.x link, 1.x text"
+    },
+    {
+      "op": "find_links",
+      "specs": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "note": "Link should be found"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "start": "2.1",
+      "width": "0.1",
+      "succeeded": true,
+      "error": null,
+      "note": "Delete link subspace V-range 2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.11"
+          }
+        ]
+      },
+      "note": "After deletion: is 2.x gone?"
+    },
+    {
+      "op": "find_links",
+      "specs": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "note": "Can we still find the link?"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "succeeded": true,
+      "error": null,
+      "note": "Can we still follow the link?"
+    }
+  ]
+}

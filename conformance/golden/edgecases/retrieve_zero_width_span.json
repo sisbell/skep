@@ -1,0 +1,23 @@
+{
+  "name": "retrieve_zero_width_span",
+  "description": "Retrieve with a zero-width span",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Content"
+    },
+    {
+      "op": "retrieve_contents",
+      "span": "1.1 length 0",
+      "result": {
+        "success": true,
+        "contents": []
+      },
+      "comment": "What does retrieving zero characters return?"
+    }
+  ]
+}

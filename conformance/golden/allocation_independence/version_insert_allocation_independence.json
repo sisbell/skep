@@ -1,0 +1,68 @@
+{
+  "name": "version_insert_allocation_independence",
+  "description": "Verify VERSION and INSERT use independent allocation counters",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_1_AAA",
+      "result": {
+        "vspans": [
+          {
+            "start": "1.1",
+            "width": "0.3"
+          }
+        ],
+        "expected": "Element-level: .0.3.1, .0.3.2, .0.3.3"
+      }
+    },
+    {
+      "op": "version_1",
+      "result": {
+        "version": "1.1.0.1.0.1.1",
+        "expected": "Document-level child: 1.1.0.1.0.1.1"
+      }
+    },
+    {
+      "op": "insert_2_BBB",
+      "result": {
+        "vspans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ],
+        "expected": "Element-level continues: .0.3.4 (VERSION did not affect element counter)"
+      }
+    },
+    {
+      "op": "version_2",
+      "result": {
+        "version": "1.1.0.1.0.1.2",
+        "expected": "Document-level continues: 1.1.0.1.0.1.2 (INSERT did not affect doc counter)"
+      }
+    },
+    {
+      "op": "insert_3_CCC",
+      "result": {
+        "vspans": [
+          {
+            "start": "1.1",
+            "width": "0.9"
+          }
+        ],
+        "content": [
+          "AAABBBCCC"
+        ],
+        "expected": "Element-level continues: .0.3.7"
+      }
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "multiple_inserts_same_position",
+  "description": "Multiple inserts at position 1.1 - tests insertion order",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "First",
+      "result": [
+        "First"
+      ]
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Second",
+      "result": [
+        "SecondFirst"
+      ],
+      "comment": "Does Second go before or after First?"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Third",
+      "result": [
+        "ThirdSecondFirst"
+      ],
+      "comment": "Final order reveals insertion semantics"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

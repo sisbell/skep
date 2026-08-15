@@ -1,0 +1,77 @@
+{
+  "name": "createnewversion_text_vs_links",
+  "description": "Test whether CREATENEWVERSION copies text subspace only or also link subspace",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original text with linkable words"
+    },
+    {
+      "op": "create_link",
+      "source_text": "linkable",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "vspanset",
+      "doc": "original",
+      "result": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "comment": "Original should have text (1.x) and links (0.x or 2.x)"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "vspanset",
+      "doc": "version",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.34"
+        }
+      ],
+      "comment": "Does version have links subspace?"
+    },
+    {
+      "op": "contents",
+      "doc": "version",
+      "result": [
+        "Original text with linkable words",
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Version text should match original"
+    },
+    {
+      "op": "find_links",
+      "from": "version",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Can version find the link? (tests if links inherited)"
+    },
+    {
+      "op": "find_links",
+      "from": "original",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Original should still have link"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "name": "link_poom_no_shift",
+  "description": "Verify CREATELINK doesn't shift existing link POOM entries",
+  "operations": [
+    {
+      "op": "create_link",
+      "num": 1,
+      "source_text": "First",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": "link1",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "comment": "Document extent after first link"
+    },
+    {
+      "op": "create_link",
+      "num": 2,
+      "source_text": "second",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": "link2",
+      "spans": [
+        "0-0.1",
+        "1-1"
+      ],
+      "comment": "Document extent after second link - did vspan change?"
+    },
+    {
+      "op": "retrieve_endsets",
+      "final_state": true,
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            },
+            {
+              "start": "1.16",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "Final endset positions - do they match vspanset growth?"
+    }
+  ]
+}

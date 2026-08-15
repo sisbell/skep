@@ -1,0 +1,84 @@
+{
+  "name": "find_links_by_type",
+  "description": "Find links filtered by their type",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Source with jump quote and footnote links"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Target document for links"
+    },
+    {
+      "op": "create_link",
+      "source_text": "jump",
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "source_text": "quote",
+      "type": "quote",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "source_text": "footnote",
+      "type": "footnote",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "find_links",
+      "filter": "none",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ],
+      "comment": "All 3 links"
+    },
+    {
+      "op": "find_links",
+      "filter": "jump",
+      "result": [],
+      "comment": "Only jump links"
+    },
+    {
+      "op": "find_links",
+      "filter": "quote",
+      "result": [],
+      "comment": "Only quote links"
+    },
+    {
+      "op": "find_links",
+      "filter": "footnote",
+      "result": [],
+      "comment": "Only footnote links"
+    }
+  ]
+}

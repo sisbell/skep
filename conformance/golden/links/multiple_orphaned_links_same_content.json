@@ -1,0 +1,82 @@
+{
+  "name": "multiple_orphaned_links_same_content",
+  "description": "Test multiple links to same content - all become orphaned when target deleted",
+  "operations": [
+    {
+      "op": "create_documents",
+      "count": 3,
+      "results": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "create_document",
+      "doc": "shared_target",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "insert",
+      "doc": "shared_target",
+      "text": "Shared target content"
+    },
+    {
+      "op": "create_links",
+      "count": 3,
+      "results": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.2.0.2.1",
+        "1.1.0.1.0.3.0.2.1"
+      ],
+      "comment": "Three links all pointing to same target"
+    },
+    {
+      "op": "follow_links_target",
+      "label": "before_delete",
+      "results": [
+        [
+          "Shared"
+        ],
+        [
+          "Shared"
+        ],
+        [
+          "Shared"
+        ]
+      ],
+      "comment": "All links resolve to 'Shared'"
+    },
+    {
+      "op": "delete_all",
+      "doc": "shared_target",
+      "comment": "Delete shared target - orphans all links at once"
+    },
+    {
+      "op": "follow_links_target",
+      "label": "after_delete",
+      "results": [
+        [],
+        [],
+        []
+      ],
+      "comment": "All links now resolve to empty"
+    },
+    {
+      "op": "follow_links_source",
+      "label": "after_delete",
+      "results": [
+        [
+          "1"
+        ],
+        [
+          " "
+        ],
+        [
+          "l"
+        ]
+      ],
+      "comment": "Source endpoints still work"
+    }
+  ]
+}

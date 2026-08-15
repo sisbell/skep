@@ -1,0 +1,25 @@
+{
+  "name": "create_multiple_nodes",
+  "description": "Create multiple nodes and observe address progression",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_node",
+      "account": "1.1.0.1",
+      "result": "1.1.0.1.1"
+    },
+    {
+      "op": "create_node",
+      "account": "1.1.0.1",
+      "result": "1.1.0.1.2"
+    },
+    {
+      "op": "create_node",
+      "account": "1.1.0.1",
+      "result": "1.1.0.1.3"
+    }
+  ]
+}

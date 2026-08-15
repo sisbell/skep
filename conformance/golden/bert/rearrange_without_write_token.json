@@ -1,0 +1,41 @@
+{
+  "name": "rearrange_without_write_token",
+  "description": "Attempt REARRANGE with only READ token - back end should reject",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABCDEF"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "rearrange",
+      "doc": "1.1.0.1.0.1",
+      "result": "OPERATION_FAILED: 'XuSession' object has no attribute 'rearrange'"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

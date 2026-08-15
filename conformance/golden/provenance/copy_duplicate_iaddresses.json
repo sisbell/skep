@@ -1,0 +1,95 @@
+{
+  "name": "copy_duplicate_iaddresses",
+  "description": "Test what happens when COPYing I-addresses that already exist in target POOM",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "ABCDE"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "at": "1.1",
+      "comment": "First COPY - should work"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "ABCDE"
+      ]
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.5"
+        }
+      ]
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "at": "1.10",
+      "comment": "Second COPY - same I-addresses, different V-position"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "ABCDEABCDE"
+      ],
+      "comment": "Should have ABCDE twice?"
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.14"
+        }
+      ]
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "at": "1.8",
+      "comment": "Third COPY - overlapping V-position"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "ABCDEABCDEABCDE"
+      ],
+      "comment": "What happens with overlapping COPY?"
+    },
+    {
+      "op": "vspanset",
+      "doc": "target",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.19"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "name": "vcopy_from_version",
+  "description": "Transclude content from a specific version of a document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Version 1 content"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": " plus version 2 additions"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "version",
+      "to": "target"
+    },
+    {
+      "op": "contents",
+      "doc": "original",
+      "result": [
+        "Version 1 content"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "version",
+      "result": [
+        "Version 1 content plus version 2 additions"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "From version: Version 1 content plus version 2 additions"
+      ]
+    },
+    {
+      "op": "compare",
+      "docs": [
+        "target",
+        "original"
+      ],
+      "shared": [
+        {
+          "target": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.15",
+              "width": "0.17"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.17"
+            }
+          }
+        }
+      ],
+      "comment": "Should share 'Version 1 content' with original"
+    },
+    {
+      "op": "compare",
+      "docs": [
+        "target",
+        "version"
+      ],
+      "shared": [
+        {
+          "target": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.15",
+              "width": "0.42"
+            }
+          },
+          "version": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.42"
+            }
+          }
+        }
+      ],
+      "comment": "Should share all content with version"
+    }
+  ]
+}

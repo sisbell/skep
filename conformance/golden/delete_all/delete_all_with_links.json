@@ -1,0 +1,61 @@
+{
+  "name": "delete_all_with_links",
+  "description": "Delete all content including link endpoints",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Source and Target"
+    },
+    {
+      "op": "create_link",
+      "from": "Source",
+      "to": "Target",
+      "link_id": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "before_delete": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": "entire document",
+      "comment": "Delete all content including link endpoints"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [
+        "Source and Target"
+      ]
+    },
+    {
+      "op": "find_links",
+      "after_delete": {
+        "success": true,
+        "count": 0
+      },
+      "comment": "Do links survive when all content is deleted?"
+    }
+  ]
+}

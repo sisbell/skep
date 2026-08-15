@@ -1,0 +1,48 @@
+{
+  "name": "endsets_multispan_link",
+  "description": "Retrieve endsets of a link with multiple source spans",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "First word and second word here"
+    },
+    {
+      "op": "create_link",
+      "source_spans": [
+        "First",
+        "second"
+      ],
+      "target": "Definition of terms",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            },
+            {
+              "start": "1.16",
+              "width": "0.6"
+            },
+            {
+              "start": "1.16",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "target": [],
+      "type": [],
+      "comment": "Source should have two spans"
+    }
+  ]
+}

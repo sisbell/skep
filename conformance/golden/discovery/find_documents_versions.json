@@ -1,0 +1,48 @@
+{
+  "name": "find_documents_versions",
+  "description": "Find all versions via shared content identity",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original content"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.3"
+    },
+    {
+      "op": "insert",
+      "doc": "version2",
+      "text": " plus v2 additions"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Original",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1",
+        "1.1.0.1.0.1.2",
+        "1.1.0.1.0.1.3"
+      ],
+      "expected_count": 4,
+      "comment": "Should find original + all 3 versions"
+    }
+  ]
+}

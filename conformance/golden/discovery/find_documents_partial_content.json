@@ -1,0 +1,55 @@
+{
+  "name": "find_documents_partial_content",
+  "description": "Find documents by searching partial content",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "DEF (middle)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 2
+    },
+    {
+      "op": "find_documents",
+      "search_text": "ABC (start)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 2
+    },
+    {
+      "op": "find_documents",
+      "search_text": "HIJ (end)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_count": 2,
+      "comment": "All partial searches should find both documents"
+    }
+  ]
+}

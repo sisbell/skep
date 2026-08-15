@@ -1,0 +1,79 @@
+{
+  "name": "search_partial_source_removal",
+  "description": "Test find_links() when only PART of the source endpoint is removed",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click hyperlink here"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "hyperlink",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "full document",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "linked region",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "hyper",
+      "comment": "Delete 'hyper' from 'hyperlink', leaving 'link'"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Click link here"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "full document",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Full doc search after partial deletion"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "remaining region",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Search region still containing 'link'"
+    }
+  ]
+}

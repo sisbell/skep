@@ -1,0 +1,10 @@
+{
+  "name": "create_document",
+  "description": "Create a new empty document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "name": "documents_single_account",
+  "description": "Create multiple documents under the same account",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "First document"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "First document"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "text": "Second document"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "Second document"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.2"
+    }
+  ]
+}

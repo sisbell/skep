@@ -1,0 +1,99 @@
+{
+  "name": "bidirectional_explicit_links",
+  "description": "Test explicit bidirectional links: A <-> B (two separate links)",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "Document A: see also Document B"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Document B: see also Document A"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "A",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "from": "A",
+      "direction": "outgoing",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "expected": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "to": "A",
+      "direction": "incoming",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "expected": [
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "B",
+      "direction": "outgoing",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "expected": [
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "to": "B",
+      "direction": "incoming",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "expected": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "direction": "A->B",
+      "result": [
+        "Document B"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "direction": "B->A",
+      "result": [
+        "Document A"
+      ],
+      "comment": "Both directions should work independently"
+    }
+  ]
+}

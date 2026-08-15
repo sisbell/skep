@@ -1,0 +1,62 @@
+{
+  "name": "vcopy_transclusion",
+  "description": "Copy content from one document to another (virtual copy)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Original content to copy"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Prefix: "
+    },
+    {
+      "op": "vcopy",
+      "source_doc": "1.1.0.1.0.1",
+      "source_span": {
+        "start": "1.1",
+        "width": "0.16"
+      },
+      "target_doc": "1.1.0.1.0.2"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.2",
+      "result": [
+        "Prefix: Original content"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.2"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "name": "search_by_source_after_source_removed",
+  "description": "Test find_links() by source specset after source content is deleted",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Click here for more info"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Detailed information"
+    },
+    {
+      "op": "create_link",
+      "source_text": "here",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "source",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link should be found via source search"
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "here ",
+      "comment": "Delete the source endpoint content"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Click for more info"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "source",
+      "search": "entire document",
+      "result": [],
+      "comment": "Can link be found after source content deleted?"
+    },
+    {
+      "op": "find_links",
+      "label": "deleted_region",
+      "by": "source",
+      "search": "exact deleted region",
+      "result": [],
+      "comment": "Search within the now-empty region"
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "name": "createlink_check_text_positions",
+  "description": "Test whether CREATELINK in subspace 2.x shifts positions in subspace 1.x",
+  "operations": [
+    {
+      "op": "setup",
+      "text_doc1": "ABCDE",
+      "text_doc2": "12345"
+    },
+    {
+      "op": "vspanset_before_links",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      },
+      "comment": "Should show only 1.x range (text only)"
+    },
+    {
+      "op": "text_at_1_3_before",
+      "result": [
+        "C"
+      ],
+      "interpretation": "Should be 'C'"
+    },
+    {
+      "op": "create_link_1",
+      "from": "doc1[1.2]",
+      "to": "doc2[1.2]",
+      "comment": "First link should go to 2.1"
+    },
+    {
+      "op": "vspanset_after_first_link",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Should now show both 1.x and 2.x"
+    },
+    {
+      "op": "create_link_2",
+      "from": "doc1[1.4]",
+      "to": "doc2[1.4]",
+      "comment": "Second link should go to 2.2"
+    },
+    {
+      "op": "vspanset_after_second_link",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "2.x range should expand"
+    },
+    {
+      "op": "text_at_1_3_after",
+      "result": [
+        "C"
+      ],
+      "interpretation": "Should still be 'C' if subspaces independent"
+    }
+  ],
+  "analysis": {
+    "question": "Does CREATELINK shift text positions?",
+    "expected": "Text positions unchanged; links accumulate in 2.x subspace"
+  }
+}

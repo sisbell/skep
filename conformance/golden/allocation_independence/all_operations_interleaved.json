@@ -1,0 +1,102 @@
+{
+  "name": "all_operations_interleaved",
+  "description": "Comprehensive test of allocation independence across all operations",
+  "operations": [
+    {
+      "op": "create_doc1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_1_AAA",
+      "result": [
+        {
+          "start": "1.1",
+          "width": "0.3"
+        }
+      ]
+    },
+    {
+      "op": "makelink_1",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "version_1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "delete",
+      "result": [
+        {
+          "start": "0",
+          "width": "0.2"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ]
+    },
+    {
+      "op": "insert_2_BBB",
+      "result": [
+        {
+          "start": "0",
+          "width": "0.2"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ]
+    },
+    {
+      "op": "create_doc2_and_copy",
+      "result": {
+        "doc2": "1.1.0.1.0.2",
+        "vspans_doc2": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ],
+        "note": "COPY should reuse I-addresses, not allocate new ones"
+      }
+    },
+    {
+      "op": "makelink_2",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "version_2",
+      "result": "1.1.0.1.0.1.3"
+    },
+    {
+      "op": "insert_3_CCC",
+      "result": {
+        "vspans": [
+          {
+            "start": "0",
+            "width": "0.2"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ],
+        "content": [
+          "AABBBCCC"
+        ]
+      }
+    },
+    {
+      "op": "summary",
+      "expected_allocation": {
+        "text_counter": "A(doc1, 3): 1,2,3 \u2192 4,5,6 \u2192 7,8,9",
+        "link_counter": "A(doc1, 2): 1 \u2192 2",
+        "doc_counter": "A_doc(doc1): 1 \u2192 2",
+        "delete_effect": "none (DELETE does not allocate)",
+        "copy_effect": "none (COPY reuses I-addresses)"
+      }
+    }
+  ]
+}

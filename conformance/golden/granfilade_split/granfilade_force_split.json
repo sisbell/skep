@@ -1,0 +1,91 @@
+{
+  "name": "granfilade_force_split",
+  "description": "Insert 5 text atoms to force granfilade to handle multiple bottom crums",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_0",
+      "text": "TEXT0",
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert_1",
+      "text": "TEXT1",
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert_2",
+      "text": "TEXT2",
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert_3",
+      "text": "TEXT3",
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.20"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert_4",
+      "text": "TEXT4",
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.25"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "TEXT0TEXT1TEXT2TEXT3TEXT4"
+      ],
+      "vspans": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.25"
+          }
+        ]
+      }
+    }
+  ],
+  "expected": "All inserts succeed; granfilade handles M_b=1 via levelpush"
+}

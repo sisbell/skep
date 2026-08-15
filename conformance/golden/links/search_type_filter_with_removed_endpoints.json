@@ -1,0 +1,115 @@
+{
+  "name": "search_type_filter_with_removed_endpoints",
+  "description": "Test find_links() with type filter when some endpoints are removed",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Jump Quote Footnote text"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content here"
+    },
+    {
+      "op": "create_link",
+      "type": "JUMP",
+      "source": "Jump",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "type": "QUOTE",
+      "source": "Quote",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "create_link",
+      "type": "FOOTNOTE",
+      "source": "Footnote",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "filter": "all",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "filter": "JUMP",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "filter": "QUOTE",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "filter": "FOOTNOTE",
+      "result": []
+    },
+    {
+      "op": "delete",
+      "doc": "source",
+      "span": "Quote ",
+      "comment": "Delete quote link source only"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        "Jump Footnote text"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "filter": "all",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.3"
+      ],
+      "comment": "Should find 2 or 3 links?"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "filter": "JUMP",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "filter": "QUOTE",
+      "result": [],
+      "comment": "Quote source deleted - findable?"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "filter": "FOOTNOTE",
+      "result": []
+    }
+  ]
+}

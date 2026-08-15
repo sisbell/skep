@@ -1,0 +1,64 @@
+{
+  "name": "find_documents_after_source_deletion",
+  "description": "Find documents after content is deleted from source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Keep. Transclude this. End."
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "target",
+      "text": "Transclude this"
+    },
+    {
+      "op": "find_documents",
+      "label": "before_deletion",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ]
+    },
+    {
+      "op": "remove",
+      "doc": "source",
+      "text": "Transclude this. "
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "result": [
+        "Keep.  End."
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Target has: Transclude this"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "label": "after_deletion",
+      "query": "from target's copy",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "comment": "Content still exists in target"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "name": "version_link_allocation_independence",
+  "description": "Verify VERSION and MAKELINK use independent allocation counters",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_text",
+      "text": "ABCDEF"
+    },
+    {
+      "op": "makelink_1",
+      "result": {
+        "link": "1.1.0.1.0.1.0.2.1",
+        "expected": "Link at .0.2.1"
+      }
+    },
+    {
+      "op": "version_1",
+      "result": {
+        "version": "1.1.0.1.0.1.1",
+        "expected": "1.1.0.1.0.1.1"
+      }
+    },
+    {
+      "op": "makelink_2",
+      "result": {
+        "link": "1.1.0.1.0.1.0.2.2",
+        "expected": "Link at .0.2.2 (VERSION did not affect link counter)"
+      }
+    },
+    {
+      "op": "version_2",
+      "result": {
+        "version": "1.1.0.1.0.1.2",
+        "expected": "1.1.0.1.0.1.2 (MAKELINK did not affect doc counter)"
+      }
+    },
+    {
+      "op": "makelink_3",
+      "result": {
+        "link": "1.1.0.1.0.1.0.2.3",
+        "expected": "Link at .0.2.3"
+      }
+    }
+  ]
+}

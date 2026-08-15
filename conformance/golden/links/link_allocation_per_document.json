@@ -1,0 +1,155 @@
+{
+  "name": "link_allocation_per_document",
+  "description": "Test whether link I-address allocation is per-document (consecutive within doc) or global (interleaved)",
+  "question": "If MAKELINK on doc A, then doc B, then doc A again \u2014 does doc A's second link get consecutive element number?",
+  "link_a1_address": "1.1.0.1.0.1.0.2.1",
+  "link_b1_address": "1.1.0.1.0.2.0.2.1",
+  "link_a2_address": "1.1.0.1.0.1.0.2.2",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Document A with text for links"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Document B with text for links"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "address": "1.1",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "doc": "A",
+      "link": "L1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "doc": "B",
+      "link": "L2",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "doc": "A",
+      "link": "L3",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.15",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "analysis",
+      "link_a1_id": "1.1.0.1.0.1.0.2.1",
+      "link_b1_id": "1.1.0.1.0.2.0.2.1",
+      "link_a2_id": "1.1.0.1.0.1.0.2.2",
+      "interpretation": {
+        "per_document": "If L1 and L3 have consecutive element numbers (e.g., docA.2.1 and docA.2.2), allocation is per-document",
+        "global": "If L3 has non-consecutive element (e.g., docA.2.3 after docB.2.2), allocation is global"
+      }
+    }
+  ]
+}

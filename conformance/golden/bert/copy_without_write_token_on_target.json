@@ -1,0 +1,46 @@
+{
+  "name": "copy_without_write_token_on_target",
+  "description": "Attempt COPY into target document with only READ token - back end should reject",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Source content"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_only",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "copy",
+      "target_doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "result": "OPERATION_FAILED: 'XuSession' object has no attribute 'copy'"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.2"
+    }
+  ]
+}

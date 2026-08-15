@@ -1,0 +1,63 @@
+{
+  "name": "insert_at_exact_end",
+  "description": "Insert text at the exact end position of existing content",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Hello"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.5"
+          }
+        ]
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.6",
+      "text": "World",
+      "comment": "Insert at exact end position"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      }
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "HelloWorld"
+      ],
+      "expected": "HelloWorld"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

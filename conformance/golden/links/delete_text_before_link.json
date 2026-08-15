@@ -1,0 +1,142 @@
+{
+  "name": "delete_text_before_link",
+  "description": "Test whether DELETE causes link V-positions to shift left",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "123456789012345",
+      "note": "15 bytes at 1.1-1.15"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.10",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "note": "Link from 1.1-1.5 to 1.10-1.14"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "note": "Before deletion: text at 1.x, link at 2.x"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "note": "Link endsets before deletion"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "start": "1.1",
+      "width": "0.15",
+      "succeeded": true,
+      "error": null,
+      "note": "Delete all 15 bytes of text"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "2.1",
+            "width": "0.1"
+          }
+        ]
+      },
+      "note": "After deletion: does link position shift?"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": []
+        }
+      ],
+      "succeeded": true,
+      "error": null,
+      "note": "Can we still follow the link? Do endsets change?"
+    },
+    {
+      "op": "find_links",
+      "specs": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "result": [],
+      "succeeded": true,
+      "error": null,
+      "note": "Can we find link from original source span (now deleted)?"
+    }
+  ]
+}

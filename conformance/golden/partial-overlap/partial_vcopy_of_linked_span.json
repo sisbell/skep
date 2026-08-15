@@ -1,0 +1,81 @@
+{
+  "name": "partial_vcopy_of_linked_span",
+  "description": "Transclude subset of linked span - link discoverable from partial copy",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "The important hyperlink text here"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Link target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "hyperlink text",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "copy",
+      "text": "link",
+      "comment": "Transclude only 'link' which is PART of 'hyperlink text'"
+    },
+    {
+      "op": "contents",
+      "doc": "copy",
+      "result": [
+        "Partial copy: link"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "copy",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link discoverable from partial copy via I-address overlap"
+    },
+    {
+      "op": "follow_link",
+      "from": "copy",
+      "result": [
+        "hyperlink text"
+      ],
+      "comment": "follow_link returns full link source (link is immutable entity)"
+    },
+    {
+      "op": "find_links",
+      "from": "source",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "from": "source",
+      "result": [
+        "hyperlink text"
+      ],
+      "comment": "From source, full 'hyperlink text' visible"
+    }
+  ]
+}

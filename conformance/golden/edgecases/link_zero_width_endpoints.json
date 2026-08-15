@@ -1,0 +1,24 @@
+{
+  "name": "link_zero_width_endpoints",
+  "description": "Test minimum-width link endpoints (zero-width crashes - see bug 017)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "Source and Target"
+    },
+    {
+      "op": "create_link",
+      "from": "1-char span at 1.1",
+      "to": "1-char span at 1.12",
+      "result": {
+        "success": true,
+        "link_id": "1.1.0.1.0.1.0.2.1"
+      },
+      "comment": "Zero-width crashes; testing 1-char minimum"
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "insert_content_discoverable_elsewhere",
+  "description": "Test if INSERT-created content is discoverable via transclusion",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Discover this"
+    },
+    {
+      "op": "create_document",
+      "doc": "dest",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "source",
+      "to": "dest",
+      "text": "Discover"
+    },
+    {
+      "op": "find_documents",
+      "search_text": "Discover",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2"
+      ],
+      "expected_if_docispan": 2,
+      "comment": "Should find both source and dest if INSERT creates DOCISPAN"
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "name": "search_after_vcopy_source_deleted",
+  "description": "Test find_links() after transcluded content deleted from original",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original linked content here"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "linked",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "original",
+      "to": "copy",
+      "text": "linked"
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "original",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "by": "copy",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link findable from transcluded copy?"
+    },
+    {
+      "op": "delete",
+      "doc": "original",
+      "span": "linked ",
+      "comment": "Delete linked content from ORIGINAL only"
+    },
+    {
+      "op": "contents",
+      "doc": "original",
+      "label": "after_delete",
+      "result": [
+        "Original content here"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "copy",
+      "label": "after_delete",
+      "result": [
+        "Prefix: linked"
+      ],
+      "comment": "Copy may still have content via transclusion"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "original",
+      "result": [],
+      "comment": "Link from original after deletion"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "by": "copy",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Link from copy - does transclusion preserve findability?"
+    }
+  ]
+}

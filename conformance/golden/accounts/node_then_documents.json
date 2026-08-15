@@ -1,0 +1,48 @@
+{
+  "name": "node_then_documents",
+  "description": "Create node, switch to it, create and populate documents",
+  "operations": [
+    {
+      "op": "account",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_node",
+      "account": "1.1.0.1",
+      "result": "1.1.0.1.1"
+    },
+    {
+      "op": "account",
+      "account": "1.1.0.1.1",
+      "comment": "Switch to newly created node"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.1.0.1",
+      "result": "1.1.0.1.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Content in new node"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "Content in new node"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.1.0.1"
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "name": "retrieve_noncontiguous_spans",
+  "description": "Retrieve multiple non-contiguous spans from a document in one call",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "The quick brown fox jumps over the lazy dog"
+    },
+    {
+      "op": "retrieve_contents",
+      "spans": [
+        "quick (5-9)",
+        "lazy (36-39)"
+      ],
+      "combined": true,
+      "result": [
+        "quicklazy"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "span": "quick",
+      "result": [
+        "quick"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "span": "lazy",
+      "result": [
+        "lazy"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

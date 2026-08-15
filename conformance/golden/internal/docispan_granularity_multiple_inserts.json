@@ -1,0 +1,39 @@
+{
+  "name": "docispan_granularity_multiple_inserts",
+  "description": "Test DOCISPAN granularity for multiple separate INSERTs",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "count": 10,
+      "description": "10 separate single-byte INSERTs"
+    },
+    {
+      "op": "find_documents",
+      "search": "A (1 byte)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "ABC (3 bytes)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "search": "ABCDEFGHIJ (all 10 bytes)",
+      "result": [
+        "1.1.0.1.0.1"
+      ]
+    }
+  ],
+  "analysis": {
+    "comment": "Compare with single INSERT test. If results identical, DOCISPAN entries may be consolidating. If different... that would be surprising given Finding 033's I-span consolidation."
+  }
+}

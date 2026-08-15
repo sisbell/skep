@@ -1,0 +1,105 @@
+{
+  "name": "delete_does_not_affect_next_insert",
+  "description": "DELETE should not change I-address allocation for subsequent INSERTs",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_A",
+      "result": {
+        "content": [
+          "A"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_B",
+      "result": {
+        "content": [
+          "AB"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "delete_A",
+      "result": {
+        "content": [
+          "B"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_C",
+      "result": {
+        "content": [
+          "BC"
+        ],
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "compare_via_transclusion",
+      "result": {
+        "shared_span_pairs": 1,
+        "shared": [
+          {
+            "doc1": {
+              "start": "1.1",
+              "width": "0.2"
+            },
+            "doc2": {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "op": "note",
+      "text": "If monotonic, C's I-address should follow B's, not reuse A's"
+    }
+  ]
+}

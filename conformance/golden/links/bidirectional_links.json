@@ -1,0 +1,164 @@
+{
+  "name": "bidirectional_links",
+  "description": "Create bidirectional links between two documents (doc1->doc2 and doc2->doc1)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Document one with source text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Document two with target text"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "comment": "Link from doc1 to doc2"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.2",
+      "source": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.14",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "target": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.14",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "type": "jump",
+      "result": "1.1.0.1.0.2.0.2.1",
+      "comment": "Link from doc2 back to doc1"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Links originating from doc1"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Links originating from doc2"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "end": "target",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.14",
+              "width": "0.6"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{
+  "name": "find_links_homedocids_no_match",
+  "description": "Test find_links with homedocids that match no links",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "text": "Source document content"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "text": "Target document content"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "text": "Uninvolved document"
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "note": "Link homed in doc1, points to doc2",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "homedocids": null,
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "note": "All links from doc1 (expected: 1)"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "homedocids": [
+        {
+          "start": "1.1.0.1.0.3",
+          "width": "0.1"
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "note": "Links from doc1 homed in doc3 (expected: 0 - doc3 has no links)"
+    },
+    {
+      "op": "find_links",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "homedocids": [
+        {
+          "start": "1.1.0.1.0.2",
+          "width": "0.1"
+        }
+      ],
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "note": "Links from doc1 homed in doc2 (expected: 0 - link targets doc2 but homed in doc1)"
+    }
+  ]
+}

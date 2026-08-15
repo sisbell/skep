@@ -1,0 +1,96 @@
+{
+  "name": "vcopy_from_multiple_documents",
+  "description": "Transclude content from multiple source documents into one target",
+  "operations": [
+    {
+      "op": "create_documents",
+      "docs": [
+        "A",
+        "B",
+        "C"
+      ],
+      "texts": [
+        "Source A text",
+        "Source B text",
+        "Source C text"
+      ],
+      "results": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "vcopy_multiple",
+      "from": [
+        "A",
+        "B",
+        "C"
+      ],
+      "to": "target"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "result": [
+        "Combined: Source A | Source B | Source C | "
+      ]
+    },
+    {
+      "op": "comparisons",
+      "results": [
+        {
+          "source": "A",
+          "shared": [
+            {
+              "target": {
+                "start": "1.11",
+                "width": "0.8"
+              },
+              "source": {
+                "start": "1.1",
+                "width": "0.8"
+              }
+            }
+          ]
+        },
+        {
+          "source": "B",
+          "shared": [
+            {
+              "target": {
+                "start": "1.22",
+                "width": "0.8"
+              },
+              "source": {
+                "start": "1.1",
+                "width": "0.8"
+              }
+            }
+          ]
+        },
+        {
+          "source": "C",
+          "shared": [
+            {
+              "target": {
+                "start": "1.33",
+                "width": "0.8"
+              },
+              "source": {
+                "start": "1.1",
+                "width": "0.8"
+              }
+            }
+          ]
+        }
+      ],
+      "comment": "Target shares content with each source independently"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "name": "link_chain_three_hops",
+  "description": "Test a longer link chain with 3 hops: A -> B -> C -> D",
+  "operations": [
+    {
+      "op": "create_documents",
+      "count": 4,
+      "results": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4"
+      ]
+    },
+    {
+      "op": "insert_all",
+      "texts": [
+        "Document A: start your journey here",
+        "Document B: continue to the next stop",
+        "Document C: almost at the destination",
+        "Document D: you have reached the end"
+      ]
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "source_text": "journey",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "C",
+      "source_text": "next",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "C",
+      "to": "D",
+      "source_text": "destination",
+      "result": "1.1.0.1.0.3.0.2.1"
+    },
+    {
+      "op": "traverse_chain",
+      "results": [
+        {
+          "step": "A",
+          "links_found": [
+            "1.1.0.1.0.1.0.2.1"
+          ]
+        },
+        {
+          "step": "B",
+          "links_found": [
+            "1.1.0.1.0.2.0.2.1"
+          ]
+        },
+        {
+          "step": "C",
+          "links_found": [
+            "1.1.0.1.0.3.0.2.1"
+          ]
+        },
+        {
+          "step": "D (end)",
+          "content": [
+            "Document"
+          ]
+        }
+      ],
+      "comment": "Following links A->B->C->D"
+    }
+  ]
+}

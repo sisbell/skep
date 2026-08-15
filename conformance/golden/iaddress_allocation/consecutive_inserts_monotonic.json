@@ -1,0 +1,60 @@
+{
+  "name": "consecutive_inserts_monotonic",
+  "description": "Control: consecutive inserts allocate monotonically increasing I-addresses",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert_A",
+      "result": {
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_B",
+      "result": {
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "insert_C",
+      "result": {
+        "vspans": {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        },
+        "content": [
+          "ABC"
+        ]
+      }
+    }
+  ]
+}

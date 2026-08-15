@@ -1,0 +1,47 @@
+{
+  "name": "pivot_v3_equals_v2",
+  "description": "Pivot where v\u2083 = v\u2082 (destination = source end)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "retrieve",
+      "before": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "vspanset_before",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>"
+    },
+    {
+      "op": "pivot_attempt",
+      "v1": "1.2",
+      "v2": "1.4",
+      "v3": "1.4",
+      "description": "Pivot with v\u2083 = v\u2082",
+      "status": "succeeded",
+      "error": "N/A"
+    },
+    {
+      "op": "retrieve",
+      "after": "['ABCDEFGH']"
+    },
+    {
+      "op": "vspanset_after",
+      "result": "<VSpec in 1.1.0.1.0.1, at 1.1 for 0.8>"
+    }
+  ]
+}

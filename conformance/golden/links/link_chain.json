@@ -1,0 +1,87 @@
+{
+  "name": "link_chain",
+  "description": "Test link chains: A -> B -> C where B is both target and source",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "Start here to follow the chain"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Middle document with next link"
+    },
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "Final destination reached"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "source_text": "here",
+      "target_text": "Middle",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "C",
+      "source_text": "next",
+      "target_text": "Final",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        "Middle"
+      ],
+      "comment": "Following A->B should give 'Middle'"
+    },
+    {
+      "op": "find_links",
+      "search_doc": "B",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ],
+      "comment": "Find links originating from B (should find B->C)"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "end": "target",
+      "result": [
+        "Final"
+      ],
+      "comment": "Following B->C should give 'Final'"
+    },
+    {
+      "op": "find_links",
+      "by": "target",
+      "search_doc": "B",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Find links targeting B (should find A->B)"
+    }
+  ]
+}

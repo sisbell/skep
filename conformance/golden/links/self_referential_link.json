@@ -1,0 +1,50 @@
+{
+  "name": "self_referential_link",
+  "description": "Test creating a link within the same document (self-referential)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "See the glossary section below. Glossary: terms defined here."
+    },
+    {
+      "op": "create_link",
+      "home_doc": "1.1.0.1.0.1",
+      "source_text": "glossary",
+      "target_text": "Glossary",
+      "same_document": true,
+      "type": "jump",
+      "result": "1.1.0.1.0.1.0.2.1",
+      "success": true,
+      "error": null,
+      "comment": "Internal link - source and target in same document"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        "Glossary"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        "glossary"
+      ]
+    }
+  ]
+}

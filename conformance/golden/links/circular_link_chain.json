@@ -1,0 +1,82 @@
+{
+  "name": "circular_link_chain",
+  "description": "Test circular link references: A -> B -> C -> A",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "A",
+      "text": "Document A: go to B"
+    },
+    {
+      "op": "create_document",
+      "doc": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "B",
+      "text": "Document B: go to C"
+    },
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "Document C: go to A"
+    },
+    {
+      "op": "create_link",
+      "from": "A",
+      "to": "B",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "C",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "create_link",
+      "from": "C",
+      "to": "A",
+      "result": "1.1.0.1.0.3.0.2.1",
+      "comment": "Completes the cycle"
+    },
+    {
+      "op": "traverse_cycle",
+      "traversal": [
+        {
+          "from": "A",
+          "to": "B",
+          "text": [
+            "Document B"
+          ]
+        },
+        {
+          "from": "B",
+          "to": "C",
+          "text": [
+            "Document C"
+          ]
+        },
+        {
+          "from": "C",
+          "to": "A (cycle complete)",
+          "text": [
+            "Document A"
+          ]
+        }
+      ],
+      "comment": "Following A->B->C->A should return to starting point"
+    }
+  ]
+}

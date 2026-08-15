@@ -1,0 +1,78 @@
+{
+  "name": "type_c_multiple_crums",
+  "description": "Type C delete when document has multiple crums",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "ABC",
+      "comment": "Creates crum 1"
+    },
+    {
+      "op": "retrieve_contents",
+      "after_insert_1": [
+        "ABC"
+      ]
+    },
+    {
+      "op": "insert",
+      "address": "1.7",
+      "text": "DEF",
+      "comment": "Creates crum 2 (separate I-address range)"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "before": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.9"
+          }
+        ]
+      },
+      "comment": "Should show 2 spans with gap"
+    },
+    {
+      "op": "retrieve_contents",
+      "before": [
+        "ABCDEF"
+      ]
+    },
+    {
+      "op": "remove",
+      "span": {
+        "start": "1.2",
+        "width": "0.1"
+      },
+      "comment": "DELETE [1.2, 1.3) - 'B' in interior of crum 1. \u0394c = +1 for crum 1"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "after": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "Expected: 3 spans after split and shift"
+    },
+    {
+      "op": "retrieve_contents",
+      "after": [
+        "ACDEF"
+      ],
+      "expected": "ACDEF (with B removed)"
+    },
+    {
+      "op": "close_document"
+    }
+  ]
+}

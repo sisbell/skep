@@ -1,0 +1,61 @@
+{
+  "name": "cross_version_vcopy",
+  "description": "Copy content from version back to original via vcopy",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "original",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "original",
+      "text": "Original text"
+    },
+    {
+      "op": "create_version",
+      "from": "original",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "version",
+      "text": " with version-only addition"
+    },
+    {
+      "op": "vcopy",
+      "from": "version:version-only",
+      "to": "original"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "original",
+        "version"
+      ],
+      "shared": [
+        {
+          "original": {
+            "start": "1.1",
+            "width": "0.13"
+          },
+          "version": {
+            "start": "1.1",
+            "width": "0.13"
+          }
+        },
+        {
+          "original": {
+            "start": "1.14",
+            "width": "0.12"
+          },
+          "version": {
+            "start": "1.15",
+            "width": "0.12"
+          }
+        }
+      ],
+      "comment": "Should find both 'Original text' and 'version-only' as shared"
+    }
+  ]
+}

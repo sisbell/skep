@@ -1,0 +1,94 @@
+{
+  "name": "delete_middle_link_check_gap_closure",
+  "description": "Test whether DELETE at 2.2 shifts link at 2.3 down to 2.2 (gap closure)",
+  "operations": [
+    {
+      "op": "setup",
+      "doc1_text": "ABCDEFGHIJ",
+      "doc2_text": "1234567890",
+      "links_created": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2",
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    },
+    {
+      "op": "vspanset_before_delete",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "interpretation": "Should show text subspace 1.x and link subspace 2.x with width 0.3"
+    },
+    {
+      "op": "links_before_delete",
+      "link_at_2_1": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "link_at_2_2": [
+        "1.1.0.1.0.1.0.2.2"
+      ],
+      "link_at_2_3": [
+        "1.1.0.1.0.1.0.2.3"
+      ]
+    },
+    {
+      "op": "DELETE",
+      "at": "2.2",
+      "width": "0.1",
+      "comment": "Delete middle link"
+    },
+    {
+      "op": "vspanset_after_delete",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "interpretation": "If gap closed: link subspace width = 0.2. If gap remains: may still be 0.3?"
+    },
+    {
+      "op": "links_after_delete",
+      "link_at_2_1": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "link_at_2_2": [],
+      "link_at_2_3": [
+        "1.1.0.1.0.1.0.2.3"
+      ],
+      "interpretation": "KEY: Is link_id_3 at position 2.2 (closed) or 2.3 (gap)?"
+    },
+    {
+      "op": "follow_links_after_delete",
+      "link_1": "<SpecSet [<VSpec in 1.1.0.1.0.2, at 1.1 for 0.2>]>",
+      "link_3": "<SpecSet [<VSpec in 1.1.0.1.0.2, at 1.5 for 0.2>]>",
+      "interpretation": "Links should still be followable regardless of V-position"
+    }
+  ],
+  "analysis": {
+    "question": "Does DELETE on link subspace close gaps via strongsub?",
+    "hypothesis_gap_closed": "Link at 2.3 shifts to 2.2; strongsub(2.3, 0.1) = 2.2",
+    "hypothesis_gap_remains": "Link at 2.3 stays at 2.3; strongsub(2.3, 0.1) = 2.3 (exponent guard fires)",
+    "code_trace": "deletend calls tumblersub(ptr->cdsp.dsas[V], width) [edit.c:63]",
+    "critical_check": "tumblersub(2.3, 0.1) -> tumbleradd(2.3, -0.1) -> strongsub(2.3, 0.1)",
+    "exponent_question": "What is exp(2.3) vs exp(0.1) in tumbler representation?",
+    "finding_reference": "Finding 055 shows DELETE of TEXT does not shift LINKS (exp mismatch). Does DELETE of LINKS shift LINKS?"
+  }
+}

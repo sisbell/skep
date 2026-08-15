@@ -1,0 +1,59 @@
+{
+  "name": "insert_link_insert_iaddress_gap",
+  "description": "Does CREATELINK create a gap in I-address allocation?",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "text": "ABC"
+    },
+    {
+      "op": "create_link",
+      "from": "B",
+      "to": "A",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "insert",
+      "text": "DEF",
+      "at": "end"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "ABCDEF"
+      ],
+      "expected": "ABCDEF"
+    },
+    {
+      "op": "compare_versions",
+      "shared_span_pairs": 2,
+      "shared": [
+        {
+          "source": {
+            "start": "1.1",
+            "width": "0.3"
+          },
+          "dest": {
+            "start": "1.1",
+            "width": "0.3"
+          }
+        },
+        {
+          "source": {
+            "start": "2",
+            "width": "0.4"
+          },
+          "dest": {
+            "start": "1.4",
+            "width": "0.4"
+          }
+        }
+      ],
+      "comment": "CREATELINK modifies POOM enfilade only, not granfilade"
+    }
+  ]
+}

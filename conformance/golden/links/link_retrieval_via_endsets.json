@@ -1,0 +1,101 @@
+{
+  "name": "link_retrieval_via_endsets",
+  "description": "Test using retrieve_endsets to examine orphaned links",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source text for endset test"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target text"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "before_delete",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "from": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "to": [],
+      "type": []
+    },
+    {
+      "op": "delete_all",
+      "doc": "source"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "after_delete",
+      "search": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.30"
+            }
+          ]
+        }
+      ],
+      "from": [],
+      "to": [],
+      "type": [],
+      "comment": "Can retrieve_endsets find orphaned link info?"
+    },
+    {
+      "op": "retrieve_endsets",
+      "label": "via_link_id",
+      "search": "link address space",
+      "from": [
+        {
+          "docid": "1.1.0.1.0.1.0.2.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "to": [],
+      "type": [],
+      "works": true,
+      "comment": "Direct query of link address space"
+    }
+  ]
+}

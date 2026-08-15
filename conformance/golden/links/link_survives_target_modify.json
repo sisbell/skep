@@ -1,0 +1,64 @@
+{
+  "name": "link_survives_target_modify",
+  "description": "Test that link survives when target document is modified (non-linked region)",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Reference this glossary term"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Glossary: Term definition here"
+    },
+    {
+      "op": "create_link",
+      "source_text": "glossary",
+      "target_text": "Glossary",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_modify",
+      "end": "target",
+      "result": [
+        "Glossary"
+      ]
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "address": "1.11",
+      "text": "INSERTED ",
+      "comment": "Insert in non-linked region"
+    },
+    {
+      "op": "contents",
+      "doc": "target",
+      "label": "after_modify",
+      "result": [
+        "Glossary: INSERTED Term definition here"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "label": "after_modify",
+      "end": "target",
+      "result": [
+        "Glossary"
+      ],
+      "comment": "Link target should still resolve to 'Glossary'"
+    }
+  ]
+}

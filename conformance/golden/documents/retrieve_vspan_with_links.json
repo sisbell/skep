@@ -1,0 +1,46 @@
+{
+  "name": "retrieve_vspan_with_links",
+  "description": "Retrieve vspan of document with text and links",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Click here"
+    },
+    {
+      "op": "create_link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "retrieve_vspan",
+      "result": "<VSpan in 1.1.0.1.0.1 at 1.1 for 1.2>",
+      "comment": "Overall extent (may cover both subspaces)"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "0",
+            "width": "0.1"
+          },
+          {
+            "start": "1",
+            "width": "1"
+          }
+        ]
+      },
+      "comment": "Separate spans for text (1.x) and links (0.x)"
+    }
+  ]
+}

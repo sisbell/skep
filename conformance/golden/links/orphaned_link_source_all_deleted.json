@@ -1,0 +1,87 @@
+{
+  "name": "orphaned_link_source_all_deleted",
+  "description": "Test link behavior when ALL content is deleted from source document",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Short"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target content here"
+    },
+    {
+      "op": "create_link",
+      "source_text": "Short",
+      "target_text": "Target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "label": "before_delete",
+      "end": "source",
+      "result": [
+        "Short"
+      ]
+    },
+    {
+      "op": "find_links",
+      "label": "before_delete",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "delete_all",
+      "doc": "source",
+      "comment": "Delete ALL content from source document"
+    },
+    {
+      "op": "contents",
+      "doc": "source",
+      "label": "after_delete",
+      "result": [
+        {
+          "link_id": "1.1.0.1.0.1.0.2.1"
+        }
+      ],
+      "comment": "Source document should now be empty"
+    },
+    {
+      "op": "find_links",
+      "label": "after_delete",
+      "result": [],
+      "comment": "find_links should NOT find the link (no content to match)"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "source",
+      "result": [],
+      "works": true,
+      "comment": "follow_link should still work but return empty"
+    },
+    {
+      "op": "follow_link",
+      "label": "after_delete",
+      "end": "target",
+      "result": [
+        "Target"
+      ],
+      "works": true,
+      "comment": "Target endpoint should be unaffected"
+    }
+  ]
+}

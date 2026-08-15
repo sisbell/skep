@@ -1,0 +1,53 @@
+{
+  "name": "link_permanence_no_delete_operation",
+  "description": "Links cannot be explicitly deleted - no DELETELINK operation exists in FEBE protocol",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "source",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "source",
+      "text": "Source document content"
+    },
+    {
+      "op": "create_document",
+      "doc": "target",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "target",
+      "text": "Target document content"
+    },
+    {
+      "op": "create_link",
+      "source_text": "Source",
+      "target_text": "Target",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "source",
+      "result": [
+        "Source"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "target",
+      "result": [
+        "Target"
+      ]
+    },
+    {
+      "op": "note",
+      "message": "No delete_link operation exists - links are permanent by design",
+      "xanadu_principle": "permanent_storage"
+    }
+  ]
+}

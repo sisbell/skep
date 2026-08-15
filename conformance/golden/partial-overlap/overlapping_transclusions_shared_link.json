@@ -1,0 +1,111 @@
+{
+  "name": "overlapping_transclusions_shared_link",
+  "description": "Two docs transclude overlapping portions - link visible from both",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "origin",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "origin",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_link",
+      "source_text": "DEF",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy1",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "from": "origin",
+      "to": "copy1",
+      "text": "BCDEFG",
+      "comment": "Copy1 has full DEF"
+    },
+    {
+      "op": "create_document",
+      "doc": "copy2",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "vcopy",
+      "from": "origin",
+      "to": "copy2",
+      "text": "EFGHIJ",
+      "comment": "Copy2 has partial overlap (EF of DEF)"
+    },
+    {
+      "op": "contents",
+      "doc": "copy1",
+      "result": [
+        "Copy1: BCDEFG"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "copy2",
+      "result": [
+        "Copy2: EFGHIJ"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "copy1",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Copy1 finds link (has full DEF)"
+    },
+    {
+      "op": "find_links",
+      "from": "copy2",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "Copy2 finds link (has partial EF)"
+    },
+    {
+      "op": "follow_link",
+      "from": "copy1",
+      "result": [
+        "DEF"
+      ],
+      "comment": "From copy1, see DEF"
+    },
+    {
+      "op": "follow_link",
+      "from": "copy2",
+      "result": [
+        "DEF"
+      ],
+      "comment": "From copy2, see only EF (overlap)"
+    },
+    {
+      "op": "compare_versions",
+      "docs": [
+        "copy1",
+        "copy2"
+      ],
+      "result": [
+        {
+          "copy1": {
+            "start": "1.11",
+            "width": "0.3"
+          },
+          "copy2": {
+            "start": "1.8",
+            "width": "0.3"
+          }
+        }
+      ],
+      "comment": "Copy1 and copy2 share EFG"
+    }
+  ]
+}

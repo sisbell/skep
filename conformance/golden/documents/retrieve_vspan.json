@@ -1,0 +1,44 @@
+{
+  "name": "retrieve_vspan",
+  "description": "Retrieve single extent span vs span set",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "address": "1.1",
+      "text": "Hello World"
+    },
+    {
+      "op": "retrieve_vspan",
+      "result": "<VSpan in 1.1.0.1.0.1 at 1.1 for 0.11>",
+      "comment": "Single span covering document extent"
+    },
+    {
+      "op": "retrieve_vspanset",
+      "result": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.11"
+          }
+        ]
+      },
+      "comment": "Span set (may have multiple spans)"
+    },
+    {
+      "op": "retrieve_contents",
+      "result": [
+        "Hello World"
+      ]
+    }
+  ]
+}

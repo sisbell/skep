@@ -1,0 +1,50 @@
+{
+  "name": "rearrange_content",
+  "description": "Rearrange content using vcopy (simulating cut and paste)",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "World Hello"
+    },
+    {
+      "op": "vcopy",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "source_span": {
+        "start": "1.7",
+        "width": "0.5"
+      },
+      "comment": "Copy 'Hello' to beginning"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.6",
+      "text": " ",
+      "comment": "Add space after copied Hello"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "result": [
+        "Hello World Hello"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "name": "transitive_link_discovery",
+  "description": "A transcludes B, B is version of C, link on C - can A find link?",
+  "operations": [
+    {
+      "op": "create_document",
+      "doc": "C",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "C",
+      "text": "Original content in C"
+    },
+    {
+      "op": "create_version",
+      "from": "C",
+      "result": "1.1.0.1.0.1.1",
+      "doc": "B"
+    },
+    {
+      "op": "create_document",
+      "doc": "A",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "from": "B",
+      "to": "A"
+    },
+    {
+      "op": "create_link",
+      "on": "C",
+      "source_text": "content",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "contents",
+      "doc": "C",
+      "result": [
+        "Original content in C"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "B",
+      "result": [
+        "Original content in C"
+      ]
+    },
+    {
+      "op": "contents",
+      "doc": "A",
+      "result": [
+        "A prefix: Original content in C"
+      ]
+    },
+    {
+      "op": "find_links",
+      "from": "C",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "C should find its link"
+    },
+    {
+      "op": "find_links",
+      "from": "B",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "B (version of C) should find link"
+    },
+    {
+      "op": "find_links",
+      "from": "A",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ],
+      "comment": "A (transcludes from B) should find link transitively"
+    }
+  ]
+}

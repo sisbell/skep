@@ -1,0 +1,33 @@
+[package]
+name = "skep-coordination"
+version = "0.1.0"
+edition = "2021"
+description = "M9 — Predicate & Coordination Layer: the closed statically-typed predicate/query algebra (PL) over M7/M3 structural state, predicate definitions persisted as content (pdef/pd_stable), and the reactive rule engine with quiescence detection, fair stepping, and the termination lint"
+
+[dependencies]
+# Value's persistent sets/maps (AddrSet/AddrSeq/Map, the Env) and cheap
+# intermediate values during folds — never journaled snapshots (§Core data
+# model: M9 owns no authoritative state).
+im = "15"
+# M1 — tumbler/address/span algebra: T1 extrema, validate lifts, document_of
+# for replay attribution, subtree_of for the address-denoting probe.
+skep-address = { path = "../skep-address" }
+# M2 — every verdict reads one pinned Snapshot; every write rides M5's/M7's
+# transact-wrapped ops (M9 drives no transact directly).
+skep-kernel = { path = "../skep-kernel" }
+# M3 — is_registered_document is PL's is_doc and the emit home-gate.
+skep-namespace = { path = "../skep-namespace" }
+# M4 — value_at(start) for resolve/parse of stored defs (the only content
+# read; lives in the operation-surface pass, never the denotation).
+skep-content = { path = "../skep-content" }
+# M5 — Vstream::insert writes def content through the placement composite
+# (J0); content_count for the append position.
+skep-arrangement = { path = "../skep-arrangement" }
+# M7 — the entire PL read surface (observe + BH1–BH4 + is_k/members/
+# targets_of) and the gated writes (emit/nullify).
+skep-links = { path = "../skep-links" }
+
+[dev-dependencies]
+# The test world (the composition contract's assembler role, in miniature)
+# derives Serialize/Deserialize for M2's WorldState bound.
+serde = { version = "1", features = ["derive"] }

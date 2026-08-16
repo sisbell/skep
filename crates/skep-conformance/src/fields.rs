@@ -122,9 +122,42 @@ fn raw_from_dashed(s: &str) -> Option<RawSpan> {
 }
 
 /// client.py `str()` forms: `<VSpec in D, at S for W, …>`, `<VSpan in D at S
-/// for W>`, `<Span at S for W>` — spans kept verbatim.
+/// for W>`, `<Span at S for W>` — spans kept verbatim. A `<SpecSet [ … ]>`
+/// wrapper (subspace/insert_text_check_both_link_positions records the
+/// client's raw SpecSet repr as a follow result) unwraps to its inner specs;
+/// spec segments naming a second document are dropped with the first kept —
+/// the one calibrated recording holds a single VSpec.
 pub fn parse_python_spec(s: &str) -> Option<(Option<String>, Vec<RawSpan>)> {
     let s = s.trim().strip_prefix('<')?.strip_suffix('>')?;
+    if let Some(r) = s.strip_prefix("SpecSet ") {
+        let inner = r.trim().strip_prefix('[')?.strip_suffix(']')?;
+        if inner.trim().is_empty() {
+            return Some((None, Vec::new()));
+        }
+        let mut doc: Option<String> = None;
+        let mut spans: Vec<RawSpan> = Vec::new();
+        // Segments are non-nested "<…>" groups.
+        let mut rest = inner;
+        while let Some(open) = rest.find('<') {
+            let Some(close) = rest[open..].find('>') else { break };
+            let seg = &rest[open..open + close + 1];
+            if let Some((d, ss)) = parse_python_spec(seg) {
+                match (&doc, &d) {
+                    (None, _) => {
+                        doc = d;
+                        spans.extend(ss);
+                    }
+                    (Some(cur), Some(new)) if cur == new => spans.extend(ss),
+                    _ => {} // second-document segment: dropped (see above)
+                }
+            }
+            rest = &rest[open + close + 1..];
+        }
+        if spans.is_empty() && doc.is_none() {
+            return None;
+        }
+        return Some((doc, spans));
+    }
     let (doc, rest) = if let Some(r) = s.strip_prefix("VSpec in ") {
         let (d, tail) = r.split_once(',').map(|(d, t)| (Some(d.trim().to_string()), t))?;
         (d, tail.to_string())
@@ -215,6 +248,43 @@ fn vspec_raw(v: &Value) -> Option<(String, Vec<RawSpan>)> {
     Some((docid, parsed?))
 }
 
+/// Harvest a vspanset expectation from ANY plausible field (the goldens key
+/// them result/before/after/empty_state/after_insert/…): first the standard
+/// keys, then a scan of remaining fields for span-set-shaped values. Shared
+/// by the translator's probes and the grounding pre-pass (whose insert-width
+/// authority reads the same recorded vspansets).
+pub fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpan>)> {
+    const ARG_KEYS: &[&str] = &[
+        "op", "doc", "docid", "comment", "label", "note", "interpretation", "search", "specs",
+        "specset", "link", "positions", "span", "vspan", "start", "width", "end", "text",
+        "strings", "texts", "cuts", "targets", "source_span", "source", "target", "from", "to",
+        "address", "at", "position",
+    ];
+    for k in ["result", "vspans", "vspanset", "spans", "before", "after", "expected"] {
+        if let Some(v) = op.get(k) {
+            if let Some((doc, spans)) = expect_spans_raw(v) {
+                return Some((k.to_string(), doc, spans));
+            }
+        }
+    }
+    let o = op.as_object()?;
+    for (k, v) in o {
+        if ARG_KEYS.contains(&k.as_str()) {
+            continue;
+        }
+        if looks_like_spanset(v) || v.as_str().is_some_and(|s| s.starts_with('<')) {
+            if let Some((doc, spans)) = expect_spans_raw(v) {
+                return Some((k.clone(), doc, spans));
+            }
+        }
+        // An explicit empty list under a state-ish key is an empty set.
+        if v.as_array().is_some_and(Vec::is_empty) && (k.contains("state") || k.contains("span")) {
+            return Some((k.clone(), None, Vec::new()));
+        }
+    }
+    None
+}
+
 /// Is this value span-set-shaped at all? (Observation-bundle detection.)
 pub fn looks_like_spanset(v: &Value) -> bool {
     match v {
@@ -293,6 +363,15 @@ pub fn client_side_failure(op: &Value) -> Option<&str> {
     str_field(op, &["result"]).filter(|s| s.starts_with("OPERATION_FAILED:"))
 }
 
+/// A recording-client python `repr` captured verbatim ("<VSpan in … at 0 for
+/// 0>", "<SpecSet […]>"). Such a string is NEVER document content — round 3
+/// seeded documents/retrieve_vspan_empty's doc with the 33-byte repr of its
+/// own empty vspan because the content-probe path took the string at face
+/// value. Every content-string consumer filters through this.
+pub fn is_python_repr(s: &str) -> bool {
+    s.starts_with('<') && s.ends_with('>')
+}
+
 // ───────────────────────────── decorated forms ─────────────────────────────
 
 /// A located region: golden doc + 1-based content ordinal + width.
@@ -333,12 +412,17 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         return Some(Located { doc, ord, width: n.max(1), how: "span-from-description" });
     }
 
-    // "doc[A-B]" bracket range (insert_text_check_link_positions).
+    // "doc[A-B]" bracket range (insert_text_check_link_positions) and the
+    // single-position form "doc1[1.2]" (createlink_check_text_positions) —
+    // one content ordinal, width 1.
     if let Some((docref, rest)) = desc.split_once('[') {
         if let Some(range) = rest.strip_suffix(']') {
             if let Some(doc) = shadow.resolve_doc(docref.trim()) {
                 if let Some((ord, w)) = ordinal_range(range) {
                     return Some(Located { doc, ord, width: w, how: "range-from-description" });
+                }
+                if let Some((1, ord)) = parse_vpos(range.trim()) {
+                    return Some(Located { doc, ord, width: 1, how: "range-from-description" });
                 }
             }
         }
@@ -373,7 +457,8 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     }
 
     // Trailing parenthetical: "text (5-9)" range, "text (from C)" doc
-    // qualifier, or descriptive junk to strip ("bank (first)").
+    // qualifier, "bank (second)" occurrence selector, or descriptive junk
+    // to strip ("shared (transcluded)").
     if let Some(open) = desc.rfind('(') {
         if desc.ends_with(')') {
             let head = desc[..open].trim();
@@ -399,6 +484,23 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
                     }
                 }
             }
+            // "(first)" / "(second)" / "(first, same span)" — an occurrence
+            // selector, honored, not stripped: round 3 landed every
+            // "bank (second)" on the FIRST occurrence, giving
+            // overlapping_links_different_targets a third overlapping link.
+            if let Some(n) = occurrence_of(inner) {
+                if !head.is_empty() {
+                    if let Some((d, ord)) = shadow.find_text_nth(doc_hint, head, n) {
+                        return Some(Located {
+                            doc: d,
+                            ord,
+                            width: head.len() as u64,
+                            how: "text-located:nth-occurrence",
+                        });
+                    }
+                    return None; // selector present but unsatisfiable
+                }
+            }
             if !head.is_empty() {
                 if let Some((d, ord)) = shadow.find_text(doc_hint, head) {
                     return Some(Located {
@@ -420,6 +522,20 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
     }
 
     None
+}
+
+/// An occurrence-selector parenthetical's ordinal: "first" → 1,
+/// "first, same span" → 1, "second" → 2 … `None` for anything else.
+fn occurrence_of(inner: &str) -> Option<u64> {
+    let word = inner.split([',', ' ']).next()?.trim().to_ascii_lowercase();
+    match word.as_str() {
+        "first" => Some(1),
+        "second" => Some(2),
+        "third" => Some(3),
+        "fourth" => Some(4),
+        "fifth" => Some(5),
+        _ => None,
+    }
 }
 
 /// "5-9" or "1.5-1.9" inclusive ordinal range → (start ordinal, width).

@@ -22,6 +22,17 @@ pub struct DocShadow {
     pub links: u64,
 }
 
+/// One created link as the harness grounded it: golden id plus both endsets
+/// as (golden doc, ordinal, width) triples — the world knowledge traversal
+/// macros resolve hops from (round 4: hop resolution uses recorded endsets,
+/// never text re-search).
+#[derive(Clone, Debug)]
+pub struct ShadowLink {
+    pub golden: String,
+    pub from: Vec<(String, u64, u64)>,
+    pub to: Vec<(String, u64, u64)>,
+}
+
 #[derive(Default, Clone)]
 pub struct Shadow {
     docs: BTreeMap<String, DocShadow>,
@@ -37,6 +48,9 @@ pub struct Shadow {
     pub version_of: BTreeMap<String, String>,
     /// "A->B"-style traversal edges: (from-name, to-name) → golden link id.
     pub arrow_links: BTreeMap<(String, String), String>,
+    /// Every link created through the op surface, creation order, with the
+    /// endsets it was grounded with (see [`ShadowLink`]).
+    pub links: Vec<ShadowLink>,
     /// Root documents created (drives synthetic golden-id generation for
     /// `create_documents` ops that recorded no results).
     root_count: u64,
@@ -208,6 +222,37 @@ impl Shadow {
         }
     }
 
+    /// The Nth (1-based) occurrence of `needle`, counted per document in
+    /// creation order (hint pins one doc) — the occurrence-selector
+    /// grounding for "bank (second)"-style descriptions.
+    pub fn find_text_nth(&self, doc: Option<&str>, needle: &str, nth: u64) -> Option<(String, u64)> {
+        let n = needle.as_bytes();
+        if n.is_empty() || nth == 0 {
+            return None;
+        }
+        let mut seen = 0u64;
+        let docs: Vec<&String> = match doc {
+            Some(d) => self.created.iter().filter(|g| g.as_str() == d).collect(),
+            None => self.created.iter().collect(),
+        };
+        for g in docs {
+            let Some(d) = self.docs.get(g.as_str()) else { continue };
+            let t = &d.text;
+            if n.len() > t.len() {
+                continue;
+            }
+            for p in 0..=(t.len() - n.len()) {
+                if &t[p..p + n.len()] == n {
+                    seen += 1;
+                    if seen == nth {
+                        return Some((g.clone(), p as u64 + 1));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Case-insensitive locate in ONE doc, returning the matched width (the
     /// label grammar says "after first" for content "First ").
     pub fn find_text_ci(&self, doc: &str, needle: &str) -> Option<(String, u64, u64)> {
@@ -313,5 +358,38 @@ impl Shadow {
 
     pub fn seat_link(&mut self, home_golden: &str) {
         self.docs.entry(home_golden.to_string()).or_default().links += 1;
+    }
+
+    /// Register a created link's grounded endsets (play pass and setup steps
+    /// call this on MakeLink success) — the traversal macros' hop-resolution
+    /// world knowledge.
+    pub fn record_link(
+        &mut self,
+        golden: &str,
+        from: Vec<(String, u64, u64)>,
+        to: Vec<(String, u64, u64)>,
+    ) {
+        if self.links.iter().any(|l| l.golden == golden) {
+            return; // create_links:repeat re-registering the same id
+        }
+        self.links.push(ShadowLink { golden: golden.to_string(), from, to });
+    }
+
+    /// Links whose FROM endset lives in `doc`, optionally narrowed to those
+    /// whose TO endset lives in `to_doc` — creation order.
+    pub fn links_from(&self, doc: &str, to_doc: Option<&str>) -> Vec<&ShadowLink> {
+        self.links
+            .iter()
+            .filter(|l| l.from.iter().any(|(d, _, _)| d == doc))
+            .filter(|l| match to_doc {
+                Some(t) => l.to.iter().any(|(d, _, _)| d == t),
+                None => true,
+            })
+            .collect()
+    }
+
+    /// Links whose TO endset lives in `doc` — creation order.
+    pub fn links_to(&self, doc: &str) -> Vec<&ShadowLink> {
+        self.links.iter().filter(|l| l.to.iter().any(|(d, _, _)| d == doc)).collect()
     }
 }

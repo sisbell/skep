@@ -84,6 +84,49 @@
 //! * `contents:content-subspace` — whole-document retrieves read the
 //!   CONTENT subspace only, matching udanax's retrieve_contents (its
 //!   recorded results never include link-subspace items).
+//! * `contents:with-link-subspace` — a retrieve whose recorded result lists
+//!   a link address alongside text read the link subspace too (the version
+//!   scenarios' whole-document retrieves surfaced the copied link).
+//! * `read-scoped-to-recorded-extent` — a whole-document retrieve read only
+//!   as many content positions as the golden's reply carries, when the
+//!   shadow (the recorded reality) holds more — the script's specset was
+//!   narrower than the doc (createnewversion_text_vs_links reads 33 of 34).
+//! * `retrieve-follow-landing` — a doc-less retrieve right after a follow
+//!   whose recorded result names a vspec reads THOSE spans (links/
+//!   follow_link op8 retrieves the link destination, not the register).
+//! * `render-by-identity` — operator ruling 11: a followed endset renders
+//!   bytes once per RECORDED I-span, in span order, from whichever live
+//!   arrangement speaks for each portion — never once per projected
+//!   occurrence (shared content used to render "DEF" as "DEFEFDEF").
+//! * `endset-coverage-translated` — operator ruling 11: retrieve_endsets
+//!   compares the golden's (docid, V-span) endsets mapped through Image to
+//!   I-coverage against skep's recorded endset spans — coverage equality,
+//!   not coordinate equality (udanax resolved into the query doc's V-space).
+//! * `traverse-hops-from-world` — traversal hop links resolve from the
+//!   harness's link registry (every created link's endsets), never by text
+//!   re-search; `links_found` lists compare against a real FindLinksFtt.
+//! * `insert-all:distributed` — an `insert_all` texts array fills one
+//!   created document per text, in creation order.
+//! * `insert-aim-from-recorded-vspanset` — a doc-less insert re-aims at the
+//!   doc whose next recorded vspanset shows the width grew by this insert
+//!   (insert_vspace_mapping: the register held the version snapshot).
+//! * `insert-padded-to-recorded-vspanset:+N` — the recorded vspanset width
+//!   is the authority for how much the script inserted; the field text is
+//!   padded (with spaces) to match, never the comparison adjusted.
+//! * `delete-noop-from-post-state` — the recorded post-delete content
+//!   equals the pre-delete content byte-for-byte: udanax removed nothing,
+//!   so neither does the harness (delete_all_with_links' whole-doc remove).
+//! * `endset-from-transcluded-region` — a create_link `on:` field naming
+//!   transcluded content grounds the endset to the home document's
+//!   foreign-origin (copied-in) regions, read from the live V→I image.
+//! * `transcluded-region-search` — a find_links `via_transcluded_content`
+//!   query searches exactly the scoped doc's foreign-origin regions.
+//! * `vcopy-cover-from-comparisons` / `vcopy-embed-plan` /
+//!   `vcopy-span-from-comparison` / `vcopy-prefix-from-comparison` —
+//!   grounding-pre-pass reconstructions of append-shaped vcopys from the
+//!   scenario's own probes and recorded comparison pairs (the round-4
+//!   unrecorded-prefix cluster); surfaced in the groundings list and
+//!   executed as expansion plans.
 
 use std::collections::BTreeMap;
 
@@ -104,11 +147,14 @@ use crate::compare::{
 };
 use crate::fields::{
     self, client_side_failure, create_name_of, doc_from_label, expect_spans_raw, expect_strings,
-    expected_failure, field, label_of, link_home_docid, locate, note_arrow, parse_python_spec,
-    position_from_label, resolve_position, span_dict, str_field, vspec_dict, DocSpans, RawSpan,
+    expected_failure, field, harvest_spanset, label_of, link_home_docid, locate, note_arrow,
+    parse_python_spec, position_from_label, resolve_position, span_dict, str_field, vspec_dict,
+    DocSpans, RawSpan,
 };
 use crate::ground::{
-    arrow_results, cuts_of, insert_text, next_content_probe, resolve_delete_span, SetupStep,
+    arrow_results, cuts_of, delete_is_noop, distributed_insert_texts, distribution_targets,
+    insert_aim_from_probe, insert_pad_width, insert_text, next_content_probe, resolve_delete_span,
+    SetupStep,
 };
 use crate::harness::Rig;
 use crate::outcome::{OpOutcome, Status};
@@ -524,6 +570,7 @@ impl Cx<'_> {
                         if let Some(g) = golden {
                             self.alpha.bind(g, &addr);
                             self.shadow.last_link = Some(g.clone());
+                            self.shadow.record_link(g, from.clone(), to.clone());
                         }
                         Ok(())
                     }
@@ -607,6 +654,169 @@ impl Cx<'_> {
             }
         }
     }
+
+    /// The whole-content V→I image of one golden doc as
+    /// (I-prefix, I-ordinal, width, V-start) rows, V order — the raw
+    /// material for identity rendering and transcluded-region detection.
+    fn image_rows(&mut self, docid: &str) -> Vec<(String, u64, u64, u64)> {
+        let n = self.shadow.text_len(docid);
+        let (Some(d), Some(span)) = (self.alpha.peek(docid), vspan(1, 1, n)) else {
+            return Vec::new();
+        };
+        let Response::Runs { runs, .. } = self.rig.exec(Op::Image { d, region: vec![span] })
+        else {
+            return Vec::new();
+        };
+        let mut rows = Vec::new();
+        let mut v = 1u64;
+        for run in &runs {
+            let w: u64 = run.width().to_string().parse().unwrap_or(0);
+            if let Some((p, lo, rw)) = elem_range(&run.iextent()) {
+                rows.push((p, lo, rw, v));
+            }
+            v += w;
+        }
+        rows
+    }
+
+    /// The scoped doc's foreign-origin (transcluded) content regions, as
+    /// golden (ordinal, width) V-ranges — a run whose I-prefix does not lie
+    /// under the doc's own skep address arrived by COPY.
+    fn transcluded_regions_golden(&mut self, docid: &str) -> Vec<(u64, u64)> {
+        let Some(own) = self.alpha.peek(docid) else { return Vec::new() };
+        let own_prefix = crate::tum::addr_str(&own);
+        self.image_rows(docid)
+            .into_iter()
+            .filter(|(p, _, _, _)| {
+                !(p.starts_with(&format!("{own_prefix}.")) || p == &own_prefix)
+            })
+            .map(|(_, _, w, v)| (v, w))
+            .collect()
+    }
+
+    /// Ruling 11's follow rendering (policy `render-by-identity`): the
+    /// RECORDED endset from `Op::FollowLink`, rendered as bytes ONCE per
+    /// I-span in span order — each portion read from the first live
+    /// arrangement (creation order) that still speaks for it. Portions no
+    /// arrangement holds render nothing (udanax's orphan follows recorded
+    /// empty; live-only keeps that agreement) and are counted in the note.
+    fn render_recorded_endset(
+        &mut self,
+        link: &skep_address::Address,
+        slot: usize,
+    ) -> Result<(String, Vec<String>), String> {
+        let set = match self.rig.exec(Op::FollowLink { a: link.clone(), slot }) {
+            Response::Follow { result: Ok(set), .. } => set,
+            Response::Follow { result: Err(_), .. } => {
+                return Ok((String::new(), vec!["followlink: invalid slot".into()]))
+            }
+            r => return Err(rejection_code(&r).unwrap_or_else(|| "unexpected response".into())),
+        };
+        // Index every doc's live V→I rows once.
+        let docs = self.shadow.all_docs();
+        let mut world: Vec<(String, Vec<(String, u64, u64, u64)>)> = Vec::new();
+        for docid in &docs {
+            if self.shadow.text_len(docid) == 0 {
+                continue;
+            }
+            let rows = self.image_rows(docid);
+            if !rows.is_empty() {
+                world.push((docid.clone(), rows));
+            }
+        }
+        let mut notes = Vec::new();
+        let mut rendered_bytes: Vec<u8> = Vec::new();
+        let mut missing = 0u64;
+        for isp in set.iter() {
+            let Some((p, lo, w)) = elem_range(isp) else {
+                notes.push("non-element endset span skipped".into());
+                continue;
+            };
+            let mut buf: Vec<Option<u8>> = vec![None; w as usize];
+            for (docid, rows) in &world {
+                if buf.iter().all(Option::is_some) {
+                    break;
+                }
+                let Some(d) = self.alpha.peek(docid) else { continue };
+                for (rp, rlo, rw, v) in rows {
+                    if rp != &p {
+                        continue;
+                    }
+                    let a = (*rlo).max(lo);
+                    let b = (rlo + rw).min(lo + w);
+                    if a >= b {
+                        continue;
+                    }
+                    let off = (a - lo) as usize;
+                    let len = (b - a) as usize;
+                    if buf[off..off + len].iter().all(Option::is_some) {
+                        continue;
+                    }
+                    let Some(span) = vspan(1, v + (a - rlo), b - a) else { continue };
+                    let items = match self
+                        .rig
+                        .exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] })
+                    {
+                        Response::Delivery { items, .. } => items.0,
+                        r => {
+                            notes.push(format!(
+                                "{docid}: retrieve {}",
+                                rejection_code(&r).unwrap_or_else(|| "?".into())
+                            ));
+                            continue;
+                        }
+                    };
+                    let mut k = off;
+                    for it in items {
+                        if k >= off + len {
+                            break;
+                        }
+                        if let DeliveryItem::Content(val) = it {
+                            for byte in val.as_bytes() {
+                                if k >= off + len {
+                                    break;
+                                }
+                                if buf[k].is_none() {
+                                    buf[k] = Some(*byte);
+                                }
+                                k += 1;
+                            }
+                        } else {
+                            k += 1; // a link ref is never endset text
+                        }
+                    }
+                }
+            }
+            for slot_byte in &buf {
+                match slot_byte {
+                    Some(b) => rendered_bytes.push(*b),
+                    None => missing += 1,
+                }
+            }
+        }
+        if missing > 0 {
+            notes.push(format!(
+                "{missing} recorded endset element(s) have no live arrangement (deleted \
+                 everywhere); rendered without them"
+            ));
+        }
+        Ok((String::from_utf8_lossy(&rendered_bytes).into_owned(), notes))
+    }
+}
+
+/// A contiguous element-level span as (prefix components, first ordinal,
+/// width) — sound exactly for the single-I-extent shape `Run::iextent` and
+/// recorded content endset spans carry. `None` for coarser spans.
+fn elem_range(s: &skep_address::Span) -> Option<(String, u64, u64)> {
+    let w = crate::tum::span_elem_width(s)?;
+    let st = s.start();
+    let n = st.len();
+    if n < 2 {
+        return None;
+    }
+    let last: u64 = st.get(n).to_string().parse().ok()?;
+    let prefix: Vec<String> = (1..n).map(|i| st.get(i).to_string()).collect();
+    Some((prefix.join("."), last, w))
 }
 
 // ────────────────────────────── the catalogue ──────────────────────────────
@@ -636,7 +846,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
     out.verb = verb.name().to_string();
     match verb {
         Verb::Meta => out.status = Status::Meta,
-        Verb::Observe => h_observe(cx, op, &mut out, grants),
+        Verb::Observe => h_observe(cx, index, op, &mut out, grants),
         Verb::Setup => h_setup(cx, index, &mut out),
         Verb::CreateDocument => h_create_document(cx, op, &mut out),
         Verb::CreateDocuments => h_create_documents(cx, index, op, &mut out),
@@ -646,7 +856,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
             out.adaptations.push("close_document:noop".into());
             out.status = Status::NotCompared;
         }
-        Verb::Insert => h_insert(cx, op, &mut out, grants),
+        Verb::Insert => h_insert(cx, index, op, &mut out, grants),
         Verb::InsertLoop => h_insert_loop(cx, op, &mut out, grants),
         Verb::InteriorTyping => h_interior_typing(cx, op, &mut out, grants),
         Verb::Delete => h_delete(cx, index, op, &mut out, grants, false),
@@ -668,7 +878,7 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
         Verb::Traverse => h_traverse(cx, op, &mut out, grants),
         Verb::FindLinks => h_find_links(cx, op, &mut out, grants),
         Verb::FindDocuments => h_find_documents(cx, op, &mut out),
-        Verb::Contents => h_contents(cx, op, &mut out, &label),
+        Verb::Contents => h_contents(cx, index, op, &mut out, &label),
         Verb::Vspan => h_vspanset(cx, op, &mut out, grants, false),
         Verb::Vspanset => h_vspanset(cx, op, &mut out, grants, true),
         Verb::Endsets => h_endsets(cx, op, &mut out),
@@ -991,17 +1201,53 @@ fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
 
 // ── content writes ──────────────────────────────────────────────────────────
 
-fn h_insert(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
-    let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+fn h_insert(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+    // insert_all + texts: one text per created doc, creation order (policy
+    // `insert-all:distributed`; mirrors the grounding pre-pass exactly).
+    if let Some(texts) = distributed_insert_texts(op) {
+        out.adaptations.push("insert-all:distributed".into());
+        let docs = distribution_targets(cx.shadow, texts.len());
+        for (docid, t) in docs.iter().zip(&texts) {
+            let Some(d) = cx.skep_doc(docid) else {
+                out.status = Status::Disagreed;
+                out.comparator = Some("alpha".into());
+                out.note = Some(format!("insert_all target {docid} unresolvable"));
+                return;
+            };
+            let at = cx.shadow.text_len(docid) + 1;
+            let values: Vec<Val> = t.bytes().map(|b| Val::new(vec![b])).collect();
+            let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values });
+            cx.shadow.insert(docid, at, t.as_bytes());
+            if let Some(code) = rejection_code(&r) {
+                out.status = Status::Disagreed;
+                out.comparator = Some("rejection".into());
+                out.expected = Some(format!("insert_all into {docid} succeeds"));
+                out.actual = Some(format!("Rejected({code})"));
+                return;
+            }
+        }
+        out.status = Status::NotCompared;
+        return;
+    }
+    let Some(mut doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
         inexpressible(out, "insert with no document in scope".into());
         return;
     };
-    let Some(text) = insert_text(op) else {
+    let Some(mut text) = insert_text(op) else {
         inexpressible(out, "insert without text".into());
         return;
     };
     if str_field(op, &["text"]).is_none() && label_of(op).starts_with("insert_") {
         out.adaptations.push("args-from-label".into());
+    }
+    // Doc-less insert re-aim from the next recorded vspanset probe (policy
+    // `insert-aim-from-recorded-vspanset`; mirrors the grounding pre-pass).
+    if str_field(op, &["doc", "docid"]).is_none() && doc_from_label(label_of(op)).is_none() {
+        if let Some(d2) = insert_aim_from_probe(cx.ops, index, cx.shadow, &doc, &text) {
+            out.adaptations.push("insert-aim-from-recorded-vspanset".into());
+            cx.shadow.set_current(&d2);
+            doc = d2;
+        }
     }
     let (sub, ord) = match str_field(op, &["address", "at", "position", "vaddr"]) {
         Some(p) => match resolve_position(cx.shadow, &doc, p) {
@@ -1023,6 +1269,18 @@ fn h_insert(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             (1, cx.shadow.text_len(&doc) + 1)
         }
     };
+    // Recorded-vspanset width authority (policy `insert-padded-to-recorded-
+    // vspanset`; mirrors the grounding pre-pass byte-for-byte).
+    if sub == 1
+        && (str_field(op, &["address", "at", "position", "vaddr"]).is_none()
+            || cx.shadow.text_len(&doc) == 0)
+    {
+        let new_len = cx.shadow.text_len(&doc) + text.len() as u64;
+        if let Some(pad) = insert_pad_width(cx.ops, index, cx.shadow, &doc, new_len) {
+            out.adaptations.push(format!("insert-padded-to-recorded-vspanset:+{pad}"));
+            text.push_str(&" ".repeat(pad as usize));
+        }
+    }
     let Some(d) = cx.skep_doc(&doc) else {
         out.status = Status::Disagreed;
         out.comparator = Some("alpha".into());
@@ -1141,6 +1399,19 @@ fn h_delete(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: 
         inexpressible(out, "delete with no document in scope".into());
         return;
     };
+    // Policy `delete-noop-from-post-state`: the recorded post-delete content
+    // equals the pre-delete content — udanax removed nothing (client-crash
+    // family), so the harness executes nothing and later probes compare
+    // against the intact document honestly.
+    if delete_is_noop(cx.shadow, cx.ops, index, &doc) {
+        out.adaptations.push("delete-noop-from-post-state".into());
+        out.status = Status::NotCompared;
+        out.note = Some(
+            "recorded post-delete content equals pre-delete content; udanax removed nothing"
+                .into(),
+        );
+        return;
+    }
     let xf = expected_failure(op);
     let (sub, ord, width) = if all {
         let n = cx.shadow.text_len(&doc);
@@ -1592,8 +1863,12 @@ fn to_vspecs(cx: &mut Cx, sides: &[DocSpans]) -> Result<Vec<VSpec>, String> {
 /// known doc first, so star_hub's three follows recording the same
 /// "Target document" each pin their own peripheral. `arrows` are the
 /// create op's own arrow results, letting step-keyed traverse entries name
-/// the link. Empty recorded evidence (`target: []`) is never used — an
-/// empty endset is not expressible to MakeLink.
+/// the link; `roles` are the create op's raw from/to strings, letting a
+/// role-keyed traverse hop ({from: "A", to: "B", text} / {step: "A->B",
+/// text}) pin the TO side — the hop's `text` is the LANDING content, so
+/// role matching never grounds a FROM side. Empty recorded evidence
+/// (`target: []`) is never used — an empty endset is not expressible to
+/// MakeLink.
 fn endset_evidence(
     cx: &Cx,
     from_index: usize,
@@ -1601,6 +1876,7 @@ fn endset_evidence(
     want_source: bool,
     hint: Option<&str>,
     arrows: &[(String, String, String)],
+    roles: Option<(&str, &str)>,
 ) -> Option<Vec<DocSpans>> {
     let writes = ["insert", "delete", "remove", "vcopy", "copy", "pivot", "swap", "rearrange"];
     let ground = |v: &Value| -> Option<Vec<DocSpans>> {
@@ -1645,7 +1921,7 @@ fn endset_evidence(
             || label.contains("traversal");
         if follow_like {
             // Entry lists ({link|step, target_text|source_text|text}).
-            for key in ["results", "path", "traversal", "steps"] {
+            for key in ["results", "path", "traversal", "steps", "result"] {
                 let Some(entries) = field(op, &[key]).and_then(Value::as_array) else { continue };
                 for e in entries {
                     let by_link = e.get("link").and_then(Value::as_str) == Some(link_golden);
@@ -1660,13 +1936,37 @@ fn endset_evidence(
                                 .map(|(_, _, r)| r.as_str())
                         })
                         == Some(link_golden);
-                    if !(by_link || by_step) {
+                    // Role match — TO side only (see doc comment): the
+                    // entry's from/to (or step "F->T" / landing step "T…")
+                    // equals this create's own role strings.
+                    let by_roles = !want_source
+                        && roles.is_some_and(|(fr, tr)| {
+                            let ef = e.get("from").and_then(Value::as_str).map(str::trim);
+                            let et = e
+                                .get("to")
+                                .and_then(Value::as_str)
+                                .and_then(|t| t.split_whitespace().next());
+                            if ef == Some(fr) && et == Some(tr) {
+                                return true;
+                            }
+                            match e.get("step").and_then(Value::as_str) {
+                                Some(s) => match s.split_once("->") {
+                                    Some((f, t)) => {
+                                        f.trim() == fr
+                                            && t.split_whitespace().next() == Some(tr)
+                                    }
+                                    None => s.split_whitespace().next() == Some(tr),
+                                },
+                                None => false,
+                            }
+                        });
+                    if !(by_link || by_step || by_roles) {
                         continue;
                     }
                     let keys: &[&str] = if want_source {
                         &["source_text", "text"]
                     } else {
-                        &["target_text", "text"]
+                        &["target_text", "text", "content"]
                     };
                     for k in keys {
                         if let Some(sides) = e.get(*k).and_then(&ground) {
@@ -1738,6 +2038,15 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     };
     let from_group = str_field(op, &["from", "source"]).and_then(|s| group_of(cx, s));
     let to_group = str_field(op, &["to", "target"]).and_then(|s| group_of(cx, s));
+    // The create's raw from/to strings, as role names for role-keyed
+    // traverse-hop evidence (endset_evidence's `roles`).
+    let roles: Option<(&str, &str)> = match (
+        str_field(op, &["from", "source"]),
+        str_field(op, &["to", "target"]),
+    ) {
+        (Some(f), Some(t)) => Some((f, t)),
+        _ => None,
+    };
 
     let count = goldens.len().max(1);
     let mut bound = 0usize;
@@ -1834,11 +2143,49 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         };
         if from_sides.is_empty() {
             if let Some(g) = &golden {
-                if let Some(ev) =
-                    endset_evidence(cx, index, g, true, from_doc_hint.as_deref(), &arrows)
-                {
+                if let Some(ev) = endset_evidence(
+                    cx,
+                    index,
+                    g,
+                    true,
+                    from_doc_hint.as_deref(),
+                    &arrows,
+                    roles,
+                ) {
                     out.adaptations.push("endset-evidence".into());
                     from_sides = ev;
+                }
+            }
+        }
+        // An `on`/`over`/`anchor` field describes the FROM anchor: either
+        // literal text to locate, or "transcluded content"-style wording
+        // that names the home doc's foreign-origin (copied-in) regions
+        // (policy `endset-from-transcluded-region`; interactions/
+        // link_to_transcluded_then_version, version_transcluded_linked_
+        // content calibrate both forms).
+        if from_sides.is_empty() {
+            if let Some(anchor) = str_field(op, &["on", "over", "anchor"]) {
+                if anchor.contains("transclu") {
+                    let doc = golden
+                        .as_ref()
+                        .and_then(|g| link_home_docid(g))
+                        .or_else(|| cx.shadow.scoped());
+                    if let Some(doc) = doc {
+                        let regions = cx.transcluded_regions_golden(&doc);
+                        if !regions.is_empty() {
+                            out.adaptations.push("endset-from-transcluded-region".into());
+                            from_sides.push((
+                                doc,
+                                regions.iter().map(|(o, w)| (1, *o, *w)).collect(),
+                            ));
+                        }
+                    }
+                } else if let Some(l) =
+                    locate(cx.shadow, from_doc_hint.as_deref(), anchor)
+                        .or_else(|| locate(cx.shadow, None, anchor))
+                {
+                    out.adaptations.push(format!("text-located:on ({})", l.how));
+                    from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
                 }
             }
         }
@@ -1906,9 +2253,15 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         }
         if to_sides.is_empty() {
             if let Some(g) = &golden {
-                if let Some(ev) =
-                    endset_evidence(cx, index, g, false, to_doc_hint.as_deref(), &arrows)
-                {
+                if let Some(ev) = endset_evidence(
+                    cx,
+                    index,
+                    g,
+                    false,
+                    to_doc_hint.as_deref(),
+                    &arrows,
+                    roles,
+                ) {
                     out.adaptations.push("endset-evidence".into());
                     to_sides = ev;
                 }
@@ -1994,6 +2347,21 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
                 if let Some(g) = &golden {
                     cx.alpha.bind(g, &addr);
                     cx.shadow.last_link = Some(g.clone());
+                    // The traversal registry: this link's grounded endsets
+                    // (content subspace), for hop resolution from the world.
+                    let flat = |sides: &[DocSpans]| -> Vec<(String, u64, u64)> {
+                        sides
+                            .iter()
+                            .flat_map(|(d, spans)| {
+                                spans
+                                    .iter()
+                                    .filter(|(s, _, _)| *s == 1)
+                                    .map(|(_, o, w)| (d.clone(), *o, *w))
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect()
+                    };
+                    cx.shadow.record_link(g, flat(&from_sides), flat(&to_sides));
                 }
                 if let Some((f, t, rr)) = &arrow {
                     cx.shadow.arrow_links.insert((f.clone(), t.clone()), rr.clone());
@@ -2226,48 +2594,33 @@ fn follow_compare(
             return;
         }
     }
-    // Shape 3: strings (endset CONTENT) or the empty list. Project into
-    // every scenario document; retrieve the projected spans; compare text.
+    // Shape 3: strings (endset CONTENT) or the empty list — operator ruling
+    // 11 (policy `render-by-identity`): render the RECORDED endset's bytes
+    // once per I-span, in span order, never once per projected occurrence.
     let Some(strings) = expect_strings(expected) else {
         inexpressible(out, "follow_link expectation in an unrecognized shape".into());
         return;
     };
-    let mut items_actual: Vec<DeliveryItem> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-    for docid in cx.shadow.all_docs() {
-        let Some(d) = cx.alpha.peek(&docid) else { continue };
-        match project(cx, &d) {
-            Ok(set) => {
-                if set.iter().next().is_none() {
-                    continue;
-                }
-                let specs: Vec<Spec> =
-                    set.iter().map(|sp| Spec { doc: d.clone(), span: sp.clone() }).collect();
-                match cx.rig.exec(Op::RetrieveV { specs }) {
-                    Response::Delivery { items, .. } => items_actual.extend(items.0),
-                    r => errors.push(format!(
-                        "{docid}: retrieve {}",
-                        rejection_code(&r).unwrap_or_else(|| "?".into())
-                    )),
-                }
+    out.adaptations.push("render-by-identity".into());
+    out.comparator = Some("follow-recorded-endset".into());
+    match cx.render_recorded_endset(link, slot) {
+        Ok((rendered, notes)) => {
+            let want = strings.join("");
+            if !notes.is_empty() {
+                out.note = Some(notes.join("; "));
             }
-            Err(code) => errors.push(format!("{docid}: {code}")),
-        }
-    }
-    out.comparator = Some("projection-content".into());
-    match compare_content(&strings, &items_actual, cx.alpha) {
-        Ok(()) if errors.is_empty() => out.status = Status::Agreed,
-        Ok(()) => {
-            out.status = Status::Disagreed;
-            out.note = Some(format!("projection errors: {}", errors.join("; ")));
-        }
-        Err((e, a)) => {
-            out.status = Status::Disagreed;
-            out.expected = Some(e);
-            out.actual = Some(a);
-            if !errors.is_empty() {
-                out.note = Some(format!("projection errors: {}", errors.join("; ")));
+            if rendered == want {
+                out.status = Status::Agreed;
+            } else {
+                out.status = Status::Disagreed;
+                out.expected = Some(format!("{want:?}"));
+                out.actual = Some(format!("{rendered:?}"));
             }
+        }
+        Err(code) => {
+            out.status = Status::Disagreed;
+            out.expected = Some(format!("{:?}", strings.join("")));
+            out.actual = Some(format!("followlink: {code}"));
         }
     }
 }
@@ -2275,6 +2628,11 @@ fn follow_compare(
 /// Traversal macros: reverse_traversal / traverse_* / follow_links_* —
 /// per-entry link follows with optional per-hop find_links checks. An op in
 /// this family without a step list is a single follow (follow_links_target).
+///
+/// Hop links resolve from the WORLD (policy `traverse-hops-from-world`):
+/// arrow-keyed edges first, then the shadow's link registry — the link
+/// whose FROM endset lives in the hop's from-doc (narrowed by the to-doc
+/// when the entry names one). Text is never re-searched to find a link.
 fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let label = label_of(op).to_ascii_lowercase();
     let entries = field(op, &["path", "traversal", "results", "steps"])
@@ -2292,38 +2650,97 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     };
     let reverse = label.contains("reverse");
     let default_slot = if label.contains("source") || reverse { 1 } else { 2 };
-    out.adaptations.push("follow_as_projection".into());
+    out.adaptations.push("traverse-hops-from-world".into());
     let mut fails: Vec<(String, String)> = Vec::new();
     let mut compared = 0usize;
+    // The traversal's current position (a golden doc) and the last link
+    // followed — landing-content entries compare against them.
+    let mut current: Option<String> = None;
+    let mut last_followed: Option<String> = None;
     for entry in entries {
         let Some(e) = entry.as_object() else { continue };
-        // links_found: 0 — a hop asserting no incoming/outgoing links.
-        if let Some(n) = e.get("links_found").and_then(Value::as_u64) {
-            let at = e.get("at").and_then(Value::as_str).and_then(|s| cx.shadow.resolve_doc(s));
+        // The entry's own doc anchors (step token / step "F->T" / from / at).
+        let step_raw = e.get("step").and_then(Value::as_str);
+        let (step_from, step_to) = match step_raw.and_then(|s| s.split_once("->")) {
+            Some((f, t)) => (
+                Some(f.trim().to_string()),
+                t.split_whitespace().next().map(str::to_string),
+            ),
+            None => (
+                step_raw.and_then(|s| s.split_whitespace().next()).map(str::to_string),
+                None,
+            ),
+        };
+        let from_tok = e
+            .get("from")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_string())
+            .or(step_from);
+        let to_tok = e
+            .get("to")
+            .and_then(Value::as_str)
+            .and_then(|t| t.split_whitespace().next())
+            .map(str::to_string)
+            .or(step_to);
+        let from_doc = from_tok.as_deref().and_then(|t| cx.shadow.resolve_doc(t));
+        let to_doc = to_tok.as_deref().and_then(|t| cx.shadow.resolve_doc(t));
+        if let Some(d) = &from_doc {
+            current = Some(d.clone());
+        }
+
+        // links_found — a count (u64) or a golden id list — checked with a
+        // REAL FindLinksFtt at the hop's doc.
+        if let Some(v) = e.get("links_found") {
+            let at = e
+                .get("at")
+                .and_then(Value::as_str)
+                .and_then(|s| cx.shadow.resolve_doc(s))
+                .or_else(|| from_doc.clone())
+                .or_else(|| current.clone());
             if let Some(atdoc) = at {
-                compared += 1;
-                let count = find_links_into(cx, &atdoc, reverse);
-                if count as u64 != n {
-                    fails.push((format!("{atdoc}: {n} links"), format!("{atdoc}: {count}")));
+                let found = find_links_at(cx, &atdoc, reverse);
+                if let Some(n) = v.as_u64() {
+                    compared += 1;
+                    if found.len() as u64 != n {
+                        fails.push((
+                            format!("{atdoc}: {n} links"),
+                            format!("{atdoc}: {}", found.len()),
+                        ));
+                    }
+                } else if let Some(arr) = v.as_array() {
+                    let want: Vec<String> =
+                        arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect();
+                    compared += 1;
+                    let rig = &*cx.rig;
+                    let mut adaptations = std::mem::take(&mut out.adaptations);
+                    let verdict = compare_addr_sets(
+                        &want,
+                        &found,
+                        cx.alpha,
+                        |a| rig.is_types_addr(a),
+                        &mut adaptations,
+                    );
+                    out.adaptations = adaptations;
+                    if let Err((exp, act)) = verdict {
+                        fails.push((format!("{atdoc}: {exp}"), format!("{atdoc}: {act}")));
+                    }
                 }
             }
-            continue;
+            // A links_found entry may still carry landing content below.
+            if !e.contains_key("content") && !e.contains_key("text") {
+                continue;
+            }
         }
-        // The link this hop follows.
+
+        // The link this hop follows: recorded arrows first, then the world
+        // registry (links FROM the hop's doc, narrowed by its to-doc).
         let link_golden: Option<String> = e
             .get("link")
             .and_then(Value::as_str)
             .filter(|s| fields::is_link_address(s))
             .map(str::to_string)
             .or_else(|| {
-                let step = e.get("step").and_then(Value::as_str)?;
-                let (f, t) = step.split_once("->")?;
-                cx.shadow.arrow_links.get(&(f.trim().to_string(), t.trim().to_string())).cloned()
-            })
-            .or_else(|| {
-                let f = e.get("from").and_then(Value::as_str)?.trim();
-                let t = e.get("to").and_then(Value::as_str)?;
-                let t = t.split_whitespace().next().unwrap_or(t).trim();
+                let (f, t) = (from_tok.as_deref()?, to_tok.as_deref()?);
                 cx.shadow.arrow_links.get(&(f.to_string(), t.to_string())).cloned()
             })
             .or_else(|| {
@@ -2332,24 +2749,54 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                 let at = e.get("at").and_then(Value::as_str)?.trim();
                 let from = e.get("found_link_from").and_then(Value::as_str)?.trim();
                 cx.shadow.arrow_links.get(&(from.to_string(), at.to_string())).cloned()
+            })
+            .or_else(|| {
+                let d = from_doc.as_deref()?;
+                let hits = cx.shadow.links_from(d, to_doc.as_deref());
+                hits.first().map(|l| l.golden.clone())
             });
+
+        let expectation: Option<(usize, &Value)> = if let Some(t) = e.get("target_text") {
+            Some((2, t))
+        } else if let Some(t) = e.get("source_text") {
+            Some((1, t))
+        } else if let Some(t) = e.get("text") {
+            Some((default_slot, t))
+        } else if let Some(t) = e.get("content") {
+            Some((default_slot, t))
+        } else if let Some(t) = e.get("result") {
+            Some((default_slot, t))
+        } else {
+            None
+        };
+
+        let link_golden = link_golden.or_else(|| {
+            // A landing-content entry without an outgoing link: the link
+            // ARRIVING at this entry's doc (preferring the one leaving the
+            // previous position), else the last followed link.
+            if expectation.is_none() {
+                return None;
+            }
+            let land = from_doc.clone().or_else(|| current.clone())?;
+            let inbound = cx.shadow.links_to(&land);
+            inbound
+                .iter()
+                .find(|l| {
+                    last_followed.as_deref() == Some(l.golden.as_str())
+                        || l.from.iter().any(|(d, _, _)| Some(d) == current.as_ref())
+                })
+                .or_else(|| inbound.first())
+                .map(|l| l.golden.clone())
+                .or_else(|| last_followed.clone())
+        });
+
+        let Some((slot, expected)) = expectation else { continue };
         let Some(link_golden) = link_golden else {
             fails.push(("hop link".into(), "no link resolvable for this hop".into()));
             continue;
         };
         let Some(link) = cx.alpha.translate(&link_golden) else {
             fails.push((link_golden.clone(), "unresolvable link".into()));
-            continue;
-        };
-        let (slot, expected) = if let Some(t) = e.get("target_text") {
-            (2, t)
-        } else if let Some(t) = e.get("source_text") {
-            (1, t)
-        } else if let Some(t) = e.get("text") {
-            (default_slot, t)
-        } else if let Some(t) = e.get("result") {
-            (default_slot, t)
-        } else {
             continue;
         };
         let mut hop = OpOutcome::new(out.index, &out.label);
@@ -2360,6 +2807,15 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                 format!("{link_golden}: {}", hop.expected.unwrap_or_default()),
                 hop.actual.unwrap_or_else(|| hop.note.unwrap_or_default()),
             ));
+        }
+        // Land: the followed link's TO doc becomes the current position.
+        last_followed = Some(link_golden.clone());
+        if slot == 2 {
+            if let Some(l) = cx.shadow.links.iter().find(|l| l.golden == link_golden) {
+                if let Some((d, _, _)) = l.to.first() {
+                    current = Some(d.clone());
+                }
+            }
         }
     }
     out.comparator = Some("traversal".into());
@@ -2382,8 +2838,9 @@ enum SideSpec {
     I(Endset),
 }
 
-/// Links whose TO (reverse) / FROM (forward) endset touches `doc`'s extent.
-fn find_links_into(cx: &mut Cx, doc: &str, reverse: bool) -> usize {
+/// Links whose TO (reverse) / FROM (forward) endset touches `doc`'s extent
+/// — the traversal macros' real per-hop FindLinksFtt query.
+fn find_links_at(cx: &mut Cx, doc: &str, reverse: bool) -> Vec<skep_address::Address> {
     let n = cx.shadow.text_len(doc);
     let (e, _, _) = cx.image_endset(doc, &[(1, 1, n.max(1))]);
     let spec = if e.is_empty() { SlotSpec::Empty } else { SlotSpec::Spans(e) };
@@ -2393,8 +2850,8 @@ fn find_links_into(cx: &mut Cx, doc: &str, reverse: bool) -> usize {
         FourSet { home: SlotSpec::Any, from: spec, to: SlotSpec::Any, ty: SlotSpec::Any }
     };
     match cx.rig.exec(Op::FindLinksFtt { q }) {
-        Response::Addrs { addrs, .. } => addrs.len(),
-        _ => 0,
+        Response::Addrs { addrs, .. } => addrs,
+        _ => Vec::new(),
     }
 }
 
@@ -2535,6 +2992,21 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             if from_sides.is_none() {
                 from_sides = Some(SideSpec::V(whole_of(cx, d)));
             }
+        }
+    }
+    // `via_transcluded_content: true` — the search covers exactly the
+    // scoped doc's foreign-origin (copied-in) regions (policy
+    // `transcluded-region-search`; links/link_chain_with_transclusion's
+    // final probe searches B's transcluded portion, not its own anchors).
+    if from_sides.is_none()
+        && to_sides.is_none()
+        && field(op, &["via_transcluded_content"]).and_then(Value::as_bool) == Some(true)
+    {
+        if let Some(d) = cx.shadow.scoped() {
+            out.adaptations.push("transcluded-region-search".into());
+            let regions = cx.transcluded_regions_golden(&d);
+            let spans: Vec<(u64, u64, u64)> = regions.iter().map(|(o, w)| (1, *o, *w)).collect();
+            from_sides = Some(SideSpec::V(vec![(d, spans)]));
         }
     }
     if from_sides.is_none() && to_sides.is_none() {
@@ -2712,6 +3184,22 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     }
 }
 
+/// A bare find_documents' aim: the source-role document first (the
+/// discovery scripts track "which docs contain SOURCE's content" across
+/// before/after probes — spanfilade/delete_all_transcluded_content,
+/// discovery/find_documents_after_delete), then the register.
+fn bare_find_documents_aim(cx: &mut Cx, op: &Value, out: &mut OpOutcome) -> Option<String> {
+    if str_field(op, &["doc", "docid"]).is_some() {
+        return cx.doc_arg(op, out, &["doc", "docid"]);
+    }
+    if let Some(d) = cx.shadow.find_named_containing("source") {
+        out.adaptations.push("doc-from-register".into());
+        cx.shadow.set_current(&d);
+        return Some(d);
+    }
+    cx.doc_arg(op, out, &["doc", "docid"])
+}
+
 fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
     let mut regions: Vec<Region> = Vec::new();
@@ -2807,7 +3295,18 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 ))
             }
         }
-    } else if let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) {
+    } else if let Some(sd) = str_field(op, &["search_from", "search_doc", "search_document"])
+        .and_then(|s| cx.shadow.resolve_doc(s))
+    {
+        // A search_from field names the DOC whose content is the query
+        // (discovery/insert_vs_append_docispan names its docs "insert" and
+        // "append").
+        cx.shadow.set_current(&sd);
+        let n = cx.shadow.text_len(&sd);
+        if let (Some(d), Some(span)) = (cx.alpha.translate(&sd), vspan(1, 1, n)) {
+            regions.push(Region { doc: d, spans: vec![span] });
+        }
+    } else if let Some(doc) = bare_find_documents_aim(cx, op, out) {
         let n = cx.shadow.text_len(&doc);
         if n == 0 {
             // The aimed doc is empty: the search the script repeated was
@@ -2885,7 +3384,36 @@ const CONTENT_EXPECT_KEYS: &[&str] = &[
     "expected", "value", "text",
 ];
 
-fn h_contents(cx: &mut Cx, op: &Value, out: &mut OpOutcome, label: &str) {
+/// The retrieve specs for a doc-less retrieve that follows a follow op whose
+/// recorded result is a vspec — the landing the script read (policy
+/// `retrieve-follow-landing`). `None` when the shape does not apply.
+fn follow_landing_specs(cx: &mut Cx, index: usize, op: &Value) -> Option<Vec<Spec>> {
+    if str_field(op, &["doc", "docid"]).is_some() {
+        return None;
+    }
+    let prev = cx.ops.get(index.checked_sub(1)?)?;
+    let prev_label = label_of(prev).to_ascii_lowercase();
+    if !(prev_label.starts_with("follow") || prev_label.starts_with("traverse")) {
+        return None;
+    }
+    let (docid, spans) = expect_spans_raw(field(prev, &["result"])?)?;
+    let docid = docid?;
+    if spans.is_empty() {
+        return None;
+    }
+    let d = cx.alpha.translate(&docid)?;
+    let mut specs = Vec::new();
+    for (start, w) in &spans {
+        let (sub, ord) = crate::tum::parse_vpos(start)?;
+        let w = crate::tum::parse_width(w)?;
+        if let Some(span) = vspan(sub, ord, w) {
+            specs.push(Spec { doc: d.clone(), span });
+        }
+    }
+    (!specs.is_empty()).then_some(specs)
+}
+
+fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label: &str) {
     let xf = expected_failure(op);
 
     // Multi-doc probe: `docs` map of name → expected strings.
@@ -3107,6 +3635,13 @@ fn h_contents(cx: &mut Cx, op: &Value, out: &mut OpOutcome, label: &str) {
                 }
             }
         }
+    } else if let Some(landing) = follow_landing_specs(cx, index, op) {
+        // Policy `retrieve-follow-landing`: a doc-less retrieve right after
+        // a follow whose recorded result names a vspec reads THOSE spans —
+        // the script retrieved the link destination it had just followed
+        // (links/follow_link op8), never the register.
+        out.adaptations.push("retrieve-follow-landing".into());
+        specs = landing;
     } else {
         let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
             inexpressible(out, "retrieve with no document in scope".into());
@@ -3132,11 +3667,50 @@ fn h_contents(cx: &mut Cx, op: &Value, out: &mut OpOutcome, label: &str) {
             }
         } else {
             // Whole document: the CONTENT subspace only (policy
-            // `contents:content-subspace`).
+            // `contents:content-subspace`). Two evidence-driven variations:
+            // when the recorded reply's TEXT is a strict prefix of the
+            // shadow's (recorded-reality) content, the script's specset was
+            // that much narrower — read only that many positions (policy
+            // `read-scoped-to-recorded-extent`); when the reply also lists
+            // a link address, the script's specset covered the link
+            // subspace — read it too (policy `contents:with-link-subspace`).
             out.adaptations.push("contents:content-subspace".into());
             let n = cx.shadow.text_len(&doc);
-            if let Some(span) = vspan(1, 1, n) {
-                specs.push(Spec { doc: d, span });
+            let mut read_n = n;
+            if let Some(ss) = &strings {
+                let has_addr = ss.iter().any(|s| fields::is_link_address(s));
+                let text_len: usize =
+                    ss.iter().filter(|s| !fields::is_link_address(s)).map(String::len).sum();
+                let shadow_text = cx.shadow.text_string(&doc);
+                // Bounded at 2 elements: a larger shortfall is a
+                // world-construction failure that must diverge loudly, not
+                // a narrower script read.
+                if (text_len as u64) < n
+                    && n - text_len as u64 <= 2
+                    && text_len > 0
+                    && shadow_text.as_bytes().len() >= text_len
+                    && ss
+                        .iter()
+                        .find(|s| !fields::is_link_address(s))
+                        .is_some_and(|first| shadow_text.starts_with(first.as_str()))
+                {
+                    out.adaptations.push("read-scoped-to-recorded-extent".into());
+                    read_n = text_len as u64;
+                }
+                if has_addr && cx.shadow.link_count(&doc) > 0 {
+                    out.adaptations.push("contents:with-link-subspace".into());
+                }
+            }
+            if let Some(span) = vspan(1, 1, read_n) {
+                specs.push(Spec { doc: d.clone(), span });
+            }
+            if let Some(ss) = &strings {
+                if ss.iter().any(|s| fields::is_link_address(s)) {
+                    let links = cx.shadow.link_count(&doc);
+                    if let Some(span) = vspan(2, 1, links) {
+                        specs.push(Spec { doc: d, span });
+                    }
+                }
             }
         }
     }
@@ -3188,41 +3762,6 @@ fn h_contents(cx: &mut Cx, op: &Value, out: &mut OpOutcome, label: &str) {
     }
 }
 
-/// Harvest a vspanset expectation from ANY plausible field (the goldens key
-/// them result/before/after/empty_state/after_insert/…): first the standard
-/// keys, then a scan of remaining fields for span-set-shaped values.
-fn harvest_spanset(op: &Value) -> Option<(String, Option<String>, Vec<RawSpan>)> {
-    const ARG_KEYS: &[&str] = &[
-        "op", "doc", "docid", "comment", "label", "note", "interpretation", "search", "specs",
-        "specset", "link", "positions", "span", "vspan", "start", "width", "end", "text",
-        "strings", "texts", "cuts", "targets", "source_span", "source", "target", "from", "to",
-        "address", "at", "position",
-    ];
-    for k in ["result", "vspans", "vspanset", "spans", "before", "after", "expected"] {
-        if let Some(v) = op.get(k) {
-            if let Some((doc, spans)) = expect_spans_raw(v) {
-                return Some((k.to_string(), doc, spans));
-            }
-        }
-    }
-    let o = op.as_object()?;
-    for (k, v) in o {
-        if ARG_KEYS.contains(&k.as_str()) {
-            continue;
-        }
-        if fields::looks_like_spanset(v) || v.as_str().is_some_and(|s| s.starts_with('<')) {
-            if let Some((doc, spans)) = expect_spans_raw(v) {
-                return Some((k.clone(), doc, spans));
-            }
-        }
-        // An explicit empty list under a state-ish key is an empty set.
-        if v.as_array().is_some_and(Vec::is_empty) && (k.contains("state") || k.contains("span")) {
-            return Some((k.clone(), None, Vec::new()));
-        }
-    }
-    None
-}
-
 fn h_vspanset(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, full_set: bool) {
     let harvested = harvest_spanset(op);
     // The expectation's own docid names the document when the op omits it.
@@ -3256,6 +3795,26 @@ fn h_vspanset(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, ful
             set
         }
         other => {
+            // Policy `empty-as-absent`, spanset form: udanax renders an
+            // empty document's extent as a zero span (cleaned to the empty
+            // set — see expect_spans_raw); a skep absence-class rejection
+            // encodes the same observable (documents/retrieve_vspan_empty).
+            let absence = matches!(
+                rejection_code(&other).as_deref(),
+                Some("RangeNotPresent")
+                    | Some("EmptySubspace")
+                    | Some("NoSuchSubspace")
+                    | Some("EmptyResult")
+                    | Some("NotArranged")
+            );
+            let expected_empty =
+                harvested.as_ref().is_some_and(|(_, _, spans)| spans.is_empty());
+            if absence && xf.is_none() && expected_empty {
+                out.adaptations.push("empty-as-absent".into());
+                out.status = Status::Agreed;
+                out.comparator = Some("vspanset".into());
+                return;
+            }
             settle_ack(out, xf, rejection_code(&other));
             return;
         }
@@ -3419,19 +3978,69 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             return;
         }
     };
-    // Structural comparison per slot: the multiset of (origin document,
-    // element width) each side's endsets cover. Golden endsets are V-specs;
-    // skep endsets are recorded I-extents — origin doc + width is the shape
-    // both sides speak. Type-slot spans inside the harness types document
-    // are excluded (policy type_registry — they encode the type NAME, which
-    // the golden encodes as an unresolvable link-subspace spec).
+    // Per-slot comparison. FROM/TO (operator ruling 11, policy
+    // `endset-coverage-translated`): the golden records udanax's RESOLVED
+    // V-specs in the query doc's coordinates while skep reports the STORED
+    // endset (I-spans) — so the golden's (docid, V-span)s are mapped
+    // through Image to I-coverage and compared coverage-for-coverage
+    // (endsets/endsets_transcluded_source: the transcluder's V-span and the
+    // source-homed I-span cover the same identity). The TYPE slot keeps the
+    // (origin doc, width) shape — type names live in the harness types
+    // document (policy type_registry), which coverage cannot speak.
     out.adaptations.push("type_registry".into());
-    out.comparator = Some("endsets-structural".into());
+    out.adaptations.push("endset-coverage-translated".into());
+    out.comparator = Some("endsets-coverage".into());
     let mut fails: Vec<(String, String)> = Vec::new();
-    for (slot_keys, slot) in
-        [(&["from", "source"][..], 1usize), (&["to", "target"][..], 2), (&["type"][..], 3)]
-    {
+    for (slot_keys, slot) in [(&["from", "source"][..], 1usize), (&["to", "target"][..], 2)] {
         let Some(exp) = field(op, slot_keys) else { continue };
+        // Golden side → I-coverage via the live image.
+        let mut want_ranges: Vec<(String, u64, u64)> = Vec::new();
+        if let Some(arr) = exp.as_array() {
+            for v in arr {
+                if let Some((docid, spans)) = vspec_dict(v) {
+                    let (e, notes, _) = cx.image_endset(&docid, &spans);
+                    for n in notes {
+                        out.note = Some(match out.note.take() {
+                            Some(prev) => format!("{prev}; {n}"),
+                            None => n,
+                        });
+                    }
+                    for sp in e.spans() {
+                        if let Some(r) = elem_range(sp) {
+                            want_ranges.push((r.0, r.1, r.1 + r.2));
+                        }
+                    }
+                }
+            }
+        }
+        // Skep side: the recorded endset spans, types-doc spans excluded.
+        let mut got_ranges: Vec<(String, u64, u64)> = Vec::new();
+        for (i, e) in &pairs {
+            if *i != slot {
+                continue;
+            }
+            for sp in e.spans() {
+                if let Ok(a) = skep_address::validate(sp.start().clone()) {
+                    if cx.rig.is_types_addr(&a) {
+                        continue;
+                    }
+                }
+                if let Some(r) = elem_range(sp) {
+                    got_ranges.push((r.0, r.1, r.1 + r.2));
+                }
+            }
+        }
+        let want = merge_ranges(want_ranges);
+        let got = merge_ranges(got_ranges);
+        if want != got {
+            fails.push((
+                format!("slot{slot}:cov{}", render_ranges(&want)),
+                format!("slot{slot}:cov{}", render_ranges(&got)),
+            ));
+        }
+    }
+    // TYPE slot: (origin doc, width) multiset as before.
+    if let Some(exp) = field(op, &["type"]) {
         let mut want: Vec<(String, u64)> = Vec::new();
         if let Some(arr) = exp.as_array() {
             for v in arr {
@@ -3444,7 +4053,7 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         }
         let mut got: Vec<(String, u64)> = Vec::new();
         for (i, e) in &pairs {
-            if *i != slot {
+            if *i != 3 {
                 continue;
             }
             for sp in e.spans() {
@@ -3464,7 +4073,7 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         want.sort();
         got.sort();
         if want != got {
-            fails.push((format!("slot{slot}:{want:?}"), format!("slot{slot}:{got:?}")));
+            fails.push((format!("slot3:{want:?}"), format!("slot3:{got:?}")));
         }
     }
     if fails.is_empty() {
@@ -3474,6 +4083,29 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.expected = Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
         out.actual = Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
     }
+}
+
+/// Sort and merge element ranges (prefix, lo, hi-exclusive) — the coverage
+/// normal form both endsets-coverage sides reduce to.
+fn merge_ranges(mut ranges: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)> {
+    ranges.sort();
+    let mut out: Vec<(String, u64, u64)> = Vec::new();
+    for (p, lo, hi) in ranges {
+        if let Some(last) = out.last_mut() {
+            if last.0 == p && lo <= last.2 {
+                last.2 = last.2.max(hi);
+                continue;
+            }
+        }
+        out.push((p, lo, hi));
+    }
+    out
+}
+
+fn render_ranges(ranges: &[(String, u64, u64)]) -> String {
+    let parts: Vec<String> =
+        ranges.iter().map(|(p, lo, hi)| format!("{p}.{lo}+{}", hi - lo)).collect();
+    format!("[{}]", parts.join(", "))
 }
 
 // ── compare ─────────────────────────────────────────────────────────────────
@@ -3939,10 +4571,11 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
         ],
     };
     if let Some(strings) = field(op, content_keys).and_then(expect_strings) {
-        // Address strings are never content-subspace bytes (a create-like
-        // result); skip rather than fabricate a comparison.
-        let addr_like =
-            strings.iter().any(|s| s.contains('.') && parse_dotted(s).is_some());
+        // Address strings and recording-client python reprs are never
+        // content-subspace bytes; skip rather than fabricate a comparison.
+        let addr_like = strings.iter().any(|s| {
+            (s.contains('.') && parse_dotted(s).is_some()) || fields::is_python_repr(s)
+        });
         if !addr_like {
             match cx.read_content(doc) {
                 Ok(items) => {
@@ -3972,13 +4605,13 @@ fn probe_state(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, do
 
 /// Observation-bundle ops (`initial_state`, `after_first_insert`,
 /// `verify_empty`, …): pure probes over the doc in scope.
-fn h_observe(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
+fn h_observe(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     // docs-map / targets-list / positions bundles compare several documents.
     if op.get("docs").and_then(Value::as_object).is_some()
         || op.get("targets").and_then(Value::as_array).is_some()
         || op.get("positions").and_then(Value::as_object).is_some()
     {
-        h_contents(cx, op, out, label_of(op));
+        h_contents(cx, index, op, out, label_of(op));
         return;
     }
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {

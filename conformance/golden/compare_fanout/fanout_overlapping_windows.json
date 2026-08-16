@@ -1,0 +1,284 @@
+{
+  "name": "fanout_overlapping_windows",
+  "description": "Cross-compare of overlapping transclusion sets, then with the overlap doubled",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "d1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "d2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      },
+      "comment": "d1 gets ABCDEF"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.3",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.4",
+          "width": "0.6"
+        }
+      },
+      "comment": "d2 gets DEFGHI"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "d1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "ABCDEF"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.3",
+      "doc_label": "d2",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "DEFGHI"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "d1": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ]
+      },
+      "d2": {
+        "docid": "1.1.0.1.0.3",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ]
+      },
+      "comment": "overlapping transclusion sets: expect DEF pairing",
+      "result": [
+        {
+          "d1": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.4",
+              "width": "0.3"
+            }
+          },
+          "d2": {
+            "docid": "1.1.0.1.0.3",
+            "span": {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.7",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.4",
+          "width": "0.3"
+        }
+      },
+      "comment": "d1 gets a second DEF: overlap now doubled in d1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "d1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.9"
+        }
+      ],
+      "contents": [
+        "ABCDEFDEF"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "d1": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.9"
+          }
+        ]
+      },
+      "d2": {
+        "docid": "1.1.0.1.0.3",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.6"
+          }
+        ]
+      },
+      "comment": "doubled DEF in d1 vs single DEF in d2",
+      "result": [
+        {
+          "d1": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.4",
+              "width": "0.3"
+            }
+          },
+          "d2": {
+            "docid": "1.1.0.1.0.3",
+            "span": {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          }
+        },
+        {
+          "d1": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.7",
+              "width": "0.3"
+            }
+          },
+          "d2": {
+            "docid": "1.1.0.1.0.3",
+            "span": {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "compare_versions",
+      "d1": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.9"
+          }
+        ]
+      },
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      },
+      "comment": "d1 vs source with internal repetition in d1",
+      "result": [
+        {
+          "d1": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          }
+        },
+        {
+          "d1": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.7",
+              "width": "0.3"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.4",
+              "width": "0.3"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    }
+  ]
+}

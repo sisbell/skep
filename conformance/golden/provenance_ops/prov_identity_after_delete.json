@@ -1,0 +1,300 @@
+{
+  "name": "prov_identity_after_delete",
+  "description": "find_documents and compare over a deleted span, then after re-inserting identical text",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "PERMANENT-RECORD"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.5",
+        "width": "0.6"
+      },
+      "comment": "delete 'ANENT-' from D"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.10"
+        }
+      ],
+      "contents": [
+        "PERMRECORD"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "doc_label": "V",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "PERMANENT-RECORD"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "who contains the DELETED identity (queried via V's copy)?",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "comment": "who contains the surviving identity?",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "D_after_delete": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      },
+      "V": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.16"
+          }
+        ]
+      },
+      "comment": "correspondences surviving the delete",
+      "result": [
+        {
+          "D_after_delete": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          },
+          "V": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        },
+        {
+          "D_after_delete": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.5",
+              "width": "0.6"
+            }
+          },
+          "V": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.11",
+              "width": "0.6"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "compare_versions",
+      "D_after_delete": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      },
+      "V_deleted_window": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.5",
+            "width": "0.6"
+          }
+        ]
+      },
+      "comment": "compare against ONLY the deleted window",
+      "result": [],
+      "pair_count": 0
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.5",
+      "text": "ANENT-",
+      "comment": "re-insert the identical text at the same V-position"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "PERMANENT-RECORD"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "D_reinserted": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.16"
+          }
+        ]
+      },
+      "V": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.16"
+          }
+        ]
+      },
+      "comment": "re-inserted text: same identity as V's copy?",
+      "result": [
+        {
+          "D_reinserted": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          },
+          "V": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        },
+        {
+          "D_reinserted": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.11",
+              "width": "0.6"
+            }
+          },
+          "V": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.11",
+              "width": "0.6"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "deleted-identity containment after re-insert",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.1.1"
+      ]
+    }
+  ]
+}

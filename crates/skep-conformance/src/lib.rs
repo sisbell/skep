@@ -1,10 +1,15 @@
 //! # skep-conformance — the golden-scenario conformance harness
 //!
-//! Plays the 263 vendored udanax-green golden scenarios
-//! (`skep/conformance/golden/`) against skep's real command surface —
-//! `Operation<World>::execute` from skep-febe over a fresh `skep-engine`
-//! world per scenario — and reports, honestly, scenario by scenario, where
-//! the two systems agree and where they diverge.
+//! Plays the 297 vendored udanax-green golden scenarios
+//! (`skep/conformance/golden/`: the original 263 plus the 34-scenario
+//! corpus extension of 2026-08-15 — multisession, n-ary/cross-document
+//! links, compare fan-out, provenance surface, depth and boundary probes)
+//! against skep's real command surface — `Operation<World>::execute` from
+//! skep-febe over a fresh `skep-engine` world per scenario — and reports,
+//! honestly, scenario by scenario, where the two systems agree and where
+//! they diverge. Multisession scenarios drive several sessions against the
+//! ONE engine: `account` ops bind golden session labels to accounts, and
+//! each op routes through its label's session.
 //!
 //! One discipline governs everything: **the harness never negotiates with
 //! the goldens and never negotiates with skep.** A divergence is a finding

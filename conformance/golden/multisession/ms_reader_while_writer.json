@@ -1,0 +1,202 @@
+{
+  "name": "ms_reader_while_writer",
+  "description": "B holds a read-only handle while A inserts and deletes; reader visibility at each stage",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "The quick brown fox"
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "comment": "committed base",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.19"
+        }
+      ],
+      "contents": [
+        "The quick brown fox"
+      ]
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "comment": "writer opens while B holds read handle",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.20",
+      "text": " jumps"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.25"
+        }
+      ],
+      "contents": [
+        "The quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "comment": "reader view after A's uncommitted insert",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.25"
+        }
+      ],
+      "contents": [
+        "The quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "delete",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.4"
+      },
+      "comment": "delete 'The '"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.21"
+        }
+      ],
+      "contents": [
+        "quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "comment": "reader view after A's uncommitted delete",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.21"
+        }
+      ],
+      "contents": [
+        "quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "comment": "reader view after A closed",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.21"
+        }
+      ],
+      "contents": [
+        "quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "fresh read-only open",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.21"
+        }
+      ],
+      "contents": [
+        "quick brown fox jumps"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

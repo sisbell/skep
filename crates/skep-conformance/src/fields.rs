@@ -669,7 +669,9 @@ pub fn doc_from_label(label: &str) -> Option<String> {
 /// no field ever bound it), `create_doc2_and_copy` names "doc2". Generic
 /// create labels (create_document, create_documents…) carry no role.
 pub fn create_name_of(op: &Value) -> Option<String> {
-    if let Some(s) = str_field(op, &["doc", "name", "label"]) {
+    // `doc_label` is the corpus-extension recorder's explicit role name
+    // (new-corpus files only; verified absent from the original 263).
+    if let Some(s) = str_field(op, &["doc", "name", "label", "doc_label"]) {
         if crate::tum::parse_dotted(s).is_none() {
             return Some(s.to_string());
         }

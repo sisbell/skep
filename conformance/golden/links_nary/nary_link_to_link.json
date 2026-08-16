@@ -1,0 +1,276 @@
+{
+  "name": "nary_link_to_link",
+  "description": "Second link whose TO endset is the first link's V-position in the link subspace",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "base text"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "target"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "other end"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "ordinary link",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "comment": "source vspanset now includes link subspace",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "base text"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "2.1",
+        "width": "0.1"
+      },
+      "doc_label": "source",
+      "comment": "read the link's V-position (local 2.1) as content",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.6",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "2.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "TO endset = link 1's V-position 2.1",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "comment": "liveness check",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "base text"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.6",
+              "width": "0.4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "2.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.9"
+            }
+          ]
+        }
+      ],
+      "comment": "links from source text: expect both",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.2"
+      ]
+    },
+    {
+      "op": "find_links",
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "2.1",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "links TO the link position 2.1",
+      "result": [
+        "1.1.0.1.0.1.0.2.2"
+      ]
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "2.1",
+              "width": "0.2"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets over the link subspace 2.1-2.2",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.1",
+            "spans": [
+              {
+                "start": "2.1",
+                "width": "0.1"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    }
+  ]
+}

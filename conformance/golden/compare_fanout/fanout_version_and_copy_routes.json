@@ -1,0 +1,254 @@
+{
+  "name": "fanout_version_and_copy_routes",
+  "description": "Dest holds the same content via a version route and a direct route; compares against both",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "MNOPQRST"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "dest"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.1.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.4"
+        }
+      },
+      "comment": "MNOP from the version"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.5",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.4"
+        }
+      },
+      "comment": "MNOP from the original"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "MNOPMNOP"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "original": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "both routes vs original",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.5",
+              "width": "0.4"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "version": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "both routes vs version",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          },
+          "version": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.5",
+              "width": "0.4"
+            }
+          },
+          "version": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "compare_versions",
+      "version": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "original": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "version vs original baseline",
+      "result": [
+        {
+          "version": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    }
+  ]
+}

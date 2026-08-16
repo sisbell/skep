@@ -1,0 +1,308 @@
+{
+  "name": "nary_multispan_from_to",
+  "description": "FROM and TO endsets each carrying two spans; find_links by each span separately",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "one two three four"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "target"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "alpha beta gamma"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            },
+            {
+              "start": "1.9",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            },
+            {
+              "start": "1.12",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "one two three four"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            },
+            {
+              "start": "1.9",
+              "width": "0.5"
+            },
+            {
+              "start": "1.9",
+              "width": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            },
+            {
+              "start": "1.12",
+              "width": "0.5"
+            },
+            {
+              "start": "1.12",
+              "width": "0.5"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.18"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets across whole source",
+      "result": {
+        "from": [
+          {
+            "docid": "1.1.0.1.0.1",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.3"
+              },
+              {
+                "start": "1.9",
+                "width": "0.5"
+              },
+              {
+                "start": "1.9",
+                "width": "0.5"
+              }
+            ]
+          }
+        ],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.16"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets across whole target",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.2",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.5"
+              },
+              {
+                "start": "1.12",
+                "width": "0.5"
+              },
+              {
+                "start": "1.12",
+                "width": "0.5"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "comment": "by first from-span only",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.9",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "by second from-span only",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "comment": "by 'two' - between the from-spans, expect none",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.12",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "by second to-span only",
+      "result": [
+        "1.1.0.1.0.1.0.2.1",
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    }
+  ]
+}

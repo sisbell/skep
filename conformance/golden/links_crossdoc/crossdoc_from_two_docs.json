@@ -1,0 +1,359 @@
+{
+  "name": "crossdoc_from_two_docs",
+  "description": "Link whose FROM endset spans two documents; queried from each side",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "P"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "alpha bravo"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "Q"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "charlie delta"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "R"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "address": "1.1",
+      "text": "echo foxtrot"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.9",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "FROM spans documents P and Q; home P",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "P",
+      "comment": "home doc after create",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "alpha bravo"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "Q",
+      "comment": "non-home from-doc: does it gain a link subspace entry?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      ],
+      "contents": [
+        "charlie delta"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.3",
+      "doc_label": "R",
+      "comment": "target doc",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.12"
+        }
+      ],
+      "contents": [
+        "echo foxtrot"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": []
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.11"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets seen from P",
+      "result": {
+        "from": [
+          {
+            "docid": "1.1.0.1.0.1",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.5"
+              }
+            ]
+          }
+        ],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets seen from Q",
+      "result": {
+        "from": [
+          {
+            "docid": "1.1.0.1.0.2",
+            "spans": [
+              {
+                "start": "1.9",
+                "width": "0.5"
+              }
+            ]
+          }
+        ],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.12"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets seen from R",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.3",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.4"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "from P's side",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.9",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "from Q's side",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.7"
+            }
+          ]
+        }
+      ],
+      "comment": "from Q's non-endset text 'charlie' - expect none",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "comment": "by target R",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    }
+  ]
+}

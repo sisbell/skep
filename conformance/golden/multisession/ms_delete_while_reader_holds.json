@@ -1,0 +1,161 @@
+{
+  "name": "ms_delete_while_reader_holds",
+  "description": "A deletes a span while B holds a read handle; B reads the deleted region at each stage",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABCDEFGHIJ"
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.10"
+        }
+      ],
+      "contents": [
+        "ABCDEFGHIJ"
+      ]
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "delete",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.3",
+        "width": "0.4"
+      },
+      "comment": "delete CDEF"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "ABGHIJ"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "comment": "reader view while delete uncommitted",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "ABGHIJ"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.3",
+        "width": "0.4"
+      },
+      "session": "B",
+      "comment": "B reads the deleted V-region through held handle",
+      "result": [
+        "GHIJ"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.3",
+        "width": "0.4"
+      },
+      "session": "B",
+      "comment": "same read after A closed",
+      "result": [
+        "GHIJ"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "ABGHIJ"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

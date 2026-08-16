@@ -1,0 +1,139 @@
+{
+  "name": "ms_open_conflict_matrix",
+  "description": "A holds doc open read-write; B tries all four open modes, then after A closes",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Shared base text"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "Shared base text"
+      ]
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "while A holds read_write open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "comment": "while A holds read_write open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "copy",
+      "comment": "while A holds read_write open",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "Shared base text"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "copy",
+      "comment": "while A holds read_write open",
+      "result": "1.1.0.2.0.2"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.2",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "Shared base text"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.2"
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "comment": "after A closed",
+      "error": "request failed (?)"
+    }
+  ]
+}

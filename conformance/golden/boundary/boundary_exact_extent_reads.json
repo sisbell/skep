@@ -1,0 +1,151 @@
+{
+  "name": "boundary_exact_extent_reads",
+  "description": "Reads at position 1, the exact extent, past-end, overhang, and empty subspaces",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "first position",
+      "result": [
+        "A"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.8",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "exact last position",
+      "result": [
+        "H"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "exact full extent",
+      "result": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.9",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "one past the end",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.5",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "overhangs the end by 4",
+      "result": [
+        "EFGH"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.20"
+      },
+      "doc_label": "D",
+      "comment": "width far beyond extent",
+      "result": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "0.1",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "subspace 0 of a linkless doc",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "2.1",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "link subspace of a linkless doc",
+      "result": []
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "liveness",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "ABCDEFGH"
+      ]
+    }
+  ]
+}

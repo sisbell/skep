@@ -1,0 +1,105 @@
+{
+  "name": "boundary_deep_vaddress_reads",
+  "description": "Retrievals addressed at nested local V-positions of a flat document",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "abcdef"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "abcdef"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1.1",
+        "width": "0.0.1"
+      },
+      "doc_label": "D",
+      "comment": "read at nested position 1.1.1",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.3.1",
+        "width": "0.0.2"
+      },
+      "doc_label": "D",
+      "comment": "read at nested position 1.3.1",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1.1",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "nested start with top-level width crossing digits",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1.1.1.1",
+        "width": "0.0.0.0.1"
+      },
+      "doc_label": "D",
+      "comment": "read at 5-digit local address",
+      "result": []
+    },
+    {
+      "op": "retrieve_vspan",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "start": "1.1",
+        "width": "0.6"
+      }
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "liveness",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "abcdef"
+      ]
+    }
+  ]
+}

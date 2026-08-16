@@ -1,0 +1,231 @@
+{
+  "name": "ms_shared_doc_interleaved_inserts",
+  "description": "Both sessions hold the same doc open read-write and interleave inserts with cross-session probes",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "AAAA"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.4"
+        }
+      ],
+      "contents": [
+        "AAAA"
+      ]
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "comment": "second writer on same doc while A holds it open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "copy",
+      "comment": "fallback: conflict copy",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "comment": "does B see A's uncommitted AAAA?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.4"
+        }
+      ],
+      "contents": [
+        "AAAA"
+      ]
+    },
+    {
+      "op": "insert",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "address": "1.5",
+      "text": "BBBB"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "AAAABBBB"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "comment": "does A's handle see B's insert?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.4"
+        }
+      ],
+      "contents": [
+        "AAAA"
+      ]
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "CC"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "CCAAAA"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "comment": "does B's handle see A's second insert?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "AAAABBBB"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "comment": "after A closed",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "AAAABBBB"
+      ]
+    },
+    {
+      "op": "insert",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "address": "1.1",
+      "text": "D",
+      "comment": "B writes after A closed"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.9"
+        }
+      ],
+      "contents": [
+        "DAAAABBBB"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "fresh open: committed state",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.6"
+        }
+      ],
+      "contents": [
+        "CCAAAA"
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    }
+  ]
+}

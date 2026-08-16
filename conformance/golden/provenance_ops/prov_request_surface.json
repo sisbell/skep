@@ -1,0 +1,128 @@
+{
+  "name": "prov_request_surface",
+  "description": "Bare probe of every in-range request code outside the live dispatch; all answer '?'",
+  "operations": [
+    {
+      "op": "raw_request",
+      "code": 4,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 6,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 7,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 8,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 9,
+      "request_name": "NAVIGATEONHT (disabled in safe mode)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 15,
+      "request_name": "SETDEBUG (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 17,
+      "request_name": "SHOWENFILADES (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 19,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 20,
+      "request_name": "EXAMINE (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 21,
+      "request_name": "SOURCEUNIXCOMMAND (disabled in safe mode)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 23,
+      "request_name": "DUMPGRANFWIDS (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 24,
+      "request_name": "JUSTEXIT (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 25,
+      "request_name": "IOINFO (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 26,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 29,
+      "request_name": "FINDNUMOFLINKSFROMTOTHREE (disabled in safe mode)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 31,
+      "request_name": "FINDNEXTNLINKSFROMTOTHREE (disabled in safe mode)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 32,
+      "request_name": "SETMAXIMUMSETUPSIZE (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 33,
+      "request_name": "PLAYWITHALLOC (never installed)",
+      "reply_char": "?"
+    },
+    {
+      "op": "raw_request",
+      "code": 37,
+      "request_name": "unassigned",
+      "reply_char": "?"
+    },
+    {
+      "note": "codes >= 40 rejected by validrequest() with NO reply (be.c:111 resets input; a client waiting on a response hangs) - established from source, not probed"
+    },
+    {
+      "op": "create_document",
+      "comment": "liveness: stream still in sync after all probes",
+      "result": "1.1.0.1.0.1"
+    }
+  ]
+}

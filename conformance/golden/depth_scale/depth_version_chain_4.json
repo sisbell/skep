@@ -1,0 +1,362 @@
+{
+  "name": "depth_version_chain_4",
+  "description": "Version chain 4 deep with an edit at every level; pairwise compares",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "level0"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Base text."
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "level": 1,
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1.1",
+      "address": "1.11",
+      "text": " v1."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "doc_label": "level1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.14"
+        }
+      ],
+      "contents": [
+        "Base text. v1."
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_version",
+      "level": 2,
+      "of": "1.1.0.1.0.1.1",
+      "result": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1.1.1",
+      "address": "1.15",
+      "text": " v2."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1",
+      "doc_label": "level2",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ],
+      "contents": [
+        "Base text. v1. v2."
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1.1.1"
+    },
+    {
+      "op": "create_version",
+      "level": 3,
+      "of": "1.1.0.1.0.1.1.1",
+      "result": "1.1.0.1.0.1.1.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1.1.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1.1.1.1",
+      "address": "1.19",
+      "text": " v3."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1.1",
+      "doc_label": "level3",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ],
+      "contents": [
+        "Base text. v1. v2. v3."
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1.1.1.1"
+    },
+    {
+      "op": "create_version",
+      "level": 4,
+      "of": "1.1.0.1.0.1.1.1.1",
+      "result": "1.1.0.1.0.1.1.1.1.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1.1.1.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1.1.1.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1.1.1.1.1",
+      "address": "1.23",
+      "text": " v4."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1.1.1",
+      "doc_label": "level4",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.26"
+        }
+      ],
+      "contents": [
+        "Base text. v1. v2. v3. v4."
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1.1.1.1.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1.1.1",
+      "doc_label": "level4",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.26"
+        }
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "level0",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.10"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "level4": {
+        "docid": "1.1.0.1.0.1.1.1.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.26"
+          }
+        ]
+      },
+      "level0": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.10"
+          }
+        ]
+      },
+      "result": [
+        {
+          "level4": {
+            "docid": "1.1.0.1.0.1.1.1.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.10"
+            }
+          },
+          "level0": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.10"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1.1.1",
+      "doc_label": "level4",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.26"
+        }
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1.1",
+      "doc_label": "level3",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "level4": {
+        "docid": "1.1.0.1.0.1.1.1.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.26"
+          }
+        ]
+      },
+      "level3": {
+        "docid": "1.1.0.1.0.1.1.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.22"
+          }
+        ]
+      },
+      "result": [
+        {
+          "level4": {
+            "docid": "1.1.0.1.0.1.1.1.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.22"
+            }
+          },
+          "level3": {
+            "docid": "1.1.0.1.0.1.1.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.22"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1.1",
+      "doc_label": "level2",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "doc_label": "level1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.14"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "level2": {
+        "docid": "1.1.0.1.0.1.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.18"
+          }
+        ]
+      },
+      "level1": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.14"
+          }
+        ]
+      },
+      "result": [
+        {
+          "level2": {
+            "docid": "1.1.0.1.0.1.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          },
+          "level1": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    }
+  ]
+}

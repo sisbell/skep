@@ -1,0 +1,357 @@
+{
+  "name": "nary_type_content_span",
+  "description": "Link whose third endset is a content span of a real document; follow/endsets/find_links on the type slot",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "typedoc"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "annotation-type-alpha"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "tagged span here"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "target"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "address": "1.1",
+      "text": "target body"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.2",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.8",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.21"
+            }
+          ]
+        }
+      ],
+      "comment": "three-endset = content span of typedoc",
+      "result": "1.1.0.1.0.2.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "source",
+      "comment": "after create_link",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "tagged span here"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "typedoc",
+      "comment": "does the typedoc itself change?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.21"
+        }
+      ],
+      "contents": [
+        "annotation-type-alpha"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.8",
+              "width": "0.4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.2.0.2.1",
+      "end": "three",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.21"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.21"
+            }
+          ]
+        }
+      ],
+      "comment": "content of the three endset",
+      "result": [
+        "annotation-type-alpha"
+      ]
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.16"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets on source content",
+      "result": {
+        "from": [
+          {
+            "docid": "1.1.0.1.0.2",
+            "spans": [
+              {
+                "start": "1.8",
+                "width": "0.4"
+              }
+            ]
+          }
+        ],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.11"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets on target content",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.3",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.6"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.21"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets on typedoc content (used as three set)",
+      "result": {
+        "from": [],
+        "to": [],
+        "three": [
+          {
+            "docid": "1.1.0.1.0.1",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.21"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "op": "find_links",
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.21"
+            }
+          ]
+        }
+      ],
+      "comment": "filter by exact three span",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.17",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "filter by sub-span 'alpha' of the three span",
+      "result": [
+        "1.1.0.1.0.2.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "filter by unrelated content (source text) - expect none",
+      "result": []
+    },
+    {
+      "op": "find_links",
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "filter by jump type marker - expect none (link typed by content)",
+      "result": []
+    }
+  ]
+}

@@ -1,0 +1,280 @@
+{
+  "name": "nary_empty_endset_shapes",
+  "description": "create_link with an empty specset in each slot in turn",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "abcdef"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "target"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "ghijkl"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "threeset": [],
+      "comment": "EMPTY three endset",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "comment": "liveness check",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "abcdef"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "EMPTY from endset",
+      "result": "1.1.0.1.0.1.0.2.2"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "comment": "liveness check",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "abcdef"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "from",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.2",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ],
+      "toset": [],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "EMPTY to endset",
+      "result": "1.1.0.1.0.1.0.2.3"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "source",
+      "comment": "liveness check",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "abcdef"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.3",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.3"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.3",
+      "end": "to",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.3",
+      "end": "three",
+      "error": "request failed (?)"
+    }
+  ]
+}

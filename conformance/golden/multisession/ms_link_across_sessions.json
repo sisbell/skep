@@ -1,0 +1,236 @@
+{
+  "name": "ms_link_across_sessions",
+  "description": "A creates a link with docs still open; B finds and follows it immediately and after commit",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "comment": "link source doc",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Click here now"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "comment": "link target doc",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "Landing zone"
+    },
+    {
+      "op": "create_link",
+      "session": "A",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.7",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.7"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "comment": "source after create_link",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "Click here now"
+      ]
+    },
+    {
+      "op": "find_links",
+      "session": "B",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          ]
+        }
+      ],
+      "comment": "while A still holds docs open",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "session": "B",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.7",
+              "width": "0.4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "session": "B",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.7"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "session": "B",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "three",
+      "result": []
+    },
+    {
+      "op": "retrieve_endsets",
+      "session": "B",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          ]
+        }
+      ],
+      "result": {
+        "from": [
+          {
+            "docid": "1.1.0.1.0.1",
+            "spans": [
+              {
+                "start": "1.7",
+                "width": "0.4"
+              }
+            ]
+          }
+        ],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.2"
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "find_links",
+      "session": "B",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          ]
+        }
+      ],
+      "comment": "after A closed both docs",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    }
+  ]
+}

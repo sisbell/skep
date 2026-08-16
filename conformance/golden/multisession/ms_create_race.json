@@ -1,0 +1,93 @@
+{
+  "name": "ms_create_race",
+  "description": "Interleaved create_document across sessions and accounts, including a third session",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.1"
+    },
+    {
+      "note": "A and B both under account 1.1.0.1: interleaved creates"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "session": "B",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "create_document",
+      "session": "B",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "note": "B switches to 1.1.0.2; interleave continues"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.5"
+    },
+    {
+      "op": "create_document",
+      "session": "B",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.6"
+    },
+    {
+      "op": "create_document",
+      "session": "B",
+      "result": "1.1.0.2.0.2"
+    },
+    {
+      "op": "connect",
+      "session": "C",
+      "comment": "third concurrent session"
+    },
+    {
+      "op": "account",
+      "session": "C",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "create_document",
+      "session": "C",
+      "result": "1.1.0.1.0.7"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.8"
+    },
+    {
+      "op": "create_document",
+      "session": "C",
+      "result": "1.1.0.1.0.9"
+    }
+  ]
+}

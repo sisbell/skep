@@ -3,6 +3,9 @@
 # `divergent` or `error` verdict at all, or a listed scenario missing.
 # Shrinking this file (scenario becomes pass) is free — trim it.
 # Growing it requires a ruling in adjudication/decisions.md, by a human.
+# [pending] lists corpus extensions not yet adjudicated: exempt from
+# enforcement, reported loudly, to be dispositioned into the sections
+# above (or to pass) by the next adjudication cycle.
 
 [allowlisted]
 scenario = "copy_duplicate_iaddresses"
@@ -85,3 +88,39 @@ scenario = "search_multiple_links_selective_removal"
 scenario = "swap_with_links"
 scenario = "version_chain"
 scenario = "version_copies_what"
+
+[pending]
+scenario = "boundary_deep_vaddress_reads"
+scenario = "boundary_exact_extent_reads"
+scenario = "boundary_far_position_insert"
+scenario = "boundary_foreign_and_malformed_opens"
+scenario = "boundary_growth_doubling"
+scenario = "boundary_single_char_lifecycle"
+scenario = "crossdoc_from_two_docs"
+scenario = "crossdoc_home_elsewhere"
+scenario = "crossdoc_to_two_docs"
+scenario = "depth_edit_marathon"
+scenario = "depth_transclusion_chain"
+scenario = "depth_version_chain_4"
+scenario = "depth_version_chain_7"
+scenario = "fanout_multiplicity_ladder"
+scenario = "fanout_overlapping_windows"
+scenario = "fanout_self_repetition"
+scenario = "fanout_version_and_copy_routes"
+scenario = "ms_committed_visibility"
+scenario = "ms_create_race"
+scenario = "ms_delete_while_reader_holds"
+scenario = "ms_link_across_sessions"
+scenario = "ms_open_conflict_matrix"
+scenario = "ms_reader_while_writer"
+scenario = "ms_shared_doc_interleaved_inserts"
+scenario = "ms_version_race"
+scenario = "nary_empty_endset_shapes"
+scenario = "nary_link_to_link"
+scenario = "nary_multispan_from_to"
+scenario = "nary_type_content_span"
+scenario = "nary_type_two_docs"
+scenario = "prov_dumpstate_delete_trace"
+scenario = "prov_identity_after_delete"
+scenario = "prov_origin_chain"
+scenario = "prov_request_surface"

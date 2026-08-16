@@ -157,6 +157,49 @@
 //!   scenario's own probes and recorded comparison pairs (the round-4
 //!   unrecorded-prefix cluster); surfaced in the groundings list and
 //!   executed as expansion plans.
+//!
+//! ## Round-7 policies (the 34-scenario corpus extension)
+//!
+//! * `session-route:<label>` — the op carried a `session` field and executed
+//!   under that label's account session (label→account bound by `account`
+//!   ops; two labels on one account share its session).
+//! * `session-label-implicit-bind` — an op used a session label no `account`
+//!   op had bound; it bound to the then-current account.
+//! * `connect:session` — green's `connect` opens a TCP session; skep
+//!   sessions open at account binding, so the op executes nothing.
+//! * `open-noop-vs-recorded-failure` — green REFUSED the open (bert
+//!   enforcement / account gating, manifest A1/A2); skep has no open layer
+//!   to refuse with, so the recorded failure is surfaced as a raw
+//!   divergence, never absorbed into the open no-op.
+//! * `joint-absence` — the golden recorded a failure against an object that
+//!   was never created (green's OPEN validates nothing, A7); the reference
+//!   has no α-image, so there is nothing to address on skep either — both
+//!   systems refuse, compared as agreement via the expected-failure
+//!   comparator (α's never-bound finding is deliberately not emitted: the
+//!   absence IS the expected answer).
+//! * `explicit-empty-endset` — a create_link `fromset`/`toset`/`threeset`
+//!   recorded as an EMPTY list is passed to MakeLink empty (green accepts
+//!   all three, A11); the default-endset conventions never substitute.
+//! * `threeset-marker→registry` — a threeset span at the udanax type-marker
+//!   local address `1.0.2.X` (client.py's LINK_TYPES encoding) denotes the
+//!   registry type name (2.2 jump / 2.3 quote / 2.6 footnote / 2.6.2
+//!   margin) — the same `type_registry` mapping the name-based path uses.
+//! * `threeset-content-type` — a threeset carrying real content spans
+//!   becomes the link's TYPE endset via α (green's content-span third
+//!   endsets are first-class, A8).
+//! * `set-empty:unconstrained` — an EMPTY `fromset`/`toset`/`threeset` on a
+//!   find_links is the recording client's NOSPECS: no constraint on that
+//!   slot (create_link's empty means empty; the query's empty means any).
+//! * `compare-operands-explicit` — a compare op's two operands read from its
+//!   own role-keyed vspec-dict fields (ms_version_race's `version_a1`/
+//!   `original`), never from the original/version convention.
+//! * `deep-vaddress-span` — a span dict at a NESTED local address ("1.1.1")
+//!   is built as an arbitrary-depth tumbler span and asked of skep raw;
+//!   M6's answer (empty, or a depth/absence rejection) is compared as
+//!   recorded (boundary_deep_vaddress_reads).
+//! * `raw wire request codes` are inexpressible by construction: skep's
+//!   surface is typed `Op`s; unknown-code handling lives in the transport's
+//!   `OpKind::Unparseable`, which a library harness cannot reach.
 
 use std::collections::BTreeMap;
 
@@ -244,6 +287,7 @@ pub enum Verb {
     Compare,
     Account,
     CreateNode,
+    Connect,
     Observe,
     Meta,
 }
@@ -279,6 +323,7 @@ impl Verb {
             Verb::Compare => "compare_versions",
             Verb::Account => "account",
             Verb::CreateNode => "create_node",
+            Verb::Connect => "connect",
             Verb::Observe => "observe",
             Verb::Meta => "meta",
         }
@@ -354,6 +399,10 @@ const STEMS: &[(&str, Verb)] = &[
     ("compare", Verb::Compare),
     ("comparisons", Verb::Compare),
     ("account", Verb::Account),
+    ("connect", Verb::Connect),
+    // The new-corpus checkpoint op: vspanset+contents bundle, or a bare
+    // failed probe of a never-created doc (error field only).
+    ("probe", Verb::Observe),
 ];
 
 /// Does the op carry observation data (a probe bundle)?
@@ -444,8 +493,41 @@ fn rejection_code(r: &Response) -> Option<String> {
     }
 }
 
+/// Policy `joint-absence`: the golden recorded a FAILURE against a document
+/// reference that was never created in this scenario (green's OPEN validates
+/// nothing — A7 — so its scripts could aim ops at garbage docids and fail at
+/// first use). The reference has no α-image, so there is nothing to address
+/// on skep either: both systems refuse the object, compared as agreement.
+/// Peek only — α's never-bound finding is deliberately not emitted, because
+/// the absence IS the expected answer here, not a translation the harness
+/// needed and missed. Returns `true` when the outcome was written.
+fn joint_absence(cx: &Cx, out: &mut OpOutcome, xf: &Option<String>, docref: &str) -> bool {
+    if xf.is_none() || cx.shadow.knows(docref) || cx.alpha.peek_translate(docref).is_some() {
+        return false;
+    }
+    out.adaptations.push("joint-absence".into());
+    out.status = Status::Agreed;
+    out.comparator = Some("expected-failure".into());
+    out.note = Some(format!(
+        "golden recorded failure and `{docref}` was never created — no α-image, nothing to \
+         address on skep; both systems refuse the object"
+    ));
+    true
+}
+
 fn vpos(sub: u64, ord: u64) -> VPos {
     VPos { subspace: Nat::from(sub), ordinal: Nat::from(ord) }
+}
+
+/// A `{start, width}` dict whose components parse as dotted decimal but NOT
+/// as a depth-2 V-position — the boundary corpus's nested local addresses
+/// ("1.1.1" width "0.0.1"). Returns the raw component vectors for
+/// [`crate::tum::deep_span`].
+fn deep_span_dict(v: &Value) -> Option<(Vec<u64>, Vec<u64>)> {
+    let o = v.as_object()?;
+    let start = parse_dotted(o.get("start").and_then(Value::as_str)?)?;
+    let width = parse_dotted(o.get("width").and_then(Value::as_str)?)?;
+    (start.len() > 2 || width.len() > 2).then_some((start, width))
 }
 
 /// Shared post-execution verdict for ops whose only comparable aspect is
@@ -858,7 +940,36 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
     let label = label_of(op).to_string();
     let mut out = OpOutcome::new(index, &label);
     if label.is_empty() {
+        // A recorder ANNOTATION entry ({note: "…"} with no op at all,
+        // ms_create_race) is commentary, not an operation — meta. Anything
+        // else without a label stays inexpressible.
+        let annotation_only = op.as_object().is_some_and(|o| {
+            !o.is_empty()
+                && o.keys().all(|k| matches!(k.as_str(), "note" | "comment" | "description"))
+        });
+        if annotation_only {
+            out.verb = Verb::Meta.name().to_string();
+            out.status = Status::Meta;
+            out.note = str_field(op, &["note", "comment", "description"]).map(str::to_string);
+            return out;
+        }
         inexpressible(&mut out, "operation has no `op` label".into());
+        return out;
+    }
+    // Raw wire request codes (prov_request_surface): green's dispatch-table
+    // probe. skep's surface is typed `Op`s — an unknown code is the
+    // TRANSPORT's `OpKind::Unparseable`, unreachable from the library
+    // harness — so the op is inexpressible by construction, code recorded.
+    if label == "raw_request" {
+        let code = field(op, &["code"]).and_then(Value::as_u64);
+        inexpressible(
+            &mut out,
+            format!(
+                "raw wire request code {} has no counterpart on skep's typed Op surface \
+                 (unknown-code handling is the transport's OpKind::Unparseable)",
+                code.map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+            ),
+        );
         return out;
     }
     // Recording-client crash: udanax never saw the op.
@@ -875,6 +986,30 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
         return out;
     };
     out.verb = verb.name().to_string();
+    // Multi-session routing: an op carrying a `session` label executes under
+    // that label's account session (policy `session-route`). `account` binds
+    // labels itself and `connect`/meta execute nothing, so they skip routing;
+    // ops without the field leave the working session untouched, so
+    // single-session scenarios are undisturbed.
+    if !matches!(verb, Verb::Account | Verb::Connect | Verb::Meta) {
+        if let Some(sess) = str_field(op, &["session"]) {
+            match cx.rig.route_session(sess) {
+                Ok(implicit) => {
+                    out.adaptations.push(format!("session-route:{sess}"));
+                    if implicit {
+                        out.adaptations.push("session-label-implicit-bind".into());
+                    }
+                }
+                Err(e) => {
+                    out.status = Status::Disagreed;
+                    out.comparator = Some("session".into());
+                    out.expected = Some(format!("op executes under session {sess}"));
+                    out.actual = Some(e);
+                    return out;
+                }
+            }
+        }
+    }
     match verb {
         Verb::Meta => out.status = Status::Meta,
         Verb::Observe => h_observe(cx, index, op, &mut out, grants),
@@ -916,6 +1051,12 @@ pub fn run_op(cx: &mut Cx, index: usize, op: &Value, grants: &Grants) -> OpOutco
         Verb::Compare => h_compare(cx, op, &mut out),
         Verb::Account => h_account(cx, op, &mut out),
         Verb::CreateNode => h_create_node(cx, op, &mut out),
+        Verb::Connect => {
+            // Green's `connect` opens a TCP session; skep sessions open when
+            // an `account` op binds the label — nothing to execute here.
+            out.adaptations.push("connect:session".into());
+            out.status = Status::NotCompared;
+        }
     }
     out
 }
@@ -1163,11 +1304,34 @@ fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         return;
     }
     out.adaptations.push("open_document:noop".into());
+    // Green REFUSED this open (bert enforcement / account gating — manifest
+    // A1/A2, recorded only in the multisession/boundary corpus); skep has no
+    // open layer to refuse with. The divergence is real and surfaces raw
+    // (policy `open-noop-vs-recorded-failure`) — never absorbed into the
+    // no-op.
+    if let Some(err) = expected_failure(op) {
+        out.adaptations.push("open-noop-vs-recorded-failure".into());
+        out.status = Status::Disagreed;
+        out.comparator = Some("expected-failure".into());
+        out.expected = Some(format!("failure: {err:?}"));
+        out.actual =
+            Some("skep has no bert/open layer (access control descoped); nothing rejected".into());
+        return;
+    }
     // The open result names the same document — bind the alias so both
-    // spellings translate.
+    // spellings translate. Peek, not translate: green's OPEN validates
+    // nothing (A7), so an open of a never-created doc succeeds there and has
+    // no α-image here — that absence is noted, not an α-finding (the later
+    // probe's recorded failure meets it as joint absence).
     if let Some(g) = &result {
-        if let Some(a) = cx.skep_doc(&doc) {
-            cx.alpha.bind(g, &a);
+        match cx.alpha.peek_translate(&doc) {
+            Some(a) => cx.alpha.bind(g, &a),
+            None => {
+                out.note = Some(format!(
+                    "open of `{doc}` (never created; green's OPEN validates nothing) — \
+                     result not bindable"
+                ));
+            }
         }
     }
     cx.shadow.set_current(&doc);
@@ -1194,13 +1358,16 @@ fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         Some(Value::Object(o)) => o.get("version").and_then(Value::as_str).map(str::to_string),
         _ => None,
     };
+    let xf = expected_failure(op);
+    if joint_absence(cx, out, &xf, &src) {
+        return; // green failed versioning a never-created doc (boundary A7)
+    }
     let Some(d_src) = cx.skep_doc(&src) else {
         out.status = Status::Disagreed;
         out.comparator = Some("alpha".into());
         out.note = Some(format!("version of unresolvable doc {src}"));
         return;
     };
-    let xf = expected_failure(op);
     match cx.rig.exec(Op::Version { d_src }) {
         Response::AckAddr { addr, .. } => {
             if !settle_ack(out, xf, None) {
@@ -1603,13 +1770,19 @@ fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &
         return;
     }
 
-    // Source spec(s): explicit vspec dicts, span dicts, located texts.
+    // Source spec(s): explicit vspec dicts, span dicts, located texts. The
+    // corpus extension records a SINGLE vspec dict (`source: {docid, span}`,
+    // fanout/depth recordings) — normalized to a one-item list here.
     let mut specs: Vec<VSpec> = Vec::new();
     let mut copied: Vec<u8> = Vec::new();
     let mut src_doc: Option<String> = None;
-    if let Some(arr) =
-        field(op, &["specs", "specset", "source", "sources"]).and_then(Value::as_array)
-    {
+    let spec_items: Option<Vec<&Value>> =
+        match field(op, &["specs", "specset", "source", "sources"]) {
+            Some(Value::Array(a)) => Some(a.iter().collect()),
+            Some(v @ Value::Object(_)) if vspec_dict(v).is_some() => Some(vec![v]),
+            _ => None,
+        };
+    if let Some(arr) = spec_items {
         for v in arr {
             if let Some((docid, spans)) = vspec_dict(v) {
                 let Some(sd) = cx.alpha.translate(&docid) else {
@@ -2124,8 +2297,279 @@ fn endset_evidence(
     None
 }
 
+/// One recorded endset span: a normal (subspace, ordinal, width) span, or
+/// the udanax type-marker local address `1.0.2.X…` (client.py's LINK_TYPES
+/// encoding — 4-plus components that are not a V-position).
+enum SetSpan {
+    Plain(u64, u64, u64),
+    Marker(Vec<u64>),
+}
+
+/// Parse a `fromset`/`toset`/`threeset` list: vspec dicts whose spans may be
+/// plain or marker-form. Errors carry the offending shape for the
+/// inexpressible reason.
+fn parse_set_spans(v: &Value) -> Result<Vec<(String, Vec<SetSpan>)>, String> {
+    let Some(arr) = v.as_array() else {
+        return Err("set field is not a list".into());
+    };
+    let mut sides = Vec::new();
+    for item in arr {
+        let Some(o) = item.as_object() else {
+            return Err("set entry is not a vspec dict".into());
+        };
+        let Some(docid) = o.get("docid").and_then(Value::as_str) else {
+            return Err("set entry has no docid".into());
+        };
+        let span_values: Vec<&Value> = match (o.get("spans").and_then(Value::as_array), o.get("span"))
+        {
+            (Some(list), _) => list.iter().collect(),
+            (None, Some(sp)) => vec![sp],
+            (None, None) => return Err(format!("set entry for {docid} has no spans")),
+        };
+        let mut spans = Vec::new();
+        for sp in span_values {
+            if let Some((s, ord, w)) = span_dict(sp) {
+                spans.push(SetSpan::Plain(s, ord, w));
+                continue;
+            }
+            let start = sp
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(parse_dotted)
+                .ok_or_else(|| format!("set span in {docid} has an unparseable start"))?;
+            spans.push(SetSpan::Marker(start));
+        }
+        sides.push((docid.to_string(), spans));
+    }
+    Ok(sides)
+}
+
+/// client.py's LINK_TYPES local addresses (version.0.link_subspace.type):
+/// 2.2 jump, 2.3 quote, 2.6 footnote, 2.6.2 margin. The docid the recordings
+/// attach carries no information — LINK_TYPES_DOC is the constant first doc.
+fn marker_type_name(comps: &[u64]) -> Option<&'static str> {
+    match comps {
+        [1, 0, 2, 2] => Some("jump"),
+        [1, 0, 2, 3] => Some("quote"),
+        [1, 0, 2, 6] => Some("footnote"),
+        [1, 0, 2, 6, 2] => Some("margin"),
+        _ => None,
+    }
+}
+
+/// The corpus-extension create_link shape (MANIFEST-NEW recordings): explicit
+/// `home` plus `fromset`/`toset`/`threeset` vspec-dict lists, every argument
+/// machine-groundable. None of the legacy default-endset conventions apply:
+/// an explicitly EMPTY list goes to MakeLink empty (policy
+/// `explicit-empty-endset` — green accepts all three empty, A11, and skep's
+/// verdict is recorded raw), and the third endset is either the udanax
+/// type-marker (→ the registry name, policy `threeset-marker→registry`) or
+/// real content spans (→ the TYPE endset via α, policy
+/// `threeset-content-type`; green's content-span third endsets are
+/// first-class, A8).
+fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Option<String>) {
+    let golden = str_field(op, &["result", "link_id"]).map(str::to_string);
+
+    // FROM / TO: α-translated V-specs; marker spans do not belong here.
+    let build_side = |cx: &mut Cx, out: &mut OpOutcome, key: &str| -> Result<Option<Vec<VSpec>>, ()> {
+        let Some(v) = op.get(key) else { return Ok(None) };
+        let sides = match parse_set_spans(v) {
+            Ok(s) => s,
+            Err(e) => {
+                inexpressible(out, format!("create_link {key}: {e}"));
+                return Err(());
+            }
+        };
+        if sides.is_empty() {
+            out.adaptations.push("explicit-empty-endset".into());
+            return Ok(Some(Vec::new()));
+        }
+        let mut specs = Vec::new();
+        for (docid, spans) in &sides {
+            let Some(d) = cx.alpha.translate(docid) else {
+                out.status = Status::Disagreed;
+                out.comparator = Some("alpha".into());
+                out.note = Some(format!("create_link {key}: doc {docid} unresolvable"));
+                return Err(());
+            };
+            for sp in spans {
+                match sp {
+                    SetSpan::Plain(s, ord, w) => {
+                        if let Some(span) = vspan(*s, *ord, *w) {
+                            specs.push(VSpec { source: d.clone(), span });
+                        }
+                    }
+                    SetSpan::Marker(comps) => {
+                        inexpressible(
+                            out,
+                            format!(
+                                "create_link {key}: marker-form span {comps:?} outside the \
+                                 type slot"
+                            ),
+                        );
+                        return Err(());
+                    }
+                }
+            }
+        }
+        Ok(Some(specs))
+    };
+    let from = match build_side(cx, out, "fromset") {
+        Ok(v) => v.unwrap_or_default(),
+        Err(()) => return,
+    };
+    let to = match build_side(cx, out, "toset") {
+        Ok(v) => v.unwrap_or_default(),
+        Err(()) => return,
+    };
+
+    // THREE: empty stays empty; markers map through the registry; content
+    // spans translate through α as the real TYPE endset.
+    let ty: Vec<VSpec> = match op.get("threeset") {
+        None => {
+            out.adaptations.push("default_type_jump".into());
+            out.adaptations.push("type_registry".into());
+            match cx.rig.type_vspec("jump") {
+                Some(t) => vec![t],
+                None => {
+                    inexpressible(out, "type registry capacity exhausted".into());
+                    return;
+                }
+            }
+        }
+        Some(v) => {
+            let sides = match parse_set_spans(v) {
+                Ok(s) => s,
+                Err(e) => {
+                    inexpressible(out, format!("create_link threeset: {e}"));
+                    return;
+                }
+            };
+            if sides.is_empty() {
+                out.adaptations.push("explicit-empty-endset".into());
+                Vec::new()
+            } else {
+                let mut specs = Vec::new();
+                for (docid, spans) in &sides {
+                    for sp in spans {
+                        match sp {
+                            SetSpan::Marker(comps) => match marker_type_name(comps) {
+                                Some(name) => {
+                                    out.adaptations.push("threeset-marker→registry".into());
+                                    out.adaptations.push("type_registry".into());
+                                    match cx.rig.type_vspec(name) {
+                                        Some(t) => specs.push(t),
+                                        None => {
+                                            inexpressible(
+                                                out,
+                                                format!(
+                                                    "type registry capacity exhausted for \
+                                                     `{name}`"
+                                                ),
+                                            );
+                                            return;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    inexpressible(
+                                        out,
+                                        format!(
+                                            "threeset marker {comps:?} is not a known udanax \
+                                             type address"
+                                        ),
+                                    );
+                                    return;
+                                }
+                            },
+                            SetSpan::Plain(s, ord, w) => {
+                                let Some(d) = cx.alpha.translate(docid) else {
+                                    out.status = Status::Disagreed;
+                                    out.comparator = Some("alpha".into());
+                                    out.note = Some(format!(
+                                        "create_link threeset: doc {docid} unresolvable"
+                                    ));
+                                    return;
+                                };
+                                out.adaptations.push("threeset-content-type".into());
+                                if let Some(span) = vspan(*s, *ord, *w) {
+                                    specs.push(VSpec { source: d, span });
+                                }
+                            }
+                        }
+                    }
+                }
+                specs
+            }
+        }
+    };
+
+    // HOME: the explicit field, else the recorded result's own prefix.
+    let home_golden = str_field(op, &["home", "home_doc"])
+        .map(str::to_string)
+        .or_else(|| golden.as_ref().and_then(|g| link_home_docid(g)));
+    let Some(home_golden) = home_golden else {
+        inexpressible(out, "explicit-set create_link with no home".into());
+        return;
+    };
+    let Some(home) = cx.alpha.translate(&home_golden) else {
+        out.status = Status::Disagreed;
+        out.comparator = Some("alpha".into());
+        out.note = Some(format!("create_link home {home_golden} unresolvable"));
+        return;
+    };
+
+    // Shadow endset triples (content subspace) for the traversal registry —
+    // recorded before the vecs move into the request.
+    let triples = |v: &Value| -> Vec<(String, u64, u64)> {
+        parse_set_spans(v)
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|(d, spans)| {
+                spans
+                    .iter()
+                    .filter_map(|sp| match sp {
+                        SetSpan::Plain(1, o, w) => Some((d.clone(), *o, *w)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let from_triples = op.get("fromset").map(&triples).unwrap_or_default();
+    let to_triples = op.get("toset").map(&triples).unwrap_or_default();
+
+    match cx.rig.exec(Op::MakeLink { home, from, to, ty }) {
+        Response::AckAddr { addr, .. } => {
+            if !settle_ack(out, xf, None) {
+                return;
+            }
+            cx.shadow.seat_link(&home_golden);
+            cx.shadow.set_current(&home_golden);
+            if let Some(g) = &golden {
+                cx.alpha.bind(g, &addr);
+                cx.shadow.last_link = Some(g.clone());
+                cx.shadow.record_link(g, from_triples, to_triples);
+                out.status = Status::Agreed;
+                out.comparator = Some("address-binding".into());
+            } else {
+                out.status = Status::NotCompared;
+            }
+        }
+        other => {
+            settle_ack(out, xf, rejection_code(&other));
+        }
+    }
+}
+
 fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
+    // The corpus-extension explicit-set shape short-circuits every legacy
+    // grounding convention — the recordings carry all arguments.
+    if op.get("fromset").is_some() || op.get("toset").is_some() || op.get("threeset").is_some() {
+        h_create_link_explicit(cx, op, out, xf);
+        return;
+    }
     // Result ids: result/results/link_id fields, or arrow keys ("A->B": link).
     let arrows = arrow_results(op);
     let goldens: Vec<String> = match field(op, &["result", "results", "link_id"]) {
@@ -2544,6 +2988,7 @@ fn link_type_name(op: &Value) -> Option<String> {
 }
 
 /// Resolve a link-slot name to M7's positional index (FROM=1, TO=2, TYPE=3).
+/// "three" is the new corpus's name for the third endset (`end: "three"`).
 fn slot_of(name: &str) -> Option<usize> {
     if name.contains("source") || name == "from" {
         return Some(1);
@@ -2551,7 +2996,7 @@ fn slot_of(name: &str) -> Option<usize> {
     if name.contains("target") || name == "to" {
         return Some(2);
     }
-    if name.contains("type") {
+    if name.contains("type") || name.contains("three") {
         return Some(3);
     }
     None
@@ -2608,6 +3053,59 @@ fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) 
         return;
     };
     let Some(expected) = field(op, &["result", "content", "contents", "expected", "spans"]) else {
+        // No recorded result but a recorded FAILURE (nary_empty_endset_shapes:
+        // green's `?` following an empty or marker-typed end): ask skep to
+        // follow the slot and reconcile. An empty/invalid answer is the same
+        // observable — nothing followable — as green's refusal; delivered
+        // spans are a divergence.
+        if let Some(err) = expected_failure(op) {
+            match cx.rig.exec(Op::FollowLink { a: link.clone(), slot }) {
+                Response::Follow { result: Err(_), .. } => {
+                    out.status = Status::Agreed;
+                    out.comparator = Some("expected-failure".into());
+                    out.note = Some("both sides refuse the slot (skep: invalid slot)".into());
+                }
+                Response::Follow { result: Ok(set), .. } => {
+                    // Types-doc spans are harness infrastructure (policy
+                    // `type_registry`) — a marker-typed link's slot 3 holds
+                    // only the registry position, which the golden cannot
+                    // speak; excluded before judging.
+                    let real = set
+                        .iter()
+                        .filter(|sp| {
+                            skep_address::validate(sp.start().clone())
+                                .map(|a| !cx.rig.is_types_addr(&a))
+                                .unwrap_or(true)
+                        })
+                        .count();
+                    if real == 0 {
+                        out.adaptations.push("type_registry".into());
+                        out.status = Status::Agreed;
+                        out.comparator = Some("expected-failure".into());
+                        out.note = Some(
+                            "both sides surface nothing followable (green: ?, skep: empty or \
+                             registry-only endset)"
+                                .into(),
+                        );
+                    } else {
+                        out.status = Status::Disagreed;
+                        out.comparator = Some("expected-failure".into());
+                        out.expected = Some(format!("failure: {err:?}"));
+                        out.actual =
+                            Some(format!("skep followed the slot to {real} span(s)"));
+                    }
+                }
+                other => {
+                    out.status = Status::Agreed;
+                    out.comparator = Some("expected-failure".into());
+                    out.note = Some(format!(
+                        "both sides failed (skep: {})",
+                        rejection_code(&other).unwrap_or_else(|| "?".into())
+                    ));
+                }
+            }
+            return;
+        }
         out.status = Status::NotCompared;
         out.note = Some("follow_link with nothing recorded to compare".into());
         return;
@@ -3089,6 +3587,28 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let mut from_sides: Option<SideSpec> = None;
     let mut to_sides: Option<SideSpec> = None;
 
+    // Corpus-extension set fields (`fromset`/`toset`): explicit vspec lists.
+    // An EMPTY list is the recording client's NOSPECS — no constraint on the
+    // slot (policy `set-empty:unconstrained`); the legacy from/to keys keep
+    // their own semantics untouched.
+    for (key, slot) in [("fromset", 0usize), ("toset", 1)] {
+        let Some(v) = field(op, &[key]) else { continue };
+        let Some(arr) = v.as_array() else { continue };
+        if arr.is_empty() {
+            out.adaptations.push(format!("set-empty:unconstrained:{key}"));
+            continue;
+        }
+        let Some(parsed) = arr.iter().map(vspec_dict).collect::<Option<Vec<DocSpans>>>() else {
+            inexpressible(out, format!("find_links {key} holds a non-vspec entry"));
+            return;
+        };
+        if slot == 0 {
+            from_sides = Some(SideSpec::V(parsed));
+        } else {
+            to_sides = Some(SideSpec::V(parsed));
+        }
+    }
+
     if let Some(s) = explicit_side(cx, out, &["from", "source", "sources"]) {
         // `by: "target"` routes the explicit doc into the TO slot: the
         // client's `from` field named the doc it searched FROM, `by` named
@@ -3146,7 +3666,11 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
             from_sides = Some(SideSpec::V(vec![(d, spans)]));
         }
     }
-    if from_sides.is_none() && to_sides.is_none() {
+    // An op that carried ANY explicit set field (even empty — NOSPECS) was a
+    // fully specified client call; the bare-register aim never applies.
+    let ext_sets_present =
+        ["fromset", "toset", "threeset", "homespans"].iter().any(|k| op.get(*k).is_some());
+    if from_sides.is_none() && to_sides.is_none() && !ext_sets_present {
         // Bare find_links: the recording client searched by the source-role
         // document when one is named (link scenarios probe "can the link be
         // found from source" — links/link_home_document_content_deleted),
@@ -3220,21 +3744,85 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
         out.adaptations.push("query-clamped-to-extent".into());
     }
 
-    let ty = match str_field(op, &["filter", "type", "link_type"]) {
-        None | Some("none") | Some("all") | Some("") => SlotSpec::Any,
-        Some(name) => {
-            out.adaptations.push("type_registry".into());
-            match cx.rig.type_endset(name) {
-                Some(e) => SlotSpec::Spans(e),
-                None => {
-                    notes.push(format!("type `{name}` has no registry endset"));
-                    SlotSpec::Empty
+    // The type slot: `threeset` (corpus extension) first — content spans
+    // image to their I-coverage, markers map through the registry, empty is
+    // NOSPECS (unconstrained) — then the legacy name-based filter.
+    let ty = if let Some(v) = field(op, &["threeset"]) {
+        match v.as_array() {
+            Some(arr) if arr.is_empty() => {
+                out.adaptations.push("set-empty:unconstrained:threeset".into());
+                SlotSpec::Any
+            }
+            Some(_) => match parse_set_spans(v) {
+                Ok(sides) => {
+                    let mut all: Vec<skep_address::Span> = Vec::new();
+                    for (docid, spans) in &sides {
+                        let mut plain: Vec<(u64, u64, u64)> = Vec::new();
+                        for sp in spans {
+                            match sp {
+                                SetSpan::Plain(s, o, w) => plain.push((*s, *o, *w)),
+                                SetSpan::Marker(comps) => match marker_type_name(comps) {
+                                    Some(name) => {
+                                        out.adaptations.push("threeset-marker→registry".into());
+                                        out.adaptations.push("type_registry".into());
+                                        match cx.rig.type_endset(name) {
+                                            Some(e) => all.extend(e.spans().cloned()),
+                                            None => notes.push(format!(
+                                                "type `{name}` has no registry endset"
+                                            )),
+                                        }
+                                    }
+                                    None => notes.push(format!(
+                                        "threeset marker {comps:?} is not a known udanax type \
+                                         address"
+                                    )),
+                                },
+                            }
+                        }
+                        if !plain.is_empty() {
+                            let (e, n, cl) = cx.image_endset(docid, &plain);
+                            notes.extend(n);
+                            // The from/to clamp tag was already emitted above;
+                            // tag a threeset clamp directly.
+                            if cl {
+                                out.adaptations.push("query-clamped-to-extent".into());
+                            }
+                            all.extend(e.spans().cloned());
+                        }
+                    }
+                    let e = Endset::from_spans(all.into_iter());
+                    if e.is_empty() {
+                        SlotSpec::Empty
+                    } else {
+                        SlotSpec::Spans(e)
+                    }
+                }
+                Err(e) => {
+                    inexpressible(out, format!("find_links threeset: {e}"));
+                    return;
+                }
+            },
+            None => SlotSpec::Any,
+        }
+    } else {
+        match str_field(op, &["filter", "type", "link_type"]) {
+            None | Some("none") | Some("all") | Some("") => SlotSpec::Any,
+            Some(name) => {
+                out.adaptations.push("type_registry".into());
+                match cx.rig.type_endset(name) {
+                    Some(e) => SlotSpec::Spans(e),
+                    None => {
+                        notes.push(format!("type `{name}` has no registry endset"));
+                        SlotSpec::Empty
+                    }
                 }
             }
         }
     };
-    let home = match field(op, &["homedocids", "homedocs", "home_docs", "homedoc", "home_doc", "home"])
-    {
+    let home = match field(
+        op,
+        &["homedocids", "homedocs", "home_docs", "homedoc", "home_doc", "home", "homespans"],
+    ) {
         None => SlotSpec::Any,
         Some(v) => {
             let refs: Vec<String> = match v {
@@ -3883,6 +4471,23 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 if let Some(span) = vspan(s, o, w) {
                     specs.push(Spec { doc: d.clone(), span });
                 }
+            } else if let Some((start, width)) = deep_span_dict(item) {
+                // A NESTED local V-address ("1.1.1" width "0.0.1" —
+                // boundary_deep_vaddress_reads): built as an arbitrary-depth
+                // tumbler span and asked of skep raw; M6's answer (empty
+                // delivery or a depth/absence rejection) is compared as
+                // recorded (policy `deep-vaddress-span`).
+                out.adaptations.push("deep-vaddress-span".into());
+                match crate::tum::deep_span(&start, &width) {
+                    Some(span) => specs.push(Spec { doc: d.clone(), span }),
+                    None => {
+                        inexpressible(
+                            out,
+                            format!("deep span start {start:?} width {width:?} not constructible"),
+                        );
+                        return;
+                    }
+                }
             } else if let Some(t) = item.as_str() {
                 match locate(cx.shadow, Some(&doc), t) {
                     Some(l) => {
@@ -4022,12 +4627,17 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 // both say "nothing there" (link_at_2_3_after probes a
                 // vacant link position; udanax answered [], skep answers
                 // RangeNotPresent).
+                // DepthIncompatible joins the absence classes for the
+                // deep-vaddress reads: a nested local address holds nothing
+                // addressable on skep, and green's nested reads answered []
+                // — the same observable (boundary_deep_vaddress_reads).
                 let absence = matches!(
                     rejection_code(&other).as_deref(),
                     Some("RangeNotPresent")
                         | Some("EmptySubspace")
                         | Some("NoSuchSubspace")
                         | Some("EmptyResult")
+                        | Some("DepthIncompatible")
                 );
                 if absence && xf.is_none() && strings.as_ref().is_some_and(Vec::is_empty) {
                     out.adaptations.push("empty-as-absent".into());
@@ -4332,9 +4942,28 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     out.adaptations.push("type_registry".into());
     out.adaptations.push("endset-coverage-translated".into());
     out.comparator = Some("endsets-coverage".into());
+    // The corpus extension nests the slot expectations under a `result`
+    // object ({from, to, three}); the legacy shape keys them top-level. The
+    // `three` slot compares through the same coverage comparator — its
+    // recorded spans are content spans (A8), and skep-side registry spans
+    // are already excluded as harness infrastructure.
+    let exp_root: &Value = match op.get("result") {
+        Some(r)
+            if r.as_object().is_some_and(|o| {
+                ["from", "to", "three"].iter().any(|k| o.contains_key(*k))
+            }) =>
+        {
+            r
+        }
+        _ => op,
+    };
     let mut fails: Vec<(String, String)> = Vec::new();
-    for (slot_keys, slot) in [(&["from", "source"][..], 1usize), (&["to", "target"][..], 2)] {
-        let Some(exp) = field(op, slot_keys) else { continue };
+    for (slot_keys, slot) in [
+        (&["from", "source"][..], 1usize),
+        (&["to", "target"][..], 2),
+        (&["three"][..], 3),
+    ] {
+        let Some(exp) = field(exp_root, slot_keys) else { continue };
         // Golden side → I-coverage via the live image.
         let mut want_ranges: Vec<(String, u64, u64)> = Vec::new();
         if let Some(arr) = exp.as_array() {
@@ -4548,8 +5177,8 @@ fn run_compare_pair(
     ref_a: &str,
     ref_b: &str,
     shared: &[Value],
-    win_a: Option<(u64, u64)>,
-    win_b: Option<(u64, u64)>,
+    win_a: Option<Vec<(u64, u64)>>,
+    win_b: Option<Vec<(u64, u64)>>,
 ) -> Option<()> {
     let (Some(da), Some(db)) = (cx.alpha.translate(ga), cx.alpha.translate(gb)) else {
         out.status = Status::Disagreed;
@@ -4557,12 +5186,15 @@ fn run_compare_pair(
         out.note = Some("compare over unresolvable documents".into());
         return None;
     };
-    // An operand window (compare_partial's "shared (13-18)") narrows that
-    // side's ρ; without one the side is the whole extent.
+    // An operand window (compare_partial's "shared (13-18)"; the corpus
+    // extension's operand vspec spans) narrows that side's ρ; without one
+    // the side is the whole extent.
     let region_of =
-        |cx: &Cx, g: &str, d: &skep_address::Address, win: Option<(u64, u64)>| -> Region {
+        |cx: &Cx, g: &str, d: &skep_address::Address, win: Option<Vec<(u64, u64)>>| -> Region {
             let spans = match win {
-                Some((ord, w)) => vspan(1, ord, w).into_iter().collect(),
+                Some(list) => {
+                    list.into_iter().filter_map(|(ord, w)| vspan(1, ord, w)).collect()
+                }
                 None => {
                     let n = cx.shadow.text_len(g);
                     vspan(1, 1, n).into_iter().collect()
@@ -4635,6 +5267,65 @@ fn run_compare_pair(
 }
 
 fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
+    // Corpus-extension operands (policy `compare-operands-explicit`): two
+    // top-level role-keyed vspec-dict fields name the sides and their
+    // windows explicitly (ms_version_race `version_a1`/`original`, fanout
+    // `dest`/`source` and self-compare `whole`/`whole_again`, the marathon's
+    // `doc`/`vbase`). The original/version convention never applies when
+    // they exist — it aims at the LATEST version, which these recordings
+    // demonstrably do not mean. Verified absent from the 263-scenario
+    // corpus, so the legacy paths are untouched.
+    const NOT_OPERAND: &[&str] = &["result", "pairs", "shared", "shared_spans"];
+    let operands: Vec<(String, String, Vec<(u64, u64)>)> = op
+        .as_object()
+        .map(|o| {
+            o.iter()
+                .filter(|(k, _)| !NOT_OPERAND.contains(&k.as_str()))
+                .filter_map(|(k, v)| {
+                    let (docid, spans) = vspec_dict(v)?;
+                    let wins: Vec<(u64, u64)> = spans
+                        .iter()
+                        .filter(|(s, _, _)| *s == 1)
+                        .map(|(_, ord, w)| (*ord, *w))
+                        .collect();
+                    Some((k.clone(), docid, wins))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if operands.len() == 2 {
+        out.adaptations.push("compare-operands-explicit".into());
+        let (ka, da, wa) = operands[0].clone();
+        let (kb, db, wb) = operands[1].clone();
+        let shared: Vec<Value> = field(op, &["result", "shared", "pairs"])
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let win_a = (!wa.is_empty()).then_some(wa);
+        let win_b = (!wb.is_empty()).then_some(wb);
+        if run_compare_pair(cx, out, &da, &db, &ka, &kb, &shared, win_a, win_b).is_none() {
+            return;
+        }
+        // A bare pair_count (no recorded pair list) re-judges as a count.
+        if let (Some(n), true) =
+            (field(op, &["pair_count"]).and_then(Value::as_u64), shared.is_empty())
+        {
+            if out.status == Status::Disagreed && out.expected.as_deref() == Some("[]") {
+                let actual = out.actual.as_deref().unwrap_or("").matches('(').count();
+                out.comparator = Some("count".into());
+                if actual as u64 == n {
+                    out.status = Status::Agreed;
+                    out.expected = None;
+                    out.actual = None;
+                } else {
+                    out.expected = Some(format!("{n} shared pairs"));
+                    out.actual = Some(format!("{actual} shared pairs"));
+                }
+            }
+        }
+        return;
+    }
+
     // Per-source comparison list (content/vcopy_from_multiple_documents
     // `comparisons`): entries {source: name, shared: […]} against the
     // destination doc.
@@ -4755,8 +5446,8 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     // Operand windows: top-level `<ref>_span` keys narrow that side's ρ —
     // compare ops honor their windows (compare_partial's descriptive
     // "shared (13-18)" grounds to doc1[13..19]; round 2 ran whole-document).
-    let mut win_a: Option<(u64, u64)> = None;
-    let mut win_b: Option<(u64, u64)> = None;
+    let mut win_a: Option<Vec<(u64, u64)>> = None;
+    let mut win_b: Option<Vec<(u64, u64)>> = None;
     if let Some(o) = op.as_object() {
         for (k, v) in o {
             let Some(stem) = k.strip_suffix("_span") else { continue };
@@ -4770,10 +5461,10 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             };
             let Some(win) = win else { continue };
             if side_doc == ga && win_a.is_none() {
-                win_a = Some(win);
+                win_a = Some(vec![win]);
                 out.adaptations.push("compare-window".into());
             } else if side_doc == gb && win_b.is_none() {
-                win_b = Some(win);
+                win_b = Some(vec![win]);
                 out.adaptations.push("compare-window".into());
             }
         }
@@ -4814,6 +5505,12 @@ fn h_account(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     match cx.rig.switch_account(existing) {
         Ok(a) => {
             cx.alpha.bind(acct, &a);
+            // Multisession: `account` ops carrying a session field bind (or
+            // re-bind) the label to this account (ms_create_race re-binds B).
+            if let Some(sess) = str_field(op, &["session"]) {
+                cx.rig.bind_session_label(sess, &a);
+                out.adaptations.push(format!("session-bind:{sess}"));
+            }
             out.status = Status::NotCompared;
         }
         Err(e) => {
@@ -4959,6 +5656,31 @@ fn h_observe(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants:
         || op.get("positions").and_then(Value::as_object).is_some()
     {
         h_contents(cx, index, op, out, label_of(op));
+        return;
+    }
+    // A probe green FAILED with no observation data recorded
+    // (boundary_foreign_and_malformed_opens: probes of never-created docs
+    // through validation-free opens). Never-created target → joint absence;
+    // a real bound target → issue the vspanset read and reconcile the
+    // recorded failure against skep's own verdict.
+    let xf = expected_failure(op);
+    if xf.is_some() && !has_observation_fields(op) {
+        if let Some(docref) = str_field(op, &["doc", "docid"]) {
+            if joint_absence(cx, out, &xf, docref) {
+                return;
+            }
+            if let Some(d) = cx.alpha.peek_translate(docref) {
+                let r = cx.rig.exec(Op::RetrieveDocVSpanSet { doc: d });
+                let rejected = match &r {
+                    Response::SpanSet { .. } => None,
+                    other => rejection_code(other)
+                        .or_else(|| Some("unexpected response shape".into())),
+                };
+                settle_ack(out, xf, rejected);
+                return;
+            }
+        }
+        inexpressible(out, "failed probe with no resolvable document".into());
         return;
     }
     let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {

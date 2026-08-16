@@ -1,0 +1,593 @@
+{
+  "name": "fanout_multiplicity_ladder",
+  "description": "Same source span transcluded 1..4 times into one dest; compare after each copy",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "source"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABCDEFGH"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "dest"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      },
+      "comment": "copy 1 of the same source span"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      ],
+      "contents": [
+        "ABCDEFGH"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "multiplicity 1: how many pairs?",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.9",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      },
+      "comment": "copy 2 of the same source span"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.16"
+        }
+      ],
+      "contents": [
+        "ABCDEFGHABCDEFGH"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.16"
+          }
+        ]
+      },
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "multiplicity 2: how many pairs?",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 2
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.17",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      },
+      "comment": "copy 3 of the same source span"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.24"
+        }
+      ],
+      "contents": [
+        "ABCDEFGHABCDEFGHABCDEFGH"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.24"
+          }
+        ]
+      },
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "multiplicity 3: how many pairs?",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.17",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 3
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.25",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.8"
+        }
+      },
+      "comment": "copy 4 of the same source span"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      ],
+      "contents": [
+        "ABCDEFGHABCDEFGHABCDEFGHABCDEFGH"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.32"
+          }
+        ]
+      },
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "comment": "multiplicity 4: how many pairs?",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.17",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.25",
+              "width": "0.8"
+            }
+          },
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 4
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "dest",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.8"
+          }
+        ]
+      },
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.32"
+          }
+        ]
+      },
+      "comment": "reversed direction at multiplicity 4",
+      "result": [
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.9",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.17",
+              "width": "0.8"
+            }
+          }
+        },
+        {
+          "source": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.8"
+            }
+          },
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.25",
+              "width": "0.8"
+            }
+          }
+        }
+      ],
+      "pair_count": 4
+    },
+    {
+      "op": "compare_versions",
+      "dest": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.32"
+          }
+        ]
+      },
+      "dest_again": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.32"
+          }
+        ]
+      },
+      "comment": "self-compare of dest at multiplicity 4",
+      "result": [
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          },
+          "dest_again": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          },
+          "dest_again": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          },
+          "dest_again": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          }
+        },
+        {
+          "dest": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          },
+          "dest_again": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.32"
+            }
+          }
+        }
+      ],
+      "pair_count": 4
+    }
+  ]
+}

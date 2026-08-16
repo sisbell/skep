@@ -1,0 +1,4396 @@
+{
+  "name": "boundary_growth_doubling",
+  "description": "Document doubled by self-vcopy from 32 to 2048 chars with tail probes and half compares",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "abcdefghijklmnopqrstuvwxyz012345"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.33",
+      "step": 1,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      },
+      "comment": "double 32 -> 64"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.64"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.57",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 64",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.65",
+      "step": 2,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.64"
+        }
+      },
+      "comment": "double 64 -> 128"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.128"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.121",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 128",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.129",
+      "step": 3,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.128"
+        }
+      },
+      "comment": "double 128 -> 256"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.256"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.249",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 256",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.257",
+      "step": 4,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.256"
+        }
+      },
+      "comment": "double 256 -> 512"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.512"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.505",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 512",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.513",
+      "step": 5,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.512"
+        }
+      },
+      "comment": "double 512 -> 1024"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.1024"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1017",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 1024",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.1",
+      "at": "1.1025",
+      "step": 6,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.1024"
+        }
+      },
+      "comment": "double 1024 -> 2048"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.2048"
+        }
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.2041",
+        "width": "0.8"
+      },
+      "doc_label": "D",
+      "comment": "tail window at extent 2048",
+      "result": [
+        "yz012345"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "first_half": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.1024"
+          }
+        ]
+      },
+      "second_half": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1025",
+            "width": "0.1024"
+          }
+        ]
+      },
+      "comment": "identity of the halves at extent 2048",
+      "result": [
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.897",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1921",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.769",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1793",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.641",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1665",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.513",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1537",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.385",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1409",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.257",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1281",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.129",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1153",
+              "width": "0.128"
+            }
+          }
+        },
+        {
+          "first_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.128"
+            }
+          },
+          "second_half": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1025",
+              "width": "0.128"
+            }
+          }
+        }
+      ],
+      "pair_count": 256
+    },
+    {
+      "op": "retrieve_vspan",
+      "doc": "1.1.0.1.0.1",
+      "result": {
+        "start": "1.1",
+        "width": "0.2048"
+      }
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "full contents at final extent",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.2048"
+        }
+      ],
+      "contents": [
+        "abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345abcdefghijklmnopqrstuvwxyz012345"
+      ]
+    }
+  ]
+}

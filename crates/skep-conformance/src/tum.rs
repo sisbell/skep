@@ -79,6 +79,19 @@ pub fn span_strings(s: &Span) -> (String, String) {
     (tum_str(s.start()), tum_str(s.width()))
 }
 
+/// Build a V-span from arbitrary-depth dotted start/width components — the
+/// boundary corpus reads at NESTED local addresses ("1.1.1" width "0.0.1",
+/// boundary_deep_vaddress_reads) that the depth-2 [`vspan`] cannot speak but
+/// skep's tumbler spans can; M6 answers them (empty or a typed rejection)
+/// and the harness records what it says. `None` when the span itself is not
+/// constructible (all-zero width).
+pub fn deep_span(start: &[u64], width: &[u64]) -> Option<Span> {
+    if start.is_empty() || width.is_empty() || width.iter().all(|&w| w == 0) {
+        return None;
+    }
+    Span::new(tum(start), tum(width)).ok()
+}
+
 /// The element count of a span whose width is ordinal-level (`[…, 0, n]`
 /// with a single trailing nonzero) — the shape of every content-element
 /// I-extent `Run::iextent` yields. `None` for coarser widths.

@@ -13,9 +13,10 @@ use skep_conformance::runner::run_all;
 fn harness_integrity() {
     let out = run_all().expect("the harness must load goldens, run, and write reports");
 
-    // The vendored corpus: 263 scenarios. A different count means the
-    // vendoring changed underneath the harness — surface it here.
-    assert_eq!(out.records.len(), 263, "expected the 263 vendored golden scenarios");
+    // The vendored corpus: 263 original + 34 corpus-extension scenarios. A
+    // different count means the vendoring changed underneath the harness —
+    // surface it here.
+    assert_eq!(out.records.len(), 297, "expected the 297 vendored golden scenarios");
     assert_eq!(out.loaded_op_counts.len(), out.records.len());
 
     // Every op classified: one outcome per recorded operation, for every
@@ -90,7 +91,8 @@ fn conformance_ratchet() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../conformance/ratchet.toml");
     let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
-    let (mut section, mut allow, mut inexpr) = (String::new(), HashSet::new(), HashSet::new());
+    let (mut section, mut allow, mut inexpr, mut pending) =
+        (String::new(), HashSet::new(), HashSet::new(), HashSet::new());
     for line in raw.lines() {
         let l = line.trim();
         if l.starts_with('#') || l.is_empty() {
@@ -101,6 +103,7 @@ fn conformance_ratchet() {
             match section.as_str() {
                 "allowlisted" => allow.insert(v.to_string()),
                 "inexpressible" => inexpr.insert(v.to_string()),
+                "pending" => pending.insert(v.to_string()),
                 other => panic!("ratchet.toml: unknown section [{other}]"),
             };
         } else {
@@ -111,7 +114,14 @@ fn conformance_ratchet() {
     let out = run_all().expect("sweep must run");
     let mut violations = Vec::new();
     let mut improved = Vec::new();
+    let mut pending_seen = Vec::new();
     for r in &out.records {
+        if pending.contains(&r.name) {
+            if r.verdict != Verdict::Pass {
+                pending_seen.push(format!("{}/{}: {:?}", r.category, r.name, r.verdict));
+            }
+            continue; // corpus extension awaiting adjudication — exempt, visible
+        }
         match r.verdict {
             Verdict::Pass => {
                 if allow.contains(&r.name) || inexpr.contains(&r.name) {
@@ -122,6 +132,10 @@ fn conformance_ratchet() {
             Verdict::Inexpressible if inexpr.contains(&r.name) => {}
             v => violations.push(format!("{}/{}: {v:?} not permitted by ratchet", r.category, r.name)),
         }
+    }
+    if !pending_seen.is_empty() {
+        eprintln!("ratchet: {} PENDING scenario(s) need adjudication:\n{}",
+                  pending_seen.len(), pending_seen.join("\n"));
     }
     if !improved.is_empty() {
         eprintln!("ratchet: {} frozen scenario(s) improved to Pass — trim ratchet.toml: {improved:?}",

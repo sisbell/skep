@@ -1,0 +1,126 @@
+{
+  "name": "boundary_far_position_insert",
+  "description": "Inserts at 1.100 and 1.1000000 of a 3-char doc; reads and a delete across the gap",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "ABC"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.100",
+      "text": "FAR",
+      "comment": "insert at 1.100 in a 3-char doc"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.102"
+        }
+      ],
+      "contents": [
+        "ABCFAR"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.100",
+        "width": "0.3"
+      },
+      "doc_label": "D",
+      "comment": "read at the far position",
+      "result": [
+        "FAR"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.4",
+        "width": "0.3"
+      },
+      "doc_label": "D",
+      "comment": "read just past original extent",
+      "result": []
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.110"
+      },
+      "doc_label": "D",
+      "comment": "read across the whole gap",
+      "result": [
+        "ABCFAR"
+      ]
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1000000",
+      "text": "XL",
+      "comment": "insert at ordinal one million"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.1000001"
+        }
+      ],
+      "contents": [
+        "ABCFARXL"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.2",
+        "width": "0.100"
+      },
+      "comment": "delete spanning content and gap"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.999901"
+        }
+      ],
+      "contents": [
+        "ARXL"
+      ]
+    }
+  ]
+}

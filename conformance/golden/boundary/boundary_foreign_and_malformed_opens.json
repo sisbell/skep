@@ -1,0 +1,128 @@
+{
+  "name": "boundary_foreign_and_malformed_opens",
+  "description": "Opens of never-created/foreign/short/bogus-version docids; writes through a read-only handle",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "guarded"
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.99",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "never-created doc under own account",
+      "result": "1.1.0.1.0.99"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.99",
+      "doc_label": "unexpected-open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.9.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "doc under never-created account",
+      "result": "1.1.0.9.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.9.0.1",
+      "doc_label": "unexpected-open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "too-short docid (node address)",
+      "result": "1.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1",
+      "doc_label": "unexpected-open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "comment": "nonexistent version of real doc",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "doc_label": "unexpected-open",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "create_version",
+      "of": "1.1.0.1.0.99",
+      "comment": "version of never-created doc",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.8",
+      "text": "!",
+      "comment": "insert through a READ_ONLY handle"
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.1"
+      },
+      "comment": "delete through a READ_ONLY handle"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "state after read-only write attempts",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.7"
+        }
+      ],
+      "contents": [
+        "guarded"
+      ]
+    }
+  ]
+}

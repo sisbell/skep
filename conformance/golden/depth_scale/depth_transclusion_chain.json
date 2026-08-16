@@ -1,0 +1,412 @@
+{
+  "name": "depth_transclusion_chain",
+  "description": "4-hop transclusion chain with identity compares back to the origin",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "A"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "SOURCE-MATERIAL"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "B"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.1",
+      "hop": 1,
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.15"
+        }
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.16",
+      "text": "+B"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.17"
+        }
+      ],
+      "contents": [
+        "SOURCE-MATERIAL+B"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "B": {
+        "docid": "1.1.0.1.0.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "A": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "identity after 1 hop(s)",
+      "result": [
+        {
+          "B": {
+            "docid": "1.1.0.1.0.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          },
+          "A": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "C"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.3",
+      "at": "1.1",
+      "hop": 2,
+      "source": {
+        "docid": "1.1.0.1.0.2",
+        "span": {
+          "start": "1.1",
+          "width": "0.15"
+        }
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "address": "1.16",
+      "text": "+C"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.3",
+      "doc_label": "C",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.17"
+        }
+      ],
+      "contents": [
+        "SOURCE-MATERIAL+C"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "C": {
+        "docid": "1.1.0.1.0.3",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "A": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "identity after 2 hop(s)",
+      "result": [
+        {
+          "C": {
+            "docid": "1.1.0.1.0.3",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          },
+          "A": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.4",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.4",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.4"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.4",
+      "at": "1.1",
+      "hop": 3,
+      "source": {
+        "docid": "1.1.0.1.0.3",
+        "span": {
+          "start": "1.1",
+          "width": "0.15"
+        }
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.4",
+      "address": "1.16",
+      "text": "+D"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.4",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.17"
+        }
+      ],
+      "contents": [
+        "SOURCE-MATERIAL+D"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "D": {
+        "docid": "1.1.0.1.0.4",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "A": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "identity after 3 hop(s)",
+      "result": [
+        {
+          "D": {
+            "docid": "1.1.0.1.0.4",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          },
+          "A": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.5",
+      "doc_label": "E"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.5",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.5"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.5",
+      "at": "1.1",
+      "hop": 4,
+      "source": {
+        "docid": "1.1.0.1.0.4",
+        "span": {
+          "start": "1.1",
+          "width": "0.15"
+        }
+      }
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.5",
+      "address": "1.16",
+      "text": "+E"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.5",
+      "doc_label": "E",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.17"
+        }
+      ],
+      "contents": [
+        "SOURCE-MATERIAL+E"
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "E": {
+        "docid": "1.1.0.1.0.5",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "A": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.15"
+          }
+        ]
+      },
+      "comment": "identity after 4 hop(s)",
+      "result": [
+        {
+          "E": {
+            "docid": "1.1.0.1.0.5",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          },
+          "A": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.15"
+            }
+          ]
+        }
+      ],
+      "comment": "all docs carrying A's identity",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.5",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "comment": "sub-span 'CE-M' membership",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3",
+        "1.1.0.1.0.4",
+        "1.1.0.1.0.5"
+      ]
+    }
+  ]
+}

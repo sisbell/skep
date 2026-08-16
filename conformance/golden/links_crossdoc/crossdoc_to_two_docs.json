@@ -1,0 +1,310 @@
+{
+  "name": "crossdoc_to_two_docs",
+  "description": "Link whose TO endset spans two documents; queried from each side",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "S"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "jump off point"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "T1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.2",
+      "address": "1.1",
+      "text": "first landing"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "T2"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.3",
+      "address": "1.1",
+      "text": "second landing"
+    },
+    {
+      "op": "create_link",
+      "home": "1.1.0.1.0.1",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ],
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "threeset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.0.2.2",
+              "width": "0.1"
+            }
+          ]
+        }
+      ],
+      "comment": "TO spans documents T1 and T2",
+      "result": "1.1.0.1.0.1.0.2.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "S",
+      "vspanset": [
+        {
+          "start": "0",
+          "width": "0.1"
+        },
+        {
+          "start": "1",
+          "width": "1"
+        }
+      ],
+      "contents": [
+        "jump off point"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "T1",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      ],
+      "contents": [
+        "first landing"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.3",
+      "doc_label": "T2",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.14"
+        }
+      ],
+      "contents": [
+        "second landing"
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "from",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.4"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "to",
+      "result": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        },
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": []
+        }
+      ]
+    },
+    {
+      "op": "follow_link",
+      "link": "1.1.0.1.0.1.0.2.1",
+      "end": "three",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets seen from T1",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.2",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.5"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          ]
+        }
+      ],
+      "comment": "endsets seen from T2",
+      "result": {
+        "from": [],
+        "to": [
+          {
+            "docid": "1.1.0.1.0.3",
+            "spans": [
+              {
+                "start": "1.1",
+                "width": "0.6"
+              }
+            ]
+          }
+        ],
+        "three": []
+      }
+    },
+    {
+      "op": "find_links",
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.5"
+            }
+          ]
+        }
+      ],
+      "comment": "by T1's span",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "toset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "by T2's span",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    },
+    {
+      "op": "find_links",
+      "fromset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.14"
+            }
+          ]
+        }
+      ],
+      "comment": "from S",
+      "result": [
+        "1.1.0.1.0.1.0.2.1"
+      ]
+    }
+  ]
+}

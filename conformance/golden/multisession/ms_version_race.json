@@ -1,0 +1,335 @@
+{
+  "name": "ms_version_race",
+  "description": "Back-to-back create_version of one doc from two sessions, independent edits, cross-compares",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.1"
+    },
+    {
+      "note": "both sessions on account 1.1.0.1 (versions belong to creator)"
+    },
+    {
+      "op": "create_document",
+      "session": "A",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Root content here."
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "create_version",
+      "session": "A",
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "create_version",
+      "session": "B",
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "create_version",
+      "session": "A",
+      "of": "1.1.0.1.0.1",
+      "result": "1.1.0.1.0.1.3"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "insert",
+      "session": "A",
+      "doc": "1.1.0.1.0.1.1",
+      "address": "1.19",
+      "text": " A1."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ],
+      "contents": [
+        "Root content here. A1."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "insert",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.2",
+      "address": "1.19",
+      "text": " B1."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.2",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ],
+      "contents": [
+        "Root content here. B1."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "comment": "original unchanged?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ],
+      "contents": [
+        "Root content here."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "session": "A",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.18"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "version_a1": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.22"
+          }
+        ]
+      },
+      "original": {
+        "docid": "1.1.0.1.0.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.18"
+          }
+        ]
+      },
+      "result": [
+        {
+          "version_a1": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.18"
+            }
+          },
+          "original": {
+            "docid": "1.1.0.1.0.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.18"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.2",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.2",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.22"
+        }
+      ]
+    },
+    {
+      "op": "compare_versions",
+      "version_b1": {
+        "docid": "1.1.0.1.0.1.2",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.22"
+          }
+        ]
+      },
+      "version_a1": {
+        "docid": "1.1.0.1.0.1.1",
+        "spans": [
+          {
+            "start": "1.1",
+            "width": "0.22"
+          }
+        ]
+      },
+      "result": [
+        {
+          "version_b1": {
+            "docid": "1.1.0.1.0.1.2",
+            "span": {
+              "start": "1.1",
+              "width": "0.18"
+            }
+          },
+          "version_a1": {
+            "docid": "1.1.0.1.0.1.1",
+            "span": {
+              "start": "1.1",
+              "width": "0.18"
+            }
+          }
+        }
+      ],
+      "pair_count": 1
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.2"
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.1.0.1.1"
+    }
+  ]
+}

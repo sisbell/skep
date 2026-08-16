@@ -1,0 +1,123 @@
+{
+  "name": "boundary_single_char_lifecycle",
+  "description": "One-character document: insert, read, delete to empty, re-insert, reopen",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "D"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "empty document",
+      "vspanset": [],
+      "contents": []
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "X"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.1"
+        }
+      ],
+      "contents": [
+        "X"
+      ]
+    },
+    {
+      "op": "retrieve_contents",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.1"
+      },
+      "doc_label": "D",
+      "comment": "exact single-char span",
+      "result": [
+        "X"
+      ]
+    },
+    {
+      "op": "delete",
+      "doc": "1.1.0.1.0.1",
+      "span": {
+        "start": "1.1",
+        "width": "0.1"
+      },
+      "comment": "delete the only character"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "empty after delete-all",
+      "vspanset": [],
+      "contents": []
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "Y",
+      "comment": "insert into emptied document"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.1"
+        }
+      ],
+      "contents": [
+        "Y"
+      ]
+    },
+    {
+      "op": "close_document",
+      "doc": "1.1.0.1.0.1"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.1",
+      "doc_label": "D",
+      "comment": "reopened",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.1"
+        }
+      ],
+      "contents": [
+        "Y"
+      ]
+    }
+  ]
+}

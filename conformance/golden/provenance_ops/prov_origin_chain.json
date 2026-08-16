@@ -1,0 +1,489 @@
+{
+  "name": "prov_origin_chain",
+  "description": "find_documents from each hop of a transclusion chain; dump_state as the only I-address surface",
+  "operations": [
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.1",
+      "doc_label": "A"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.1"
+    },
+    {
+      "op": "insert",
+      "doc": "1.1.0.1.0.1",
+      "address": "1.1",
+      "text": "SHARED-ORIGIN"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.2",
+      "doc_label": "B"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.2",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "result": "1.1.0.1.0.3",
+      "doc_label": "C"
+    },
+    {
+      "op": "open_document",
+      "doc": "1.1.0.1.0.3",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.1.0.3"
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.2",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.1",
+        "span": {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      }
+    },
+    {
+      "op": "vcopy",
+      "dest": "1.1.0.1.0.3",
+      "at": "1.1",
+      "source": {
+        "docid": "1.1.0.1.0.2",
+        "span": {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      }
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.2",
+      "doc_label": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      ],
+      "contents": [
+        "SHARED-ORIGIN"
+      ]
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.1.0.3",
+      "doc_label": "C",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.13"
+        }
+      ],
+      "contents": [
+        "SHARED-ORIGIN"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "queried via A (the origin)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.2",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "queried via B (hop 1): same set? any origin distinction?",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "queried via C (hop 2)",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "find_documents",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.3",
+          "spans": [
+            {
+              "start": "1.8",
+              "width": "0.6"
+            }
+          ]
+        }
+      ],
+      "comment": "sub-span 'ORIGIN' via C",
+      "result": [
+        "1.1.0.1.0.1",
+        "1.1.0.1.0.2",
+        "1.1.0.1.0.3"
+      ]
+    },
+    {
+      "op": "retrieve_endsets",
+      "specset": [
+        {
+          "docid": "1.1.0.1.0.1",
+          "spans": [
+            {
+              "start": "1.1",
+              "width": "0.13"
+            }
+          ]
+        }
+      ],
+      "comment": "no links anywhere: endset shape for pure transclusion",
+      "result": {
+        "from": [],
+        "to": [],
+        "three": []
+      }
+    },
+    {
+      "op": "dump_state",
+      "comment": "the only surface exposing I-addresses: granf/spanf after a transclusion chain",
+      "result": {
+        "granf": {
+          "depth": 0,
+          "height": 2,
+          "enftype": "GRAN",
+          "wid": [
+            "1.1.0.1.0.3"
+          ],
+          "dsp": [
+            "0"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "1.1.0.1.0.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "1.1.0.1.0.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 0
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0.0.0.0.0.0.0.1.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0.0.0.0.0.0.0.1.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 2,
+                  "orgl": {
+                    "depth": 3,
+                    "height": 1,
+                    "enftype": "POOM",
+                    "wid": [
+                      "0.0.0.0.0.0.0.0.13",
+                      "0.13"
+                    ],
+                    "dsp": [
+                      "1.1.0.1.0.1.0.1.1",
+                      "1.1"
+                    ],
+                    "children": [
+                      {
+                        "depth": 4,
+                        "height": 0,
+                        "enftype": "POOM",
+                        "wid": [
+                          "0.0.0.0.0.0.0.0.13",
+                          "0.13"
+                        ],
+                        "dsp": [
+                          "0",
+                          "0"
+                        ],
+                        "homedoc": "0"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0.0.0.0.0.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0.0.0.0.0.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 1,
+                  "text": "SHARED-ORIGIN"
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0.0.0.0.0.1"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0.0.0.0.0.1"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 2,
+                  "orgl": {
+                    "depth": 3,
+                    "height": 1,
+                    "enftype": "POOM",
+                    "wid": [
+                      "0.0.0.0.0.0.0.0.13",
+                      "0.13"
+                    ],
+                    "dsp": [
+                      "1.1.0.1.0.1.0.1.1",
+                      "1.1"
+                    ],
+                    "children": [
+                      {
+                        "depth": 4,
+                        "height": 0,
+                        "enftype": "POOM",
+                        "wid": [
+                          "0.0.0.0.0.0.0.0.13",
+                          "0.13"
+                        ],
+                        "dsp": [
+                          "0",
+                          "0"
+                        ],
+                        "homedoc": "0"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "depth": 1,
+              "height": 1,
+              "enftype": "GRAN",
+              "wid": [
+                "0"
+              ],
+              "dsp": [
+                "0"
+              ],
+              "children": [
+                {
+                  "depth": 2,
+                  "height": 0,
+                  "enftype": "GRAN",
+                  "wid": [
+                    "0"
+                  ],
+                  "dsp": [
+                    "0"
+                  ],
+                  "infotype": 2,
+                  "orgl": {
+                    "depth": 3,
+                    "height": 1,
+                    "enftype": "POOM",
+                    "wid": [
+                      "0.0.0.0.0.0.0.0.13",
+                      "0.13"
+                    ],
+                    "dsp": [
+                      "1.1.0.1.0.1.0.1.1",
+                      "1.1"
+                    ],
+                    "children": [
+                      {
+                        "depth": 4,
+                        "height": 0,
+                        "enftype": "POOM",
+                        "wid": [
+                          "0.0.0.0.0.0.0.0.13",
+                          "0.13"
+                        ],
+                        "dsp": [
+                          "0",
+                          "0"
+                        ],
+                        "homedoc": "0"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "spanf": {
+          "depth": 0,
+          "height": 1,
+          "enftype": "SPAN",
+          "wid": [
+            "0.0.0.0.0.0.2",
+            "0.0.0.0.0.0.0.0.13"
+          ],
+          "dsp": [
+            "4.1.1.0.1.0.1",
+            "1.1.0.1.0.1.0.1.1"
+          ],
+          "children": [
+            {
+              "depth": 1,
+              "height": 0,
+              "enftype": "SPAN",
+              "wid": [
+                "0",
+                "0.0.0.0.0.0.0.0.13"
+              ],
+              "dsp": [
+                "0.0.0.0.0.0.2",
+                "0"
+              ],
+              "homedoc": "1.1.0.1.0.3"
+            },
+            {
+              "depth": 1,
+              "height": 0,
+              "enftype": "SPAN",
+              "wid": [
+                "0",
+                "0.0.0.0.0.0.0.0.13"
+              ],
+              "dsp": [
+                "0.0.0.0.0.0.1",
+                "0"
+              ],
+              "homedoc": "1.1.0.1.0.2"
+            },
+            {
+              "depth": 1,
+              "height": 0,
+              "enftype": "SPAN",
+              "wid": [
+                "0",
+                "0.0.0.0.0.0.0.0.13"
+              ],
+              "dsp": [
+                "0",
+                "0"
+              ],
+              "homedoc": "1.1.0.1.0.1"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

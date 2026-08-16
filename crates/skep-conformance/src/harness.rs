@@ -44,6 +44,10 @@ pub struct Rig {
     boot: SessionId,
     /// Per skep-account sessions: dotted account string → (session, id).
     sessions: BTreeMap<String, (SessionId, PrincipalId)>,
+    /// Golden session labels ("A"/"B"/"C") → skep account addr string (a
+    /// `sessions` key). Bound by `account` ops carrying a `session` field;
+    /// ops carrying `session` route through the label's account session.
+    labels: BTreeMap<String, String>,
     /// The session scenario ops execute under (switched by `account`).
     pub current_session: SessionId,
     /// The account new documents mint under.
@@ -107,6 +111,7 @@ impl Rig {
             op,
             boot,
             sessions: BTreeMap::new(),
+            labels: BTreeMap::new(),
             current_session: session,
             current_account: account.clone(),
             next_principal: 2,
@@ -169,6 +174,40 @@ impl Rig {
         }
         let node = addr(&[1]).ok_or("node [1] must validate")?;
         self.delegate_under(&node, true)
+    }
+
+    /// Bind a golden session label to a skep account (the `account` op's
+    /// session field does this; a label may be re-bound — ms_create_race's B
+    /// switches from 1.1.0.1 to 1.1.0.2 mid-scenario). Two labels sharing an
+    /// account share its session: M10 sessions carry only the principal
+    /// binding, so the shared session is observably identical and the map
+    /// stays one-session-per-account.
+    pub fn bind_session_label(&mut self, label: &str, account: &Address) {
+        self.labels
+            .insert(label.to_string(), crate::tum::addr_str(account));
+    }
+
+    /// Route the working session/account to a golden session label. An
+    /// unbound label (an op carries `session` before any `account` op bound
+    /// it) binds to the CURRENT account — returns `true` so the caller can
+    /// tag the implicit bind.
+    pub fn route_session(&mut self, label: &str) -> Result<bool, String> {
+        let implicit = if self.labels.contains_key(label) {
+            false
+        } else {
+            let cur = crate::tum::addr_str(&self.current_account);
+            self.labels.insert(label.to_string(), cur);
+            true
+        };
+        let key = self.labels[label].clone();
+        let Some((s, _)) = self.sessions.get(&key) else {
+            return Err(format!("session label {label}: account {key} has no session"));
+        };
+        self.current_session = *s;
+        let a = parse_account_addr(&key)
+            .ok_or_else(|| format!("session label {label}: account {key} unparseable"))?;
+        self.current_account = a;
+        Ok(implicit)
     }
 
     /// Delegate the next account-tier prefix under `parent` to a fresh
@@ -328,6 +367,13 @@ impl Rig {
         }
         None
     }
+}
+
+/// Re-validate a stored dotted account string back to an `Address` (the
+/// `sessions`/`labels` maps key by string; routing needs the value form).
+fn parse_account_addr(s: &str) -> Option<Address> {
+    let comps = crate::tum::parse_dotted(s)?;
+    crate::tum::addr(&comps)
 }
 
 /// One-line rendering of a response for rig-internal error strings.

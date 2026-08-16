@@ -1,0 +1,169 @@
+{
+  "name": "ms_committed_visibility",
+  "description": "B commits in stages, A observes each stage, then A writes into B's doc",
+  "multisession": true,
+  "operations": [
+    {
+      "op": "account",
+      "session": "A",
+      "account": "1.1.0.1"
+    },
+    {
+      "op": "account",
+      "session": "B",
+      "account": "1.1.0.2"
+    },
+    {
+      "op": "create_document",
+      "session": "B",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "address": "1.1",
+      "text": "First draft from B."
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "A",
+      "comment": "A sees B's first commit",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.19"
+        }
+      ],
+      "contents": [
+        "First draft from B."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "insert",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "address": "1.20",
+      "text": " Second pass."
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      ],
+      "contents": [
+        "First draft from B. Second pass."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "A",
+      "comment": "A sees B's second commit",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      ],
+      "contents": [
+        "First draft from B. Second pass."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "A",
+      "doc": "1.1.0.2.0.1"
+    },
+    {
+      "op": "open_document",
+      "session": "A",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_write",
+      "conflict": "fail",
+      "comment": "A writes into B's document (account 1.1.0.2 owns it)",
+      "error": "request failed (?)"
+    },
+    {
+      "op": "open_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1",
+      "mode": "read_only",
+      "conflict": "fail",
+      "result": "1.1.0.2.0.1"
+    },
+    {
+      "op": "probe",
+      "doc": "1.1.0.2.0.1",
+      "session": "B",
+      "comment": "B sees A's addendum?",
+      "vspanset": [
+        {
+          "start": "1.1",
+          "width": "0.32"
+        }
+      ],
+      "contents": [
+        "First draft from B. Second pass."
+      ]
+    },
+    {
+      "op": "close_document",
+      "session": "B",
+      "doc": "1.1.0.2.0.1"
+    }
+  ]
+}

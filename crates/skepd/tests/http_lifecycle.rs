@@ -1,0 +1,281 @@
+//! End-to-end over a real socket: session → delegate → create → insert →
+//! retrieve → makelink → findlinks, with sessions interleaved, the guest
+//! (session-less) path, unparseable frames, transport errors, idempotent
+//! retry, and concurrent clients on one world. Store semantics are trusted
+//! to the stores' own tests — these assert the transport.
+
+mod common;
+
+use common::*;
+use serde_json::Value;
+
+/// Bootstrap the standard working chain: π₀ session → next prefix under
+/// node [1] → delegate principal 1 → its session + account.
+fn delegate_first_principal(port: u16) -> (String, String) {
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = expect_resp(&v, "maybe_addr")["addr"]
+        .as_str()
+        .expect("node [1] has a delegable prefix")
+        .to_string();
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
+    );
+    let account = acked_addr(&v);
+    (open_session(port, 1), account)
+}
+
+fn create_doc(port: u16, session: &str, account: &str) -> String {
+    let v = op(
+        port,
+        Some(session),
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    acked_addr(&v)
+}
+
+fn insert_at(port: u16, session: &str, doc: &str, ordinal: u64, value: &str) -> Value {
+    op(
+        port,
+        Some(session),
+        &format!(
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{value}]}}"#
+        ),
+    )
+}
+
+/// Concatenated text of a delivery over `width` positions from ordinal 1.
+fn read_text(port: u16, doc: &str, width: u64) -> String {
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.{width}"}}}}]}}"#
+        ),
+    );
+    expect_resp(&v, "delivery")["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["content"].as_str().unwrap_or(""))
+        .collect()
+}
+
+#[test]
+fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200);
+    assert_eq!(json(&body)["ok"], Value::Bool(true));
+
+    let (s1, account1) = delegate_first_principal(port);
+
+    // Principal 1's document, one value per position.
+    let doc1 = create_doc(port, &s1, &account1);
+    expect_resp(&insert_at(port, &s1, &doc1, 1, r#""hello, wire""#), "ack_addr");
+
+    // Second principal, delegated under account1 by its owner (session 1),
+    // interleaving with principal 1's edits.
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"next_account_prefix","parent":"{account1}"}}"#));
+    let prefix2 = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"delegate","new_prefix":"{prefix2}","new_id":2}}"#));
+    let account2 = acked_addr(&v);
+    let s2 = open_session(port, 2);
+
+    let doc2 = create_doc(port, &s2, &account2);
+    expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
+    expect_resp(&insert_at(port, &s1, &doc1, 2, r#"" and more""#), "ack_addr");
+
+    assert_eq!(read_text(port, &doc1, 2), "hello, wire and more");
+    assert_eq!(read_text(port, &doc2, 1), "linked text");
+
+    // principal_prefix resolves the account the session was told at open.
+    let v = op(port, None, r#"{"op":"principal_prefix","principal":2}"#);
+    assert_eq!(expect_resp(&v, "maybe_addr")["addr"].as_str(), Some(account2.as_str()));
+
+    // A link: type slot resolved from a types document's content.
+    let tdoc = create_doc(port, &s1, &account1);
+    expect_resp(&insert_at(port, &s1, &tdoc, 1, r#""type:jump""#), "ack_addr");
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            concat!(
+                r#"{{"op":"make_link","home":"{d1}","#,
+                r#""from":[{{"source":"{d1}","span":{{"start":"1.1","width":"0.1"}}}}],"#,
+                r#""to":[{{"source":"{d2}","span":{{"start":"1.1","width":"0.1"}}}}],"#,
+                r#""ty":[{{"source":"{t}","span":{{"start":"1.1","width":"0.1"}}}}]}}"#
+            ),
+            d1 = doc1,
+            d2 = doc2,
+            t = tdoc
+        ),
+    );
+    let link = acked_addr(&v);
+
+    // Discovery finds it from the covered region of doc1.
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"find_links_v","d":"{doc1}","region":[{{"start":"1.1","width":"0.1"}}]}}"#
+        ),
+    );
+    let addrs = expect_resp(&v, "addrs")["addrs"].as_array().expect("addrs");
+    assert!(
+        addrs.iter().any(|a| a.as_str() == Some(link.as_str())),
+        "find_links_v must discover {link}: {addrs:?}"
+    );
+
+    // Raw read-back and slot coverage.
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
+    let slots = expect_resp(&v, "link_value")["link"]["slots"].as_array().expect("slots");
+    assert_eq!(slots.len(), 3);
+    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{link}","slot":2}}"#));
+    let covered = expect_resp(&v, "follow")["result"]["ok"].as_array().expect("ok spans");
+    assert!(!covered.is_empty(), "TO slot coverage must be nonempty");
+
+    sd.shutdown();
+}
+
+#[test]
+fn idempotent_retry_replays_the_ack() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (s1, account1) = delegate_first_principal(port);
+
+    let frame =
+        format!(r#"{{"op":"create_new_document","account":"{account1}","id":"retry-1"}}"#);
+    let (st1, first) = http(port, "POST", "/op", Some(&s1), frame.as_bytes());
+    let (st2, second) = http(port, "POST", "/op", Some(&s1), frame.as_bytes());
+    assert_eq!((st1, st2), (200, 200));
+    assert_eq!(first, second, "a same-id retry must replay the identical ack");
+    // A fresh id mints a fresh document.
+    let frame2 =
+        format!(r#"{{"op":"create_new_document","account":"{account1}","id":"retry-2"}}"#);
+    let (_, third) = http(port, "POST", "/op", Some(&s1), frame2.as_bytes());
+    assert_ne!(first, third);
+
+    sd.shutdown();
+}
+
+#[test]
+fn guest_requests_read_but_cannot_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // Reads are principal-free: served with no session at all.
+    let v = op(port, None, r#"{"op":"next_account_prefix","parent":"1"}"#);
+    expect_resp(&v, "maybe_addr");
+
+    // Writes without a session get M10's own verdict, marshaled.
+    let v = op(port, None, r#"{"op":"fork"}"#);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["op"].as_str(), Some("fork"));
+    assert_eq!(rej["code"].as_str(), Some("unauthenticated"));
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"));
+
+    // An unknown token behaves exactly like no token.
+    let v = op(port, Some("no-such-token"), r#"{"op":"fork"}"#);
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
+
+    // Malformed session bodies are transport errors, not op responses.
+    let (st, body) = http(port, "POST", "/session", None, br#"{"user":"alice"}"#);
+    assert_eq!(st, 400);
+    assert_eq!(json(&body)["error"].as_str(), Some("malformed_session_request"));
+
+    sd.shutdown();
+}
+
+#[test]
+fn unparseable_frames_get_the_unparseable_rejection() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    for frame in [
+        &b"this is not json"[..],
+        br#"{"op":"frobnicate"}"#,
+        br#"{"op":"fork","stray":true}"#,
+        br#"{"op":"version","d_src":"not-an-address"}"#,
+    ] {
+        let (st, body) = http(port, "POST", "/op", None, frame);
+        assert_eq!(st, 200, "unparseable frames still get a marshaled response");
+        let v = json(&body);
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["op"].as_str(), Some("unparseable"));
+        assert_eq!(rej["code"].as_str(), Some("malformed"));
+        assert!(rej["detail"].is_string(), "unparseable carries what failed: {rej}");
+    }
+
+    sd.shutdown();
+}
+
+#[test]
+fn transport_errors_are_json() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let (st, body) = get(port, "/nope");
+    assert_eq!(st, 404);
+    assert_eq!(json(&body)["error"].as_str(), Some("no_such_endpoint"));
+
+    let (st, body) = get(port, "/op");
+    assert_eq!(st, 405);
+    assert_eq!(json(&body)["error"].as_str(), Some("method_not_allowed"));
+
+    sd.shutdown();
+}
+
+#[test]
+fn concurrent_clients_share_one_world() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (s1, account1) = delegate_first_principal(port);
+
+    let doc_a = create_doc(port, &s1, &account1);
+    let doc_b = create_doc(port, &s1, &account1);
+
+    let mut handles = Vec::new();
+    for (doc, tag) in [(doc_a.clone(), "a"), (doc_b.clone(), "b")] {
+        let session = s1.clone();
+        handles.push(std::thread::spawn(move || {
+            for i in 1..=5u64 {
+                let v = insert_at(port, &session, &doc, i, &format!("\"{tag}{i}\""));
+                expect_resp(&v, "ack_addr");
+            }
+        }));
+    }
+    for h in handles {
+        h.join().expect("client thread");
+    }
+
+    assert_eq!(read_text(port, &doc_a, 5), "a1a2a3a4a5");
+    assert_eq!(read_text(port, &doc_b, 5), "b1b2b3b4b5");
+
+    sd.shutdown();
+}
+
+#[cfg(feature = "observe")]
+#[test]
+fn dump_serves_the_world_dump() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let (st, body) = get(port, "/dump");
+    assert_eq!(st, 200);
+    let text = String::from_utf8(body).expect("dump is utf-8 text");
+    assert!(text.starts_with("skep-world-dump v1"), "unexpected dump header: {text:.40}");
+
+    sd.shutdown();
+}

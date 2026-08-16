@@ -1,0 +1,633 @@
+//! Codec contract tests, transport-only: every `Op` variant round-trips
+//! through the canonical encoding, every `Response` shape marshals
+//! deterministically, and the wire name tables (op names, rejection codes)
+//! are pinned so a rename upstream cannot silently change the protocol.
+
+use serde_json::Value;
+use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
+use skep_arrangement::{Run, VPos, VSpec};
+use skep_content::Val;
+use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
+use skep_febe::{
+    Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
+    Response, SuccessorSpec, TypeArg,
+};
+use skep_kernel::Seq;
+use skep_links::{Endset, Invalid, Link, View};
+use skep_namespace::PrincipalId;
+use skep_retrieval::{
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Region, Spec, SpecFault,
+};
+use skepd::JsonCodec;
+
+// ── fixture vocabulary ──
+
+fn t(comps: &[u64]) -> Tumbler {
+    Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty component list")
+}
+
+fn a(comps: &[u64]) -> Address {
+    validate(t(comps)).expect("T4-valid test address")
+}
+
+fn n(x: u64) -> Nat {
+    Nat::from(x)
+}
+
+fn sp(start: &[u64], width: &[u64]) -> Span {
+    Span::new(t(start), t(width)).expect("well-formed test span")
+}
+
+fn vp(s: u64, o: u64) -> VPos {
+    VPos { subspace: n(s), ordinal: n(o) }
+}
+
+fn d1() -> Address {
+    a(&[1, 0, 1, 0, 1])
+}
+
+fn d2() -> Address {
+    a(&[1, 0, 1, 0, 2])
+}
+
+fn d3() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
+fn link1() -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 2, 1])
+}
+
+fn link2() -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 2, 2])
+}
+
+fn cspan(ord: u64, w: u64) -> Span {
+    sp(&[1, ord], &[0, w])
+}
+
+fn vs(source: Address, ord: u64, w: u64) -> VSpec {
+    VSpec { source, span: cspan(ord, w) }
+}
+
+fn ispan() -> Span {
+    sp(&[1, 0, 1, 0, 1, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 5])
+}
+
+fn q_all() -> FourSet {
+    FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: SlotSpec::Any, ty: SlotSpec::Any }
+}
+
+fn rq(id: Option<&str>, op: Op) -> Request {
+    Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op }
+}
+
+/// Every `Op` variant at least once; both `TypeArg` forms, both cursor
+/// states, all three slot-constraint forms, and both value encodings.
+fn all_requests() -> Vec<Request> {
+    vec![
+        rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]) }),
+        rq(None, Op::Delegate { new_prefix: t(&[1, 0, 2]), new_id: PrincipalId(2) }),
+        rq(None, Op::RegisterNode { addr: t(&[1, 1]) }),
+        rq(None, Op::Fork),
+        rq(None, Op::NextAccountPrefix { parent: a(&[1]) }),
+        rq(None, Op::PrincipalPrefix { id: PrincipalId(2) }),
+        rq(
+            None,
+            Op::Insert {
+                doc: d1(),
+                at: vp(1, 1),
+                values: vec![Val::new(b"hello".to_vec()), Val::new(vec![0u8, 255])],
+            },
+        ),
+        rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
+        rq(None, Op::Copy { doc: d1(), at: vp(1, 6), specs: vec![vs(d2(), 1, 5)] }),
+        rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)] }),
+        rq(None, Op::Version { d_src: d1() }),
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: vec![vs(d1(), 1, 5)],
+                to: vec![vs(d2(), 1, 6)],
+                ty: vec![vs(d3(), 1, 1)],
+            },
+        ),
+        rq(
+            None,
+            Op::Emit {
+                home: d1(),
+                ty: Endset::from_spans([sp(&[9, 0, 9, 0, 9, 0, 9, 4], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                from: d1(),
+                to: vec![d2()],
+            },
+        ),
+        rq(None, Op::Nullify { home: d1(), target: link1() }),
+        rq(None, Op::AssertSup { home: d1(), old: link1(), new: link2() }),
+        rq(
+            None,
+            Op::EditLink {
+                original: link1(),
+                successor: SuccessorSpec {
+                    from: vec![vs(d2(), 1, 5)],
+                    to: vec![vs(d2(), 6, 2)],
+                    ty: TypeArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 2, 1])]),
+                },
+                d_s: d2(),
+                d_a: d1(),
+            },
+        ),
+        rq(
+            None,
+            Op::EditLink {
+                original: link1(),
+                successor: SuccessorSpec {
+                    from: vec![vs(d2(), 1, 5)],
+                    to: vec![],
+                    ty: TypeArg::Resolve(vec![vs(d3(), 1, 1)]),
+                },
+                d_s: d2(),
+                d_a: d1(),
+            },
+        ),
+        rq(None, Op::ReadLink { a: link1() }),
+        rq(None, Op::FollowLink { a: link1(), slot: 2 }),
+        rq(None, Op::RetrieveV { specs: vec![Spec { doc: d1(), span: cspan(1, 11) }] }),
+        rq(None, Op::RetrieveDocVSpan { doc: d1() }),
+        rq(None, Op::RetrieveDocVSpanSet { doc: d1() }),
+        rq(None, Op::ShowOrigin { doc: d1(), span: cspan(1, 5) }),
+        rq(None, Op::ShowDeletions { d_a: d1(), d_b: d2() }),
+        rq(
+            None,
+            Op::Compare {
+                rho1: vec![Region { doc: d1(), spans: vec![cspan(1, 5)] }],
+                rho2: vec![Region { doc: d2(), spans: vec![cspan(1, 5)] }],
+            },
+        ),
+        rq(
+            None,
+            Op::FindDocsContaining {
+                regions: vec![Region { doc: d1(), spans: vec![cspan(1, 5)] }],
+            },
+        ),
+        rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)] }),
+        rq(None, Op::FindLinksV { d: d1(), region: vec![cspan(1, 5)] }),
+        rq(
+            None,
+            Op::FindLinksFtt {
+                q: FourSet {
+                    home: SlotSpec::Any,
+                    from: SlotSpec::Spans(Endset::from_spans([ispan()])),
+                    to: SlotSpec::Any,
+                    ty: SlotSpec::Empty,
+                },
+            },
+        ),
+        rq(None, Op::CountV { d: d1(), region: vec![cspan(1, 5)] }),
+        rq(None, Op::CountFtt { q: q_all() }),
+        rq(None, Op::WindowV { d: d1(), region: vec![cspan(1, 5)], cur: None, n: 16 }),
+        rq(None, Op::WindowFtt { q: q_all(), cur: Some(link1()), n: 16 }),
+        rq(None, Op::RetrieveEndsets { d: d1(), region: vec![cspan(1, 5)] }),
+        rq(None, Op::Project { a: link1(), slot: 2, d: d2() }),
+        rq(None, Op::DiscoverableFrom { a: link1(), d: d1() }),
+        rq(None, Op::DeleteOrphans { d: d1(), p: vp(1, 3), width: n(2) }),
+        rq(None, Op::InClaims { y: link1(), view: View::Active }),
+        rq(None, Op::OutClaims { x: link2(), view: View::Audit }),
+    ]
+}
+
+const OP_NAMES: [&str; 38] = [
+    "create_new_document",
+    "delegate",
+    "register_node",
+    "fork",
+    "next_account_prefix",
+    "principal_prefix",
+    "insert",
+    "delete",
+    "copy",
+    "rearrange",
+    "version",
+    "make_link",
+    "emit",
+    "nullify",
+    "assert_sup",
+    "edit_link",
+    "read_link",
+    "follow_link",
+    "retrieve_v",
+    "retrieve_doc_v_span",
+    "retrieve_doc_v_span_set",
+    "show_origin",
+    "show_deletions",
+    "compare",
+    "find_docs_containing",
+    "image",
+    "find_links_v",
+    "find_links_ftt",
+    "count_v",
+    "count_ftt",
+    "window_v",
+    "window_ftt",
+    "retrieve_endsets",
+    "project",
+    "discoverable_from",
+    "delete_orphans",
+    "in_claims",
+    "out_claims",
+];
+
+/// parse ∘ marshal_request is the identity on canonical frames, for every
+/// variant; and the emitted op-name set is exactly the documented 38.
+#[test]
+fn every_op_round_trips_canonically() {
+    let codec = JsonCodec;
+    let mut seen: Vec<String> = Vec::new();
+    for req in all_requests() {
+        let bytes = codec.marshal_request(&req);
+        let parsed = codec
+            .parse(&bytes)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "canonical frame failed to parse: {:?} — frame {}",
+                    e.detail,
+                    String::from_utf8_lossy(&bytes)
+                )
+            });
+        let bytes2 = codec.marshal_request(&parsed);
+        assert_eq!(
+            bytes,
+            bytes2,
+            "round-trip not a fixpoint for {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let v: Value = serde_json::from_slice(&bytes).expect("canonical frame is JSON");
+        seen.push(v["op"].as_str().expect("op tag").to_string());
+    }
+    seen.sort();
+    seen.dedup();
+    let mut expected: Vec<&str> = OP_NAMES.to_vec();
+    expected.sort();
+    assert_eq!(seen, expected, "op-name coverage drifted");
+}
+
+/// The idempotency id rides the frame and survives the round trip.
+#[test]
+fn request_id_round_trips() {
+    let codec = JsonCodec;
+    let req = rq(Some("key-9"), Op::Fork);
+    let parsed = codec.parse(&codec.marshal_request(&req)).expect("parses");
+    assert_eq!(parsed.id, Some(ReqId(b"key-9".to_vec())));
+}
+
+/// Every non-rejected `Response` shape, built fresh on each call so
+/// determinism can be checked across two independent constructions
+/// (`Response` derives no `Clone`, deliberately).
+fn all_responses() -> Vec<(&'static str, Response)> {
+    vec![
+        ("ack", Response::Ack { at: Seq(7) }),
+        ("ack_addr", Response::AckAddr { addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]), at: Seq(7) }),
+        (
+            "ack_edit",
+            Response::AckEdit {
+                successor: link2(),
+                claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
+                at: Seq(7),
+            },
+        ),
+        (
+            "delivery",
+            Response::Delivery {
+                items: Delivery(vec![
+                    DeliveryItem::Content(Val::new(b"hello".to_vec())),
+                    DeliveryItem::Content(Val::new(vec![0u8, 255])),
+                    DeliveryItem::Ref(link1()),
+                ]),
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "span_set",
+            Response::SpanSet { set: [ispan()].into_iter().collect::<SpanSet>(), as_of: Seq(9) },
+        ),
+        ("addrs", Response::Addrs { addrs: vec![link1()], as_of: Seq(9) }),
+        ("maybe_addr", Response::MaybeAddr { addr: Some(a(&[1, 0, 2])), as_of: Seq(9) }),
+        ("maybe_addr_none", Response::MaybeAddr { addr: None, as_of: Seq(9) }),
+        ("count", Response::Count { n: 2, as_of: Seq(9) }),
+        (
+            "page",
+            Response::Page {
+                window: Window { batch: vec![link1()], next: Some(link1()), exhausted: true },
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "endsets",
+            Response::Endsets {
+                pairs: vec![(1, Endset::from_spans([cspan(1, 5)]))],
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "runs",
+            Response::Runs {
+                runs: vec![Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 1]), n(5))
+                    .expect("element-level run fixture")],
+                as_of: Seq(9),
+            },
+        ),
+        ("bool", Response::Bool { val: true, as_of: Seq(9) }),
+        (
+            "link_value",
+            Response::LinkValue {
+                link: Some(
+                    Link::new([
+                        Endset::from_spans([ispan()]),
+                        Endset::from_spans([sp(
+                            &[1, 0, 1, 0, 2, 0, 1, 1],
+                            &[0, 0, 0, 0, 0, 0, 0, 6],
+                        )]),
+                        Endset::from_spans([sp(
+                            &[1, 0, 1, 0, 3, 0, 1, 1],
+                            &[0, 0, 0, 0, 0, 0, 0, 1],
+                        )]),
+                    ])
+                    .expect("arity-3 link fixture"),
+                ),
+                as_of: Seq(9),
+            },
+        ),
+        ("link_value_null", Response::LinkValue { link: None, as_of: Seq(9) }),
+        (
+            "follow",
+            Response::Follow {
+                result: Ok([ispan()].into_iter().collect::<SpanSet>()),
+                as_of: Seq(9),
+            },
+        ),
+        ("follow_invalid", Response::Follow { result: Err(Invalid), as_of: Seq(9) }),
+        (
+            "deletions",
+            Response::Deletions {
+                rep: Deletions { a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], b_with_a: vec![] },
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "compare",
+            Response::Compare {
+                rep: CompareReport(vec![CorrPair {
+                    d1: d1(),
+                    u1: vp(1, 1),
+                    d2: d2(),
+                    u2: vp(1, 3),
+                    width: n(5),
+                }]),
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "orphans",
+            Response::Orphans { report: OrphanReport { orphaned: vec![link1()] }, as_of: Seq(9) },
+        ),
+        (
+            "claims",
+            Response::Claims {
+                claims: vec![SupClaim {
+                    claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
+                    old: link1(),
+                    new: link2(),
+                    home: d1(),
+                    active: true,
+                }],
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "rejected",
+            Response::Rejected(Rejection {
+                op: OpKind::Insert,
+                code: RejectCode::Unauthenticated,
+                disposition: Disposition::Permanent,
+                site: None,
+                detail: None,
+            }),
+        ),
+        (
+            "rejected_site",
+            Response::Rejected(Rejection {
+                op: OpKind::RetrieveV,
+                code: RejectCode::MalformedSpan,
+                disposition: Disposition::Permanent,
+                site: Some(FaultSite {
+                    index: Some(1),
+                    fault: Some(SpecFault::NotOrdinalLevel),
+                    ..FaultSite::default()
+                }),
+                detail: None,
+            }),
+        ),
+        (
+            "rejected_unparseable",
+            JsonCodec.unparseable(ParseError { detail: Some("unknown op 'frobnicate'".into()) }),
+        ),
+    ]
+}
+
+/// Marshal determinism: same value twice → byte-equal; two independent
+/// constructions of the same value → byte-equal; and every shape name is
+/// distinct where it should be.
+#[test]
+fn every_response_shape_marshals_deterministically() {
+    let codec = JsonCodec;
+    let first = all_responses();
+    let second = all_responses();
+    assert_eq!(first.len(), second.len());
+    for ((name_a, resp_a), (name_b, resp_b)) in first.iter().zip(second.iter()) {
+        assert_eq!(name_a, name_b);
+        let one = codec.marshal(resp_a);
+        assert_eq!(one, codec.marshal(resp_a), "double marshal differs for {name_a}");
+        assert_eq!(one, codec.marshal(resp_b), "independent construction differs for {name_a}");
+        // Every marshaled response is itself valid JSON with a resp tag.
+        let v: Value = serde_json::from_slice(&one).expect("marshal emits JSON");
+        assert!(v["resp"].is_string(), "{name_a} lacks a resp tag");
+    }
+}
+
+/// The full `RejectCode` wire-name table — all 58 codes, pinned.
+#[test]
+fn reject_code_names_are_pinned() {
+    let table: [(RejectCode, &str); 58] = [
+        (RejectCode::Unauthenticated, "unauthenticated"),
+        (RejectCode::Malformed, "malformed"),
+        (RejectCode::Durability, "durability"),
+        (RejectCode::Poisoned, "poisoned"),
+        (RejectCode::HomeNotRegistered, "home_not_registered"),
+        (RejectCode::DocNotRegistered, "doc_not_registered"),
+        (RejectCode::SourceNotRegistered, "source_not_registered"),
+        (RejectCode::ParentNotRegistered, "parent_not_registered"),
+        (RejectCode::NotRegistered, "not_registered"),
+        (RejectCode::OriginalNotResident, "original_not_resident"),
+        (RejectCode::EndpointNotResident, "endpoint_not_resident"),
+        (RejectCode::NotOwner, "not_owner"),
+        (RejectCode::NotAnAccount, "not_an_account"),
+        (RejectCode::Gate, "gate"),
+        (RejectCode::DelegatorUnknown, "delegator_unknown"),
+        (RejectCode::DuplicateId, "duplicate_id"),
+        (RejectCode::NotAncestor, "not_ancestor"),
+        (RejectCode::NotAuthorized, "not_authorized"),
+        (RejectCode::NotAccountTier, "not_account_tier"),
+        (RejectCode::NotTopDown, "not_top_down"),
+        (RejectCode::NotNextForm, "not_next_form"),
+        (RejectCode::NotValid, "not_valid"),
+        (RejectCode::NotNode, "not_node"),
+        (RejectCode::NotDescendantOfBootstrap, "not_descendant_of_bootstrap"),
+        (RejectCode::NotFresh, "not_fresh"),
+        (RejectCode::BadPosition, "bad_position"),
+        (RejectCode::EmptyContent, "empty_content"),
+        (RejectCode::Content, "content"),
+        (RejectCode::EmptySource, "empty_source"),
+        (RejectCode::BadSpan, "bad_span"),
+        (RejectCode::DanglingSource, "dangling_source"),
+        (RejectCode::EmptyResult, "empty_result"),
+        (RejectCode::NotArranged, "not_arranged"),
+        (RejectCode::OutOfBounds, "out_of_bounds"),
+        (RejectCode::EmptyWidth, "empty_width"),
+        (RejectCode::BadCutCount, "bad_cut_count"),
+        (RejectCode::NotAscending, "not_ascending"),
+        (RejectCode::EmptyContentSubspace, "empty_content_subspace"),
+        (RejectCode::NotAPrincipal, "not_a_principal"),
+        (RejectCode::NodeTierCrossOwner, "node_tier_cross_owner"),
+        (RejectCode::NotHomeLink, "not_home_link"),
+        (RejectCode::AlreadySeated, "already_seated"),
+        (RejectCode::NotContentSubspace, "not_content_subspace"),
+        (RejectCode::IllFormedSpec, "ill_formed_spec"),
+        (RejectCode::EmptyTypeResolution, "empty_type_resolution"),
+        (RejectCode::ShapeViolation, "shape_violation"),
+        (RejectCode::RetractionClass, "retraction_class"),
+        (RejectCode::NonAddressDenotingType, "non_address_denoting_type"),
+        (RejectCode::BadTarget, "bad_target"),
+        (RejectCode::SelfSupersession, "self_supersession"),
+        (RejectCode::IllFormedSuccessor, "ill_formed_successor"),
+        (RejectCode::DcViolation, "dc_violation"),
+        (RejectCode::NoSuchSubspace, "no_such_subspace"),
+        (RejectCode::EmptySubspace, "empty_subspace"),
+        (RejectCode::DepthIncompatible, "depth_incompatible"),
+        (RejectCode::RangeNotPresent, "range_not_present"),
+        (RejectCode::MalformedSpan, "malformed_span"),
+        (RejectCode::NotALink, "not_a_link"),
+        (RejectCode::BadRegion, "bad_region"),
+    ];
+    let codec = JsonCodec;
+    for (code, name) in table {
+        let resp = Response::Rejected(Rejection {
+            op: OpKind::Insert,
+            code,
+            disposition: Disposition::Permanent,
+            site: None,
+            detail: None,
+        });
+        let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
+        assert_eq!(v["code"].as_str(), Some(name), "wire name drifted for {code:?}");
+    }
+}
+
+/// The four dispositions and the diagnostic-field presence rules.
+#[test]
+fn rejection_dispositions_and_optional_fields() {
+    let codec = JsonCodec;
+    let table = [
+        (Disposition::Permanent, "permanent"),
+        (Disposition::Reorder, "reorder"),
+        (Disposition::Retry, "retry"),
+        (Disposition::Halt, "halt"),
+    ];
+    for (disp, name) in table {
+        let resp = Response::Rejected(Rejection {
+            op: OpKind::Delete,
+            code: RejectCode::OutOfBounds,
+            disposition: disp,
+            site: None,
+            detail: None,
+        });
+        let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
+        assert_eq!(v["disposition"].as_str(), Some(name));
+        // Diagnostic options are OMITTED when absent, not null.
+        assert!(v.get("site").is_none());
+        assert!(v.get("detail").is_none());
+    }
+    // …and present when carried, including the full site field set.
+    let resp = Response::Rejected(Rejection {
+        op: OpKind::Compare,
+        code: RejectCode::DocNotRegistered,
+        disposition: Disposition::Reorder,
+        site: Some(FaultSite {
+            operand: Some(skep_retrieval::Operand::Second),
+            region: Some(0),
+            index: Some(2),
+            fault: Some(SpecFault::StartTooShallow),
+            addr: Some(d2()),
+        }),
+        detail: Some("d2 not registered".into()),
+    });
+    let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
+    assert_eq!(v["site"]["operand"].as_str(), Some("second"));
+    assert_eq!(v["site"]["region"].as_u64(), Some(0));
+    assert_eq!(v["site"]["index"].as_u64(), Some(2));
+    assert_eq!(v["site"]["fault"].as_str(), Some("start_too_shallow"));
+    assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.2"));
+    assert_eq!(v["detail"].as_str(), Some("d2 not registered"));
+}
+
+/// Lenient parse, canonical emit: integer naturals, uppercase hex, shuffled
+/// field order, and the empty slot-constraint normalization all read; the
+/// canonical form is what comes back out.
+#[test]
+fn lenient_parse_canonical_emit() {
+    let codec = JsonCodec;
+    // Integer nats and shuffled fields.
+    let lenient =
+        br#"{"values":["hi"],"doc":"1.0.1.0.1","op":"insert","at":{"subspace":1,"ordinal":1}}"#;
+    let parsed = codec.parse(lenient).expect("lenient frame parses");
+    let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
+    assert_eq!(canon["at"]["subspace"].as_str(), Some("1"), "canonical nats are strings");
+    // Uppercase hex reads; canonical output is lowercase.
+    let hexed = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[{"hex":"00FF"}]}"#;
+    let parsed = codec.parse(hexed).expect("uppercase hex parses");
+    let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
+    assert_eq!(canon["values"][0]["hex"].as_str(), Some("00ff"));
+    // Empty slot-constraint array normalizes onto "empty".
+    let ftt = br#"{"op":"count_ftt","q":{"home":[],"from":"any","to":"any","ty":"any"}}"#;
+    let parsed = codec.parse(ftt).expect("empty slot array parses");
+    let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
+    assert_eq!(canon["q"]["home"].as_str(), Some("empty"));
+    // A beyond-u64 natural rides the string form.
+    let wide = br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"18446744073709551616"}"#;
+    let parsed = codec.parse(wide).expect("big width parses");
+    let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
+    assert_eq!(canon["width"].as_str(), Some("18446744073709551616"));
+}
+
+/// Never-silent applied to typos: unknown ops, unknown fields, missing
+/// fields, malformed addresses, and non-object frames all fail parse with a
+/// detail message.
+#[test]
+fn strict_parse_failures() {
+    let codec = JsonCodec;
+    let bad: [&[u8]; 7] = [
+        b"not json at all",
+        br#"["op","fork"]"#,
+        br#"{"op":"frobnicate"}"#,
+        br#"{"op":"fork","surprise":1}"#,
+        br#"{"op":"version"}"#,
+        br#"{"op":"version","d_src":"0.1"}"#,
+        br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true]}"#,
+    ];
+    for frame in bad {
+        let err = match codec.parse(frame) {
+            Err(e) => e,
+            Ok(_) => panic!("frame must not parse: {}", String::from_utf8_lossy(frame)),
+        };
+        assert!(err.detail.is_some(), "parse failure must carry a detail");
+    }
+}

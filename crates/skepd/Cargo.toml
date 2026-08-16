@@ -1,0 +1,43 @@
+[package]
+name = "skepd"
+version = "0.1.0"
+edition = "2021"
+description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, configuration, and process lifetime — no semantics."
+
+[features]
+# `observe` forwards the engine's WorldDump surface as GET /dump. Default-ON
+# so the workspace gate exercises the route and the restart test's dump
+# equality; a build without it simply has no /dump route.
+default = ["observe"]
+observe = ["skep-engine/observe"]
+
+[dependencies]
+# The assembled engine: Engine::open (genesis-or-recover), the Stores<World>
+# factory, and (behind `observe`) the WorldDump surface.
+skep-engine = { path = "../skep-engine", default-features = false }
+# M10 — the operation surface this daemon transports: Operation, Op/Response,
+# the Codec seam, and the typed Rejection model.
+skep-febe = { path = "../skep-febe" }
+# M2 — KernelCfg/Durability/CheckpointPolicy (durability is configuration,
+# chosen here) and Seq.
+skep-kernel = { path = "../skep-kernel" }
+# The wire value types the codec round-trips, each from its owning crate.
+skep-address = { path = "../skep-address" }
+skep-namespace = { path = "../skep-namespace" }
+skep-content = { path = "../skep-content" }
+skep-arrangement = { path = "../skep-arrangement" }
+skep-retrieval = { path = "../skep-retrieval" }
+skep-links = { path = "../skep-links" }
+skep-discovery = { path = "../skep-discovery" }
+# JSON frames. The codec builds Values through its own key-sorting obj()
+# helper, so marshal determinism never depends on serde_json's map backend.
+serde_json = "1"
+# Synchronous HTTP/1.1 server — no async runtime: M2's single applier already
+# serializes writes and Operation::execute is Sync, so worker threads calling
+# it concurrently are the whole concurrency story.
+tiny_http = "0.12"
+# Non-poisoning session-map lock (the same totality argument M10 §7 makes).
+parking_lot = "0.12"
+
+[dev-dependencies]
+tempfile = "3"

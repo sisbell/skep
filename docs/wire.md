@@ -698,7 +698,9 @@ arrangement. → `span_set`.
 {"doc":"1.0.1.0.1","op":"retrieve_doc_v_span"}
 ```
 
-**`retrieve_doc_v_span_set`** — the maximal-run V-span set of `doc`.
+**`retrieve_doc_v_span_set`** — `doc`'s exact per-subspace extents: one
+span per occupied subspace (`[S,1]` with width = that subspace's position
+count; content before links), empty for a registered-empty document.
 → `span_set`.
 
 <!-- wire: request retrieve_doc_v_span_set -->

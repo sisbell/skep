@@ -34,6 +34,7 @@
 //! survive a network.
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

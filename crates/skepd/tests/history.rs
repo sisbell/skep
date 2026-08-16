@@ -14,12 +14,13 @@ use serde_json::Value;
 
 /// One scenario with its positions: doc1 gets "alpha" then loses "lp"
 /// (leaving "aha"), doc2 gets "beta", and one link doc1→doc2 is made and
-/// then nullified. Every field's `at_*` is the committed position the
-/// corresponding ack carried.
+/// then nullified (`nul` is the retraction's own minted address). Every
+/// field's `at_*` is the committed position the corresponding ack carried.
 struct Hist {
     doc1: String,
     doc2: String,
     link: String,
+    nul: String,
     at_c1: u64,
     at_i1: u64,
     at_c2: u64,
@@ -106,9 +107,10 @@ fn seed(port: u16) -> Hist {
         Some(&s1),
         &format!(r#"{{"op":"nullify","home":"{doc1}","target":"{link}"}}"#),
     );
+    let nul = acked_addr(&v);
     let at_null = committed_at(&v);
 
-    Hist { doc1, doc2, link, at_c1, at_i1, at_c2, at_i2, at_del, at_link, at_null }
+    Hist { doc1, doc2, link, nul, at_c1, at_i1, at_c2, at_i2, at_del, at_link, at_null }
 }
 
 fn head_of(port: u16) -> u64 {
@@ -216,11 +218,15 @@ fn historical_reads_answer_every_earlier_state() {
         v["link"]["slots"].is_array(),
         "a nullified link still reads back (audit permanence): {v}"
     );
+    // The nullified link leaves active discovery; the retraction takes its
+    // place (a retraction is itself an active link whose document-homed FROM
+    // covers every content extent of doc1 — M7's contract, replayed here as
+    // the state a live client saw at that position).
     let v = op_at_ok(port, h.at_null, &find_links(&h.doc1));
     assert_eq!(
         expect_resp(&v, "addrs")["addrs"],
-        Value::Array(vec![]),
-        "the nullified link is gone from active discovery"
+        Value::Array(vec![Value::String(h.nul.clone())]),
+        "at the nullify position, active discovery holds exactly the retraction"
     );
 
     // ── determinism, and history-at-head ≡ the live answer ──

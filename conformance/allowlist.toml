@@ -541,3 +541,81 @@ op_index = 9
 class = "asn-0124-present-tense-containment"
 rationale = "ASN-0124: containment is present-tense and address-keyed (not content-once-held); skep implements the spec's monotone-R + present-tense-filter mechanism (M6 FD-SOUND). Udanax's stale spanfilade answer contradicts its own scenario comment. Ruled 2026-08-15."
 
+[[allow]]
+scenario = "endsets_transcluded_source"
+op_index = 4
+class = "asn-0131-whole-endsets-no-clipping"
+rationale = "ASN-0131 whole-endset surfacing, never clipped (ruling from run-2 E1); residue after coverage translation."
+
+[[allow]]
+scenario = "find_documents_after_delete"
+op_index = 7
+class = "asn-0124-present-tense-containment"
+rationale = "ASN-0124 present-tense containment (ruling 14): udanax's stale spanfilade returns emptied docs; skep filters to current arrangement."
+
+[[allow]]
+scenario = "insert_text_check_link_positions"
+op_index = 7
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1; index re-aimed after run-4 op expansion)."
+
+[[allow]]
+scenario = "multiple_text_insertions_with_links"
+op_index = 10
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1; index re-aimed after run-4 op expansion)."
+
+[[allow]]
+scenario = "multiple_text_insertions_with_links"
+op_index = 13
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1; index re-aimed after run-4 op expansion)."
+
+[[allow]]
+scenario = "text_insert_preserves_link_vpositions"
+op_index = 10
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1; index re-aimed after run-4 op expansion)."
+
+[[allow]]
+scenario = "delete_text_before_link"
+op_index = 9
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10: post-delete find reaches the link via permanent I-coverage; udanax's V-limited search recorded empty."
+
+[[allow]]
+scenario = "partial_delete_overlaps_link_and_transclusion"
+op_index = 10
+class = "asn-0114-recorded-not-resolved"
+rationale = "Ruling 11 (ASN-0114 recorded-not-resolved): udanax's bundled resolution drops deleted addresses from the followed end; skep renders the recorded endset."
+
+[[allow]]
+scenario = "partial_delete_overlaps_link_and_transclusion"
+op_index = 11
+class = "asn-0114-recorded-not-resolved"
+rationale = "Ruling 11 (ASN-0114 recorded-not-resolved): udanax's bundled resolution drops deleted addresses from the followed end; skep renders the recorded endset."
+
+[[allow]]
+scenario = "delete_width_larger_than_content"
+op_index = 5
+class = "ruled-rejection-cascade"
+rationale = "Cascade of a ruled rejection: skep refused the udanax-only operation earlier in this scenario (rulings 2/3/12 — subspace confinement / dense V-space / no clamping), so subsequent observations legitimately differ; the divergence is the ruled divergence propagated."
+
+[[allow]]
+scenario = "delete_width_larger_than_content"
+op_index = 6
+class = "ruled-rejection-cascade"
+rationale = "Cascade of a ruled rejection: skep refused the udanax-only operation earlier in this scenario (rulings 2/3/12 — subspace confinement / dense V-space / no clamping), so subsequent observations legitimately differ; the divergence is the ruled divergence propagated."
+
+[[allow]]
+scenario = "copy_link_to_text_subspace"
+op_index = 10
+class = "ruled-rejection-cascade"
+rationale = "Cascade of a ruled rejection: skep refused the udanax-only operation earlier in this scenario (rulings 2/3/12 — subspace confinement / dense V-space / no clamping), so subsequent observations legitimately differ; the divergence is the ruled divergence propagated."
+
+[[allow]]
+scenario = "delete_link_subspace"
+op_index = 10
+class = "ruled-rejection-cascade"
+rationale = "Cascade of a ruled rejection: skep refused the udanax-only operation earlier in this scenario (rulings 2/3/12 — subspace confinement / dense V-space / no clamping), so subsequent observations legitimately differ; the divergence is the ruled divergence propagated."
+

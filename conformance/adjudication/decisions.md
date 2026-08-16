@@ -69,3 +69,43 @@ skep reports MORE pairs take this class.
 - Golden defect classes: bert crash-banner recordings; duplicated
   find_links results; udanax filter fields ignored (type, homedocids);
   malformed two-subspace vspanset replies.
+
+## 2026-08-15 — run-3 docket (37 divergences, worksheet run3)
+
+**Rulings (operator): "go with our spec" — confirmed across the board.**
+
+11. **asn-0114/0131-recorded-not-resolved** — FOLLOWLINK and RETRIEVEENDSETS
+    report the RECORDED endset (content-space spans), never a resolution
+    into any document's V-space. Udanax's bundled resolution (one link,
+    many answers; orphans answering empty) is the defect ASN-0114 documents.
+    Harness renders follow results by content identity (bytes once per
+    recorded I-span) and compares endsets by coverage translation; residue
+    takes this class. NO skep change.
+12. **udanax-clamps-oversized-ops** (extends ruling 3's bounds family) —
+    udanax clamps oversized delete/copy widths; skep rejects OutOfBounds
+    per admission discipline.
+13. Ruled-class extensions at new ops are mechanical: subspace-confinement
+    DELETE, ruling-10 finds, empty-document acceptance, malformed-vspanset
+    variant signature ("0","0.N").
+
+**Verdict on the spec (operator, after runs 1–3):** where spec and udanax
+collide, the spec is presumed correct — every adjudication to date upheld
+it (udanax defects self-documented; substantive divergences pre-argued in
+the ASNs). Standing exceptions: D1 (known spec contradiction, open) and
+M9 (no external ground truth exists).
+
+**Still open from run 3:** T4 investigation (find_documents partial after
+delete — possible harness query construction or R/COPY gap); T2/T5–T8
+harness round-4 items.
+
+**T4 CLOSED (2026-08-15): designed divergence, no bug anywhere.**
+14. **asn-0124-present-tense-containment** — FINDDOCSCONTAINING is
+    present-tense by the ASN's central design fact ("not content-once-held");
+    skep implements the spec's recommended monotone-R + present-tense-filter
+    mechanism (M6 FD-SOUND). Udanax's never-pruned spanfilade returned the
+    emptied document — contradicting its own scenario author's comment
+    ("Should only find source, not empty target"), the third self-documented
+    udanax defect. Coexists with ruling 10: content/link findability is
+    identity-permanent; document containment is an arrangement fact.
+**FINAL investigation tally, runs 1–3: every divergence class explained.
+Confirmed skep bugs: ZERO.**

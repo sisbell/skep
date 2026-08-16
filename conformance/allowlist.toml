@@ -468,3 +468,76 @@ scenario = "version_copies_what"
 op_index = 5
 class = "udanax-malformed-vspanset"
 rationale = "udanax RETRIEVEDOCVSPANSET reply for two-subspace documents is malformed — widths track neither text length nor link count (harness standing analysis, run 2); skep's per-subspace spans are well-formed per M5/M6. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "orphaned_link_both_endpoints_deleted"
+op_index = 11
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "orphaned_link_both_endpoints_deleted"
+op_index = 12
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "orphaned_link_discovery_by_link_id"
+op_index = 6
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "orphaned_link_source_all_deleted"
+op_index = 9
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "search_after_vcopy_source_deleted"
+op_index = 12
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "search_by_both_endpoints_one_removed"
+op_index = 7
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10 (2026-08-15): deleted content remains findable via I-coverage (R / spanfilade); the harness's i-coverage search reaches it, udanax's V-limited search recorded empty. Skep finding the link is the ruled behavior."
+
+[[allow]]
+scenario = "delete_width_larger_than_content"
+op_index = 4
+class = "udanax-clamps-oversized-ops"
+rationale = "udanax clamps oversized delete/copy widths; skep rejects OutOfBounds per admission discipline (bounds family of ruling 3, dense-v-space). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "copy_link_to_text_subspace"
+op_index = 8
+class = "udanax-clamps-oversized-ops"
+rationale = "udanax clamps oversized delete/copy widths; skep rejects OutOfBounds per admission discipline (bounds family of ruling 3, dense-v-space). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "find_documents_empty_document"
+op_index = 3
+class = "registered-empty-accepted"
+rationale = "udanax errors on searching an empty document; skep's registered-empty semantics accept (registry gate, run-2 K ruling). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_link_subspace"
+op_index = 9
+class = "udanax-no-subspace-confinement"
+rationale = "udanax does not enforce the content/link subspace boundary on DELETE; skep's subspace-confinement invariant rejects (extends ruling 2). Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_all_transcluded_content"
+op_index = 8
+class = "asn-0124-present-tense-containment"
+rationale = "ASN-0124: containment is present-tense and address-keyed (not content-once-held); skep implements the spec's monotone-R + present-tense-filter mechanism (M6 FD-SOUND). Udanax's stale spanfilade answer contradicts its own scenario comment. Ruled 2026-08-15."
+
+[[allow]]
+scenario = "delete_transcluded_content_spanfilade_cleanup"
+op_index = 9
+class = "asn-0124-present-tense-containment"
+rationale = "ASN-0124: containment is present-tense and address-keyed (not content-once-held); skep implements the spec's monotone-R + present-tense-filter mechanism (M6 FD-SOUND). Udanax's stale spanfilade answer contradicts its own scenario comment. Ruled 2026-08-15."
+

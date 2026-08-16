@@ -335,6 +335,11 @@ pub(crate) struct ScanOutcome {
     /// committed transaction, unordered (the caller sorts by `Seq` and filters
     /// to `(S_load, W]`).
     pub committed_records: Vec<(u64, Vec<u8>)>,
+    /// Every committed marker's `last_seq`, in scan order — the transaction
+    /// boundaries of the scanned region. Recovery ignores this; bounded
+    /// replay (`Kernel::world_at`) uses it to tell a position (a boundary)
+    /// from a composite's interior `Seq`.
+    pub committed_boundaries: Vec<u64>,
     /// Corrupt runs in scan order.
     pub runs: Vec<RunEnd>,
     /// `(segment index, byte offset of the last committed marker's frame
@@ -369,6 +374,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     let mut out = ScanOutcome {
         w: s_load,
         committed_records: Vec::new(),
+        committed_boundaries: Vec::new(),
         runs: Vec::new(),
         cut: None,
         first_scanned: None,
@@ -423,6 +429,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                                     // disk we read) + records_checksum-valid (§1).
                                     out.w = out.w.max(m.last_seq);
                                     out.cut = Some((i, end as u64));
+                                    out.committed_boundaries.push(m.last_seq);
                                     out.committed_records
                                         .extend(group.into_iter().map(|p| (p.seq, p.bytes)));
                                 }

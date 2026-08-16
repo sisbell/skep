@@ -1,8 +1,11 @@
 //! `skep/docs/wire.md` is tested, not decorative: every fenced JSON example
-//! annotated `<!-- wire: request <op> -->` must parse and be canonical, and
+//! annotated `<!-- wire: request <op> -->` must parse and be canonical,
 //! every `<!-- wire: response <name> -->` block must equal the marshal of
-//! the corresponding fixture here. Coverage is asserted both ways — an op
-//! or response shape missing from the doc fails, and a doc marker without a
+//! the corresponding fixture here, every `<!-- wire: op_at <name> -->`
+//! block must be the strict history envelope around a canonical read frame,
+//! and every `<!-- wire: error <name> -->` block must equal its
+//! transport-error fixture. Coverage is asserted both ways — an op or
+//! response shape missing from the doc fails, and a doc marker without a
 //! fixture fails.
 
 use std::path::Path;
@@ -301,6 +304,71 @@ const REQUIRED_SHAPES: [&str; 19] = [
     "claims",
     "rejected",
 ];
+
+/// Every `op_at` example is the strict `{"at", "frame"}` envelope around a
+/// canonical READ frame — the doc's history examples parse through the same
+/// codec the daemon uses.
+#[test]
+fn doc_op_at_examples_are_canonical() {
+    let codec = JsonCodec;
+    let mut count = 0;
+    for (kind, name, body) in blocks() {
+        if kind != "op_at" {
+            continue;
+        }
+        let v: Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("doc op_at '{name}' is not JSON: {e}"));
+        let obj = v.as_object().unwrap_or_else(|| panic!("op_at '{name}' must be an object"));
+        assert_eq!(
+            obj.len(),
+            2,
+            "op_at '{name}' carries exactly 'at' and 'frame': {v}"
+        );
+        assert!(obj["at"].is_u64(), "op_at '{name}': 'at' is a JSON number");
+        let frame = obj.get("frame").expect("op_at envelope carries 'frame'");
+        let frame_bytes = serde_json::to_vec(frame).expect("frame re-serializes");
+        let req = codec.parse(&frame_bytes).unwrap_or_else(|e| {
+            panic!("doc op_at '{name}' frame does not parse: {:?}", e.detail)
+        });
+        let canonical: Value =
+            serde_json::from_slice(&codec.marshal_request(&req)).expect("canonical is JSON");
+        assert_eq!(&canonical, frame, "op_at '{name}' frame is not in canonical form");
+        count += 1;
+    }
+    assert!(count > 0, "wire.md documents no op_at example");
+}
+
+/// Every transport-error example equals its fixture — the bodies the
+/// history endpoints refuse with. The server side of the same shapes is
+/// asserted end-to-end in tests/history.rs.
+#[test]
+fn doc_error_examples_match_their_fixtures() {
+    let mut seen: Vec<String> = Vec::new();
+    for (kind, name, body) in blocks() {
+        if kind != "error" {
+            continue;
+        }
+        let doc: Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("doc error '{name}' is not JSON: {e}"));
+        let expect = match name.as_str() {
+            "write_at_history" => serde_json::json!({"error": "write_at_history"}),
+            "beyond_head" => serde_json::json!({"error": "beyond_head", "head": 12}),
+            "not_a_position" => serde_json::json!({"error": "not_a_position", "nearest": 7}),
+            "history_reclaimed" => {
+                serde_json::json!({"error": "history_reclaimed", "floor": 2048})
+            }
+            other => panic!("doc marker 'error {other}' has no fixture in wire_doc.rs"),
+        };
+        assert_eq!(doc, expect, "doc error '{name}' drifted from its fixture");
+        seen.push(name);
+    }
+    for required in ["write_at_history", "beyond_head", "not_a_position", "history_reclaimed"] {
+        assert!(
+            seen.iter().any(|n| n == required),
+            "transport error '{required}' has no documented example"
+        );
+    }
+}
 
 /// Every response example equals the marshal of its fixture, and every
 /// required shape is documented.

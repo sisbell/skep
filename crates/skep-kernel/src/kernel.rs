@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 
 use crate::checkpoint;
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
-use crate::error::{CheckpointError, OpenError, TxnError};
+use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
 use crate::journal::{self, JournalWriter, RunEnd};
 use crate::{LockKey, Seq, WorldState};
 
@@ -570,6 +570,122 @@ impl<W: WorldState> Kernel<W> {
         Ok(s)
     }
 
+    /// The committed world as of position `at` — READ-ONLY bounded replay
+    /// over this kernel's own journal directory (observation-surface API;
+    /// the journal already holds every committed state, this makes a prefix
+    /// of it answerable). Base = the newest retained checkpoint at or below
+    /// `at` (else `genesis` while the journal still reaches back to `Seq(1)`),
+    /// seeded through [`WorldState::rebuild_derived`], then folded over
+    /// exactly `(base, at]` — recovery's Pass 2 with `W := at`. Deterministic:
+    /// the same `at` yields a value-equal world on every call, across
+    /// processes and regardless of which base is selected (a checkpoint
+    /// embodies the same fold it stands in for — §6/§7).
+    ///
+    /// `at` must be a committed transaction boundary — one of the `Seq`
+    /// values `transact` has returned (or 0 = genesis); a composite's
+    /// interior `Seq` names a state that was never externally observable
+    /// (§3) and is refused with [`HistoryError::NotABoundary`].
+    ///
+    /// CALLER CONTRACT — `genesis` MUST be the same Σ₀ this journal was
+    /// opened under (M2's byte-identical-genesis contract, restated): the
+    /// bounded fold applies journaled deltas onto it exactly as recovery
+    /// would.
+    ///
+    /// Safe concurrently with the live appender and with `checkpoint()`:
+    /// takes no kernel lock and writes nothing. Every frame of a commit
+    /// `≤ current_seq()` is fully durable before that head was installed
+    /// (§1 durable-before-visible), so the bounded region is stable under
+    /// the reader; a racing append can contribute at most a torn suffix,
+    /// which classifies as an EOF run beyond the last committed marker and
+    /// is ignored here. A concurrent checkpoint's retention pruning can
+    /// remove a file between listing and reading — that surfaces as a
+    /// transient [`HistoryError::Io`]/[`HistoryError::Reclaimed`], never a
+    /// wrong world.
+    pub fn world_at(&self, genesis: W, at: Seq) -> Result<W, HistoryError> {
+        let head = self.current_seq();
+        if at > head {
+            return Err(HistoryError::BeyondHead { head });
+        }
+        if matches!(self.cfg.durability, Durability::InMemory) {
+            return Err(HistoryError::Unjournaled);
+        }
+        // Base selection mirrors open(): newest valid retained checkpoint —
+        // here additionally capped at `at` — else genesis while reachable.
+        let cps = checkpoint::list(&self.cfg.journal_path)?;
+        let mut base: Option<(u64, W)> = None;
+        for cp in cps.iter().rev() {
+            if cp.seq > at.0 {
+                continue;
+            }
+            if let Some(w) = checkpoint::load::<W>(&cp.path, cp.seq) {
+                base = Some((cp.seq, w));
+                break;
+            }
+        }
+        let segs = journal::list_segments(&self.cfg.journal_path)?;
+        let (s_load, world) = match base {
+            Some(b) => b,
+            None => {
+                let genesis_reachable = segs.is_empty() || segs[0].first_seq == 1;
+                if !genesis_reachable {
+                    return Err(HistoryError::Reclaimed {
+                        floor: cps.first().map(|c| Seq(c.seq)),
+                    });
+                }
+                (0, genesis)
+            }
+        };
+        let world = world.rebuild_derived();
+        // Checkpoint seqs are committed boundaries (a checkpoint serializes
+        // an installed root) and 0 is genesis: nothing to fold, no scan.
+        if at.0 == s_load {
+            return Ok(world);
+        }
+        let scan = journal::scan(&segs, s_load)?;
+        for run in &scan.runs {
+            if let RunEnd::Landed { inferred_max, at: run_at } = *run {
+                // Any at-rest corrupt run not wholly embodied in the base is
+                // a halt, even beyond `at`: a run's own seqs are unreadable,
+                // so its reach below `inferred_max` is unknowable — never
+                // answer around it. (A racing live append never produces a
+                // Landed run: it can tear only the file's suffix, after the
+                // last committed marker, which reaches EOF.)
+                if inferred_max > s_load {
+                    return Err(HistoryError::Corruption { at: Seq(run_at) });
+                }
+            }
+            // RunEnd::Eof: the in-flight/truncated tail beyond the last
+            // committed marker — beyond `head ≥ at`, never data this fold
+            // needs.
+        }
+        if !scan.committed_boundaries.iter().any(|&b| b == at.0) {
+            // `s_load` is itself a boundary and a straddler segment can
+            // contribute boundaries below it, so floor the max there.
+            let nearest = scan
+                .committed_boundaries
+                .iter()
+                .copied()
+                .filter(|&b| b < at.0)
+                .max()
+                .map_or(s_load, |m| m.max(s_load));
+            return Err(HistoryError::NotABoundary { nearest: Seq(nearest) });
+        }
+        // Recovery's Pass-2 fold, bounded at `at` (§6/§7: exactly once, in
+        // Seq order, no contiguity required).
+        let mut recs = scan.committed_records;
+        recs.sort_by_key(|(seq, _)| *seq);
+        let mut world = world;
+        for (seq, bytes) in recs {
+            if seq <= s_load || seq > at.0 {
+                continue;
+            }
+            let rec: W::Record = bincode::deserialize(&bytes)
+                .map_err(|_| HistoryError::Corruption { at: Seq(seq) })?;
+            world = world.apply(&rec);
+        }
+        Ok(world)
+    }
+
     /// Shutdown/checkpoint hook. Under per-commit `Fsync` every commit
     /// already fsyncs its records+marker barrier, so there is nothing pending
     /// and this is a no-op returning `Ok(())`; under the in-memory mode it is
@@ -637,5 +753,88 @@ mod tests {
         c.retain_checkpoints = 0;
         let err = Kernel::<Vec<u64>>::open(c, Vec::new()).err().unwrap();
         assert!(matches!(err, OpenError::Io(_)));
+    }
+
+    #[test]
+    fn world_at_answers_every_boundary_and_refuses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let k =
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+                .unwrap();
+        let (_, s1) = k.transact::<_, ()>(&[], |s| {
+            s.push(10);
+            Ok(())
+        })
+        .unwrap();
+        let (_, s2) = k.transact::<_, ()>(&[], |s| {
+            s.push(20);
+            s.push(30); // a composite: seqs 2..=3, boundary 3
+            Ok(())
+        })
+        .unwrap();
+        let (_, s3) = k.transact::<_, ()>(&[], |s| {
+            s.push(40);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!((s1, s2, s3), (Seq(1), Seq(3), Seq(4)));
+
+        // Every boundary answers its exact prefix; 0 is genesis.
+        assert_eq!(k.world_at(Vec::new(), Seq(0)).unwrap(), Vec::<u64>::new());
+        assert_eq!(k.world_at(Vec::new(), Seq(1)).unwrap(), vec![10]);
+        assert_eq!(k.world_at(Vec::new(), Seq(3)).unwrap(), vec![10, 20, 30]);
+        assert_eq!(k.world_at(Vec::new(), Seq(4)).unwrap(), vec![10, 20, 30, 40]);
+
+        // The composite's interior seq was never an observable state.
+        match k.world_at(Vec::new(), Seq(2)) {
+            Err(HistoryError::NotABoundary { nearest }) => assert_eq!(nearest, Seq(1)),
+            other => panic!("expected NotABoundary, got {other:?}"),
+        }
+        match k.world_at(Vec::new(), Seq(9)) {
+            Err(HistoryError::BeyondHead { head }) => assert_eq!(head, Seq(4)),
+            other => panic!("expected BeyondHead, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn world_at_selects_the_base_below_the_position() {
+        // A checkpoint above `at` must be skipped (positions before it still
+        // fold from genesis); a checkpoint at/below `at` is a valid base and
+        // yields the same value the genesis fold would (§6 consistency).
+        let dir = tempfile::tempdir().unwrap();
+        let k =
+            Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+                .unwrap();
+        for x in [10u64, 20, 30] {
+            k.transact::<_, ()>(&[], |s| {
+                s.push(x);
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(k.checkpoint().unwrap(), Seq(3));
+        k.transact::<_, ()>(&[], |s| {
+            s.push(40);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(k.world_at(Vec::new(), Seq(1)).unwrap(), vec![10]);
+        assert_eq!(k.world_at(Vec::new(), Seq(3)).unwrap(), vec![10, 20, 30]);
+        assert_eq!(k.world_at(Vec::new(), Seq(4)).unwrap(), vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn world_at_is_unjournaled_in_memory() {
+        let c = KernelCfg {
+            journal_path: std::path::PathBuf::new(),
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+            retain_checkpoints: 1,
+        };
+        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        assert!(matches!(
+            k.world_at(Vec::new(), Seq(0)),
+            Err(HistoryError::Unjournaled)
+        ));
     }
 }

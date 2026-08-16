@@ -96,7 +96,7 @@ mod journal;
 mod kernel;
 
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
-pub use error::{CheckpointError, OpenError, TxnError};
+pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
 pub use kernel::{Kernel, Snapshot, Staging};
 
 use serde::de::DeserializeOwned;

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use skep_arrangement::Vstream;
 use skep_coordination::{CatalogError, Coordinator};
 use skep_febe::Stores;
-use skep_kernel::{Kernel, KernelCfg, OpenError};
+use skep_kernel::{HistoryError, Kernel, KernelCfg, OpenError, Seq};
 use skep_links::{HasLinks, LinkStore, RegistryError, ShippedType, TypeRegistry};
 use skep_namespace::Namespace;
 
@@ -166,6 +166,19 @@ impl Engine {
     /// wrapped once so the binary holds no assembly knowledge.
     pub fn stores(&self) -> EngineStores {
         EngineStores { kernel: Arc::clone(&self.kernel) }
+    }
+
+    /// The committed world as of position `at` — M2's read-only bounded
+    /// replay ([`Kernel::world_at`]) fed with THE genesis world of this
+    /// engine's one configuration, so the historical fold starts from the
+    /// same Σ₀ every recovery starts from (the byte-identical-genesis
+    /// contract, discharged here rather than left to the binary).
+    /// Observation-surface API: writes nothing, takes no kernel lock, and
+    /// leaves the live paths untouched.
+    pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
+        let genesis = World::genesis(&self.genesis)
+            .expect("the engine's own genesis config validated at Engine::open");
+        self.kernel.world_at(genesis, at)
     }
 }
 

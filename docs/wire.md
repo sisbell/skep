@@ -22,8 +22,9 @@ acknowledged only after it is durable on disk.
 |------------------|------------------------------------------------------------|
 | `POST /session`  | Bind a principal; returns an opaque session token.         |
 | `POST /op`       | One operation frame in, one response document out.         |
+| `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
 | `GET /health`    | Liveness + current log position.                           |
-| `GET /dump`      | Deterministic world dump (only in `observe` builds).       |
+| `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
 There are no other routes. The daemon listens on **127.0.0.1 only**.
 
@@ -98,9 +99,17 @@ Non-200 statuses are transport-level failures with a body of the shape
 |--------|-----------------------------|-----------------------------------------|
 | 400    | `malformed_session_request` | `POST /session` body isn't `{"principal": n}` |
 | 400    | `unreadable_body`           | the request body could not be read      |
+| 400    | `malformed_op_at`           | `POST /op-at` body isn't `{"at": n, "frame": {…}}` |
+| 400    | `write_at_history`          | the `/op-at` frame is a write operation |
+| 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
+| 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
+| 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
+| 410    | `history_reclaimed`         | the position predates the retained journal (carries `floor` when known) |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
+| 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
+| 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
 
 ### Determinism
 
@@ -827,6 +836,95 @@ positions at `p` in `d` orphan? Nothing is written. → `orphans`.
 {"op":"out_claims","view":"audit","x":"1.0.1.0.1.0.2.2"}
 ```
 
+## Reading history
+
+Every response names where it sits in the one committed log — `at` on a
+write acknowledgment, `as_of` on a read. Those numbers are **positions**:
+durable coordinates of committed states, stable across daemon restarts.
+`0` is the empty genesis state. A client that keeps the positions from its
+own history can ask for any read to be answered as of any of them; history
+comes from the substrate's journal itself, never from a client-side
+reconstruction.
+
+**`POST /op-at`** — body `{"at": <position>, "frame": {…}}`, where `frame`
+is an ordinary `/op` frame (§Operations, same codec, no session needed —
+reads are principal-free). The answer is the ordinary response document
+for that operation, its `as_of` reporting `at`:
+
+<!-- wire: op_at retrieve_v -->
+```json
+{"at":9,"frame":{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}]}}
+```
+
+Rules:
+
+* **Read operations only.** History is not a place you can act. A write
+  frame is refused at the transport before anything runs:
+
+  <!-- wire: error write_at_history -->
+  ```json
+  {"error":"write_at_history"}
+  ```
+
+* `at` must be a position you were given — a value some response's
+  `at`/`as_of` carried, or `0`. A number beyond the committed head:
+
+  <!-- wire: error beyond_head -->
+  ```json
+  {"error":"beyond_head","head":12}
+  ```
+
+  A number that falls *between* positions (inside a multi-record commit —
+  such numbers never appear in responses):
+
+  <!-- wire: error not_a_position -->
+  ```json
+  {"error":"not_a_position","nearest":7}
+  ```
+
+  `nearest` is the greatest position at or below the number you sent.
+
+* **Rejections are history too.** A read that would have been rejected at
+  that position is rejected the same way now: asking about a document at a
+  position before its creation gets that position's own
+  `doc_not_registered`. Read the rejection's `disposition` as describing
+  that frozen state — a `reorder` cannot resolve by waiting; reissue at a
+  later position instead.
+
+* Envelope faults (missing or non-integer `at`, missing `frame`, unknown
+  fields) are `400 {"error": "malformed_op_at", "detail": …}`. An
+  unparseable `frame` is answered exactly as `/op` answers it: `200` with
+  the `unparseable` rejection. An `id` inside the frame is accepted and
+  ignored — reads are never memoized (§Correlation and idempotency).
+
+**Determinism.** The same `at` with the same frame yields a byte-identical
+response body — across repeats and across daemon restarts. A freshly
+started daemon answers positions committed long before it started. `/op-at`
+at the current head is byte-identical to the same frame on `/op`.
+
+**Cost and retention.** Each historical read rebuilds the state at `at` by
+folding the journal forward from the nearest on-disk checkpoint at or
+below it — per request, uncached. This is an observation surface, not a
+serving path: fine for history panes and diff tooling, wrong for a hot
+loop. Retention is exactly what the journal already provides: the daemon
+retains recent checkpoints and reclaims journal segments below the oldest
+retained one, so a sufficiently old position can stop being derivable.
+Asking for one:
+
+<!-- wire: error history_reclaimed -->
+```json
+{"error":"history_reclaimed","floor":2048}
+```
+
+`floor` (when known) is the oldest position still answerable. Nothing in
+this surface extends retention.
+
+**`GET /dump?at=<position>`** (only in `observe` builds) — the
+deterministic world dump (§The other endpoints) of the state at that
+position. Two calls with equal `at` are byte-equal; `at` = the current
+head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s;
+a malformed query is `400 {"error": "malformed_at", "detail": …}`.
+
 ## The other endpoints
 
 **`GET /health`** → `200 {"log_position": <n>, "ok": true}`.
@@ -835,7 +933,8 @@ positions at `p` in `d` orphan? Nothing is written. → `orphans`.
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
 deterministic world dump (`skep-world-dump v1` format), byte-comparable
 across processes for run reconstruction. Two dumps of equal worlds are
-byte-equal.
+byte-equal. `GET /dump?at=N` serves a historical position (§Reading
+history).
 
 ## A first session, end to end
 
@@ -854,6 +953,32 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v3 (historical reads — read-at-position, served from the journal):
+
+* New `POST /op-at`: `{"at": <position>, "frame": {<read op>}}` — the same
+  codec and response documents as `/op`, `as_of` reporting `at`. Positions
+  are the `at`/`as_of` values responses already carry (`0` = genesis);
+  clients hold them from their own history.
+* Read-only, enforced at the transport: a write frame is
+  `400 {"error":"write_at_history"}` (ruling-fixed body); `at` beyond the
+  head is `400 {"error":"beyond_head","head":n}` (ruling-fixed).
+* A number inside a multi-record commit is not a position:
+  `400 {"error":"not_a_position","nearest":p}` — refused rather than
+  silently answered at a state that never observably existed.
+* Rejections replay as history: a document queried before its creation
+  gets that position's own `doc_not_registered`; dispositions describe the
+  frozen state.
+* Envelope faults: `400 malformed_op_at`; an unparseable frame stays on
+  the op channel (`200` + `unparseable`), as on `/op`.
+* `GET /dump?at=N` (observe builds): the deterministic dump of that
+  position; equal `N` byte-equal; `N` = head equals plain `/dump`;
+  malformed query `400 malformed_at`.
+* Mechanism and cost stated: per-request bounded replay from the nearest
+  checkpoint at or below `at`, uncached; deterministic across restarts.
+  Retention is the journal's own — reclaimed positions answer
+  `410 {"error":"history_reclaimed","floor":p?}`.
+* The frame's `id` is accepted and ignored (reads are never memoized).
 
 v2 (value granularity — one adjudicated defect, two faces; found by the
 client-side smoke harness against the conformance record's per-byte text

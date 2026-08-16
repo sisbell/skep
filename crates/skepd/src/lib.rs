@@ -12,8 +12,10 @@
 //!   cross-client contract in `skep/docs/wire.md`, whose examples the tests
 //!   assert.
 //! * [`Daemon`] — the state and the socket-free router: `POST /session`,
-//!   `POST /op`, `GET /health`, and (behind the `observe` feature)
-//!   `GET /dump`.
+//!   `POST /op`, `POST /op-at` (any READ frame answered as of a committed
+//!   position, served from the journal via the engine's bounded replay),
+//!   `GET /health`, and (behind the `observe` feature) `GET /dump`, with
+//!   `?at=N` for the dump of a historical position.
 //! * [`serve`]/[`Skepd`] — the synchronous accept loop: worker threads over
 //!   one shared listener, bound to 127.0.0.1 (local trust does not survive
 //!   a network).

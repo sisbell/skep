@@ -41,5 +41,5 @@ pub use world::{Record, World};
 // The foreign types the engine's own signatures name, re-exported so a binary
 // can drive `Engine::open`/`coordinator()` without spelling every store crate.
 pub use skep_coordination::CatalogError;
-pub use skep_kernel::{KernelCfg, OpenError};
+pub use skep_kernel::{HistoryError, KernelCfg, OpenError};
 pub use skep_links::{RegistryError, ReservedAddrs, TypeDecl};

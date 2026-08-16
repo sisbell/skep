@@ -145,10 +145,60 @@ verbatim.
 `{"doc": "<address>", "span": {…}}`. **Regions** are
 `{"doc": "<address>", "spans": [{…}, …]}`.
 
-**Content values** are JSON strings when the bytes are UTF-8 text
-(`"hello"`), and `{"hex": "<lowercase hex>"}` for raw bytes (`{"hex":
-"00ff"}`). Both forms denote exactly their bytes; parse accepts uppercase
-hex, output is lowercase.
+**Content values** carry granularity explicitly (wire v2). The store holds
+a sequence of *values*, each an opaque byte payload occupying **one
+V-position**; a value's interior has no addresses of its own. The
+substrate's text discipline is one single-byte value per position — the
+granularity under which V-span widths measure exact bytes and any byte
+range can be linked, partially transcluded, or compared. The wire defaults
+to it and requires the coarse choice to be spelled out.
+
+*Write forms* — each element of an `insert`'s `values` array is one of:
+
+* `"str"` — one single-byte value per UTF-8 **byte** of the string.
+  `"hello"` is five values at five positions; a two-byte character like `é`
+  is two values.
+* `{"hex": "<hex>"}` — one single-byte value per byte of the payload.
+* `{"atom": "<str>"}` — a **single composite value** holding the string's
+  UTF-8 bytes, at one position.
+* `{"atom_hex": "<hex>"}` — a single composite value of those raw bytes, at
+  one position.
+
+Mixed arrays are legal and concatenate in order. `""` and `{"hex": ""}`
+contribute zero values (vacuous in the array; an insert whose total is zero
+values is still rejected by the store with `empty_content`). `{"atom": ""}`
+and `{"atom_hex": ""}` are parse failures — a zero-byte atom is not
+expressible. A one-byte atom is the same write as its per-byte form
+(granularity distinguishes only multi-byte payloads) and canonicalizes to
+it. Hex is lowercase canonically; uppercase parses.
+
+**What a composite value does.** I-addresses are write-once, so a composite
+value's interior bytes are **permanently unaddressable**: no link can ever
+target inside it, no transclusion can carry part of it, and no compare can
+align against its interior — for the value's whole lifetime, in every
+document that ever transcludes it. That is the operation's meaning, not
+advice; write an atom only for a payload that is indivisible in your data
+model.
+
+*Read form* (`delivery` items) — injective and canonical: two different
+position-value sequences never render alike.
+
+* A **maximal run of consecutive single-byte values** renders as ONE item —
+  `{"content": "<str>"}` when the run's concatenated bytes are valid UTF-8
+  (validity is judged on the whole run: per-byte values routinely
+  concatenate into multi-byte UTF-8 characters), else `{"hex": "<hex>"}`.
+* A **composite value** renders as its own item — `{"atom": "<str>"}` when
+  its bytes are valid UTF-8, else `{"atom_hex": "<hex>"}` — exactly one
+  value per item, never coalesced.
+* A **link position** renders `{"ref": "<address>"}`.
+
+Count positions, not items: `{"content": "hello"}` spans five positions,
+`{"atom": "hello"}` spans one.
+
+The canonical *request* rendering (the form this document's examples are
+asserted in) applies the same coalescing: maximal per-byte runs as one bare
+string (or one `{"hex"}` when the run is not UTF-8), each composite value
+as its atom form.
 
 **Views** are `"audit"` (everything ever created), `"active"` (not
 retracted), or `"default"`.
@@ -217,13 +267,23 @@ nullify / assert_sup / fork / delegate / register_node.
 {"at":7,"claim":"1.0.1.0.1.0.2.3","resp":"ack_edit","successor":"1.0.1.0.1.0.2.2"}
 ```
 
-**`delivery`** — retrieve_v: one item per position, in submitted-spec
-order; a content position delivers its value, a link position delivers the
-address as a reference.
+**`delivery`** — retrieve_v: items in submitted-spec order, granularity
+intact (§Content values): a maximal run of single-byte values is one
+`content` item (or `hex` when the run is not UTF-8), a composite value is
+its own `atom`/`atom_hex` item, a link position is a `ref`. This example
+delivers five per-byte positions and one link position:
 
 <!-- wire: response delivery -->
 ```json
 {"as_of":9,"items":[{"content":"hello"},{"ref":"1.0.1.0.1.0.2.1"}],"resp":"delivery"}
+```
+
+Two per-byte positions followed by one composite value — the atom is never
+coalesced into the run beside it:
+
+<!-- wire: response delivery_atom -->
+```json
+{"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"}],"resp":"delivery"}
 ```
 
 **`span_set`** — retrieve_doc_v_span / retrieve_doc_v_span_set / project.
@@ -493,12 +553,24 @@ at session open — to resolve your own account. The argument is named
 
 ### Arrangement (document editing)
 
-**`insert`** — insert `values` into `doc`'s content at V-position `at`.
-→ `ack_addr` (the first minted I-address).
+**`insert`** — insert content into `doc` at V-position `at`; each element
+of `values` is a §Content values write form. → `ack_addr` (the first
+minted I-address). This example inserts **eleven single-byte values at
+eleven positions** — the string form is per-byte:
 
 <!-- wire: request insert -->
 ```json
 {"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["hello, wire"]}
+```
+
+Granularity is said, never fallen into: the atom forms mint one composite
+value whose interior is permanently unaddressable (§Content values). This
+mixed example seats fourteen per-byte values, one composite, two raw
+bytes, and one non-UTF-8 composite — eighteen positions:
+
+<!-- wire: request insert -->
+```json
+{"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["per-byte text ",{"atom":"one indivisible value"},{"hex":"c328"},{"atom_hex":"00ff"}]}
 ```
 
 **`delete`** — remove `width` positions of `doc` starting at `p`. → `ack`.
@@ -777,7 +849,33 @@ POST /op   (session)   {"op": "insert", "doc": <doc>, "at": {"subspace": "1", "o
 POST /op               {"op": "retrieve_v", "specs": [{"doc": <doc>, "span": {"start": "1.1", "width": "0.5"}}]}
 ```
 
+The insert seats five single-byte values at positions 1..=5 (§Content
+values), which is exactly why the retrieve's width is `"0.5"` and the
+delivery is `[{"content": "hello"}]`.
+
 ## Changelog of wire decisions
+
+v2 (value granularity — one adjudicated defect, two faces; found by the
+client-side smoke harness against the conformance record's per-byte text
+discipline):
+
+* **Write side.** `"str"` and `{"hex"}` now mint **one single-byte value
+  per byte** — v1 read them as one composite value of all the bytes, which
+  silently made the payload's interior permanently unaddressable. The
+  composite reading survives only as the explicit `{"atom"}`/`{"atom_hex"}`
+  forms: coarse granularity must be said, never fallen into.
+* **Read side.** The delivery marshal is now injective: v1 rendered N
+  per-byte positions and one N-byte value identically. v2 renders a maximal
+  per-byte run as one `content`/`hex` item (UTF-8 judged on the whole run)
+  and every composite value as its own `atom`/`atom_hex` item, never
+  coalesced.
+* Empty forms: `""`/`{"hex": ""}` are vacuous (zero values); `{"atom": ""}`
+  and `{"atom_hex": ""}` are parse failures.
+* The insert example `{"values": ["hello, wire"]}` is unchanged in bytes
+  and changed in meaning: eleven values, eleven positions.
+* Granularity is not enforced server-side — composite values are a
+  legitimate store capability; the wire's job is making the choice explicit
+  and lossless in both directions.
 
 v1 (initial):
 
@@ -788,7 +886,8 @@ v1 (initial):
   numbers.
 * Spans as `{"start", "width"}` objects; endsets/span-sets as span arrays,
   order verbatim.
-* Content values: UTF-8 as JSON strings, raw bytes as `{"hex": …}`.
+* Content values: UTF-8 as JSON strings, raw bytes as `{"hex": …}`, one
+  value per array element (superseded by v2's granularity forms).
 * Responses tagged by `resp`; payload options (`addr`, `link`, `next`)
   explicit `null`; diagnostic options (`site`, `detail`) omitted when
   absent.

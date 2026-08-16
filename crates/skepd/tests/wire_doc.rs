@@ -125,7 +125,7 @@ fn doc_request_examples_are_canonical_and_complete() {
     seen.dedup();
     let mut expected: Vec<&str> = OP_NAMES.to_vec();
     expected.sort();
-    assert_eq!(seen, expected, "the doc must carry exactly one example per op");
+    assert_eq!(seen, expected, "every op must carry at least one doc example");
 }
 
 // ── the response fixtures behind the doc's examples ──
@@ -163,10 +163,25 @@ fn fixture(name: &str) -> Response {
             claim: a(&[1, 0, 1, 0, 1, 0, 2, 3]),
             at: Seq(7),
         },
+        // Five per-byte values coalesce into one content item (the text
+        // discipline's common case); the ref breaks the run.
         "delivery" => Response::Delivery {
+            items: Delivery(
+                b"hello"
+                    .iter()
+                    .map(|&b| DeliveryItem::Content(Val::new(vec![b])))
+                    .chain([DeliveryItem::Ref(link1())])
+                    .collect(),
+            ),
+            as_of: Seq(9),
+        },
+        // A composite value is its own atom item, never coalesced with the
+        // per-byte run beside it.
+        "delivery_atom" => Response::Delivery {
             items: Delivery(vec![
-                DeliveryItem::Content(Val::new(b"hello".to_vec())),
-                DeliveryItem::Ref(link1()),
+                DeliveryItem::Content(Val::new(vec![b'h'])),
+                DeliveryItem::Content(Val::new(vec![b'i'])),
+                DeliveryItem::Content(Val::new(b"chunk".to_vec())),
             ]),
             as_of: Seq(9),
         },

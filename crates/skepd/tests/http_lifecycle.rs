@@ -75,7 +75,8 @@ fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
 
     let (s1, account1) = delegate_first_principal(port);
 
-    // Principal 1's document, one value per position.
+    // Principal 1's document; the string write form is per-byte, so
+    // "hello, wire" seats eleven values at positions 1..=11.
     let doc1 = create_doc(port, &s1, &account1);
     expect_resp(&insert_at(port, &s1, &doc1, 1, r#""hello, wire""#), "ack_addr");
 
@@ -89,10 +90,10 @@ fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
 
     let doc2 = create_doc(port, &s2, &account2);
     expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
-    expect_resp(&insert_at(port, &s1, &doc1, 2, r#"" and more""#), "ack_addr");
+    expect_resp(&insert_at(port, &s1, &doc1, 12, r#"" and more""#), "ack_addr");
 
-    assert_eq!(read_text(port, &doc1, 2), "hello, wire and more");
-    assert_eq!(read_text(port, &doc2, 1), "linked text");
+    assert_eq!(read_text(port, &doc1, 20), "hello, wire and more");
+    assert_eq!(read_text(port, &doc2, 11), "linked text");
 
     // principal_prefix resolves the account the session was told at open.
     let v = op(port, None, r#"{"op":"principal_prefix","principal":2}"#);
@@ -139,6 +140,55 @@ fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
     let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{link}","slot":2}}"#));
     let covered = expect_resp(&v, "follow")["result"]["ok"].as_array().expect("ok spans");
     assert!(!covered.is_empty(), "TO slot coverage must be nonempty");
+
+    sd.shutdown();
+}
+
+/// Wire v2 granularity through the real store: a mixed insert (per-byte
+/// text, a composite atom, raw non-UTF-8 bytes) comes back from retrieve_v
+/// with its granularity intact — per-byte runs coalesce, the atom stays its
+/// own item, and the delivery is injective about which world this is.
+#[test]
+fn atom_values_round_trip_through_the_store() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (s1, account1) = delegate_first_principal(port);
+    let doc = create_doc(port, &s1, &account1);
+
+    // "ab" per-byte (positions 1-2), one 5-byte atom (position 3), "yz"
+    // per-byte (4-5), then two raw non-UTF-8 bytes per-byte (6-7).
+    let v = insert_at(port, &s1, &doc, 1, r#""ab",{"atom":"chunk"},"yz""#);
+    expect_resp(&v, "ack_addr");
+    let v = insert_at(port, &s1, &doc, 6, r#"{"hex":"c328"}"#);
+    expect_resp(&v, "ack_addr");
+
+    // Seven positions, three items: the trailing run y,z,0xc3,0x28 is judged
+    // UTF-8 as a whole, fails, and renders on the hex path.
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.7"}}}}]}}"#
+        ),
+    );
+    let items = &expect_resp(&v, "delivery")["items"];
+    let expect: Value =
+        serde_json::from_str(r#"[{"content":"ab"},{"atom":"chunk"},{"hex":"797ac328"}]"#)
+            .expect("json");
+    assert_eq!(items, &expect, "granularity must survive the store round trip");
+
+    // The whole composite value sits at ONE position.
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.3","width":"0.1"}}}}]}}"#
+        ),
+    );
+    let items = &expect_resp(&v, "delivery")["items"];
+    let expect: Value = serde_json::from_str(r#"[{"atom":"chunk"}]"#).expect("json");
+    assert_eq!(items, &expect);
 
     sd.shutdown();
 }
@@ -249,8 +299,10 @@ fn concurrent_clients_share_one_world() {
     for (doc, tag) in [(doc_a.clone(), "a"), (doc_b.clone(), "b")] {
         let session = s1.clone();
         handles.push(std::thread::spawn(move || {
+            // Each two-char chunk is two per-byte values, so chunk i appends
+            // at ordinal 2i-1.
             for i in 1..=5u64 {
-                let v = insert_at(port, &session, &doc, i, &format!("\"{tag}{i}\""));
+                let v = insert_at(port, &session, &doc, 2 * i - 1, &format!("\"{tag}{i}\""));
                 expect_resp(&v, "ack_addr");
             }
         }));
@@ -259,8 +311,8 @@ fn concurrent_clients_share_one_world() {
         h.join().expect("client thread");
     }
 
-    assert_eq!(read_text(port, &doc_a, 5), "a1a2a3a4a5");
-    assert_eq!(read_text(port, &doc_b, 5), "b1b2b3b4b5");
+    assert_eq!(read_text(port, &doc_a, 10), "a1a2a3a4a5");
+    assert_eq!(read_text(port, &doc_b, 10), "b1b2b3b4b5");
 
     sd.shutdown();
 }

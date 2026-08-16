@@ -15,6 +15,14 @@
 //!   with non-negative JSON integers accepted leniently on parse;
 //!   machine-bounded values (`Seq`, slots, counts, principal ids) are JSON
 //!   numbers.
+//! * Content values carry granularity explicitly (wire v2): the per-byte
+//!   write forms (`"str"`, `{"hex"}`) mint one single-byte value per byte —
+//!   the substrate's text discipline, under which V-span widths measure
+//!   exact bytes — while `{"atom"}`/`{"atom_hex"}` mint ONE composite value
+//!   whose interior is permanently unaddressable. Deliveries render maximal
+//!   per-byte runs as one `content`/`hex` item and every composite value as
+//!   its own `atom`/`atom_hex` item, so the marshal is injective across
+//!   granularity: two distinct position-value sequences never render alike.
 //! * Marshaling is deterministic: every object is built through [`obj`],
 //!   which sorts keys, so two marshals of one response are byte-equal and
 //!   the canonical form never depends on serde_json's map backend.
@@ -320,7 +328,7 @@ impl Obj {
     }
 
     fn vals(&mut self, k: &'static str) -> PResult<Vec<Val>> {
-        self.field(k, |v| p_list(v, p_val))
+        self.field(k, p_val_forms)
     }
 
     fn endset(&mut self, k: &'static str) -> PResult<Endset> {
@@ -446,18 +454,57 @@ fn p_region(v: &Value) -> PResult<Region> {
     Ok(Region { doc: sub(m, "doc", p_addr)?, spans: sub(m, "spans", |v| p_list(v, p_span))? })
 }
 
-/// A content value: a JSON string carries UTF-8 text; `{"hex": "…"}` carries
-/// raw bytes. Both forms round-trip to the same `Val` bytes.
-fn p_val(v: &Value) -> PResult<Val> {
-    match v {
-        Value::String(s) => Ok(Val::new(s.clone().into_bytes())),
-        Value::Object(_) => {
-            let m = p_obj(v, &["hex"])?;
-            let s = sub(m, "hex", p_string)?;
-            p_hex(&s).map(Val::new)
-        }
-        _ => Err(PErr("expected a string or {\"hex\": …} object".into())),
+/// The `values` array of `insert`: each element is one of the four write
+/// forms (wire.md §Content values), contributing zero or more values that
+/// concatenate in order.
+fn p_val_forms(v: &Value) -> PResult<Vec<Val>> {
+    let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
+    let mut out = Vec::new();
+    for (i, x) in arr.iter().enumerate() {
+        p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {}", e.0)))?;
     }
+    Ok(out)
+}
+
+/// One element of `values`. The per-byte forms (`"str"`, `{"hex"}`) mint one
+/// single-byte value per byte — the substrate's text discipline, under which
+/// every interior byte stays addressable — and admit the vacuous `""`. The
+/// atom forms (`{"atom"}`, `{"atom_hex"}`) mint ONE composite value of all
+/// the bytes: coarse granularity must be said, never fallen into; a
+/// zero-byte atom is not expressible.
+fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
+    let m = match v {
+        Value::String(s) => {
+            out.extend(s.bytes().map(|b| Val::new(vec![b])));
+            return Ok(());
+        }
+        Value::Object(_) => p_obj(v, &["atom", "atom_hex", "hex"])?,
+        _ => {
+            return Err(PErr(
+                "expected a string or an object with one of 'hex', 'atom', 'atom_hex'".into(),
+            ))
+        }
+    };
+    if m.len() != 1 {
+        return Err(PErr("expected exactly one of 'hex', 'atom', or 'atom_hex'".into()));
+    }
+    if m.contains_key("hex") {
+        let bytes = sub(m, "hex", |v| p_hex(&p_string(v)?))?;
+        out.extend(bytes.into_iter().map(|b| Val::new(vec![b])));
+    } else if m.contains_key("atom") {
+        let s = sub(m, "atom", p_string)?;
+        if s.is_empty() {
+            return Err(PErr("atom: a zero-byte atom is not expressible".into()));
+        }
+        out.push(Val::new(s.into_bytes()));
+    } else {
+        let bytes = sub(m, "atom_hex", |v| p_hex(&p_string(v)?))?;
+        if bytes.is_empty() {
+            return Err(PErr("atom_hex: a zero-byte atom is not expressible".into()));
+        }
+        out.push(Val::new(bytes));
+    }
+    Ok(())
 }
 
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
@@ -563,7 +610,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         }
         Op::Insert { doc, at, values } => (
             op_name(OpKind::Insert),
-            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_vals(values))],
+            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_val_forms(values))],
         ),
         Op::Delete { doc, p, width } => (
             op_name(OpKind::Delete),
@@ -701,13 +748,9 @@ fn j_response(r: &Response) -> Value {
             "ack_edit",
             vec![("successor", j_addr(successor)), ("claim", j_addr(claim)), ("at", j_seq(*at))],
         ),
-        Response::Delivery { items, as_of } => (
-            "delivery",
-            vec![
-                ("items", Value::Array(items.0.iter().map(j_item).collect())),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
+        Response::Delivery { items, as_of } => {
+            ("delivery", vec![("items", j_items(&items.0)), ("as_of", j_seq(*as_of))])
+        }
         Response::SpanSet { set, as_of } => {
             ("span_set", vec![("set", j_spanset(set)), ("as_of", j_seq(*as_of))])
         }
@@ -924,15 +967,60 @@ fn j_regions(rs: &[Region]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
 }
 
-fn j_val(v: &Val) -> Value {
-    match std::str::from_utf8(v.as_bytes()) {
-        Ok(s) => Value::String(s.to_owned()),
-        Err(_) => obj(vec![("hex", Value::String(hex_string(v.as_bytes())))]),
+/// The canonical `values` encoding — [`p_val_forms`]'s inverse: maximal runs
+/// of consecutive single-byte values coalesce into one per-byte element (a
+/// bare string when the run's concatenated bytes are UTF-8 — judged on the
+/// whole run — else `{"hex"}`); every multi-byte value is its own atom form.
+/// `parse(marshal_request(r))` reproduces `r`; the parse-side normalizations
+/// (element boundaries between adjacent per-byte forms, one-byte atoms) are
+/// exactly what maximal-run coalescing re-canonicalizes.
+fn j_val_forms(vs: &[Val]) -> Value {
+    let mut items: Vec<Value> = Vec::new();
+    let mut run: Vec<u8> = Vec::new();
+    for v in vs {
+        if let [b] = v.as_bytes() {
+            run.push(*b);
+        } else {
+            flush_run_str(&mut run, &mut items);
+            items.push(j_atom(v));
+        }
     }
+    flush_run_str(&mut run, &mut items);
+    Value::Array(items)
 }
 
-fn j_vals(vs: &[Val]) -> Value {
-    Value::Array(vs.iter().map(j_val).collect())
+/// Flush a pending per-byte run as a request-side `values` element: a bare
+/// JSON string when the whole run is UTF-8, else `{"hex": …}`.
+fn flush_run_str(run: &mut Vec<u8>, items: &mut Vec<Value>) {
+    if run.is_empty() {
+        return;
+    }
+    items.push(match String::from_utf8(std::mem::take(run)) {
+        Ok(s) => Value::String(s),
+        Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
+    });
+}
+
+/// Flush a pending per-byte run as a delivery item: `{"content": …}` when
+/// the whole run is UTF-8, else `{"hex": …}`.
+fn flush_run_content(run: &mut Vec<u8>, items: &mut Vec<Value>) {
+    if run.is_empty() {
+        return;
+    }
+    items.push(match String::from_utf8(std::mem::take(run)) {
+        Ok(s) => obj(vec![("content", Value::String(s))]),
+        Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
+    });
+}
+
+/// One composite value as its atom item: `{"atom"}` when its bytes are
+/// UTF-8, else `{"atom_hex"}` — exactly one value per item, never coalesced
+/// with its neighbors.
+fn j_atom(v: &Val) -> Value {
+    match std::str::from_utf8(v.as_bytes()) {
+        Ok(s) => obj(vec![("atom", Value::String(s.to_owned()))]),
+        Err(_) => obj(vec![("atom_hex", Value::String(hex_string(v.as_bytes())))]),
+    }
 }
 
 fn hex_string(b: &[u8]) -> String {
@@ -983,11 +1071,33 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
-fn j_item(i: &DeliveryItem) -> Value {
-    match i {
-        DeliveryItem::Content(v) => obj(vec![("content", j_val(v))]),
-        DeliveryItem::Ref(a) => obj(vec![("ref", j_addr(a))]),
+/// Delivery items, injectively: maximal runs of consecutive single-byte
+/// content values coalesce into ONE `{"content"}`/`{"hex"}` item, every
+/// multi-byte value is its own `{"atom"}`/`{"atom_hex"}` item, and link
+/// positions stay `{"ref"}`. The item key names the granularity and
+/// maximal-run coalescing keeps the rendering canonical, so two distinct
+/// position-value sequences never marshal to the same items array.
+fn j_items(items: &[DeliveryItem]) -> Value {
+    let mut out: Vec<Value> = Vec::new();
+    let mut run: Vec<u8> = Vec::new();
+    for it in items {
+        match it {
+            DeliveryItem::Content(v) => {
+                if let [b] = v.as_bytes() {
+                    run.push(*b);
+                } else {
+                    flush_run_content(&mut run, &mut out);
+                    out.push(j_atom(v));
+                }
+            }
+            DeliveryItem::Ref(a) => {
+                flush_run_content(&mut run, &mut out);
+                out.push(obj(vec![("ref", j_addr(a))]));
+            }
+        }
     }
+    flush_run_content(&mut run, &mut out);
+    Value::Array(out)
 }
 
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,
@@ -1189,15 +1299,41 @@ mod tests {
         }
     }
 
-    /// Values: UTF-8 rides as a string, arbitrary bytes as lowercase hex;
-    /// both directions agree.
+    /// Value granularity at the leaf: per-byte forms mint one single-byte
+    /// value per byte, atom forms one composite value; the canonical marshal
+    /// coalesces maximal per-byte runs (UTF-8 judged on the whole run) and
+    /// never coalesces atoms.
     #[test]
-    fn val_encodings_round_trip() {
-        let text = p_val(&Value::String("héllo".into())).map_err(|e| e.0).unwrap();
-        assert_eq!(j_val(&text), Value::String("héllo".into()));
-        let raw = p_val(&j_val(&Val::new(vec![0x00u8, 0xff]))).map_err(|e| e.0).unwrap();
-        assert_eq!(raw.as_bytes(), &[0x00, 0xff]);
-        assert!(p_val(&Value::Bool(true)).is_err());
+    fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
+        let mut vs: Vec<Val> = Vec::new();
+        p_val_form(&Value::String("hé".into()), &mut vs).map_err(|e| e.0).unwrap();
+        assert_eq!(vs.len(), 3, "'h' plus the two bytes of 'é'");
+        assert!(vs.iter().all(|v| v.len() == 1));
+        p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs)
+            .map_err(|e| e.0)
+            .unwrap();
+        assert_eq!(vs.len(), 4);
+        assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
+        // Canonical inverse: the run reassembles, the atom stays its own form.
+        let canon = j_val_forms(&vs);
+        let expect: Value = serde_json::from_str(r#"["hé",{"atom":"hé"}]"#).unwrap();
+        assert_eq!(canon, expect);
+        // Empty per-byte forms are vacuous; empty atoms are inexpressible;
+        // multi-key objects and non-string/object elements are malformed.
+        let mut none: Vec<Val> = Vec::new();
+        p_val_form(&Value::String(String::new()), &mut none).map_err(|e| e.0).unwrap();
+        p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none)
+            .map_err(|e| e.0)
+            .unwrap();
+        assert!(none.is_empty());
+        for bad in [
+            obj(vec![("atom", Value::String(String::new()))]),
+            obj(vec![("atom_hex", Value::String(String::new()))]),
+            obj(vec![("atom", Value::String("a".into())), ("hex", Value::String("00".into()))]),
+            Value::Bool(true),
+        ] {
+            assert!(p_val_form(&bad, &mut none).is_err(), "{bad} must not parse");
+        }
         assert!(p_hex("abc").is_err()); // odd length
         assert!(p_hex("zz").is_err());
     }

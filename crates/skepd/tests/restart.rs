@@ -43,7 +43,9 @@ fn world_survives_a_restart() {
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         );
         doc = acked_addr(&v);
-        for (ord, text) in [(1, "durable"), (2, " text")] {
+        // Per-byte writes: "durable" fills positions 1..=7, so the append
+        // lands at ordinal 8 — twelve positions of "durable text" in all.
+        for (ord, text) in [(1, "durable"), (8, " text")] {
             let v = op(
                 port,
                 Some(&s1),
@@ -55,7 +57,7 @@ fn world_survives_a_restart() {
         }
 
         retrieve_frame = format!(
-            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.12"}}}}]}}"#
         );
         spanset_frame = format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{doc}"}}"#);
         let (st, body) = http(port, "POST", "/op", None, retrieve_frame.as_bytes());
@@ -112,7 +114,7 @@ fn world_survives_a_restart() {
             port,
             Some(&stale_token),
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"3"}},"values":["x"]}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"13"}},"values":["x"]}}"#
             ),
         );
         assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
@@ -123,7 +125,7 @@ fn world_survives_a_restart() {
             port,
             Some(&s1),
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"3"}},"values":["!"]}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"13"}},"values":["!"]}}"#
             ),
         );
         expect_resp(&v, "ack_addr");

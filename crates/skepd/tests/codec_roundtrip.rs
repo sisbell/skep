@@ -95,7 +95,8 @@ fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
 }
 
 /// Every `Op` variant at least once; both `TypeArg` forms, both cursor
-/// states, all three slot-constraint forms, and both value encodings.
+/// states, all three slot-constraint forms, and all four value write forms
+/// (per-byte runs, a UTF-8 atom, a non-UTF-8 run, a non-UTF-8 atom).
 fn all_requests() -> Vec<Request> {
     vec![
         rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]) }),
@@ -109,7 +110,14 @@ fn all_requests() -> Vec<Request> {
             Op::Insert {
                 doc: d1(),
                 at: vp(1, 1),
-                values: vec![Val::new(b"hello".to_vec()), Val::new(vec![0u8, 255])],
+                // Canonical: ["hi",{"atom":"atom!"},{"hex":"ff"},{"atom_hex":"00ff"}]
+                values: vec![
+                    Val::new(vec![b'h']),
+                    Val::new(vec![b'i']),
+                    Val::new(b"atom!".to_vec()),
+                    Val::new(vec![0xffu8]),
+                    Val::new(vec![0u8, 255]),
+                ],
             },
         ),
         rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
@@ -303,6 +311,8 @@ fn all_responses() -> Vec<(&'static str, Response)> {
             "delivery",
             Response::Delivery {
                 items: Delivery(vec![
+                    DeliveryItem::Content(Val::new(vec![b'h'])),
+                    DeliveryItem::Content(Val::new(vec![b'i'])),
                     DeliveryItem::Content(Val::new(b"hello".to_vec())),
                     DeliveryItem::Content(Val::new(vec![0u8, 255])),
                     DeliveryItem::Ref(link1()),
@@ -610,6 +620,144 @@ fn lenient_parse_canonical_emit() {
     let parsed = parse_ok(&codec, wide);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["width"].as_str(), Some("18446744073709551616"));
+}
+
+/// Wire v2 write forms: `"str"`/`{"hex"}` mint one single-byte value per
+/// byte, `{"atom"}`/`{"atom_hex"}` mint one composite value; mixed arrays
+/// concatenate in order; the canonical form coalesces maximal per-byte runs
+/// and renders one-byte atoms per-byte; empty per-byte forms are vacuous and
+/// empty atoms are inexpressible.
+#[test]
+fn value_write_forms_round_trip() {
+    let codec = JsonCodec;
+    let frame = |values: &str| {
+        format!(
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":{values}}}"#
+        )
+    };
+    let vals = |req: &Request| match &req.op {
+        Op::Insert { values, .. } => values.clone(),
+        _ => panic!("insert expected"),
+    };
+    let canon = |req: &Request| -> Value {
+        serde_json::from_slice::<Value>(&codec.marshal_request(req)).expect("canonical is JSON")
+            ["values"]
+            .clone()
+    };
+    let jv = |s: &str| serde_json::from_str::<Value>(s).expect("expectation is JSON");
+
+    // "str": one single-byte value per UTF-8 byte ("hé" = 'h' + 2 bytes of 'é').
+    let parsed = parse_ok(&codec, frame(r#"["hé"]"#).as_bytes());
+    let vs = vals(&parsed);
+    assert_eq!(vs.len(), 3);
+    assert!(vs.iter().all(|v| v.as_bytes().len() == 1));
+    assert_eq!(canon(&parsed), jv(r#"["hé"]"#));
+
+    // {"hex"}: per-byte as well; a non-UTF-8 run re-marshals on the hex path.
+    let parsed = parse_ok(&codec, frame(r#"[{"hex":"00ff"}]"#).as_bytes());
+    let vs = vals(&parsed);
+    assert_eq!(vs.len(), 2);
+    assert_eq!(canon(&parsed), jv(r#"[{"hex":"00ff"}]"#));
+
+    // {"atom"}: ONE composite value; {"atom_hex"}: one composite of raw bytes.
+    let parsed = parse_ok(&codec, frame(r#"[{"atom":"hello"}]"#).as_bytes());
+    let vs = vals(&parsed);
+    assert_eq!(vs.len(), 1);
+    assert_eq!(vs[0].as_bytes(), b"hello");
+    assert_eq!(canon(&parsed), jv(r#"[{"atom":"hello"}]"#));
+    let parsed = parse_ok(&codec, frame(r#"[{"atom_hex":"00ff"}]"#).as_bytes());
+    let vs = vals(&parsed);
+    assert_eq!(vs.len(), 1);
+    assert_eq!(vs[0].as_bytes(), &[0x00, 0xff]);
+    assert_eq!(canon(&parsed), jv(r#"[{"atom_hex":"00ff"}]"#));
+
+    // Mixed arrays concatenate in order and are canonical as given.
+    let parsed = parse_ok(&codec, frame(r#"["ab",{"atom":"cd"},"ef"]"#).as_bytes());
+    assert_eq!(vals(&parsed).len(), 5);
+    assert_eq!(canon(&parsed), jv(r#"["ab",{"atom":"cd"},"ef"]"#));
+
+    // Adjacent per-byte elements canonicalize onto one maximal run…
+    let parsed = parse_ok(&codec, frame(r#"["ab","cd"]"#).as_bytes());
+    assert_eq!(canon(&parsed), jv(r#"["abcd"]"#));
+    // …and a one-byte atom IS a single-byte value (granularity distinguishes
+    // only multi-byte payloads), canonicalizing onto the per-byte form.
+    let parsed = parse_ok(&codec, frame(r#"[{"atom":"x"}]"#).as_bytes());
+    assert_eq!(canon(&parsed), jv(r#"["x"]"#));
+
+    // Empty per-byte forms contribute zero values (the store still rejects a
+    // zero-total insert; that verdict is the store's, not the parse's).
+    let parsed = parse_ok(&codec, frame(r#"["",{"hex":""}]"#).as_bytes());
+    assert!(vals(&parsed).is_empty());
+    assert_eq!(canon(&parsed), jv("[]"));
+
+    // Zero-byte atoms and multi-key objects are parse failures.
+    for bad in [
+        r#"[{"atom":""}]"#,
+        r#"[{"atom_hex":""}]"#,
+        r#"[{"atom":"a","hex":"00"}]"#,
+        r#"[{}]"#,
+    ] {
+        assert!(codec.parse(frame(bad).as_bytes()).is_err(), "{bad} must not parse");
+    }
+}
+
+/// The delivery marshal is injective across granularity: N per-byte values
+/// and one N-byte composite render differently, so a client always knows
+/// which world it is looking at.
+#[test]
+fn delivery_marshal_distinguishes_granularity() {
+    let codec = JsonCodec;
+    let per_byte = Response::Delivery {
+        items: Delivery(
+            b"hello".iter().map(|&b| DeliveryItem::Content(Val::new(vec![b]))).collect(),
+        ),
+        as_of: Seq(9),
+    };
+    let atom = Response::Delivery {
+        items: Delivery(vec![DeliveryItem::Content(Val::new(b"hello".to_vec()))]),
+        as_of: Seq(9),
+    };
+    let per_bytes = codec.marshal(&per_byte);
+    let atom_bytes = codec.marshal(&atom);
+    assert_ne!(per_bytes, atom_bytes, "granularity must survive the marshal");
+    let v: Value = serde_json::from_slice(&per_bytes).expect("json");
+    assert_eq!(v["items"], serde_json::from_str::<Value>(r#"[{"content":"hello"}]"#).unwrap());
+    let v: Value = serde_json::from_slice(&atom_bytes).expect("json");
+    assert_eq!(v["items"], serde_json::from_str::<Value>(r#"[{"atom":"hello"}]"#).unwrap());
+}
+
+/// Delivery runs coalesce maximally and are judged UTF-8 on the whole
+/// concatenation; refs and atoms break runs; non-UTF-8 takes the hex paths.
+#[test]
+fn delivery_runs_coalesce_and_split() {
+    let codec = JsonCodec;
+    let c = |b: u8| DeliveryItem::Content(Val::new(vec![b]));
+    let items_of = |resp: &Response| -> Value {
+        serde_json::from_slice::<Value>(&codec.marshal(resp)).expect("json")["items"].clone()
+    };
+    // 'é' arrives as two per-byte values; the run is one valid-UTF-8 item.
+    let utf8 =
+        Response::Delivery { items: Delivery(vec![c(b'h'), c(0xc3), c(0xa9)]), as_of: Seq(9) };
+    assert_eq!(items_of(&utf8), serde_json::from_str::<Value>(r#"[{"content":"hé"}]"#).unwrap());
+    // An invalid concatenation renders the WHOLE run as hex.
+    let raw = Response::Delivery { items: Delivery(vec![c(0xc3), c(0x28)]), as_of: Seq(9) };
+    assert_eq!(items_of(&raw), serde_json::from_str::<Value>(r#"[{"hex":"c328"}]"#).unwrap());
+    // Refs and atoms break runs; a non-UTF-8 composite is atom_hex.
+    let mixed = Response::Delivery {
+        items: Delivery(vec![
+            c(b'a'),
+            DeliveryItem::Ref(link1()),
+            c(b'b'),
+            DeliveryItem::Content(Val::new(vec![0u8, 255])),
+            c(b'c'),
+        ]),
+        as_of: Seq(9),
+    };
+    let expect: Value = serde_json::from_str(
+        r#"[{"content":"a"},{"ref":"1.0.1.0.1.0.2.1"},{"content":"b"},{"atom_hex":"00ff"},{"content":"c"}]"#,
+    )
+    .unwrap();
+    assert_eq!(items_of(&mixed), expect);
 }
 
 /// Never-silent applied to typos: unknown ops, unknown fields, missing

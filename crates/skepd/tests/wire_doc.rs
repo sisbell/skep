@@ -370,6 +370,34 @@ fn doc_error_examples_match_their_fixtures() {
     }
 }
 
+/// The commit-stream example is asserted structurally, not byte-for-byte:
+/// the position in the doc is illustrative, the framing is the contract —
+/// an `event: commit` line, then a `data:` line whose payload is exactly
+/// `{"log_position": <number>}`, nothing else. (The daemon's emitter is a
+/// single format string over the same framing.)
+#[test]
+fn doc_sse_examples_have_the_commit_framing() {
+    let mut count = 0;
+    for (kind, name, body) in blocks() {
+        if kind != "sse" {
+            continue;
+        }
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 2, "sse '{name}' is one event: event line + data line");
+        assert_eq!(lines[0], "event: commit", "sse '{name}' event name");
+        let data = lines[1]
+            .strip_prefix("data: ")
+            .unwrap_or_else(|| panic!("sse '{name}' lacks a 'data: ' line"));
+        let v: Value = serde_json::from_str(data)
+            .unwrap_or_else(|e| panic!("sse '{name}' data is not JSON: {e}"));
+        let obj = v.as_object().unwrap_or_else(|| panic!("sse '{name}' data is an object"));
+        assert_eq!(obj.len(), 1, "the v1 payload is the position alone: {data}");
+        assert!(obj["log_position"].is_u64(), "sse '{name}': log_position is a number");
+        count += 1;
+    }
+    assert!(count > 0, "wire.md documents no commit-stream event example");
+}
+
 /// Every response example equals the marshal of its fixture, and every
 /// required shape is documented.
 #[test]

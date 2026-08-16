@@ -14,11 +14,17 @@
 //! * [`Daemon`] — the state and the socket-free router: `POST /session`,
 //!   `POST /op`, `POST /op-at` (any READ frame answered as of a committed
 //!   position, served from the journal via the engine's bounded replay),
-//!   `GET /health`, and (behind the `observe` feature) `GET /dump`, with
-//!   `?at=N` for the dump of a historical position.
+//!   `GET /health`, `GET /events` (the server-sent commit stream, wire v4),
+//!   the CORS preflight on every known path, and (behind the `observe`
+//!   feature) `GET /dump`, with `?at=N` for the dump of a historical
+//!   position.
 //! * [`serve`]/[`Skepd`] — the synchronous accept loop: worker threads over
-//!   one shared listener, bound to 127.0.0.1 (local trust does not survive
-//!   a network).
+//!   one owned `TcpListener` speaking a written-out HTTP/1.1 subset (one
+//!   request per connection, `Connection: close` and
+//!   `Access-Control-Allow-Origin: *` on every response), bound to
+//!   127.0.0.1 (local trust does not survive a network). Event-stream
+//!   subscribers run on dedicated threads off the op pool, fed by
+//!   write-path notification — no polling anywhere.
 //!
 //! Durability lives in M2 and is *configured* here (`Durability::Fsync`,
 //! every-1024-commits checkpoints, two retained): genesis on a fresh data
@@ -30,4 +36,4 @@ mod codec;
 mod server;
 
 pub use codec::{tumbler_string, JsonCodec};
-pub use server::{serve, Daemon, Reply, Skepd};
+pub use server::{serve, Daemon, Reply, Routed, Skepd};

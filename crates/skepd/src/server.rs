@@ -3,8 +3,15 @@
 //! parse/marshal/dispatch/configure; every decision lives in a store.
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
-//! `(method, path, query, session, body) → Reply` with no socket anywhere;
-//! [`serve`]/[`Skepd`] wrap it in a synchronous `tiny_http` accept loop.
+//! `(method, path, query, session, body) → Routed` with no socket anywhere;
+//! [`serve`]/[`Skepd`] wrap it in a synchronous accept loop over a plain
+//! `TcpListener`. The HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS,
+//! `Content-Length` bodies, one request per connection, `Connection: close`
+//! on every response) is written out here rather than taken from a server
+//! library, because the commit stream needs two things a pull-based library
+//! response cannot give: event bytes flushed to the socket at commit time,
+//! and a server-initiated close at shutdown. Owning the socket makes both
+//! one-line facts.
 //!
 //! **History is served from the journal** (wire v3): `POST /op-at` answers
 //! any READ frame as of any committed position, and `GET /dump?at=N`
@@ -32,16 +39,42 @@
 //! principal-free and succeed; writes get M10's own `Unauthenticated`
 //! rejection. The daemon binds 127.0.0.1 only — the trust model does not
 //! survive a network.
+//!
+//! **Cross-origin posture (wire v4)**: every response carries
+//! `Access-Control-Allow-Origin: *`, added at the one place responses are
+//! written so no reply can miss it, and `OPTIONS` on any known path answers
+//! a 204 preflight naming the allowed methods and headers. The `*` is a
+//! scope decision, not an accident: the daemon is loopback-only local
+//! trust, so any local page may read what any local process may read;
+//! writes still require the session token, which is not a browser
+//! credential. Revisited when authentication lands.
+//!
+//! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
+//! of committed log positions — one event carrying the current head on
+//! connect, then an event whenever the head advances (coalescing under
+//! load: a subscriber sees a strictly increasing sequence converging on the
+//! true head). The mechanism is write-path notification: `/op` — the
+//! daemon's only live write path — publishes its post-execute position into
+//! the condvar-backed `EventFeed`, and each subscriber thread blocks there;
+//! no polling anywhere, so a commit reaches subscribers at thread-wake
+//! speed. Subscribers are dedicated spawned threads, never workers: the
+//! accepting worker hands the socket off and returns to `accept`, so open
+//! streams cannot starve `/op`. A `:ka` keepalive comment flows after each
+//! silent interval so both sides can detect a dead peer; shutdown
+//! broadcasts on the same condvar and joins every subscriber, so open
+//! streams end in bounded time with a clean close the client sees.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use serde_json::{Map, Value};
 use skep_arrangement::Vstream;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
@@ -60,6 +93,28 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 /// the older base instead of a full-journal replay from genesis.
 const RETAINED_CHECKPOINTS: usize = 2;
 
+/// SSE keepalive cadence: a `:ka` comment after each interval of silence,
+/// so proxies and clients can detect liveness — and the daemon detects a
+/// dead subscriber by the failed write within one interval.
+const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
+
+/// Socket read deadline for one request's head+body: a stalled local
+/// client releases its worker instead of pinning it.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Socket write deadline (per write call, replies and events alike): a
+/// subscriber that stops draining errors out instead of blocking a thread
+/// forever — which is what keeps shutdown bounded even against a stalled
+/// peer.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
+const CORS_MAX_AGE_SECS: &str = "86400";
+
+/// Request-head size cap. Tokens and headers are small; frames ride in the
+/// body, which keeps its no-daemon-cap policy (local trust, as before).
+const HEAD_MAX: usize = 64 * 1024;
+
 /// One handler result: status, content type, body. `POST /op` is always
 /// `200` once a `Response` exists — rejections included; the `Response`
 /// envelope, not the HTTP status, is the operation protocol. Non-200 codes
@@ -69,6 +124,10 @@ pub struct Reply {
     pub status: u16,
     pub content_type: &'static str,
     pub body: Vec<u8>,
+    /// Extra response headers beyond the universal set (`Content-Type`,
+    /// `Content-Length`, `Access-Control-Allow-Origin`, `Connection`) —
+    /// the preflight trio rides here.
+    pub headers: Vec<(&'static str, &'static str)>,
 }
 
 impl Reply {
@@ -77,8 +136,36 @@ impl Reply {
             status,
             content_type: "application/json",
             body: serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail"),
+            headers: Vec::new(),
         }
     }
+
+    /// The CORS preflight answer (wire v4): 204, no body, the fixed method
+    /// and header lists. `Access-Control-Allow-Origin: *` is universal and
+    /// added where every response is written, so it is not repeated here.
+    fn preflight() -> Reply {
+        Reply {
+            status: 204,
+            content_type: "",
+            body: Vec::new(),
+            headers: vec![
+                ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
+                ("Access-Control-Allow-Headers", "Content-Type, Skepd-Session"),
+                ("Access-Control-Max-Age", CORS_MAX_AGE_SECS),
+            ],
+        }
+    }
+}
+
+/// One routing decision. Almost everything is a complete [`Reply`]; the
+/// event stream is not request/response at all, so it never becomes one —
+/// the accept path spawns a subscriber thread that owns the socket
+/// (`serve_events`), and the type makes reaching it through the plain reply
+/// path unrepresentable.
+pub enum Routed {
+    Reply(Reply),
+    /// `GET /events` — the server-sent commit stream (wire v4).
+    EventStream,
 }
 
 /// A transport-level error body: `{"error": name}` plus an optional detail.
@@ -109,6 +196,9 @@ pub struct Daemon {
     /// misses instead of silently aliasing onto a fresh session.
     token_seed: u64,
     token_counter: AtomicU64,
+    /// The commit feed behind `GET /events` (wire v4): `/op` publishes its
+    /// post-execute log position, subscriber threads block on the condvar.
+    feed: EventFeed,
 }
 
 impl Daemon {
@@ -133,6 +223,7 @@ impl Daemon {
             use std::hash::{BuildHasher, Hasher};
             RandomState::new().build_hasher().finish()
         };
+        let feed = EventFeed::at(op.log_position());
         Ok(Daemon {
             engine,
             op,
@@ -141,6 +232,7 @@ impl Daemon {
             guest,
             token_seed,
             token_counter: AtomicU64::new(1),
+            feed,
         })
     }
 
@@ -154,11 +246,36 @@ impl Daemon {
         self.op.log_position()
     }
 
-    /// The router — the whole HTTP surface. `query` is the raw query string
-    /// (meaningful only on `/dump`, ignored elsewhere); `session` is the
-    /// value of the `Skepd-Session` header, if any.
-    #[cfg_attr(not(feature = "observe"), allow(unused_variables))]
+    /// The router — the whole HTTP surface, still socket-free: the one
+    /// route that cannot be a request/response `Reply` (`GET /events`, an
+    /// unbounded response) is returned as its own [`Routed`] variant, and
+    /// the accept path owns the socket from there. `query` is the raw query
+    /// string (meaningful only on `/dump`, ignored elsewhere); `session` is
+    /// the value of the `Skepd-Session` header, if any.
     pub fn handle(
+        &self,
+        method: &str,
+        path: &str,
+        query: Option<&str>,
+        session: Option<&str>,
+        body: &[u8],
+    ) -> Routed {
+        match (method, path) {
+            ("GET", "/events") => Routed::EventStream,
+            // CORS preflight (wire v4): 204 on any known path; an unknown
+            // path falls through to the ordinary 404.
+            ("OPTIONS", "/session" | "/op" | "/op-at" | "/health" | "/events") => {
+                Routed::Reply(Reply::preflight())
+            }
+            #[cfg(feature = "observe")]
+            ("OPTIONS", "/dump") => Routed::Reply(Reply::preflight()),
+            _ => Routed::Reply(self.reply(method, path, query, session, body)),
+        }
+    }
+
+    /// The request/response routes.
+    #[cfg_attr(not(feature = "observe"), allow(unused_variables))]
+    fn reply(
         &self,
         method: &str,
         path: &str,
@@ -173,10 +290,12 @@ impl Daemon {
             ("GET", "/health") => self.get_health(),
             #[cfg(feature = "observe")]
             ("GET", "/dump") => self.get_dump(query),
-            (_, "/session") | (_, "/op") | (_, "/op-at") | (_, "/health") => Reply::json(
-                405,
-                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
-            ),
+            (_, "/session") | (_, "/op") | (_, "/op-at") | (_, "/health") | (_, "/events") => {
+                Reply::json(
+                    405,
+                    err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
+                )
+            }
             #[cfg(feature = "observe")]
             (_, "/dump") => Reply::json(
                 405,
@@ -218,10 +337,16 @@ impl Daemon {
             Ok(req) => self.execute(sid, req),
             Err(e) => self.codec.unparseable(e),
         };
+        // Write-path notification (wire v4): `/op` is the daemon's only
+        // live write path, so publishing the post-execute head here is
+        // complete. Reads publish a no-op; concurrent writes coalesce; the
+        // feed keeps the sequence monotone.
+        self.feed.publish(self.op.log_position());
         Reply {
             status: 200,
             content_type: "application/json",
             body: self.codec.marshal(&resp),
+            headers: Vec::new(),
         }
     }
 
@@ -248,6 +373,7 @@ impl Daemon {
                     status: 200,
                     content_type: "application/json",
                     body: self.codec.marshal(&resp),
+                    headers: Vec::new(),
                 };
             }
         };
@@ -267,6 +393,7 @@ impl Daemon {
             status: 200,
             content_type: "application/json",
             body: self.codec.marshal(&resp),
+            headers: Vec::new(),
         }
     }
 
@@ -298,6 +425,7 @@ impl Daemon {
             status: 200,
             content_type: "text/plain; charset=utf-8",
             body: dump.into_string().into_bytes(),
+            headers: Vec::new(),
         }
     }
 }
@@ -536,43 +664,138 @@ fn op_is_read(op: &Op) -> bool {
     }
 }
 
-/// The running server: the shared listener, the worker threads, the daemon.
+// ── the commit feed (wire v4) ────────────────────────────────────────────
+
+/// One head + shutdown flag under a mutex, one condvar. `/op` publishes
+/// after execute (write-path notification — the only live write path, so
+/// no head advance can be missed); each subscriber blocks in
+/// [`EventFeed::next`] with the keepalive interval as its wait bound.
+/// Shutdown broadcasts on the same condvar, which is what makes closing
+/// open streams immediate rather than a poll away.
+struct EventFeed {
+    state: Mutex<FeedState>,
+    cond: Condvar,
+}
+
+struct FeedState {
+    head: Seq,
+    shutdown: bool,
+}
+
+/// What a subscriber does next.
+enum FeedStep {
+    /// The head advanced past the subscriber's last-sent position.
+    Commit(Seq),
+    /// Nothing moved for one keepalive interval.
+    Keepalive,
+    /// The daemon is stopping; end the stream.
+    Shutdown,
+}
+
+impl EventFeed {
+    fn at(head: Seq) -> EventFeed {
+        EventFeed {
+            state: Mutex::new(FeedState { head, shutdown: false }),
+            cond: Condvar::new(),
+        }
+    }
+
+    fn publish(&self, seq: Seq) {
+        let mut st = self.state.lock();
+        if seq.0 > st.head.0 {
+            st.head = seq;
+            self.cond.notify_all();
+        }
+    }
+
+    fn shutdown(&self) {
+        self.state.lock().shutdown = true;
+        self.cond.notify_all();
+    }
+
+    /// Block until the head passes `last`, the daemon stops, or the
+    /// keepalive interval elapses — whichever comes first. Returning the
+    /// current head (not a queue of commits) is the coalescing: a burst of
+    /// commits between wakes is one step.
+    fn next(&self, last: Seq) -> FeedStep {
+        let deadline = Instant::now() + SSE_KEEPALIVE;
+        let mut st = self.state.lock();
+        loop {
+            if st.shutdown {
+                return FeedStep::Shutdown;
+            }
+            if st.head.0 > last.0 {
+                return FeedStep::Commit(st.head);
+            }
+            if self.cond.wait_until(&mut st, deadline).timed_out() {
+                return FeedStep::Keepalive;
+            }
+        }
+    }
+}
+
+// ── the wire loop ────────────────────────────────────────────────────────
+
+/// The running server: the listener, the op workers, the daemon, and the
+/// event-stream subscriber threads.
 pub struct Skepd {
-    server: Arc<tiny_http::Server>,
-    workers: Vec<JoinHandle<()>>,
     daemon: Arc<Daemon>,
+    listener: Arc<TcpListener>,
+    workers: Vec<JoinHandle<()>>,
+    subscribers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    stop: Arc<AtomicBool>,
     port: u16,
 }
 
 /// Bind `127.0.0.1:port` (`0` = ephemeral) and serve with `workers`
-/// threads. Concurrency policy in full: each worker blocks in `recv`,
-/// handles one request, responds — `Operation::execute` is `Sync` and M2's
-/// single applier serializes writes, so no further machinery exists here.
+/// threads. Concurrency policy in full: each worker blocks in `accept`,
+/// serves the one request on that connection, closes it — one request per
+/// connection, `Connection: close` on every response (`Operation::execute`
+/// is `Sync` and M2's single applier serializes writes, so the worker count
+/// is the whole op-concurrency story). `GET /events` is the one exception
+/// to request/response: the worker hands the socket to a dedicated
+/// subscriber thread and returns to `accept` at once, so open streams never
+/// occupy the op pool.
 pub fn serve(
     daemon: Daemon,
     port: u16,
     workers: usize,
 ) -> Result<Skepd, Box<dyn std::error::Error + Send + Sync>> {
     let daemon = Arc::new(daemon);
-    let server = Arc::new(tiny_http::Server::http(("127.0.0.1", port))?);
-    let port = server
-        .server_addr()
-        .to_ip()
-        .ok_or("tcp listener must have an ip address")?
-        .port();
+    let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
+    let port = listener.local_addr()?.port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let subscribers: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
     let workers = workers.max(1);
     let handles = (0..workers)
         .map(|_| {
-            let server = Arc::clone(&server);
             let daemon = Arc::clone(&daemon);
-            thread::spawn(move || {
-                while let Ok(rq) = server.recv() {
-                    serve_one(&daemon, rq);
+            let listener = Arc::clone(&listener);
+            let stop = Arc::clone(&stop);
+            let subscribers = Arc::clone(&subscribers);
+            thread::spawn(move || loop {
+                if stop.load(Ordering::Acquire) {
+                    break;
                 }
+                let stream = match listener.accept() {
+                    Ok((s, _)) => s,
+                    Err(_) => {
+                        // Transient accept failure (EMFILE and kin): brief
+                        // pause instead of a spin, then re-check stop.
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                };
+                // Shutdown's wake connect lands here: the flag, not the
+                // connection, is the signal.
+                if stop.load(Ordering::Acquire) {
+                    break;
+                }
+                serve_connection(&daemon, &subscribers, stream);
             })
         })
         .collect();
-    Ok(Skepd { server, workers: handles, daemon, port })
+    Ok(Skepd { daemon, listener, workers: handles, subscribers, stop, port })
 }
 
 impl Skepd {
@@ -594,57 +817,282 @@ impl Skepd {
         }
     }
 
-    /// Orderly stop for embedders and tests: unblock and join every worker,
-    /// then drop the daemon — releasing the kernel's journal-directory lock
-    /// so the same data dir can be reopened.
+    /// Orderly stop for embedders and tests: release and join the op
+    /// workers, then end every event stream — the feed broadcast wakes each
+    /// subscriber, which drops its socket (the client sees a clean close)
+    /// and exits — and join those threads too. Dropping the daemon last
+    /// releases the kernel's journal-directory lock so the same data dir
+    /// can be reopened. Bounded: nothing here waits on a client.
     pub fn shutdown(self) {
-        let Skepd { server, workers, daemon, port: _ } = self;
+        let Skepd { daemon, listener, workers, subscribers, stop, port } = self;
+        stop.store(true, Ordering::Release);
+        // One wake connect per worker: a worker blocked in `accept` returns
+        // and the flag breaks its loop. A worker mid-request exits at its
+        // next loop check instead, leaving its wake connect unclaimed in
+        // the backlog — harmless; the listener drops below.
         for _ in 0..workers.len() {
-            server.unblock();
+            let _ = TcpStream::connect(("127.0.0.1", port));
         }
         for h in workers {
             let _ = h.join();
         }
-        drop(server);
+        // The workers are gone, so no new subscriber can appear past here.
+        daemon.feed.shutdown();
+        let subs = std::mem::take(&mut *subscribers.lock());
+        for h in subs {
+            let _ = h.join();
+        }
+        drop(listener);
         drop(daemon);
     }
 }
 
-/// Adapt one `tiny_http` request onto [`Daemon::handle`]. A handler panic is
-/// contained to a 500 so one bad request cannot take a worker down; the
-/// panic still prints to stderr for the operator.
-fn serve_one(daemon: &Daemon, mut rq: tiny_http::Request) {
-    let method = match rq.method() {
-        tiny_http::Method::Get => "GET",
-        tiny_http::Method::Post => "POST",
-        _ => "OTHER",
-    };
-    let url = rq.url().to_string();
-    let (path, query) = match url.split_once('?') {
-        Some((p, q)) => (p.to_string(), Some(q.to_string())),
-        None => (url, None),
-    };
-    let session = rq
-        .headers()
-        .iter()
-        .find(|h| h.field.equiv("Skepd-Session"))
-        .map(|h| h.value.as_str().to_string());
-    let mut body = Vec::new();
-    let reply = if rq.as_reader().read_to_end(&mut body).is_err() {
-        Reply::json(400, err_body("unreadable_body", None))
-    } else {
-        match catch_unwind(AssertUnwindSafe(|| {
-            daemon.handle(method, &path, query.as_deref(), session.as_deref(), &body)
-        })) {
-            Ok(r) => r,
-            Err(_) => Reply::json(500, err_body("internal_panic", None)),
+/// Serve one connection: read the one request, route it, write the one
+/// reply, close — or, for `GET /events`, hand the socket to a dedicated
+/// subscriber thread and return at once. A handler panic is contained to a
+/// 500 so one bad request cannot take a worker down; the panic still prints
+/// to stderr for the operator.
+fn serve_connection(
+    daemon: &Arc<Daemon>,
+    subscribers: &Mutex<Vec<JoinHandle<()>>>,
+    mut stream: TcpStream,
+) {
+    let _ = stream.set_nodelay(true);
+    let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    let req = match read_request(&mut stream) {
+        Ok(Some(r)) => r,
+        // Clean close before any byte (a port probe, shutdown's wake
+        // connect): no request, so no reply owed.
+        Ok(None) => return,
+        Err(detail) => {
+            let reply = Reply::json(400, err_body("malformed_http", Some(&detail)));
+            let _ = write_reply(&mut stream, &reply);
+            return;
         }
     };
-    let response = tiny_http::Response::from_data(reply.body)
-        .with_status_code(reply.status)
-        .with_header(
-            tiny_http::Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes())
-                .expect("a static content type is a valid header"),
+    let routed = match catch_unwind(AssertUnwindSafe(|| {
+        daemon.handle(
+            &req.method,
+            &req.path,
+            req.query.as_deref(),
+            req.session.as_deref(),
+            &req.body,
+        )
+    })) {
+        Ok(r) => r,
+        Err(_) => Routed::Reply(Reply::json(500, err_body("internal_panic", None))),
+    };
+    match routed {
+        Routed::Reply(reply) => {
+            let _ = write_reply(&mut stream, &reply);
+        }
+        Routed::EventStream => {
+            let daemon = Arc::clone(daemon);
+            let mut subs = subscribers.lock();
+            // Reap finished subscriber threads so the registry tracks live
+            // streams, not history.
+            subs.retain(|h| !h.is_finished());
+            subs.push(thread::spawn(move || serve_events(&daemon, stream)));
+        }
+    }
+}
+
+/// One parsed request. `body` is exactly `Content-Length` bytes.
+struct HttpRequest {
+    method: String,
+    path: String,
+    query: Option<String>,
+    session: Option<String>,
+    body: Vec<u8>,
+}
+
+/// Read one request off the socket. `Ok(None)` = clean close before any
+/// byte; `Err(detail)` = not the HTTP subset this daemon speaks (the caller
+/// answers `400 malformed_http`). The subset: one request per connection,
+/// HTTP/1.0 or 1.1, bodies by `Content-Length` (absent = empty),
+/// `Expect: 100-continue` honored, `Transfer-Encoding` refused.
+fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
+    // The head, plus whatever early body bytes arrived with it.
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let head_end = loop {
+        if let Some(i) = find_head_end(&buf) {
+            break i;
+        }
+        if buf.len() > HEAD_MAX {
+            return Err("request head exceeds 64 KiB".into());
+        }
+        let mut chunk = [0u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) if buf.is_empty() => return Ok(None),
+            Ok(0) => return Err("connection closed inside the request head".into()),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) if buf.is_empty() => return Ok(None),
+            Err(e) => return Err(format!("read: {e}")),
+        }
+    };
+    let head = std::str::from_utf8(&buf[..head_end])
+        .map_err(|_| String::from("request head is not UTF-8"))?;
+    let mut lines = head.split("\r\n");
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split(' ');
+    let method = parts.next().unwrap_or("").to_string();
+    let target = parts
+        .next()
+        .ok_or_else(|| String::from("request line lacks a target"))?
+        .to_string();
+    let version = parts
+        .next()
+        .ok_or_else(|| String::from("request line lacks an HTTP version"))?;
+    if parts.next().is_some() {
+        return Err("malformed request line".into());
+    }
+    if version != "HTTP/1.1" && version != "HTTP/1.0" {
+        return Err(format!("unsupported protocol '{version}'"));
+    }
+    if method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Err("malformed method token".into());
+    }
+    // The headers this daemon acts on; everything else passes unread.
+    let mut content_length: Option<usize> = None;
+    let mut session: Option<String> = None;
+    let mut expects_continue = false;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let (name, value) = line
+            .split_once(':')
+            .ok_or_else(|| format!("malformed header line '{line}'"))?;
+        let (name, value) = (name.trim(), value.trim());
+        if name.eq_ignore_ascii_case("Content-Length") {
+            content_length =
+                Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
+        } else if name.eq_ignore_ascii_case("Skepd-Session") {
+            session = Some(value.to_string());
+        } else if name.eq_ignore_ascii_case("Expect") {
+            expects_continue = value.eq_ignore_ascii_case("100-continue");
+        } else if name.eq_ignore_ascii_case("Transfer-Encoding") {
+            return Err("chunked request bodies are unsupported; send Content-Length".into());
+        }
+    }
+    let (path, query) = match target.split_once('?') {
+        Some((p, q)) => (p.to_string(), Some(q.to_string())),
+        None => (target, None),
+    };
+    let mut body = buf[head_end + 4..].to_vec();
+    let want = content_length.unwrap_or(0);
+    if expects_continue && body.len() < want {
+        // The client is holding the body until told to send it (curl does
+        // this for large payloads).
+        if stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
+            return Err("client went away at 100-continue".into());
+        }
+    }
+    while body.len() < want {
+        let mut chunk = [0u8; 8192];
+        match stream.read(&mut chunk) {
+            Ok(0) => return Err("connection closed inside the request body".into()),
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
+            Err(e) => return Err(format!("read: {e}")),
+        }
+    }
+    // A byte past Content-Length would be a pipelined second request; this
+    // connection answers one and closes, so it is dropped unread.
+    body.truncate(want);
+    Ok(Some(HttpRequest { method, path, query, session, body }))
+}
+
+fn find_head_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
+}
+
+/// Write one complete reply; the connection closes behind it. Every
+/// response carries `Access-Control-Allow-Origin: *` — wire v4's CORS
+/// posture, enforced at this one choke point so no reply can miss it — and
+/// `Connection: close` (one request per connection). A 204 carries no body
+/// and no content headers (RFC 7230).
+fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
+    let mut out = Vec::with_capacity(reply.body.len() + 256);
+    out.extend_from_slice(
+        format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
+    );
+    out.extend_from_slice(b"Access-Control-Allow-Origin: *\r\n");
+    for (name, value) in &reply.headers {
+        out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+    }
+    if reply.status != 204 {
+        out.extend_from_slice(
+            format!(
+                "Content-Type: {}\r\nContent-Length: {}\r\n",
+                reply.content_type,
+                reply.body.len()
+            )
+            .as_bytes(),
         );
-    let _ = rq.respond(response);
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    if reply.status != 204 {
+        out.extend_from_slice(&reply.body);
+    }
+    stream.write_all(&out)
+}
+
+/// The subset's reason phrases — informational only; clients dispatch on
+/// the code.
+fn reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        410 => "Gone",
+        500 => "Internal Server Error",
+        _ => "Status",
+    }
+}
+
+/// One subscriber (wire v4): write the stream head and the initial event
+/// carrying the current head, then follow the feed — a `commit` event when
+/// the head advances, a `:ka` comment on silence — until shutdown or the
+/// first failed write (a gone subscriber). Exiting drops the socket, which
+/// is the client's end-of-stream. Coalescing is inherent: the feed answers
+/// "anything past what I last sent", so a burst of commits is one event.
+fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
+    let head = "HTTP/1.1 200 OK\r\n\
+                Access-Control-Allow-Origin: *\r\n\
+                Content-Type: text/event-stream\r\n\
+                Cache-Control: no-cache\r\n\
+                Connection: close\r\n\r\n";
+    if stream.write_all(head.as_bytes()).is_err() {
+        return;
+    }
+    let mut last = daemon.log_position();
+    if write_commit_event(&mut stream, last).is_err() {
+        return;
+    }
+    loop {
+        match daemon.feed.next(last) {
+            FeedStep::Shutdown => return,
+            FeedStep::Commit(at) => {
+                last = at;
+                if write_commit_event(&mut stream, at).is_err() {
+                    return;
+                }
+            }
+            FeedStep::Keepalive => {
+                if stream.write_all(b":ka\n\n").is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// `event: commit` / `data: {"log_position":N}` / blank — the wire v4
+/// event framing, byte-for-byte what wire.md documents (compact JSON, the
+/// position alone).
+fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
+    stream.write_all(format!("event: commit\ndata: {{\"log_position\":{}}}\n\n", at.0).as_bytes())
 }

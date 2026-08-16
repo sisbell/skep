@@ -5,7 +5,8 @@ written for a client author who will never read the Rust; it is also
 executable documentation — every fenced JSON example annotated with a
 `<!-- wire: … -->` marker is asserted byte-for-byte-canonically by
 `skep/crates/skepd/tests/wire_doc.rs`, so an example that drifts from the
-daemon fails the build.
+daemon fails the build. (The one exception: the commit-stream event example
+is asserted structurally — its framing, not its illustrative position.)
 
 ## The model
 
@@ -24,9 +25,21 @@ acknowledged only after it is durable on disk.
 | `POST /op`       | One operation frame in, one response document out.         |
 | `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
 | `GET /health`    | Liveness + current log position.                           |
+| `GET /events`    | Server-sent stream of committed positions (§The commit stream). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
-There are no other routes. The daemon listens on **127.0.0.1 only**.
+There are no other routes; every known path additionally answers `OPTIONS`
+— the CORS preflight (§Cross-origin access). The daemon listens on
+**127.0.0.1 only**.
+
+### Transport
+
+One request per connection: every response carries `Connection: close`, so
+a client opens a fresh connection per call. `GET /events` is the one
+long-lived response — a single unbounded body, ended by the daemon (clean
+close) at shutdown. HTTP/1.0 and 1.1 are accepted; request bodies ride
+with `Content-Length` (absent means empty; `Transfer-Encoding` is refused
+with `400 malformed_http`); `Expect: 100-continue` is honored.
 
 ### Identity — a scope decision
 
@@ -39,6 +52,28 @@ distinct principal is its own account, so every write is attributed. This is
 the deliberate v1 scope — the daemon binds only the loopback interface
 precisely because this trust model does not survive a network. It is a
 decision, not a TODO.
+
+### Cross-origin access — a scope decision
+
+Every response — every status, every endpoint, rejections and transport
+errors included — carries `Access-Control-Allow-Origin: *`. `OPTIONS` on
+any known path answers the preflight:
+
+```
+OPTIONS /op
+→ 204
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, Skepd-Session
+Access-Control-Max-Age: 86400
+```
+
+(`OPTIONS` on an unknown path is the ordinary 404.) The `*` is deliberate:
+the daemon is loopback-only under the local trust model above, so any
+local page may read what any local process may read. Writes still require
+a session token, and the token is not a browser credential — a page holds
+one only if it opened the session itself. This decision is revisited when
+authentication lands, not before.
 
 ### Sessions
 
@@ -104,6 +139,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
 | 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
+| 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
 | 410    | `history_reclaimed`         | the position predates the retained journal (carries `floor` when known) |
@@ -927,6 +963,62 @@ position. Two calls with equal `at` are byte-equal; `at` = the current
 head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s;
 a malformed query is `400 {"error": "malformed_at", "detail": …}`.
 
+## The commit stream
+
+**`GET /events`** answers `200 Content-Type: text/event-stream` and never
+ends on its own: it is the daemon's push channel for log movement, so
+clients stop polling `/health`. No session is needed — like every read it
+is principal-free. On connect the daemon immediately sends one event
+carrying the current committed head; thereafter it sends an event whenever
+the head advances. Every event has this framing (`data` is compact JSON,
+the position alone):
+
+<!-- wire: sse commit_event -->
+```
+event: commit
+data: {"log_position":13}
+```
+
+A worked exchange — connect, receive the initial head (12), then a write
+elsewhere commits at 13:
+
+```
+GET /events HTTP/1.1
+Host: 127.0.0.1:8642
+
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: close
+
+event: commit
+data: {"log_position":12}
+
+:ka
+
+event: commit
+data: {"log_position":13}
+```
+
+Rules:
+
+* **Coalescing is expected.** Under load, several commits may collapse
+  into one event: the promise is a strictly increasing sequence of
+  positions whose last value converges on the true head — not one event
+  per commit. A commit is reflected promptly (the daemon notifies on the
+  write path rather than polling — well inside 250 ms).
+* **No payload beyond the position in v1**: no op kinds, no document
+  addresses, no per-document filtering. React to movement by re-querying
+  what you care about — reads are cheap and principal-free.
+* **Keepalive.** After 15 seconds of silence the daemon writes the comment
+  line `:ka` (followed by a blank line). Treat a stream silent well past
+  that as dead, and reconnect.
+* **Client guidance:** on `commit`, re-read; on reconnect, treat the
+  initial event as potentially having skipped history.
+* The stream ends when the daemon shuts down — subscribers see a clean
+  connection close. Reconnect on close.
+
 ## The other endpoints
 
 **`GET /health`** → `200 {"log_position": <n>, "ok": true}`.
@@ -955,6 +1047,34 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v4 (browser reads — CORS everywhere, the commit stream):
+
+* Every response now carries `Access-Control-Allow-Origin: *`; `OPTIONS`
+  on any known path answers `204` with
+  `Access-Control-Allow-Methods: GET, POST, OPTIONS`,
+  `Access-Control-Allow-Headers: Content-Type, Skepd-Session`, and
+  `Access-Control-Max-Age: 86400`; unknown paths keep their 404. Scope
+  decision: `*` is safe precisely because the daemon is loopback-only
+  local trust — reads are public to local pages, writes still ride the
+  session token, and the token is not a browser credential. Revisited when
+  authentication lands.
+* New `GET /events`: a `text/event-stream` of committed positions — one
+  initial event carrying the current head at connect, then `event: commit`
+  with `data: {"log_position":N}` (compact JSON, the position alone) as
+  the head advances. Coalescing under load is promised behavior (a
+  strictly increasing sequence converging on the head); `:ka` comment
+  keepalives after each 15 s of silence; no payloads or filters in v1 —
+  clients re-read on movement. Delivery is write-path notification, not
+  polling, and event-stream subscribers never occupy the op workers.
+* Reconnect guidance fixed: on `commit`, re-read; on reconnect, treat the
+  initial event as potentially having skipped history.
+* Transport made explicit: one request per connection (`Connection: close`
+  on every response — connection reuse was never contractual); the event
+  stream is the one unbounded response, ended by daemon shutdown with a
+  clean close. `Expect: 100-continue` honored; `Transfer-Encoding` request
+  bodies refused with the new `400 malformed_http`, which also answers an
+  unparseable request head.
 
 v3 (historical reads — read-at-position, served from the journal):
 

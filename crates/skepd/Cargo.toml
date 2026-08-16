@@ -32,11 +32,18 @@ skep-discovery = { path = "../skep-discovery" }
 # JSON frames. The codec builds Values through its own key-sorting obj()
 # helper, so marshal determinism never depends on serde_json's map backend.
 serde_json = "1"
-# Synchronous HTTP/1.1 server — no async runtime: M2's single applier already
-# serializes writes and Operation::execute is Sync, so worker threads calling
-# it concurrently are the whole concurrency story.
-tiny_http = "0.12"
-# Non-poisoning session-map lock (the same totality argument M10 §7 makes).
+# No HTTP server dependency, deliberately (wire v4): the daemon speaks a
+# written-out HTTP/1.1 subset over std's TcpListener — the commit stream
+# needs event bytes flushed at commit time and a server-initiated close at
+# shutdown, and a pull-based server library's response reader (tiny_http's
+# included: end-of-response flush, connection pump owning the socket) can
+# give neither. No async runtime either: M2's single applier already
+# serializes writes and Operation::execute is Sync, so worker threads are
+# the whole concurrency story.
+#
+# Non-poisoning locks: the session map, the subscriber registry, and the
+# commit-feed condvar behind GET /events (the same totality argument M10 §7
+# makes).
 parking_lot = "0.12"
 
 [dev-dependencies]

@@ -5,9 +5,10 @@
 
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use skepd::{serve, Daemon, Skepd};
@@ -17,14 +18,14 @@ pub fn spawn(dir: &Path) -> Skepd {
     serve(daemon, 0, 4).expect("bind an ephemeral port")
 }
 
-/// One HTTP exchange; returns (status, body bytes).
-pub fn http(
+/// One HTTP exchange; returns (status, headers, body bytes).
+pub fn http_full(
     port: u16,
     method: &str,
     path: &str,
     session: Option<&str>,
     body: &[u8],
-) -> (u16, Vec<u8>) {
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
@@ -40,13 +41,44 @@ pub fn http(
     stream.read_to_end(&mut raw).expect("read response");
     let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("header/body separator");
     let head = std::str::from_utf8(&raw[..sep]).expect("ascii response head");
-    let status: u16 = head
+    let mut lines = head.split("\r\n");
+    let status: u16 = lines
+        .next()
+        .expect("status line")
         .split_whitespace()
         .nth(1)
         .expect("status code in the status line")
         .parse()
         .expect("numeric status");
-    (status, raw[sep + 4..].to_vec())
+    let headers = lines
+        .filter_map(|l| l.split_once(':'))
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .collect();
+    (status, headers, raw[sep + 4..].to_vec())
+}
+
+/// One HTTP exchange; returns (status, body bytes).
+pub fn http(
+    port: u16,
+    method: &str,
+    path: &str,
+    session: Option<&str>,
+    body: &[u8],
+) -> (u16, Vec<u8>) {
+    let (status, _headers, body) = http_full(port, method, path, session, body);
+    (status, body)
+}
+
+/// Case-insensitive response-header lookup.
+pub fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str())
+}
+
+pub fn options(port: u16, path: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    http_full(port, "OPTIONS", path, None, b"")
 }
 
 pub fn get(port: u16, path: &str) -> (u16, Vec<u8>) {
@@ -82,4 +114,115 @@ pub fn expect_resp<'a>(v: &'a Value, shape: &str) -> &'a Value {
 /// The minted address of an ack_addr response.
 pub fn acked_addr(v: &Value) -> String {
     expect_resp(v, "ack_addr")["addr"].as_str().expect("ack_addr carries addr").to_string()
+}
+
+/// The deadline every stream assertion runs under — generous for CI; the
+/// daemon's own delivery is notification-driven (well under the wire's
+/// ~250 ms bound).
+const SSE_DEADLINE: Duration = Duration::from_secs(5);
+
+/// A raw `GET /events` subscriber: reads the SSE framing off the socket,
+/// skipping `:ka` keepalive comments.
+pub struct Sse {
+    stream: TcpStream,
+    buf: Vec<u8>,
+}
+
+impl Sse {
+    pub fn connect(port: u16) -> Sse {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect /events");
+        stream.set_read_timeout(Some(Duration::from_millis(100))).expect("read timeout");
+        stream
+            .write_all(
+                b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n",
+            )
+            .expect("write /events request");
+        let mut sse = Sse { stream, buf: Vec::new() };
+        let head = sse.read_until(b"\r\n\r\n");
+        let head = String::from_utf8(head).expect("ascii stream head");
+        assert!(
+            head.starts_with("HTTP/1.1 200 "),
+            "the event stream must open 200: {head}"
+        );
+        let lower = head.to_ascii_lowercase();
+        assert!(
+            lower.contains("content-type: text/event-stream"),
+            "the event stream is text/event-stream: {head}"
+        );
+        assert!(
+            lower.contains("access-control-allow-origin: *"),
+            "the event stream carries the CORS header: {head}"
+        );
+        sse
+    }
+
+    /// Read (appending to the persistent buffer) until `delim`; returns the
+    /// bytes before it and consumes through it.
+    fn read_until(&mut self, delim: &[u8]) -> Vec<u8> {
+        let deadline = Instant::now() + SSE_DEADLINE;
+        loop {
+            if let Some(i) = self.buf.windows(delim.len()).position(|w| w == delim) {
+                let mut taken: Vec<u8> = self.buf.drain(..i + delim.len()).collect();
+                taken.truncate(i);
+                return taken;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no stream data within {SSE_DEADLINE:?}; buffered: {:?}",
+                String::from_utf8_lossy(&self.buf)
+            );
+            let mut chunk = [0u8; 4096];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => panic!(
+                    "stream closed while waiting; buffered: {:?}",
+                    String::from_utf8_lossy(&self.buf)
+                ),
+                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
+                Err(e) => panic!("read /events: {e}"),
+            }
+        }
+    }
+
+    /// The next event's `log_position`, asserting the `commit` framing;
+    /// keepalive comment blocks are skipped.
+    pub fn expect_commit(&mut self) -> u64 {
+        loop {
+            let block = self.read_until(b"\n\n");
+            let text = String::from_utf8(block).expect("utf-8 event block");
+            if text.trim_start().starts_with(':') {
+                continue;
+            }
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 2, "one event line + one data line: {text:?}");
+            assert_eq!(lines[0], "event: commit", "event name: {text:?}");
+            let data = lines[1].strip_prefix("data: ").expect("data line");
+            let v: Value = serde_json::from_str(data).expect("event data is JSON");
+            let obj = v.as_object().expect("event data object");
+            assert_eq!(obj.len(), 1, "v1 payload is the position alone: {data}");
+            return obj["log_position"].as_u64().expect("log_position number");
+        }
+    }
+
+    /// Assert the daemon closes the stream (draining any trailing events).
+    pub fn expect_eof(&mut self) {
+        let deadline = Instant::now() + SSE_DEADLINE;
+        loop {
+            let mut chunk = [0u8; 4096];
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return,
+                // Reset counts as closed: the daemon is gone either way.
+                Err(e)
+                    if e.kind() == ErrorKind::ConnectionReset
+                        || e.kind() == ErrorKind::BrokenPipe =>
+                {
+                    return
+                }
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
+                Err(e) => panic!("read at stream end: {e}"),
+            }
+            assert!(Instant::now() < deadline, "stream not closed within {SSE_DEADLINE:?}");
+        }
+    }
 }

@@ -624,3 +624,149 @@ op_index = 10
 class = "ruled-rejection-cascade"
 rationale = "Cascade of a ruled rejection: skep refused the udanax-only operation earlier in this scenario (rulings 2/3/12 — subspace confinement / dense V-space / no clamping), so subsequent observations legitimately differ; the divergence is the ruled divergence propagated."
 
+# Signature entries (survive op-index shifts across harness rounds)
+
+[[allow]]
+scenario = "all_operations_interleaved"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "insert_link_allocation_independence"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_all_with_links"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "retrieve_vspan_with_links"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "link_orgl_vposition_observation"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "link_poom_no_shift"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "three_links_vspan_growth"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "copy_link_to_text_subspace"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_at_root_origin_height_1"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_from_middle_affects_later_links"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_link_subspace"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_middle_link_check_gap_closure"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_partial_text_before_link"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_text_before_link"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "delete_width_larger_than_content"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "multiple_text_insertions_with_links"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "text_insert_preserves_link_vpositions"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "createnewversion_text_vs_links"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "pivot_cross_subspace_boundary"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "createlink_check_text_positions"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "insert_text_check_link_positions"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "version_copies_link_subspace"
+expected_matches = "("0", "0."
+class = "udanax-malformed-vspanset"
+rationale = "udanax two-subspace RETRIEVEDOCVSPANSET reply malformed (ruling 1) — signature entry, survives op-index shifts."
+
+[[allow]]
+scenario = "internal_transclusion_identity"
+op_index = 4
+class = "udanax-compare-fanout-underreport"
+rationale = "Pre-registered class (run-2 ledger): ASN-0122 verifies udanax COMPARE under-reports fan-out (width-budgeted merge, not a join — self-comparison reports only the diagonal); skep's complete join reports the off-diagonal pairs. Ruled in advance 2026-08-15."
+
+[[allow]]
+scenario = "delete_all_with_links"
+op_index = 7
+class = "ruling-10-i-coverage-findability"
+rationale = "Ruling 10: the seated link remains discoverable after content delete_all; udanax's V-limited search recorded zero. Ruled 2026-08-15."
+

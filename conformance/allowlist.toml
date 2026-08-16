@@ -770,3 +770,18 @@ op_index = 7
 class = "ruling-10-i-coverage-findability"
 rationale = "Ruling 10: the seated link remains discoverable after content delete_all; udanax's V-limited search recorded zero. Ruled 2026-08-15."
 
+[[allow]]
+scenario = "link_to_transcluded_then_version"
+class = "version-link-carryover"
+rationale = "Ruling 15 (2026-08-15): udanax CREATENEWVERSION copies fork-time link membership (Green's self-described 'kluge not yet kluged', ASN-0123 Green deviation 2); skep implements V2b content-only snapshot + CL-OWN + query-time refraction, which also covers post-fork links. See decisions.md."
+
+[[allow]]
+scenario = "createnewversion_text_vs_links"
+class = "version-link-carryover"
+rationale = "Ruling 15 (2026-08-15): udanax CREATENEWVERSION copies fork-time link membership (Green's self-described 'kluge not yet kluged', ASN-0123 Green deviation 2); skep implements V2b content-only snapshot + CL-OWN + query-time refraction, which also covers post-fork links. See decisions.md."
+
+[[allow]]
+scenario = "version_copies_link_subspace"
+class = "version-link-carryover"
+rationale = "Ruling 15 (2026-08-15): udanax CREATENEWVERSION copies fork-time link membership (Green's self-described 'kluge not yet kluged', ASN-0123 Green deviation 2); skep implements V2b content-only snapshot + CL-OWN + query-time refraction, which also covers post-fork links. See decisions.md."
+

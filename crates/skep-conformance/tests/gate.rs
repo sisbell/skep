@@ -74,3 +74,61 @@ fn report_is_deterministic() {
     let second = render_jsonl(&run_scenarios(&subset, &allow));
     assert_eq!(first, second, "two identical runs must render byte-identical reports");
 }
+
+/// The RATCHET — conformance as an enforced property (frozen 2026-08-15,
+/// adjudication complete: decisions.md rulings 1–15, zero divergent).
+///
+/// `conformance/ratchet.toml` freezes the expected non-pass set. This test
+/// FAILS on any scenario that is `Divergent` or `Error`, on any
+/// `Allowlisted`/`Inexpressible` scenario not in the frozen lists, and it
+/// reports (without failing) frozen entries that improved to `Pass` so the
+/// file can be trimmed. Growing the frozen set requires a human ruling in
+/// adjudication/decisions.md — never an edit made to turn this test green.
+#[test]
+fn conformance_ratchet() {
+    use std::collections::HashSet;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../conformance/ratchet.toml");
+    let raw = std::fs::read_to_string(&path).expect("ratchet.toml must exist");
+    let (mut section, mut allow, mut inexpr) = (String::new(), HashSet::new(), HashSet::new());
+    for line in raw.lines() {
+        let l = line.trim();
+        if l.starts_with('#') || l.is_empty() {
+            continue;
+        } else if let Some(s) = l.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
+            section = s.to_string();
+        } else if let Some(v) = l.strip_prefix("scenario = \"").and_then(|x| x.strip_suffix('"')) {
+            match section.as_str() {
+                "allowlisted" => allow.insert(v.to_string()),
+                "inexpressible" => inexpr.insert(v.to_string()),
+                other => panic!("ratchet.toml: unknown section [{other}]"),
+            };
+        } else {
+            panic!("ratchet.toml: unparseable line: {l}");
+        }
+    }
+
+    let out = run_all().expect("sweep must run");
+    let mut violations = Vec::new();
+    let mut improved = Vec::new();
+    for r in &out.records {
+        match r.verdict {
+            Verdict::Pass => {
+                if allow.contains(&r.name) || inexpr.contains(&r.name) {
+                    improved.push(r.name.clone());
+                }
+            }
+            Verdict::Allowlisted if allow.contains(&r.name) => {}
+            Verdict::Inexpressible if inexpr.contains(&r.name) => {}
+            v => violations.push(format!("{}/{}: {v:?} not permitted by ratchet", r.category, r.name)),
+        }
+    }
+    if !improved.is_empty() {
+        eprintln!("ratchet: {} frozen scenario(s) improved to Pass — trim ratchet.toml: {improved:?}",
+                  improved.len());
+    }
+    assert!(violations.is_empty(),
+            "CONFORMANCE RATCHET VIOLATED — a new divergence requires a human ruling \
+             (adjudication/decisions.md) before the frozen set may grow:\n{}",
+            violations.join("\n"));
+}

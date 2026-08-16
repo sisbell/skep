@@ -109,3 +109,50 @@ harness round-4 items.
     identity-permanent; document containment is an arrangement fact.
 **FINAL investigation tally, runs 1–3: every divergence class explained.
 Confirmed skep bugs: ZERO.**
+
+## 2026-08-15 — runs 4–6 closure and final ruling
+
+**Run history:** run 4 (175/34/17/37): render-by-identity + endset coverage
+translation mandated by ruling 11; op-index entry drift identified. Run 5
+(184/45→48/8→4/27): signature-match allowlist key added (`expected_matches`,
+survives op-index shifts); α-lift equality; wider grounding; the
+pre-registered fan-out class ARRIVED (`internal_transclusion_identity` —
+ASN-0122's predicted under-reporting observed in the wild) and its entry
+applied. Run 6 (185/47/3/28): the harness caught and removed its own
+fabrication (a padded ghost byte masking the carryover family) and
+surfaced the final class rather than forcing agreement.
+
+15. **version-link-carryover** (ALLOWLIST, 3 scenarios — the final ruling;
+    divergent → 0). What udanax does: CREATENEWVERSION copies the source's
+    TOTAL V-extent, giving the version an arrangement entry for the link's
+    V-position — fork-time link membership. Green's own source labels the
+    routine "a kluge not yet kluged" (ASN-0123 records it as Green
+    deviation 2 with the instruction "don't ship the kluge"). What skep
+    does: V2b content-only snapshot + CL-OWN (one arranger per link) +
+    REFRACTION — "a link to one version is a link to all versions" by
+    shared content addresses, computed at query time, total, bidirectional,
+    and covering links created AFTER the fork (which udanax's fork-time
+    copy misses). The only observable skep lacks: the link in the version's
+    own link-subspace enumeration — membership vs reachability, same
+    family as rulings 11/14. Ownership teeth: green has no link deletion,
+    so dual arrangers never conflict there; skep has nullify/supersession,
+    so singular arrangement is load-bearing. Link-subspace versioning
+    remains open as ASN-0123 OQ3, a separate mechanism.
+
+**FINAL: 263 scenarios — 188 pass equivalent (185 + the 3 now allowlisted),
+47+3 allowlisted, 0 divergent, 28 inexpressible (annotated), 0 errors.
+Fifteen rulings, zero skep bugs, three udanax defects self-documented in
+its own goldens, four designed divergences pre-argued in the ASNs.**
+
+**Corpus extension (same date):** 34 new goldens recorded from live
+udanax-green (263→297; multisession 8, links_nary 5, links_crossdoc 3,
+compare_fanout 4, provenance_ops 4, depth_scale 4, boundary 6; all
+quadruple-verified deterministic; manifest + anomalies A1–A23 in
+udanax-test-harness/golden/MANIFEST-NEW.md). Pre-registered classes for
+the sweep, from the anomalies: green-no-snapshot-isolation (readers see
+uncommitted writes; READ_ONLY writes acked and discarded — skep's M2
+isolation will diverge by design); green-followlink-multispan-corruption
+(reply corrupt for multi-span/multi-doc endsets — ASN-0114 vindicated
+again); green-fanout-identical-rows (both-sided fan-out answers N
+identical rows, no off-diagonal entries); green-nplaces-version-depth
+(chains abort at level 8); no-origin-op (absence recorded).

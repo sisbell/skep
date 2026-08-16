@@ -785,3 +785,110 @@ scenario = "version_copies_link_subspace"
 class = "version-link-carryover"
 rationale = "Ruling 15 (2026-08-15): udanax CREATENEWVERSION copies fork-time link membership (Green's self-described 'kluge not yet kluged', ASN-0123 Green deviation 2); skep implements V2b content-only snapshot + CL-OWN + query-time refraction, which also covers post-fork links. See decisions.md."
 
+# Run-7 extension rulings (2026-08-16)
+
+[[allow]]
+scenario = "boundary_deep_vaddress_reads"
+class = "depth2-vspan-gate"
+rationale = "Ruling 17: depth-2 V-position discipline rejects nested read spans green tolerates (D-SEQ cosmetic note recorded)."
+
+[[allow]]
+scenario = "boundary_exact_extent_reads"
+class = "depth2-vspan-gate"
+rationale = "Ruling 17: degenerate/at-extent read spans rejected by the V-span gate; green tolerates."
+
+[[allow]]
+scenario = "boundary_far_position_insert"
+class = "dense-v-space"
+rationale = "Ruling 3 cascade: sparse insert rejected; downstream observations differ accordingly."
+
+[[allow]]
+scenario = "boundary_foreign_and_malformed_opens"
+class = "descoped-bert-enforcement"
+rationale = "Ruling 16: green's bert rejections/discards vs skep's descoped access control; no truncation (investigated 2026-08-16)."
+
+[[allow]]
+scenario = "boundary_growth_doubling"
+class = "asn-0122-fanout-family"
+rationale = "Ruling 18: green answers N identical full-width rows under both-sided fan-out; skep's join enumerates distinct positions."
+
+[[allow]]
+scenario = "crossdoc_from_two_docs"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite: green drops second-doc spans/clips per-region; skep honest whole endsets (rulings 4/18) + malformed vspanset (ruling 1)."
+
+[[allow]]
+scenario = "crossdoc_home_elsewhere"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite; see crossdoc_from_two_docs."
+
+[[allow]]
+scenario = "crossdoc_to_two_docs"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite; see crossdoc_from_two_docs."
+
+[[allow]]
+scenario = "depth_edit_marathon"
+class = "asn-0122-fanout-family"
+rationale = "Ruling 18: repeated single-char identities — green's budget merge picks arbitrary pairings; skep reports the canonical relation."
+
+[[allow]]
+scenario = "fanout_multiplicity_ladder"
+class = "asn-0122-fanout-family"
+rationale = "Ruling 18: predicted merge-vs-join divergence observed across the multiplicity ladder."
+
+[[allow]]
+scenario = "fanout_self_repetition"
+class = "asn-0122-fanout-family"
+rationale = "Ruling 18: green duplicates one pairing; skep enumerates all four."
+
+[[allow]]
+scenario = "ms_committed_visibility"
+class = "descoped-bert-enforcement"
+rationale = "Ruling 16: open-rejection expectations; isolation mechanics agreed where comparable."
+
+[[allow]]
+scenario = "ms_link_across_sessions"
+class = "descoped-bert-enforcement"
+rationale = "Ruling 16."
+
+[[allow]]
+scenario = "ms_open_conflict_matrix"
+class = "descoped-bert-enforcement"
+rationale = "Ruling 16: the conflict matrix is bert behavior."
+
+[[allow]]
+scenario = "ms_shared_doc_interleaved_inserts"
+class = "descoped-bert-enforcement"
+rationale = "Ruling 16."
+
+[[allow]]
+scenario = "nary_empty_endset_shapes"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite: nary endset family; green reply corruption per MANIFEST-NEW; skep honest."
+
+[[allow]]
+scenario = "nary_link_to_link"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite; nary family."
+
+[[allow]]
+scenario = "nary_multispan_from_to"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18: green duplicates the last span in multi-span follows; skep returns the recorded endset."
+
+[[allow]]
+scenario = "nary_type_content_span"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite; nary family."
+
+[[allow]]
+scenario = "nary_type_two_docs"
+class = "green-followlink-multispan-corruption"
+rationale = "Ruling 18 composite; nary family."
+
+[[allow]]
+scenario = "prov_identity_after_delete"
+class = "asn-0124-present-tense-containment"
+rationale = "Ruling 14: deleted source filtered present-tense; version still arranges the content."
+

@@ -156,3 +156,36 @@ isolation will diverge by design); green-followlink-multispan-corruption
 again); green-fanout-identical-rows (both-sided fan-out answers N
 identical rows, no off-diagonal entries); green-nplaces-version-depth
 (chains abort at level 8); no-origin-op (absence recorded).
+
+## 2026-08-16 — run-7 docket: the 34-golden extension (all 21 adjudicated)
+
+16. **descoped-bert-enforcement** (ALLOWLIST) — green's bert layer rejects
+    opens (conflict/foreign/malformed) and silently discards READ_ONLY
+    writes (acked-then-dropped, its own recorded defect); skep descoped
+    per-handle access control by design (ownership/auth lives in M3 +
+    session principals; open→noop adaptation). Scenarios probing bert
+    enforcement diverge at the adaptation boundary, not the engine. The
+    "guarded"/"uarded!" scare investigated: NO truncation — skep executed
+    character-perfectly the two writes green discarded. Covers
+    boundary_foreign_and_malformed_opens + the ms_* open-rejection ops.
+17. **depth2-vspan-gate** (ALLOWLIST) — skep's V-positions are depth-2
+    [subspace, ordinal]; nested/degenerate read spans green tolerates are
+    rejected MalformedSpan. NOTE for future work: the depth-2 restriction
+    was assessed cosmetic (D-SEQ) in the design phase — relaxation is
+    possible if ever wanted; until then the gate is the spec.
+    Covers boundary_deep_vaddress_reads, boundary_exact_extent_reads.
+18. Pre-registered classes confirmed with data: **asn-0122-fanout-family**
+    (growth_doubling, fanout pair, depth_edit_marathon — green answers N
+    identical rows / arbitrary merge pairings; skep's join enumerates the
+    relation) and **green-followlink-multispan-corruption** (nary_* and
+    crossdoc_* — green duplicates last spans, drops second-doc spans,
+    empties wrong docids exactly as MANIFEST-NEW recorded; skep honest;
+    composite with whole-endsets and malformed-vspanset per scenario).
+    prov_identity_after_delete = ruling 14 (present-tense). far_position =
+    ruling 3 cascade.
+
+**Run-7 final: 297 scenarios — 209 pass-equivalent, 71 allowlisted,
+0 divergent, 29 inexpressible, 0 errors. Multisession result: 4 of 8
+concurrency recordings PASS outright (interleaved inserts, committed
+visibility mechanics); the rest diverge only at the bert adaptation
+boundary. Skep bugs found: still ZERO.**

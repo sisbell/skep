@@ -125,7 +125,24 @@
 //!   (insert_vspace_mapping: the register held the version snapshot).
 //! * `insert-padded-to-recorded-vspanset:+N` — the recorded vspanset width
 //!   is the authority for how much the script inserted; the field text is
-//!   padded (with spaces) to match, never the comparison adjusted.
+//!   padded (with spaces) to match, never the comparison adjusted. DECLINED
+//!   when links seated between the insert and the probe explain the surplus
+//!   — that is udanax's version link carryover (see
+//!   `VERSION_LINK_CARRYOVER_ANALYSIS`), and padding would fabricate a
+//!   ghost content byte (createnewversion_text_vs_links' own retrieve
+//!   delivers 33 text chars plus the link marker for its recorded 0.34).
+//! * `vcopy-source-reaimed` — a from-description that grounded OUTSIDE its
+//!   doc's live extent (the register pointing at the just-created empty
+//!   destination) re-grounds against the content-holding docs excluding the
+//!   destination; the recorded post-state confirms the span
+//!   (internal/ispan_partial_overlap's "positions 3-7 (CDEFG)").
+//! * `contents:per-doc-keyed` — `<docname>: [strings]` fields are the
+//!   recorded per-document replies of one retrieve (ispan_partial_overlap's
+//!   `source:/dest:` arrays; the `expected` string alongside is prose).
+//! * `read-span-from-recorded-strings` — a per-doc-keyed reply that is a
+//!   proper substring of the doc's shadow content locates in the SHADOW
+//!   (golden-side data only) and that span is read from skep — the script's
+//!   unrecorded specset reconstructed without consulting skep's answer.
 //! * `delete-noop-from-post-state` — the recorded post-delete content
 //!   equals the pre-delete content byte-for-byte: udanax removed nothing,
 //!   so neither does the harness (delete_all_with_links' whole-doc remove).
@@ -157,6 +174,7 @@ use crate::alpha::Alpha;
 use crate::compare::{
     collapsed_subspace_shape, compare_addr_sets, compare_content, compare_count,
     compare_expected_failure, compare_spansets, COLLAPSED_SUBSPACE_ANALYSIS,
+    VERSION_LINK_CARRYOVER_ANALYSIS,
 };
 use crate::fields::{
     self, client_side_failure, create_name_of, doc_from_label, expect_spans_raw, expect_strings,
@@ -1707,7 +1725,34 @@ fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &
             }
         } else if let Some(l) = locate(cx.shadow, None, s) {
             // A described region, not a doc ("positions 1-4 (Orig)" —
-            // edgecases/vcopy_to_same_document).
+            // edgecases/vcopy_to_same_document). A grounding that lands
+            // OUTSIDE its doc's live extent grounded against the wrong doc —
+            // typically the register pointing at the just-created empty
+            // destination — and the script's copy can only have read a doc
+            // that holds the span: re-ground against the content-holding
+            // docs excluding the dest reference (policy
+            // `vcopy-source-reaimed`; internal/ispan_partial_overlap's
+            // `from: "positions 3-7 (CDEFG)"` with `to: "dest"`, confirmed
+            // by the recorded post-state "CDEFG in both"). No valid re-aim
+            // keeps the original grounding and its loud divergence.
+            let l = if l.ord + l.width > cx.shadow.text_len(&l.doc) + 1 {
+                let dest_ref = str_field(op, &["to", "dest", "target", "target_doc"])
+                    .filter(|t| !crate::ground::is_position_marker(t))
+                    .and_then(|t| cx.shadow.resolve_doc(t))
+                    .unwrap_or_default();
+                match cx.shadow.content_docs_except(&dest_ref).iter().find_map(|d| {
+                    locate(cx.shadow, Some(d.as_str()), s)
+                        .filter(|c| c.ord + c.width <= cx.shadow.text_len(&c.doc) + 1)
+                }) {
+                    Some(re) => {
+                        out.adaptations.push("vcopy-source-reaimed".into());
+                        re
+                    }
+                    None => l,
+                }
+            } else {
+                l
+            };
             if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
                 return;
             }
@@ -3610,6 +3655,103 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
         }
     }
 
+    // Per-doc keyed probe: two or more fields whose KEY resolves as a doc
+    // reference and whose VALUE is a string array are the recorded
+    // per-document replies of one retrieve (policy `contents:per-doc-keyed`;
+    // internal/ispan_partial_overlap op 4 records `source: ["CDEFG"],
+    // dest: ["CDEFG"], expected: "CDEFG in both"` — the arrays are the data,
+    // `expected` is prose, and reading it as the expectation while dropping
+    // the arrays is what this branch replaces). The script's unrecorded
+    // specset is reconstructed GOLDEN-side: a single recorded string that is
+    // a proper substring of the doc's shadow content locates in the SHADOW
+    // and that span is read from skep (policy
+    // `read-span-from-recorded-strings` — the query derives from golden data
+    // only, so skep still has to deliver the right bytes at those
+    // positions); everything else reads the whole document and any mismatch
+    // surfaces loudly.
+    if str_field(op, &["doc", "docid"]).is_none()
+        && field(op, &["result", "specset", "specs", "contents", "content"]).is_none()
+    {
+        const NOT_DOC_KEYS: &[&str] = &[
+            "op", "comment", "note", "label", "description", "interpretation", "expected",
+            "error", "status", "before", "after", "sample", "remaining", "empty", "value",
+            "text", "texts", "strings", "cuts", "spans", "targets", "docs", "positions",
+        ];
+        let keyed: Vec<(String, String, Vec<String>)> = op
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter(|(k, v)| !NOT_DOC_KEYS.contains(&k.as_str()) && v.is_array())
+                    .filter_map(|(k, v)| {
+                        let strings = expect_strings(v)?;
+                        let doc = cx.shadow.resolve_doc(k)?;
+                        Some((k.clone(), doc, strings))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if keyed.len() >= 2 {
+            let mut fails: Vec<(String, String)> = Vec::new();
+            for (name, doc, strings) in &keyed {
+                let Some(d) = cx.skep_doc(doc) else {
+                    fails.push((
+                        format!("{name}: contents"),
+                        format!("{name}: {doc} unresolvable"),
+                    ));
+                    continue;
+                };
+                // Reconstructed narrowing: exactly one recorded string,
+                // strictly inside the shadow's content, located there.
+                let narrowed = match strings.as_slice() {
+                    [s] if !s.is_empty()
+                        && !fields::is_link_address(s)
+                        && *s != cx.shadow.text_string(doc) =>
+                    {
+                        cx.shadow
+                            .find_text(Some(doc.as_str()), s)
+                            .map(|(_, ord)| (ord, s.len() as u64))
+                    }
+                    _ => None,
+                };
+                let items = if let Some((ord, w)) = narrowed {
+                    out.adaptations.push("read-span-from-recorded-strings".into());
+                    match vspan(1, ord, w).map(|span| {
+                        cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d, span }] })
+                    }) {
+                        Some(Response::Delivery { items, .. }) => Ok(items.0),
+                        Some(r) => Err(rejection_code(&r)
+                            .unwrap_or_else(|| "unexpected response".into())),
+                        None => Ok(Vec::new()),
+                    }
+                } else {
+                    cx.read_content(doc)
+                };
+                match items {
+                    Ok(items) => {
+                        if let Err((e, a)) = compare_content(strings, &items, cx.alpha) {
+                            fails.push((format!("{name}: {e}"), format!("{name}: {a}")));
+                        }
+                    }
+                    Err(code) => {
+                        fails.push((format!("{name}: contents"), format!("{name}: {code}")))
+                    }
+                }
+            }
+            out.adaptations.push("contents:per-doc-keyed".into());
+            out.comparator = Some("content".into());
+            if fails.is_empty() {
+                out.status = Status::Agreed;
+            } else {
+                out.status = Status::Disagreed;
+                out.expected =
+                    Some(fails.iter().map(|f| f.0.clone()).collect::<Vec<_>>().join(" | "));
+                out.actual =
+                    Some(fails.iter().map(|f| f.1.clone()).collect::<Vec<_>>().join(" | "));
+            }
+            return;
+        }
+    }
+
     // Per-position probe: `positions` map of "1.3" → "C".
     if let Some(map) = op.get("positions").and_then(Value::as_object) {
         let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
@@ -3672,8 +3814,11 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
     let mut specs: Vec<Spec> = Vec::new();
     // Link-subspace reads issued as a SECOND RetrieveV so a link-side
     // absence localizes to the missing segment instead of rejecting the
-    // whole delivery (policy `contents:both-subspaces`).
+    // whole delivery (policy `contents:both-subspaces`). The golden doc the
+    // link read targets is kept so an empty answer can be classified (a
+    // VERSION missing its source's links is the carryover family).
     let mut link_specs: Vec<Spec> = Vec::new();
+    let mut link_read_doc: Option<String> = None;
     if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
         for v in arr {
             let Some((docid, spans)) = vspec_dict(v) else {
@@ -3856,6 +4001,7 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 let links = cx.shadow.link_count(&doc).max(n_addr);
                 if let Some(span) = vspan(2, 1, links) {
                     link_specs.push(Spec { doc: d, span });
+                    link_read_doc = Some(doc.clone());
                 }
             }
         }
@@ -3899,7 +4045,32 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
     let mut items = items;
     if !link_specs.is_empty() {
         match cx.rig.exec(Op::RetrieveV { specs: link_specs }) {
-            Response::Delivery { items: more, .. } => items.extend(more.0),
+            Response::Delivery { items: more, .. } => {
+                if more.0.is_empty() {
+                    // The read FIRED and came back silent-empty (M6 R6: an
+                    // unoccupied subspace degrades to an empty contribution,
+                    // never an error). Say so — a note-less miss is
+                    // indistinguishable from the policy not firing, which is
+                    // exactly the ambiguity round 6 was misdiagnosed on. A
+                    // version doc missing its source's links is the
+                    // adjudication-ready carryover family.
+                    let versioned = link_read_doc
+                        .as_deref()
+                        .is_some_and(|g| cx.shadow.version_of.contains_key(g));
+                    let msg = if versioned {
+                        VERSION_LINK_CARRYOVER_ANALYSIS.to_string()
+                    } else {
+                        "link-subspace read fired and delivered no items (subspace \
+                         unoccupied on the skep side)"
+                            .to_string()
+                    };
+                    out.note = Some(match out.note.take() {
+                        Some(n) => format!("{n}; {msg}"),
+                        None => msg,
+                    });
+                }
+                items.extend(more.0);
+            }
             r => {
                 let code = rejection_code(&r).unwrap_or_else(|| "unexpected response".into());
                 out.note = Some(match out.note.take() {
@@ -4008,6 +4179,15 @@ fn h_vspanset(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants, ful
             out.actual = Some(a);
             if collapsed_subspace_shape(&spans) {
                 out.note = Some(COLLAPSED_SUBSPACE_ANALYSIS.to_string());
+            } else if cx.shadow.version_of.contains_key(&doc)
+                && cx.shadow.link_count(&doc) > 0
+                && spans.iter().all(|(s, _)| s == "1" || s.starts_with("1."))
+            {
+                // A VERSION's recorded content-subspace extent disagreeing
+                // with skep's while the shadow (udanax's recorded reality)
+                // says the version carries links is the carryover family —
+                // the recorded width folds the copied links onto the tail.
+                out.note = Some(VERSION_LINK_CARRYOVER_ANALYSIS.to_string());
             }
         }
     }

@@ -276,6 +276,31 @@ pub const COLLAPSED_SUBSPACE_ANALYSIS: &str =
      (single-subspace documents record well-formed spans). Not provably representational — \
      compared raw and left divergent for operator adjudication.";
 
+/// The second standing cluster: versions and the link subspace.
+///
+/// The evidence (all from the vendored goldens): udanax's CREATENEWVERSION
+/// carries the source's link subspace into the new version, and the
+/// version's RETRIEVEDOCVSPANSET flattens it onto the content extent's tail
+/// — provenance/createnewversion_text_vs_links records width 0.34 for a
+/// 33-char text, and its own whole-extent retrieve delivers those 33 chars
+/// PLUS the link marker, so position 34 IS the carried link (not an
+/// unrecorded 34th text byte); versions/version_copies_link_subspace
+/// records 0.15 = 14 text + 1 link the same way. skep's Version installs a
+/// content-subspace-only snapshot (M5 `VersionSnapshot`, ASN-0123 V2), so
+/// the version's link subspace is empty: the link item and the +links
+/// extent are absent, while link DISCOVERY from the version (FindLinksV
+/// over the shared I-content) agrees on both sides. A real design
+/// divergence — surfaced raw for operator adjudication, never papered over.
+pub const VERSION_LINK_CARRYOVER_ANALYSIS: &str =
+    "udanax version link carryover: CREATENEWVERSION carries the source's link subspace into \
+     the version and the version's vspanset flattens it onto the content extent's tail \
+     (createnewversion_text_vs_links: 0.34 = 33 text + 1 link, its whole-extent retrieve \
+     delivering 33 chars plus the link marker; version_copies_link_subspace: 0.15 = 14 + 1). \
+     skep's Version installs a content-subspace-only snapshot (M5 VersionSnapshot, ASN-0123 \
+     V2), so the version's link subspace is empty — the link item and the +links extent are \
+     absent, while link discovery from the version agrees on both sides. Real design \
+     divergence, surfaced raw for adjudication.";
+
 // ── counts: exact modulo declared delta ────────────────────────────────────
 
 pub fn compare_count(expected: u64, delta: i64, actual: usize) -> Verdict {

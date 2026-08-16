@@ -246,9 +246,20 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
     } else {
         Verdict::Pass
     };
+    // The summary's divergent list leads with the first UNADJUDICATED
+    // disagreement — a first-failure line showing an allowlisted op reads as
+    // the scenario's finding and misdirects (round 6's item 1 was diagnosed
+    // off exactly that). Allowlisted disagreements are the fallback only
+    // when nothing unadjudicated exists (allowlisted/inexpressible verdicts).
     let first_failure = ops
         .iter()
-        .find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
+        .find(|o| {
+            o.status == Status::Inexpressible
+                || (o.status == Status::Disagreed && o.allowlisted.is_none())
+        })
+        .or_else(|| {
+            ops.iter().find(|o| matches!(o.status, Status::Disagreed | Status::Inexpressible))
+        })
         .map(|o| {
             let detail = match (&o.expected, &o.actual, &o.note) {
                 (Some(e), Some(a), _) => format!("expected {e} / actual {a}"),

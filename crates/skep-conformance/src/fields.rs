@@ -306,9 +306,16 @@ pub fn looks_like_spanset(v: &Value) -> bool {
 /// object wrapper (edgecases/retrieve_empty_specset). The bare marker
 /// `"empty"` under an `expected` key means no content
 /// (delete_all/empty_document_never_filled).
+///
+/// An array is a content list only when EVERY entry is a string; an array
+/// holding span dicts is a different result shape and returns `None` — the
+/// old filtering read a recorded post-insert vspanset (`result:
+/// [{start,width}]`, allocation_independence/all_operations_interleaved
+/// op 1) as the EMPTY content expectation and fabricated a `content []`
+/// disagreement against the delivered text.
 pub fn expect_strings(v: &Value) -> Option<Vec<String>> {
     if let Some(arr) = v.as_array() {
-        return Some(arr.iter().filter_map(|x| x.as_str().map(str::to_string)).collect());
+        return arr.iter().map(|x| x.as_str().map(str::to_string)).collect();
     }
     if let Some(o) = v.as_object() {
         for k in ["contents", "content", "strings"] {

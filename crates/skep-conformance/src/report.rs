@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::compare::COLLAPSED_SUBSPACE_ANALYSIS;
+use crate::compare::{COLLAPSED_SUBSPACE_ANALYSIS, VERSION_LINK_CARRYOVER_ANALYSIS};
 use crate::outcome::{ScenarioRecord, Status, Verdict};
 
 fn status_str(s: &Status) -> &'static str {
@@ -158,22 +158,32 @@ fn render_summary(records: &[ScenarioRecord]) -> String {
         s.push_str("(none)\n");
     }
 
-    // The one standing cluster analysis: surfaced once, with the affected
-    // scenarios listed, so the operators adjudicate it in one sitting.
-    let affected: Vec<&ScenarioRecord> = records
-        .iter()
-        .filter(|r| {
-            r.ops
-                .iter()
-                .any(|o| o.note.as_deref() == Some(COLLAPSED_SUBSPACE_ANALYSIS))
-        })
-        .collect();
-    if !affected.is_empty() {
-        s.push_str("\n## Standing analysis — udanax two-subspace vspanset shape\n\n");
-        s.push_str(COLLAPSED_SUBSPACE_ANALYSIS);
-        s.push_str("\n\nAffected scenarios:\n\n");
-        for r in &affected {
-            s.push_str(&format!("- `{}/{}`\n", r.category, r.name));
+    // The standing cluster analyses: each surfaced once, with the affected
+    // scenarios listed, so the operators adjudicate a family in one sitting.
+    // Notes may carry the analysis alongside other evidence, so the match is
+    // containment, not equality.
+    for (title, analysis) in [
+        ("udanax two-subspace vspanset shape", COLLAPSED_SUBSPACE_ANALYSIS),
+        (
+            "udanax version link carryover vs skep content-only Version",
+            VERSION_LINK_CARRYOVER_ANALYSIS,
+        ),
+    ] {
+        let affected: Vec<&ScenarioRecord> = records
+            .iter()
+            .filter(|r| {
+                r.ops
+                    .iter()
+                    .any(|o| o.note.as_deref().is_some_and(|n| n.contains(analysis)))
+            })
+            .collect();
+        if !affected.is_empty() {
+            s.push_str(&format!("\n## Standing analysis — {title}\n\n"));
+            s.push_str(analysis);
+            s.push_str("\n\nAffected scenarios:\n\n");
+            for r in &affected {
+                s.push_str(&format!("- `{}/{}`\n", r.category, r.name));
+            }
         }
     }
 

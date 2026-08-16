@@ -1261,7 +1261,26 @@ impl Sim {
                 spec_list.push((from, 1, n));
             } else if let Some(l) = locate(&self.shadow, None, s) {
                 // A described region, not a doc ("positions 1-4 (Orig)" —
-                // vcopy_to_same_document); mirrors the translator.
+                // vcopy_to_same_document); mirrors the translator, the
+                // out-of-extent re-aim included (`vcopy-source-reaimed`:
+                // ispan_partial_overlap's register held the empty dest).
+                let l = if l.ord + l.width > self.shadow.text_len(&l.doc) + 1 {
+                    let dest_hint = str_field(op, &["to", "dest", "target", "target_doc"])
+                        .filter(|t| !is_position_marker(t))
+                        .and_then(|t| self.shadow.resolve_doc(t))
+                        .unwrap_or_default();
+                    self.shadow
+                        .content_docs_except(&dest_hint)
+                        .iter()
+                        .find_map(|d| {
+                            locate(&self.shadow, Some(d.as_str()), s).filter(|c| {
+                                c.ord + c.width <= self.shadow.text_len(&c.doc) + 1
+                            })
+                        })
+                        .unwrap_or(l)
+                } else {
+                    l
+                };
                 copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
                 spec_list.push((l.doc, l.ord, l.width));
             }
@@ -1726,9 +1745,15 @@ pub fn insert_aim_from_probe(
 /// Recorded-vspanset width authority for an append-shaped insert: the doc's
 /// (or an intervening version-of-the-doc's) next clean single-span vspanset
 /// probe records `new_len + pad` for a small pad — the script inserted more
-/// than the golden's text field carries (provenance/createnewversion_text_
-/// vs_links records 0.34 for a 33-char text; the retrieve was 33 wide, so
-/// the padding byte is never content-compared). Returns the pad width.
+/// than the golden's text field carries. Returns the pad width.
+///
+/// DECLINED when links were seated between the insert and the probe: the
+/// surplus is then udanax's version link CARRYOVER, not unrecorded text —
+/// provenance/createnewversion_text_vs_links records 0.34 for a 33-char
+/// insert, and its own whole-extent retrieve delivers 33 text chars PLUS
+/// the link marker, proving position 34 is the carried link (rounds 4–6
+/// padded a ghost space here, fabricating the one byte that made the
+/// version-extent comparison agree; see `VERSION_LINK_CARRYOVER_ANALYSIS`).
 pub fn insert_pad_width(
     all: &[Value],
     i: usize,
@@ -1739,8 +1764,16 @@ pub fn insert_pad_width(
     let writes = ["insert", "append", "delete", "remove", "vcopy", "copy", "pivot", "swap",
         "rearrange"];
     let mut aliases: Vec<String> = vec![doc.to_string()];
+    let mut links_seen = 0u64;
     for op in &all[i + 1..] {
         let label = label_of(op).to_ascii_lowercase();
+        if label.starts_with("create_link") || label.starts_with("makelink") {
+            links_seen += match field(op, &["result", "results"]) {
+                Some(Value::Array(a)) => a.len() as u64,
+                _ => 1,
+            };
+            continue;
+        }
         if writes.iter().any(|w| label.starts_with(w)) {
             // A write into the doc ends the probe's authority over THIS
             // insert. A NAMED target that resolves elsewhere — or resolves
@@ -1782,6 +1815,9 @@ pub fn insert_pad_width(
         }
         let Some(w) = crate::tum::parse_width(w) else { continue };
         if w > new_len && w - new_len <= 2 {
+            if links_seen > 0 {
+                return None; // surplus = carried links, not unrecorded text
+            }
             return Some(w - new_len);
         }
         return None; // clean probe consistent with (or below) the field text

@@ -82,6 +82,18 @@ fn rq(id: Option<&str>, op: Op) -> Request {
     Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op }
 }
 
+/// Unwrap a parse by hand: upstream `ParseError` (M10, read-only) derives no
+/// `Debug`, so `Result::expect` cannot apply; surface the detail instead.
+fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
+    codec.parse(frame).unwrap_or_else(|e| {
+        panic!(
+            "frame failed to parse ({:?}): {}",
+            e.detail,
+            String::from_utf8_lossy(frame)
+        )
+    })
+}
+
 /// Every `Op` variant at least once; both `TypeArg` forms, both cursor
 /// states, all three slot-constraint forms, and both value encodings.
 fn all_requests() -> Vec<Request> {
@@ -245,15 +257,7 @@ fn every_op_round_trips_canonically() {
     let mut seen: Vec<String> = Vec::new();
     for req in all_requests() {
         let bytes = codec.marshal_request(&req);
-        let parsed = codec
-            .parse(&bytes)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "canonical frame failed to parse: {:?} — frame {}",
-                    e.detail,
-                    String::from_utf8_lossy(&bytes)
-                )
-            });
+        let parsed = parse_ok(&codec, &bytes);
         let bytes2 = codec.marshal_request(&parsed);
         assert_eq!(
             bytes,
@@ -276,7 +280,7 @@ fn every_op_round_trips_canonically() {
 fn request_id_round_trips() {
     let codec = JsonCodec;
     let req = rq(Some("key-9"), Op::Fork);
-    let parsed = codec.parse(&codec.marshal_request(&req)).expect("parses");
+    let parsed = parse_ok(&codec, &codec.marshal_request(&req));
     assert_eq!(parsed.id, Some(ReqId(b"key-9".to_vec())));
 }
 
@@ -454,10 +458,10 @@ fn every_response_shape_marshals_deterministically() {
     }
 }
 
-/// The full `RejectCode` wire-name table — all 58 codes, pinned.
+/// The full `RejectCode` wire-name table — all 59 codes, pinned.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 58] = [
+    let table: [(RejectCode, &str); 59] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -588,22 +592,22 @@ fn lenient_parse_canonical_emit() {
     // Integer nats and shuffled fields.
     let lenient =
         br#"{"values":["hi"],"doc":"1.0.1.0.1","op":"insert","at":{"subspace":1,"ordinal":1}}"#;
-    let parsed = codec.parse(lenient).expect("lenient frame parses");
+    let parsed = parse_ok(&codec, lenient);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["at"]["subspace"].as_str(), Some("1"), "canonical nats are strings");
     // Uppercase hex reads; canonical output is lowercase.
     let hexed = br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[{"hex":"00FF"}]}"#;
-    let parsed = codec.parse(hexed).expect("uppercase hex parses");
+    let parsed = parse_ok(&codec, hexed);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["values"][0]["hex"].as_str(), Some("00ff"));
     // Empty slot-constraint array normalizes onto "empty".
     let ftt = br#"{"op":"count_ftt","q":{"home":[],"from":"any","to":"any","ty":"any"}}"#;
-    let parsed = codec.parse(ftt).expect("empty slot array parses");
+    let parsed = parse_ok(&codec, ftt);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["q"]["home"].as_str(), Some("empty"));
     // A beyond-u64 natural rides the string form.
     let wide = br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":"18446744073709551616"}"#;
-    let parsed = codec.parse(wide).expect("big width parses");
+    let parsed = parse_ok(&codec, wide);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["width"].as_str(), Some("18446744073709551616"));
 }

@@ -87,7 +87,9 @@ pub fn compare_content(
             DeliveryItem::Ref(a) => raw.push(RawSeg::Addr(a.clone())),
         }
     }
-    // Opportunistic index-aligned binding.
+    // Opportunistic index-aligned binding: an unbound golden address paired
+    // positionally with an unbound skep address is an α-bind opportunity
+    // (the sanctioned move) — never a raw emission.
     if want.len() == raw.len() {
         for (w, r) in want.iter().zip(&raw) {
             if let (Segment::Addr(g), RawSeg::Addr(a)) = (w, r) {
@@ -104,6 +106,24 @@ pub fn compare_content(
             let _ = alpha.translate(g);
         }
     }
+    // Address equality goes THROUGH the bijection (element lift included) —
+    // a golden link id that translates via its bound doc prefix must equal
+    // the delivered skep address, whether or not the pair was ever bound
+    // exactly (subspace/insert_text_check_link_positions reads link
+    // position 2.1 of a doc whose create_link recorded no result).
+    let equal = want.len() == raw.len()
+        && want.iter().zip(&raw).all(|(w, r)| match (w, r) {
+            (Segment::Text(a), RawSeg::Text(b)) => a == b,
+            (Segment::Addr(g), RawSeg::Addr(a)) => {
+                alpha.peek_translate(g).is_some_and(|t| crate::tum::addr_str(&t) == crate::tum::addr_str(a))
+            }
+            _ => false,
+        });
+    if equal {
+        return Ok(());
+    }
+    // Report rendering: skep addresses reverse-translate (bound name or
+    // reverse lift) so the reader sees golden terms, extras tagged.
     let got: Vec<Segment> = raw
         .into_iter()
         .map(|r| match r {
@@ -111,11 +131,7 @@ pub fn compare_content(
             RawSeg::Addr(a) => Segment::Addr(alpha.render_skep(&a)),
         })
         .collect();
-    if want == got {
-        Ok(())
-    } else {
-        Err((render_segments(&want), render_segments(&got)))
-    }
+    Err((render_segments(&want), render_segments(&got)))
 }
 
 // ── address sets: set equality under the bijection ─────────────────────────

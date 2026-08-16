@@ -8,6 +8,11 @@
 #   rationale = "<one sentence citing the design doc / drift item / udanax finding>"
 #   count_delta = <integer>                # optional declared count adjustment
 #   width_tolerance = <integer>            # optional span-width tolerance
+#   expected_matches = "<substring>"       # optional SIGNATURE key: the entry
+#       applies to any DISAGREED op of the scenario whose rendered expected
+#       value contains the substring (op_index, if also given, must match
+#       too). Survives op-index shifts across harness rounds. Signature
+#       entries classify only — count_delta/width_tolerance never apply.
 #
 
 # Retraction-tuple class (D8): adjudicated intended; no golden exercises

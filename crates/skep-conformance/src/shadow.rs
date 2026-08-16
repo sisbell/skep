@@ -42,6 +42,11 @@ pub struct Shadow {
     pub created: Vec<String>,
     /// The current-document register (see module docs).
     current: Option<String>,
+    /// The last document a CONTENT write touched (insert/delete/pivot/swap,
+    /// setup steps included) — the doc a "full_text_after"-style probe reads
+    /// (round-5 item: the probe targets the document the setup's INSERT
+    /// modified, not whatever the register drifted to).
+    pub last_written: Option<String>,
     /// The golden id of the most recently created link.
     pub last_link: Option<String>,
     /// version source memo: version docid → source docid.
@@ -272,6 +277,7 @@ impl Shadow {
         let d = self.docs.entry(golden.to_string()).or_default();
         let i = (ord.saturating_sub(1) as usize).min(d.text.len());
         d.text.splice(i..i, bytes.iter().copied());
+        self.last_written = Some(golden.to_string());
     }
 
     pub fn delete(&mut self, golden: &str, ord: u64, width: u64) {
@@ -279,6 +285,7 @@ impl Shadow {
             let s = (ord.saturating_sub(1) as usize).min(d.text.len());
             let e = (s + width as usize).min(d.text.len());
             d.text.drain(s..e);
+            self.last_written = Some(golden.to_string());
         }
     }
 
@@ -308,6 +315,7 @@ impl Shadow {
                 out.extend_from_slice(&d.text[a..b]);
                 out.extend_from_slice(&d.text[c..]);
                 d.text = out;
+                self.last_written = Some(golden.to_string());
             }
         }
     }
@@ -329,6 +337,7 @@ impl Shadow {
                 out.extend_from_slice(&d.text[s1..e1]);
                 out.extend_from_slice(&d.text[e2..]);
                 d.text = out;
+                self.last_written = Some(golden.to_string());
             }
         }
     }

@@ -92,7 +92,10 @@ pub struct Grounding {
 #[derive(Clone)]
 enum Edit {
     Ins { at: Option<u64>, bytes: Vec<u8> },
-    Del { at: u64, bytes: Vec<u8> },
+    /// `explicit` = the position was numerically recorded (client-sent), so
+    /// the undo reinserts there FIRST; a text-located position tries the end
+    /// first (the seed-shift shape).
+    Del { at: u64, bytes: Vec<u8>, explicit: bool },
     Pivot { a: u64, b: u64, c: u64 },
     Swap { s1: u64, e1: u64, s2: u64, e2: u64 },
 }
@@ -166,7 +169,23 @@ pub fn ground(ops: &[Value]) -> Grounding {
         }
         let evidence = uniform_follow_text(ops);
         for doc in sim.link_participants_empty {
-            // Per-doc landing evidence first: a traverse hop whose to-side
+            // Endset-anchored construction first: a later retrieve_endsets
+            // recording this doc's endset coordinates, together with the
+            // create_links' own source_text/target_text, pins the content
+            // exactly (link_poom/link_poom_no_shift: "First" at 1.1 w 5,
+            // "second" at 1.16 w 6 — gaps filled with spaces).
+            if let Some(seed) = endset_anchored_seed(ops, &sim.shadow, &doc) {
+                if let Entry::Vacant(slot) = seeds.entry(doc.clone()) {
+                    g.tags.push(format!(
+                        "implied-setup:endset-anchored-seed: {doc} starts with {:?} (link texts \
+                         placed at the recorded endset ordinals)",
+                        String::from_utf8_lossy(&seed)
+                    ));
+                    slot.insert(seed);
+                }
+                continue;
+            }
+            // Per-doc landing evidence next: a traverse hop whose to-side
             // resolves to this doc records exactly what the script filled
             // it with (diamond_link_pattern's "Path B"/"Path C"/
             // "Destination"); the scenario-uniform text and the loud marker
@@ -326,12 +345,16 @@ fn undo_edits(cur: Vec<u8>, edits: &[Edit]) -> Option<Vec<u8>> {
             next.drain(start..start + n);
             undo_edits(next, rest)
         }
-        Edit::Del { at, bytes } => {
-            // Candidate reinsertion points, most-likely first: the end (a
-            // seed prefix shifts an append-built doc's delete rightward —
-            // the recorded position undercounts by the seed length), then
-            // the recorded position itself.
-            let mut cands = vec![cur.len(), (*at as usize).saturating_sub(1).min(cur.len())];
+        Edit::Del { at, bytes, explicit } => {
+            // Candidate reinsertion points. Explicit (client-sent) position:
+            // the recorded ordinal first — it is authoritative (isolation/
+            // delete_does_not_affect_other_documents "1.3 for 0.5 (CDEFG)"
+            // must reinsert at 3, not the end). Text-located: the end first
+            // (a seed prefix shifts an append-built doc's delete rightward —
+            // the recorded position undercounts by the seed length).
+            let rec = (*at as usize).saturating_sub(1).min(cur.len());
+            let mut cands =
+                if *explicit { vec![rec, cur.len()] } else { vec![cur.len(), rec] };
             cands.dedup();
             for k in cands {
                 let mut next = cur.clone();
@@ -642,7 +665,12 @@ impl Sim {
             let (at, ord) = match pos.and_then(|p| resolve_position(&self.shadow, &doc, p)) {
                 Some((1, o, _)) => (Some(o), o),
                 Some(_) => return, // link-subspace insert: no content effect
-                None => (None, self.shadow.text_len(&doc) + 1),
+                None => match insert_pos_from_post_state(op, &self.shadow, &doc, &text) {
+                    // Post-state-pinned position (mirror of the translator's
+                    // `insert-position-from-post-state`).
+                    Some(o) => (Some(o), o),
+                    None => (None, self.shadow.text_len(&doc) + 1),
+                },
             };
             // Recorded-vspanset width authority: pad an append-shaped insert
             // whose doc's next clean vspanset probe records more than the
@@ -667,7 +695,7 @@ impl Sim {
                 let n = self.shadow.text_len(&doc);
                 let bytes = self.shadow.slice(&doc, 1, n);
                 self.shadow.delete(&doc, 1, n);
-                self.record(&doc, Edit::Del { at: 1, bytes });
+                self.record(&doc, Edit::Del { at: 1, bytes, explicit: true });
             }
             return;
         }
@@ -677,10 +705,20 @@ impl Sim {
                 self.check_probes(op);
                 return; // recorded post-state shows udanax removed nothing
             }
-            if let Some((ord, w, _)) = resolve_delete_span(&self.shadow, all, i, &doc, op) {
-                let bytes = self.shadow.slice(&doc, ord, w);
+            if let Some((ord, w, how)) = resolve_delete_span(&self.shadow, all, i, &doc, op) {
+                // Bytes removed: the sim slice — unless the op DESCRIBES the
+                // removed text (the "(CDEFG)" parenthetical) and the sim's
+                // state cannot yet cover the width (seed not in place); the
+                // description then feeds the undo the true bytes.
+                let mut bytes = self.shadow.slice(&doc, ord, w);
+                if bytes.len() as u64 != w {
+                    if let Some(d) = delete_described_bytes(op, w) {
+                        bytes = d;
+                    }
+                }
+                let explicit = !matches!(how, "text-located" | "delete-text-from-label");
                 self.shadow.delete(&doc, ord, w);
-                self.record(&doc, Edit::Del { at: ord, bytes });
+                self.record(&doc, Edit::Del { at: ord, bytes, explicit });
             }
             self.check_probes(op);
             return;
@@ -752,7 +790,7 @@ impl Sim {
                     self.link_participants_empty.push(d);
                 }
             }
-            let results: Vec<String> = match field(op, &["result", "results"]) {
+            let results: Vec<String> = match field(op, &["result", "results", "link_id"]) {
                 Some(Value::String(s)) => vec![s.clone()],
                 Some(Value::Array(a)) => {
                     a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
@@ -1131,8 +1169,10 @@ impl Sim {
         let to_raw = str_field(op, &["to", "dest", "target", "target_doc"]);
         // Explicit destination only — the register fallback waits until the
         // copied bytes are known, so forward evidence can aim first.
+        // "end"/"start"/"end of doc" are position markers, not doc refs
+        // (edgecases/vcopy_to_same_document).
         let explicit_dest: Option<String> = match to_raw {
-            Some("end") | Some("start") => self.shadow.scoped(),
+            Some(s) if is_position_marker(s) => self.shadow.scoped(),
             Some(s) => self.shadow.resolve_doc(s),
             None => str_field(op, &["doc", "docid"]).and_then(|s| self.shadow.resolve_doc(s)),
         };
@@ -1212,14 +1252,19 @@ impl Sim {
                 copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
                 spec_list.push((l.doc, l.ord, l.width));
             }
-        } else if let Some(from) =
-            str_field(op, &["from", "source"]).and_then(|s| self.shadow.resolve_doc(s))
-        {
-            // `from: <doc>` with no span: whole current extent (mirrors the
-            // translator's fallback).
-            let n = self.shadow.text_len(&from);
-            copied.extend(self.shadow.slice(&from, 1, n));
-            spec_list.push((from, 1, n));
+        } else if let Some(s) = str_field(op, &["from", "source"]) {
+            if let Some(from) = self.shadow.resolve_doc(s) {
+                // `from: <doc>` with no span: whole current extent (mirrors
+                // the translator's fallback).
+                let n = self.shadow.text_len(&from);
+                copied.extend(self.shadow.slice(&from, 1, n));
+                spec_list.push((from, 1, n));
+            } else if let Some(l) = locate(&self.shadow, None, s) {
+                // A described region, not a doc ("positions 1-4 (Orig)" —
+                // vcopy_to_same_document); mirrors the translator.
+                copied.extend(self.shadow.slice(&l.doc, l.ord, l.width));
+                spec_list.push((l.doc, l.ord, l.width));
+            }
         }
         if copied.is_empty() {
             return;
@@ -1255,7 +1300,7 @@ impl Sim {
             .and_then(|(s, o, _)| if s == 1 { Some(o) } else { None });
         let (at, o) = match (ord, to_raw) {
             (Some(o), _) => (Some(o), o),
-            (None, Some("start")) => (Some(1), 1),
+            (None, Some(s)) if s.starts_with("start") => (Some(1), 1),
             (None, _) => (None, self.shadow.text_len(&dest) + 1),
         };
         // Append-shaped copies may carry unrecorded world structure the
@@ -1450,6 +1495,11 @@ impl Sim {
             || label.contains("state")
             || label.starts_with("after_")
             || label.starts_with("verify")
+            // A snapshot op WITH a content expectation is a contents probe
+            // of the named/scoped doc (isolation/delete_does_not_affect_
+            // other_documents seeds doc B only through its snapshots);
+            // content-less snapshots stay meta.
+            || label.starts_with("snapshot")
         {
             &[
                 "result", "before", "after", "content", "contents", "sample", "remaining",
@@ -1467,6 +1517,14 @@ impl Sim {
             (s.contains('.') && parse_dotted(s).is_some()) || crate::fields::is_python_repr(s)
         }) {
             return;
+        }
+        // A full_* probe reads the doc the last CONTENT write touched
+        // (mirror of the translator's `full-probe-targets-last-write`).
+        if label.starts_with("full_") && str_field(op, &["doc", "docid"]).is_none() {
+            if let Some(d) = self.shadow.last_written.clone().filter(|d| self.shadow.knows(d)) {
+                self.probe(&d, &strings.join(""));
+                return;
+            }
         }
         let Some(doc) = self.doc_ref(op, &["doc", "docid"]) else { return };
         self.probe(&doc, &strings.join(""));
@@ -1684,12 +1742,17 @@ pub fn insert_pad_width(
     for op in &all[i + 1..] {
         let label = label_of(op).to_ascii_lowercase();
         if writes.iter().any(|w| label.starts_with(w)) {
-            // A write into the doc (or one whose target cannot be resolved)
-            // ends the probe's authority over THIS insert.
-            let target = str_field(op, &["to", "dest", "target", "target_doc", "doc", "docid"])
-                .and_then(|s| shadow.resolve_doc(s));
-            match target {
-                Some(t) if !aliases.contains(&t) => continue,
+            // A write into the doc ends the probe's authority over THIS
+            // insert. A NAMED target that resolves elsewhere — or resolves
+            // nowhere YET because it names a doc created between here and
+            // there ("target" at scan time of versions/version_copies_link_
+            // subspace op1) — is a write to another doc; only a doc-less or
+            // alias-named write kills the scan.
+            let raw = str_field(op, &["to", "dest", "target", "target_doc", "doc", "docid"]);
+            let target = raw.and_then(|s| shadow.resolve_doc(s));
+            match (raw, target) {
+                (_, Some(t)) if !aliases.contains(&t) => continue,
+                (Some(r), None) if !aliases.iter().any(|a| a.as_str() == r) => continue,
                 _ => return None,
             }
         }
@@ -1724,6 +1787,35 @@ pub fn insert_pad_width(
         return None; // clean probe consistent with (or below) the field text
     }
     None
+}
+
+/// A doc-less, position-less insert whose own recorded post-state shows the
+/// text embedded MID-document: the position is recoverable as the single
+/// gap where `post == pre[..k] + text + pre[k..]` — recorded post-state as
+/// first authority (iaddress_allocation/interleaved_insert_delete's
+/// insert_2 "BBB" turns "AA" into "ABBBA"). Returns the 1-based ordinal
+/// only when the append shape does NOT already reproduce the post-state.
+pub fn insert_pos_from_post_state(op: &Value, shadow: &Shadow, doc: &str, text: &str) -> Option<u64> {
+    let v = field(op, &["result", "remaining", "expected_contents"])?;
+    let strings = expect_strings(v)?;
+    if strings.iter().any(|s| {
+        (s.contains('.') && parse_dotted(s).is_some()) || crate::fields::is_python_repr(s)
+    }) {
+        return None;
+    }
+    let post = strings.join("");
+    let pre = shadow.text_string(doc);
+    if post.len() != pre.len() + text.len() || text.is_empty() {
+        return None;
+    }
+    if post == format!("{pre}{text}") {
+        return None; // the append shape already explains it
+    }
+    // Byte-level gap scan (no char-boundary slicing risk).
+    let (p, t, q) = (post.as_bytes(), text.as_bytes(), pre.as_bytes());
+    (0..=q.len())
+        .find(|&k| p[..k] == q[..k] && p[k..k + t.len()] == *t && p[k + t.len()..] == q[k..])
+        .map(|k| k as u64 + 1)
 }
 
 /// Was this delete a no-op in udanax? The doc's recorded post-delete content
@@ -1782,6 +1874,13 @@ fn follow_landing_text(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Stri
     None
 }
 
+/// A `to`/`dest` value that is a position marker, not a document reference:
+/// "end", "start", "end of doc" (edgecases/vcopy_to_same_document).
+pub fn is_position_marker(s: &str) -> bool {
+    let t = s.trim().to_ascii_lowercase();
+    t == "end" || t == "start" || t.starts_with("end of") || t.starts_with("start of")
+}
+
 /// Is this key a `<role><n>` docid holder (`doc1`, `source2`, `target3`)?
 pub fn keyed_role(k: &str) -> bool {
     ["doc", "source", "target"].iter().any(|stem| {
@@ -1808,6 +1907,66 @@ pub fn group_word(op: &Value) -> Option<String> {
         }
     }
     None
+}
+
+/// Endset-anchored seed for a doc filled only implicitly: a later
+/// retrieve_endsets records the doc's endset spans, and the create_link
+/// ops' source_text/target_text supply the bytes those spans held — each
+/// text is placed at the recorded ordinal whose width equals its length,
+/// gaps filled with spaces. Constructible only when EVERY recorded span
+/// finds a width-matched text (never fabricate).
+fn endset_anchored_seed(ops: &[Value], shadow: &Shadow, doc: &str) -> Option<Vec<u8>> {
+    let mut spans: Vec<(u64, u64)> = Vec::new();
+    for op in ops {
+        let label = label_of(op).to_ascii_lowercase();
+        if !(label.starts_with("retrieve_endsets") || label.starts_with("endsets")) {
+            continue;
+        }
+        for key in ["source", "from", "target", "to"] {
+            let Some(arr) = field(op, &[key]).and_then(Value::as_array) else { continue };
+            for v in arr {
+                if let Some((docid, ss)) = vspec_dict(v) {
+                    if docid == doc || shadow.resolve_doc(&docid).as_deref() == Some(doc) {
+                        for (sub, ord, w) in ss {
+                            if sub == 1 && w > 0 {
+                                spans.push((ord, w));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    spans.sort();
+    spans.dedup();
+    if spans.is_empty() {
+        return None;
+    }
+    let mut texts: Vec<String> = Vec::new();
+    for op in ops {
+        let label = label_of(op).to_ascii_lowercase();
+        if !(label.starts_with("create_link") || label.starts_with("makelink")) {
+            continue;
+        }
+        for key in ["source_text", "target_text"] {
+            if let Some(t) = str_field(op, &[key]) {
+                texts.push(t.to_string());
+            }
+        }
+    }
+    if texts.is_empty() {
+        return None;
+    }
+    let n = spans.iter().map(|(o, w)| o + w - 1).max()?;
+    let mut seed = vec![b' '; n as usize];
+    let mut used = vec![false; texts.len()];
+    for (ord, w) in &spans {
+        let k = (0..texts.len()).find(|&i| !used[i] && texts[i].len() as u64 == *w)?;
+        used[k] = true;
+        let s = (*ord - 1) as usize;
+        seed[s..s + *w as usize].copy_from_slice(texts[k].as_bytes());
+    }
+    Some(seed)
 }
 
 /// The single text every follow/traverse expectation in the scenario
@@ -2149,30 +2308,107 @@ pub fn resolve_delete_span(
             }
         }
     }
-    let desc = str_field(op, &["span", "vspan", "text"])?;
-    let l = locate(shadow, Some(doc), desc)?;
-    if l.how != "text-located" {
-        // Numeric-precise description ("1.1 length 3", ranges): keep as sent.
-        return Some((l.ord, l.width, "explicit"));
-    }
-    let pre = shadow.text_string(doc);
-    if let Some(post) = post_state_of(all, i, doc, shadow, op) {
-        if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
-            let tag = if (ord, w) == (l.ord, l.width) {
-                "text-located"
-            } else {
-                "delete-span-from-post-state"
-            };
-            return Some((ord, w, tag));
+    // `removed`/`deleted` field: a V-position ("1.2" = one element) or an
+    // inclusive range ("1.3-1.4") — the client's numeric record
+    // (iaddress_allocation/interleaved_insert_delete).
+    if let Some(r) = str_field(op, &["removed", "deleted"]) {
+        if let Some((ord, w)) = removed_range(r) {
+            return Some((ord, w, "explicit"));
         }
     }
-    let b = pre.as_bytes();
-    let after = b.get((l.ord - 1 + l.width) as usize);
-    let before = if l.ord >= 2 { b.get(l.ord as usize - 2) } else { None };
-    if after == Some(&b' ') && (l.ord == 1 || before == Some(&b' ')) {
-        return Some((l.ord, l.width + 1, "delete-span-widened-boundary"));
+    let pre = shadow.text_string(doc);
+    let post = post_state_of(all, i, doc, shadow, op);
+    if let Some(desc) = str_field(op, &["span", "vspan", "text"]) {
+        if let Some(l) = locate(shadow, Some(doc), desc) {
+            if l.how != "text-located" {
+                // Numeric-precise description ("1.1 length 3", "1.3 for
+                // 0.5", ranges): keep as sent.
+                return Some((l.ord, l.width, "explicit"));
+            }
+            // A text-located span is a reconstruction; the recorded
+            // post-state, where present, tells exactly what udanax removed.
+            if let Some(post) = &post {
+                if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
+                    let tag = if (ord, w) == (l.ord, l.width) {
+                        "text-located"
+                    } else {
+                        "delete-span-from-post-state"
+                    };
+                    return Some((ord, w, tag));
+                }
+            }
+            let b = pre.as_bytes();
+            let after = b.get((l.ord - 1 + l.width) as usize);
+            let before = if l.ord >= 2 { b.get(l.ord as usize - 2) } else { None };
+            if after == Some(&b' ') && (l.ord == 1 || before == Some(&b' ')) {
+                return Some((l.ord, l.width + 1, "delete-span-widened-boundary"));
+            }
+            return Some((l.ord, l.width, "text-located"));
+        }
     }
-    Some((l.ord, l.width, "text-located"))
+    // No groundable description at all: the recorded post-state is the
+    // first authority (delete_A carries only its result.content), then a
+    // label-borne text ("delete_A" removed "A") — round-5 item 9's
+    // restored grounding order.
+    if !pre.is_empty() {
+        if let Some(post) = &post {
+            if let Some((ord, w)) = single_gap_diff(pre.as_bytes(), post.as_bytes()) {
+                return Some((ord, w, "delete-span-from-post-state"));
+            }
+        }
+    }
+    if let Some(t) = delete_text_from_label(op) {
+        if let Some((_, ord)) = shadow.find_text(Some(doc), &t) {
+            return Some((ord, t.len() as u64, "delete-text-from-label"));
+        }
+    }
+    None
+}
+
+/// `removed`-field forms: "1.2" (V-position, one element) or "1.3-1.4"
+/// (inclusive ordinal range) → (ordinal, width).
+fn removed_range(s: &str) -> Option<(u64, u64)> {
+    let s = s.trim();
+    if let Some((ord, w)) = crate::fields::ordinal_range(s) {
+        return Some((ord, w));
+    }
+    match crate::tum::parse_vpos(s) {
+        Some((1, ord)) => Some((ord, 1)),
+        _ => None,
+    }
+}
+
+/// Label-borne deleted text, mirroring `insert_text`'s label grammar:
+/// `delete_A` → "A" (iaddress_allocation/delete_does_not_affect_next_
+/// insert). Descriptive tails (delete_all, delete_vspan…) carry no text.
+fn delete_text_from_label(op: &Value) -> Option<String> {
+    let label = label_of(op);
+    let rest = label.strip_prefix("delete_").or_else(|| label.strip_prefix("remove_"))?;
+    if rest.is_empty()
+        || rest.contains('_')
+        || matches!(rest, "all" | "vspan" | "text" | "attempt" | "loop")
+    {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+/// The deleted bytes as the recording DESCRIBES them: the trailing
+/// parenthetical of a span/text field ("1.3 for 0.5 (CDEFG)") or a quoted
+/// segment — accepted only at exactly the resolved width, so a reminder
+/// word never masquerades as the removed bytes.
+fn delete_described_bytes(op: &Value, w: u64) -> Option<Vec<u8>> {
+    for key in ["span", "vspan", "text", "removed"] {
+        let Some(s) = str_field(op, &[key]) else { continue };
+        if let Some(open) = s.rfind('(') {
+            if let Some(inner) = s[open + 1..].strip_suffix(')') {
+                if inner.len() as u64 == w {
+                    return Some(inner.as_bytes().to_vec());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The doc's recorded content right after op `i`: the op's own post-write
@@ -2193,7 +2429,11 @@ fn post_state_of(
         }
         Some(s.join(""))
     };
-    if let Some(v) = field(op, &["remaining", "result", "expected_contents", "after"]) {
+    // Own keys; "after" only in structured form — a bare string under
+    // "after" is a phase label ("link1"), never content.
+    let own = field(op, &["remaining", "result", "expected_contents"])
+        .or_else(|| field(op, &["after"]).filter(|v| !v.is_string()));
+    if let Some(v) = own {
         if let Some(s) = content(v) {
             return Some(s);
         }
@@ -2229,7 +2469,11 @@ fn post_state_of(
         {
             continue;
         }
-        if let Some(v) = field(later, &["result", "content", "contents"]) {
+        // "after"-keyed replies count too (delete_all/delete_all_with_links
+        // records its post-remove retrieve under "after"), structured only.
+        let reply = field(later, &["result", "content", "contents"])
+            .or_else(|| field(later, &["after"]).filter(|v| !v.is_string()));
+        if let Some(v) = reply {
             if let Some(s) = content(v) {
                 return Some(s);
             }

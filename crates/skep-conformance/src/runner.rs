@@ -214,6 +214,22 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             classes.dedup();
             out.allowlisted = Some(classes.join("+"));
         }
+        // Signature entries (`expected_matches`): evaluated post-hoc against
+        // the disagreed op's rendered expected value, so an adjudicated
+        // divergence stays granted when harness rounds shift op indices.
+        // Classification only — adjustments never retro-apply.
+        if out.status == Status::Disagreed {
+            let sig = allow.matching_expected(&scn.name, i, out.expected.as_deref());
+            if !sig.is_empty() {
+                let mut classes: Vec<String> =
+                    sig.iter().map(|e| e.class.clone()).collect();
+                if let Some(prev) = out.allowlisted.take() {
+                    classes.insert(0, prev);
+                }
+                classes.dedup();
+                out.allowlisted = Some(classes.join("+"));
+            }
+        }
         ops.push(out);
     }
 

@@ -84,9 +84,22 @@
 //! * `contents:content-subspace` — whole-document retrieves read the
 //!   CONTENT subspace only, matching udanax's retrieve_contents (its
 //!   recorded results never include link-subspace items).
-//! * `contents:with-link-subspace` — a retrieve whose recorded result lists
-//!   a link address alongside text read the link subspace too (the version
-//!   scenarios' whole-document retrieves surfaced the copied link).
+//! * `contents:both-subspaces` — a retrieve whose recorded result lists a
+//!   link address alongside text read the link subspace too, as a second
+//!   RetrieveV so a link-side absence localizes; the link addresses compare
+//!   through α (the version scenarios' whole-document retrieves surfaced
+//!   the copied link). The reply's shape follows the golden.
+//! * `full-probe-targets-last-write` — a `full_text_*`/`full_content_*`
+//!   probe reads the doc the last CONTENT write touched, never a follow
+//!   landing and never the drifted register
+//!   (subspace/insert_text_check_both_link_positions op7).
+//! * `by-routes-explicit-side` — find_links `by: "target"` routes the
+//!   explicit from-doc into the TO slot: the field named the doc searched
+//!   FROM, `by` named the endset constrained
+//!   (interactions/link_both_endpoints_transcluded op11).
+//! * `delete-text-from-label` — a bare `delete_A` op's removed text comes
+//!   from its label, post-state-diff first
+//!   (iaddress_allocation/delete_does_not_affect_next_insert).
 //! * `read-scoped-to-recorded-extent` — a whole-document retrieve read only
 //!   as many content positions as the golden's reply carries, when the
 //!   shadow (the recorded reality) holds more — the script's specset was
@@ -1264,9 +1277,21 @@ fn h_insert(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: 
         },
         None => {
             // insert_<n>_<TEXT> labels carry the sequence number, not a
-            // position; those and bare inserts append.
-            out.adaptations.push("position-end".into());
-            (1, cx.shadow.text_len(&doc) + 1)
+            // position; those and bare inserts append — unless the op's own
+            // recorded post-state shows the text embedded mid-document,
+            // which pins the position exactly (policy
+            // `insert-position-from-post-state`; interleaved_insert_delete's
+            // insert_2 "BBB" turns "AA" into "ABBBA").
+            match crate::ground::insert_pos_from_post_state(op, cx.shadow, &doc, &text) {
+                Some(o) => {
+                    out.adaptations.push("insert-position-from-post-state".into());
+                    (1, o)
+                }
+                None => {
+                    out.adaptations.push("position-end".into());
+                    (1, cx.shadow.text_len(&doc) + 1)
+                }
+            }
         }
     };
     // Recorded-vspanset width authority (policy `insert-padded-to-recorded-
@@ -1406,10 +1431,46 @@ fn h_delete(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: 
     if delete_is_noop(cx.shadow, cx.ops, index, &doc) {
         out.adaptations.push("delete-noop-from-post-state".into());
         out.status = Status::NotCompared;
-        out.note = Some(
-            "recorded post-delete content equals pre-delete content; udanax removed nothing"
-                .into(),
+        let mut note = String::from(
+            "recorded post-delete content equals pre-delete content; udanax removed nothing \
+             from the content subspace",
         );
+        // Adjudication analysis (round-5 item 8, delete_all_with_links):
+        // when the SAME recording later reports the doc's links unfindable
+        // (find_links count 0 / empty) while its content probe still reads
+        // the full text, udanax's whole-document remove split the
+        // subspaces — content intact, link-subspace occupancy removed.
+        // Skep cannot reproduce that split without violating the ruled
+        // subspace-confinement invariant (udanax-no-subspace-confinement,
+        // adjudication/decisions.md ruling 2), so the harness keeps the
+        // content no-op and leaves the later link-findability divergence
+        // raw for adjudication.
+        let links_vanish = cx.shadow.link_count(&doc) > 0
+            && cx.ops[index + 1..].iter().any(|later| {
+                let l = label_of(later).to_ascii_lowercase();
+                if !(l.starts_with("find_links") || l.starts_with("links")) {
+                    return false;
+                }
+                ["result", "links", "expected", "before_delete", "after_delete", "before",
+                 "after"]
+                .iter()
+                .any(|k| {
+                    let Some(v) = later.get(*k) else { return false };
+                    v.as_array().is_some_and(|a| a.is_empty())
+                        || v.get("count").and_then(Value::as_u64) == Some(0)
+                })
+            });
+        if links_vanish {
+            note.push_str(
+                "; ANALYSIS: this recording's later find_links expects the home link \
+                 unfindable (count 0) while the content probe still reads the full text — \
+                 udanax's remove deleted link-subspace occupancy only; skep cannot reproduce \
+                 the split without violating the ruled subspace-confinement invariant \
+                 (decisions.md ruling 2), so the link-findability divergence downstream is \
+                 left raw for adjudication",
+            );
+        }
+        out.note = Some(note);
         return;
     }
     let xf = expected_failure(op);
@@ -1631,18 +1692,27 @@ fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &
                 return;
             }
         }
-    } else if let Some(from) =
-        str_field(op, &["from", "source"]).and_then(|s| cx.shadow.resolve_doc(s))
-    {
-        // `from: <doc>` with no span: the whole current extent.
-        let n = cx.shadow.text_len(&from);
-        if let (Some(sd), Some(span)) = (cx.alpha.translate(&from), vspan(1, 1, n)) {
-            out.adaptations.push("whole-extent".into());
-            copied.extend(cx.shadow.slice(&from, 1, n));
-            src_doc = Some(from);
-            specs.push(VSpec { source: sd, span });
+    } else if let Some(s) = str_field(op, &["from", "source"]) {
+        if let Some(from) = cx.shadow.resolve_doc(s) {
+            // `from: <doc>` with no span: the whole current extent.
+            let n = cx.shadow.text_len(&from);
+            if let (Some(sd), Some(span)) = (cx.alpha.translate(&from), vspan(1, 1, n)) {
+                out.adaptations.push("whole-extent".into());
+                copied.extend(cx.shadow.slice(&from, 1, n));
+                src_doc = Some(from);
+                specs.push(VSpec { source: sd, span });
+            } else {
+                inexpressible(out, "vcopy from an empty document".into());
+                return;
+            }
+        } else if let Some(l) = locate(cx.shadow, None, s) {
+            // A described region, not a doc ("positions 1-4 (Orig)" —
+            // edgecases/vcopy_to_same_document).
+            if !vcopy_push_located(cx, out, l, &mut specs, &mut copied, &mut src_doc) {
+                return;
+            }
         } else {
-            inexpressible(out, "vcopy from an empty document".into());
+            inexpressible(out, format!("vcopy from {s:?}: neither a doc nor a groundable region"));
             return;
         }
     } else {
@@ -1662,7 +1732,9 @@ fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &
     // other than the source; the register serves only evidence-less ops.
     let to_raw = str_field(op, &["to", "dest", "target", "target_doc"]);
     let dest: Option<String> = match to_raw {
-        Some("end") | Some("start") => src_doc.clone(),
+        // "end"/"start"/"end of doc" are position markers over the source
+        // doc itself (vcopy_to_same_document's self-transclusion).
+        Some(s) if crate::ground::is_position_marker(s) => src_doc.clone(),
         Some(s) => cx.shadow.resolve_doc(s),
         None => str_field(op, &["doc", "docid"])
             .and_then(|s| cx.shadow.resolve_doc(s))
@@ -1702,7 +1774,7 @@ fn h_vcopy(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: &
             }
         },
         None => {
-            if to_raw == Some("start") {
+            if to_raw.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("start")) {
                 1
             } else {
                 out.adaptations.push("position-end".into());
@@ -2009,9 +2081,9 @@ fn endset_evidence(
 
 fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
-    // Result ids: result/results fields, or arrow keys ("A->B": link).
+    // Result ids: result/results/link_id fields, or arrow keys ("A->B": link).
     let arrows = arrow_results(op);
-    let goldens: Vec<String> = match field(op, &["result", "results"]) {
+    let goldens: Vec<String> = match field(op, &["result", "results", "link_id"]) {
         Some(Value::String(s)) => vec![s.clone()],
         Some(Value::Array(a)) => {
             a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
@@ -2095,7 +2167,8 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         // forward evidence; the hint doc's whole extent; the scripts'
         // first-word convention on the home.
         let mut from_sides: Vec<DocSpans> = Vec::new();
-        if let Some(v) = field(op, &["source", "from"]).filter(|v| !v.is_string()) {
+        if let Some(v) = field(op, &["source", "from", "source_spans"]).filter(|v| !v.is_string())
+        {
             match side_specs(cx, out, v) {
                 Ok(s) => from_sides = s,
                 Err(e) => {
@@ -2120,11 +2193,16 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
                 }
             }
         }
-        if from_sides.is_empty() && from_doc_hint.is_none() && from_group.is_none() {
+        if from_sides.is_empty() && from_group.is_none() {
             if let Some(s) = str_field(op, &["source", "from"]) {
-                if let Some(l) = locate(cx.shadow, None, s) {
-                    out.adaptations.push(l.how.into());
-                    from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                // A bracket range ("doc1[1.2-1.4]") is a REGION description,
+                // never a bare doc reference — locate wins over the fuzzy
+                // doc-hint containment match.
+                if from_doc_hint.is_none() || s.contains('[') {
+                    if let Some(l) = locate(cx.shadow, None, s) {
+                        out.adaptations.push(l.how.into());
+                        from_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                    }
                 }
             }
         }
@@ -2218,7 +2296,7 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
         // whole extent, then self (a single-doc scenario self-links —
         // three_links_vspan_growth has only one document).
         let mut to_sides: Vec<DocSpans> = Vec::new();
-        if let Some(v) = field(op, &["target", "to"]).filter(|v| !v.is_string()) {
+        if let Some(v) = field(op, &["target", "to", "target_spans"]).filter(|v| !v.is_string()) {
             match side_specs(cx, out, v) {
                 Ok(s) => to_sides = s,
                 Err(e) => {
@@ -2243,11 +2321,14 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
                 }
             }
         }
-        if to_sides.is_empty() && to_doc_hint.is_none() && to_group.is_none() {
+        if to_sides.is_empty() && to_group.is_none() {
             if let Some(s) = str_field(op, &["target", "to"]) {
-                if let Some(l) = locate(cx.shadow, None, s) {
-                    out.adaptations.push(l.how.into());
-                    to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                // Same bracket-range-over-doc-hint rule as the FROM side.
+                if to_doc_hint.is_none() || s.contains('[') {
+                    if let Some(l) = locate(cx.shadow, None, s) {
+                        out.adaptations.push(l.how.into());
+                        to_sides.push((l.doc, vec![(1, l.ord, l.width)]));
+                    }
                 }
             }
         }
@@ -2964,7 +3045,18 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let mut to_sides: Option<SideSpec> = None;
 
     if let Some(s) = explicit_side(cx, out, &["from", "source", "sources"]) {
-        from_sides = Some(SideSpec::V(s));
+        // `by: "target"` routes the explicit doc into the TO slot: the
+        // client's `from` field named the doc it searched FROM, `by` named
+        // WHICH endset it constrained (interactions/link_both_endpoints_
+        // transcluded op11 searches target_origin by target — its content
+        // is the link's TO coverage, never its FROM). Policy
+        // `by-routes-explicit-side`.
+        if by_is_target && !by_is_both && to_sides.is_none() {
+            out.adaptations.push("by-routes-explicit-side".into());
+            to_sides = Some(SideSpec::V(s));
+        } else {
+            from_sides = Some(SideSpec::V(s));
+        }
     }
     if let Some(s) = explicit_side(cx, out, &["to", "target", "targets"]) {
         to_sides = Some(SideSpec::V(s));
@@ -3149,9 +3241,32 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     if !notes.is_empty() {
         out.note = Some(notes.join("; "));
     }
-    let expected = field(op, &["result", "links", "expected"]).and_then(Value::as_array);
+    // Expected addresses: the standard keys, then the phase-keyed forms the
+    // delete scripts use (delete_all_with_links records its results under
+    // before_delete / after_delete — round-5 item 8: those ARE recorded
+    // expectations, never skipped).
+    const PHASE_KEYS: &[&str] = &[
+        "before_delete", "after_delete", "links_before", "links_after", "before", "after",
+        "found",
+    ];
+    let expected = field(op, &["result", "links", "expected"])
+        .and_then(Value::as_array)
+        .or_else(|| {
+            // All-string arrays only — a phase key holding span dicts is
+            // observation data for other comparators, not an address list.
+            field(op, PHASE_KEYS)
+                .and_then(Value::as_array)
+                .filter(|a| a.iter().all(|v| v.as_str().is_some()))
+        });
     let Some(expected) = expected else {
-        if let Some(n) = field(op, &["expected_count", "count"]).and_then(Value::as_u64) {
+        // Count expectations: bare fields, or a `{success, count}` object
+        // under a phase key.
+        let n = field(op, &["expected_count", "count"]).and_then(Value::as_u64).or_else(|| {
+            field(op, PHASE_KEYS)
+                .and_then(|v| v.get("count").or_else(|| v.get("expected_count")))
+                .and_then(Value::as_u64)
+        });
+        if let Some(n) = n {
             out.comparator = Some("count".into());
             match compare_count(n, grants.count_delta, addrs.len()) {
                 Ok(()) => out.status = Status::Agreed,
@@ -3513,18 +3628,17 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
             let Some(span) = vspan(sub, ord, 1) else { continue };
             match cx.rig.exec(Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span }] }) {
                 Response::Delivery { items, .. } => {
-                    let got: String = items
-                        .0
-                        .iter()
-                        .map(|it| match it {
-                            DeliveryItem::Content(v) => {
-                                String::from_utf8_lossy(v.as_bytes()).into_owned()
-                            }
-                            DeliveryItem::Ref(a) => format!("@{}", cx.alpha.render_skep(a)),
-                        })
-                        .collect();
-                    if got != want {
-                        fails.push((format!("{pos}={want:?}"), format!("{pos}={got:?}")));
+                    // One-position comparison through the shared content
+                    // comparator, so an address value goes through α
+                    // (bind + element lift) like every delivered address —
+                    // never compared as a rendered string.
+                    if want.is_empty() && items.0.is_empty() {
+                        continue;
+                    }
+                    if let Err((e, a)) =
+                        compare_content(&[want.to_string()], &items.0, cx.alpha)
+                    {
+                        fails.push((format!("{pos}={e}"), format!("{pos}={a}")));
                     }
                 }
                 r => fails.push((
@@ -3556,6 +3670,10 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
     }
 
     let mut specs: Vec<Spec> = Vec::new();
+    // Link-subspace reads issued as a SECOND RetrieveV so a link-side
+    // absence localizes to the missing segment instead of rejecting the
+    // whole delivery (policy `contents:both-subspaces`).
+    let mut link_specs: Vec<Spec> = Vec::new();
     if let Some(arr) = field(op, &["specset", "specs"]).and_then(Value::as_array) {
         for v in arr {
             let Some((docid, spans)) = vspec_dict(v) else {
@@ -3635,15 +3753,36 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 }
             }
         }
-    } else if let Some(landing) = follow_landing_specs(cx, index, op) {
+    } else if let Some(landing) = (!label.to_ascii_lowercase().starts_with("full_"))
+        .then(|| follow_landing_specs(cx, index, op))
+        .flatten()
+    {
         // Policy `retrieve-follow-landing`: a doc-less retrieve right after
         // a follow whose recorded result names a vspec reads THOSE spans —
         // the script retrieved the link destination it had just followed
-        // (links/follow_link op8), never the register.
+        // (links/follow_link op8), never the register. A `full_*` label is
+        // by its own words a whole-document read, never a landing read
+        // (round-5 item 4: insert_text_check_both_link_positions op7).
         out.adaptations.push("retrieve-follow-landing".into());
         specs = landing;
     } else {
-        let Some(doc) = cx.doc_arg(op, out, &["doc", "docid"]) else {
+        // Full probes aim at the doc the last CONTENT write touched, not
+        // whatever the register drifted to (policy
+        // `full-probe-targets-last-write`).
+        let full_probe = label.to_ascii_lowercase().starts_with("full_");
+        let doc = if full_probe && str_field(op, &["doc", "docid"]).is_none() {
+            match cx.shadow.last_written.clone().filter(|d| cx.shadow.knows(d)) {
+                Some(d) => {
+                    out.adaptations.push("full-probe-targets-last-write".into());
+                    cx.shadow.set_current(&d);
+                    Some(d)
+                }
+                None => cx.doc_arg(op, out, &["doc", "docid"]),
+            }
+        } else {
+            cx.doc_arg(op, out, &["doc", "docid"])
+        };
+        let Some(doc) = doc else {
             inexpressible(out, "retrieve with no document in scope".into());
             return;
         };
@@ -3666,19 +3805,23 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                 specs.push(Spec { doc: d, span });
             }
         } else {
-            // Whole document: the CONTENT subspace only (policy
-            // `contents:content-subspace`). Two evidence-driven variations:
-            // when the recorded reply's TEXT is a strict prefix of the
-            // shadow's (recorded-reality) content, the script's specset was
-            // that much narrower — read only that many positions (policy
-            // `read-scoped-to-recorded-extent`); when the reply also lists
-            // a link address, the script's specset covered the link
-            // subspace — read it too (policy `contents:with-link-subspace`).
-            out.adaptations.push("contents:content-subspace".into());
+            // Whole document. The reply's SHAPE follows the golden (round-5
+            // item 5): text-only recorded contents read the CONTENT
+            // subspace only (policy `contents:content-subspace` — udanax's
+            // plain retrieve_contents never lists link items); a recorded
+            // reply that includes a link address read BOTH subspaces —
+            // content plus the link positions — and the link addresses
+            // compare through α (policy `contents:both-subspaces`). One
+            // evidence-driven narrowing: when the recorded TEXT is a strict
+            // prefix of the shadow's (recorded-reality) content, the
+            // script's specset was that much narrower — read only that many
+            // positions (policy `read-scoped-to-recorded-extent`).
             let n = cx.shadow.text_len(&doc);
             let mut read_n = n;
+            let has_addr = strings
+                .as_ref()
+                .is_some_and(|ss| ss.iter().any(|s| fields::is_link_address(s)));
             if let Some(ss) = &strings {
-                let has_addr = ss.iter().any(|s| fields::is_link_address(s));
                 let text_len: usize =
                     ss.iter().filter(|s| !fields::is_link_address(s)).map(String::len).sum();
                 let shadow_text = cx.shadow.text_string(&doc);
@@ -3697,19 +3840,22 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
                     out.adaptations.push("read-scoped-to-recorded-extent".into());
                     read_n = text_len as u64;
                 }
-                if has_addr && cx.shadow.link_count(&doc) > 0 {
-                    out.adaptations.push("contents:with-link-subspace".into());
-                }
             }
+            out.adaptations.push(
+                if has_addr { "contents:both-subspaces" } else { "contents:content-subspace" }
+                    .to_string(),
+            );
             if let Some(span) = vspan(1, 1, read_n) {
                 specs.push(Spec { doc: d.clone(), span });
             }
-            if let Some(ss) = &strings {
-                if ss.iter().any(|s| fields::is_link_address(s)) {
-                    let links = cx.shadow.link_count(&doc);
-                    if let Some(span) = vspan(2, 1, links) {
-                        specs.push(Spec { doc: d, span });
-                    }
+            if has_addr {
+                let n_addr = strings
+                    .as_ref()
+                    .map(|ss| ss.iter().filter(|s| fields::is_link_address(s)).count() as u64)
+                    .unwrap_or(0);
+                let links = cx.shadow.link_count(&doc).max(n_addr);
+                if let Some(span) = vspan(2, 1, links) {
+                    link_specs.push(Spec { doc: d, span });
                 }
             }
         }
@@ -3747,6 +3893,22 @@ fn h_contents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, label:
             }
         }
     };
+    // The link-subspace read, as its own call: a link-side rejection
+    // localizes to the missing segment — the comparison below then shows
+    // the expected @addr undelivered — instead of voiding the content read.
+    let mut items = items;
+    if !link_specs.is_empty() {
+        match cx.rig.exec(Op::RetrieveV { specs: link_specs }) {
+            Response::Delivery { items: more, .. } => items.extend(more.0),
+            r => {
+                let code = rejection_code(&r).unwrap_or_else(|| "unexpected response".into());
+                out.note = Some(match out.note.take() {
+                    Some(n) => format!("{n}; link-subspace read: {code}"),
+                    None => format!("link-subspace read: {code}"),
+                });
+            }
+        }
+    }
     let Some(strings) = strings else {
         out.status = Status::NotCompared;
         return;
@@ -4366,9 +4528,14 @@ fn h_compare(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     } else {
         ("original".to_string(), "version".to_string())
     };
+    // Shared pairs: a bare array, or wrapped in a result object
+    // (`result: {shared_span_pairs, shared: […]}` —
+    // iaddress_allocation/delete_does_not_affect_next_insert's
+    // compare_via_transclusion).
     let shared: Vec<Value> = field(op, &["shared", "result", "pairs", "shared_spans"])
-        .and_then(Value::as_array)
-        .cloned()
+        .and_then(|v| {
+            v.as_array().cloned().or_else(|| v.get("shared").and_then(Value::as_array).cloned())
+        })
         .unwrap_or_default();
     // Resolve refs; fall back to the docids carried inside the shared items
     // (identity_through_rearrange_pivot's "rearranged"/"original_version").

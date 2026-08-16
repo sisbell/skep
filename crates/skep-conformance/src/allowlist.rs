@@ -12,7 +12,14 @@
 //! * `class`     (required) — a short divergence class;
 //! * `rationale` (required) — one sentence citing the adjudication source;
 //! * `count_delta`     (optional) — declared count adjustment (golden+delta);
-//! * `width_tolerance` (optional) — span-width tolerance granted.
+//! * `width_tolerance` (optional) — span-width tolerance granted;
+//! * `expected_matches` (optional) — a substring of the op's rendered
+//!   EXPECTED value. When present the entry applies to any DISAGREED op of
+//!   the scenario whose expected value contains it (op_index, if also
+//!   present, must match too) — a signature key that survives op-index
+//!   shifts across harness rounds. Signature entries classify only; their
+//!   `count_delta`/`width_tolerance` never apply (adjustments run before
+//!   comparison, when the expected value is not yet known).
 
 use std::fs;
 use std::path::Path;
@@ -25,6 +32,7 @@ pub struct Entry {
     pub rationale: String,
     pub count_delta: Option<i64>,
     pub width_tolerance: Option<u64>,
+    pub expected_matches: Option<String>,
 }
 
 #[derive(Default)]
@@ -33,11 +41,37 @@ pub struct Allowlist {
 }
 
 impl Allowlist {
-    /// Entries applying to (scenario, op index).
+    /// Entries applying to (scenario, op index) BEFORE execution — the
+    /// adjustment-capable path. Signature entries (`expected_matches`) are
+    /// excluded: they cannot be evaluated until the expected value exists.
     pub fn matching(&self, scenario: &str, op_index: usize) -> Vec<&Entry> {
         self.entries
             .iter()
-            .filter(|e| e.scenario == scenario && e.op_index.is_none_or(|i| i == op_index))
+            .filter(|e| {
+                e.expected_matches.is_none()
+                    && e.scenario == scenario
+                    && e.op_index.is_none_or(|i| i == op_index)
+            })
+            .collect()
+    }
+
+    /// Signature entries applying to a DISAGREED op after execution: the
+    /// scenario matches, the op index (when given) matches, and the op's
+    /// rendered expected value contains the entry's substring.
+    pub fn matching_expected(
+        &self,
+        scenario: &str,
+        op_index: usize,
+        expected: Option<&str>,
+    ) -> Vec<&Entry> {
+        let Some(expected) = expected else { return Vec::new() };
+        self.entries
+            .iter()
+            .filter(|e| {
+                e.scenario == scenario
+                    && e.op_index.is_none_or(|i| i == op_index)
+                    && e.expected_matches.as_deref().is_some_and(|m| expected.contains(m))
+            })
             .collect()
     }
 }
@@ -98,6 +132,7 @@ pub fn load(path: &Path) -> Result<Allowlist, String> {
                     format!("allowlist line {}: width_tolerance must be an integer", ln + 1)
                 })?)
             }
+            "expected_matches" => e.expected_matches = Some(s(v)?),
             other => return Err(format!("allowlist line {}: unknown key `{other}`", ln + 1)),
         }
     }

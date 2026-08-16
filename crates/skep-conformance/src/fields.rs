@@ -404,6 +404,35 @@ pub fn locate(shadow: &Shadow, doc_hint: Option<&str>, desc: &str) -> Option<Loc
         }
     }
 
+    // "1.3 for 0.5 (CDEFG)" — the client's own "S for W" span idiom with an
+    // optional reminder parenthetical (isolation/delete_does_not_affect_
+    // other_documents). Numeric, so it counts as sent, never reconstructed.
+    {
+        let core = desc.split(" (").next().unwrap_or(desc).trim();
+        if let Some((pos, w)) = core.split_once(" for ") {
+            if let (Some((1, ord)), Some(w)) = (parse_vpos(pos.trim()), parse_width(w.trim())) {
+                if w > 0 {
+                    let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+                    return Some(Located { doc, ord, width: w, how: "span-from-description" });
+                }
+            }
+        }
+    }
+
+    // "positions 1-4 (Orig)" — explicit ordinal range with a reminder
+    // parenthetical (edgecases/vcopy_to_same_document's `from`).
+    {
+        let core = desc.split(" (").next().unwrap_or(desc).trim();
+        if let Some(r) =
+            core.strip_prefix("positions ").or_else(|| core.strip_prefix("position "))
+        {
+            if let Some((ord, w)) = ordinal_range(r.trim()) {
+                let doc = doc_hint.map(str::to_string).or_else(|| shadow.scoped())?;
+                return Some(Located { doc, ord, width: w, how: "range-from-description" });
+            }
+        }
+    }
+
     // "N-char span at S.O" (link_zero_width_endpoints).
     if let Some(idx) = desc.find("-char span at ") {
         let n = desc[..idx].trim().parse::<u64>().ok()?;
@@ -539,7 +568,7 @@ fn occurrence_of(inner: &str) -> Option<u64> {
 }
 
 /// "5-9" or "1.5-1.9" inclusive ordinal range → (start ordinal, width).
-fn ordinal_range(s: &str) -> Option<(u64, u64)> {
+pub fn ordinal_range(s: &str) -> Option<(u64, u64)> {
     let (a, b) = s.split_once('-')?;
     let pv = |x: &str| -> Option<u64> {
         let x = x.trim();

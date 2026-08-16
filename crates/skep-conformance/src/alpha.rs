@@ -148,13 +148,33 @@ impl Alpha {
     }
 
     /// Render a skep address for the report: its golden name when bound,
-    /// else `skep:<dotted>` so extras stay identifiable.
+    /// else the REVERSE of the element lift — a skep `docid·0·local` whose
+    /// docid is rev-bound renders as `golden(docid)·0·local` (round-5 item:
+    /// a skep-side address must reverse-translate through the bijection
+    /// before it reaches a comparison or the report; only a truly foreign
+    /// address renders `skep:<dotted>`).
     pub fn render_skep(&self, a: &Address) -> String {
         let s = addr_str(a);
-        match self.rev.get(&s) {
-            Some(g) => g.clone(),
-            None => format!("skep:{s}"),
+        if let Some(g) = self.rev.get(&s) {
+            return g.clone();
         }
+        let comps: Vec<u64> = (1..=a.tumbler().len())
+            .map(|i| a.tumbler().get(i).to_string().parse().unwrap_or(0))
+            .collect();
+        for cut in (1..comps.len()).rev() {
+            if comps[cut] != 0 {
+                continue;
+            }
+            let local = &comps[cut + 1..];
+            if local.len() != 2 || local[0] == 0 || local[1] == 0 {
+                continue;
+            }
+            let prefix: Vec<String> = comps[..cut].iter().map(|c| c.to_string()).collect();
+            if let Some(g) = self.rev.get(&prefix.join(".")) {
+                return format!("{g}.0.{}.{}", local[0], local[1]);
+            }
+        }
+        format!("skep:{s}")
     }
 }
 

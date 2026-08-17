@@ -5,8 +5,11 @@ written for a client author who will never read the Rust; it is also
 executable documentation — every fenced JSON example annotated with a
 `<!-- wire: … -->` marker is asserted byte-for-byte-canonically by
 `skep/crates/skepd/tests/wire_doc.rs`, so an example that drifts from the
-daemon fails the build. (The one exception: the commit-stream event example
-is asserted structurally — its framing, not its illustrative position.)
+daemon fails the build. (Two exceptions: the commit-stream event example is
+asserted structurally — its framing, not its illustrative position — and
+the change-feed examples are asserted against live daemon bytes in
+`tests/changes.rs` with the `time` values normalized, the one field a live
+daemon cannot reproduce; the bare-entry example is byte-exact.)
 
 ## The model
 
@@ -24,8 +27,10 @@ acknowledged only after it is durable on disk.
 | `POST /session`  | Bind a principal; returns an opaque session token.         |
 | `POST /op`       | One operation frame in, one response document out.         |
 | `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
-| `GET /health`    | Liveness + current log position.                           |
+| `GET /health`    | Liveness, current log position, and the head commit's time. |
 | `GET /events`    | Server-sent stream of committed positions (§The commit stream). |
+| `GET /changes`   | The pull delta feed of committed writes (§The change feed). |
+| `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the default). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
 There are no other routes; every known path additionally answers `OPTIONS`
@@ -151,10 +156,11 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
 | 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
+| 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit` |
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body) |
-| 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe`) |
+| 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
-| 410    | `history_reclaimed`         | the position predates the retained journal (carries `floor` when known) |
+| 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
@@ -1078,9 +1084,92 @@ Rules:
 * The stream ends when the daemon shuts down — subscribers see a clean
   connection close. Reconnect on close.
 
+## The change feed
+
+**`GET /changes?since=N`** answers the committed **write** positions in
+`(N, head]`, oldest first — what changed, where, and when — so clients
+refresh what they display instead of re-walking the world on every
+`/events` tick: standing queries become delta scans, and a document-history
+view takes its revision positions from the substrate rather than
+reconstructing them client-side.
+
+Each entry:
+
+* `at` — the committed position (the same coordinate `/op-at` accepts).
+* `op` — the snake_case op kind of the write, or `null` (below).
+* `docs` — the document(s) whose state that commit touched, or `null`:
+  the write's target doc for `insert`/`delete`/`copy`/`rearrange`; a link
+  write names its **home** (`edit_link` both its homes, successor's first);
+  the **minted** document for `create_new_document`/`fork`/`version`;
+  `delegate` and `register_node` touch no document and carry `[]`.
+* `time` — the commit's wall-clock unix milliseconds, or `null` (below).
+
+Only writes appear: reads are not in the journal and never enter the feed.
+Rejected operations committed nothing and never appear. An idempotent
+retry re-acknowledges the original commit — one entry per commit, ever.
+
+**Timestamps are transport metadata, never substrate state.** They are the
+daemon's testimony about when *it* committed each transaction — two
+daemons replaying one journal still converge on byte-identical worlds,
+and times ride beside the world, not in it. A position whose testimony
+was lost answers `null`, never an invented value.
+
+**Paging.** `limit` (default 256, maximum 4096; out-of-range values are
+refused, not clamped) caps the page. The response carries `last` — the
+final entry's position, or your `since` echoed when the page is empty —
+and `more`; pass `last` as the next request's `since` to page. `since` is
+a fence, not necessarily a position: any number works, and `since ≥ head`
+answers the empty page. Determinism: the same `(since, limit)` against the
+same journal answers byte-identically, across repeats and restarts.
+
+The examples below are produced by this flow on a fresh world, asserted
+against live daemon bytes (the `time` values are illustrative — the one
+normalized field): `delegate` commits at position 2, `create_new_document`
+at 3, a two-byte `insert` at 8, `make_link` at 11.
+
+<!-- wire: changes feed -->
+```json
+{"changes":[{"at":2,"docs":[],"op":"delegate","time":1786838400000},{"at":3,"docs":["1.0.1.0.1"],"op":"create_new_document","time":1786838400012},{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1786838400031},{"at":11,"docs":["1.0.1.0.1"],"op":"make_link","time":1786838400047}],"last":11,"more":false}
+```
+
+The first page of the same feed, `GET /changes?since=0&limit=2`:
+
+<!-- wire: changes feed_page -->
+```json
+{"changes":[{"at":2,"docs":[],"op":"delegate","time":1786838400000},{"at":3,"docs":["1.0.1.0.1"],"op":"create_new_document","time":1786838400012}],"last":3,"more":true}
+```
+
+**Bare entries.** A position whose metadata the daemon never observed — a
+data dir written before this feature existed, or a record lost to a crash
+— still appears, reconstructed from the journal itself, with every
+metadata field `null`. The same flow's first three writes on a pre-feature
+dir (byte-exact):
+
+<!-- wire: changes bare -->
+```json
+{"changes":[{"at":2,"docs":null,"op":null,"time":null},{"at":3,"docs":null,"op":null,"time":null},{"at":8,"docs":null,"op":null,"time":null}],"last":8,"more":false}
+```
+
+**Retention.** The feed's memory is the daemon's `commits.log` sidecar
+plus what the journal can still reconstruct. When `since` reaches below
+that — reclaimed or unreadable journal regions — the answer is the same
+discipline as `/op-at`: `410 {"error": "history_reclaimed", "floor": F?}`,
+`F` the oldest position that still has an entry. A malformed query
+(missing `since`, a non-integer, an out-of-range `limit`, an unknown
+parameter) is `400 {"error": "malformed_changes", "detail": …}`.
+
 ## The other endpoints
 
-**`GET /health`** → `200 {"log_position": <n>, "ok": true}`.
+**`GET /health`** → `200 {"head_time": <ms>|null, "log_position": <n>,
+"ok": true}`. `head_time` is the newest recorded commit's wall-clock unix
+milliseconds (§The change feed's timestamp scope: transport metadata) —
+`null` on a fresh world or when the head position's record is bare.
+
+**`GET /`** (only in builds with the `client` feature — the default) →
+`200 text/html`: the authoring client, one self-contained HTML file
+embedded in the binary at build. There are no other static routes and no
+asset pipeline — the client is one file by design. Without the feature,
+`/` is an unknown path (the usual 404 shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
@@ -1106,6 +1195,38 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v6 (browser enablement: change feed, commit timestamps, served client —
+the 2026-08-16 ruling):
+
+* New `GET /changes?since=N[&limit=K]`: the pull delta feed of committed
+  writes in `(N, head]`, oldest first — `{"at", "op", "docs", "time"}` per
+  entry, `{"changes", "last", "more"}` around them; `limit` default 256,
+  max 4096, out-of-range refused (`400 malformed_changes`); `since ≥ head`
+  is the empty page with `last` echoing `since`; `since` below retained
+  history is `/op-at`'s own `410 history_reclaimed` discipline. Writes
+  only — reads never appear; rejections never appear; an idempotent retry
+  never duplicates an entry.
+* Affected-docs convention fixed: target doc for arrangement writes, home
+  for link writes (`edit_link` both homes), the minted document for
+  `create_new_document`/`fork`/`version`, `[]` for `delegate`/
+  `register_node`.
+* Commit timestamps enter the wire as **transport metadata, never
+  substrate state** — the daemon's testimony about when it committed,
+  riding beside the world (two daemons replaying one journal still
+  converge byte-identically). Provenance: timestamps were a planned Nelson
+  extension to Xanadu (owner's confirmation, 2026-08-16). Mechanism: the
+  daemon-owned `commits.log` sidecar in the data dir, written at ack time,
+  replayed on reopen; a torn tail truncates at the last whole record;
+  lost or pre-feature positions are reconstructed from the journal as bare
+  entries answering `"op": null, "docs": null, "time": null` — null over
+  invention, always. Surfaced in `/changes` and as `/health`'s new
+  `head_time`; deliberately NOT added to op responses (the live surface is
+  unchanged).
+* New `GET /` (feature `client`, default on): the authoring client served
+  as one embedded HTML file, `text/html`, same CORS posture as everything
+  else; no other static routes, no asset pipeline. Without the feature,
+  `/` stays a 404.
 
 v5.1 (ownership gate on the write surface — the 2026-08-16 security
 ruling; no encoding change, new rejection paths):

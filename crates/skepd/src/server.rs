@@ -63,6 +63,26 @@
 //! silent interval so both sides can detect a dead peer; shutdown
 //! broadcasts on the same condvar and joins every subscriber, so open
 //! streams end in bounded time with a clean close the client sees.
+//!
+//! **The change feed (wire v6)**: `GET /changes?since=N` answers the
+//! committed positions in `(N, head]`, oldest first, each with its op kind,
+//! affected document(s), and commit wall-clock time — so clients refresh
+//! what they display instead of re-walking the world on every SSE tick.
+//! The source is the commit-metadata sidecar (`commits.log`, see
+//! `sidecar.rs`): the daemon observing its own write path — `/op` is the
+//! only live write path — under the write-serialization lock, so sidecar
+//! order is commit order. Writes only; reads never appear. Timestamps are
+//! transport metadata, never substrate state: two daemons replaying one
+//! journal still converge on byte-identical worlds, and a position whose
+//! record was lost (or predates the feature) answers `null` fields —
+//! reconstructed as a bare position, never an invented value. `/health`
+//! additionally reports `head_time`, the newest recorded commit's time.
+//!
+//! **The served client (wire v6, `client` feature, default on)**: `GET /`
+//! answers the embedded authoring client (`skep/clients/board.html`,
+//! `include_str!` at build — the binary is self-contained), `text/html`,
+//! same CORS posture as everything else. One file by design; there is no
+//! asset pipeline. A build without the feature has no `/` route (404).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -76,14 +96,16 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 use serde_json::{Map, Value};
+use skep_address::Address;
 use skep_arrangement::Vstream;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
-use skep_febe::{Codec, Op, Operation, Request, Response, SessionId, Stores};
+use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId, Stores};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, Seq};
 use skep_links::LinkStore;
 use skep_namespace::{Namespace, PrincipalId};
 
-use crate::codec::JsonCodec;
+use crate::codec::{op_name, tumbler_string, JsonCodec};
+use crate::sidecar::{ChangesAnswer, Sidecar};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon).
@@ -114,6 +136,42 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 /// Request-head size cap. Tokens and headers are small; frames ride in the
 /// body, which keeps its no-daemon-cap policy (local trust, as before).
 const HEAD_MAX: usize = 64 * 1024;
+
+/// `/changes` page size when `limit` is absent.
+const CHANGES_LIMIT_DEFAULT: usize = 256;
+
+/// `/changes` page-size ceiling; a larger request is refused, not clamped
+/// (the never-silent posture applied to paging).
+const CHANGES_LIMIT_MAX: usize = 4096;
+
+/// The embedded authoring client (wire v6): one file, compiled in so the
+/// binary is self-contained.
+#[cfg(feature = "client")]
+const BOARD_HTML: &str = include_str!("../../../clients/board.html");
+
+/// `Daemon::open` failure — every variant is an operator-intervention
+/// condition: report and stop, never retry.
+#[derive(Debug)]
+pub enum DaemonError {
+    /// The engine could not genesis/recover (corrupt journal, bad
+    /// checkpoint, drifted genesis config).
+    Engine(EngineError),
+    /// `commits.log` (the commit-metadata sidecar) could not be opened,
+    /// replayed, or extended. A torn tail is NOT an error (it truncates);
+    /// this is the data dir refusing I/O the kernel just performed.
+    Sidecar(std::io::Error),
+}
+
+impl std::fmt::Display for DaemonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DaemonError::Engine(e) => write!(f, "{e}"),
+            DaemonError::Sidecar(e) => write!(f, "commits.log sidecar: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for DaemonError {}
 
 /// One handler result: status, content type, body. `POST /op` is always
 /// `200` once a `Response` exists — rejections included; the `Response`
@@ -199,20 +257,34 @@ pub struct Daemon {
     /// The commit feed behind `GET /events` (wire v4): `/op` publishes its
     /// post-execute log position, subscriber threads block on the condvar.
     feed: EventFeed,
+    /// The commit-metadata sidecar behind `GET /changes` and `head_time`
+    /// (wire v6) — the daemon's testimony about its own write path.
+    sidecar: Sidecar,
+    /// Serializes the daemon's write path (M2's applier serializes commits
+    /// anyway; this only moves the serialization point up) so the sidecar
+    /// append rides atomically behind its own commit: file order is
+    /// position order and recorded times are monotone. A process crash can
+    /// lose at most the one in-flight record (the append is flushed before
+    /// the lock releases); an OS crash can lose more of the un-fsynced
+    /// tail — either way the reopen walk re-covers the gap as bare
+    /// entries. Reads never take this lock.
+    write_serial: Mutex<()>,
 }
 
 impl Daemon {
-    /// Open (genesis or recover) the one world at `data_dir` and assemble
-    /// the operation surface over it. Every [`EngineError`] is an
-    /// operator-intervention condition — surface it and exit, never retry.
-    pub fn open(data_dir: &Path) -> Result<Daemon, EngineError> {
+    /// Open (genesis or recover) the one world at `data_dir`, replay the
+    /// commit-metadata sidecar, and assemble the operation surface. Every
+    /// [`DaemonError`] is an operator-intervention condition — surface it
+    /// and exit, never retry.
+    pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
         let cfg = KernelCfg {
             journal_path: data_dir.to_path_buf(),
             durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
             retain_checkpoints: RETAINED_CHECKPOINTS,
         };
-        let engine = Engine::open(cfg, GenesisConfig::standard())?;
+        let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
+        let sidecar = Sidecar::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         let op = Operation::new(Box::new(engine.stores()));
         // Mint-and-retire the guest binding; the principal value never
         // reaches a store (the binding is dropped before any request runs).
@@ -233,6 +305,8 @@ impl Daemon {
             token_seed,
             token_counter: AtomicU64::new(1),
             feed,
+            sidecar,
+            write_serial: Mutex::new(()),
         })
     }
 
@@ -250,8 +324,8 @@ impl Daemon {
     /// route that cannot be a request/response `Reply` (`GET /events`, an
     /// unbounded response) is returned as its own [`Routed`] variant, and
     /// the accept path owns the socket from there. `query` is the raw query
-    /// string (meaningful only on `/dump`, ignored elsewhere); `session` is
-    /// the value of the `Skepd-Session` header, if any.
+    /// string (meaningful on `/changes` and `/dump`, ignored elsewhere);
+    /// `session` is the value of the `Skepd-Session` header, if any.
     pub fn handle(
         &self,
         method: &str,
@@ -264,17 +338,18 @@ impl Daemon {
             ("GET", "/events") => Routed::EventStream,
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404.
-            ("OPTIONS", "/session" | "/op" | "/op-at" | "/health" | "/events") => {
+            ("OPTIONS", "/session" | "/op" | "/op-at" | "/health" | "/events" | "/changes") => {
                 Routed::Reply(Reply::preflight())
             }
             #[cfg(feature = "observe")]
             ("OPTIONS", "/dump") => Routed::Reply(Reply::preflight()),
+            #[cfg(feature = "client")]
+            ("OPTIONS", "/") => Routed::Reply(Reply::preflight()),
             _ => Routed::Reply(self.reply(method, path, query, session, body)),
         }
     }
 
     /// The request/response routes.
-    #[cfg_attr(not(feature = "observe"), allow(unused_variables))]
     fn reply(
         &self,
         method: &str,
@@ -288,16 +363,28 @@ impl Daemon {
             ("POST", "/op") => self.post_op(session, body),
             ("POST", "/op-at") => self.post_op_at(body),
             ("GET", "/health") => self.get_health(),
+            ("GET", "/changes") => self.get_changes(query),
             #[cfg(feature = "observe")]
             ("GET", "/dump") => self.get_dump(query),
-            (_, "/session") | (_, "/op") | (_, "/op-at") | (_, "/health") | (_, "/events") => {
-                Reply::json(
-                    405,
-                    err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
-                )
-            }
+            #[cfg(feature = "client")]
+            ("GET", "/") => Reply {
+                status: 200,
+                content_type: "text/html; charset=utf-8",
+                body: BOARD_HTML.as_bytes().to_vec(),
+                headers: Vec::new(),
+            },
+            (_, "/session") | (_, "/op") | (_, "/op-at") | (_, "/health") | (_, "/events")
+            | (_, "/changes") => Reply::json(
+                405,
+                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
+            ),
             #[cfg(feature = "observe")]
             (_, "/dump") => Reply::json(
+                405,
+                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
+            ),
+            #[cfg(feature = "client")]
+            (_, "/") => Reply::json(
                 405,
                 err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
             ),
@@ -329,18 +416,33 @@ impl Daemon {
     /// exchange is the correlation envelope. Every inbound frame gets
     /// exactly one response: parsed → `execute`'s answer; unparseable → the
     /// `Unparseable` rejection, marshaled the same way.
+    ///
+    /// Writes additionally serialize through `write_serial` (wire v6) so
+    /// the sidecar append is atomic with its own commit — M2's applier
+    /// already serializes the commits themselves, so this costs nothing it
+    /// wasn't already paying. Reads bypass the lock entirely.
     fn post_op(&self, session: Option<&str>, body: &[u8]) -> Reply {
         let sid = session
             .and_then(|t| self.sessions.lock().get(t).copied())
             .unwrap_or(self.guest);
         let resp = match self.codec.parse(body) {
-            Ok(req) => self.execute(sid, req),
+            Ok(req) => match write_meta(&req.op) {
+                None => self.execute(sid, req),
+                Some((kind, docs)) => {
+                    let _serial = self.write_serial.lock();
+                    let resp = self.execute(sid, req);
+                    self.observe_commit(kind, docs, &resp);
+                    resp
+                }
+            },
             Err(e) => self.codec.unparseable(e),
         };
         // Write-path notification (wire v4): `/op` is the daemon's only
         // live write path, so publishing the post-execute head here is
         // complete. Reads publish a no-op; concurrent writes coalesce; the
-        // feed keeps the sequence monotone.
+        // feed keeps the sequence monotone. Published after the sidecar
+        // append (above), so a subscriber waking on the event already finds
+        // the position in `/changes`.
         self.feed.publish(self.op.log_position());
         Reply {
             status: 200,
@@ -348,6 +450,26 @@ impl Daemon {
             body: self.codec.marshal(&resp),
             headers: Vec::new(),
         }
+    }
+
+    /// Feed the sidecar from a write's answer: an ack carries the committed
+    /// position; a rejection committed nothing and records nothing. Runs
+    /// under `write_serial`.
+    fn observe_commit(&self, kind: OpKind, docs: DocsSrc, resp: &Response) {
+        let (at, minted) = match resp {
+            Response::Ack { at } => (*at, None),
+            Response::AckAddr { addr, at } => (*at, Some(addr)),
+            Response::AckEdit { at, .. } => (*at, None),
+            _ => return,
+        };
+        let docs = match docs {
+            DocsSrc::These(v) => v.iter().map(|a| tumbler_string(a.tumbler())).collect(),
+            DocsSrc::Minted => match minted {
+                Some(a) => vec![tumbler_string(a.tumbler())],
+                None => Vec::new(),
+            },
+        };
+        self.sidecar.record(at.0, op_name(kind), docs);
     }
 
     fn execute(&self, sid: SessionId, req: Request) -> skep_febe::Response {
@@ -399,9 +521,76 @@ impl Daemon {
 
     fn get_health(&self) -> Reply {
         let mut m = Map::new();
+        // The newest recorded commit's wall-clock time (wire v6) — null
+        // when unrecorded (fresh world, bare head): transport metadata,
+        // never invented.
+        m.insert(
+            "head_time".into(),
+            self.sidecar.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
+        );
         m.insert("log_position".into(), Value::Number(self.op.log_position().0.into()));
         m.insert("ok".into(), Value::Bool(true));
         Reply::json(200, Value::Object(m))
+    }
+
+    /// `GET /changes?since=N[&limit=K]` (wire v6) — the delta read: the
+    /// committed positions in `(N, head]`, oldest first, from the sidecar.
+    /// Pure parse/marshal over [`Sidecar::changes`]; determinism is the
+    /// map's (same journal + sidecar ⇒ byte-equal pages, across restarts).
+    fn get_changes(&self, query: Option<&str>) -> Reply {
+        let (since, limit) = match changes_params(query) {
+            Ok(x) => x,
+            Err(detail) => {
+                return Reply::json(400, err_body("malformed_changes", Some(&detail)))
+            }
+        };
+        match self.sidecar.changes(since, limit) {
+            ChangesAnswer::Reclaimed { floor } => {
+                let mut m = Map::new();
+                m.insert("error".into(), Value::String("history_reclaimed".into()));
+                if let Some(f) = floor {
+                    m.insert("floor".into(), Value::Number(f.into()));
+                }
+                Reply::json(410, Value::Object(m))
+            }
+            ChangesAnswer::Page { entries, last, more } => {
+                let list: Vec<Value> = entries
+                    .iter()
+                    .map(|(at, meta)| {
+                        let mut e = Map::new();
+                        e.insert("at".into(), Value::Number((*at).into()));
+                        e.insert(
+                            "docs".into(),
+                            meta.docs
+                                .as_ref()
+                                .map(|d| {
+                                    Value::Array(
+                                        d.iter().map(|s| Value::String(s.clone())).collect(),
+                                    )
+                                })
+                                .unwrap_or(Value::Null),
+                        );
+                        e.insert(
+                            "op".into(),
+                            meta.op
+                                .as_ref()
+                                .map(|s| Value::String(s.clone()))
+                                .unwrap_or(Value::Null),
+                        );
+                        e.insert(
+                            "time".into(),
+                            meta.time.map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
+                        );
+                        Value::Object(e)
+                    })
+                    .collect();
+                let mut m = Map::new();
+                m.insert("changes".into(), Value::Array(list));
+                m.insert("last".into(), Value::Number(last.into()));
+                m.insert("more".into(), Value::Bool(more));
+                Reply::json(200, Value::Object(m))
+            }
+        }
     }
 
     /// `GET /dump` — the engine's deterministic `WorldDump` of the committed
@@ -445,6 +634,114 @@ fn session_principal(body: &[u8]) -> Result<u64, String> {
     m.get("principal")
         .and_then(Value::as_u64)
         .ok_or_else(|| "missing or non-integer field 'principal'".into())
+}
+
+// ── the change feed (wire v6) ────────────────────────────────────────────
+
+/// The `/changes` query: `since=<position>` (required) plus optional
+/// `limit=<1..=4096>`. Unknown or repeated parameters are refused — the
+/// wire's never-silent posture applied to queries.
+fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
+    let q = match query {
+        None | Some("") => {
+            return Err("the required parameter is since=<position>".into());
+        }
+        Some(q) => q,
+    };
+    let mut since: Option<u64> = None;
+    let mut limit: Option<usize> = None;
+    for pair in q.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            return Err(format!("malformed parameter '{pair}'"));
+        };
+        match k {
+            "since" => {
+                if since.is_some() {
+                    return Err("duplicate parameter 'since'".into());
+                }
+                since = Some(v.parse().map_err(|_| {
+                    format!("since: '{v}' is not a position (a non-negative integer)")
+                })?);
+            }
+            "limit" => {
+                if limit.is_some() {
+                    return Err("duplicate parameter 'limit'".into());
+                }
+                let n: usize = v
+                    .parse()
+                    .map_err(|_| format!("limit: '{v}' is not a count"))?;
+                if n == 0 || n > CHANGES_LIMIT_MAX {
+                    return Err(format!("limit: must be 1..={CHANGES_LIMIT_MAX}"));
+                }
+                limit = Some(n);
+            }
+            other => return Err(format!("unknown parameter '{other}'")),
+        }
+    }
+    let since = since.ok_or_else(|| String::from("the required parameter is since=<position>"))?;
+    Ok((since, limit.unwrap_or(CHANGES_LIMIT_DEFAULT)))
+}
+
+/// A write's affected document(s) for the sidecar (ruling §0): the write's
+/// target doc; a link write names its home (`edit_link` both homes); the
+/// MINTED document for create/fork/version (known only from the ack);
+/// delegate/register_node touch no document.
+enum DocsSrc {
+    These(Vec<Address>),
+    Minted,
+}
+
+/// The sidecar metadata of a write `Op` — `None` for reads. EXHAUSTIVE
+/// with no `_` arm, like [`op_is_read`]: a new `Op` variant fails to
+/// compile here until its feed entry is decided.
+fn write_meta(op: &Op) -> Option<(OpKind, DocsSrc)> {
+    let one = |a: &Address| DocsSrc::These(vec![a.clone()]);
+    match op {
+        Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, DocsSrc::Minted)),
+        Op::Delegate { .. } => Some((OpKind::Delegate, DocsSrc::These(Vec::new()))),
+        Op::RegisterNode { .. } => Some((OpKind::RegisterNode, DocsSrc::These(Vec::new()))),
+        Op::Fork => Some((OpKind::Fork, DocsSrc::Minted)),
+        Op::Insert { doc, .. } => Some((OpKind::Insert, one(doc))),
+        Op::Delete { doc, .. } => Some((OpKind::Delete, one(doc))),
+        Op::Copy { doc, .. } => Some((OpKind::Copy, one(doc))),
+        Op::Rearrange { doc, .. } => Some((OpKind::Rearrange, one(doc))),
+        Op::Version { .. } => Some((OpKind::Version, DocsSrc::Minted)),
+        Op::MakeLink { home, .. } => Some((OpKind::MakeLink, one(home))),
+        Op::Emit { home, .. } => Some((OpKind::Emit, one(home))),
+        Op::Nullify { home, .. } => Some((OpKind::Nullify, one(home))),
+        Op::AssertSup { home, .. } => Some((OpKind::AssertSup, one(home))),
+        Op::EditLink { d_s, d_a, .. } => {
+            let mut docs = vec![d_s.clone()];
+            if d_a != d_s {
+                docs.push(d_a.clone());
+            }
+            Some((OpKind::EditLink, DocsSrc::These(docs)))
+        }
+        Op::NextAccountPrefix { .. }
+        | Op::PrincipalPrefix { .. }
+        | Op::ReadLink { .. }
+        | Op::FollowLink { .. }
+        | Op::RetrieveV { .. }
+        | Op::RetrieveDocVSpan { .. }
+        | Op::RetrieveDocVSpanSet { .. }
+        | Op::ShowOrigin { .. }
+        | Op::ShowDeletions { .. }
+        | Op::Compare { .. }
+        | Op::FindDocsContaining { .. }
+        | Op::Image { .. }
+        | Op::FindLinksV { .. }
+        | Op::FindLinksFtt { .. }
+        | Op::CountV { .. }
+        | Op::CountFtt { .. }
+        | Op::WindowV { .. }
+        | Op::WindowFtt { .. }
+        | Op::RetrieveEndsets { .. }
+        | Op::Project { .. }
+        | Op::DiscoverableFrom { .. }
+        | Op::DeleteOrphans { .. }
+        | Op::InClaims { .. }
+        | Op::OutClaims { .. } => None,
+    }
 }
 
 // ── the history surface (wire v3) ────────────────────────────────────────

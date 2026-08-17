@@ -12,9 +12,12 @@ fn preflight_answers_204_with_the_fixed_headers() {
     let sd = spawn(dir.path());
     let port = sd.port();
 
-    let mut known = vec!["/session", "/op", "/op-at", "/health", "/events"];
+    let mut known = vec!["/session", "/op", "/op-at", "/health", "/events", "/changes"];
     if cfg!(feature = "observe") {
         known.push("/dump");
+    }
+    if cfg!(feature = "client") {
+        known.push("/");
     }
     for path in known {
         let (st, headers, body) = options(port, path);

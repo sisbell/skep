@@ -1,0 +1,1788 @@
+{
+  "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. Each tool here is one wire operation (plus session_info, adapter apparatus); the result text is skepd's response document, verbatim JSON.\n\nEncodings. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based.\n\nContent granularity is said, never fallen into. In insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it, in any document, for the value's whole lifetime. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nRejections are data, not errors. A failed operation answers {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} as a normal tool result; isError marks only failure to reach the daemon. disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nSessions are this adapter's job: it binds its configured principal automatically and reopens the session after a daemon restart; tokens never surface here. A principal must be delegated an account before the stores accept its writes; session_info reports your principal, your account address (null until delegated), and daemon health. One naming note: in make_link and emit, the schema argument from_ is the wire's from.",
+  "tools": [
+    {
+      "name": "create_new_document",
+      "description": "Mint a fresh empty document in account (your own account: resolve it via principal_prefix or session_info). Response: ack_addr with the document's address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Account address the document is minted in."
+          }
+        },
+        "required": ["account"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delegate",
+      "description": "Carve new_prefix off your account (or node) and register principal new_id as its owner, atomically. Obtain new_prefix from next_account_prefix; only the owner of the parent may delegate under it. Response: ack_addr with the minted account address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "new_prefix": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The delegable prefix tumbler, as answered by next_account_prefix."
+          },
+          "new_id": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The principal id registered as the new account's owner."
+          }
+        },
+        "required": ["new_prefix", "new_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "register_node",
+      "description": "Admit a provisioned node address (bootstrap provisioning; the address is supplied, not minted). Response: ack_addr.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "addr": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The provisioned node address (a raw tumbler)."
+          }
+        },
+        "required": ["addr"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "fork",
+      "description": "Mint a fresh EMPTY account-tier document in your own account. Shares no content: the content-sharing fork is version. Response: ack_addr.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "next_account_prefix",
+      "description": "The next delegable prefix under parent (what delegate demands). Response: maybe_addr; addr null means an ineligible parent.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "parent": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The parent account (or node) address."
+          }
+        },
+        "required": ["parent"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "principal_prefix",
+      "description": "Any principal's account address (public, immutable registry data). Response: maybe_addr; addr null means an unknown principal.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "principal": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The principal id to resolve."
+          }
+        },
+        "required": ["principal"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "insert",
+      "description": "Insert content into doc at V-position at; each element of values is one write form. A bare string mints one single-byte value per UTF-8 byte (per-byte text, the substrate's text discipline); {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at one position whose interior is permanently unaddressable. Mixed arrays concatenate in order; an insert totalling zero values is rejected empty_content. Response: ack_addr with the first minted I-address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "at": {
+            "type": "object",
+            "description": "Insertion V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+            "properties": {
+              "subspace": {
+                "type": ["string", "integer"],
+                "description": "Subspace natural, decimal string canonically."
+              },
+              "ordinal": {
+                "type": ["string", "integer"],
+                "description": "1-based ordinal natural, decimal string canonically."
+              }
+            },
+            "required": ["subspace", "ordinal"],
+            "additionalProperties": false
+          },
+          "values": {
+            "type": "array",
+            "description": "Write forms, concatenated in order. \"\" and {\"hex\": \"\"} are vacuous; a zero-byte atom is not expressible.",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "description": "Per-byte text: one single-byte value per UTF-8 byte."
+                },
+                {
+                  "type": "object",
+                  "description": "Per-byte raw bytes: one single-byte value per byte.",
+                  "properties": {
+                    "hex": {
+                      "type": "string",
+                      "pattern": "^([0-9a-fA-F]{2})*$",
+                      "description": "Hex-encoded bytes (lowercase canonically)."
+                    }
+                  },
+                  "required": ["hex"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "description": "ONE composite value of the string's UTF-8 bytes, at one position; its interior is permanently unaddressable.",
+                  "properties": {
+                    "atom": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["atom"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "description": "ONE composite value of the raw bytes, at one position; interior permanently unaddressable.",
+                  "properties": {
+                    "atom_hex": {
+                      "type": "string",
+                      "pattern": "^([0-9a-fA-F]{2})+$",
+                      "description": "Hex-encoded bytes (lowercase canonically)."
+                    }
+                  },
+                  "required": ["atom_hex"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          }
+        },
+        "required": ["doc", "at", "values"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete",
+      "description": "Remove width positions of doc starting at p. Response: ack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "p": {
+            "type": "object",
+            "description": "First removed V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+            "properties": {
+              "subspace": {
+                "type": ["string", "integer"],
+                "description": "Subspace natural, decimal string canonically."
+              },
+              "ordinal": {
+                "type": ["string", "integer"],
+                "description": "1-based ordinal natural, decimal string canonically."
+              }
+            },
+            "required": ["subspace", "ordinal"],
+            "additionalProperties": false
+          },
+          "width": {
+            "type": ["string", "integer"],
+            "description": "Number of positions, an unbounded natural: decimal string canonically (\"2\"); a non-negative integer is accepted."
+          }
+        },
+        "required": ["doc", "p", "width"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "copy",
+      "description": "Transclude the given source spans into doc at at — shared identity, not copied bytes. Response: ack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Destination document address."
+          },
+          "at": {
+            "type": "object",
+            "description": "Destination V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+            "properties": {
+              "subspace": {
+                "type": ["string", "integer"],
+                "description": "Subspace natural, decimal string canonically."
+              },
+              "ordinal": {
+                "type": ["string", "integer"],
+                "description": "1-based ordinal natural, decimal string canonically."
+              }
+            },
+            "required": ["subspace", "ordinal"],
+            "additionalProperties": false
+          },
+          "specs": {
+            "type": "array",
+            "description": "V-specs naming the transcluded source spans.",
+            "items": {
+              "type": "object",
+              "description": "V-spec: a span of some document's arrangement.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Source document address."
+                },
+                "span": {
+                  "type": "object",
+                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions; zero-width is invalid.",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Start tumbler."
+                    },
+                    "width": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Width tumbler."
+                    }
+                  },
+                  "required": ["start", "width"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["source", "span"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["doc", "at", "specs"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "rearrange",
+      "description": "Pivot/swap doc's content about the cut positions. Response: ack.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "cuts": {
+            "type": "array",
+            "description": "Cut V-positions, ascending.",
+            "items": {
+              "type": "object",
+              "description": "V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+              "properties": {
+                "subspace": {
+                  "type": ["string", "integer"],
+                  "description": "Subspace natural, decimal string canonically."
+                },
+                "ordinal": {
+                  "type": ["string", "integer"],
+                  "description": "1-based ordinal natural, decimal string canonically."
+                }
+              },
+              "required": ["subspace", "ordinal"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["doc", "cuts"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "version",
+      "description": "The content-sharing, copy-on-write fork of d_src. Response: ack_addr with the new version's address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d_src": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The versioned document's address."
+          }
+        },
+        "required": ["d_src"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "make_link",
+      "description": "Create an open content link homed in home; from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty are V-spec sets resolved against current arrangements (the recorded endsets are permanent I-spans). The type slot must resolve nonempty. Response: ack_addr with the link's address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "home": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document address."
+          },
+          "from_": {
+            "type": "array",
+            "description": "FROM endset as V-specs (the wire argument named from).",
+            "items": {
+              "type": "object",
+              "description": "V-spec: a span of some document's arrangement.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Source document address."
+                },
+                "span": {
+                  "type": "object",
+                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Start tumbler."
+                    },
+                    "width": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Width tumbler."
+                    }
+                  },
+                  "required": ["start", "width"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["source", "span"],
+              "additionalProperties": false
+            }
+          },
+          "to": {
+            "type": "array",
+            "description": "TO endset as V-specs.",
+            "items": {
+              "type": "object",
+              "description": "V-spec: a span of some document's arrangement.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Source document address."
+                },
+                "span": {
+                  "type": "object",
+                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Start tumbler."
+                    },
+                    "width": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Width tumbler."
+                    }
+                  },
+                  "required": ["start", "width"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["source", "span"],
+              "additionalProperties": false
+            }
+          },
+          "ty": {
+            "type": "array",
+            "description": "TYPE endset as V-specs; must resolve nonempty.",
+            "items": {
+              "type": "object",
+              "description": "V-spec: a span of some document's arrangement.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Source document address."
+                },
+                "span": {
+                  "type": "object",
+                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Start tumbler."
+                    },
+                    "width": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Width tumbler."
+                    }
+                  },
+                  "required": ["start", "width"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["source", "span"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["home", "from_", "to", "ty"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "emit",
+      "description": "Gated typed-relation emission: a managed tuple of type ty (the type key as an endset, usually unit subtree spans of type addresses) from from_ (the wire's from — renamed in this schema only, mapped back by the adapter) to the to addresses, homed in home. Idempotent within a type class: re-emitting an existing tuple acks the incumbent address. Response: ack_addr.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "home": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document address."
+          },
+          "ty": {
+            "type": "array",
+            "description": "The type key as an endset: I-spans, usually unit subtree spans of type addresses.",
+            "items": {
+              "type": "object",
+              "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "from_": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Tuple source address (the wire argument named from)."
+          },
+          "to": {
+            "type": "array",
+            "description": "Tuple target addresses.",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+              "description": "Target address."
+            }
+          }
+        },
+        "required": ["home", "ty", "from_", "to"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "nullify",
+      "description": "The sole retraction path: retract target (a link) from the active view, by a retraction homed in home. Response: ack_addr with the retraction's address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "home": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document address of the retraction."
+          },
+          "target": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The retracted link's address."
+          }
+        },
+        "required": ["home", "target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "assert_sup",
+      "description": "Record that old is superseded by new. Response: ack_addr with the claim's address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "home": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document address of the claim."
+          },
+          "old": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The superseded address."
+          },
+          "new": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The superseding address."
+          }
+        },
+        "required": ["home", "old", "new"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "edit_link",
+      "description": "One composite: create a successor of link original (endsets given as content V-specs; the type slot either {\"addrs\": [...]} or {\"resolve\": [...]}), homed in d_s, plus the supersession claim homed in d_a. Response: ack_edit with the successor link and its supersession claim.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "original": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The edited link's address."
+          },
+          "successor": {
+            "type": "object",
+            "description": "The successor's endsets. Nested keys are wire shape verbatim (this from is not renamed).",
+            "properties": {
+              "from": {
+                "type": "array",
+                "description": "FROM endset as V-specs.",
+                "items": {
+                  "type": "object",
+                  "description": "V-spec: a span of some document's arrangement.",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Source document address."
+                    },
+                    "span": {
+                      "type": "object",
+                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["source", "span"],
+                  "additionalProperties": false
+                }
+              },
+              "to": {
+                "type": "array",
+                "description": "TO endset as V-specs.",
+                "items": {
+                  "type": "object",
+                  "description": "V-spec: a span of some document's arrangement.",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Source document address."
+                    },
+                    "span": {
+                      "type": "object",
+                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": ["source", "span"],
+                  "additionalProperties": false
+                }
+              },
+              "ty": {
+                "description": "The type slot: exactly one of {\"addrs\": [addresses]} (address-denoting) or {\"resolve\": [V-specs]} (content-resolved).",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "addrs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Type address."
+                        }
+                      }
+                    },
+                    "required": ["addrs"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "resolve": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "description": "V-spec: a span of some document's arrangement.",
+                          "properties": {
+                            "source": {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                              "description": "Source document address."
+                            },
+                            "span": {
+                              "type": "object",
+                              "description": "Half-open V-span; zero-width is invalid.",
+                              "properties": {
+                                "start": {
+                                  "type": "string",
+                                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                                  "description": "Start tumbler."
+                                },
+                                "width": {
+                                  "type": "string",
+                                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                                  "description": "Width tumbler."
+                                }
+                              },
+                              "required": ["start", "width"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": ["source", "span"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["resolve"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": ["from", "to", "ty"],
+            "additionalProperties": false
+          },
+          "d_s": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document of the successor link."
+          },
+          "d_a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Home document of the supersession claim."
+          }
+        },
+        "required": ["original", "successor", "d_s", "d_a"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "read_link",
+      "description": "The link value at a, verbatim: {\"slots\": [endset, ...]}, positional, 1-based (slot 1 = FROM, 2 = TO, 3 = TYPE). Response: link_value; link null means no link resides at that address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Link address."
+          }
+        },
+        "required": ["a"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "follow_link",
+      "description": "The coverage of slot slot of link a. Response: follow — {\"ok\": [spans]} (possibly empty) versus {\"err\": \"invalid\"} are different defined answers: empty endset is not the same as no such link/slot.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Link address."
+          },
+          "slot": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1 = FROM, 2 = TO, 3 = TYPE."
+          }
+        },
+        "required": ["a", "slot"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "retrieve_v",
+      "description": "Deliver the content of the given (doc, span) specs, in submitted order. Response: delivery — items with granularity intact: per-byte runs as one {\"content\"}/{\"hex\"} item, each composite value its own {\"atom\"}/{\"atom_hex\"} item, link positions as {\"ref\"}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "specs": {
+            "type": "array",
+            "description": "Retrieval specs, answered in order.",
+            "items": {
+              "type": "object",
+              "description": "One (doc, span) spec.",
+              "properties": {
+                "doc": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Document address."
+                },
+                "span": {
+                  "type": "object",
+                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"} = five positions; zero-width is invalid.",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Start tumbler."
+                    },
+                    "width": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "Width tumbler."
+                    }
+                  },
+                  "required": ["start", "width"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["doc", "span"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["specs"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "retrieve_doc_v_span",
+      "description": "The single V-span covering doc's arrangement. Response: span_set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          }
+        },
+        "required": ["doc"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "retrieve_doc_v_span_set",
+      "description": "doc's exact per-subspace extents: one span per occupied subspace ([S,1] with width = that subspace's position count; content before links), empty for a registered-empty document. Response: span_set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          }
+        },
+        "required": ["doc"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "show_origin",
+      "description": "The origin documents of the positions in span of doc. Response: addrs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "doc": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "span": {
+            "type": "object",
+            "description": "Half-open V-span of doc's arrangement; zero-width is invalid.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                "description": "Start tumbler."
+              },
+              "width": {
+                "type": "string",
+                "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                "description": "Width tumbler."
+              }
+            },
+            "required": ["start", "width"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["doc", "span"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "show_deletions",
+      "description": "The deletions between two versions, both directions: each half of the report is the set of I-addresses deleted from one document yet current in the other. Response: deletions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d_a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "First document address."
+          },
+          "d_b": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Second document address."
+          }
+        },
+        "required": ["d_a", "d_b"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "compare",
+      "description": "The shared-content correspondence between two region sets. Response: compare — pairs, each naming a shared run of width positions at u1 in d1 and u2 in d2.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "rho1": {
+            "type": "array",
+            "description": "First region set.",
+            "items": {
+              "type": "object",
+              "description": "Region: a document and spans of its arrangement.",
+              "properties": {
+                "doc": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Document address."
+                },
+                "spans": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Half-open V-span; zero-width is invalid.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Start tumbler."
+                      },
+                      "width": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Width tumbler."
+                      }
+                    },
+                    "required": ["start", "width"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["doc", "spans"],
+              "additionalProperties": false
+            }
+          },
+          "rho2": {
+            "type": "array",
+            "description": "Second region set.",
+            "items": {
+              "type": "object",
+              "description": "Region: a document and spans of its arrangement.",
+              "properties": {
+                "doc": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Document address."
+                },
+                "spans": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Half-open V-span; zero-width is invalid.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Start tumbler."
+                      },
+                      "width": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Width tumbler."
+                      }
+                    },
+                    "required": ["start", "width"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["doc", "spans"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["rho1", "rho2"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "find_docs_containing",
+      "description": "The documents whose arrangements contain the given regions' content. Response: addrs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "regions": {
+            "type": "array",
+            "description": "The probed regions.",
+            "items": {
+              "type": "object",
+              "description": "Region: a document and spans of its arrangement.",
+              "properties": {
+                "doc": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Document address."
+                },
+                "spans": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "description": "Half-open V-span; zero-width is invalid.",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Start tumbler."
+                      },
+                      "width": {
+                        "type": "string",
+                        "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                        "description": "Width tumbler."
+                      }
+                    },
+                    "required": ["start", "width"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["doc", "spans"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["regions"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "image",
+      "description": "The V→I image of the region: which permanent addresses sit at those positions. Response: runs — each {\"i_start\", \"width\"} is width consecutive permanent I-addresses.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["d", "region"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "find_links_v",
+      "description": "The active links whose endsets touch the region. Response: addrs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["d", "region"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "find_links_ftt",
+      "description": "Four-set descriptor query: the links matching the home/from/to/ty slot constraints. Response: addrs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "object",
+            "description": "Four-set descriptor; all four slots required. Nested keys are wire shape verbatim (this from is not renamed).",
+            "properties": {
+              "home": {
+                "description": "Slot constraint: \"any\" (unconstrained), \"empty\" (constrained to nothing — annihilates the query), or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "from": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "to": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "ty": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "required": ["home", "from", "to", "ty"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["q"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "count_v",
+      "description": "The census form of find_links_v: how many active links touch the region. Response: count.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["d", "region"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "count_ftt",
+      "description": "The census form of find_links_ftt: how many links match the four-set descriptor. Response: count.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "object",
+            "description": "Four-set descriptor; all four slots required. Nested keys are wire shape verbatim (this from is not renamed).",
+            "properties": {
+              "home": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "from": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "to": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "ty": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "required": ["home", "from", "to", "ty"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["q"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "window_v",
+      "description": "The windowed form of find_links_v: up to n addresses strictly past cursor cur. Response: page — window {\"batch\" (ascending address order), \"exhausted\" (true = terminal), \"next\" (the continuation cursor)}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          },
+          "cur": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Cursor: null or absent = start; a link address = resume strictly past it. The cursor you hold is the whole continuation."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Window size: up to n addresses."
+          }
+        },
+        "required": ["d", "region", "n"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "window_ftt",
+      "description": "The windowed form of find_links_ftt: up to n addresses strictly past cursor cur. Response: page.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "object",
+            "description": "Four-set descriptor; all four slots required. Nested keys are wire shape verbatim (this from is not renamed).",
+            "properties": {
+              "home": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "from": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "to": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              },
+              "ty": {
+                "description": "Slot constraint: \"any\", \"empty\", or a span array of I-spans ([] reads as \"empty\").",
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "enum": ["any", "empty"]
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "description": "Half-open I-span over permanent addresses; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
+                    }
+                  }
+                ]
+              }
+            },
+            "required": ["home", "from", "to", "ty"],
+            "additionalProperties": false
+          },
+          "cur": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Cursor: null or absent = start; a link address = resume strictly past it. The cursor you hold is the whole continuation."
+          },
+          "n": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Window size: up to n addresses."
+          }
+        },
+        "required": ["q", "n"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "retrieve_endsets",
+      "description": "The endset fragments of active links falling in the region, per slot. Response: endsets — (slot, endset) pairs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "region": {
+            "type": "array",
+            "description": "Depth-2 content V-spans in d.",
+            "items": {
+              "type": "object",
+              "description": "Depth-2 content V-span: {\"start\": \"1.1\", \"width\": \"0.5\"} = subspace 1, ordinal 1, five positions.",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Start tumbler."
+                },
+                "width": {
+                  "type": "string",
+                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                  "description": "Width tumbler."
+                }
+              },
+              "required": ["start", "width"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["d", "region"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "project",
+      "description": "The I→V projection of link a's slot slot into document d: where that endset content sits in d now. Response: span_set.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Link address."
+          },
+          "slot": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1 = FROM, 2 = TO, 3 = TYPE."
+          },
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The document projected into."
+          }
+        },
+        "required": ["a", "slot", "d"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "discoverable_from",
+      "description": "Is link a arrangement-reachable AND active from d? Response: bool.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Link address."
+          },
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          }
+        },
+        "required": ["a", "d"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "delete_orphans",
+      "description": "Preview: which links would the delete of width positions at p in d orphan? Nothing is written. Response: orphans.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "d": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "Document address."
+          },
+          "p": {
+            "type": "object",
+            "description": "First removed V-position: subspace 1 = content, 2 = links; ordinals 1-based.",
+            "properties": {
+              "subspace": {
+                "type": ["string", "integer"],
+                "description": "Subspace natural, decimal string canonically."
+              },
+              "ordinal": {
+                "type": ["string", "integer"],
+                "description": "1-based ordinal natural, decimal string canonically."
+              }
+            },
+            "required": ["subspace", "ordinal"],
+            "additionalProperties": false
+          },
+          "width": {
+            "type": ["string", "integer"],
+            "description": "Number of positions, an unbounded natural: decimal string canonically (\"2\"); a non-negative integer is accepted."
+          }
+        },
+        "required": ["d", "p", "width"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "in_claims",
+      "description": "Supersession lineage: the claims whose old is y, under the given view. Response: claims.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "y": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The superseded address."
+          },
+          "view": {
+            "type": "string",
+            "enum": ["audit", "active", "default"],
+            "description": "audit = everything ever created; active = not retracted; default = the store's default."
+          }
+        },
+        "required": ["y", "view"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "out_claims",
+      "description": "Supersession lineage: the claims whose new is x, under the given view. Response: claims.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "string",
+            "pattern": "^[0-9]+(\\.[0-9]+)*$",
+            "description": "The superseding address."
+          },
+          "view": {
+            "type": "string",
+            "enum": ["audit", "active", "default"],
+            "description": "audit = everything ever created; active = not retracted; default = the store's default."
+          }
+        },
+        "required": ["x", "view"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "session_info",
+      "description": "Adapter apparatus, not a wire operation: reports {\"principal\", \"account\", \"health\"} — this adapter's configured principal, that principal's account address via principal_prefix (null until delegated), and the daemon's health document {\"log_position\", \"ok\"}.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  ]
+}

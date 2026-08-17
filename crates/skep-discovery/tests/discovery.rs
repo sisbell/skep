@@ -111,13 +111,14 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 
     // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
     let (e1, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(9)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(9)])
         .expect("emit succeeds");
     assert_eq!(e1, la(1));
     // m1 reaches position 2 via FROM, 3 via TO, and 1 via TYPE (makelink
     // resolves V-specs to content extents).
     let (m1, _) = store
         .makelink(
+            SYS,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
@@ -145,7 +146,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     // foundation ∩ active: a nullified link never surfaces, even though its
     // coverage still reaches the region. (Homed in doc2 so the retraction
     // tuple's own enc({doc2}) from-fill stays off doc1's content.)
-    store.nullify(&doc2(), &e1).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(lq.findlinks_v(&doc1(), &[vspan(1, 1, 1)]), Ok(vec![la(2)]));
     assert_eq!(lq.count_v(&doc1(), &[vspan(1, 1, 1)]), Ok(1));
 }
@@ -160,7 +161,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let lq = LinkQuery::new(&k);
     for to in [ca(101), ca(102), ca(103)] {
         store
-            .emit(&doc1(), &rel_ty(), &ca(1), &[to])
+            .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[to])
             .expect("emit succeeds");
     }
     let region = [vspan(1, 1, 1)];
@@ -189,7 +190,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
 
     // Cursor survives orphaning (W8): la(2) leaves the matched set under
     // nullification, but the key-cut resume needs no lookup of it.
-    store.nullify(&doc2(), &la(2)).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &la(2)).expect("nullify succeeds");
     let w4 = lq.window_v(&doc1(), &region, Some(la(2)), 5).expect("window");
     assert_eq!(w4.batch, vec![la(3)]);
     assert!(w4.exhausted);
@@ -206,13 +207,14 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
     store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
         .expect("emit succeeds");
     store
         .makelink(
+            SYS,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 3)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
@@ -253,13 +255,13 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     store
-        .emit(&doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
         .expect("emit succeeds");
     store
-        .emit(&doc2(), &rel_ty(), &ca(1), &[ca(102)])
+        .emit(SYS, &doc2(), &rel_ty(), &ca(1), &[ca(102)])
         .expect("emit succeeds");
 
     // (∗,∗,∗,∗) — the whole addressable slice (FL-WILD), address order.
@@ -297,7 +299,7 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
 
     // Retraction shrinks the active slice: a found link stays found ONLY
     // absent retraction (FL-MON's hypothesis).
-    store.nullify(&doc2(), &e1).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(lq.findlinks_ftt(&q_from), vec![la2(1)]);
 }
 
@@ -308,13 +310,13 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     store
-        .emit(&doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
         .expect("emit succeeds");
     store
-        .emit(&doc2(), &rel_ty(), &ca(1), &[ca(102)])
+        .emit(SYS, &doc2(), &rel_ty(), &ca(1), &[ca(102)])
         .expect("emit succeeds");
 
     // home is matched against home(a) = document_of — an address projection,
@@ -358,7 +360,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
         .expect("emit succeeds");
 
     // FROM covers ca(2) ⇒ exactly V-position [s_C, 2] of doc1.
@@ -389,7 +391,7 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(true));
     // Registered-but-empty d: nothing is reachable.
@@ -399,6 +401,7 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     // link addresses, which are seated in doc1's link runs by makelink.
     let (m1, _) = store
         .makelink(
+            SYS,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
@@ -407,13 +410,14 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
         .expect("makelink succeeds");
     let (m2, _) = store
         .makelink(
+            SYS,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
         )
         .expect("makelink succeeds");
-    let (claim, _) = store.assert_sup(&doc2(), &m1, &m2).expect("assert_sup succeeds");
+    let (claim, _) = store.assert_sup(SYS, &doc2(), &m1, &m2).expect("assert_sup succeeds");
     assert_eq!(lq.discoverable_from(&claim, &doc1()), Ok(true));
     // The claim is homed in doc2 but reaches nothing arranged there
     // (assert_sup never seats).
@@ -422,7 +426,7 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     // Compound "reachable AND active", NOT pure LP12: nullified-but-reachable
     // answers Ok(false) — and a nullified link is still a link (it passes the
     // residence gate rather than erring NotALink).
-    store.nullify(&doc2(), &e1).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(false));
 
     assert_eq!(
@@ -483,10 +487,10 @@ fn delete_orphans_reports_active_last_witness_losses() {
     let lq = LinkQuery::new(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
     let (_link_a, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(2)])
         .expect("emit succeeds");
     let (link_b, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(3), &[ca(3)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(3), &[ca(3)])
         .expect("emit succeeds");
 
     // Deleting position 3 drops link_b's last witness in d.
@@ -501,7 +505,7 @@ fn delete_orphans_reports_active_last_witness_losses() {
 
     // Orphans are reported over the ACTIVE view: a nullified link that loses
     // its last witness is NOT reported (divergence from ASN-0117's D(d,Σ)).
-    store.nullify(&doc2(), &link_b).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &link_b).expect("nullify succeeds");
     let r = lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).expect("preview");
     assert_eq!(r.orphaned, vec![]);
 
@@ -518,12 +522,12 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     let (e2, _) = store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
         .expect("emit succeeds");
-    let (claim, _) = store.assert_sup(&doc1(), &e1, &e2).expect("assert_sup succeeds");
+    let (claim, _) = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
 
     let expected = SupClaim {
         claim: claim.clone(),
@@ -547,7 +551,7 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
 
     // Nullifying the claim removes it from the operative graph but keeps it
     // in the audit history, with its own activity disclosed honestly.
-    store.nullify(&doc2(), &claim).expect("nullify succeeds");
+    store.nullify(SYS, &doc2(), &claim).expect("nullify succeeds");
     assert_eq!(lq.in_claims(&e1, View::Active), vec![]);
     let audit = lq.in_claims(&e1, View::Audit);
     assert_eq!(audit.len(), 1);
@@ -564,7 +568,7 @@ fn snapshot_twins_read_one_pinned_state() {
     let store = LinkStore::new(&k);
     let lq = LinkQuery::new(&k);
     store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
         .expect("emit succeeds");
     let region = [vspan(1, 1, 1)];
 
@@ -574,7 +578,7 @@ fn snapshot_twins_read_one_pinned_state() {
     let snap = k.snapshot();
     assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
     store
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
         .expect("emit succeeds");
     assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
     let w = window_v_on(&snap, &doc1(), &region, None, 10).expect("window");

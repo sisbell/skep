@@ -11,7 +11,7 @@ use skep_address::{Address, Nat};
 use skep_arrangement::{HasM5, M5Rec, VPos};
 use skep_content::{ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, Snapshot, WorldState};
-use skep_links::{HasLinks, LinkRec, ShippedType, Tip, View};
+use skep_links::{Caller, HasLinks, LinkRec, ShippedType, Tip, View};
 use skep_namespace::{HasM3, M3Rec};
 
 use crate::ast::{collect_ref_addrs, Term, VarId};
@@ -66,7 +66,10 @@ where
         let n_c = self.kernel.snapshot().world().m5().content_count(d);
         let at = VPos { subspace: s_c(), ordinal: n_c + Nat::from(1u32) };
         let vs = (self.mk_vstream)(self.kernel.as_ref());
-        let (start, _insert_seq) = vs.insert(d, at, vec![Val::new(blob)])?;
+        // M9's writes run as `Caller::System` (the ownership ruling's
+        // automation path, 2026-08-16): the coordination layer holds no wire
+        // principal — M9 ⟂ M10 by architecture.
+        let (start, _insert_seq) = vs.insert(Caller::System, d, at, vec![Val::new(blob)])?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
         Ok((start, seq))
     }
@@ -121,7 +124,7 @@ where
         // Valid ⇒ emit(d, [pdef], start, &[]) — Unary, |F| = 1; idem⊤ dedups
         // to ≤1 active pdef per start.
         let ls = (self.mk_link_store)(self.kernel.as_ref());
-        let (tuple, seq) = ls.emit(d, &pdef, start, &[])?;
+        let (tuple, seq) = ls.emit(Caller::System, d, &pdef, start, &[])?;
         // Memoize the freshly-derived hint (immutable-once-defined).
         self.memo_defined(start, DefEntry {
             sig: Signature { params, result: checked.sort },
@@ -240,7 +243,8 @@ where
         let (new_start, _pdef_seq) = self.define_core(d, &new_term)?;
         let sup = self.catalog.reserved(ShippedType::Supersedes).clone();
         let ls = (self.mk_link_store)(self.kernel.as_ref());
-        let (_claim, seq) = ls.emit(d, &sup, old_start, slice::from_ref(&new_start))?;
+        let (_claim, seq) =
+            ls.emit(Caller::System, d, &sup, old_start, slice::from_ref(&new_start))?;
         Ok((new_start, seq))
     }
 
@@ -284,7 +288,8 @@ where
             return Err(CertifyError::NotStable);
         }
         let ls = (self.mk_link_store)(self.kernel.as_ref());
-        let (tuple, seq) = ls.emit(d, self.catalog.reserved(ShippedType::PredStable), start, &[])?;
+        let (tuple, seq) =
+            ls.emit(Caller::System, d, self.catalog.reserved(ShippedType::PredStable), start, &[])?;
         Ok((tuple, seq))
     }
 
@@ -316,7 +321,7 @@ where
                 .clone()
         };
         let ls = (self.mk_link_store)(self.kernel.as_ref());
-        let (r, seq) = ls.nullify(d, &target)?;
+        let (r, seq) = ls.nullify(Caller::System, d, &target)?;
         Ok((r, seq))
     }
 

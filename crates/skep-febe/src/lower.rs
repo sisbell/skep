@@ -4,6 +4,11 @@
 //! leaf; wrapper variants (`Mint`, `Seat`, `Content`) recurse into the leaf
 //! enum's own impl. Neither converter ever returns `Ok` — every upstream
 //! failure becomes a [`Rejection`].
+//!
+//! The ownership ruling (2026-08-16): M5's and M7's `NotOwner(Address)`
+//! variants thread the failing document (or target link) into
+//! `FaultSite::addr` — the same address-localization shape M6's
+//! `DocNotRegistered(Address)` established.
 
 use skep_arrangement::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
 use skep_content::ContentError;
@@ -18,6 +23,12 @@ use crate::reject::{FaultSite, RejectCode, Rejection};
 /// One impl per store error enum (mechanical; §5).
 pub(crate) trait Lower {
     fn lower(self) -> (RejectCode, Option<FaultSite>);
+}
+
+/// The `NotOwner(Address)` lowering, shared by every ω-gated write enum
+/// (ownership ruling, 2026-08-16): the failing address rides `site.addr`.
+fn not_owner(a: skep_address::Address) -> (RejectCode, Option<FaultSite>) {
+    (RejectCode::NotOwner, Some(FaultSite { addr: Some(a), ..FaultSite::default() }))
 }
 
 /// Lower a read error into a classified [`Rejection`] (§5). Stays a free
@@ -112,6 +123,7 @@ impl Lower for InsertError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             InsertError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            InsertError::NotOwner(a) => not_owner(a),
             InsertError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             InsertError::OutOfBounds => (RejectCode::OutOfBounds, None),
             InsertError::EmptyContent => (RejectCode::EmptyContent, None),
@@ -123,49 +135,49 @@ impl Lower for InsertError {
 
 impl Lower for CopyError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
-        let code = match self {
-            CopyError::DocNotRegistered => RejectCode::DocNotRegistered,
-            CopyError::NotContentSubspace => RejectCode::NotContentSubspace,
-            CopyError::OutOfBounds => RejectCode::OutOfBounds,
-            CopyError::SourceNotRegistered => RejectCode::SourceNotRegistered,
-            CopyError::EmptySource => RejectCode::EmptySource,
-            CopyError::BadSpan => RejectCode::BadSpan,
+        match self {
+            CopyError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            CopyError::NotOwner(a) => not_owner(a),
+            CopyError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
+            CopyError::OutOfBounds => (RejectCode::OutOfBounds, None),
+            CopyError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            CopyError::EmptySource => (RejectCode::EmptySource, None),
+            CopyError::BadSpan => (RejectCode::BadSpan, None),
             // As-built M5 splits the source-residence guard into its own
             // variant; the design's RejectCode union carries no same-named
             // leaf, so it lowers to the shared NotContentSubspace (surfaced
             // in the build report as upstream drift).
-            CopyError::SourceNotContentSubspace => RejectCode::NotContentSubspace,
-            CopyError::DanglingSource => RejectCode::DanglingSource,
-            CopyError::EmptyResult => RejectCode::EmptyResult,
-        };
-        (code, None)
+            CopyError::SourceNotContentSubspace => (RejectCode::NotContentSubspace, None),
+            CopyError::DanglingSource => (RejectCode::DanglingSource, None),
+            CopyError::EmptyResult => (RejectCode::EmptyResult, None),
+        }
     }
 }
 
 impl Lower for DeleteError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
-        let code = match self {
-            DeleteError::DocNotRegistered => RejectCode::DocNotRegistered,
-            DeleteError::NotContentSubspace => RejectCode::NotContentSubspace,
-            DeleteError::NotArranged => RejectCode::NotArranged,
-            DeleteError::OutOfBounds => RejectCode::OutOfBounds,
-            DeleteError::EmptyWidth => RejectCode::EmptyWidth,
-        };
-        (code, None)
+        match self {
+            DeleteError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            DeleteError::NotOwner(a) => not_owner(a),
+            DeleteError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
+            DeleteError::NotArranged => (RejectCode::NotArranged, None),
+            DeleteError::OutOfBounds => (RejectCode::OutOfBounds, None),
+            DeleteError::EmptyWidth => (RejectCode::EmptyWidth, None),
+        }
     }
 }
 
 impl Lower for RearrangeError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
-        let code = match self {
-            RearrangeError::DocNotRegistered => RejectCode::DocNotRegistered,
-            RearrangeError::BadCutCount => RejectCode::BadCutCount,
-            RearrangeError::NotAscending => RejectCode::NotAscending,
-            RearrangeError::NotContentSubspace => RejectCode::NotContentSubspace,
-            RearrangeError::OutOfBounds => RejectCode::OutOfBounds,
-            RearrangeError::EmptyContentSubspace => RejectCode::EmptyContentSubspace,
-        };
-        (code, None)
+        match self {
+            RearrangeError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            RearrangeError::NotOwner(a) => not_owner(a),
+            RearrangeError::BadCutCount => (RejectCode::BadCutCount, None),
+            RearrangeError::NotAscending => (RejectCode::NotAscending, None),
+            RearrangeError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
+            RearrangeError::OutOfBounds => (RejectCode::OutOfBounds, None),
+            RearrangeError::EmptyContentSubspace => (RejectCode::EmptyContentSubspace, None),
+        }
     }
 }
 
@@ -186,6 +198,7 @@ impl Lower for MakeLinkError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             MakeLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            MakeLinkError::NotOwner(a) => not_owner(a),
             MakeLinkError::IllFormedSpec => (RejectCode::IllFormedSpec, None),
             MakeLinkError::EmptyTypeResolution => (RejectCode::EmptyTypeResolution, None),
             MakeLinkError::Mint(m) => m.lower(),
@@ -198,6 +211,7 @@ impl Lower for EmitError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             EmitError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            EmitError::NotOwner(a) => not_owner(a),
             EmitError::NotRegistered => (RejectCode::NotRegistered, None),
             EmitError::ShapeViolation => (RejectCode::ShapeViolation, None),
             EmitError::RetractionClass => (RejectCode::RetractionClass, None),
@@ -219,6 +233,8 @@ impl Lower for NullifyError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             NullifyError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            // Carries whichever ω check failed — the home or the target link.
+            NullifyError::NotOwner(a) => not_owner(a),
             NullifyError::BadTarget => (RejectCode::BadTarget, None),
             NullifyError::Mint(m) => m.lower(),
         }
@@ -229,6 +245,7 @@ impl Lower for AssertSupError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
             AssertSupError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            AssertSupError::NotOwner(a) => not_owner(a),
             AssertSupError::EndpointNotResident => (RejectCode::EndpointNotResident, None),
             AssertSupError::SelfSupersession => (RejectCode::SelfSupersession, None),
             AssertSupError::Mint(m) => m.lower(),
@@ -241,6 +258,8 @@ impl Lower for EditLinkError {
         match self {
             EditLinkError::OriginalNotResident => (RejectCode::OriginalNotResident, None),
             EditLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
+            // Carries whichever home failed — d_s or d_a.
+            EditLinkError::NotOwner(a) => not_owner(a),
             EditLinkError::IllFormedSuccessor => (RejectCode::IllFormedSuccessor, None),
             EditLinkError::DcViolation => (RejectCode::DcViolation, None),
             EditLinkError::Mint(m) => m.lower(),
@@ -435,6 +454,28 @@ mod tests {
         let (c, s) = FindError::DocNotRegistered(addr()).lower();
         assert_eq!(c, RejectCode::DocNotRegistered);
         assert_eq!(s.expect("localized").addr, Some(addr()));
+    }
+
+    /// Ownership ruling (2026-08-16): every gated write enum's
+    /// `NotOwner(Address)` lowers to the `NotOwner` code with the failing
+    /// address threaded into `site.addr`.
+    #[test]
+    fn not_owner_threads_the_failing_address() {
+        for (c, s) in [
+            InsertError::NotOwner(addr()).lower(),
+            CopyError::NotOwner(addr()).lower(),
+            DeleteError::NotOwner(addr()).lower(),
+            RearrangeError::NotOwner(addr()).lower(),
+            MakeLinkError::NotOwner(addr()).lower(),
+            EmitError::NotOwner(addr()).lower(),
+            NullifyError::NotOwner(addr()).lower(),
+            AssertSupError::NotOwner(addr()).lower(),
+            EditLinkError::NotOwner(addr()).lower(),
+        ] {
+            assert_eq!(c, RejectCode::NotOwner);
+            assert_eq!(s.expect("localized").addr, Some(addr()));
+            assert_eq!(crate::reject::disposition_of(c), Disposition::Permanent);
+        }
     }
 
     /// §5: M8's fieldless `DocNotRegistered` lowers with no site — unlike

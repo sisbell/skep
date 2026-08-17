@@ -11,7 +11,7 @@ use lru::LruCache;
 use parking_lot::Mutex;
 
 use skep_address::{Address, Nat, Span};
-use skep_arrangement::{HasM5, M5Rec, M5State, Run, VSpec};
+use skep_arrangement::{Caller, HasM5, M5Rec, M5State, Run, VSpec};
 use skep_content::{ContentWrite, HasContent};
 use skep_discovery::{
     count_ftt_on, count_v_on, delete_orphans_on, discoverable_from_on, findlinks_ftt_on,
@@ -68,6 +68,16 @@ pub struct Operation<W: WorldState> {
 /// gate guaranteed it" reasoning.
 struct WriteCtx {
     principal: PrincipalId,
+}
+
+impl WriteCtx {
+    /// The session principal as the stores' caller identity (the ownership
+    /// ruling, as amended 2026-08-16): M10 passes it through verbatim —
+    /// the stores own the mechanism "is this principal the effective owner".
+    /// M10 never constructs `Caller::System`.
+    fn caller(&self) -> Caller {
+        Caller::Principal(self.principal)
+    }
 }
 
 /// The committed-write essence + the op-kind that produced it; trivially
@@ -254,28 +264,38 @@ where
                     self.stores.namespace().fork(wc.principal).map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // ── arrangement writes (→ M5) ──
+            // ── arrangement writes (→ M5; ω-gated in-store under the
+            //    session caller — the ownership ruling, 2026-08-16) ──
             Op::Insert { doc, at, values } => {
                 let (start, at_seq) = self
                     .stores
                     .vstream()
-                    .insert(&doc, at, values)
+                    .insert(wc.caller(), &doc, at, values)
                     .map_err(|e| self.map_txn(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: at_seq }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width } => {
-                let at =
-                    self.stores.vstream().delete(&doc, p, width).map_err(|e| self.map_txn(kind, e))?;
+                let at = self
+                    .stores
+                    .vstream()
+                    .delete(wc.caller(), &doc, p, width)
+                    .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Copy { doc, at, specs } => {
-                let seq =
-                    self.stores.vstream().copy(&doc, at, specs).map_err(|e| self.map_txn(kind, e))?;
+                let seq = self
+                    .stores
+                    .vstream()
+                    .copy(wc.caller(), &doc, at, specs)
+                    .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at: seq })
             }
             Op::Rearrange { doc, cuts } => {
-                let at =
-                    self.stores.vstream().rearrange(&doc, cuts).map_err(|e| self.map_txn(kind, e))?;
+                let at = self
+                    .stores
+                    .vstream()
+                    .rearrange(wc.caller(), &doc, cuts)
+                    .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
             Op::Version { d_src } => {
@@ -286,14 +306,15 @@ where
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // ── link writes (→ M7) ──
+            // ── link writes (→ M7; ω-gated in-store on each written home —
+            //    the ownership ruling, 2026-08-16) ──
             Op::MakeLink { home, from, to, ty } => {
                 // M7 handles both slot forms INSIDE its transact: Resolve
                 // V-specs off the txn base, Addrs deposited verbatim.
                 let (addr, at) = self
                     .stores
                     .linkstore()
-                    .makelink(&home, from, to, ty)
+                    .makelink(wc.caller(), &home, from, to, ty)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -304,7 +325,7 @@ where
                 let (addr, at) = self
                     .stores
                     .linkstore()
-                    .emit(&home, &ty, &from, &to)
+                    .emit(wc.caller(), &home, &ty, &from, &to)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -312,7 +333,7 @@ where
                 let (addr, at) = self
                     .stores
                     .linkstore()
-                    .nullify(&home, &target)
+                    .nullify(wc.caller(), &home, &target)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -320,7 +341,7 @@ where
                 let (addr, at) = self
                     .stores
                     .linkstore()
-                    .assert_sup(&home, &old, &new)
+                    .assert_sup(wc.caller(), &home, &old, &new)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -346,7 +367,7 @@ where
                 let (succ, claim, at) = self
                     .stores
                     .linkstore()
-                    .editlink(&original, link, &d_s, &d_a)
+                    .editlink(wc.caller(), &original, link, &d_s, &d_a)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckEdit { successor: succ, claim, at })
             }

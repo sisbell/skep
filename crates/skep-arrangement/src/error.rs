@@ -37,10 +37,13 @@ pub struct VSpec {
 /// s_C`. `OutOfBounds`: `at.ordinal ∉ [1, n_C + 1]`. (The interface
 /// document's former `BadPosition` was split into these two precise
 /// verdicts, aligned with DELETE's granularity, so M10 gets a
-/// self-describing rejection.)
+/// self-describing rejection.) `NotOwner` (ownership ruling, as amended
+/// 2026-08-16) carries the document that failed the ω check, checked after
+/// registration and before every shape check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertError {
     DocNotRegistered,
+    NotOwner(Address),
     NotContentSubspace,
     OutOfBounds,
     EmptyContent,
@@ -55,10 +58,15 @@ pub enum InsertError {
 /// (content-residence, `span.start().get(1) ≠ s_C`), `EmptySource`
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
 /// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), and
-/// `EmptyResult` (net placement empty after clipping).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `EmptyResult` (net placement empty after clipping). `NotOwner` gates the
+/// DESTINATION doc only (ownership ruling, as amended 2026-08-16) — reading
+/// source spans stays unrestricted: transclusion of anyone's content is the
+/// point of the medium. (`Copy` derive dropped: the variant carries the
+/// failing `Address`.)
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     DocNotRegistered,
+    NotOwner(Address),
     NotContentSubspace,
     OutOfBounds,
     SourceNotRegistered,
@@ -69,12 +77,14 @@ pub enum CopyError {
     EmptyResult,
 }
 
-/// DELETE rejection (ASN-0117; §4): registered doc, `subspace(p) = s_C`,
-/// `p` arranged (`ordinal ∈ [1, n_C]`), containment
-/// `ordinal + width − 1 ≤ n_C`, `width ≥ 1` — checked in that order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// DELETE rejection (ASN-0117; §4): registered doc, owner (ownership
+/// ruling, as amended 2026-08-16), `subspace(p) = s_C`, `p` arranged
+/// (`ordinal ∈ [1, n_C]`), containment `ordinal + width − 1 ≤ n_C`,
+/// `width ≥ 1` — checked in that order.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteError {
     DocNotRegistered,
+    NotOwner(Address),
     NotContentSubspace,
     NotArranged,
     OutOfBounds,
@@ -86,10 +96,12 @@ pub enum DeleteError {
 /// bound `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), content subspace
 /// non-empty (R-PRE(ii); with ascending in-bounds cuts an empty subspace
 /// always trips `OutOfBounds` first, so this last verdict is defensive
-/// completeness against the cited R-PRE).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// completeness against the cited R-PRE). `NotOwner` (ownership ruling, as
+/// amended 2026-08-16) follows registration, precedes the cut checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RearrangeError {
     DocNotRegistered,
+    NotOwner(Address),
     BadCutCount,
     NotAscending,
     NotContentSubspace,
@@ -143,6 +155,9 @@ impl fmt::Display for InsertError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InsertError::DocNotRegistered => f.write_str("insert: doc is not a registered document"),
+            InsertError::NotOwner(_) => {
+                f.write_str("insert: the caller is not the document's effective owner (ω)")
+            }
             InsertError::NotContentSubspace => {
                 f.write_str("insert: at.subspace is not the content subspace s_C")
             }
@@ -169,6 +184,9 @@ impl fmt::Display for CopyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             CopyError::DocNotRegistered => "copy: doc is not a registered document",
+            CopyError::NotOwner(_) => {
+                "copy: the caller is not the destination document's effective owner (ω)"
+            }
             CopyError::NotContentSubspace => "copy: at.subspace is not the content subspace s_C",
             CopyError::OutOfBounds => {
                 "copy: at.ordinal is outside the valid insertion range [1, n_C + 1]"
@@ -192,6 +210,9 @@ impl fmt::Display for DeleteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             DeleteError::DocNotRegistered => "delete: doc is not a registered document",
+            DeleteError::NotOwner(_) => {
+                "delete: the caller is not the document's effective owner (ω)"
+            }
             DeleteError::NotContentSubspace => "delete: p.subspace is not the content subspace s_C",
             DeleteError::NotArranged => "delete: p.ordinal names no arranged content position",
             DeleteError::OutOfBounds => "delete: the range overruns the arranged content (ordinal + width − 1 > n_C)",
@@ -205,6 +226,9 @@ impl fmt::Display for RearrangeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             RearrangeError::DocNotRegistered => "rearrange: doc is not a registered document",
+            RearrangeError::NotOwner(_) => {
+                "rearrange: the caller is not the document's effective owner (ω)"
+            }
             RearrangeError::BadCutCount => "rearrange: exactly 3 or 4 cuts are required",
             RearrangeError::NotAscending => "rearrange: cut ordinals must be strictly ascending",
             RearrangeError::NotContentSubspace => {

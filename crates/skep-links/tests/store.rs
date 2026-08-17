@@ -12,7 +12,7 @@ use skep_address::SpanSet;
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
-    enc, AssertSupError, EditLinkError, EmitError, Endset, HasLinks, Link, LinkStore,
+    enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Link, LinkStore,
     MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, SlotArg, Tip, View,
 };
 
@@ -25,7 +25,7 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let k = kernel();
     let s = store(&k);
     let (a1, _) = s
-        .emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)])
         .expect("registered Binary emit succeeds");
     assert_eq!(a1, la(1)); // first link minted on doc1's link chain
 
@@ -90,32 +90,32 @@ fn emit_typed_rejections() {
         .expect("well-formed span");
     let content_extent = Endset::from_spans([wide]);
     assert!(matches!(
-        s.emit(&doc1(), &content_extent, &ca(1), &[ca(2)]),
+        s.emit(P1, &doc1(), &content_extent, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NonAddressDenotingType))
     ));
     // Pre-transact: the supersession-class fence (Conflicts §10).
     assert!(matches!(
-        s.emit(&doc1(), &sup, &ca(1), &[ca(2)]),
+        s.emit(P1, &doc1(), &sup, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::SupersessionClass))
     ));
     // Unregistered class.
     assert!(matches!(
-        s.emit(&doc1(), &enc(&[ra(20)]), &ca(1), &[ca(2)]),
+        s.emit(P1, &doc1(), &enc(&[ra(20)]), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NotRegistered))
     ));
     // Shape gate: Binary demands |G| = 1.
     assert!(matches!(
-        s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2), ca(3)]),
+        s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2), ca(3)]),
         Err(TxnError::Rejected(EmitError::ShapeViolation))
     ));
     // K ≁ R: retraction writes only through nullify.
     assert!(matches!(
-        s.emit(&doc1(), &retraction, &ca(1), &[ca(2)]),
+        s.emit(P1, &doc1(), &retraction, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::RetractionClass))
     ));
     // Home existence, enforced on every path.
     assert!(matches!(
-        s.emit(&a(&[1, 0, 1, 0, 7]), &rel_ty(), &ca(1), &[ca(2)]),
+        s.emit(P1, &a(&[1, 0, 1, 0, 7]), &rel_ty(), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::HomeNotRegistered))
     ));
 }
@@ -126,20 +126,20 @@ fn emit_idem_dedup_zero_step_and_resurrection() {
     let s = store(&k);
     // idem⊤: a duplicate returns the incumbent with the base Seq and commits
     // nothing.
-    let (a1, s1) = s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("first emit");
+    let (a1, s1) = s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("first emit");
     assert_eq!(k.current_seq(), s1);
-    let (a1b, s1b) = s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
+    let (a1b, s1b) = s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
     assert_eq!(a1b, a1);
     assert_eq!(s1b, s1);
     assert_eq!(k.current_seq(), s1); // zero-step: nothing committed
     // idem⊥ (Multi app type): every emit deposits fresh (ML0's analogue).
-    let (m1, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
-    let (m2, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 2");
+    let (m1, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
+    let (m2, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 2");
     assert_ne!(m1, m2);
     // Resurrection (I2): dedup reads the ACTIVE view — a nullified incumbent
     // is invisible, so re-emitting lands at a fresh address; audit keeps both.
-    s.nullify(&doc1(), &a1).expect("nullify the rel tuple");
-    let (a3, _) = s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("re-emit");
+    s.nullify(P1, &doc1(), &a1).expect("nullify the rel tuple");
+    let (a3, _) = s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("re-emit");
     assert_ne!(a3, a1);
     let snap = k.snapshot();
     let ls = snap.world().links();
@@ -154,17 +154,17 @@ fn nullify_contract_active_view_and_born_nullified_self_emit() {
     let s = store(&k);
     // P-tgt rejects a non-resident, non-self target.
     assert!(matches!(
-        s.nullify(&doc1(), &ca(9)),
+        s.nullify(P1, &doc1(), &ca(9)),
         Err(TxnError::Rejected(NullifyError::BadTarget))
     ));
     // P0.
     assert!(matches!(
-        s.nullify(&a(&[1, 0, 1, 0, 7]), &la(1)),
+        s.nullify(P1, &a(&[1, 0, 1, 0, 7]), &la(1)),
         Err(TxnError::Rejected(NullifyError::HomeNotRegistered))
     ));
     // Happy path: the [R] tuple nullifies exactly the target root.
-    let (m1, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("emit");
-    let (r1, _) = s.nullify(&doc1(), &m1).expect("nullify");
+    let (m1, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("emit");
+    let (r1, _) = s.nullify(P1, &doc1(), &m1).expect("nullify");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -176,11 +176,11 @@ fn nullify_contract_active_view_and_born_nullified_self_emit() {
         assert!(ls.type_slice(&multi_ty(), View::Audit).contains(m1.tumbler()));
     }
     // idem⊤: re-retracting the same target from the same home dedups.
-    let (r2, _) = s.nullify(&doc1(), &m1).expect("re-nullify dedups");
+    let (r2, _) = s.nullify(P1, &doc1(), &m1).expect("re-nullify dedups");
     assert_eq!(r2, r1);
     // Born-nullified self-emit: the target may be the call's own would-be
     // fresh emitter (P-tgt's second disjunct) — doc2's first link is la2(1).
-    let (e, _) = s.nullify(&doc2(), &la2(1)).expect("self-emit retraction");
+    let (e, _) = s.nullify(P1, &doc2(), &la2(1)).expect("self-emit retraction");
     assert_eq!(e, la2(1));
     let snap = k.snapshot();
     assert!(snap.world().links().is_nullified(&la2(1)));
@@ -196,19 +196,19 @@ fn assert_sup_dedup_walk_and_standoff() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (x, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
+    let (y, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
     // Schema preconditions.
     assert!(matches!(
-        s.assert_sup(&doc1(), &x, &la(9)),
+        s.assert_sup(P1, &doc1(), &x, &la(9)),
         Err(TxnError::Rejected(AssertSupError::EndpointNotResident))
     ));
     assert!(matches!(
-        s.assert_sup(&doc1(), &x, &x),
+        s.assert_sup(P1, &doc1(), &x, &x),
         Err(TxnError::Rejected(AssertSupError::SelfSupersession))
     ));
     // The claim: F = old, G = new; edges run old → new.
-    let (c1, _) = s.assert_sup(&doc1(), &x, &y).expect("claim");
+    let (c1, _) = s.assert_sup(P1, &doc1(), &x, &y).expect("claim");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -228,11 +228,11 @@ fn assert_sup_dedup_walk_and_standoff() {
     }
     // Dedup excludes home: the same (old, new) from ANOTHER home hits the
     // first claim (Conflicts §9).
-    let (c1b, _) = s.assert_sup(&doc2(), &x, &y).expect("cross-home duplicate");
+    let (c1b, _) = s.assert_sup(P1, &doc2(), &x, &y).expect("cross-home duplicate");
     assert_eq!(c1b, c1);
     // Retraction stability: nullifying the claim removes the operative edge;
     // x becomes its own sink.
-    s.nullify(&doc1(), &c1).expect("retract claim");
+    s.nullify(P1, &doc1(), &c1).expect("retract claim");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -242,9 +242,9 @@ fn assert_sup_dedup_walk_and_standoff() {
     // Claim resurrection + mutual standoff: re-assert (fresh claim — the
     // nullified one is invisible to dedup), then the reverse claim; the
     // closure then has no sink and current() legitimately returns 0 members.
-    let (c2, _) = s.assert_sup(&doc1(), &x, &y).expect("re-assert");
+    let (c2, _) = s.assert_sup(P1, &doc1(), &x, &y).expect("re-assert");
     assert_ne!(c2, c1);
-    s.assert_sup(&doc1(), &y, &x).expect("reverse claim");
+    s.assert_sup(P1, &doc1(), &y, &x).expect("reverse claim");
     let snap = k.snapshot();
     assert!(snap.world().links().current(&x).is_empty());
 }
@@ -264,12 +264,12 @@ fn editlink_composite_dc_guard_and_currency() {
         .links()
         .reserved_type(ShippedType::Retraction)
         .clone();
-    let (orig, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("orig");
+    let (orig, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("orig");
 
     // One atomic composite: fresh successor + claim; original untouched.
     let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
     let (s1, c1, _) = s
-        .editlink(&orig, succ_value.clone(), &doc1(), &doc1())
+        .editlink(P1, &orig, succ_value.clone(), &doc1(), &doc1())
         .expect("editlink");
     {
         let snap = k.snapshot();
@@ -287,7 +287,7 @@ fn editlink_composite_dc_guard_and_currency() {
     // Fork permanence: a second edit of the same original yields a distinct
     // successor and a co-visible claim; the walk reports the branch.
     let succ2 = Link::new([enc(&[ca(5)]), enc(&[ca(6)]), enc(&[ra(31)])]).expect("arity 3");
-    let (s2, c2, _) = s.editlink(&orig, succ2, &doc1(), &doc1()).expect("fork");
+    let (s2, c2, _) = s.editlink(P1, &orig, succ2, &doc1(), &doc1()).expect("fork");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -307,9 +307,9 @@ fn editlink_composite_dc_guard_and_currency() {
 
     // A [K_sup]-typed successor is admitted iff schema-conforming (DC): both
     // endpoints resident, distinct, unit-depth single-addr F/G.
-    let (z, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
+    let (z, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
     let conforming = Link::new([enc(&[orig.clone()]), enc(&[z.clone()]), sup.clone()]).expect("arity 3");
-    s.editlink(&orig, conforming, &doc1(), &doc1())
+    s.editlink(P1, &orig, conforming, &doc1(), &doc1())
         .expect("schema-conforming claim-typed successor");
     {
         let snap = k.snapshot();
@@ -319,11 +319,11 @@ fn editlink_composite_dc_guard_and_currency() {
     // Rejections (each leaves no state change by M2's Rejected contract).
     let ok_succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(32)])]).expect("arity 3");
     assert!(matches!(
-        s.editlink(&la(90), ok_succ.clone(), &doc1(), &doc1()),
+        s.editlink(P1, &la(90), ok_succ.clone(), &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::OriginalNotResident))
     ));
     assert!(matches!(
-        s.editlink(&orig, ok_succ.clone(), &a(&[1, 0, 1, 0, 7]), &doc1()),
+        s.editlink(P1, &orig, ok_succ.clone(), &a(&[1, 0, 1, 0, 7]), &doc1()),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
     ));
     let arity4 = Link::new(vec![
@@ -334,23 +334,23 @@ fn editlink_composite_dc_guard_and_currency() {
     ])
     .expect("capacity admits arity 4");
     assert!(matches!(
-        s.editlink(&orig, arity4, &doc1(), &doc1()),
+        s.editlink(P1, &orig, arity4, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
     ));
     let empty_ty = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), Endset::empty()]).expect("arity 3");
     assert!(matches!(
-        s.editlink(&orig, empty_ty, &doc1(), &doc1()),
+        s.editlink(P1, &orig, empty_ty, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
     ));
     let retraction_typed =
         Link::new([enc(&[ca(3)]), enc(&[ca(4)]), retraction.clone()]).expect("arity 3");
     assert!(matches!(
-        s.editlink(&orig, retraction_typed, &doc1(), &doc1()),
+        s.editlink(P1, &orig, retraction_typed, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
     let self_sup = Link::new([enc(&[orig.clone()]), enc(&[orig.clone()]), sup.clone()]).expect("arity 3");
     assert!(matches!(
-        s.editlink(&orig, self_sup, &doc1(), &doc1()),
+        s.editlink(P1, &orig, self_sup, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
 }
@@ -363,6 +363,7 @@ fn makelink_resolves_deposits_and_seats() {
 
     let (l1, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
@@ -395,6 +396,7 @@ fn makelink_resolves_deposits_and_seats() {
     // ML0: distinct links always — no dedup on the open surface.
     let (l2, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
@@ -407,6 +409,7 @@ fn makelink_resolves_deposits_and_seats() {
     // keeps ⟨⟩ ≠ ⊥.
     let (l3, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
@@ -422,6 +425,7 @@ fn makelink_resolves_deposits_and_seats() {
     // ML6: a well-formed type spec resolving to nothing is a typed rejection.
     assert!(matches!(
         s.makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![]),
@@ -432,6 +436,7 @@ fn makelink_resolves_deposits_and_seats() {
     // wf: link-subspace spec, deeper-than-2 spec, unregistered source.
     assert!(matches!(
         s.makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 2, 1, 1)]),
             SlotArg::Resolve(vec![]),
@@ -445,6 +450,7 @@ fn makelink_resolves_deposits_and_seats() {
     };
     assert!(matches!(
         s.makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![deep]),
             SlotArg::Resolve(vec![]),
@@ -454,6 +460,7 @@ fn makelink_resolves_deposits_and_seats() {
     ));
     assert!(matches!(
         s.makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1)]),
             SlotArg::Resolve(vec![]),
@@ -463,6 +470,7 @@ fn makelink_resolves_deposits_and_seats() {
     ));
     assert!(matches!(
         s.makelink(
+            P1,
             &a(&[1, 0, 1, 0, 7]),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![]),
@@ -488,6 +496,7 @@ fn makelink_addrs_form_records_names_verbatim() {
     let name = a(&[1, 0, 1, 0, 1, 0, 3, 6, 1]);
     let (l1, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
             SlotArg::Addrs(vec![]), // empty FROM/TO admitted in either form
@@ -506,6 +515,7 @@ fn makelink_addrs_form_records_names_verbatim() {
     // of the link address (ReflexiveAddressing, L13).
     let (l2, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
             SlotArg::Addrs(vec![l1.clone()]),
@@ -524,6 +534,7 @@ fn makelink_addrs_form_records_names_verbatim() {
     // The as-given type floor: empty Addrs ty ⇒ EmptyTypeResolution.
     assert!(matches!(
         s.makelink(
+            P1,
             &doc1(),
             SlotArg::Addrs(vec![]),
             SlotArg::Addrs(vec![]),
@@ -541,6 +552,7 @@ fn stab_and_match_links_overlap_excludes_adjacency() {
     // from covers [ca1, ca3); to and ty cover [ca3, ca4).
     let (l, _) = s
         .makelink(
+            P1,
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 2)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
@@ -571,7 +583,7 @@ fn stab_and_match_links_overlap_excludes_adjacency() {
         assert!(ls.type_slice(&enc(&[ca(3)]), View::Audit).contains(l.tumbler()));
     }
     // Active view filters nullified results.
-    s.nullify(&doc1(), &l).expect("nullify the link");
+    s.nullify(P1, &doc1(), &l).expect("nullify the link");
     let snap = k.snapshot();
     let ls = snap.world().links();
     assert!(!ls.stab(1, &enc(&[ca(1)]), View::Active).contains(l.tumbler()));
@@ -590,11 +602,11 @@ fn bh4_age_stale_and_the_typed_batch_fence() {
         .reserved_type(ShippedType::Supersedes)
         .clone();
     // Three idem⊥ BH4 tuples on doc2's chain: ordinals 1..3.
-    let (t1, _) = s.emit(&doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
-    let (t2, _) = s.emit(&doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
-    let (t3, _) = s.emit(&doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
+    let (t1, _) = s.emit(P1, &doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
+    let (t2, _) = s.emit(P1, &doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
+    let (t3, _) = s.emit(P1, &doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
     // Two idem⊥ Multi tuples so an UNFENCED batch would have stale targets.
-    let (m1, _) = s.emit(&doc2(), &multi_ty(), &ca(4), &[]).expect("m1");
+    let (m1, _) = s.emit(P1, &doc2(), &multi_ty(), &ca(4), &[]).expect("m1");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -620,24 +632,24 @@ fn bh4_age_stale_and_the_typed_batch_fence() {
     // aimed at an idem⊤/other class to mass-nullify).
     let before = k.current_seq();
     assert!(matches!(
-        s.retract_stale(&doc2(), &multi_ty(), 0),
+        s.retract_stale(P1, &doc2(), &multi_ty(), 0),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
     assert!(matches!(
-        s.retract_stale(&doc2(), &sup, 0),
+        s.retract_stale(P1, &doc2(), &sup, 0),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
     // A constituent nullify's rejection lifts through Nullify (nothing
     // committed here either: the first nullify rejects on P0).
     assert!(matches!(
-        s.retract_stale(&a(&[1, 0, 1, 0, 7]), &bh4_ty(), 2),
+        s.retract_stale(P1, &a(&[1, 0, 1, 0, 7]), &bh4_ty(), 2),
         Err(TxnError::Rejected(RetractStaleError::Nullify(
             NullifyError::HomeNotRegistered
         )))
     ));
     assert_eq!(k.current_seq(), before);
     // On a BH4 ty it nullifies exactly the stale set snapshotted at entry.
-    let out = s.retract_stale(&doc2(), &bh4_ty(), 2).expect("batch");
+    let out = s.retract_stale(P1, &doc2(), &bh4_ty(), 2).expect("batch");
     assert_eq!(out.len(), 1);
     let snap = k.snapshot();
     let ls = snap.world().links();
@@ -656,13 +668,13 @@ fn retired_filter_rewrites_default_views_only() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("relation");
+    s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("relation");
     {
         let snap = k.snapshot();
         assert!(!snap.world().links().is_filtered(ca(1).tumbler()));
     }
     // Retire ca(1) through the shipped Unary/idem⊤ BH1 class.
-    s.emit(&doc1(), &retired, &ca(1), &[]).expect("retire ca1");
+    s.emit(P1, &doc1(), &retired, &ca(1), &[]).expect("retire ca1");
     let snap = k.snapshot();
     let ls = snap.world().links();
     assert!(ls.is_filtered(ca(1).tumbler()));
@@ -684,9 +696,9 @@ fn retired_filter_rewrites_default_views_only() {
 fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
     let k = kernel();
     let s = store(&k);
-    s.emit(&doc1(), &bh3_ty(), &ca(1), &[ca(2)]).expect("bh3 tuple");
+    s.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(2)]).expect("bh3 tuple");
     // A same-source tuple of ANOTHER type must not disturb the typed reads.
-    s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(3)]).expect("rel tuple");
+    s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(3)]).expect("rel tuple");
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
@@ -703,7 +715,7 @@ fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
     }
     // A second active tuple of the same class denoting the same source makes
     // target_of ⊥ ("exactly one active K-tuple").
-    s.emit(&doc1(), &bh3_ty(), &ca(1), &[ca(4)]).expect("second bh3 tuple");
+    s.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(4)]).expect("second bh3 tuple");
     let snap = k.snapshot();
     let ls = snap.world().links();
     assert_eq!(ls.target_of(&bh3_ty(), &ca(1)), None);
@@ -720,11 +732,11 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (a1, _) = s.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel");
-    let (m1, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("m1");
-    let (m2, _) = s.emit(&doc1(), &multi_ty(), &ca(1), &[ca(4)]).expect("m2");
-    let (c, _) = s.assert_sup(&doc1(), &m1, &m2).expect("claim");
-    s.nullify(&doc1(), &m1).expect("nullify m1");
+    let (a1, _) = s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel");
+    let (m1, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("m1");
+    let (m2, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(4)]).expect("m2");
+    let (c, _) = s.assert_sup(P1, &doc1(), &m1, &m2).expect("claim");
+    s.nullify(P1, &doc1(), &m1).expect("nullify m1");
 
     // The checkpoint wire format: serialize the world, deserialize (skip
     // fields default), rebuild_derived BEFORE any read/replay.
@@ -759,6 +771,105 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     };
     let k2 = skep_kernel::Kernel::open(cfg, recovered).expect("reopen");
     let s2 = store(&k2);
-    let (again, _) = s2.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
+    let (again, _) = s2.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
     assert_eq!(again, a1);
+}
+
+// ---- the ownership gate (as amended 2026-08-16) ----
+
+#[test]
+fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
+    // The probe matrix, link side: principal 2 (account [1,0,2]) deposits
+    // into P1's doc1 — make_link / emit / assert_sup / editlink (d_s and
+    // d_a) all reject NotOwner carrying the home that failed; nothing
+    // commits; System (the M9 automation path) is exempt by architecture.
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let s = store(&k);
+    let p2 = P2;
+    let (x, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
+    let (y, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let before = k.current_seq();
+    assert!(matches!(
+        s.makelink(
+            p2,
+            &doc1(),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::NotOwner(d))) if d == doc1()
+    ));
+    assert!(matches!(
+        s.emit(p2, &doc1(), &rel_ty(), &ca(1), &[ca(2)]),
+        Err(TxnError::Rejected(EmitError::NotOwner(d))) if d == doc1()
+    ));
+    assert!(matches!(
+        s.assert_sup(p2, &doc1(), &x, &y),
+        Err(TxnError::Rejected(AssertSupError::NotOwner(d))) if d == doc1()
+    ));
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    // Foreign d_s (successor home): the error names d_s.
+    assert!(matches!(
+        s.editlink(p2, &x, succ.clone(), &doc1(), &sib_doc()),
+        Err(TxnError::Rejected(EditLinkError::NotOwner(d))) if d == doc1()
+    ));
+    // Foreign d_a (claim home): the error names d_a.
+    assert!(matches!(
+        s.editlink(p2, &x, succ, &sib_doc(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::NotOwner(d))) if d == doc1()
+    ));
+    assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
+    // System bypasses the gate (M9 ⟂ M10 — rule fires carry no principal).
+    s.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)])
+        .expect("the automation path deposits ungated");
+}
+
+#[test]
+fn ownership_gate_holds_on_the_idem_hit_path() {
+    // Like the hoisted home check, ω is enforced on hit AND miss: a foreign
+    // emit whose tuple already exists still rejects NotOwner — the caller
+    // cannot observe the dedup branch through the rejection.
+    let k = kernel();
+    let s = store(&k);
+    let p2 = P2;
+    s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("incumbent");
+    assert!(matches!(
+        s.emit(p2, &doc1(), &rel_ty(), &ca(1), &[ca(2)]),
+        Err(TxnError::Rejected(EmitError::NotOwner(_)))
+    ));
+}
+
+#[test]
+fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
+    // v1 target policy: self-retraction only. Principal 2, from its OWN
+    // home, cannot retract P1's link — the rejection names the TARGET; the
+    // owner's retraction still lands and filters the active view while the
+    // audit view retains everything.
+    let k = kernel();
+    let s = store(&k);
+    let p2 = P2;
+    let (m1, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("P1's tuple");
+    // Foreign target, owned home: NotOwner carrying the target link.
+    assert!(matches!(
+        s.nullify(p2, &sib_doc(), &m1),
+        Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == m1
+    ));
+    // Foreign home is rejected first, naming the home.
+    assert!(matches!(
+        s.nullify(p2, &doc1(), &m1),
+        Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == doc1()
+    ));
+    {
+        let snap = k.snapshot();
+        assert!(snap.world().links().is_active(&m1), "no foreign retraction landed");
+    }
+    // The owner's own retraction: active view filtered, audit retains.
+    s.nullify(P1, &doc1(), &m1).expect("owner retraction");
+    let snap = k.snapshot();
+    let ls = snap.world().links();
+    assert!(ls.is_nullified(&m1));
+    assert!(ls.readlink(&m1).is_some());
+    assert!(ls.type_slice(&multi_ty(), View::Audit).contains(m1.tumbler()));
+    assert!(!ls.type_slice(&multi_ty(), View::Active).contains(m1.tumbler()));
 }

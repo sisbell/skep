@@ -34,6 +34,7 @@ fn cross_store_lifecycle_under_fsync() {
         let (_start, s_insert) = engine
             .vstream()
             .insert(
+                OWNER,
                 &doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
@@ -56,6 +57,7 @@ fn cross_store_lifecycle_under_fsync() {
         let (l, s_link) = engine
             .linkstore()
             .makelink(
+                OWNER,
                 &doc,
                 SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),

@@ -53,6 +53,18 @@ the deliberate v1 scope — the daemon binds only the loopback interface
 precisely because this trust model does not survive a network. It is a
 decision, not a TODO.
 
+**Ownership** (v5.1): attribution now gates. A write into a document's
+space — its content arrangement or its link subspace — is accepted only
+from the document's owner: the principal whose account is **exactly** the
+document's account (the nearest registered account prefix of its address —
+never mere prefix containment, so a parent account does not own a
+sub-delegated account's documents and a sub-account does not own its
+parent's). Anything else is the `not_owner` rejection with the failing
+address in `site.addr`. Reads remain principal-free. The sanctioned way to
+build on someone else's document is `version` (fork it into your own
+account, content shared) and `copy` (transclude their content into your own
+document) — proposing a change is forking, never editing in place.
+
 ### Cross-origin access — a scope decision
 
 Every response — every status, every endpoint, rejections and transport
@@ -486,8 +498,9 @@ Fields:
   "fault": "<span fault>"?, "addr": "<address>"?}`. `index`/`fault` localize
   a malformed span in a multi-span request; `operand`/`region` localize
   compare inputs; `addr` names the offending document in multi-document
-  lookups. Span faults: `not_ordinal_level`, `not_level_uniform`,
-  `start_not_zero_free`, `start_too_shallow`.
+  lookups — and, on a `not_owner` rejection, the document (or target link)
+  that failed the ownership check. Span faults: `not_ordinal_level`,
+  `not_level_uniform`, `start_not_zero_free`, `start_too_shallow`.
 * `detail` — optional human-readable message (always present on
   `unparseable`, where it says what failed to parse).
 
@@ -598,6 +611,13 @@ at session open — to resolve your own account. The argument is named
 
 ### Arrangement (document editing)
 
+Ownership (v5.1): `insert`, `delete`, and `rearrange` require the session
+principal to own `doc`; `copy` requires owning the **destination** `doc`
+only — its source spans may read anyone's content (transclusion is
+unrestricted). A non-owner gets `not_owner` (permanent) with the document
+in `site.addr`. `version` is deliberately ungated: forking a foreign
+document into your own account IS the sanctioned "propose a change" path.
+
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
 minted I-address). This example inserts **eleven single-byte values at
@@ -650,6 +670,18 @@ identity, not copied bytes). → `ack`.
 ```
 
 ### Links (writes)
+
+Ownership (v5.1): every deposit into a home document's link subspace
+requires the session principal to own that home — `make_link`/`emit`/
+`nullify`/`assert_sup` their `home`, `edit_link` **both** `d_s` (the
+successor's home) and `d_a` (the claim's home). `nullify` additionally
+requires owning the **target** link itself (the account of the link's own
+address): self-retraction only in v1. Whether a document's owner should be
+able to retract foreign links that touch it (territorial moderation), or
+retraction should be open with viewer-side filtering, is a genuine
+governance question for the lattice — explicitly deferred, not decided by
+omission. Failures are `not_owner` (permanent) with the failing home or
+target in `site.addr`.
 
 **`make_link`** — create an open link homed in `home`. Each of `from`,
 `to`, `ty` takes **one of two forms** (wire v5; no mixing within one slot):
@@ -1074,6 +1106,29 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v5.1 (ownership gate on the write surface — the 2026-08-16 security
+ruling; no encoding change, new rejection paths):
+
+* Ownership, in one sentence: a caller owns a document iff its account is
+  **exactly** the document's account — the nearest registered account
+  prefix of the document's address, never mere prefix containment (so
+  parent and sub-delegated accounts do not own each other's documents, in
+  either direction).
+* Ops that now reject `not_owner` (permanent, `site.addr` = the failing
+  address), checked after registration and before all other validation:
+  `insert`/`delete`/`rearrange` on `doc`; `copy` on its **destination**
+  `doc` only (source spans stay unrestricted — transclusion of anyone's
+  content is the point of the medium); `make_link`/`emit`/`assert_sup`/
+  `nullify` on `home`; `edit_link` on both `d_s` and `d_a`; and `nullify`
+  additionally on the **target** link's own address.
+* Nullify target policy: self-retraction only. Territorial moderation
+  (owner of a touched document may retract) versus open retraction with
+  viewer-side filtering is an explicitly deferred scope decision.
+* `version` of a foreign document remains ungated by design: it forks into
+  the CALLER's account (denial-as-fork) and is the sanctioned
+  "propose a change" path.
+* Reads are unchanged: every read remains principal-free.
 
 v5 (address-denoting endsets on the open link surface — the 2026-08-16
 ruling; spec anchors ASN-0043 L4/L8/L9/L13, Literary Machines 4/44):

@@ -34,10 +34,11 @@ pub enum Disposition {
 /// Where in a multi-part request a fault landed — threaded from M6's
 /// variant-carried localization (`RetrieveError::MalformedSpec{index, fault}`,
 /// COMPARE's `{operand, region, index}`, and the offending document `Address`
-/// of the multi-document `DocNotRegistered(Address)` variants). M6 is the
-/// ONLY producer of a populated site: M5's and M8's error variants carry no
-/// localization at all (M8's `DocNotRegistered` is fieldless, unlike M6's),
-/// so every M5/M8 variant lowers with `site = None` (§5).
+/// of the multi-document `DocNotRegistered(Address)` variants), and — since
+/// the ownership ruling (2026-08-16) — from M5's and M7's
+/// `NotOwner(Address)`, whose `addr` names the document (or target link)
+/// that failed the ω check. Every other M5/M8 variant still lowers with
+/// `site = None` (§5; M8's `DocNotRegistered` is fieldless, unlike M6's).
 #[derive(Debug, Default)]
 pub struct FaultSite {
     /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.

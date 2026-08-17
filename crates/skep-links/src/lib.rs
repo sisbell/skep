@@ -56,6 +56,10 @@ mod state;
 mod store;
 
 pub use endset::{coverage_class, enc, CoverageClass, Endset, Link};
+// The ONE caller-identity type of the write-surface ownership gate
+// (as amended 2026-08-16) — defined beside M5's edit ops, re-exported here
+// because M7's five deposit ops take it too.
+pub use skep_arrangement::Caller;
 pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,

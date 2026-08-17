@@ -9,7 +9,7 @@ use std::slice;
 use skep_address::{document_of, Address};
 use skep_kernel::{Snapshot, TxnError, WorldState};
 use skep_links::{
-    EmitError, Endset, HasLinks, LinkRec, NullifyError, Shape, ShippedType, View,
+    Caller, EmitError, Endset, HasLinks, LinkRec, NullifyError, Shape, ShippedType, View,
 };
 use skep_namespace::{HasM3, M3Rec};
 use skep_arrangement::{HasM5, M5Rec};
@@ -353,15 +353,19 @@ where
         }
         let a = elem.key_addr();
         let ls = (self.mk_link_store)(self.kernel.as_ref());
+        // Rule fires run as `Caller::System` (the ownership ruling's
+        // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
+        // principal, and its authority is the operator's certified rule set,
+        // not a session.
         match &rule.action {
-            FireAction::Marker { home, ty } => match ls.emit(home, &ty.0, &a, &[]) {
+            FireAction::Marker { home, ty } => match ls.emit(Caller::System, home, &ty.0, &a, &[]) {
                 Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
                 Err(TxnError::Rejected(EmitError::HomeNotRegistered)) => {
                     Err(FireError::HomeNotRegistered)
                 }
                 Err(err) => Err(FireError::Emit(err)),
             },
-            FireAction::Nullify { home } => match ls.nullify(home, &a) {
+            FireAction::Nullify { home } => match ls.nullify(Caller::System, home, &a) {
                 Ok((effect, seq)) => Ok(self.fired_or_deduped(&snap, effect, seq)),
                 Err(TxnError::Rejected(NullifyError::HomeNotRegistered)) => {
                     Err(FireError::HomeNotRegistered)

@@ -7,13 +7,17 @@
 use std::path::Path;
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
-use skep_arrangement::{VPos, VSpec};
+use skep_arrangement::{Caller, VPos, VSpec};
 use skep_engine::{Engine, GenesisConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
 
 pub const USER: PrincipalId = PrincipalId(7);
+
+/// [`USER`] as the stores' ω-gated caller (the ownership ruling,
+/// 2026-08-16) — the owner of everything `setup_doc` creates.
+pub const OWNER: Caller = Caller::Principal(USER);
 
 pub fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")

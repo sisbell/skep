@@ -5,12 +5,19 @@
 //!
 //! Concurrency belongs to the kernel: nothing here locks, threads, or caches
 //! beyond the genesis-immutable registry `Arc` the design mandates.
+//!
+//! Ownership (as amended 2026-08-16): every op that deposits into a home
+//! document's link subspace takes a [`Caller`] and requires
+//! `caller.is_owner(m3, home)` — the in-txn ω gate, enforced at
+//! [`emit_core`] (hit AND miss) with per-op hoists pinning error order;
+//! `nullify` additionally requires owning the TARGET link (self-retraction
+//! only in v1).
 
 use std::slice;
 use std::sync::Arc;
 
 use skep_address::{elem_addr, validate, Address, ElemPos, Nat};
-use skep_arrangement::{stage_seat_link, HasM5, M5Rec, SeatError, VSpec};
+use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, SeatError, VSpec};
 use skep_kernel::{Kernel, LockKey, Seq, Space, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
@@ -94,10 +101,14 @@ enum Gate {
 /// impls below (§2 error mapping). `HomeNotRegistered` originates at the
 /// hoisted home check alone — the hoist makes `home` known-registered before
 /// the mint, so `mint_link`'s own `HomeNotRegistered` branch is unreachable
-/// and every other `MintError` rides `Mint`.
+/// and every other `MintError` rides `Mint`. `NotOwner` is the ω backstop
+/// (as amended 2026-08-16): every deposit passes this one choke point, so
+/// no caller path can reach the mint without the ownership check having
+/// run — the per-op hoists exist only to pin each op's error ORDER.
 #[derive(Debug)]
 enum EmitCoreError {
     HomeNotRegistered,
+    NotOwner(Address),
     NotRegistered,
     ShapeViolation,
     RetractionClass,
@@ -115,11 +126,12 @@ impl From<MintError> for EmitCoreError {
 // proves cannot fire (each op's gate discipline makes them dead).
 
 impl From<EmitCoreError> for MakeLinkError {
-    // Open: only EmptyType/HomeNotRegistered/Mint reachable.
+    // Open: only EmptyType/HomeNotRegistered/NotOwner/Mint reachable.
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::EmptyType => MakeLinkError::EmptyTypeResolution,
             EmitCoreError::HomeNotRegistered => MakeLinkError::HomeNotRegistered,
+            EmitCoreError::NotOwner(a) => MakeLinkError::NotOwner(a),
             EmitCoreError::Mint(m) => MakeLinkError::Mint(m),
             _ => unreachable!("Open gate raises no Managed/Retraction rejection"),
         }
@@ -138,6 +150,7 @@ impl From<EmitCoreError> for EmitError {
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::HomeNotRegistered => EmitError::HomeNotRegistered,
+            EmitCoreError::NotOwner(a) => EmitError::NotOwner(a),
             EmitCoreError::NotRegistered => EmitError::NotRegistered,
             EmitCoreError::ShapeViolation => EmitError::ShapeViolation,
             EmitCoreError::RetractionClass => EmitError::RetractionClass,
@@ -153,6 +166,7 @@ impl From<EmitCoreError> for NullifyError {
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::HomeNotRegistered => NullifyError::HomeNotRegistered,
+            EmitCoreError::NotOwner(a) => NullifyError::NotOwner(a),
             EmitCoreError::Mint(m) => NullifyError::Mint(m),
             _ => unreachable!("[R] type is genesis-fixed Binary; P-tgt checked in nullify"),
         }
@@ -165,6 +179,7 @@ impl From<EmitCoreError> for AssertSupError {
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::HomeNotRegistered => AssertSupError::HomeNotRegistered,
+            EmitCoreError::NotOwner(a) => AssertSupError::NotOwner(a),
             EmitCoreError::Mint(m) => AssertSupError::Mint(m),
             _ => unreachable!(
                 "K_sup registry-fixed Binary/idem⊤; endpoints/irreflexivity pre-checked in assert_sup"
@@ -179,6 +194,7 @@ impl From<EmitCoreError> for EditLinkError {
         match e {
             EmitCoreError::EmptyType => EditLinkError::IllFormedSuccessor,
             EmitCoreError::HomeNotRegistered => EditLinkError::HomeNotRegistered,
+            EmitCoreError::NotOwner(a) => EditLinkError::NotOwner(a),
             EmitCoreError::Mint(m) => EditLinkError::Mint(m),
             _ => unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed"),
         }
@@ -269,9 +285,13 @@ fn dedup_lock_key(key: &DedupKey) -> LockKey {
 /// ASN-0128 I1's miss-only read) runs ahead of EVERY gate/dedup
 /// short-circuit, so an unregistered-home emit is rejected on every path —
 /// miss AND hit; callers cannot observe the branch, which is what makes the
-/// contract portable.
+/// contract portable. The ω check (as amended 2026-08-16) rides directly
+/// behind it under the same discipline: a non-owner deposit is rejected on
+/// hit AND miss, and because every deposit passes THIS choke point, no
+/// caller can reach the mint ungated.
 fn emit_core<W>(
     stg: &mut Staging<W>,
+    caller: Caller,
     home: &Address,
     value: Link,
     gate: Gate,
@@ -287,6 +307,9 @@ where
     assert_eq!(value.arity(), 3, "emit_core: the store holds only arity-3 links");
     if !stg.working().m3().is_registered_document(home) {
         return Err(EmitCoreError::HomeNotRegistered);
+    }
+    if !caller.is_owner(stg.working().m3(), home) {
+        return Err(EmitCoreError::NotOwner(home.clone()));
     }
     match gate {
         Gate::Open => {
@@ -373,6 +396,7 @@ where
     /// precondition, already carried by the `Address` type.
     pub fn makelink(
         &self,
+        caller: Caller,
         home: &Address,
         from: SlotArg,
         to: SlotArg,
@@ -384,6 +408,11 @@ where
                     let base = stg.base();
                     if !base.m3().is_registered_document(home) {
                         return Err(MakeLinkError::HomeNotRegistered);
+                    }
+                    // ω on home (as amended 2026-08-16), hoisted so
+                    // NotOwner wins over every spec/type verdict.
+                    if !caller.is_owner(base.m3(), home) {
+                        return Err(MakeLinkError::NotOwner(home.clone()));
                     }
                     for spec in
                         from.specs().iter().chain(to.specs().iter()).chain(ty.specs().iter())
@@ -421,7 +450,7 @@ where
                     return Err(MakeLinkError::EmptyTypeResolution); // ML6, as-given
                 }
                 let value = Link::new([e1, e2, e3]).expect("the standard triple has arity 3");
-                let addr = emit_core(stg, home, value, Gate::Open)?;
+                let addr = emit_core(stg, caller, home, value, Gate::Open)?;
                 let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
                 stg.push(seat.into());
                 Ok(addr)
@@ -451,6 +480,7 @@ where
     /// because the registry is genesis-immutable (§3 step 1).
     pub fn emit(
         &self,
+        caller: Caller,
         home: &Address,
         ty: &Endset,
         from: &Address,
@@ -477,7 +507,7 @@ where
         self.kernel.transact(&keys, |stg| {
             let value = Link::new([enc(slice::from_ref(from)), enc(to), ty.clone()])
                 .expect("the managed triple has arity 3");
-            let addr = emit_core(stg, home, value, Gate::Managed)?;
+            let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
             Ok(addr)
         })
     }
@@ -492,8 +522,18 @@ where
     /// `mint_link(home)`'s output by construction (FrontierUnification,
     /// Conflicts §7) — so sterilization is unreachable through this surface
     /// (DR). Lock set `[dedup_key, link_lock_key(home)]`.
+    ///
+    /// Ownership (as amended 2026-08-16): the caller must own `home` AND the
+    /// TARGET link — ω applied to the link's own address, which resolves to
+    /// the account of the link's home document. Self-retraction only; the
+    /// broader moderation question (territorial retraction, viewer-side
+    /// filtering) is an explicitly deferred scope decision (wire.md). Both
+    /// checks precede P-tgt, so the auth verdict never depends on residence
+    /// timing. The self-emitter case passes by arithmetic: the fresh
+    /// emitter's account IS home's account.
     pub fn nullify(
         &self,
+        caller: Caller,
         home: &Address,
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
@@ -509,6 +549,12 @@ where
                 let base = stg.base();
                 if !base.m3().is_registered_document(home) {
                     return Err(NullifyError::HomeNotRegistered); // P0
+                }
+                if !caller.is_owner(base.m3(), home) {
+                    return Err(NullifyError::NotOwner(home.clone()));
+                }
+                if !caller.is_owner(base.m3(), target) {
+                    return Err(NullifyError::NotOwner(target.clone())); // v1 target policy
                 }
                 if !base.links().resident(target.tumbler()) {
                     let next = base.links().next_home_ordinal(home);
@@ -529,7 +575,7 @@ where
                 rty.clone(),
             ])
             .expect("the retraction triple has arity 3");
-            let addr = emit_core(stg, home, value, Gate::Retraction)?;
+            let addr = emit_core(stg, caller, home, value, Gate::Retraction)?;
             Ok(addr)
         })
     }
@@ -543,6 +589,7 @@ where
     /// endpoints resident, `old ≠ new` (Df-DISC(ii)); checked in that order.
     pub fn assert_sup(
         &self,
+        caller: Caller,
         home: &Address,
         old: &Address,
         new: &Address,
@@ -560,6 +607,11 @@ where
                 if !base.m3().is_registered_document(home) {
                     return Err(AssertSupError::HomeNotRegistered); // P0
                 }
+                // ω on home (as amended 2026-08-16), before the endpoint
+                // verdicts.
+                if !caller.is_owner(base.m3(), home) {
+                    return Err(AssertSupError::NotOwner(home.clone()));
+                }
                 if !base.links().resident(old.tumbler()) || !base.links().resident(new.tumbler()) {
                     return Err(AssertSupError::EndpointNotResident);
                 }
@@ -573,7 +625,7 @@ where
                 sup.clone(),
             ])
             .expect("the claim triple has arity 3");
-            let addr = emit_core(stg, home, value, Gate::Managed)?;
+            let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
             Ok(addr)
         })
     }
@@ -600,6 +652,7 @@ where
     /// taken (§3).
     pub fn editlink(
         &self,
+        caller: Caller,
         original: &Address,
         successor: Link,
         d_s: &Address,
@@ -619,6 +672,15 @@ where
                 if !base.m3().is_registered_document(d_s) || !base.m3().is_registered_document(d_a)
                 {
                     return Err(EditLinkError::HomeNotRegistered);
+                }
+                // ω on BOTH homes (as amended 2026-08-16): the successor
+                // deposits into d_s, the claim into d_a — each carries the
+                // home that failed.
+                if !caller.is_owner(base.m3(), d_s) {
+                    return Err(EditLinkError::NotOwner(d_s.clone()));
+                }
+                if !caller.is_owner(base.m3(), d_a) {
+                    return Err(EditLinkError::NotOwner(d_a.clone()));
                 }
                 if !base.links().resident(original.tumbler()) {
                     return Err(EditLinkError::OriginalNotResident);
@@ -650,14 +712,14 @@ where
                     }
                 }
             }
-            let succ = emit_core(stg, d_s, successor, Gate::Open)?;
+            let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?;
             let claim_value = Link::new([
                 enc(slice::from_ref(original)),
                 enc(slice::from_ref(&succ)),
                 sup.clone(),
             ])
             .expect("the claim triple has arity 3");
-            let claim = emit_core(stg, d_a, claim_value, Gate::Managed)?;
+            let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?;
             Ok((succ, claim))
         })?;
         Ok((succ, claim, seq))
@@ -680,6 +742,7 @@ where
     /// stale set excludes them).
     pub fn retract_stale(
         &self,
+        caller: Caller,
         d_retr: &Address,
         ty: &Endset,
         horizon: u64,
@@ -700,7 +763,7 @@ where
         };
         let mut out = Vec::with_capacity(stale.len());
         for target in &stale {
-            out.push(self.nullify(d_retr, target).map_err(lift_nullify)?);
+            out.push(self.nullify(caller, d_retr, target).map_err(lift_nullify)?);
         }
         Ok(out)
     }

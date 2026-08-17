@@ -19,8 +19,8 @@ use skep_coordination::{
 };
 use skep_kernel::TxnError;
 use skep_links::{
-    enc, Behavior, EmitError, HasLinks, NullifyError, Registration, Shape, ShippedType, Tip,
-    TypeDecl, TypeRegistry, View,
+    enc, Behavior, Caller, EmitError, HasLinks, NullifyError, Registration, Shape, ShippedType,
+    Tip, TypeDecl, TypeRegistry, View,
 };
 use skep_arrangement::HasM5;
 
@@ -250,7 +250,7 @@ fn reg_expansion_folds_instantiates_and_rejects() {
         .expect("Reg-quantified MapGet body type-checks");
     let env = Env::empty().bind(v(1), Value::Addr(ca(5)));
     assert!(!c.decide(&ex, &env, View::Active, &k.snapshot()));
-    ls.emit(&doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
+    ls.emit(Caller::System, &doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
     assert!(c.decide(&ex, &env, View::Active, &k.snapshot()));
 
     // A class-indexed behavior atom at the bound class dies by instantiation
@@ -280,8 +280,8 @@ fn eval_views_uv_rewrite_and_atoms() {
     let ls = links(&k);
     let retired = c.reserved_type(ShippedType::Retired).clone();
 
-    let (t1, _) = ls.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(&doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    let (t1, _) = ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
+    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
 
     // is_K / member counting / L_dom / reflection membership.
     assert!(decide_now(&k, &c, View::Active, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
@@ -296,7 +296,7 @@ fn eval_views_uv_rewrite_and_atoms() {
 
     // Retraction: the active reading shrinks, the audit reading persists —
     // the term view selects (PR-VIEW: the view is an eval parameter).
-    ls.nullify(&doc1(), &t1).expect("retract rel 1");
+    ls.nullify(Caller::System, &doc1(), &t1).expect("retract rel 1");
     assert!(!decide_now(&k, &c, View::Active, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
     assert!(decide_now(&k, &c, View::Audit, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
     // The audit tuple slice still carries t1 (∃ t ∈ L_rel :: ca1 ∈ cov_F(t)).
@@ -310,7 +310,7 @@ fn eval_views_uv_rewrite_and_atoms() {
     // UV default view: members(K, default) drops elements filtered by BH1
     // types OTHER than K — and never by K itself (retired is unfiltered in
     // its own default reading — the OQ1 commitment).
-    ls.emit(&doc1(), &retired, &ca(3), &[]).expect("retire ca3");
+    ls.emit(Caller::System, &doc1(), &retired, &ca(3), &[]).expect("retire ca3");
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&rel_ty()))), lit_nat(1))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&rel_ty()))), lit_nat(0))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&retired))), lit_nat(1))));
@@ -321,7 +321,7 @@ fn eval_views_uv_rewrite_and_atoms() {
 
     // BH3 + the binder guard: target_of narrows through IfSome; the
     // targets_keyed join keys by class, absent keys denote ⊥.
-    ls.emit(&doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
+    ls.emit(Caller::System, &doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
     assert!(decide_now(
         &k,
         &c,
@@ -758,8 +758,8 @@ fn marker_rule_certifies_fires_and_quiesces() {
     let k = kernel();
     let mut c = coord(&k);
     let ls = links(&k);
-    ls.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(&doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
+    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
@@ -821,7 +821,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     let k = kernel();
     let mut c = coord(&k);
     let ls = links(&k);
-    let (m1, _) = ls.emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
+    let (m1, _) = ls.emit(Caller::System, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("Tup trigger"),
@@ -852,7 +852,7 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     // links, so every fire trips M7's BadTarget — surfaced, rotate-past.
     let k2 = kernel();
     let mut c2 = coord(&k2);
-    links(&k2).emit(&doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi");
+    links(&k2).emit(Caller::System, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi");
     let trig2 = TriggerRef::Inline(
         c2.type_check_trigger(vec![(v(1), Sort::Addr)], tru()).expect("Addr trigger"),
     );
@@ -881,8 +881,8 @@ fn quiescent_scoped_exact_then_over_approximates() {
     let k = kernel();
     let mut c = coord(&k);
     let ls = links(&k);
-    ls.emit(&doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(&doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
+    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
@@ -914,7 +914,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     // A Tup-domain rule is sort-incompatible with PerAddress: left UNSCOPED,
     // its enabled occurrence keeps the scoped verdict false — more work
     // reported, never false quiescence.
-    ls.emit(&doc1(), &multi_ty(), &ca(5), &[ca(6)]).expect("multi");
+    ls.emit(Caller::System, &doc1(), &multi_ty(), &ca(5), &[ca(6)]).expect("multi");
     let trig_t = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(2), Sort::Tup)], tru()).expect("Tup trigger"),
     );

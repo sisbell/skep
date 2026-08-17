@@ -13,10 +13,18 @@ use skep_arrangement::{HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
 use skep_links::{
-    enc, Behavior, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs, Shape,
-    TypeDecl,
+    enc, Behavior, Caller, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs,
+    Shape, TypeDecl,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
+
+/// The seeded owner of doc1/doc2 — every pre-ruling op runs under it, so
+/// the ω gate is exercised on every path, not skipped.
+pub const P1: Caller = Caller::Principal(PrincipalId(1));
+
+/// The sibling principal (account [1,0,2]) — the ownership probes' foreign
+/// caller.
+pub const P2: Caller = Caller::Principal(PrincipalId(2));
 
 // ───────────────────────── the assembled test world ─────────────────────────
 
@@ -249,7 +257,9 @@ pub fn decls() -> Vec<TypeDecl> {
 
 /// An M3 slice with a principal-owned account and two registered documents,
 /// built by folding exactly the records M3's own `delegate`/
-/// `create_new_document` would stage (the M5 testutil precedent).
+/// `create_new_document` would stage (the M5 testutil precedent), plus a
+/// SIBLING account [1,0,2] → principal 2 with its own document [1,0,2,0,1]
+/// — the ownership-gate probe fixtures (as amended 2026-08-16).
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_ns(&M3Rec::Allocate { addr: t(&[1, 0, 1]) })
@@ -257,12 +267,25 @@ pub fn seeded_m3() -> M3State {
             prefix: t(&[1, 0, 1]),
             id: PrincipalId(1),
         })
+        .apply_ns(&M3Rec::Allocate { addr: t(&[1, 0, 2]) })
+        .apply_ns(&M3Rec::RegisterPrincipal {
+            prefix: t(&[1, 0, 2]),
+            id: PrincipalId(2),
+        })
         .apply_ns(&M3Rec::Allocate {
             addr: t(&[1, 0, 1, 0, 1]),
         })
         .apply_ns(&M3Rec::Allocate {
             addr: t(&[1, 0, 1, 0, 2]),
         })
+        .apply_ns(&M3Rec::Allocate {
+            addr: t(&[1, 0, 2, 0, 1]),
+        })
+}
+
+/// The sibling principal's document: `[1,0,2,0,1]` (owned by principal 2).
+pub fn sib_doc() -> Address {
+    a(&[1, 0, 2, 0, 1])
 }
 
 pub fn genesis_world() -> World {
@@ -288,9 +311,11 @@ pub fn kernel() -> Kernel<World> {
 
 /// Seed `count` one-byte content values into `doc`'s content subspace via
 /// M5's INSERT composite (so MAKELINK has arranged content to resolve).
+/// Runs as `System`: harness seeding, not an attributed write — the doc
+/// under seed may belong to any fixture principal.
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(doc, vp(1, 1), vals)
+        .insert(Caller::System, doc, vp(1, 1), vals)
         .expect("test content INSERT succeeds");
 }

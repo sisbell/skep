@@ -277,13 +277,14 @@ pub fn links(k: &Arc<Kernel<World>>) -> LinkStore<'_, World> {
 }
 
 /// Insert one raw content Val into `doc` (M5's placement composite) and
-/// return its start address.
+/// return its start address. Runs as `System` — harness seeding, the same
+/// path M9's own writes take.
 pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Address {
     let snap = k.snapshot();
     let n_c = snap.world().m5().content_count(doc);
     let at = VPos { subspace: n(1), ordinal: n_c + n(1) };
     let (start, _) = Vstream::new(k.as_ref())
-        .insert(doc, at, vec![Val::new(bytes)])
+        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)])
         .expect("test content INSERT succeeds");
     start
 }

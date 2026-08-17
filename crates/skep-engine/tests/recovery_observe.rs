@@ -48,7 +48,7 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
         // History batch A (below the checkpoint): content.
         let (start, _) = engine
             .vstream()
-            .insert(&doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
             .expect("insert succeeds");
 
         // Checkpoint mid-history, so recovery is checkpoint + replay, not a
@@ -61,6 +61,7 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
         let (l1, _) = engine
             .linkstore()
             .makelink(
+                OWNER,
                 &doc,
                 SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
@@ -70,18 +71,19 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
         let (l2, _) = engine
             .linkstore()
             .makelink(
+                OWNER,
                 &doc,
                 SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
             )
             .expect("makelink l2");
-        engine.linkstore().assert_sup(&doc, &l1, &l2).expect("assert_sup");
-        engine.linkstore().nullify(&doc, &l1).expect("nullify");
+        engine.linkstore().assert_sup(OWNER, &doc, &l1, &l2).expect("assert_sup");
+        engine.linkstore().nullify(OWNER, &doc, &l1).expect("nullify");
         let rel = genesis.decls[0].key.clone();
         engine
             .linkstore()
-            .emit(&doc, &rel, &start, std::slice::from_ref(&doc))
+            .emit(OWNER, &doc, &rel, &start, std::slice::from_ref(&doc))
             .expect("app-typed emit");
 
         // Dump determinism: two dumps of one world are byte-equal.
@@ -120,7 +122,7 @@ fn dump_free_functions_off_a_snapshot() {
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
-        .insert(&doc, vp(1, 1), vec![Val::new(vec![b'v'])])
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])])
         .expect("insert succeeds");
 
     let snap = engine.kernel().snapshot();

@@ -8,14 +8,24 @@
 use std::error::Error;
 use std::fmt;
 
+use skep_address::Address;
 use skep_arrangement::SeatError;
 use skep_namespace::MintError;
 
+// Ownership (as amended 2026-08-16): every op that deposits into a home
+// document's link subspace carries a `NotOwner(Address)` rejection — the
+// in-txn ω gate on that home (and, for nullify, on the target link's own
+// address) — checked after home registration, before every other gate. The
+// payload is the address that failed the check (M10 threads it into the
+// rejection's fault site); carrying it costs these enums their `Copy`.
+
 /// MAKELINK rejection (ASN-0120; §C/§2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MakeLinkError {
     /// `home` is not a registered Document (L1a/ML0 P0).
     HomeNotRegistered,
+    /// The caller is not `home`'s effective owner (ω, exact account match).
+    NotOwner(Address),
     /// A `Resolve` V-spec fails wf: unregistered source, or not a depth-2
     /// content V-position with ordinal displacement (`#start = 2 ∧ start₁ =
     /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
@@ -35,11 +45,14 @@ pub enum MakeLinkError {
 /// `[K_sup]` write fence (Conflicts §10) — the exact parallel of the `[R]`
 /// fence, making `assert_sup`/`editlink` the sole `[K_sup]`-writers so every
 /// stored claim is schema-conformant, which the walk family leans on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
     /// `home` is not a registered Document (P0; enforced on hit AND miss —
     /// Conflicts §8).
     HomeNotRegistered,
+    /// The caller is not `home`'s effective owner (ω) — enforced on hit AND
+    /// miss, like the home check it follows.
+    NotOwner(Address),
     /// `ty`'s coverage class is not registered (Managed gate (i)).
     NotRegistered,
     /// Span counts violate the registered shape (P3 Sh-conf: `|F| = 1`;
@@ -58,10 +71,15 @@ pub enum EmitError {
 }
 
 /// Nullify rejection (ASN-0128; §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NullifyError {
     /// `home` (`d_retr`) is not a registered Document (P0).
     HomeNotRegistered,
+    /// The caller is not the effective owner (ω) of the address carried:
+    /// `home`, or the TARGET link's own address (self-retraction only —
+    /// the v1 nullify target policy; owning the retraction's home does not
+    /// license retracting someone else's link).
+    NotOwner(Address),
     /// P-tgt: `target` is neither a resident link nor this call's own fresh
     /// emitter (sterilization made unreachable through the surface — DR).
     BadTarget,
@@ -70,10 +88,12 @@ pub enum NullifyError {
 }
 
 /// assert_sup rejection (ASN-0125 Df-DISC; §5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssertSupError {
     /// `home` is not a registered Document (P0).
     HomeNotRegistered,
+    /// The caller is not `home`'s effective owner (ω).
+    NotOwner(Address),
     /// `old` or `new` is not a resident link.
     EndpointNotResident,
     /// `old == new` (Df-DISC(ii) irreflexivity).
@@ -83,12 +103,15 @@ pub enum AssertSupError {
 }
 
 /// editlink rejection (ASN-0125 EDITop/DC; §2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditLinkError {
     /// `original` is not a resident link.
     OriginalNotResident,
     /// `d_s` or `d_a` is not a registered Document.
     HomeNotRegistered,
+    /// The caller is not the effective owner (ω) of the carried home —
+    /// `d_s` or `d_a`, whichever failed.
+    NotOwner(Address),
     /// The supplied successor has arity ≠ 3 (the deliberate narrowing of
     /// EDITop's N ≥ 3 — Conflicts §11), an empty type slot, or a
     /// non-level-uniform type slot (keeps the DC-guard `coverage_class`
@@ -111,8 +134,9 @@ pub enum EditLinkError {
 pub struct NotBh4;
 
 /// retract_stale rejection (§7): the pre-transact BH4 fence, or a
-/// constituent nullify's own rejection lifted into the batch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// constituent nullify's own rejection lifted into the batch. (`Copy`
+/// dropped with `NullifyError`'s — its `NotOwner` carries an `Address`.)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetractStaleError {
     /// `ty` is not registered with BH4 (Age) — rejected before any
     /// transaction is opened (served only where declared; the fence that
@@ -147,6 +171,9 @@ impl fmt::Display for MakeLinkError {
             MakeLinkError::HomeNotRegistered => {
                 f.write_str("makelink: home is not a registered Document (L1a)")
             }
+            MakeLinkError::NotOwner(_) => {
+                f.write_str("makelink: the caller is not home's effective owner (ω)")
+            }
             MakeLinkError::IllFormedSpec => f.write_str(
                 "makelink: a V-spec is not a registered-source depth-2 content V-position (wf, Conflicts §12)",
             ),
@@ -172,6 +199,9 @@ impl fmt::Display for EmitError {
         match self {
             EmitError::HomeNotRegistered => {
                 f.write_str("emit: home is not a registered Document (P0)")
+            }
+            EmitError::NotOwner(_) => {
+                f.write_str("emit: the caller is not home's effective owner (ω)")
             }
             EmitError::NotRegistered => f.write_str("emit: ty's coverage class is not registered"),
             EmitError::ShapeViolation => {
@@ -205,6 +235,9 @@ impl fmt::Display for NullifyError {
             NullifyError::HomeNotRegistered => {
                 f.write_str("nullify: home is not a registered Document (P0)")
             }
+            NullifyError::NotOwner(_) => f.write_str(
+                "nullify: the caller is not the effective owner (ω) of the home or target link",
+            ),
             NullifyError::BadTarget => f.write_str(
                 "nullify: target is neither a resident link nor this call's own fresh emitter (P-tgt)",
             ),
@@ -226,6 +259,9 @@ impl fmt::Display for AssertSupError {
         match self {
             AssertSupError::HomeNotRegistered => {
                 f.write_str("assert_sup: home is not a registered Document (P0)")
+            }
+            AssertSupError::NotOwner(_) => {
+                f.write_str("assert_sup: the caller is not home's effective owner (ω)")
             }
             AssertSupError::EndpointNotResident => {
                 f.write_str("assert_sup: old or new is not a resident link")
@@ -254,6 +290,9 @@ impl fmt::Display for EditLinkError {
             }
             EditLinkError::HomeNotRegistered => {
                 f.write_str("editlink: d_s or d_a is not a registered Document")
+            }
+            EditLinkError::NotOwner(_) => {
+                f.write_str("editlink: the caller is not the effective owner (ω) of d_s or d_a")
             }
             EditLinkError::IllFormedSuccessor => f.write_str(
                 "editlink: successor arity ≠ 3, empty type slot, or non-level-uniform type slot (Conflicts §11)",

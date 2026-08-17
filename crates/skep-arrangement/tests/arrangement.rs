@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    seat_link, stage_seat_link, CopyError, DeleteError, HasM5, InsertError, M5State,
+    seat_link, stage_seat_link, Caller, CopyError, DeleteError, HasM5, InsertError, M5State,
     RearrangeError, SeatError, VPos, VSpec, VersionError, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
@@ -147,9 +147,15 @@ fn val(b: &[u8]) -> Val {
     Val::new(b)
 }
 
+/// The seeded owner of doc1/doc2 — the caller every pre-ruling op runs
+/// under, so the ω gate is exercised on every path, not skipped.
+const P1: Caller = Caller::Principal(PrincipalId(1));
+
 /// Genesis with M3 pre-seeded by folding exactly the records its own
 /// delegate/create_new_document ops would stage: account [1,0,1] → principal
-/// 1 (owns doc1, doc2), account [1,0,2] → principal 2. Deterministic, per
+/// 1 (owns doc1, doc2), sibling account [1,0,2] → principal 2, sub-account
+/// [1,0,1,1] (delegated under [1,0,1]) → principal 3 with its own document
+/// [1,0,1,1,0,1] — the ownership-exactness fixtures. Deterministic, per
 /// M2's byte-identical-genesis contract.
 fn genesis() -> World {
     let m3 = M3State::genesis()
@@ -164,10 +170,20 @@ fn genesis() -> World {
             id: PrincipalId(2),
         })
         .apply_ns(&M3Rec::Allocate {
+            addr: t(&[1, 0, 1, 1]),
+        })
+        .apply_ns(&M3Rec::RegisterPrincipal {
+            prefix: t(&[1, 0, 1, 1]),
+            id: PrincipalId(3),
+        })
+        .apply_ns(&M3Rec::Allocate {
             addr: t(&[1, 0, 1, 0, 1]),
         })
         .apply_ns(&M3Rec::Allocate {
             addr: t(&[1, 0, 1, 0, 2]),
+        })
+        .apply_ns(&M3Rec::Allocate {
+            addr: t(&[1, 0, 1, 1, 0, 1]),
         });
     World {
         m3,
@@ -225,7 +241,7 @@ fn read_v(s: &Snapshot<World>, doc: &Address, ord: u32) -> Vec<u8> {
 
 fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(&doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
         .expect("insert commits");
     vs
 }
@@ -239,7 +255,7 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (start, seq) = vs
-        .insert(&doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
+        .insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
         .expect("insert commits");
     assert_eq!(start, ca(1));
     assert_eq!(k.current_seq(), seq);
@@ -268,7 +284,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     let vs = insert3(&k);
     // Tail append continues the frontier ⇒ I-adjacent ⇒ still one run (M12).
     let (start, _) = vs
-        .insert(&doc1(), vp(1, 4), vec![val(b"d")])
+        .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
         .expect("append commits");
     assert_eq!(start, ca(4));
     {
@@ -277,7 +293,7 @@ fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     }
     // Interior insert splits the run; the suffix shifts for free (§1).
     let (start, _) = vs
-        .insert(&doc1(), vp(1, 2), vec![val(b"x")])
+        .insert(P1, &doc1(), vp(1, 2), vec![val(b"x")])
         .expect("interior insert commits");
     assert_eq!(start, ca(5));
     let s = k.snapshot();
@@ -299,24 +315,24 @@ fn insert_rejects_in_documented_order_and_commits_nothing() {
     let before = k.current_seq();
     let un = a(&[1, 0, 1, 0, 9]); // never registered
     assert!(matches!(
-        rejected(vs.insert(&un, vp(2, 0), vec![])),
+        rejected(vs.insert(P1, &un, vp(2, 0), vec![])),
         InsertError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.insert(&doc1(), vp(2, 0), vec![])),
+        rejected(vs.insert(P1, &doc1(), vp(2, 0), vec![])),
         InsertError::EmptyContent
     ));
     assert!(matches!(
-        rejected(vs.insert(&doc1(), vp(2, 99), vec![val(b"x")])),
+        rejected(vs.insert(P1, &doc1(), vp(2, 99), vec![val(b"x")])),
         InsertError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.insert(&doc1(), vp(1, 0), vec![val(b"x")])),
+        rejected(vs.insert(P1, &doc1(), vp(1, 0), vec![val(b"x")])),
         InsertError::OutOfBounds
     ));
     // n_C = 0: the only valid insertion ordinal is 1 (FirstInsertionPosition).
     assert!(matches!(
-        rejected(vs.insert(&doc1(), vp(1, 2), vec![val(b"x")])),
+        rejected(vs.insert(P1, &doc1(), vp(1, 2), vec![val(b"x")])),
         InsertError::OutOfBounds
     ));
     assert_eq!(k.current_seq(), before);
@@ -333,6 +349,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
     let stored_before = k.snapshot().world().content().len();
     let seq = vs
         .copy(
+            P1,
             &doc2(),
             vp(1, 1),
             vec![VSpec {
@@ -363,6 +380,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
+        P1,
         &doc1(),
         vp(1, 1),
         vec![VSpec {
@@ -386,48 +404,48 @@ fn copy_rejects_each_documented_guard() {
     let un = a(&[1, 0, 1, 0, 9]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
-        rejected(vs.copy(&un, vp(1, 1), vec![])),
+        rejected(vs.copy(P1, &un, vp(1, 1), vec![])),
         CopyError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(2, 1), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), vec![])),
         CopyError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 2), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), vec![])),
         CopyError::OutOfBounds
     ));
     let spec = |source: Address, span: Span| VSpec { source, span };
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 1), vec![spec(un.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
     ));
     // BadSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
     let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 1), vec![spec(doc1(), lu)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), lu)])),
         CopyError::BadSpan
     ));
     // Content-residence guard (§5).
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 1), vec![spec(doc1(), vspan(2, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), vspan(2, 1, 1))])),
         CopyError::SourceNotContentSubspace
     ));
     // Registered-but-content-empty source is a typed verdict, not a skip.
     assert!(matches!(
-        rejected(vs.copy(&doc1(), vp(1, 1), vec![spec(doc2(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), vec![spec(doc2(), vspan(1, 1, 1))])),
         CopyError::EmptySource
     ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 1), vec![spec(doc1(), vspan(1, 5, 2))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), vspan(1, 5, 2))])),
         CopyError::EmptyResult
     ));
     // …as is an empty spec list.
     assert!(matches!(
-        rejected(vs.copy(&doc2(), vp(1, 1), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![])),
         CopyError::EmptyResult
     ));
 }
@@ -441,12 +459,13 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     vs.insert(
+        P1,
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
     )
     .expect("insert commits");
-    vs.delete(&doc1(), vp(1, 2), n(2)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 2), n(2)).expect("delete commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert_eq!(m5.content_count(&doc1()), n(3));
@@ -475,23 +494,23 @@ fn delete_rejects_in_documented_order() {
     let vs = insert3(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.delete(&un, vp(1, 1), n(1))),
+        rejected(vs.delete(P1, &un, vp(1, 1), n(1))),
         DeleteError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.delete(&doc1(), vp(2, 1), n(1))),
+        rejected(vs.delete(P1, &doc1(), vp(2, 1), n(1))),
         DeleteError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.delete(&doc1(), vp(1, 4), n(1))),
+        rejected(vs.delete(P1, &doc1(), vp(1, 4), n(1))),
         DeleteError::NotArranged
     ));
     assert!(matches!(
-        rejected(vs.delete(&doc1(), vp(1, 2), n(3))),
+        rejected(vs.delete(P1, &doc1(), vp(1, 2), n(3))),
         DeleteError::OutOfBounds
     ));
     assert!(matches!(
-        rejected(vs.delete(&doc1(), vp(1, 1), n(0))),
+        rejected(vs.delete(P1, &doc1(), vp(1, 1), n(0))),
         DeleteError::EmptyWidth
     ));
 }
@@ -505,12 +524,13 @@ fn rearrange_pivot_exchanges_the_two_adjacent_regions() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     vs.insert(
+        P1,
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
     )
     .expect("insert commits");
-    vs.rearrange(&doc1(), vec![vp(1, 2), vp(1, 4), vp(1, 6)])
+    vs.rearrange(P1, &doc1(), vec![vp(1, 2), vp(1, 4), vp(1, 6)])
         .expect("pivot commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -526,12 +546,13 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     vs.insert(
+        P1,
         &doc1(),
         vp(1, 1),
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
     )
     .expect("insert commits");
-    vs.rearrange(&doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
+    vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
         .expect("swap commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -544,24 +565,24 @@ fn rearrange_rejects_in_documented_order() {
     let vs = insert3(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.rearrange(&un, vec![vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &un, vec![vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.rearrange(&doc1(), vec![vp(1, 1), vp(1, 2)])),
+        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2)])),
         RearrangeError::BadCutCount
     ));
     assert!(matches!(
-        rejected(vs.rearrange(&doc1(), vec![vp(1, 2), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 2), vp(1, 2), vp(1, 3)])),
         RearrangeError::NotAscending
     ));
     assert!(matches!(
-        rejected(vs.rearrange(&doc1(), vec![vp(2, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), vec![vp(2, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::NotContentSubspace
     ));
     // n_C = 3 ⇒ upper bound is 4.
     assert!(matches!(
-        rejected(vs.rearrange(&doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 5)])),
+        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 5)])),
         RearrangeError::OutOfBounds
     ));
 }
@@ -589,7 +610,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // Edit the fork: its content chain mints LENGTH-9 elements; the source
     // is untouched.
     let (start, _) = vs
-        .insert(&fork, vp(1, 4), vec![val(b"z")])
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
         .expect("fork edit commits");
     assert_eq!(start, vca(1));
     let s = k.snapshot();
@@ -651,6 +672,97 @@ fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     ));
 }
 
+// ---- §B ownership gate (as amended 2026-08-16) ----
+
+#[test]
+fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
+    // The probe matrix, store-level: sibling principal 2 (account [1,0,2])
+    // against P1's doc1 — insert / delete / rearrange / copy-DEST all reject
+    // NotOwner carrying doc1; each rejection is a clean no-op; the owner's
+    // identical op still commits.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let p2 = Caller::Principal(PrincipalId(2));
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.insert(p2, &doc1(), vp(1, 4), vec![val(b"x")])),
+        InsertError::NotOwner(d) if d == doc1()
+    ));
+    assert!(matches!(
+        rejected(vs.delete(p2, &doc1(), vp(1, 1), n(1))),
+        DeleteError::NotOwner(d) if d == doc1()
+    ));
+    assert!(matches!(
+        rejected(vs.rearrange(p2, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3)])),
+        RearrangeError::NotOwner(d) if d == doc1()
+    ));
+    assert!(matches!(
+        rejected(vs.copy(
+            p2,
+            &doc1(),
+            vp(1, 4),
+            vec![VSpec {
+                source: doc1(),
+                span: vspan(1, 1, 1),
+            }]
+        )),
+        CopyError::NotOwner(d) if d == doc1()
+    ));
+    assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1))
+        .expect("the owner's delete still commits");
+}
+
+#[test]
+fn ownership_is_exact_in_both_directions() {
+    // Exclusive delegation (ASN-0042 O2/O3/O8): ω is EXACT account match,
+    // never prefix containment — the parent account's principal does not own
+    // the sub-delegated account's document, and the sub-account's principal
+    // does not own the parent's.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let sub = Caller::Principal(PrincipalId(3)); // account [1,0,1,1], under [1,0,1]
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    // Sub-delegated child vs the parent's doc.
+    assert!(matches!(
+        rejected(vs.insert(sub, &doc1(), vp(1, 4), vec![val(b"x")])),
+        InsertError::NotOwner(_)
+    ));
+    // Parent vs the child's doc.
+    assert!(matches!(
+        rejected(vs.insert(P1, &subdoc, vp(1, 1), vec![val(b"x")])),
+        InsertError::NotOwner(_)
+    ));
+    // The sub-account's own principal edits its own doc.
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")])
+        .expect("sub-owner insert commits");
+}
+
+#[test]
+fn copy_reads_foreign_sources_into_an_owned_destination() {
+    // Transclusion stays unrestricted: only the DESTINATION is ω-gated.
+    // Principal 2 forks the empty doc2 into its own account (denial-as-fork,
+    // O10), then transcludes P1's doc1 content into it.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let p2 = Caller::Principal(PrincipalId(2));
+    let (fork, _) = vs
+        .version(PrincipalId(2), &doc2())
+        .expect("cross-owner fork commits");
+    vs.copy(
+        p2,
+        &fork,
+        vp(1, 1),
+        vec![VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }],
+    )
+    .expect("foreign-SOURCE copy into an owned destination commits");
+    let s = k.snapshot();
+    assert_eq!(s.world().m5().content_count(&fork), n(2));
+}
+
 // ---- §C link seating ----
 
 #[test]
@@ -684,7 +796,7 @@ fn seat_link_appends_guards_and_never_touches_r_and_links_survive_edits() {
     let foreign = a(&[1, 0, 1, 0, 2, 0, 2, 1]); // doc2's home link
     assert_eq!(rejected(seat_link(&k, &doc1(), &foreign)), SeatError::NotHomeLink);
     // Link survival: a text delete leaves the link subspace untouched.
-    vs.delete(&doc1(), vp(1, 1), n(3)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(3)).expect("delete commits");
     let s = k.snapshot();
     assert_eq!(s.world().m5().link_count(&doc1()), n(2));
 }
@@ -699,6 +811,7 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -708,7 +821,7 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
     )
     .expect("copy commits");
     // doc1 deletes the region; doc2 still holds it.
-    vs.delete(&doc1(), vp(1, 1), n(3)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(3)).expect("delete commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
     let region = SpanSet::singleton(
@@ -735,9 +848,10 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     let k = mem_kernel();
     let vs = insert3(&k);
     let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
-    vs.insert(&fork, vp(1, 4), vec![val(b"y"), val(b"z")])
+    vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")])
         .expect("fork edit commits"); // mints vca(1..2), length 9
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![
@@ -774,7 +888,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(spans[0].width(), &t(&[0, 2]));
     }
     // Delete everything in doc2: BOTH classes surface in deletions.
-    vs.delete(&doc2(), vp(1, 1), n(4)).expect("delete commits");
+    vs.delete(P1, &doc2(), vp(1, 1), n(4)).expect("delete commits");
     let s = k.snapshot();
     let d = s.world().m5().deletions(&doc2());
     let mut lens: Vec<usize> = d.iter().map(|s| s.start().len()).collect();
@@ -816,10 +930,10 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
         let vs = Vstream::new(&k);
-        vs.insert(&doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
+        vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
             .expect("insert commits");
         k.checkpoint().expect("checkpoint");
-        vs.delete(&doc1(), vp(1, 2), n(1)).expect("delete commits");
+        vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         seat_link(&k, &doc1(), &link1).expect("seat commits");
         let s = k.snapshot();
         bytes_before = bincode::serialize(s.world().m5()).expect("slice serializes");
@@ -840,6 +954,6 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     assert_eq!(spans[0].start(), ca(2).tumbler());
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
-    vs.insert(&doc1(), vp(1, 3), vec![val(b"d")])
+    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"d")])
         .expect("post-recovery insert commits");
 }

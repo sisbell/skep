@@ -64,6 +64,7 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
 mod error;
 mod ops;
 mod reads;
@@ -75,6 +76,7 @@ mod state;
 #[cfg(test)]
 pub(crate) mod testutil;
 
+pub use auth::Caller;
 pub use error::{
     CopyError, DeleteError, InsertError, RearrangeError, SeatError, VPos, VSpec, VersionError,
 };

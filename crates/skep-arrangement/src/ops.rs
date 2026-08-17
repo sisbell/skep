@@ -5,6 +5,12 @@
 //! change; M10 surfaces `TxnError::Rejected(E)` as typed rejections and
 //! acknowledges only after commit.
 //!
+//! Ownership (as amended 2026-08-16): the four edit ops take a [`Caller`]
+//! and require `caller.is_owner(m3, doc)` — the in-txn ω gate — on the
+//! document whose arrangement they write (COPY: destination only; VERSION
+//! untouched — non-owner versioning is denial-as-fork, O10, correct as
+//! built).
+//!
 //! Per-op trait bounds: each impl block names exactly the slices its ops
 //! read and the records they stage, so a minimal test world can drive
 //! `delete`/`rearrange` with `HasM5 + HasM3` and `From<M5Rec>` alone.
@@ -15,6 +21,7 @@ use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
+use crate::auth::Caller;
 use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VPos, VSpec, VersionError};
 use crate::run::Run;
 use crate::runlist::{extend_or_push_run, extend_run};
@@ -48,16 +55,19 @@ where
     /// `M3State::content_lock_key(doc)`. Returns the inserted run's START
     /// address (the predicate-def identity for M9) and the commit `Seq`.
     ///
-    /// Check order (which error wins): `DocNotRegistered` → `EmptyContent` →
-    /// `NotContentSubspace` (`at.subspace ≠ s_C`) → `OutOfBounds`
-    /// (`at.ordinal ∉ [1, n_C + 1]` — the Valid(First)InsertionPosition
-    /// guard, ordinal = 1 when n_C = 0). J0/J1★ by construction: mint +
-    /// write + place + provenance ride one transaction; successive
-    /// `mint_content` calls read `stg.working()`, so under the held lock
-    /// they advance the same frontier → contiguous I-adjacent addresses →
-    /// exactly ONE placed run ([`extend_run`] only ever widens it).
+    /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
+    /// in-txn ω gate — ownership ruling, as amended 2026-08-16) →
+    /// `EmptyContent` → `NotContentSubspace` (`at.subspace ≠ s_C`) →
+    /// `OutOfBounds` (`at.ordinal ∉ [1, n_C + 1]` — the
+    /// Valid(First)InsertionPosition guard, ordinal = 1 when n_C = 0).
+    /// J0/J1★ by construction: mint + write + place + provenance ride one
+    /// transaction; successive `mint_content` calls read `stg.working()`,
+    /// so under the held lock they advance the same frontier → contiguous
+    /// I-adjacent addresses → exactly ONE placed run ([`extend_run`] only
+    /// ever widens it).
     pub fn insert(
         &self,
+        caller: Caller,
         doc: &Address,
         at: VPos,
         values: Vec<Val>,
@@ -66,6 +76,9 @@ where
         self.kernel.transact(&[key], |stg| {
             if !stg.working().m3().is_registered_document(doc) {
                 return Err(InsertError::DocNotRegistered);
+            }
+            if !caller.is_owner(stg.working().m3(), doc) {
+                return Err(InsertError::NotOwner(doc.clone()));
             }
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
@@ -116,8 +129,11 @@ where
     /// resolved addresses stay valid forever by content immutability (S0),
     /// so no source lock is needed.
     ///
-    /// Destination checks as INSERT (`DocNotRegistered` →
-    /// `NotContentSubspace` → `OutOfBounds`); per spec: `SourceNotRegistered`
+    /// Destination checks as INSERT (`DocNotRegistered` → `NotOwner` — the
+    /// ω gate on the DESTINATION only; source spans stay unrestricted,
+    /// transclusion of anyone's content being the point of the medium
+    /// (ownership ruling, as amended 2026-08-16) — `NotContentSubspace` →
+    /// `OutOfBounds`); per spec: `SourceNotRegistered`
     /// → `BadSpan` (the ordinal-level depth-2 guard — identical to
     /// `resolve`'s complete guard, Conflicts #7) → `SourceNotContentSubspace`
     /// (`span.start().get(1) ≠ s_C`) → `EmptySource` (ASN-0118
@@ -128,6 +144,7 @@ where
     /// multiset (CP11).
     pub fn copy(
         &self,
+        caller: Caller,
         doc: &Address,
         at: VPos,
         specs: Vec<VSpec>,
@@ -138,6 +155,9 @@ where
                 let w = stg.working();
                 if !w.m3().is_registered_document(doc) {
                     return Err(CopyError::DocNotRegistered);
+                }
+                if !caller.is_owner(w.m3(), doc) {
+                    return Err(CopyError::NotOwner(doc.clone()));
                 }
                 if at.subspace != s_c() {
                     return Err(CopyError::NotContentSubspace);
@@ -203,11 +223,13 @@ where
     /// survival is automatic (a text delete never touches the link
     /// run-list).
     ///
-    /// Check order: `DocNotRegistered` → `NotContentSubspace` →
+    /// Check order: `DocNotRegistered` → `NotOwner` (the ω gate —
+    /// ownership ruling, as amended 2026-08-16) → `NotContentSubspace` →
     /// `NotArranged` (`p.ordinal ∉ [1, n_C]`) → `OutOfBounds`
     /// (`ordinal + width − 1 > n_C`) → `EmptyWidth` (`width = 0`).
     pub fn delete(
         &self,
+        caller: Caller,
         doc: &Address,
         p: VPos,
         width: Nat,
@@ -217,6 +239,9 @@ where
             .transact(&[key], |stg| {
                 if !stg.working().m3().is_registered_document(doc) {
                     return Err(DeleteError::DocNotRegistered);
+                }
+                if !caller.is_owner(stg.working().m3(), doc) {
+                    return Err(DeleteError::NotOwner(doc.clone()));
                 }
                 if p.subspace != s_c() {
                     return Err(DeleteError::NotContentSubspace);
@@ -250,19 +275,28 @@ where
     /// permutation — content, links, R untouched (a duplicate-I interval
     /// correctly yields π ≠ id with M' = M).
     ///
-    /// Check order (R-PRE): `DocNotRegistered` → `BadCutCount` (3|4) →
+    /// Check order (R-PRE): `DocNotRegistered` → `NotOwner` (the ω gate —
+    /// ownership ruling, as amended 2026-08-16) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
     /// `OutOfBounds` (CS5 lower bound `1 ≤ ord(c₀)` and upper bound
     /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii);
     /// defensive after the bounds — see [`RearrangeError`]). Strict ascent
     /// already forces every region width ≥ 1, so no per-region emptiness
     /// check is reachable.
-    pub fn rearrange(&self, doc: &Address, cuts: Vec<VPos>) -> Result<Seq, TxnError<RearrangeError>> {
+    pub fn rearrange(
+        &self,
+        caller: Caller,
+        doc: &Address,
+        cuts: Vec<VPos>,
+    ) -> Result<Seq, TxnError<RearrangeError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
             .transact(&[key], |stg| {
                 if !stg.working().m3().is_registered_document(doc) {
                     return Err(RearrangeError::DocNotRegistered);
+                }
+                if !caller.is_owner(stg.working().m3(), doc) {
+                    return Err(RearrangeError::NotOwner(doc.clone()));
                 }
                 if cuts.len() != 3 && cuts.len() != 4 {
                     return Err(RearrangeError::BadCutCount);
@@ -420,9 +454,11 @@ mod tests {
     fn delete_and_rearrange_drive_a_minimal_world() {
         let k = mini_kernel();
         let vs = Vstream::new(&k);
-        vs.delete(&doc1(), vp(1, 2), n(1)).expect("delete commits");
+        // The seeded owner of doc1 — the ω gate is exercised, not skipped.
+        let p1 = Caller::Principal(PrincipalId(1));
+        vs.delete(p1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         let seq = vs
-            .rearrange(&doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3)])
+            .rearrange(p1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3)])
             .expect("rearrange commits");
         let s = k.snapshot();
         assert_eq!(s.seq(), seq);

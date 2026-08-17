@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{seat_link, HasM5, M5State, VPos, VSpec, Vstream};
+use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -166,6 +166,10 @@ fn val(b: &[u8]) -> Val {
     Val::new(b)
 }
 
+/// The seeded owner of doc1/doc2 — write fixtures run under it, so the ω
+/// gate (ownership ruling, 2026-08-16) is exercised, not skipped.
+const P1: Caller = Caller::Principal(PrincipalId(1));
+
 fn spec(doc: Address, span: Span) -> Spec {
     Spec { doc, span }
 }
@@ -243,7 +247,7 @@ fn mem_kernel() -> Kernel<World> {
 /// doc1 arranged with content a, b, c (ca1..ca3).
 fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(&doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
         .expect("insert commits");
     vs
 }
@@ -258,6 +262,7 @@ fn as_of_reports_the_pinned_seq_and_queries_never_mutate() {
     let vs = insert3(&k);
     seat_link(&k, &doc1(), &la(1)).expect("seat commits");
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -514,9 +519,10 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
     let k = mem_kernel();
     let vs = insert3(&k);
     // doc2 = [da1][ca1, ca2][ca1]: own content + two transclusions of doc1.
-    vs.insert(&doc2(), vp(1, 1), vec![val(b"x")])
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")])
         .expect("insert commits");
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 2),
         vec![VSpec {
@@ -526,6 +532,7 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
     )
     .expect("copy commits");
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 4),
         vec![VSpec {
@@ -637,6 +644,7 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -645,8 +653,8 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
         }],
     )
     .expect("copy commits"); // doc2 = [ca1, ca2]
-    vs.delete(&doc1(), vp(1, 2), n(1)).expect("delete commits"); // doc1 = [ca1, ca3]; deleted ca2
-    vs.delete(&doc2(), vp(1, 1), n(1)).expect("delete commits"); // doc2 = [ca2]; deleted ca1
+    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits"); // doc1 = [ca1, ca3]; deleted ca2
+    vs.delete(P1, &doc2(), vp(1, 1), n(1)).expect("delete commits"); // doc2 = [ca2]; deleted ca1
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
@@ -695,6 +703,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     let vs = insert3(&k);
     // doc2 holds ca1 TWICE; doc1 then deletes ca1.
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -704,6 +713,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     )
     .expect("copy commits");
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 2),
         vec![VSpec {
@@ -712,7 +722,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
         }],
     )
     .expect("copy commits");
-    vs.delete(&doc1(), vp(1, 1), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
@@ -735,6 +745,7 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -783,6 +794,7 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
     // doc2 = [ca1][ca1][da1]: ca1 placed twice, then doc2's OWN "a" (same
     // bytes as doc1's ca1, different address).
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {
@@ -792,6 +804,7 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
     )
     .expect("copy commits");
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 2),
         vec![VSpec {
@@ -800,7 +813,7 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
         }],
     )
     .expect("copy commits");
-    vs.insert(&doc2(), vp(1, 3), vec![val(b"a")])
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")])
         .expect("insert commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -895,10 +908,11 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
     assert_eq!(fork, vdoc()); // shares ca1..ca3
     let (start, _) = vs
-        .insert(&fork, vp(1, 4), vec![val(b"z")])
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
         .expect("fork edit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![
@@ -925,7 +939,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     }
     // doc1 drops ca1 — it stays an R-candidate (permanence) but the
     // present-tense filter removes it.
-    vs.delete(&doc1(), vp(1, 1), n(1)).expect("delete commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     assert_eq!(
@@ -1002,6 +1016,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
+        P1,
         &doc2(),
         vp(1, 1),
         vec![VSpec {

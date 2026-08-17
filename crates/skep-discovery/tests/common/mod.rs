@@ -262,11 +262,17 @@ pub fn kernel() -> Kernel<World> {
     Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail")
 }
 
+/// The write-fixture caller (ownership ruling, 2026-08-16): this crate
+/// tests the READ layer — its writes are harness seeding, run on the
+/// automation path, so the ω gate (the write stores' own concern) never
+/// shapes a discovery verdict.
+pub const SYS: skep_arrangement::Caller = skep_arrangement::Caller::System;
+
 /// Seed `count` one-byte content values into `doc`'s content subspace via
 /// M5's INSERT composite (so the discovery queries have arranged content).
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(doc, vp(1, 1), vals)
+        .insert(SYS, doc, vp(1, 1), vals)
         .expect("test content INSERT succeeds");
 }

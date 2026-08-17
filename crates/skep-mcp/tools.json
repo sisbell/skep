@@ -1,5 +1,6 @@
 {
   "instructions": "skep is a substrate of documents, immutable content, and first-class links, served by the skepd daemon. Each tool here is one wire operation (plus session_info, adapter apparatus); the result text is skepd's response document, verbatim JSON.\n\nEncodings. Tumblers and addresses are dotted-decimal strings (\"1.0.1.0.1.0.1.1\"), zeros explicit. Unbounded naturals (widths, V-position components) are decimal strings (\"5\"); non-negative integers are accepted. Log positions (at/as_of), slots, window sizes, and principal ids are plain JSON numbers. Spans are {\"start\": <tumbler>, \"width\": <tumbler>}, half-open in the tumbler order; zero-width is invalid; the depth-2 content V-span {\"start\": \"1.1\", \"width\": \"0.5\"} names subspace 1 (content), ordinal 1, five positions. V-positions are {\"subspace\", \"ordinal\"} naturals; subspace 1 = content, 2 = links; ordinals 1-based.\n\nContent granularity is said, never fallen into. In insert's values array, a bare string mints one single-byte value per UTF-8 byte (\"hello\" is five values at five positions) and {\"hex\"} one per raw byte; {\"atom\"}/{\"atom_hex\"} mint ONE composite value at ONE position whose interior is permanently unaddressable — no link, transclusion, or compare can ever reach inside it, in any document, for the value's whole lifetime. Deliveries are injective: a maximal run of single-byte values renders as one {\"content\"} item ({\"hex\"} when the run is not UTF-8), each composite value as its own {\"atom\"}/{\"atom_hex\"} item, and a link position as {\"ref\"}. Count positions, not items: {\"content\": \"hello\"} spans five positions, {\"atom\": \"hello\"} one.\n\nRejections are data, not errors. A failed operation answers {\"resp\": \"rejected\", \"op\", \"code\", \"disposition\", ...} as a normal tool result; isError marks only failure to reach the daemon. disposition is advisory: permanent (reissuing the same request cannot succeed), reorder (a future committed state may satisfy the precondition; reissue after it commits), retry (transient; the operation did nothing), halt (writes stopped; reads still work). Every write acknowledgment carries at (the commit that made it true); every read carries as_of (its snapshot).\n\nSessions are this adapter's job: it binds its configured principal automatically and reopens the session after a daemon restart; tokens never surface here. A principal must be delegated an account before the stores accept its writes; session_info reports your principal, your account address (null until delegated), and daemon health. One naming note: in make_link and emit, the schema argument from_ is the wire's from.",
+  "commons_instructions": "A link-type registry document exists at {addr}: type names are addresses in its subspace 3, each documented by a link of type {addr}.0.3.50 (\"defines\").",
   "tools": [
     {
       "name": "create_new_document",
@@ -334,7 +335,7 @@
     },
     {
       "name": "make_link",
-      "description": "Create an open content link homed in home; from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty are V-spec sets resolved against current arrangements (the recorded endsets are permanent I-spans). The type slot must resolve nonempty. Response: ack_addr with the link's address.",
+      "description": "Create an open link homed in home. Each of from_ (the wire's from — renamed in this schema only, mapped back by the adapter), to, and ty takes one of two forms per slot: a V-spec array, resolved against current arrangements (the recorded endset is the permanent I-spans), or {\"addrs\": [addresses]}, address-denoting — the recorded endset is the names verbatim, one unit subtree span per address, with no resolution and no occupancy requirement. Contents at the addresses are never examined; matching is by address, and names nest by tumbler prefix. Any T4-valid address may be named — a link, a document, or a ghost position nothing will ever occupy. The type slot must be nonempty as given (an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution); from_ and to may be empty in either form. Response: ack_addr with the link's address.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -344,109 +345,172 @@
             "description": "Home document address."
           },
           "from_": {
-            "type": "array",
-            "description": "FROM endset as V-specs (the wire argument named from).",
-            "items": {
-              "type": "object",
-              "description": "V-spec: a span of some document's arrangement.",
-              "properties": {
-                "source": {
-                  "type": "string",
-                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                  "description": "Source document address."
-                },
-                "span": {
+            "description": "FROM endset (the wire argument named from), one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting). May be empty in either form.",
+            "oneOf": [
+              {
+                "type": "array",
+                "description": "V-spec array: resolved against current arrangements; the recorded endset is the permanent I-spans.",
+                "items": {
                   "type": "object",
-                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "description": "V-spec: a span of some document's arrangement.",
                   "properties": {
-                    "start": {
+                    "source": {
                       "type": "string",
                       "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Start tumbler."
+                      "description": "Source document address."
                     },
-                    "width": {
-                      "type": "string",
-                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Width tumbler."
+                    "span": {
+                      "type": "object",
+                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
                     }
                   },
-                  "required": ["start", "width"],
+                  "required": ["source", "span"],
                   "additionalProperties": false
                 }
               },
-              "required": ["source", "span"],
-              "additionalProperties": false
-            }
+              {
+                "type": "object",
+                "description": "Address form: the recorded endset is the names verbatim, one unit subtree span per address; no resolution, no occupancy requirement — contents at the addresses are never examined.",
+                "properties": {
+                  "addrs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "A T4-valid address, recorded verbatim."
+                    }
+                  }
+                },
+                "required": ["addrs"],
+                "additionalProperties": false
+              }
+            ]
           },
           "to": {
-            "type": "array",
-            "description": "TO endset as V-specs.",
-            "items": {
-              "type": "object",
-              "description": "V-spec: a span of some document's arrangement.",
-              "properties": {
-                "source": {
-                  "type": "string",
-                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                  "description": "Source document address."
-                },
-                "span": {
+            "description": "TO endset, one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting). May be empty in either form.",
+            "oneOf": [
+              {
+                "type": "array",
+                "description": "V-spec array: resolved against current arrangements; the recorded endset is the permanent I-spans.",
+                "items": {
                   "type": "object",
-                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "description": "V-spec: a span of some document's arrangement.",
                   "properties": {
-                    "start": {
+                    "source": {
                       "type": "string",
                       "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Start tumbler."
+                      "description": "Source document address."
                     },
-                    "width": {
-                      "type": "string",
-                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Width tumbler."
+                    "span": {
+                      "type": "object",
+                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
                     }
                   },
-                  "required": ["start", "width"],
+                  "required": ["source", "span"],
                   "additionalProperties": false
                 }
               },
-              "required": ["source", "span"],
-              "additionalProperties": false
-            }
+              {
+                "type": "object",
+                "description": "Address form: the recorded endset is the names verbatim, one unit subtree span per address; no resolution, no occupancy requirement — contents at the addresses are never examined.",
+                "properties": {
+                  "addrs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "A T4-valid address, recorded verbatim."
+                    }
+                  }
+                },
+                "required": ["addrs"],
+                "additionalProperties": false
+              }
+            ]
           },
           "ty": {
-            "type": "array",
-            "description": "TYPE endset as V-specs; must resolve nonempty.",
-            "items": {
-              "type": "object",
-              "description": "V-spec: a span of some document's arrangement.",
-              "properties": {
-                "source": {
-                  "type": "string",
-                  "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                  "description": "Source document address."
-                },
-                "span": {
+            "description": "TYPE endset, one of two forms: a V-spec array (content-resolved) or {\"addrs\": [addresses]} (address-denoting; matching is by address, and a name prefix's subtree groups subtypes). Must be nonempty as given: an empty addrs list, like a V-spec set resolving to nothing, rejects empty_type_resolution.",
+            "oneOf": [
+              {
+                "type": "array",
+                "description": "V-spec array: resolved against current arrangements; the recorded endset is the permanent I-spans.",
+                "items": {
                   "type": "object",
-                  "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                  "description": "V-spec: a span of some document's arrangement.",
                   "properties": {
-                    "start": {
+                    "source": {
                       "type": "string",
                       "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Start tumbler."
+                      "description": "Source document address."
                     },
-                    "width": {
-                      "type": "string",
-                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
-                      "description": "Width tumbler."
+                    "span": {
+                      "type": "object",
+                      "description": "Half-open V-span: depth-2 content example {\"start\": \"1.1\", \"width\": \"0.5\"}; zero-width is invalid.",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Start tumbler."
+                        },
+                        "width": {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                          "description": "Width tumbler."
+                        }
+                      },
+                      "required": ["start", "width"],
+                      "additionalProperties": false
                     }
                   },
-                  "required": ["start", "width"],
+                  "required": ["source", "span"],
                   "additionalProperties": false
                 }
               },
-              "required": ["source", "span"],
-              "additionalProperties": false
-            }
+              {
+                "type": "object",
+                "description": "Address form: the recorded endset is the names verbatim, one unit subtree span per address; no resolution, no occupancy requirement — contents at the addresses are never examined.",
+                "properties": {
+                  "addrs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9]+(\\.[0-9]+)*$",
+                      "description": "A T4-valid address, recorded verbatim."
+                    }
+                  }
+                },
+                "required": ["addrs"],
+                "additionalProperties": false
+              }
+            ]
           }
         },
         "required": ["home", "from_", "to", "ty"],
@@ -638,7 +702,7 @@
                 }
               },
               "ty": {
-                "description": "The type slot: exactly one of {\"addrs\": [addresses]} (address-denoting) or {\"resolve\": [V-specs]} (content-resolved).",
+                "description": "The type slot: exactly one of {\"addrs\": [addresses]} (address-denoting: the names recorded verbatim, one unit subtree span per address — no resolution, no occupancy requirement; the identical encoding of make_link's addrs form) or {\"resolve\": [V-specs]} (content-resolved).",
                 "oneOf": [
                   {
                     "type": "object",

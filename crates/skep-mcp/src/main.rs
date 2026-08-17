@@ -41,6 +41,8 @@ usage: skep-mcp [--tools-file <PATH>]
 environment:
   SKEPD_URL       the daemon's base URL (default http://127.0.0.1:8642)
   SKEP_PRINCIPAL  the principal this adapter binds (required, integer)
+  SKEP_COMMONS    optional address of a link-type registry document; when
+                  set, the server instructions point agents at it
 
 Speaks MCP (JSON-RPC 2.0, one message per line) on stdio; the skepd side
 is specified in skep/docs/wire.md.";
@@ -74,7 +76,7 @@ fn main() {
             Err(e) => die(&format!("--tools-file {}: {e}", p.display())),
         },
     };
-    let catalog = match tools::load(&text) {
+    let mut catalog = match tools::load(&text) {
         Ok(c) => c,
         Err(e) => die(&format!("tools file: {e}")),
     };
@@ -93,10 +95,28 @@ fn main() {
         Ok(h) => h,
         Err(e) => die(&format!("SKEPD_URL {e}")),
     };
+    // The commons pointer: an address the instructions hand to agents,
+    // never dereferenced here — T4 well-formedness is the whole startup
+    // check, the same class of refusal as a bad SKEPD_URL.
+    let commons = match std::env::var("SKEP_COMMONS") {
+        Ok(a) => {
+            if !is_t4_address(&a) {
+                die(&format!("SKEP_COMMONS: '{a}' is not a T4-valid address"));
+            }
+            Some(a)
+        }
+        Err(_) => None,
+    };
+    if let Some(addr) = &commons {
+        let sentence = catalog.commons_instructions.replace("{addr}", addr);
+        catalog.instructions.push_str("\n\n");
+        catalog.instructions.push_str(&sentence);
+    }
     eprintln!(
-        "skep-mcp: skepd at http://{}, principal {principal}, {} tools",
+        "skep-mcp: skepd at http://{}, principal {principal}, {} tools{}",
         http.authority(),
-        catalog.tools.len()
+        catalog.tools.len(),
+        commons.as_deref().map(|a| format!(", commons {a}")).unwrap_or_default()
     );
     Server { skepd: Skepd { http, principal, token: None }, catalog }.run();
 }
@@ -109,6 +129,34 @@ fn die(msg: &str) -> ! {
 fn die_usage(msg: &str) -> ! {
     eprintln!("skep-mcp: {msg}\n\n{USAGE}");
     std::process::exit(2);
+}
+
+/// T4 well-formedness of a dotted-decimal tumbler string (wire.md §Value
+/// encodings; the four clauses of skep-address's validator): every
+/// component is a decimal natural, the first and last are nonzero, no two
+/// zeros are adjacent, and at most three components are zero. Zeroness is
+/// judged on the digits (`"00"` is zero, matching the daemon's lenient
+/// numeric read); magnitudes stay strings — T4 never bounds size.
+fn is_t4_address(s: &str) -> bool {
+    let is_zero = |c: &str| c.bytes().all(|b| b == b'0');
+    let mut zeros = 0usize;
+    let mut prev_zero = false;
+    let mut count = 0usize;
+    for comp in s.split('.') {
+        if comp.is_empty() || !comp.bytes().all(|b| b.is_ascii_digit()) {
+            return false;
+        }
+        let z = is_zero(comp);
+        if z {
+            if prev_zero || count == 0 {
+                return false;
+            }
+            zeros += 1;
+        }
+        prev_zero = z;
+        count += 1;
+    }
+    count > 0 && !prev_zero && zeros <= 3
 }
 
 // ── the skepd side ───────────────────────────────────────────────────────
@@ -385,6 +433,23 @@ mod tests {
             br#"{"code":"not_owner","disposition":"permanent","op":"insert","resp":"rejected"}"#
         ));
         assert!(!is_unauthenticated(b"not json"));
+    }
+
+    /// The startup gate on SKEP_COMMONS is exactly T4: leading/trailing
+    /// zero, adjacent zeros, and a fourth separator all refuse; depth and
+    /// magnitude do not.
+    #[test]
+    fn t4_address_check() {
+        for good in
+            ["1", "1.1", "1.0.2", "1.0.1.0.1", "1.0.1.0.1.0.1.1", "1.0.2.0.3.0.3.6.1", "10.20.30"]
+        {
+            assert!(is_t4_address(good), "'{good}' is T4-valid");
+        }
+        for bad in
+            ["", "0", "0.1", "1.0", "1..2", "1.a", " 1", "1.0.0.1", "1.0.1.0.1.0.1.0.2", "1.-2"]
+        {
+            assert!(!is_t4_address(bad), "'{bad}' is not T4-valid");
+        }
     }
 
     #[test]

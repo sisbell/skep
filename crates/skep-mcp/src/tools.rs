@@ -1,10 +1,11 @@
-//! The tool catalog: names, descriptions, input schemas, and the server
-//! `instructions` string — data, not code. The shipped `tools.json` is
-//! embedded at build time and overridable with `--tools-file`. Loading
-//! cross-checks the catalog against the dispatch table in BOTH directions,
-//! so the file and the code cannot drift silently: a file entry the
-//! dispatch doesn't know refuses startup, and a dispatch op the file
-//! doesn't name refuses startup.
+//! The tool catalog: names, descriptions, input schemas, the server
+//! `instructions` string, and the `SKEP_COMMONS` sentence template
+//! (`commons_instructions`, `{addr}` placeholder) — data, not code. The
+//! shipped `tools.json` is embedded at build time and overridable with
+//! `--tools-file`. Loading cross-checks the catalog against the dispatch
+//! table in BOTH directions, so the file and the code cannot drift
+//! silently: a file entry the dispatch doesn't know refuses startup, and a
+//! dispatch op the file doesn't name refuses startup.
 
 use serde_json::Value;
 
@@ -83,6 +84,9 @@ pub struct Tool {
 #[derive(Debug)]
 pub struct Tools {
     pub instructions: String,
+    /// The sentence appended to `instructions` when `SKEP_COMMONS` names a
+    /// link-type registry document; `{addr}` is the substitution point.
+    pub commons_instructions: String,
     pub tools: Vec<Tool>,
 }
 
@@ -95,7 +99,7 @@ pub fn load(text: &str) -> Result<Tools, String> {
         return Err("root must be a JSON object".into());
     };
     for k in root.keys() {
-        if k != "instructions" && k != "tools" {
+        if k != "instructions" && k != "commons_instructions" && k != "tools" {
             return Err(format!("unknown root field '{k}'"));
         }
     }
@@ -106,6 +110,14 @@ pub fn load(text: &str) -> Result<Tools, String> {
         .to_string();
     if instructions.is_empty() {
         return Err("'instructions' must be nonempty".into());
+    }
+    let commons_instructions = root
+        .get("commons_instructions")
+        .and_then(Value::as_str)
+        .ok_or("missing string field 'commons_instructions'")?
+        .to_string();
+    if !commons_instructions.contains("{addr}") {
+        return Err("'commons_instructions' must contain the '{addr}' placeholder".into());
     }
     let entries =
         root.get("tools").and_then(Value::as_array).ok_or("missing array field 'tools'")?;
@@ -127,7 +139,7 @@ pub fn load(text: &str) -> Result<Tools, String> {
             return Err(format!("dispatch op '{op}' has no tools-file entry"));
         }
     }
-    Ok(Tools { instructions, tools })
+    Ok(Tools { instructions, commons_instructions, tools })
 }
 
 fn parse_tool(v: &Value) -> Result<Tool, String> {
@@ -196,6 +208,21 @@ mod tests {
         v["tools"].as_array_mut().expect("tools").retain(|t| t["name"] != "insert");
         let err = load(&v.to_string()).expect_err("must refuse");
         assert!(err.contains("insert"), "error must name the op: {err}");
+    }
+
+    /// The commons sentence template is catalog data like everything else:
+    /// absent, or present without its substitution point, refuses to load.
+    #[test]
+    fn commons_template_refusals() {
+        let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+        v.as_object_mut().expect("root").remove("commons_instructions");
+        let err = load(&v.to_string()).expect_err("must refuse");
+        assert!(err.contains("commons_instructions"), "error names the field: {err}");
+
+        let mut v: Value = serde_json::from_str(EMBEDDED).expect("embedded parses");
+        v["commons_instructions"] = json!("a sentence with no substitution point");
+        let err = load(&v.to_string()).expect_err("must refuse");
+        assert!(err.contains("{addr}"), "error names the placeholder: {err}");
     }
 
     #[test]

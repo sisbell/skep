@@ -109,14 +109,21 @@ struct Mcp {
 
 impl Mcp {
     fn spawn(port: u16, principal: &str) -> Mcp {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
-            .env("SKEPD_URL", format!("http://127.0.0.1:{port}"))
+        Mcp::spawn_with_commons(port, principal, None)
+    }
+
+    fn spawn_with_commons(port: u16, principal: &str, commons: Option<&str>) -> Mcp {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_skep-mcp"));
+        cmd.env("SKEPD_URL", format!("http://127.0.0.1:{port}"))
             .env("SKEP_PRINCIPAL", principal)
+            .env_remove("SKEP_COMMONS")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn skep-mcp");
+            .stderr(Stdio::inherit());
+        if let Some(addr) = commons {
+            cmd.env("SKEP_COMMONS", addr);
+        }
+        let mut child = cmd.spawn().expect("spawn skep-mcp");
         let stdin = child.stdin.take().expect("child stdin");
         let stdout = BufReader::new(child.stdout.take().expect("child stdout"));
         Mcp { child, stdin: Some(stdin), stdout, next_id: 0 }
@@ -218,6 +225,17 @@ fn embedded_tools() -> Value {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tools.json");
     serde_json::from_str(&std::fs::read_to_string(path).expect("read tools.json"))
         .expect("tools.json parses")
+}
+
+/// A width tumbler at `addr`'s own depth: zeros with `last` in the final
+/// component. `width_of(a, 1)` is the unit subtree span width the daemon
+/// records for an address-form endset member; `width_of(a, k)` the width of
+/// a k-position I-run starting at `a`.
+fn width_of(addr: &str, last: u64) -> String {
+    let n = addr.split('.').count();
+    let mut comps = vec!["0".to_string(); n];
+    comps[n - 1] = last.to_string();
+    comps.join(".")
 }
 
 // ── the tests ────────────────────────────────────────────────────────────
@@ -433,6 +451,154 @@ fn daemon_restart_reopens_the_session_and_resends() {
     sd.shutdown();
 }
 
+/// Wire v5's two-form slots through the adapter, one link exercising both:
+/// FROM as a V-spec array (content-resolved to permanent I-spans — the v4
+/// meaning, pinned by the exact recorded span), TO and TYPE as
+/// `{"addrs": […]}` (the names verbatim, one unit subtree span per
+/// address, the TYPE a ghost nothing occupies).
+#[test]
+fn make_link_addrs_form_records_names_verbatim() {
+    let dir = TempDir::new("addrs");
+    let sd = spawn_daemon(dir.path(), 0);
+    let port = sd.port();
+    let account = provision_principal_1(port);
+
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+
+    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let doc = v["addr"].as_str().expect("doc addr").to_string();
+    let v = mcp.call_doc(
+        "insert",
+        json!({"doc": doc, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}),
+    );
+    assert_eq!(v["resp"], "ack_addr", "insert: {v}");
+    let i_start = v["addr"].as_str().expect("first minted I-address").to_string();
+
+    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let doc2 = v["addr"].as_str().expect("doc2 addr").to_string();
+    // A ghost: doc2's never-occupied subspace 3. Nothing resides there and
+    // nothing has to — the addrs form records names, not contents.
+    let ghost = format!("{doc2}.0.3.6.1");
+
+    let v = mcp.call_doc(
+        "make_link",
+        json!({
+            "home": doc,
+            "from_": [{"source": doc, "span": {"start": "1.1", "width": "0.5"}}],
+            "to": {"addrs": [doc2]},
+            "ty": {"addrs": [ghost]}
+        }),
+    );
+    assert_eq!(v["resp"], "ack_addr", "two-form make_link: {v}");
+    let link = v["addr"].as_str().expect("link addr").to_string();
+
+    let v = mcp.call_doc("read_link", json!({"a": link}));
+    assert_eq!(
+        v["link"]["slots"],
+        json!([
+            [{"start": i_start, "width": width_of(&i_start, 5)}],
+            [{"start": doc2, "width": width_of(&doc2, 1)}],
+            [{"start": ghost, "width": width_of(&ghost, 1)}]
+        ]),
+        "recorded endsets — resolved I-span, then names verbatim: {v}"
+    );
+
+    sd.shutdown();
+}
+
+/// The slot forms' failure modes are data, not transport errors: an object
+/// mixing the two forms is the daemon's unparseable rejection, an empty
+/// addrs TYPE its empty_type_resolution — both isError false.
+#[test]
+fn slot_form_faults_surface_as_normal_results() {
+    let dir = TempDir::new("slotfault");
+    let sd = spawn_daemon(dir.path(), 0);
+    let port = sd.port();
+    let account = provision_principal_1(port);
+
+    let mut mcp = Mcp::spawn(port, "1");
+    mcp.initialize();
+    let v = mcp.call_doc("create_new_document", json!({"account": account}));
+    let doc = v["addr"].as_str().expect("doc addr").to_string();
+
+    // Both forms at once in one slot: not a form ('resolve' is not a
+    // make_link key), so the frame never becomes an operation.
+    let v = mcp.call_doc(
+        "make_link",
+        json!({
+            "home": doc,
+            "from_": [],
+            "to": [],
+            "ty": {"addrs": ["1.1"], "resolve": []}
+        }),
+    );
+    assert_eq!(v["resp"], "rejected", "mixed forms: {v}");
+    assert_eq!(v["op"], "unparseable");
+    assert_eq!(v["code"], "malformed");
+
+    // An empty addrs TYPE parses; the store rejects it exactly as an empty
+    // resolution always has — the type floor reads the slot as given.
+    let v = mcp.call_doc(
+        "make_link",
+        json!({"home": doc, "from_": [], "to": [], "ty": {"addrs": []}}),
+    );
+    assert_eq!(v["resp"], "rejected", "empty addrs type: {v}");
+    assert_eq!(v["code"], "empty_type_resolution");
+
+    sd.shutdown();
+}
+
+/// SKEP_COMMONS set: the instructions carry the registry sentence with the
+/// address substituted. Unset: byte-identical to the tools file's
+/// instructions. Malformed: startup refusal naming the variable. No daemon
+/// anywhere — initialize never dials skepd.
+#[test]
+fn skep_commons_appends_the_registry_sentence() {
+    let file = embedded_tools();
+    let base = file["instructions"].as_str().expect("instructions").to_string();
+    let template = file["commons_instructions"].as_str().expect("template").to_string();
+
+    let commons = "1.0.2.0.9";
+    let mut mcp = Mcp::spawn_with_commons(1, "1", Some(commons));
+    let init = mcp.initialize();
+    let expected = format!("{base}\n\n{}", template.replace("{addr}", commons));
+    assert_eq!(
+        init["instructions"].as_str(),
+        Some(expected.as_str()),
+        "the sentence is appended with the address substituted"
+    );
+    assert!(
+        expected.contains(&format!("{commons}.0.3.50")),
+        "the defines-type address rides in the sentence: {expected}"
+    );
+    assert!(mcp.finish().success());
+
+    let mut mcp = Mcp::spawn_with_commons(1, "1", None);
+    let init = mcp.initialize();
+    assert_eq!(
+        init["instructions"].as_str(),
+        Some(base.as_str()),
+        "unset leaves the instructions byte-identical"
+    );
+    assert!(mcp.finish().success());
+}
+
+#[test]
+fn malformed_skep_commons_refuses_startup() {
+    for bad in ["", "banana", "1..2", "0.1", "1.0", "1.0.0.1", "1.0.1.0.1.0.1.0.2"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_skep-mcp"))
+            .env("SKEPD_URL", "http://127.0.0.1:1")
+            .env("SKEP_PRINCIPAL", "1")
+            .env("SKEP_COMMONS", bad)
+            .output()
+            .expect("run skep-mcp");
+        assert!(!out.status.success(), "'{bad}' must refuse startup");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("SKEP_COMMONS"), "stderr names the variable for '{bad}': {err}");
+    }
+}
+
 #[test]
 fn tools_file_dispatch_drift_refuses_startup_both_directions() {
     // Catalog validation precedes any network use, so no daemon is needed
@@ -467,6 +633,7 @@ fn tools_file_dispatch_drift_refuses_startup_both_directions() {
         .args(["--tools-file", path.to_str().expect("utf-8 path")])
         .env("SKEPD_URL", "http://127.0.0.1:1")
         .env("SKEP_PRINCIPAL", "1")
+        .env_remove("SKEP_COMMONS")
         .output()
         .expect("run skep-mcp");
     assert!(
@@ -481,6 +648,7 @@ fn spawn_expect_startup_failure(tools_file: &Path) -> String {
         .args(["--tools-file", tools_file.to_str().expect("utf-8 path")])
         .env("SKEPD_URL", "http://127.0.0.1:1")
         .env("SKEP_PRINCIPAL", "1")
+        .env_remove("SKEP_COMMONS")
         .output()
         .expect("run skep-mcp");
     assert!(!out.status.success(), "a drifted tools file must refuse startup");

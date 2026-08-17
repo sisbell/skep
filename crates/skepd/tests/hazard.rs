@@ -78,7 +78,16 @@ fn spawn_skepd(dir: &Path) -> (Child, u16) {
         .split_once("http://127.0.0.1:")
         .and_then(|(_, rest)| rest.split('/').next())
         .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or_else(|| panic!("no port in skepd startup line: {line:?}"));
+        .unwrap_or_else(|| {
+            // Name the child's fate: a refused startup (Daemon::open error)
+            // exits nonzero with its message on inherited stderr, above.
+            let fate = match child.try_wait() {
+                Ok(Some(status)) => format!("exited {status}"),
+                Ok(None) => "still running".to_string(),
+                Err(e) => format!("unwaitable: {e}"),
+            };
+            panic!("no port in skepd startup line {line:?} (child {fate}; its stderr is inherited above)")
+        });
     (child, port)
 }
 
@@ -112,7 +121,9 @@ fn try_op(port: u16, session: Option<&str>, frame: &str) -> Option<Value> {
 }
 
 /// `Daemon::open` under a deadline: a reopen that hangs is a finding, and a
-/// refusal where recovery was required is one too.
+/// refusal where recovery was required is one too. A `Disconnected` recv is
+/// the opener thread PANICKING — a distinct fate from a wedge, named as one
+/// so the gate log attributes it to the right code path.
 fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
     let d = dir.to_path_buf();
     let (tx, rx) = mpsc::channel();
@@ -122,7 +133,13 @@ fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
     match rx.recv_timeout(Duration::from_secs(60)) {
         Ok(Ok(d)) => d,
         Ok(Err(e)) => panic!("FINDING ({ctx}): reopen refused where recovery was required: {e}"),
-        Err(_) => panic!("FINDING (wedge, {ctx}): Daemon::open hung past 60s"),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            panic!("FINDING (wedge, {ctx}): Daemon::open hung past 60s")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
+            "FINDING ({ctx}): Daemon::open PANICKED during reopen — the opener thread's \
+             panic message is printed above in this test's captured output"
+        ),
     }
 }
 
@@ -279,7 +296,11 @@ fn e_trial(trial: u64) -> (usize, usize) {
                 acks.push(v["at"].as_u64().expect("insert ack at"));
                 inserts_acked += 1;
             }
-            Some(v) => panic!("E trial {trial}: healthy sequential insert rejected: {v}"),
+            Some(v) => panic!(
+                "E trial {trial}: healthy sequential insert (ordinal {i}, after \
+                 {} prior acks) answered non-ack: {v}",
+                acks.len()
+            ),
             None => break, // the daemon died mid-exchange; unacked from here
         }
         assert!(i < 500_000, "E trial {trial}: the killer never fired");

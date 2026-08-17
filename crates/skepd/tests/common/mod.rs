@@ -32,7 +32,9 @@ pub fn http_full(
     session: Option<&str>,
     body: &[u8],
 ) -> (u16, Vec<(String, String)>, Vec<u8>) {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    let ctx = |what: &str| format!("{what} ({method} {path})");
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .unwrap_or_else(|e| panic!("{}: {e}", ctx("connect to skepd")));
     stream.set_read_timeout(Some(HTTP_TIMEOUT)).expect("read timeout");
     stream.set_write_timeout(Some(HTTP_TIMEOUT)).expect("write timeout");
     let mut head = format!(
@@ -43,11 +45,18 @@ pub fn http_full(
         head.push_str(&format!("Skepd-Session: {tok}\r\n"));
     }
     head.push_str("Content-Type: application/json\r\n\r\n");
-    stream.write_all(head.as_bytes()).expect("write request head");
-    stream.write_all(body).expect("write request body");
+    stream
+        .write_all(head.as_bytes())
+        .unwrap_or_else(|e| panic!("{}: {e}", ctx("write request head")));
+    stream.write_all(body).unwrap_or_else(|e| panic!("{}: {e}", ctx("write request body")));
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).expect("read response");
-    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("header/body separator");
+    stream
+        .read_to_end(&mut raw)
+        .unwrap_or_else(|e| panic!("{}: {e}", ctx("read response")));
+    let sep = raw
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or_else(|| panic!("{}", ctx("no header/body separator in response")));
     let head = std::str::from_utf8(&raw[..sep]).expect("ascii response head");
     let mut lines = head.split("\r\n");
     let status: u16 = lines

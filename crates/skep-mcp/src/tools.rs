@@ -73,12 +73,14 @@ pub const RENAMES_FROM: &[&str] = &["make_link", "emit"];
 
 /// One catalog entry. Order is preserved: `tools/list` answers in file
 /// order.
+#[derive(Debug)]
 pub struct Tool {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
 }
 
+#[derive(Debug)]
 pub struct Tools {
     pub instructions: String,
     pub tools: Vec<Tool>,

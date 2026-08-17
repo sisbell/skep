@@ -534,6 +534,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "skep-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "skepd",
+]
+
+[[package]]
 name = "skep-namespace"
 version = "0.1.0"
 dependencies = [

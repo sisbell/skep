@@ -133,8 +133,11 @@ fn plan_strategy() -> impl Strategy<Value = Vec<P>> {
 // ── the shadow world ─────────────────────────────────────────────────────
 
 /// One content position: a single byte (the substrate's text discipline) or
-/// one composite value. ASCII-only alphabets keep every per-byte run valid
-/// UTF-8, so the expected delivery rendering is exact.
+/// one composite value — always ≥ 2 bytes: a one-byte atom is the same
+/// write as its per-byte form (wire.md §Content values), so the shadow
+/// records it as a `Byte` and expects it coalesced into a delivery run.
+/// ASCII-only alphabets keep every per-byte run valid UTF-8, so the
+/// expected delivery rendering is exact.
 #[derive(Clone)]
 enum CItem {
     Byte(u8),
@@ -369,9 +372,12 @@ fn step(i: usize, pl: &P, w: &mut World, rs: &mut Rs) {
             );
             commit(w, rs, pi, frame, i);
             let at0 = (pos - 1) as usize;
-            if *atom {
+            if *atom && bytes.len() > 1 {
                 w.docs[di].content.insert(at0, CItem::Atom(bytes));
             } else {
+                // Per-byte — including a one-byte {"atom"}, which is the
+                // same write as its per-byte form (wire.md §Content values)
+                // and coalesces into content runs on delivery.
                 for (k, b) in bytes.iter().enumerate() {
                     w.docs[di].content.insert(at0 + k, CItem::Byte(*b));
                 }

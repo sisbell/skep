@@ -693,8 +693,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         // the wall) — never an ack the disk cannot honor.
         let mut inserts_acked: u64 = 0;
         let mut consecutive = 0u32;
-        let mut code_seen = String::new();
-        loop {
+        stop_code = loop {
             let ord = inserts_acked * W + 1;
             let frame = format!(
                 r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"]}}"#
@@ -713,16 +712,14 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
                         "FINDING (G): untyped/unexpected rejection under disk pressure: {v}"
                     );
                     consecutive += 1;
-                    code_seen = code;
                     if consecutive >= 3 {
-                        break;
+                        break code;
                     }
                 }
                 other => panic!("G: unexpected response {other:?}: {v}"),
             }
             assert!(inserts_acked < 4000, "G: the volume never filled — enlarge the ballast");
-        }
-        stop_code = code_seen;
+        };
 
         // Reads keep being served while the write path refuses.
         let h = handle_raw(&d, "GET", "/health", None, None, b"");

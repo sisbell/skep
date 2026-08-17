@@ -188,13 +188,6 @@ fn seed_text(port: u16, session: &str, doc: &str, text: &str) {
     expect_resp(&v, "ack_addr");
 }
 
-/// A unit-subtree width for an address: `0.….0.1` at its component count.
-fn unit_w(addr: &str) -> String {
-    let mut comps = vec!["0"; addr.split('.').count() - 1];
-    comps.push("1");
-    comps.join(".")
-}
-
 /// Mint an addrs-form link (empty from/to, fresh ghost type) in `home`.
 fn mint_link(port: u16, session: &str, home: &str, n: &Counters) -> String {
     let ghost = format!("{home}.0.3.6.{}", Counters::next(&n.ghost));

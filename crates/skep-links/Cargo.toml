@@ -1,7 +1,9 @@
 [package]
 name = "skep-links"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "M7 — Link & Relation Store: the authoritative append-only store of links and typed relations, the immutable type/shape registry, idempotent de-duplication, retraction/supersession, and the spanfilade discovery primitives"
 
 [dependencies]
@@ -9,11 +11,11 @@ description = "M7 — Link & Relation Store: the authoritative append-only store
 # for the authoritative links map and every recomputable hint; the serde
 # feature because the authoritative slice (links + genesis type config) rides
 # M2 checkpoints.
-im = { version = "15", features = ["serde"] }
+im.workspace = true
 # serde's `rc` feature: the genesis type config (`reserved`/`decls`) is
 # Arc-wrapped so the clone-and-modify fold bumps a refcount instead of copying
 # the declaration vector on every record (§Core data model).
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { workspace = true, features = ["rc"] }
 # M1 — tumbler/address/span algebra; M7 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
 # M2 — every write rides transact, every read rides a snapshot; the dedup
@@ -30,5 +32,5 @@ skep-arrangement = { path = "../skep-arrangement" }
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # checkpoint encoding; skep-content lets the test world drive M5's INSERT so
 # MAKELINK has arranged content to resolve.
-bincode = "1.3"
+bincode.workspace = true
 skep-content = { path = "../skep-content" }

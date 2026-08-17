@@ -1,7 +1,9 @@
 [package]
 name = "skep-engine"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one (reserved, decls) configuration, the pinned recovery order, and the observe dump surface"
 
 [features]
@@ -13,7 +15,7 @@ observe = []
 
 [dependencies]
 # The World/Record serde derives satisfying M2's WorldState bounds.
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true
 # M1 — Tumbler/Address construction for the standard reserved type addresses
 # and the observe surface's address rendering.
 skep-address = { path = "../skep-address" }
@@ -40,6 +42,6 @@ skep-febe = { path = "../skep-febe" }
 skep-retrieval = { path = "../skep-retrieval" }
 skep-discovery = { path = "../skep-discovery" }
 # App TypeDecl construction (Registration.behaviors is an im::OrdSet).
-im = { version = "15", features = ["serde"] }
+im.workspace = true
 # Fsync journals for the lifecycle/recovery tests.
-tempfile = "3"
+tempfile.workspace = true

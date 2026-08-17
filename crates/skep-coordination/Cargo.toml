@@ -1,14 +1,16 @@
 [package]
 name = "skep-coordination"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "M9 — Predicate & Coordination Layer: the closed statically-typed predicate/query algebra (PL) over M7/M3 structural state, predicate definitions persisted as content (pdef/pd_stable), and the reactive rule engine with quiescence detection, fair stepping, and the termination lint"
 
 [dependencies]
 # Value's persistent sets/maps (AddrSet/AddrSeq/Map, the Env) and cheap
 # intermediate values during folds — never journaled snapshots (§Core data
 # model: M9 owns no authoritative state).
-im = "15"
+im.workspace = true
 # M1 — tumbler/address/span algebra: T1 extrema, validate lifts, document_of
 # for replay attribution, subtree_of for the address-denoting probe.
 skep-address = { path = "../skep-address" }
@@ -30,4 +32,4 @@ skep-links = { path = "../skep-links" }
 [dev-dependencies]
 # The test world (the composition contract's assembler role, in miniature)
 # derives Serialize/Deserialize for M2's WorldState bound.
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true

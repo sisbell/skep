@@ -1,7 +1,9 @@
 [package]
 name = "skep-mcp"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd's HTTP/JSON wire on the other. One static binary an operator points a harness at; tool name → wire op is mechanical, skepd documents pass through verbatim, rejections are data."
 
 [dependencies]
@@ -9,7 +11,7 @@ description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd
 # over std::net (skepd is one-request-per-connection, Connection: close),
 # and newline-delimited JSON-RPC over stdio. JSON framing is the one thing
 # taken from a library.
-serde_json = "1"
+serde_json.workspace = true
 
 [dev-dependencies]
 # The real stack: tests build a daemon in-process on an ephemeral port over

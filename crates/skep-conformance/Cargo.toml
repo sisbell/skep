@@ -1,7 +1,9 @@
 [package]
 name = "skep-conformance"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "Conformance harness: plays the vendored udanax-green golden scenarios against skep's real Operation<World>::execute surface and reports, scenario by scenario, where the two systems agree and where they diverge. The harness never negotiates with the goldens and never negotiates with skep."
 
 [dependencies]
@@ -19,4 +21,4 @@ skep-retrieval = { path = "../skep-retrieval" }
 skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
 # Golden scenario files are loose field-bags — parsed as dynamic JSON.
-serde_json = "1"
+serde_json.workspace = true

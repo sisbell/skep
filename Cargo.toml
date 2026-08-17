@@ -16,3 +16,29 @@ members = [
     "crates/skep-kernel",
     "crates/skep-address",
 ]
+
+# Shared package metadata — every crate inherits (crate Cargo.tomls carry
+# only name + description + their own deps/features). One lockstep version
+# for the whole family, bumped at release.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+repository = "https://github.com/sisbell/skep"
+# license: DECISION PENDING (owner's call; Rust convention is
+# "MIT OR Apache-2.0"). Add here + LICENSE files in one commit when chosen.
+
+# Shared external dependency versions — one place, no drift. Features here
+# are the union each consumer may rely on; crates may add features but
+# never pin a different version.
+[workspace.dependencies]
+im = { version = "15", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+num-bigint = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"
+bincode = "1.3"
+parking_lot = "0.12"
+rustc-hash = "2"
+once_cell = "1"
+tempfile = "3"

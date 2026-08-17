@@ -1,0 +1,4 @@
+# Pinned so every machine (and any future CI) compiles with the same
+# toolchain the gates ran on. Bump deliberately, with a full gate run.
+[toolchain]
+channel = "1.94.0"

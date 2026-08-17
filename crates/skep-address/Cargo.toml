@@ -1,7 +1,9 @@
 [package]
 name = "skep-address"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "M1 — pure value-level address & span algebra: tumblers, T4 structure, position arithmetic, span-set algebra"
 
 [dependencies]
@@ -10,11 +12,11 @@ description = "M1 — pure value-level address & span algebra: tumblers, T4 stru
 # im's `serde` feature (the default SpanSet backing im::Vector<Span> must
 # serialize). The composition contract places these here — the shared base
 # crate sits above skep-address, so they cannot land there without a cycle.
-im = { version = "15", features = ["serde"] }
-num-bigint = { version = "0.4", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
+im.workspace = true
+num-bigint.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 # Self-describing format used to exercise the symmetric serde shadow pairs;
 # the at-rest journal format itself is deferred to M2.
-serde_json = "1"
+serde_json.workspace = true

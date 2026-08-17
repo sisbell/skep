@@ -1,7 +1,9 @@
 [package]
 name = "skep-arrangement"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations, link seating for M7, forward/reverse arrangement reads, and the R read surface"
 
 [dependencies]
@@ -11,10 +13,10 @@ description = "M5 — Arrangements & Editing (Vstream): the per-document mutable
 # RunList's v1 physical backing im::Vector<Run> (Open build decision #1
 # default). The serde feature because both slices are fully serialized in
 # checkpoints (no skip-serialize; rebuild_derived is identity).
-im = { version = "15", features = ["serde"] }
+im.workspace = true
 # Nat::zero()/one()/is_zero() are trait fns the ordinal math keeps in scope.
-num-traits = "0.2"
-serde = { version = "1", features = ["derive"] }
+num-traits.workspace = true
+serde.workspace = true
 # M1 — tumbler/address/span algebra; M5 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
 # M2 — every composite rides transact/snapshot; M5 owns no ordering,
@@ -31,5 +33,5 @@ skep-content = { path = "../skep-content" }
 [dev-dependencies]
 # bincode is M2's actual wire format — the round-trip tests exercise the real
 # journal/checkpoint encoding; tempfile hosts the durable-recovery test.
-bincode = "1.3"
-tempfile = "3"
+bincode.workspace = true
+tempfile.workspace = true

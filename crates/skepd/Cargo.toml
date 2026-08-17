@@ -1,7 +1,9 @@
 [package]
 name = "skepd"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, configuration, and process lifetime — no semantics."
 
 [features]
@@ -31,7 +33,7 @@ skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
 # JSON frames. The codec builds Values through its own key-sorting obj()
 # helper, so marshal determinism never depends on serde_json's map backend.
-serde_json = "1"
+serde_json.workspace = true
 # No HTTP server dependency, deliberately (wire v4): the daemon speaks a
 # written-out HTTP/1.1 subset over std's TcpListener — the commit stream
 # needs event bytes flushed at commit time and a server-initiated close at
@@ -44,7 +46,7 @@ serde_json = "1"
 # Non-poisoning locks: the session map, the subscriber registry, and the
 # commit-feed condvar behind GET /events (the same totality argument M10 §7
 # makes).
-parking_lot = "0.12"
+parking_lot.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

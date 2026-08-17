@@ -1,7 +1,9 @@
 [package]
 name = "skep-febe"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 description = "M10 — Operation Surface (FEBE command layer): the uniform request lifecycle (parse → authorize → linearize → commit-gate → marshal → surface) over a static dispatch table, plus ephemeral session→principal binding and best-effort retry de-duplication"
 
 [dependencies]
@@ -9,7 +11,7 @@ description = "M10 — Operation Surface (FEBE command layer): the uniform reque
 # sessions/idem maps (a panic while a lock is held must not break `execute`'s
 # Total contract) and the bounded LRU for the committed-write-ack memo.
 # Pointedly NOT `im`: no M10 field is ever snapshotted or replayed.
-parking_lot = "0.12"
+parking_lot.workspace = true
 lru = "0.12"
 # M1 — Address/Tumbler/Span/SpanSet/Nat for request/response payloads;
 # Tumbler::{len, get} in the editlink helper's content-V guard (§4).
@@ -40,4 +42,4 @@ skep-discovery = { path = "../skep-discovery" }
 [dev-dependencies]
 # The test world (the composition contract's assembler role, in miniature)
 # derives Serialize/Deserialize for M2's WorldState bound.
-serde = { version = "1", features = ["derive"] }
+serde.workspace = true

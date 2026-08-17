@@ -339,30 +339,51 @@ fn e_trial(trial: u64) -> (usize, usize) {
     }
     // At most ONE committed-but-unacked write can exist (the single
     // in-flight request at the kill); anything past k+1 is a phantom.
+    // Clipping semantics: the k+1-wide span always answers `delivery` —
+    // of k chars (no in-flight write survived) or k+1 (the single
+    // in-flight write committed before the kill). Either is legal; the
+    // bytes must be exactly what the client sent.
     let probe = handle_op(&d, None, &retrieve_frame(&doc, k + 1));
-    let lost = match probe["resp"].as_str() {
-        Some("delivery") => {
-            let text: String = probe["items"]
-                .as_array()
-                .expect("items")
-                .iter()
-                .map(|i| i["content"].as_str().unwrap_or(""))
-                .collect();
-            let expect: String = (1..=k + 1).map(expect_char).collect();
-            assert_eq!(
-                text, expect,
-                "FINDING (E, {ctx}): the in-flight write's content is not the one the client sent"
-            );
-            1
-        }
-        Some("rejected") => 0,
-        other => panic!("E trial {trial}: unexpected probe response {other:?}: {probe}"),
-    };
-    let beyond = handle_op(&d, None, &retrieve_frame(&doc, k + 2));
     assert_eq!(
-        beyond["resp"].as_str(),
-        Some("rejected"),
+        probe["resp"].as_str(),
+        Some("delivery"),
+        "E trial {trial}: unexpected probe response: {probe}"
+    );
+    let text: String = probe["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|i| i["content"].as_str().unwrap_or(""))
+        .collect();
+    let tlen = text.len() as u64;
+    assert!(
+        tlen == k || tlen == k + 1,
+        "FINDING (E, {ctx}): recovered length {tlen} outside k..=k+1: {probe}"
+    );
+    let expect: String = (1..=tlen).map(expect_char).collect();
+    assert_eq!(
+        text, expect,
+        "FINDING (E, {ctx}): the in-flight write's content is not the one the client sent"
+    );
+    let lost = if tlen == k + 1 { 1 } else { 0 };
+    // Clipping semantics: the k+2-wide span answers `delivery` of the
+    // present prefix. Phantom check = the delivered text may extend at
+    // most one char (the single possible in-flight write) past the acks,
+    // and that char must be the one the client sent.
+    let beyond = handle_op(&d, None, &retrieve_frame(&doc, k + 2));
+    let btext: String = beyond["items"]
+        .as_array()
+        .map(|a| a.iter().map(|i| i["content"].as_str().unwrap_or("")).collect())
+        .unwrap_or_default();
+    let blen = btext.len() as u64;
+    assert!(
+        blen <= k + 1,
         "FINDING (E, {ctx}): phantom content beyond the one possible in-flight write: {beyond}"
+    );
+    let expect_max: String = (1..=blen).map(expect_char).collect();
+    assert_eq!(
+        btext, expect_max,
+        "FINDING (E, {ctx}): recovered bytes diverge from what the client sent: {beyond}"
     );
     (acks.len(), lost)
 }
@@ -539,11 +560,14 @@ fn f_sidecar_mutilation_never_touches_the_world() {
             "FINDING (F): /changes claims positions the recovered world lacks"
         );
         assert_eq!(read_text(&d, &doc, 4), "abcd", "the surviving prefix reads back");
-        let gone = handle_op(&d, None, &retrieve_frame(&doc, 5));
+        // Clipping semantics (matches green: contents skip absent
+        // positions): a span covering the rolled-back position answers
+        // `delivery` of the surviving prefix ONLY — the rolled-back
+        // write's byte must be absent from the delivered text.
         assert_eq!(
-            gone["resp"].as_str(),
-            Some("rejected"),
-            "the rolled-back write's content must be gone: {gone}"
+            read_text(&d, &doc, 5),
+            "abcd",
+            "FINDING (F): the rolled-back write's content still present"
         );
     }
     println!(

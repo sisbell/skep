@@ -516,6 +516,12 @@ dependencies = [
  "im",
  "parking_lot",
  "serde",
+ "skep-address",
+ "skep-arrangement",
+ "skep-content",
+ "skep-engine",
+ "skep-links",
+ "skep-namespace",
  "tempfile",
 ]
 

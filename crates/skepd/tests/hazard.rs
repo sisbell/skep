@@ -88,6 +88,10 @@ fn spawn_skepd(dir: &Path) -> (Child, u16) {
 fn try_op(port: u16, session: Option<&str>, frame: &str) -> Option<Value> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     let _ = s.set_nodelay(true);
+    // Bounded like every judge: a wedged daemon becomes "no ack" (an honest
+    // client view) instead of stalling the trial loop indefinitely.
+    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
     let mut head = format!(
         "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
         frame.len()

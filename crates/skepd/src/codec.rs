@@ -532,7 +532,9 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
 }
 
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    // `% 2`, not `is_multiple_of`: the workspace MSRV is 1.85 and
+    // `u64::is_multiple_of` stabilized in 1.87 (clippy::incompatible_msrv).
+    if s.len() % 2 != 0 {
         return Err(PErr("hex string has odd length".into()));
     }
     let b = s.as_bytes();

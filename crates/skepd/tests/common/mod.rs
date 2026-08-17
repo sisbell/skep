@@ -18,6 +18,12 @@ pub fn spawn(dir: &Path) -> Skepd {
     serve(daemon, 0, 4).expect("bind an ephemeral port")
 }
 
+/// Client-side socket deadline: a daemon that wedges must fail the exchange
+/// loudly (panic with context) rather than hang the whole gate, whose log
+/// would then carry no failure name at all. Generous — a healthy op is
+/// milliseconds even under fsync.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// One HTTP exchange; returns (status, headers, body bytes).
 pub fn http_full(
     port: u16,
@@ -27,6 +33,8 @@ pub fn http_full(
     body: &[u8],
 ) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    stream.set_read_timeout(Some(HTTP_TIMEOUT)).expect("read timeout");
+    stream.set_write_timeout(Some(HTTP_TIMEOUT)).expect("write timeout");
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
         body.len()

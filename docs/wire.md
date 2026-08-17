@@ -150,14 +150,13 @@ Non-200 statuses are transport-level failures with a body of the shape
 | Status | `error`                     | When                                    |
 |--------|-----------------------------|-----------------------------------------|
 | 400    | `malformed_session_request` | `POST /session` body isn't `{"principal": n}` |
-| 400    | `unreadable_body`           | the request body could not be read      |
 | 400    | `malformed_op_at`           | `POST /op-at` body isn't `{"at": n, "frame": {…}}` |
 | 400    | `write_at_history`          | the `/op-at` frame is a write operation |
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
 | 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
 | 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit` |
-| 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body) |
+| 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |

@@ -10,7 +10,7 @@ use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
     Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
-    Response, SuccessorSpec, TypeArg,
+    Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View};
@@ -94,9 +94,10 @@ fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
     })
 }
 
-/// Every `Op` variant at least once; both `TypeArg` forms, both cursor
-/// states, all three slot-constraint forms, and all four value write forms
-/// (per-byte runs, a UTF-8 atom, a non-UTF-8 run, a non-UTF-8 atom).
+/// Every `Op` variant at least once; both `SlotArg` forms on make_link's
+/// slots (wire v5) and on the successor type slot, both cursor states, all
+/// three slot-constraint forms, and all four value write forms (per-byte
+/// runs, a UTF-8 atom, a non-UTF-8 run, a non-UTF-8 atom).
 fn all_requests() -> Vec<Request> {
     vec![
         rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]) }),
@@ -128,9 +129,31 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::MakeLink {
                 home: d1(),
-                from: vec![vs(d1(), 1, 5)],
-                to: vec![vs(d2(), 1, 6)],
-                ty: vec![vs(d3(), 1, 1)],
+                from: SlotArg::Resolve(vec![vs(d1(), 1, 5)]),
+                to: SlotArg::Resolve(vec![vs(d2(), 1, 6)]),
+                ty: SlotArg::Resolve(vec![vs(d3(), 1, 1)]),
+            },
+        ),
+        // Wire v5: mixed slots — a link-to-link addrs TO and a ghost
+        // subspace-3 name typing the link.
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: SlotArg::Resolve(vec![vs(d1(), 1, 5)]),
+                to: SlotArg::Addrs(vec![link1()]),
+                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 1])]),
+            },
+        ),
+        // Wire v5: empty addrs FROM/TO are expressible (the store's type
+        // floor, not the codec, rejects an empty ty).
+        rq(
+            None,
+            Op::MakeLink {
+                home: d1(),
+                from: SlotArg::Addrs(vec![]),
+                to: SlotArg::Addrs(vec![]),
+                ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 3, 6, 2])]),
             },
         ),
         rq(
@@ -151,7 +174,7 @@ fn all_requests() -> Vec<Request> {
                 successor: SuccessorSpec {
                     from: vec![vs(d2(), 1, 5)],
                     to: vec![vs(d2(), 6, 2)],
-                    ty: TypeArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 2, 1])]),
+                    ty: SlotArg::Addrs(vec![a(&[1, 0, 1, 0, 3, 0, 2, 1])]),
                 },
                 d_s: d2(),
                 d_a: d1(),
@@ -164,7 +187,7 @@ fn all_requests() -> Vec<Request> {
                 successor: SuccessorSpec {
                     from: vec![vs(d2(), 1, 5)],
                     to: vec![],
-                    ty: TypeArg::Resolve(vec![vs(d3(), 1, 1)]),
+                    ty: SlotArg::Resolve(vec![vs(d3(), 1, 1)]),
                 },
                 d_s: d2(),
                 d_a: d1(),
@@ -762,11 +785,13 @@ fn delivery_runs_coalesce_and_split() {
 
 /// Never-silent applied to typos: unknown ops, unknown fields, missing
 /// fields, malformed addresses, and non-object frames all fail parse with a
-/// detail message.
+/// detail message. The make_link slot grammar is exactly two forms: the
+/// tagged `{"resolve"}` object belongs to edit_link's successor `ty` alone,
+/// and addrs names must be T4-valid addresses.
 #[test]
 fn strict_parse_failures() {
     let codec = JsonCodec;
-    let bad: [&[u8]; 7] = [
+    let bad: [&[u8]; 9] = [
         b"not json at all",
         br#"["op","fork"]"#,
         br#"{"op":"frobnicate"}"#,
@@ -774,6 +799,8 @@ fn strict_parse_failures() {
         br#"{"op":"version"}"#,
         br#"{"op":"version","d_src":"0.1"}"#,
         br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true]}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"resolve":[]}}"#,
+        br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"addrs":["0.1"]}}"#,
     ];
     for frame in bad {
         let err = match codec.parse(frame) {

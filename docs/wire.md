@@ -651,14 +651,40 @@ identity, not copied bytes). → `ack`.
 
 ### Links (writes)
 
-**`make_link`** — create an open content link homed in `home`; `from`,
-`to`, `ty` are V-spec sets resolved against current arrangements (the
-recorded endsets are permanent I-spans). The type slot must resolve
-nonempty. → `ack_addr` (the link's address).
+**`make_link`** — create an open link homed in `home`. Each of `from`,
+`to`, `ty` takes **one of two forms** (wire v5; no mixing within one slot):
+
+* a **V-spec array** `[{"source": …, "span": …}, …]` — resolved against
+  current arrangements; the recorded endset is the permanent I-spans (the
+  original form, meaning unchanged);
+* an **address form** `{"addrs": ["<address>", …]}` — the recorded endset
+  is the NAMES verbatim, one unit subtree span per address, with **no
+  resolution and no occupancy requirement**: matching is by address and the
+  contents at the addresses are never examined, exactly as Literary
+  Machines specifies for link types. Any T4-valid address may be named —
+  a link, a document, or a *ghost* position that nothing will ever occupy.
+
+The type slot must be nonempty **as given** (an empty `addrs` list, like a
+V-spec set resolving to nothing, rejects `empty_type_resolution`);
+`from`/`to` may be empty in either form. → `ack_addr` (the link's
+address).
 
 <!-- wire: request make_link -->
 ```json
 {"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":[{"source":"1.0.1.0.2","span":{"start":"1.1","width":"0.6"}}],"ty":[{"source":"1.0.1.0.3","span":{"start":"1.1","width":"0.1"}}]}
+```
+
+Typing by pure name: the `ty` below names position `3.6.1` of document
+`1.0.1.0.3`'s (never-occupied) subspace 3 — a ghost. Every link naming the
+same address is typed identically, and because names nest by tumbler
+prefix, one `find_links_ftt` filter over the name — or over the `…3.6`
+prefix's subtree — finds every link so typed. The `to` here is a
+link-to-link reference: an address-form endset may name a link like any
+other address.
+
+<!-- wire: request make_link -->
+```json
+{"from":[{"source":"1.0.1.0.1","span":{"start":"1.1","width":"0.5"}}],"home":"1.0.1.0.1","op":"make_link","to":{"addrs":["1.0.1.0.1.0.2.1"]},"ty":{"addrs":["1.0.1.0.3.0.3.6.1"]}}
 ```
 
 **`emit`** — gated typed-relation emission: a managed tuple of type `ty`
@@ -691,8 +717,9 @@ retraction's address).
 
 **`edit_link`** — one composite: create a successor of link `original`
 (endsets given as content V-specs; the type slot either
-`{"addrs": [addresses…]}` or `{"resolve": [v-specs…]}`), homed in `d_s`,
-plus the supersession claim homed in `d_a`. → `ack_edit`.
+`{"addrs": [addresses…]}` — the identical encoding of `make_link`'s
+address form — or `{"resolve": [v-specs…]}`), homed in `d_s`, plus the
+supersession claim homed in `d_a`. → `ack_edit`.
 
 <!-- wire: request edit_link -->
 ```json
@@ -1047,6 +1074,26 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v5 (address-denoting endsets on the open link surface — the 2026-08-16
+ruling; spec anchors ASN-0043 L4/L8/L9/L13, Literary Machines 4/44):
+
+* `make_link`'s `from`/`to`/`ty` each accept a second form,
+  `{"addrs": ["<address>", …]}`, beside the unchanged V-spec array: the
+  recorded endset is the names verbatim — one unit subtree span per
+  address, no resolution, no occupancy requirement, nothing beyond address
+  validity (type matching is by address; contents are never examined, and
+  ghost names are valid types). Per-slot either/or; a mixed need resolves
+  first via the read surface and passes `addrs`.
+* The type floor reads *as given*: an empty `addrs` list rejects
+  `empty_type_resolution` exactly as an empty resolution always has;
+  `from`/`to` may be empty in either form.
+* The addrs-object encoding is byte-identical to `edit_link`'s successor
+  `ty` addrs form, which already existed; the V-spec-array form is
+  byte-identical to v4 (existing frames mean exactly what they meant).
+* `udanax-green` precedent: its standard client marker types were always
+  pure address names (vspans over never-created link-subspace positions of
+  doc 1) — the open surface now says so first-class.
 
 v4 (browser reads — CORS everywhere, the commit stream):
 

@@ -10,7 +10,7 @@ mod common;
 use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Disposition, Op, OpKind, RejectCode, SuccessorSpec, TypeArg};
+use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec};
 use skep_links::{enc, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Region, Spec};
@@ -192,9 +192,9 @@ fn link_lifecycle() {
 
     let mk = || Op::MakeLink {
         home: d.clone(),
-        from: vec![vspec(&d, 1, 1)],
-        to: vec![vspec(&d, 2, 1)],
-        ty: vec![vspec(&d, 3, 1)],
+        from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+        to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+        ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
     };
     let (l1, _) = ack_addr(ex(&fx.op, fx.s, mk()));
     let (l2, _) = ack_addr(ex(&fx.op, fx.s, mk()));
@@ -251,7 +251,7 @@ fn link_lifecycle() {
             successor: SuccessorSpec {
                 from: vec![vspec(&d, 1, 1)],
                 to: vec![vspec(&d, 2, 1)],
-                ty: TypeArg::Resolve(vec![vspec(&d, 3, 1)]),
+                ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
             },
             d_s: d.clone(),
             d_a: d.clone(),
@@ -367,7 +367,7 @@ fn rejection_surface() {
             successor: SuccessorSpec {
                 from: vec![ill_formed],
                 to: vec![],
-                ty: TypeArg::Addrs(vec![d.clone()]),
+                ty: SlotArg::Addrs(vec![d.clone()]),
             },
             d_s: d.clone(),
             d_a: d.clone(),
@@ -381,9 +381,9 @@ fn rejection_surface() {
     // supersession claims write only via AssertSup/EditLink.
     let mk = || Op::MakeLink {
         home: d.clone(),
-        from: vec![vspec(&d, 1, 1)],
-        to: vec![vspec(&d, 2, 1)],
-        ty: vec![vspec(&d, 3, 1)],
+        from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+        to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+        ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
     };
     let (l1, _) = ack_addr(ex(&fx.op, fx.s, mk()));
     let (l2, _) = ack_addr(ex(&fx.op, fx.s, mk()));

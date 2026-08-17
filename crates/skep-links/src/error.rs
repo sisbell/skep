@@ -16,12 +16,13 @@ use skep_namespace::MintError;
 pub enum MakeLinkError {
     /// `home` is not a registered Document (L1a/ML0 P0).
     HomeNotRegistered,
-    /// A V-spec fails wf: unregistered source, or not a depth-2 content
-    /// V-position with ordinal displacement (`#start = 2 ∧ start₁ = s_C ∧
-    /// #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
-    /// ASN-0120's `#u_j ≥ 2` (Conflicts §12).
+    /// A `Resolve` V-spec fails wf: unregistered source, or not a depth-2
+    /// content V-position with ordinal displacement (`#start = 2 ∧ start₁ =
+    /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
+    /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
-    /// The type spec-set resolved to `⟨⟩` (ML6 — `e₃ ≠ ∅`).
+    /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
+    /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
     EmptyTypeResolution,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -150,7 +151,7 @@ impl fmt::Display for MakeLinkError {
                 "makelink: a V-spec is not a registered-source depth-2 content V-position (wf, Conflicts §12)",
             ),
             MakeLinkError::EmptyTypeResolution => {
-                f.write_str("makelink: the type spec-set resolved to ⟨⟩ (ML6)")
+                f.write_str("makelink: the type slot is empty as given (ML6)")
             }
             MakeLinkError::Mint(e) => write!(f, "makelink: mint failed: {e}"),
             MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e:?}"),

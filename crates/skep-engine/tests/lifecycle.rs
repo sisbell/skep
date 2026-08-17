@@ -12,7 +12,7 @@ use common::*;
 use skep_content::Val;
 use skep_discovery::LinkQuery;
 use skep_engine::{Engine, EngineError, GenesisConfig};
-use skep_links::HasLinks;
+use skep_links::{HasLinks, SlotArg};
 use skep_retrieval::{Query, Spec};
 use tempfile::tempdir;
 
@@ -57,9 +57,9 @@ fn cross_store_lifecycle_under_fsync() {
             .linkstore()
             .makelink(
                 &doc,
-                vec![vspec(&doc, 1, 1)],
-                vec![vspec(&doc, 2, 1)],
-                vec![vspec(&doc, 3, 1)],
+                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 3, 1)]),
             )
             .expect("makelink succeeds");
         link = l;

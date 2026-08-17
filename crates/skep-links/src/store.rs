@@ -35,6 +35,35 @@ pub struct LinkStore<'k, W: WorldState> {
     registry: Arc<TypeRegistry>,
 }
 
+/// One MAKELINK endset argument (the 2026-08-16 address-denoting-endsets
+/// amendment; ASN-0043 L4/L8/L9/L13): content V-specs resolved against the
+/// txn base — the original form, semantics unchanged — or address NAMES
+/// recorded verbatim as [`enc`]`(addrs)`, with no resolution, no occupancy
+/// requirement, and nothing beyond the T4 validity `Address` already carries
+/// (LM 4/44: type matching is by address, contents never examined; ghost
+/// names are valid). Per-slot either/or — no mixing within a slot in v1 (a
+/// mixed need resolves first via the read surface and passes `Addrs`). Also
+/// M10's successor type slot: the one two-form enum serves both surfaces.
+pub enum SlotArg {
+    /// Content V-specs, wf-checked and resolved to I-extents inside
+    /// makelink's transact.
+    Resolve(Vec<VSpec>),
+    /// Address names, deposited verbatim as the canonical `enc` endset.
+    Addrs(Vec<Address>),
+}
+
+impl SlotArg {
+    /// The `Resolve` form's specs — the wf-check domain. `Addrs` names get
+    /// no check beyond the T4 validity their type already carries
+    /// (ReflexiveAddressing: any T4-valid name, occupied or ghost).
+    fn specs(&self) -> &[VSpec] {
+        match self {
+            SlotArg::Resolve(specs) => specs,
+            SlotArg::Addrs(_) => &[],
+        }
+    }
+}
+
 impl<'k, W> LinkStore<'k, W>
 where
     W: WorldState + HasLinks,
@@ -320,28 +349,34 @@ where
     W: WorldState + HasLinks + HasM3 + HasM5,
     W::Record: From<LinkRec> + From<M3Rec> + From<M5Rec>,
 {
-    /// MAKELINK (ASN-0120): resolve three V-spec-sets to content I-extent
-    /// endsets (M5 `resolve` + `Run::iextent`, read off the txn BASE — the
-    /// whole op linearizes at its commit, ASN-0134), require the type endset
-    /// non-empty (ML6), mint a fresh home-scoped link, deposit the standard
-    /// triple, then seat it in `home`'s link subspace (K.μ⁺_L, no R —
-    /// J-LV). ONE M2 composite under `link_lock_key(home)` (the held lock
-    /// and the advanced frontier are byte-identical — M3's contract). NO
-    /// shape gate, NO idem dedup (distinct links always — ML0), NO
-    /// provenance.
+    /// MAKELINK (ASN-0120, as amended 2026-08-16): build three endsets — a
+    /// [`SlotArg::Resolve`] slot resolves its V-specs to content I-extents
+    /// (M5 `resolve` + `Run::iextent`, read off the txn BASE — the whole op
+    /// linearizes at its commit, ASN-0134); a [`SlotArg::Addrs`] slot is
+    /// `enc(addrs)`, the NAMES verbatim (L8: matching is by address,
+    /// contents never examined; ghost names valid, L9) — require the type
+    /// endset non-empty AS GIVEN (ML6: an empty `Addrs` list and an empty
+    /// `Resolve` resolution both land in the one `⟨⟩` check), mint a fresh
+    /// home-scoped link, deposit the standard triple, then seat it in
+    /// `home`'s link subspace (K.μ⁺_L, no R — J-LV). ONE M2 composite under
+    /// `link_lock_key(home)` (the held lock and the advanced frontier are
+    /// byte-identical — M3's contract). NO shape gate, NO idem dedup
+    /// (distinct links always — ML0), NO provenance.
     ///
-    /// wf is CONCRETE component tests on each spec (registered source;
-    /// `#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧ width₁ = 0`) — the
+    /// wf is CONCRETE component tests on each `Resolve` spec (registered
+    /// source; `#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧ width₁ = 0`) — the
     /// V-position's subspace is the start's FIRST component, NOT M1's
     /// `Address::subspace()` (which needs zeros = 3 and would reject every
     /// depth-2 spec); the length checks precede the `get(1)` indexing. A
-    /// deliberate depth-2 narrowing of ASN-0120's `#u_j ≥ 2` (Conflicts §12).
+    /// deliberate depth-2 narrowing of ASN-0120's `#u_j ≥ 2` (Conflicts
+    /// §12). `Addrs` slots get no wf step: T4 validity is the whole
+    /// precondition, already carried by the `Address` type.
     pub fn makelink(
         &self,
         home: &Address,
-        from: Vec<VSpec>,
-        to: Vec<VSpec>,
-        ty: Vec<VSpec>,
+        from: SlotArg,
+        to: SlotArg,
+        ty: SlotArg,
     ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
         self.kernel
             .transact(&[M3State::link_lock_key(home)], |stg| {
@@ -350,7 +385,9 @@ where
                     if !base.m3().is_registered_document(home) {
                         return Err(MakeLinkError::HomeNotRegistered);
                     }
-                    for spec in from.iter().chain(to.iter()).chain(ty.iter()) {
+                    for spec in
+                        from.specs().iter().chain(to.specs().iter()).chain(ty.specs().iter())
+                    {
                         let wf = base.m3().is_registered_document(&spec.source)
                             && spec.span.start().len() == 2
                             && *spec.span.start().get(1) == s_c()
@@ -360,22 +397,28 @@ where
                             return Err(MakeLinkError::IllFormedSpec);
                         }
                     }
-                    // ρ as content I-extents — readable, level-uniform spans
-                    // (ML1 coverage-exactness by construction: the runs trace
-                    // exactly allocated content, cross-origin runs arrive
-                    // un-coalesced).
-                    let resolve_set = |specs: &[VSpec]| -> Endset {
-                        Endset::from_spans(specs.iter().flat_map(|sp| {
-                            base.m5()
-                                .resolve(&sp.source, &sp.span)
-                                .into_iter()
-                                .map(|r| r.iextent())
-                        }))
+                    // Resolve: ρ as content I-extents — readable,
+                    // level-uniform spans (ML1 coverage-exactness by
+                    // construction: the runs trace exactly allocated content,
+                    // cross-origin runs arrive un-coalesced). Addrs: the
+                    // canonical name encoding, deposited unresolved.
+                    let build = |slot: &SlotArg| -> Endset {
+                        match slot {
+                            SlotArg::Resolve(specs) => {
+                                Endset::from_spans(specs.iter().flat_map(|sp| {
+                                    base.m5()
+                                        .resolve(&sp.source, &sp.span)
+                                        .into_iter()
+                                        .map(|r| r.iextent())
+                                }))
+                            }
+                            SlotArg::Addrs(addrs) => enc(addrs),
+                        }
                     };
-                    (resolve_set(&from), resolve_set(&to), resolve_set(&ty))
+                    (build(&from), build(&to), build(&ty))
                 };
                 if e3.is_empty() {
-                    return Err(MakeLinkError::EmptyTypeResolution); // ML6
+                    return Err(MakeLinkError::EmptyTypeResolution); // ML6, as-given
                 }
                 let value = Link::new([e1, e2, e3]).expect("the standard triple has arity 3");
                 let addr = emit_core(stg, home, value, Gate::Open)?;

@@ -60,10 +60,14 @@ mod reject;
 mod response;
 
 pub use codec::{Codec, ParseError};
-pub use op::{Op, OpKind, ReqId, Request, SessionId, SuccessorSpec, TypeArg};
+pub use op::{Op, OpKind, ReqId, Request, SessionId, SuccessorSpec};
 pub use operation::Operation;
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
+// The two-form endset slot (M7-defined; the 2026-08-16 amendment): names
+// `Op::MakeLink`'s three slots and `SuccessorSpec`'s type slot, re-exported
+// so the transport spells one crate.
+pub use skep_links::SlotArg;
 
 use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, WorldState};

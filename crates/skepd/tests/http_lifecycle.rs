@@ -144,6 +144,138 @@ fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
     sd.shutdown();
 }
 
+/// Wire v5: address-form endsets on make_link, end to end. Ghost NAMES in a
+/// registry document's never-occupied subspace 3 type links; the recorded
+/// endsets are the names verbatim (no resolution, contents never examined);
+/// follow answers the name span; an ftt type filter over the exact name
+/// finds every link sharing it and no other; a filter over the names'
+/// common prefix subtree finds the whole family; a link address is an
+/// ordinary endset name (link-to-link); and the type floor reads as-given —
+/// empty addrs FROM/TO admitted, empty addrs TY rejected.
+#[test]
+fn addrs_form_endsets_and_ghost_types() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (s1, account1) = delegate_first_principal(port);
+
+    let doc = create_doc(port, &s1, &account1);
+    expect_resp(&insert_at(port, &s1, &doc, 1, r#""anchor text""#), "ack_addr");
+    // The registry document: nothing is ever inserted in its subspace 3, so
+    // the names below are pure names — ghosts.
+    let registry = create_doc(port, &s1, &account1);
+    let name1 = format!("{registry}.0.3.6.1");
+    let name2 = format!("{registry}.0.3.6.2");
+    // enc records one unit subtree span per name: width 0.….0.1 at the
+    // name's own component count.
+    let unit_w = |addr: &str| {
+        let mut comps = vec!["0"; addr.split('.').count() - 1];
+        comps.push("1");
+        comps.join(".")
+    };
+
+    // Link 1: content-resolved FROM, empty addrs TO, ghost-name TY.
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"make_link","home":"{doc}","from":[{{"source":"{doc}","span":{{"start":"1.1","width":"0.6"}}}}],"to":{{"addrs":[]}},"ty":{{"addrs":["{name1}"]}}}}"#
+        ),
+    );
+    let l1 = acked_addr(&v);
+
+    // read_link: the type slot is exactly enc({name1}) — the NAME, not any
+    // content — and the empty addrs TO is the empty endset.
+    let ty_endset: Value = serde_json::from_str(&format!(
+        r#"[{{"start":"{name1}","width":"{}"}}]"#,
+        unit_w(&name1)
+    ))
+    .expect("json");
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l1}"}}"#));
+    let slots = expect_resp(&v, "link_value")["link"]["slots"].as_array().expect("slots");
+    assert_eq!(slots[2], ty_endset, "the addrs-form ty records the name verbatim");
+    assert_eq!(slots[1], Value::Array(vec![]), "the empty addrs to-endset is ⟨⟩");
+
+    // follow slot 3 answers the name span.
+    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{l1}","slot":3}}"#));
+    assert_eq!(expect_resp(&v, "follow")["result"]["ok"], ty_endset);
+
+    // Link 2 shares name1 and points TO l1 by address (link-to-link).
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"make_link","home":"{doc}","from":[{{"source":"{doc}","span":{{"start":"1.7","width":"0.4"}}}}],"to":{{"addrs":["{l1}"]}},"ty":{{"addrs":["{name1}"]}}}}"#
+        ),
+    );
+    let l2 = acked_addr(&v);
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l2}"}}"#));
+    let to_expect: Value =
+        serde_json::from_str(&format!(r#"[{{"start":"{l1}","width":"{}"}}]"#, unit_w(&l1)))
+            .expect("json");
+    assert_eq!(
+        expect_resp(&v, "link_value")["link"]["slots"][1],
+        to_expect,
+        "the addrs-form to records the link address"
+    );
+
+    // Link 3: the sibling name under …3.6, with both FROM and TO empty in
+    // the addrs form (both admitted).
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"make_link","home":"{doc}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{name2}"]}}}}"#
+        ),
+    );
+    let l3 = acked_addr(&v);
+
+    // ftt over the exact name: the two links sharing name1, and only them.
+    let has = |v: &Value, addr: &str| {
+        v["addrs"].as_array().expect("addrs").iter().any(|a| a.as_str() == Some(addr))
+    };
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{name1}","width":"{}"}}]}}}}"#,
+            unit_w(&name1)
+        ),
+    );
+    expect_resp(&v, "addrs");
+    assert!(has(&v, &l1) && has(&v, &l2), "shared-identity typing: both name1 links found");
+    assert!(!has(&v, &l3), "the sibling name must not match the exact-name filter");
+
+    // One query spanning …3.6's subtree finds the whole family — the type
+    // hierarchy is the tumbler prefix order.
+    let prefix = format!("{registry}.0.3.6");
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{prefix}","width":"{}"}}]}}}}"#,
+            unit_w(&prefix)
+        ),
+    );
+    expect_resp(&v, "addrs");
+    assert!(has(&v, &l1) && has(&v, &l2) && has(&v, &l3), "the prefix subtree finds all three");
+
+    // The type floor is as-given: an empty addrs TY rejects exactly as an
+    // empty resolution does.
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"make_link","home":"{doc}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":[]}}}}"#
+        ),
+    );
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["op"].as_str(), Some("make_link"));
+    assert_eq!(rej["code"].as_str(), Some("empty_type_resolution"));
+
+    sd.shutdown();
+}
+
 /// Wire v2 granularity through the real store: a mixed insert (per-byte
 /// text, a composite atom, raw non-UTF-8 bytes) comes back from retrieve_v
 /// with its granularity intact — per-byte runs coalesce, the atom stays its

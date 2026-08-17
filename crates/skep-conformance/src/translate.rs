@@ -209,7 +209,7 @@ use skep_address::Nat;
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Op, Response};
+use skep_febe::{Op, Response, SlotArg};
 use skep_links::{enc, Endset};
 use skep_retrieval::{DeliveryItem, Region, Spec};
 
@@ -676,7 +676,12 @@ impl Cx<'_> {
                     .rig
                     .type_vspec("jump")
                     .ok_or_else(|| "setup link: type registry exhausted".to_string())?;
-                match self.rig.exec(Op::MakeLink { home, from: f, to: t, ty: vec![ty] }) {
+                match self.rig.exec(Op::MakeLink {
+                    home,
+                    from: SlotArg::Resolve(f),
+                    to: SlotArg::Resolve(t),
+                    ty: SlotArg::Resolve(vec![ty]),
+                }) {
                     Response::AckAddr { addr, .. } => {
                         self.shadow.seat_link(&home_golden);
                         self.shadow.set_current(&home_golden);
@@ -2539,7 +2544,12 @@ fn h_create_link_explicit(cx: &mut Cx, op: &Value, out: &mut OpOutcome, xf: Opti
     let from_triples = op.get("fromset").map(&triples).unwrap_or_default();
     let to_triples = op.get("toset").map(&triples).unwrap_or_default();
 
-    match cx.rig.exec(Op::MakeLink { home, from, to, ty }) {
+    match cx.rig.exec(Op::MakeLink {
+        home,
+        from: SlotArg::Resolve(from),
+        to: SlotArg::Resolve(to),
+        ty: SlotArg::Resolve(ty),
+    }) {
         Response::AckAddr { addr, .. } => {
             if !settle_ack(out, xf, None) {
                 return;
@@ -2909,7 +2919,12 @@ fn h_create_link(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome) {
             out.note = Some(format!("create_link home {home_golden} unresolvable"));
             return;
         };
-        let r = cx.rig.exec(Op::MakeLink { home, from, to, ty: vec![ty] });
+        let r = cx.rig.exec(Op::MakeLink {
+            home,
+            from: SlotArg::Resolve(from),
+            to: SlotArg::Resolve(to),
+            ty: SlotArg::Resolve(vec![ty]),
+        });
         match r {
             Response::AckAddr { addr, .. } => {
                 cx.shadow.seat_link(&home_golden);

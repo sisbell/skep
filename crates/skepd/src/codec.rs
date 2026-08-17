@@ -9,6 +9,11 @@
 //!   snake_case op names mirroring `OpKind`; unknown ops and unknown fields
 //!   are parse failures, never ignored (the never-silent contract applied to
 //!   client typos).
+//! * `make_link`'s three endset slots are two-form (wire v5): a V-spec array
+//!   (content-resolved, the v1 meaning byte-for-byte) or
+//!   `{"addrs": [addresses…]}` — the names recorded verbatim, no resolution;
+//!   the addrs-object encoding is identical to `edit_link`'s successor `ty`
+//!   addrs form.
 //! * Tumblers and addresses are dotted-decimal strings (`"1.1.0.1.0.2"`);
 //!   spans are `{"start": …, "width": …}` objects; unbounded ℕ values ride
 //!   as decimal strings (T0 admits magnitudes no JSON number can carry),
@@ -43,7 +48,7 @@ use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
     Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
-    Response, SuccessorSpec, TypeArg,
+    Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Link, View};
@@ -174,9 +179,9 @@ fn parse_op(name: &str, o: &mut Obj) -> PResult<Op> {
         "version" => Op::Version { d_src: o.addr("d_src")? },
         "make_link" => Op::MakeLink {
             home: o.addr("home")?,
-            from: o.vspecs("from")?,
-            to: o.vspecs("to")?,
-            ty: o.vspecs("ty")?,
+            from: o.slotarg("from")?,
+            to: o.slotarg("to")?,
+            ty: o.slotarg("ty")?,
         },
         "emit" => Op::Emit {
             home: o.addr("home")?,
@@ -319,6 +324,10 @@ impl Obj {
         self.field(k, |v| p_list(v, p_vspec))
     }
 
+    fn slotarg(&mut self, k: &'static str) -> PResult<SlotArg> {
+        self.field(k, p_slotarg)
+    }
+
     fn specs(&mut self, k: &'static str) -> PResult<Vec<Spec>> {
         self.field(k, |v| p_list(v, p_spec))
     }
@@ -444,6 +453,21 @@ fn p_vspec(v: &Value) -> PResult<VSpec> {
     Ok(VSpec { source: sub(m, "source", p_addr)?, span: sub(m, "span", p_span)? })
 }
 
+/// A `make_link` endset slot (wire v5): a V-spec array (content-resolved,
+/// the v1 form, unchanged meaning) or `{"addrs": [addresses…]}` — the names
+/// recorded verbatim, the same addrs-object encoding as `edit_link`'s
+/// successor `ty`.
+fn p_slotarg(v: &Value) -> PResult<SlotArg> {
+    match v {
+        Value::Array(_) => Ok(SlotArg::Resolve(p_list(v, p_vspec)?)),
+        Value::Object(_) => {
+            let m = p_obj(v, &["addrs"])?;
+            Ok(SlotArg::Addrs(sub(m, "addrs", |v| p_list(v, p_addr))?))
+        }
+        _ => Err(PErr("expected a v-spec array or {\"addrs\": [addresses…]}".into())),
+    }
+}
+
 fn p_spec(v: &Value) -> PResult<Spec> {
     let m = p_obj(v, &["doc", "span"])?;
     Ok(Spec { doc: sub(m, "doc", p_addr)?, span: sub(m, "span", p_span)? })
@@ -567,22 +591,23 @@ fn p_fourset(v: &Value) -> PResult<FourSet> {
 }
 
 /// EditLink's successor: content V-specs for from/to; the type slot is
-/// exactly one of `{"addrs": […]}` (address-denoting) or `{"resolve": […]}`
-/// (content-resolved), mirroring M10's `TypeArg`.
+/// exactly one of `{"addrs": […]}` (address-denoting — the identical
+/// encoding of `make_link`'s addrs form) or `{"resolve": […]}`
+/// (content-resolved), mirroring M10's `SlotArg`.
 fn p_successor(v: &Value) -> PResult<SuccessorSpec> {
     let m = p_obj(v, &["from", "to", "ty"])?;
     Ok(SuccessorSpec {
         from: sub(m, "from", |v| p_list(v, p_vspec))?,
         to: sub(m, "to", |v| p_list(v, p_vspec))?,
-        ty: sub(m, "ty", p_typearg)?,
+        ty: sub(m, "ty", p_successor_ty)?,
     })
 }
 
-fn p_typearg(v: &Value) -> PResult<TypeArg> {
+fn p_successor_ty(v: &Value) -> PResult<SlotArg> {
     let m = p_obj(v, &["addrs", "resolve"])?;
     match (m.get("addrs"), m.get("resolve")) {
-        (Some(a), None) => Ok(TypeArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {}", e.0)))?)),
-        (None, Some(r)) => Ok(TypeArg::Resolve(p_list(r, p_vspec).map_err(|e| PErr(format!("resolve: {}", e.0)))?)),
+        (Some(a), None) => Ok(SlotArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {}", e.0)))?)),
+        (None, Some(r)) => Ok(SlotArg::Resolve(p_list(r, p_vspec).map_err(|e| PErr(format!("resolve: {}", e.0)))?)),
         _ => Err(PErr("expected exactly one of 'addrs' or 'resolve'".into())),
     }
 }
@@ -629,9 +654,9 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::MakeLink),
             vec![
                 ("home", j_addr(home)),
-                ("from", j_vspecs(from)),
-                ("to", j_vspecs(to)),
-                ("ty", j_vspecs(ty)),
+                ("from", j_slotarg(from)),
+                ("to", j_slotarg(to)),
+                ("ty", j_slotarg(ty)),
             ],
         ),
         Op::Emit { home, ty, from, to } => (
@@ -955,6 +980,15 @@ fn j_vspecs(vs: &[VSpec]) -> Value {
     Value::Array(vs.iter().map(j_vspec).collect())
 }
 
+/// [`p_slotarg`]'s inverse: the Resolve form is the bare v-spec array (v4
+/// bytes unchanged), the Addrs form the tagged object.
+fn j_slotarg(s: &SlotArg) -> Value {
+    match s {
+        SlotArg::Resolve(v) => j_vspecs(v),
+        SlotArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
+    }
+}
+
 fn j_spec(s: &Spec) -> Value {
     obj(vec![("doc", j_addr(&s.doc)), ("span", j_span(&s.span))])
 }
@@ -1137,14 +1171,14 @@ fn j_successor(s: &SuccessorSpec) -> Value {
     obj(vec![
         ("from", j_vspecs(&s.from)),
         ("to", j_vspecs(&s.to)),
-        ("ty", j_typearg(&s.ty)),
+        ("ty", j_successor_ty(&s.ty)),
     ])
 }
 
-fn j_typearg(t: &TypeArg) -> Value {
+fn j_successor_ty(t: &SlotArg) -> Value {
     match t {
-        TypeArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
-        TypeArg::Resolve(v) => obj(vec![("resolve", j_vspecs(v))]),
+        SlotArg::Addrs(a) => obj(vec![("addrs", j_addrs(a))]),
+        SlotArg::Resolve(v) => obj(vec![("resolve", j_vspecs(v))]),
     }
 }
 

@@ -19,12 +19,12 @@ use skep_discovery::{
     window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::{enc, Endset, HasLinks, Link, LinkRec};
+use skep_links::{enc, Endset, HasLinks, Link, LinkRec, SlotArg};
 use skep_namespace::{HasM3, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::lower::{map_read, Lower};
-use crate::op::{Op, OpKind, ReqId, Request, SessionId, TypeArg};
+use crate::op::{Op, OpKind, ReqId, Request, SessionId};
 use crate::reject::{reject, reject1, RejectCode, Rejection};
 use crate::response::Response;
 use crate::Stores;
@@ -288,10 +288,12 @@ where
             }
             // ── link writes (→ M7) ──
             Op::MakeLink { home, from, to, ty } => {
+                // M7 handles both slot forms INSIDE its transact: Resolve
+                // V-specs off the txn base, Addrs deposited verbatim.
                 let (addr, at) = self
                     .stores
                     .linkstore()
-                    .makelink(&home, from, to, ty) // M7 resolves V-specs INSIDE its transact
+                    .makelink(&home, from, to, ty)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -333,11 +335,11 @@ where
                 let from = endset_from_vspecs(m5, &successor.from)?;
                 let to = endset_from_vspecs(m5, &successor.to)?;
                 let ty = match &successor.ty {
-                    // TYPE is the one slot offering two forms (§4):
+                    // TYPE is the successor's one two-form slot (§4):
                     // address-denoting or content-resolved; M7 owns the
                     // slot-shape/schema verdict inside editlink.
-                    TypeArg::Addrs(a) => enc(a),
-                    TypeArg::Resolve(v) => endset_from_vspecs(m5, v)?,
+                    SlotArg::Addrs(a) => enc(a),
+                    SlotArg::Resolve(v) => endset_from_vspecs(m5, v)?,
                 };
                 let link = Link::new([from, to, ty])
                     .ok_or_else(|| reject1(kind, RejectCode::IllFormedSpec))?;

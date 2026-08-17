@@ -6,7 +6,7 @@ use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::{VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
-use skep_links::{Endset, View};
+use skep_links::{Endset, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Region, Spec};
 
@@ -68,8 +68,10 @@ pub enum Op {
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
     Version { d_src: Address },
     // ── link writes (→ M7) ──
-    /// MAKELINK (ASN-0120): open content link from three V-spec-sets.
-    MakeLink { home: Address, from: Vec<VSpec>, to: Vec<VSpec>, ty: Vec<VSpec> },
+    /// MAKELINK (ASN-0120, as amended 2026-08-16): open link from three
+    /// two-form slots — each content V-specs (resolved by M7 inside its
+    /// transact) or address NAMES deposited verbatim (`SlotArg` is M7's).
+    MakeLink { home: Address, from: SlotArg, to: SlotArg, ty: SlotArg },
     /// Emit_K: gated typed-relation emission (ASN-0126).
     Emit { home: Address, ty: Endset, from: Address, to: Vec<Address> },
     /// Nullify_Binary — the sole retraction path.
@@ -130,18 +132,14 @@ pub enum Op {
 /// EditLink's successor, assembled by M10 from content V-specs (§4).
 /// `from`/`to` are content-resolved ONLY — a deliberate narrowing: an
 /// address-denoting successor is not constructible here; supersession of
-/// managed tuples goes via [`Op::Emit`] + [`Op::AssertSup`].
+/// managed tuples goes via [`Op::Emit`] + [`Op::AssertSup`]. The type slot
+/// is the two-form [`SlotArg`] (formerly this crate's own `TypeArg`; the
+/// 2026-08-16 amendment unified it with M7's, which [`Op::MakeLink`]'s
+/// three slots now share).
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,
-    pub ty: TypeArg,
-}
-
-/// The type slot: address-set (managed-relation) or content-resolved —
-/// the one successor slot offering two forms (§4).
-pub enum TypeArg {
-    Addrs(Vec<Address>),
-    Resolve(Vec<VSpec>),
+    pub ty: SlotArg,
 }
 
 /// Fieldless echo of [`Op`] (one unit variant per operation) PLUS
@@ -344,14 +342,22 @@ mod tests {
             (Op::Copy { doc: d(), at: vp(), specs: vec![vs()] }, false),
             (Op::Rearrange { doc: d(), cuts: vec![vp()] }, false),
             (Op::Version { d_src: d() }, false),
-            (Op::MakeLink { home: d(), from: vec![vs()], to: vec![vs()], ty: vec![vs()] }, false),
+            (
+                Op::MakeLink {
+                    home: d(),
+                    from: SlotArg::Resolve(vec![vs()]),
+                    to: SlotArg::Addrs(vec![d()]),
+                    ty: SlotArg::Resolve(vec![vs()]),
+                },
+                false,
+            ),
             (Op::Emit { home: d(), ty: Endset::empty(), from: d(), to: vec![] }, false),
             (Op::Nullify { home: d(), target: d() }, false),
             (Op::AssertSup { home: d(), old: d(), new: d() }, false),
             (
                 Op::EditLink {
                     original: d(),
-                    successor: SuccessorSpec { from: vec![vs()], to: vec![vs()], ty: TypeArg::Addrs(vec![d()]) },
+                    successor: SuccessorSpec { from: vec![vs()], to: vec![vs()], ty: SlotArg::Addrs(vec![d()]) },
                     d_s: d(),
                     d_a: d(),
                 },

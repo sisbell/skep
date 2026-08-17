@@ -16,7 +16,7 @@ use common::*;
 use skep_content::Val;
 use skep_engine::observe::{dump, hints_faithful};
 use skep_engine::{Engine, GenesisConfig, ReservedAddrs, TypeDecl};
-use skep_links::{enc, Behavior, Registration, Shape};
+use skep_links::{enc, Behavior, Registration, Shape, SlotArg};
 use tempfile::tempdir;
 
 /// The standard reserved addresses plus one app-declared Binary idem⊤ type,
@@ -60,11 +60,21 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
         // dump-observable hint family past the checkpoint.
         let (l1, _) = engine
             .linkstore()
-            .makelink(&doc, vec![vspec(&doc, 1, 1)], vec![vspec(&doc, 2, 1)], vec![vspec(&doc, 1, 2)])
+            .makelink(
+                &doc,
+                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
+            )
             .expect("makelink l1");
         let (l2, _) = engine
             .linkstore()
-            .makelink(&doc, vec![vspec(&doc, 2, 1)], vec![vspec(&doc, 1, 1)], vec![vspec(&doc, 1, 2)])
+            .makelink(
+                &doc,
+                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
+            )
             .expect("makelink l2");
         engine.linkstore().assert_sup(&doc, &l1, &l2).expect("assert_sup");
         engine.linkstore().nullify(&doc, &l1).expect("nullify");

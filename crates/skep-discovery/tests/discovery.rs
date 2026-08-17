@@ -15,7 +15,7 @@ use skep_arrangement::HasM5;
 use skep_discovery::{
     count_v_on, window_v_on, FourSet, LinkQuery, QueryError, SlotSpec, SupClaim, FROM, TO, TYPE,
 };
-use skep_links::{enc, Endset, LinkStore, View};
+use skep_links::{enc, Endset, LinkStore, SlotArg, View};
 
 fn all_any() -> FourSet {
     FourSet {
@@ -119,9 +119,9 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
     let (m1, _) = store
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 2, 1)],
-            vec![spec(&doc1(), 1, 3, 1)],
-            vec![spec(&doc1(), 1, 1, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
         )
         .expect("makelink succeeds");
     assert_eq!(m1, la(2));
@@ -214,9 +214,9 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     store
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 1, 3)],
-            vec![spec(&doc1(), 1, 3, 1)],
-            vec![spec(&doc1(), 1, 1, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 3)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
         )
         .expect("makelink succeeds");
     let whole = Endset::from_spans([run(&ca(1), 3).iextent()]);
@@ -400,17 +400,17 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     let (m1, _) = store
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 1, 1)],
-            vec![spec(&doc1(), 1, 2, 1)],
-            vec![spec(&doc1(), 1, 1, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
         )
         .expect("makelink succeeds");
     let (m2, _) = store
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 2, 1)],
-            vec![spec(&doc1(), 1, 1, 1)],
-            vec![spec(&doc1(), 1, 2, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
         )
         .expect("makelink succeeds");
     let (claim, _) = store.assert_sup(&doc2(), &m1, &m2).expect("assert_sup succeeds");

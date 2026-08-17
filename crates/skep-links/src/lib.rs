@@ -66,7 +66,7 @@ pub use registry::{
     TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use store::LinkStore;
+pub use store::{LinkStore, SlotArg};
 
 use skep_address::Nat;
 

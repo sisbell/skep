@@ -13,7 +13,7 @@ use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, EditLinkError, EmitError, Endset, HasLinks, Link, LinkStore,
-    MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, Tip, View,
+    MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, SlotArg, Tip, View,
 };
 
 fn store(k: &skep_kernel::Kernel<World>) -> LinkStore<'_, World> {
@@ -364,9 +364,9 @@ fn makelink_resolves_deposits_and_seats() {
     let (l1, _) = s
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 1, 1)],
-            vec![spec(&doc1(), 1, 2, 1)],
-            vec![spec(&doc1(), 1, 3, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
         )
         .expect("makelink");
     assert_eq!(l1, la(1));
@@ -396,9 +396,9 @@ fn makelink_resolves_deposits_and_seats() {
     let (l2, _) = s
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 1, 1)],
-            vec![spec(&doc1(), 1, 2, 1)],
-            vec![spec(&doc1(), 1, 3, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
         )
         .expect("identical makelink deposits fresh");
     assert_ne!(l2, l1);
@@ -406,7 +406,12 @@ fn makelink_resolves_deposits_and_seats() {
     // An empty from spec-set is a valid ⟨⟩ endset — and FOLLOWLINK's Ok-empty
     // keeps ⟨⟩ ≠ ⊥.
     let (l3, _) = s
-        .makelink(&doc1(), vec![], vec![spec(&doc1(), 1, 2, 1)], vec![spec(&doc1(), 1, 3, 1)])
+        .makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
+        )
         .expect("empty from-set admitted");
     {
         let snap = k.snapshot();
@@ -416,12 +421,22 @@ fn makelink_resolves_deposits_and_seats() {
 
     // ML6: a well-formed type spec resolving to nothing is a typed rejection.
     assert!(matches!(
-        s.makelink(&doc1(), vec![], vec![], vec![spec(&doc1(), 1, 9, 1)]),
+        s.makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 9, 1)])
+        ),
         Err(TxnError::Rejected(MakeLinkError::EmptyTypeResolution))
     ));
     // wf: link-subspace spec, deeper-than-2 spec, unregistered source.
     assert!(matches!(
-        s.makelink(&doc1(), vec![spec(&doc1(), 2, 1, 1)], vec![], vec![spec(&doc1(), 1, 3, 1)]),
+        s.makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 2, 1, 1)]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
+        ),
         Err(TxnError::Rejected(MakeLinkError::IllFormedSpec))
     ));
     let deep = skep_arrangement::VSpec {
@@ -429,21 +444,92 @@ fn makelink_resolves_deposits_and_seats() {
         span: skep_address::Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12-valid"),
     };
     assert!(matches!(
-        s.makelink(&doc1(), vec![deep], vec![], vec![spec(&doc1(), 1, 3, 1)]),
+        s.makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![deep]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
+        ),
         Err(TxnError::Rejected(MakeLinkError::IllFormedSpec))
     ));
     assert!(matches!(
         s.makelink(
             &doc1(),
-            vec![spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1)],
-            vec![],
-            vec![spec(&doc1(), 1, 3, 1)]
+            SlotArg::Resolve(vec![spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1)]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
         ),
         Err(TxnError::Rejected(MakeLinkError::IllFormedSpec))
     ));
     assert!(matches!(
-        s.makelink(&a(&[1, 0, 1, 0, 7]), vec![], vec![], vec![spec(&doc1(), 1, 3, 1)]),
+        s.makelink(
+            &a(&[1, 0, 1, 0, 7]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
+        ),
         Err(TxnError::Rejected(MakeLinkError::HomeNotRegistered))
+    ));
+}
+
+/// The 2026-08-16 address-form amendment (L4/L8/L9/L13): an `Addrs` slot
+/// deposits `enc(addrs)` — the NAMES verbatim, unresolved, no occupancy
+/// requirement — so a ghost subspace-3 name can type a link, two links
+/// naming the same address share a type class, and a link address is an
+/// ordinary endset name. The type floor reads as-given: an empty `Addrs`
+/// list rejects exactly as an empty resolution does.
+#[test]
+fn makelink_addrs_form_records_names_verbatim() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let s = store(&k);
+
+    // A NAME in doc1's never-occupied subspace 3 — a ghost (L9), T4-valid.
+    let name = a(&[1, 0, 1, 0, 1, 0, 3, 6, 1]);
+    let (l1, _) = s
+        .makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Addrs(vec![]), // empty FROM/TO admitted in either form
+            SlotArg::Addrs(vec![name.clone()]),
+        )
+        .expect("ghost-typed makelink admitted");
+    {
+        let snap = k.snapshot();
+        let ls = snap.world().links();
+        let link = ls.readlink(&l1).expect("resident");
+        assert_eq!(link.type_slot(), &enc(&[name.clone()]));
+        assert_eq!(link.to_slot(), &Endset::empty());
+    }
+
+    // Mixed slots, link-to-link: TO names l1 itself; the deposit is the enc
+    // of the link address (ReflexiveAddressing, L13).
+    let (l2, _) = s
+        .makelink(
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 1)]),
+            SlotArg::Addrs(vec![l1.clone()]),
+            SlotArg::Addrs(vec![name.clone()]),
+        )
+        .expect("mixed-slot makelink admitted");
+    {
+        let snap = k.snapshot();
+        let ls = snap.world().links();
+        assert_eq!(ls.readlink(&l2).expect("resident").to_slot(), &enc(&[l1.clone()]));
+        // Shared-identity typing: both links sit in the name's type slice.
+        let slice = ls.type_slice(&enc(&[name.clone()]), View::Active);
+        assert!(slice.contains(l1.tumbler()) && slice.contains(l2.tumbler()));
+    }
+
+    // The as-given type floor: empty Addrs ty ⇒ EmptyTypeResolution.
+    assert!(matches!(
+        s.makelink(
+            &doc1(),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::EmptyTypeResolution))
     ));
 }
 
@@ -456,9 +542,9 @@ fn stab_and_match_links_overlap_excludes_adjacency() {
     let (l, _) = s
         .makelink(
             &doc1(),
-            vec![spec(&doc1(), 1, 1, 2)],
-            vec![spec(&doc1(), 1, 3, 1)],
-            vec![spec(&doc1(), 1, 3, 1)],
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 2)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)]),
         )
         .expect("makelink");
     {

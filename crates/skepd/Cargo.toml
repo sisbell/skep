@@ -54,3 +54,7 @@ parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# H4 property-based op sequences (tests/properties.rs): random-but-valid
+# plans with shrinking; failure seeds persist to proptest-regressions/
+# (pins, same standing as goldens).
+proptest.workspace = true

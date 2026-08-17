@@ -1,0 +1,5 @@
+# cargo-fuzz build + run artifacts; the seed corpus under corpus/ is tracked.
+/target
+/artifacts
+/coverage
+Cargo.lock

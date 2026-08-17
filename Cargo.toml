@@ -16,6 +16,10 @@ members = [
     "crates/skep-kernel",
     "crates/skep-address",
 ]
+# The nightly libFuzzer crate (hardening H2, tier 2) is deliberately NOT a
+# member: it needs nightly (its own rust-toolchain.toml) and is built only by
+# `cargo fuzz`, never by the stable in-gate `cargo test --workspace`.
+exclude = ["fuzz"]
 
 # Shared package metadata — every crate inherits (crate Cargo.tomls carry
 # only name + description + their own deps/features). One lockstep version

@@ -44,5 +44,14 @@ mod codec;
 mod server;
 mod sidecar;
 
+/// The shared fuzzing harness (hardening H2): the pure oracle and mutation
+/// logic the tier-1 `#[test]`s and the nightly libFuzzer targets both drive.
+/// Not a stable API — `#[doc(hidden)]`, std-only, and exempt from the wire
+/// contract. It is unconditionally compiled (not `#[cfg(test)]`) precisely so
+/// the out-of-workspace `skep/fuzz/` crate and the integration tests — both
+/// external to this library — can reach it under a plain build.
+#[doc(hidden)]
+pub mod fuzz_support;
+
 pub use codec::{tumbler_string, JsonCodec};
 pub use server::{serve, Daemon, DaemonError, Reply, Routed, Skepd};

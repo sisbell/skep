@@ -1,0 +1,6 @@
+# libFuzzer needs nightly; this pin applies ONLY inside skep/fuzz (the crate
+# is excluded from the workspace), so the workspace's stable 1.94.0 pin —
+# what the gate runs — is untouched.
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

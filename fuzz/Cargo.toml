@@ -1,0 +1,49 @@
+# skep-fuzz — the nightly libFuzzer tier (hardening H2, tier 2).
+#
+# EXCLUDED from the skep workspace (see `exclude` in ../Cargo.toml) and
+# pinned to nightly by its own rust-toolchain.toml, so the workspace's stable
+# 1.94.0 pin is untouched and the in-gate `cargo test` never builds this
+# crate. Every target is a ≤10-line wrapper around `skepd::fuzz_support` —
+# the SAME oracle and mutation code the tier-1 `#[test]`s exercise and the
+# stable gate compiles — so the logic libFuzzer runs is trivial by
+# construction. `cargo fuzz` builds and runs it; see README.md.
+
+[package]
+name = "skep-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The daemon under test and the shared harness seam. Default features
+# (observe + client) so `/dump` and `/` are live surfaces for the socket
+# targets.
+skepd = { path = "../crates/skepd" }
+# The socket targets stand up one real daemon on a temp dir for the fuzzer's
+# lifetime.
+tempfile = "3"
+
+[[bin]]
+name = "codec"
+path = "fuzz_targets/codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http"
+path = "fuzz_targets/http.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,6 @@
+POST /op HTTP/1.1
+Host: 127.0.0.1
+Content-Type: application/json
+Content-Length: 84
+
+{"op":"retrieve_v","specs":[{"doc":"1.0.9.0.1","span":{"start":"1.1","width":"0.1"}}]}

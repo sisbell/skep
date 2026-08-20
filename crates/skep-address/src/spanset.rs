@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arith::next_at_length;
 use crate::error::LevelMismatch;
-use crate::span::{subtree_of, Bounds, Span};
+use crate::span::{subtree_of, Endpoints, Span};
 use crate::tumbler::Tumbler;
 
 /// An unordered union-denoting collection of spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
@@ -141,10 +141,10 @@ impl SpanSet {
         if self.level_class()?.is_none() {
             return Ok(SpanSet::empty());
         }
-        let mut bounds: Vec<Bounds> = self.0.iter().map(Bounds::of).collect();
-        bounds.sort_by(|x, y| x.start.cmp(&y.start));
+        let mut ends: Vec<Endpoints> = self.0.iter().map(Endpoints::of).collect();
+        ends.sort_by(|x, y| x.start.cmp(&y.start));
         let mut out: Vec<Span> = Vec::new();
-        let mut rest = bounds.into_iter();
+        let mut rest = ends.into_iter();
         let mut cur = rest.next().expect("nonempty: level_class was Some");
         for b in rest {
             if b.start <= cur.reach {
@@ -226,8 +226,8 @@ fn normalized_pair(a: &SpanSet, b: &SpanSet) -> Result<(SpanSet, SpanSet), Level
 /// both sides have members, so ⟨⟩ on either side yields ⟨⟩.
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (na, nb) = normalized_pair(a, b)?;
-    let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
-    let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
+    let av: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
+    let bv: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
     let (mut i, mut j) = (0usize, 0usize);
     let mut out: Vec<Span> = Vec::new();
     while i < av.len() && j < bv.len() {
@@ -235,7 +235,7 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
         let hi = std::cmp::min(&av[i].reach, &bv[j].reach);
         if lo < hi {
             out.push(
-                Bounds::new(lo.clone(), hi.clone())
+                Endpoints::new(lo.clone(), hi.clone())
                     .into_span()
                     .expect("one length class with lo < hi"),
             );
@@ -257,8 +257,8 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 /// survives whole (a \ ⟨⟩ = a).
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (na, nb) = normalized_pair(a, b)?;
-    let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
-    let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
+    let av: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
+    let bv: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
     let mut out: Vec<Span> = Vec::new();
     let mut j = 0usize;
     for a in av {
@@ -272,7 +272,7 @@ pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatc
         while k < bv.len() && bv[k].start < a.reach {
             if bv[k].start > cur {
                 out.push(
-                    Bounds::new(cur.clone(), bv[k].start.clone())
+                    Endpoints::new(cur.clone(), bv[k].start.clone())
                         .into_span()
                         .expect("one length class with cur < b-start"),
                 );
@@ -287,7 +287,7 @@ pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatc
         }
         if cur < a.reach {
             out.push(
-                Bounds::new(cur, a.reach)
+                Endpoints::new(cur, a.reach)
                     .into_span()
                     .expect("one length class with cur < reach"),
             );

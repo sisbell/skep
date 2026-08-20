@@ -55,8 +55,9 @@ mod spanset;
 mod tumbler;
 
 pub use address::{
-    classify, document_of, is_t4_valid, ordinal, parent, same_account, same_document, same_node,
-    under_document, validate, zeros, Address, Class, Level, T4Clause, T4Error,
+    classify, content_subspace, document_of, is_t4_valid, link_subspace, ordinal, parent,
+    same_account, same_document, same_node, under_document, validate, zeros, Address, Class, Level,
+    T4Clause, T4Error,
 };
 pub use arith::{
     action_point, add, checked_inc, displacement, elem_addr, inc, inc_preserves_t4, shift,

@@ -128,12 +128,11 @@ fn shift_advances_the_last_component_only() {
 #[test]
 fn raw_shift_on_a_subspace_base_advances_the_subspace_id() {
     // The documented TA7a hazard: on `doc·0·subspace` the last component IS
-    // the subspace id — a raw shift advances text (1) → link (2). This is
+    // the subspace id — a raw shift advances content (1) → link (2). This is
     // shift's specified primitive behavior; `shift_ordinal` is the safe form.
-    assert_eq!(
-        shift(&t(&[1, 0, 2, 0, 5, 0, 1]), &n(1)),
-        t(&[1, 0, 2, 0, 5, 0, 2])
-    );
+    let base = t(&[1, 0, 2, 0, 5, 0, 1]);
+    assert_eq!(ordinal(&base), &content_subspace()); // the "ordinal" here is s_C
+    assert_eq!(shift(&base, &n(1)), t(&[1, 0, 2, 0, 5, 0, 2]));
 }
 
 #[test]
@@ -171,16 +170,26 @@ fn elem_addr_guards_each_condition() {
     assert_eq!(elem_addr(&ord0), Err(ElemError::OrdinalZero));
 }
 
+/// A position is its content, so the shift is asserted as a whole position —
+/// which pins the document and the subspace as surviving the advance, not
+/// just the ordinal that moved.
 #[test]
 fn shift_ordinal_leaves_the_subspace_untouched() {
     let p = ElemPos {
         doc: addr(&[1, 0, 2, 0, 5]),
-        subspace: n(1),
+        subspace: content_subspace(),
         ordinal: n(9),
     };
     let q = shift_ordinal(&p, &n(3));
-    assert_eq!(q.subspace, n(1));
-    assert_eq!(q.ordinal, n(12));
+    assert_eq!(
+        q,
+        ElemPos {
+            doc: addr(&[1, 0, 2, 0, 5]),
+            subspace: content_subspace(),
+            ordinal: n(12),
+        }
+    );
+    assert_eq!(shift_ordinal(&p, &n(0)), p); // the identity displacement
     assert_eq!(
         elem_addr(&q).unwrap().tumbler(),
         &t(&[1, 0, 2, 0, 5, 0, 1, 12])

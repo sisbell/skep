@@ -308,10 +308,10 @@ impl Address {
         self.field(3)
     }
 
-    /// `element_field[0]` (T7): the subspace id — 1 = text, 2 = link
-    /// (disjoint by `1 < 2` at this position; no enforcement needed).
-    /// Returns an owned `Nat`, per the interface signature (the component is
-    /// cloned).
+    /// `element_field[0]` (T7): which subspace the element sits in —
+    /// [`content_subspace`] or [`link_subspace`], disjoint by `1 < 2` at this
+    /// position, so nothing has to enforce the separation. Returns an owned
+    /// `Nat`, per the interface signature (the component is cloned).
     pub fn subspace(&self) -> Option<Nat> {
         self.element_field().map(|e| e[0].clone())
     }
@@ -331,6 +331,23 @@ impl Address {
             ),
         }
     }
+}
+
+/// T7's **content** subspace: the numeral `1` at `element_field[0]` (the
+/// spec's *text* subspace, and the system's content subspace — M4's store,
+/// M5's content runs, the content side of M6/M7 routing). M1 owns T7, so the
+/// numeral that decides content-from-link is named here rather than restated
+/// wherever an element is routed.
+pub fn content_subspace() -> Nat {
+    Nat::from(1u32)
+}
+
+/// T7's **link** subspace: the numeral `2` at `element_field[0]`. The two
+/// subspaces are named values rather than a closed sum because T7 leaves the
+/// link subspace open to further subdivision — an element field T4b admits
+/// may carry a numeral matching neither.
+pub fn link_subspace() -> Nat {
+    Nat::from(2u32)
 }
 
 /// T6(a): `N(a) = N(b)` — decidable from the two addresses alone
@@ -420,6 +437,15 @@ pub fn document_of(a: &Address) -> Option<Address> {
 
 /// §C — `t_{#t}`: the local sibling index at the current field. Total on the
 /// carrier (tumblers are nonempty, T0).
+///
+/// Which field is current decides what the component means, and that is the
+/// caller's knowledge, not the tumbler's: it is the element ordinal only for
+/// a FULL element position `doc·0·subspace·ordinal`. On a subspace *base*
+/// `doc·0·subspace` the last component is the subspace id (TA7a, the same
+/// hazard [`crate::shift`] carries); on a versioned document it is the
+/// version component. A caller after an element ordinal reads it from a
+/// verified element position — [`Address::element_field`], or the
+/// [`crate::ElemPos`] packaging that holds `subspace` and `ordinal` apart.
 pub fn ordinal(t: &Tumbler) -> &Nat {
     t.comps().last().expect("T0: tumblers are nonempty")
 }

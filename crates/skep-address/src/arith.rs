@@ -228,7 +228,7 @@ pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
 /// and it carries the TA7a hazard: the last component is the ordinal only
 /// for a FULL element position `doc·0·subspace·ordinal`; a raw shift of a
 /// subspace *base* `doc·0·subspace` (whose last component IS the subspace id)
-/// silently advances text → link. Hold a verified full element position, or
+/// silently advances content → link. Hold a verified full element position, or
 /// use [`shift_ordinal`], which makes the mis-shift unrepresentable for
 /// callers that go through it. (OPEN DECISION resolved to the documented
 /// default: `shift` stays public-but-annotated rather than crate-private —
@@ -265,7 +265,12 @@ pub(crate) fn next_at_length(t: &Tumbler) -> Tumbler {
 /// admits element fields of ANY length ≥ 1, so [`elem_addr`] is NOT the only
 /// element-construction path — longer element fields are minted via
 /// `Tumbler::new(..)` + `validate`.
-#[derive(Debug, Clone)]
+///
+/// Identity is the content, like every other value in this crate: two
+/// positions naming the same document, subspace and ordinal are the same
+/// position, and [`elem_addr`] is injective on its guarded domain, so equal
+/// positions materialize to equal addresses.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElemPos {
     pub doc: Address,
     pub subspace: Nat,
@@ -315,7 +320,7 @@ pub fn elem_addr(p: &ElemPos) -> Result<Address, ElemError> {
 }
 
 /// Subspace-safe ordinal shift: `ordinal += n` ONLY — the subspace is
-/// structural context and untouched, so the TA7a text→link mis-shift is
+/// structural context and untouched, so the TA7a content→link mis-shift is
 /// unrepresentable through this wrapper. Pure `ElemPos → ElemPos`; validity
 /// is re-discharged when the position is materialized by [`elem_addr`].
 pub fn shift_ordinal(p: &ElemPos, n: &Nat) -> ElemPos {

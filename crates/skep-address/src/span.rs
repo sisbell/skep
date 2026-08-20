@@ -160,27 +160,28 @@ impl Span {
 /// It carries a name because `(start, width)` is the authoritative form and
 /// the two pairs are not interchangeable: read as a width, a reach denotes a
 /// different span entirely, and an anonymous pair of tumblers says which of
-/// the two it is nowhere. The way back to the authoritative form is
-/// [`Bounds::into_span`] — `from_endpoints` IS that conversion, so WF travels
-/// with it.
+/// the two it is nowhere. The name is the constructor's — a pair of endpoints
+/// is what [`Span::from_endpoints`] takes — and the way back to the
+/// authoritative form is [`Endpoints::into_span`], which IS that conversion,
+/// so WF travels with it.
 #[derive(Debug, Clone)]
-pub(crate) struct Bounds {
+pub(crate) struct Endpoints {
     pub(crate) start: Tumbler,
     pub(crate) reach: Tumbler,
 }
 
-impl Bounds {
+impl Endpoints {
     /// The derived form of `s` — one `reach()` recomputation.
-    pub(crate) fn of(s: &Span) -> Bounds {
-        Bounds {
+    pub(crate) fn of(s: &Span) -> Endpoints {
+        Endpoints {
             start: s.start().clone(),
             reach: s.reach(),
         }
     }
 
     /// A pair of endpoints a sweep computed, still to be checked by WF.
-    pub(crate) fn new(start: Tumbler, reach: Tumbler) -> Bounds {
-        Bounds { start, reach }
+    pub(crate) fn new(start: Tumbler, reach: Tumbler) -> Endpoints {
+        Endpoints { start, reach }
     }
 
     /// Back to the authoritative `(start, width)` form (WF).
@@ -233,7 +234,7 @@ pub enum SpanRel {
 /// [`difference`] — the one operation whose construction depends on it —
 /// reads it here rather than re-deriving it from the endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Rel {
+enum OrientedRel {
     Separated,
     Adjacent,
     Equal,
@@ -253,33 +254,33 @@ enum Rel {
 /// equal, containment, proper overlap. Past Equal and containment the starts
 /// must differ, so the overlap orientation is the one remaining comparison.
 ///
-/// Takes [`Bounds`] rather than spans: every predicate below is an endpoint
+/// Takes [`Endpoints`] rather than spans: every predicate below is an endpoint
 /// comparison, so the two reaches are derived once by the caller instead of
 /// once per question. [`intersect`] and [`merge`] each decide a single
 /// boundary question inline rather than classifying — a deliberate cheap
 /// path, and the reason this is not the only place a boundary is compared.
-fn relate(a: &Bounds, b: &Bounds) -> Rel {
+fn relate(a: &Endpoints, b: &Endpoints) -> OrientedRel {
     let max_start = max(&a.start, &b.start);
     let min_reach = min(&a.reach, &b.reach);
     if max_start > min_reach {
-        return Rel::Separated;
+        return OrientedRel::Separated;
     }
     if max_start == min_reach {
-        return Rel::Adjacent;
+        return OrientedRel::Adjacent;
     }
     if a.start == b.start && a.reach == b.reach {
-        return Rel::Equal;
+        return OrientedRel::Equal;
     }
     if a.start <= b.start && b.reach <= a.reach {
-        return Rel::AContainsB;
+        return OrientedRel::AContainsB;
     }
     if b.start <= a.start && a.reach <= b.reach {
-        return Rel::BContainsA;
+        return OrientedRel::BContainsA;
     }
     if a.start < b.start {
-        Rel::OverlapAFirst
+        OrientedRel::OverlapAFirst
     } else {
-        Rel::OverlapBFirst
+        OrientedRel::OverlapBFirst
     }
 }
 
@@ -287,12 +288,12 @@ fn relate(a: &Bounds, b: &Bounds) -> Rel {
 /// and mixed lengths included. The projection of the oriented `relate` onto
 /// the five bare cases the interface declares.
 pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
-    match relate(&Bounds::of(a), &Bounds::of(b)) {
-        Rel::Separated => SpanRel::Separated,
-        Rel::Adjacent => SpanRel::Adjacent,
-        Rel::Equal => SpanRel::Equal,
-        Rel::AContainsB | Rel::BContainsA => SpanRel::Containment,
-        Rel::OverlapAFirst | Rel::OverlapBFirst => SpanRel::ProperOverlap,
+    match relate(&Endpoints::of(a), &Endpoints::of(b)) {
+        OrientedRel::Separated => SpanRel::Separated,
+        OrientedRel::Adjacent => SpanRel::Adjacent,
+        OrientedRel::Equal => SpanRel::Equal,
+        OrientedRel::AContainsB | OrientedRel::BContainsA => SpanRel::Containment,
+        OrientedRel::OverlapAFirst | OrientedRel::OverlapBFirst => SpanRel::ProperOverlap,
     }
 }
 
@@ -320,9 +321,9 @@ fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
 /// `Ok(None)` with no SC call.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     level_gate(a, b)?;
-    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
-    let lo = max(&ba.start, &bb.start);
-    let hi = min(&ba.reach, &bb.reach);
+    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
+    let lo = max(&ea.start, &eb.start);
+    let hi = min(&ea.reach, &eb.reach);
     if lo < hi {
         Ok(Some(
             Span::from_endpoints(lo.clone(), hi.clone())
@@ -339,12 +340,12 @@ pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
 /// gate is not).
 pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     level_gate(a, b)?;
-    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
-    if max(&ba.start, &bb.start) > min(&ba.reach, &bb.reach) {
+    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
+    if max(&ea.start, &eb.start) > min(&ea.reach, &eb.reach) {
         return Ok(None); // separated
     }
-    let lo = min(&ba.start, &bb.start).clone();
-    let hi = max(&ba.reach, &bb.reach).clone();
+    let lo = min(&ea.start, &eb.start).clone();
+    let hi = max(&ea.reach, &eb.reach).clone();
     Ok(Some(
         Span::from_endpoints(lo, hi).expect("non-separated gated operands give lo < hi"),
     ))
@@ -409,35 +410,35 @@ pub fn split(s: &Span, p: &Tumbler) -> Result<(Span, Span), SplitError> {
 /// order (left before right) and is normalized by construction (§6).
 pub fn difference(a: &Span, b: &Span) -> Result<SpanSet, LevelMismatch> {
     level_gate(a, b)?;
-    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
+    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
     // The left complement `[start a, start b)` and the right complement
     // `[reach b, reach a)` — each built only on an arm that has already
     // established that its endpoints increase.
     let left = || {
-        Bounds::new(ba.start.clone(), bb.start.clone())
+        Endpoints::new(ea.start.clone(), eb.start.clone())
             .into_span()
             .expect("gated one-length endpoints with start a < start b")
     };
     let right = || {
-        Bounds::new(bb.reach.clone(), ba.reach.clone())
+        Endpoints::new(eb.reach.clone(), ea.reach.clone())
             .into_span()
             .expect("gated one-length endpoints with reach b < reach a")
     };
-    match relate(&ba, &bb) {
-        Rel::Separated | Rel::Adjacent => Ok(SpanSet::singleton(a.clone())),
+    match relate(&ea, &eb) {
+        OrientedRel::Separated | OrientedRel::Adjacent => Ok(SpanSet::singleton(a.clone())),
         // a ⊆ b: nothing of a survives.
-        Rel::Equal | Rel::BContainsA => Ok(SpanSet::empty()),
-        Rel::AContainsB => {
+        OrientedRel::Equal | OrientedRel::BContainsA => Ok(SpanSet::empty()),
+        OrientedRel::AContainsB => {
             let mut parts: Vec<Span> = Vec::with_capacity(2);
-            if ba.start < bb.start {
+            if ea.start < eb.start {
                 parts.push(left());
             }
-            if bb.reach < ba.reach {
+            if eb.reach < ea.reach {
                 parts.push(right());
             }
             Ok(parts.into_iter().collect())
         }
-        Rel::OverlapAFirst => Ok(SpanSet::singleton(left())),
-        Rel::OverlapBFirst => Ok(SpanSet::singleton(right())),
+        OrientedRel::OverlapAFirst => Ok(SpanSet::singleton(left())),
+        OrientedRel::OverlapBFirst => Ok(SpanSet::singleton(right())),
     }
 }

@@ -158,7 +158,7 @@ fn field_projections_by_zero_count() {
     assert_eq!(e.account_field().unwrap(), &[n(2)][..]);
     assert_eq!(e.document_field().unwrap(), &[n(5)][..]);
     assert_eq!(e.element_field().unwrap(), &[n(1), n(9)][..]);
-    assert_eq!(e.subspace(), Some(n(1))); // T7: 1 = text
+    assert_eq!(e.subspace(), Some(content_subspace())); // T7: the content subspace
 
     let d = addr(&[1, 0, 2, 0, 5, 3]);
     assert_eq!(d.document_field().unwrap(), &[n(5), n(3)][..]); // version components included
@@ -169,6 +169,29 @@ fn field_projections_by_zero_count() {
     assert_eq!(node.node_field(), &[n(1), n(2)][..]);
     assert_eq!(node.account_field(), None);
     assert_eq!(node.document_field(), None);
+}
+
+/// T7's two subspaces are named values, so an element is routed by asking
+/// which subspace it names rather than by a numeral each caller re-derives.
+#[test]
+fn the_two_subspaces_are_named() {
+    let content = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    let link = addr(&[1, 0, 2, 0, 5, 0, 2, 4]);
+    assert_eq!(content.subspace(), Some(content_subspace()));
+    assert_eq!(link.subspace(), Some(link_subspace()));
+    assert_ne!(content_subspace(), link_subspace()); // disjoint by 1 < 2 (T7)
+
+    // Both are mint-side too: the numeral an element field opens with is the
+    // one `ElemPos` carries into it.
+    let minted = elem_addr(&ElemPos {
+        doc: addr(&[1, 0, 2, 0, 5]),
+        subspace: link_subspace(),
+        ordinal: n(4),
+    })
+    .unwrap();
+    assert_eq!(minted, link);
+    // An address below Element level names no subspace at all.
+    assert_eq!(addr(&[1, 0, 2, 0, 5]).subspace(), None);
 }
 
 // ---- T6 a–d: containment ----------------------------------------------------

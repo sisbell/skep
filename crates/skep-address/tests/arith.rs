@@ -98,6 +98,24 @@ fn checked_inc_gates_and_reclassifies() {
     assert_eq!(next.level(), Level::Document);
 }
 
+/// T0(a) — component magnitude is unbounded, and the arithmetic is exact at
+/// magnitudes no fixed-width component holds. This is the clause that deletes
+/// the reference design's silent digit-overflow wrap in `tumbleradd`: a
+/// wrapping component would make two distinct positions equal, which is the
+/// alias class T3 exists to keep empty, reopened at the top end.
+#[test]
+fn arithmetic_is_exact_above_any_fixed_width() {
+    let a = tw([n(1), wide()]);
+    let w = tw([n(0), wide()]);
+    let b = add(&a, &w).unwrap();
+    assert_eq!(b.get(2), Some(&(wide() + wide()))); // 2⁶⁵ at one position, no wrap
+    assert_eq!(displacement(&a, &b), Some(w)); // ⊖ recovers the wide width exactly
+
+    // The two advances cross the 2⁶⁴ boundary rather than wrapping to zero.
+    assert_eq!(inc(&tw([Nat::from(u64::MAX)]), 0), tw([wide()]));
+    assert_eq!(shift(&tw([Nat::from(u64::MAX)]), &n(1)), tw([wide()]));
+}
+
 // ---- displacement (D0–D2) ---------------------------------------------------
 
 #[test]

@@ -15,6 +15,11 @@ fn tumbler_round_trips_and_revalidates_at_the_boundary() {
     assert_eq!(serde_json::from_str::<Tumbler>(&json).unwrap(), x);
     // The mint path rejects the empty sequence (T0) on replay.
     assert!(serde_json::from_str::<Tumbler>("[]").is_err());
+    // T0(a) crosses the journal boundary intact — a narrowed component would
+    // truncate here, where nothing downstream could tell it had.
+    let big = tw([n(1), wide(), n(0), n(5)]);
+    let json = serde_json::to_string(&big).unwrap();
+    assert_eq!(serde_json::from_str::<Tumbler>(&json).unwrap(), big);
 }
 
 #[test]

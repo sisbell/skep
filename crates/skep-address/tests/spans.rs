@@ -128,6 +128,45 @@ fn subtree_of_a_trailing_zero_prefix_does_not_overcapture() {
     assert!(!s.contains(&t(&[2, 1])));
 }
 
+/// T5 — `subtree_of(p)` denotes EXACTLY the extensions of `p`, in both
+/// directions and for any carrier prefix. Asserted against a reading of
+/// "extension" written from the promise, over every tumbler of length 1..=3
+/// over `{0, 1, 2, 3}` plus each prefix's own near neighbours — so the lower
+/// boundary (a proper prefix of `p`, which is NOT an extension) is visited as
+/// well as the reach.
+#[test]
+fn subtree_of_denotes_exactly_the_extensions_of_the_prefix() {
+    let prefixes = [
+        t(&[1]),
+        t(&[2, 0]),
+        t(&[0, 0]), // a carrier sentinel is a legal prefix
+        t(&[1, 0, 2]),
+        t(&[1, 0, 2, 0, 5]),
+        t(&[3, 7]),
+    ];
+    let mut probes = tumblers_upto(&[0, 1, 2, 3], 3);
+    for p in &prefixes {
+        probes.push(p.clone());
+        for tail in [&[0u32][..], &[1][..], &[9][..], &[0, 1][..], &[7, 7][..]] {
+            let mut comps: Vec<Nat> = p.iter().cloned().collect();
+            comps.extend(tail.iter().map(|&c| n(c)));
+            probes.push(tw(comps));
+        }
+    }
+    for p in &prefixes {
+        let s = subtree_of(p);
+        for x in &probes {
+            let is_extension =
+                p.len() <= x.len() && p.iter().zip(x.iter()).all(|(a, b)| a == b);
+            assert_eq!(
+                s.contains(x),
+                is_extension,
+                "subtree_of({p}) disagrees at {x}"
+            );
+        }
+    }
+}
+
 // ---- SC classifier ----------------------------------------------------------
 
 #[test]
@@ -302,6 +341,14 @@ fn difference_carves_a_not_b_in_every_orientation() {
                     "difference({a:?}, {b:?}) disagrees at {p:?}"
                 );
             }
+            // The published bounds on the result, in every case: ≤ 2 spans
+            // (S11d/S1), and normalized by construction — the N1 ordering of
+            // the two complements included.
+            assert!(d.len() <= 2, "S11d fan-out on ({a:?}, {b:?})");
+            assert!(
+                d.is_normalized(),
+                "difference({a:?}, {b:?}) is not normalized by construction"
+            );
             // The two non-constructing cases return ⟦a⟧ itself, whole.
             if matches!(
                 classify_spans(a, b),

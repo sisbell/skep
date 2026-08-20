@@ -76,6 +76,21 @@ fn tumbler_renders_as_dotted_decimal() {
     assert_eq!(a.to_string(), "1.0.2.0.5.0.1.9");
 }
 
+/// T0(a) — the value layer holds components no fixed-width representation
+/// does. The order is what a wrap would break first (two distinct tumblers
+/// comparing equal), and the dotted-decimal rendering is where a narrowed
+/// component would be truncated silently: it is the daemon's wire form and
+/// what the conformance harness compares against the golden.
+#[test]
+fn values_are_exact_above_any_fixed_width() {
+    assert!(tw([wide()]) > tw([Nat::from(u64::MAX)]));
+    assert_ne!(tw([wide()]), tw([Nat::from(u64::MAX)]));
+    assert_eq!(tw([n(1), wide()]).to_string(), "1.18446744073709551616");
+    // The zero scan reads magnitude-free, so a wide component is a separator
+    // to nobody and the classification is unchanged by the size of a field.
+    assert_eq!(classify(&tw([wide(), n(0), wide()])), Class::Account);
+}
+
 // ---- T1/T2/T3: order and identity ------------------------------------------
 
 #[test]
@@ -205,6 +220,85 @@ fn validate_reports_the_violated_clauses() {
     assert!(e.clauses().contains(&T4Clause::OverDepth));
 }
 
+/// The whole of T4 admission — the separator count, the validity verdict, the
+/// class, and the exact clause set of a rejection — against a reading of the
+/// four clauses written from T4 itself, over EVERY zero/nonzero pattern of
+/// length 1..=9. T4 reads nothing but which components are zero, so this
+/// family is exhaustive in the only thing the scan can see.
+#[test]
+fn t4_admission_agrees_with_the_clause_by_clause_reading() {
+    for len in 1..=9usize {
+        for bits in 0..(1u32 << len) {
+            let comps: Vec<u32> = (0..len).map(|i| (bits >> i) & 1).collect();
+            let x = t(&comps);
+
+            let z = comps.iter().filter(|&&c| c == 0).count();
+            let mut want: Vec<T4Clause> = Vec::new();
+            if comps[0] == 0 {
+                want.push(T4Clause::LeadingZero);
+            }
+            if comps[len - 1] == 0 {
+                want.push(T4Clause::TrailingZero);
+            }
+            if comps.windows(2).any(|w| w[0] == 0 && w[1] == 0) {
+                want.push(T4Clause::AdjacentZeros);
+            }
+            if z > 3 {
+                want.push(T4Clause::OverDepth);
+            }
+
+            assert_eq!(zeros(&x), z, "zeros({x})");
+            assert_eq!(is_t4_valid(&x), want.is_empty(), "is_t4_valid({x})");
+            let want_class = match (want.is_empty(), z) {
+                (false, _) => Class::Invalid,
+                (true, 0) => Class::Node,
+                (true, 1) => Class::Account,
+                (true, 2) => Class::Document,
+                (true, _) => Class::Element,
+            };
+            assert_eq!(classify(&x), want_class, "classify({x})");
+
+            match validate(x.clone()) {
+                Ok(a) => {
+                    assert!(want.is_empty(), "validate admitted {x}, violating {want:?}");
+                    assert_eq!(a.tumbler(), &x);
+                    assert_eq!(Class::from(a.level()), want_class);
+                }
+                Err(e) => {
+                    // Exact vector equality: the full set, each clause at most
+                    // once, in `T4Clause` declaration order.
+                    assert_eq!(e.clauses(), want.as_slice(), "clauses of {x}");
+                }
+            }
+        }
+    }
+}
+
+/// A rejection renders every clause it carries, comma-separated — the text a
+/// caller puts in front of a user, and the one place a clause set is read by
+/// something other than a `match`.
+#[test]
+fn t4_error_renders_every_violated_clause() {
+    let e = validate(t(&[0, 0])).unwrap_err();
+    assert_eq!(
+        e.clauses(),
+        &[
+            T4Clause::LeadingZero,
+            T4Clause::TrailingZero,
+            T4Clause::AdjacentZeros
+        ][..]
+    );
+    assert_eq!(
+        e.to_string(),
+        "tumbler is not T4-valid; violated clause(s): LeadingZero, TrailingZero, AdjacentZeros"
+    );
+    let e = validate(t(&[0])).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "tumbler is not T4-valid; violated clause(s): LeadingZero, TrailingZero"
+    );
+}
+
 #[test]
 fn address_orders_by_the_tumbler_order() {
     let mut v = vec![addr(&[2]), addr(&[1, 0, 2]), addr(&[1])];
@@ -251,6 +345,39 @@ fn field_projections_by_zero_count() {
     assert_eq!(node.document_field(), None);
 }
 
+/// T4b — the four fields are present exactly per the separator count, and
+/// together they CARVE the address: rejoined across the separators they drop,
+/// they reproduce the component sequence exactly. An index off by one at any
+/// separator loses or repeats a component, which no single projection read in
+/// isolation would show.
+#[test]
+fn field_projections_carve_the_address_at_its_separators() {
+    let battery = [
+        addr(&[1, 2]),
+        addr(&[1, 0, 2]),
+        addr(&[1, 0, 2, 0, 5]),
+        addr(&[1, 0, 2, 0, 5, 3]),
+        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 5, 0, 2, 4, 7]),
+    ];
+    for a in &battery {
+        let z = zeros(a.tumbler());
+        assert_eq!(a.account_field().is_some(), z >= 1, "U presence on {a}");
+        assert_eq!(a.document_field().is_some(), z >= 2, "D presence on {a}");
+        assert_eq!(a.element_field().is_some(), z == 3, "E presence on {a}");
+
+        let mut rejoined: Vec<Nat> = a.node_field().to_vec();
+        for f in [a.account_field(), a.document_field(), a.element_field()]
+            .into_iter()
+            .flatten()
+        {
+            rejoined.push(n(0)); // the separator the projection dropped
+            rejoined.extend(f.iter().cloned());
+        }
+        assert_eq!(&tw(rejoined), a.tumbler(), "fields do not carve {a}");
+    }
+}
+
 /// T7's two subspaces are named values, so an element is routed by asking
 /// which subspace it names rather than by a numeral each caller re-derives.
 #[test]
@@ -275,6 +402,24 @@ fn the_two_subspaces_are_named() {
 }
 
 // ---- T6 a–d: containment ----------------------------------------------------
+
+/// Addresses spanning all four levels, including a second node and a second
+/// account carrying the SAME numerals below them — the shapes that tell
+/// "these fields match" apart from "these are the same account".
+fn containment_battery() -> Vec<Address> {
+    vec![
+        addr(&[1]),
+        addr(&[1, 2]),
+        addr(&[1, 0, 2]),
+        addr(&[1, 0, 2, 0, 5]),
+        addr(&[1, 0, 2, 0, 5, 3]),
+        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 6]),
+        addr(&[1, 0, 2, 0, 6, 0, 2, 4]),
+        addr(&[1, 0, 3, 0, 5]),
+        addr(&[2, 0, 2, 0, 5, 0, 1, 9]),
+    ]
+}
 
 #[test]
 fn containment_field_absence_is_decisive() {
@@ -308,23 +453,65 @@ fn containment_positive_and_negative() {
     assert!(!under_document(&d, &v)); // not conversely
 }
 
+/// T6(b)/(c) conjoin every ENCLOSING level: an account is the same account
+/// only under the same node, and a document only under the same account.
+/// Matching numerals are not the claim — two nodes routinely allocate the
+/// same numbers, and two accounts under one node routinely allocate the same
+/// document number.
+#[test]
+fn containment_requires_agreement_at_every_enclosing_level() {
+    let a = addr(&[1, 0, 2, 0, 5]);
+    let cross_node = addr(&[2, 0, 2, 0, 5]); // same U and D, different N
+    let cross_acct = addr(&[1, 0, 3, 0, 5]); // same N and D, different U
+
+    assert!(!same_node(&a, &cross_node));
+    assert!(same_node(&a, &cross_acct));
+
+    assert!(!same_account(&a, &cross_node)); // T6(b) conjoins N
+    assert!(!same_account(&a, &cross_acct)); // U itself differs
+
+    assert!(!same_document(&a, &cross_node)); // T6(c) conjoins N
+    assert!(!same_document(&a, &cross_acct)); // T6(c) conjoins U
+
+    // Another node's like-numbered document encloses nothing of a's.
+    assert!(!under_document(&addr(&[2, 0, 2, 0, 5, 0, 1, 9]), &a));
+    assert!(!under_document(&addr(&[1, 0, 3, 0, 5, 0, 1, 9]), &a));
+}
+
+/// T6(b)/(c) read straight from their clauses — `N, U equal` and
+/// `N, U, D equal` — rather than through the implementation's chaining, so a
+/// dropped conjunct has an independent statement to disagree with. Asserted
+/// over every ordered pair of the battery.
+#[test]
+fn same_account_and_same_document_agree_with_the_t6_clauses() {
+    let battery = containment_battery();
+    for a in &battery {
+        for b in &battery {
+            let t6b = match (a.account_field(), b.account_field()) {
+                (Some(ua), Some(ub)) => a.node_field() == b.node_field() && ua == ub,
+                _ => false, // field absence ⇒ NO
+            };
+            let t6c = match (a.document_field(), b.document_field()) {
+                (Some(da), Some(db)) => {
+                    a.node_field() == b.node_field()
+                        && a.account_field() == b.account_field()
+                        && da == db
+                }
+                _ => false,
+            };
+            assert_eq!(same_account(a, b), t6b, "T6(b) on ({a:?}, {b:?})");
+            assert_eq!(same_document(a, b), t6c, "T6(c) on ({a:?}, {b:?})");
+        }
+    }
+}
+
 /// `under_document` compares a document prefix and `document_of` mints one.
 /// Both read the same projection, so the predicate and the constructor cannot
 /// disagree about where a document begins — asserted over every ordered pair
 /// of a battery spanning all four levels.
 #[test]
 fn under_document_agrees_with_document_of() {
-    let battery = [
-        addr(&[1]),
-        addr(&[1, 2]),
-        addr(&[1, 0, 2]),
-        addr(&[1, 0, 2, 0, 5]),
-        addr(&[1, 0, 2, 0, 5, 3]),
-        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
-        addr(&[1, 0, 2, 0, 6]),
-        addr(&[1, 0, 2, 0, 6, 0, 2, 4]),
-        addr(&[2, 0, 2, 0, 5, 0, 1, 9]),
-    ];
+    let battery = containment_battery();
     for a in &battery {
         for b in &battery {
             let via_mint = matches!(a.level(), Level::Document | Level::Element)

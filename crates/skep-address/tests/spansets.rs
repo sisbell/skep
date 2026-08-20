@@ -69,6 +69,83 @@ fn normalize_sorts_and_coalesces_to_the_unique_form() {
     assert!(SpanSet::empty().is_normalized());
 }
 
+/// S8's coalescing step extends the running reach to the MAXIMUM of the two,
+/// so a span nested inside its predecessor cannot shorten it. Nesting is the
+/// only shape where the choice shows, and the equal-start pair is the tie S8
+/// breaks arbitrarily and S9 says must not matter.
+#[test]
+fn normalize_keeps_the_widest_reach_of_a_coalesced_run() {
+    let whole = set(&[sp(&[1], &[9])]);
+    let nested = [
+        set(&[sp(&[1], &[9]), sp(&[3], &[5])]), // wide first
+        set(&[sp(&[3], &[5]), sp(&[1], &[9])]), // narrow first
+        set(&[sp(&[1], &[9]), sp(&[1], &[5])]), // equal starts, wide first
+        set(&[sp(&[1], &[5]), sp(&[1], &[9])]), // equal starts, narrow first
+    ];
+    for raw in nested {
+        assert_eq!(raw.normalize().unwrap(), whole, "swallowed reach of {raw:?}");
+    }
+}
+
+/// S8's loop invariant J is denotation preservation, and S9 makes the result
+/// unique — so it cannot depend on the order the members arrive in. Asserted
+/// over every ordered triple drawn from a pool of six, which visits nested,
+/// overlapping, adjacent, separated and duplicated shapes nobody chose.
+#[test]
+fn normalize_preserves_the_denotation_in_any_order() {
+    let pool = [
+        sp(&[1], &[3]),
+        sp(&[2], &[5]),
+        sp(&[4], &[9]),
+        sp(&[9], &[12]),
+        sp(&[1], &[30]),
+        sp(&[20], &[30]),
+    ];
+    let probes: Vec<Tumbler> = (0u32..32)
+        .map(|x| t(&[x]))
+        .chain([t(&[2, 5]), t(&[29, 9])])
+        .collect();
+    let mut seen: HashMap<Vec<usize>, SpanSet> = HashMap::new();
+    for i in 0..pool.len() {
+        for j in 0..pool.len() {
+            for k in 0..pool.len() {
+                let idx = [i, j, k];
+                let raw = set(&idx.map(|x| pool[x].clone()));
+                let norm = raw.normalize().unwrap();
+                for p in &probes {
+                    assert_eq!(
+                        raw.denotes(p),
+                        norm.denotes(p),
+                        "normalize({raw:?}) changed the denotation at {p:?}"
+                    );
+                }
+                assert!(norm.is_normalized(), "normalize({raw:?}) is not normalized");
+                assert_eq!(norm.normalize().unwrap(), norm, "normalize is idempotent");
+                // N1 ∧ N2 read directly: starts ascend and no two members
+                // touch, which is what `is_normalized` decides via equality.
+                let members: Vec<&Span> = norm.iter().collect();
+                for w in members.windows(2) {
+                    assert!(
+                        w[0].reach() < *w[1].start(),
+                        "N1/N2: {:?} and {:?} should have coalesced",
+                        w[0],
+                        w[1]
+                    );
+                }
+                // S9: one canonical form per multiset, whatever the order.
+                let mut key = idx.to_vec();
+                key.sort_unstable();
+                match seen.get(&key) {
+                    Some(first) => assert_eq!(&norm, first, "order changed the canonical form"),
+                    None => {
+                        seen.insert(key, norm);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// `level_class` answers the S8 gate directly, with the same verdict
 /// `normalize` reaches through it.
 #[test]
@@ -183,6 +260,50 @@ fn difference_sets_carves_and_emits_normalized() {
     assert_eq!(difference_sets(&SpanSet::empty(), &a).unwrap(), SpanSet::empty());
     let cross = set(&[sp(&[1, 0], &[1, 5])]);
     assert_eq!(difference_sets(&a, &cross), Err(LevelMismatch));
+}
+
+/// The two set-level sweeps interleave two canonical forms, and their cursor
+/// logic decides which regions survive — so both are asserted pointwise
+/// against the denotations they promise, over every ordered pair of a pool
+/// carrying multi-span operands, set-scale adjacency, nesting, duplication
+/// and un-normalized input on both sides.
+#[test]
+fn set_algebra_agrees_pointwise_with_the_denotations() {
+    let pool = [
+        SpanSet::empty(),
+        set(&[sp(&[1], &[9])]),                                 // one wide span
+        set(&[sp(&[2], &[3]), sp(&[5], &[6])]),                 // two separated
+        set(&[sp(&[5], &[6]), sp(&[2], &[3])]),                 // the same two, un-normalized
+        set(&[sp(&[1], &[3])]),
+        set(&[sp(&[3], &[5])]),                                 // touching the previous
+        set(&[sp(&[1], &[5]), sp(&[3], &[9]), sp(&[1], &[5])]), // overlapping + duplicated
+        set(&[sp(&[1], &[9]), sp(&[3], &[5])]),                 // nested
+        set(&[sp(&[9], &[12])]),
+    ];
+    let probes: Vec<Tumbler> = (0u32..14)
+        .map(|x| t(&[x]))
+        .chain([t(&[2, 5]), t(&[8, 0, 1])])
+        .collect();
+    for a in &pool {
+        for b in &pool {
+            let i = intersect_sets(a, b).unwrap();
+            let d = difference_sets(a, b).unwrap();
+            for p in &probes {
+                assert_eq!(
+                    i.denotes(p),
+                    a.denotes(p) && b.denotes(p),
+                    "intersect_sets({a:?}, {b:?}) disagrees at {p:?}"
+                );
+                assert_eq!(
+                    d.denotes(p),
+                    a.denotes(p) && !b.denotes(p),
+                    "difference_sets({a:?}, {b:?}) disagrees at {p:?}"
+                );
+            }
+            assert!(i.is_normalized(), "intersect_sets({a:?}, {b:?}) is not normalized");
+            assert!(d.is_normalized(), "difference_sets({a:?}, {b:?}) is not normalized");
+        }
+    }
 }
 
 #[test]

@@ -582,3 +582,59 @@ fn ordinal_is_the_last_component_and_level_is_not_a_count() {
     // three-component address reads as Account, not as 3.
     assert_eq!(addr(&[1, 0, 2]).level(), Level::Account);
 }
+
+// ---- what T4 discharges, over the whole family ------------------------------
+
+/// Every §B/§C discharge that rests on a T4 clause, over the whole space T4
+/// can see. `separator` counts separators in its own loop and the validating
+/// scan counts them in another; `field`'s window, `subspace`'s index into the
+/// element field, and the truncations behind `document_of` and `parent` are
+/// each total only while the two agree and the leading/trailing-zero clauses
+/// hold. Asserted over EVERY zero/nonzero pattern of length 1..=9 — exhaustive
+/// in the only thing the scan reads — rather than over the addresses a test
+/// author would have picked.
+#[test]
+fn every_t4_derived_projection_holds_over_the_whole_family() {
+    for len in 1..=9usize {
+        for bits in 0..(1u32 << len) {
+            let comps: Vec<u32> = (0..len).map(|i| (bits >> i) & 1).collect();
+            let Ok(a) = validate(t(&comps)) else { continue };
+            let z = zeros(a.tumbler());
+
+            // T4b presence, against the count the validating scan reported.
+            assert_eq!(a.account_field().is_some(), z >= 1, "U presence on {a}");
+            assert_eq!(a.document_field().is_some(), z >= 2, "D presence on {a}");
+            assert_eq!(a.element_field().is_some(), z == 3, "E presence on {a}");
+            // No field is empty, and the fields carve the address: the
+            // leading-, trailing- and adjacent-zero clauses are exactly what
+            // leaves a component on both sides of every separator.
+            assert!(!a.node_field().is_empty(), "empty N on {a}");
+            let mut rejoined: Vec<Nat> = a.node_field().to_vec();
+            for f in [a.account_field(), a.document_field(), a.element_field()]
+                .into_iter()
+                .flatten()
+            {
+                assert!(!f.is_empty(), "empty field on {a}");
+                rejoined.push(n(0)); // the separator the projection dropped
+                rejoined.extend(f.iter().cloned());
+            }
+            assert_eq!(&tumbler(rejoined), a.tumbler(), "fields do not carve {a}");
+            // T7's index into the element field is total exactly at Element level.
+            assert_eq!(a.subspace().is_some(), z == 3, "subspace presence on {a}");
+
+            // §C: both projectors total on their stated domains, and neither
+            // mints an address the validator would refuse.
+            assert_eq!(document_of(&a).is_some(), z >= 2, "document_of on {a}");
+            if let Some(d) = document_of(&a) {
+                assert_eq!(d.level(), Level::Document, "document_of level on {a}");
+                assert!(is_prefix(d.tumbler(), a.tumbler()), "document_of prefix on {a}");
+            }
+            assert_eq!(parent(&a).is_some(), a.tumbler().len() > 1, "parent on {a}");
+            if let Some(p) = parent(&a) {
+                assert!(p.tumbler().len() < a.tumbler().len(), "peel shortens {a}");
+                assert!(is_prefix(p.tumbler(), a.tumbler()), "peel of {a} is a prefix");
+                assert!(is_t4_valid(p.tumbler()), "peel of {a} is T4-valid");
+            }
+        }
+    }
+}

@@ -321,11 +321,16 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 }
 
 /// Set difference `⟦a⟧ \ ⟦b⟧` as one sweep over the two canonical forms.
-/// Normalizes both inputs internally; emits a normalized result. NO proven
-/// output-size bound (open, per the design) — the result is not
-/// size-promised. An empty operand needs no arm of its own: with no a-spans
-/// the sweep emits nothing (⟨⟩ \ b = ⟨⟩), and with no b-spans each a-span
-/// survives whole (a \ ⟨⟩ = a).
+/// Normalizes both inputs internally; emits a normalized result. An empty
+/// operand needs no arm of its own: with no a-spans the sweep emits nothing
+/// (⟨⟩ \ b = ⟨⟩), and with no b-spans each a-span survives whole (a \ ⟨⟩ = a).
+///
+/// Fan-out is `|Σ| ≤ |a| + |b|`. Two emissions exist: a *gap*, which requires
+/// a b-start strictly inside the surviving part of an a-span, and a *tail*,
+/// at most one per a-span. Canonical a-spans are pairwise separated, so a
+/// b-start lies strictly inside at most one of them and each b-span yields at
+/// most one gap; normalizing grows neither operand, so the two counts bound
+/// against the inputs as given.
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (na, nb) = normalized_pair(a, b)?;
     let a_spans: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();

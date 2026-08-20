@@ -305,6 +305,13 @@ fn set_algebra_agrees_pointwise_with_the_denotations() {
                 only_a.is_normalized(),
                 "difference_sets({a:?}, {b:?}) is not normalized"
             );
+            // The carve's published fan-out: at most one gap per b-span (a
+            // b-start lies strictly inside at most one a-span) plus at most
+            // one tail per a-span, and normalizing never grows either side.
+            assert!(
+                only_a.len() <= a.len() + b.len(),
+                "difference_sets({a:?}, {b:?}) fan-out"
+            );
         }
     }
 }

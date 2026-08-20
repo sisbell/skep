@@ -86,6 +86,36 @@ fn ta5a_gate_admits_the_descent_only_for_a_non_element_address() {
     assert!(!inc_preserves_t4(&elem, 2)); // zeros = 3: one more separator breaks T4
 }
 
+/// TA5a as a law rather than as six points. The gate predicate reads a level;
+/// `inc` appends; `checked_inc` applies the validator unguarded on the
+/// strength of the two agreeing, on M3's every mint. So the agreement is
+/// asserted over EVERY T4-valid address in the zero/nonzero family of length
+/// 1..=7 — exhaustive in what T4 reads — against `k` on both sides of the
+/// gate's cut.
+#[test]
+fn the_ta5a_gate_admits_exactly_what_inc_leaves_t4_valid() {
+    for len in 1..=7usize {
+        for bits in 0..(1u32 << len) {
+            let comps: Vec<u32> = (0..len).map(|i| (bits >> i) & 1).collect();
+            let Ok(a) = validate(t(&comps)) else { continue };
+            for k in 0..=4usize {
+                assert_eq!(
+                    inc_preserves_t4(&a, k),
+                    is_t4_valid(&inc(a.tumbler(), k)),
+                    "TA5a gate disagrees with inc on ({a}, k = {k})"
+                );
+                // Wherever the gate opens, the constructor's mint opens with
+                // it — which is what stops `checked_inc` faulting on a mint.
+                assert_eq!(
+                    checked_inc(&a, k).is_ok(),
+                    inc_preserves_t4(&a, k),
+                    "checked_inc disagrees with the gate on ({a}, k = {k})"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn checked_inc_gates_and_reclassifies() {
     let doc = addr(&[1, 0, 2, 0, 5]);

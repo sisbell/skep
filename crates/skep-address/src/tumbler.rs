@@ -105,9 +105,19 @@ impl Tumbler {
         &self.0
     }
 
-    /// Internal constructor for sequences known nonempty by construction.
+    /// Internal constructor for sequences a call site has already established
+    /// nonempty — by the arithmetic (`⊕` writes at least the action point,
+    /// `⊖` at least one padded position) or by a T4 clause (the peel in
+    /// [`crate::parent`] survives because no valid address leads with a zero).
+    ///
+    /// The check runs in EVERY build, not only under debug assertions: T0 is
+    /// what the validating scan's first- and last-component reads and
+    /// [`crate::ordinal`]'s last-component read stand on, so a call site whose
+    /// premise moved is named here rather than surfacing as an anonymous index
+    /// panic two functions away. One branch, beside an allocation already paid
+    /// for.
     pub(crate) fn from_vec(comps: Vec<Nat>) -> Tumbler {
-        debug_assert!(!comps.is_empty(), "internal tumbler construction must be nonempty");
+        assert!(!comps.is_empty(), "internal tumbler construction must be nonempty");
         Tumbler(comps)
     }
 }

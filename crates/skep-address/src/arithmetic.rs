@@ -135,6 +135,13 @@ pub fn sub(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, SubPrecond> {
 /// `k = 2` descends one zeros-level, `k ≥ 3` always breaks T4 — hence the
 /// gate). M1 supplies the pure value tool; the durable frontier that uses it
 /// is M3's.
+///
+/// `k` is a LENGTH, not a bound: the result carries `#t + k` components, so
+/// this is the one operation here whose allocation is sized by an argument
+/// rather than by its operand. Every caller passes a literal (M3's `b_C`/`b_L`
+/// pass 2) or routes through [`checked_inc`], whose gate caps it at 2 — a `k`
+/// derived from input would be an allocation the input sizes, and would yield
+/// nothing usable either, since the gate refuses every `k ≥ 3`.
 pub fn inc(t: &Tumbler, k: usize) -> Tumbler {
     let mut out = t.comps().to_vec();
     if k == 0 {

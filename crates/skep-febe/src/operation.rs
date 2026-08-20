@@ -966,7 +966,8 @@ mod tests {
     }
 
     /// §4: the content-V guard — depth-2, content-subspace (s_C = 1),
-    /// ordinal-level — with length checks preceding every `get`.
+    /// ordinal-level — answering for a span of any shape, deeper and
+    /// shallower included.
     #[test]
     fn content_vspan_guard() {
         let ok = Span::new(t(&[1, 1]), t(&[0, 2])).unwrap_or_else(|_| panic!("well-formed"));
@@ -976,7 +977,7 @@ mod tests {
         let not_ordinal = Span::new(t(&[1, 1]), t(&[1, 0])).unwrap_or_else(|_| panic!("wf"));
         assert!(!is_content_vspan(&not_ordinal));
         let depth1 = Span::new(t(&[5]), t(&[1])).unwrap_or_else(|_| panic!("wf"));
-        assert!(!is_content_vspan(&depth1)); // length gate short-circuits before get(1)
+        assert!(!is_content_vspan(&depth1)); // shallower than depth 2
         let depth3 = Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).unwrap_or_else(|_| panic!("wf"));
         assert!(!is_content_vspan(&depth3));
     }

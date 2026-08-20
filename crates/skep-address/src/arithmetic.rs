@@ -175,8 +175,9 @@ impl fmt::Display for GateViolation {
 }
 impl Error for GateViolation {}
 
-/// `inc` + TA5a gate + reclassify — an `Address` mint site (validity
-/// preserved; routed through [`validate`] defensively).
+/// `inc` + TA5a gate + reclassify — an `Address` mint site: the advanced
+/// tumbler is minted through [`validate`], the one gate for the validity
+/// invariant, and the `expect` states why it opens.
 pub fn checked_inc(t: &Address, k: usize) -> Result<Address, GateViolation> {
     if !inc_preserves_t4(t, k) {
         return Err(GateViolation);
@@ -221,8 +222,10 @@ pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
 /// `n`. Order-preserving on same-length operands (TS1), injective (TS2),
 /// additively composing (TS3), strict and amount-monotone for `n ≥ 1`
 /// (TS4/TS5) — what lets the I-stream stay sorted and distinct under shift.
-/// Precondition `n ≥ 1` (OrdinalDisplacement); `shift(v, 0) = v` is the
-/// explicit total extension (identity displacement).
+/// **Total for `n ≥ 0`**: the source's OrdinalDisplacement is stated for
+/// `n ≥ 1` (`δ(0, ·)` is Zero and fails `Pos(w)`), and M1 extends the function
+/// at `0` with the identity displacement — so the caller owes nothing at the
+/// amount and there is no refusal channel for it.
 ///
 /// PRIMITIVE serving two obligations. The first is the §E ordinal advance,
 /// and it carries the TA7a hazard: the last component is the ordinal only
@@ -299,7 +302,8 @@ impl Error for ElemError {}
 /// Mints `doc·0·subspace·ordinal` — an `Address` mint site guarding the
 /// validity invariant: requires `doc.level() == Document`, `subspace ≥ 1`
 /// (else adjacent zeros after the separator), `ordinal ≥ 1` (else a trailing
-/// zero); the constructed tumbler is routed through [`validate`] defensively.
+/// zero). The constructed tumbler is minted through [`validate`], the one
+/// gate for the validity invariant, and the `expect` states why it opens.
 /// Guards run in `ElemError` declaration order.
 ///
 /// CONSUMES `p`, like every other admission door here: its components move

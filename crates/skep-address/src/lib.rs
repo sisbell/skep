@@ -18,11 +18,27 @@
 //!
 //! Every rejection type lives beside the one operation that produces it;
 //! [`LevelMismatch`], produced across the span and span-set algebra, is the
-//! one shared error and keeps its own module. Serde bound (design preamble):
-//! the validating `try_from` deserialization shadows require
-//! `TryFrom::Error: Display`, so [`EmptySequence`], [`T4Error`], and
-//! [`T12Clause`] must implement `Display`; every other public error carries
-//! one too, uniformly, ahead of any serde boundary it might ever back.
+//! one shared error and keeps its own module. Every public error implements
+//! `Display` and [`std::error::Error`], uniformly: the validating
+//! deserialization below requires `Display` of [`EmptySequence`], [`T4Error`]
+//! and [`T12Clause`], and a caller that boxes any of the others meets the same
+//! surface.
+//!
+//! ## Serde — deserialization is a mint path
+//!
+//! Every type carrying a standing invariant deserializes **through its own
+//! constructor**, never by a bare derive: [`Tumbler`] through
+//! [`Tumbler::new`] (T0 nonemptiness), [`Address`] through [`validate`] (T4,
+//! with `level` re-derived rather than restored, so a stored level cannot
+//! disagree with [`classify`]), [`Span`] through [`Span::new`] (T12). Each
+//! pairs that with the serialize shadow its own at-rest shape needs — the
+//! bare component sequence, the flat tumbler, the `(start, width)` pair — so
+//! the two sides agree and a self-describing format round-trips by
+//! construction rather than by coincidence. [`SpanSet`], [`Level`] and
+//! [`Class`] derive both sides: none carries a standing invariant, and a
+//! span-set's members validate through `Span`'s shadows, so the round trip is
+//! inherited. [`CanonicalForm`] carries no serde at all; what a future one
+//! would have to re-establish is recorded on the type.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!

@@ -12,6 +12,13 @@ use skep_address::*;
 fn tumbler_round_trips_and_revalidates_at_the_boundary() {
     let x = t(&[1, 0, 2, 0, 5]);
     let json = serde_json::to_string(&x).unwrap();
+    // Symmetric shadow: the serialize side emits exactly the `Vec<Nat>` shape
+    // the validating `try_from` side reads, so the round trip below holds by
+    // construction and not by the two shapes happening to agree.
+    assert_eq!(
+        json,
+        serde_json::to_string(&x.iter().cloned().collect::<Vec<Nat>>()).unwrap()
+    );
     assert_eq!(serde_json::from_str::<Tumbler>(&json).unwrap(), x);
     // The mint path rejects the empty sequence (T0) on replay.
     assert!(serde_json::from_str::<Tumbler>("[]").is_err());

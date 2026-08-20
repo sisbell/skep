@@ -390,7 +390,9 @@ where
     /// source; `#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧ width₁ = 0`) — the
     /// V-position's subspace is the start's FIRST component, NOT M1's
     /// `Address::subspace()` (which needs zeros = 3 and would reject every
-    /// depth-2 spec); the length checks precede the `get(1)` indexing. A
+    /// depth-2 spec); every component read is fallible, so a spec of any
+    /// shape answers rather than faulting, and the length tests state the
+    /// depth this narrowing wants rather than guarding the reads. A
     /// deliberate depth-2 narrowing of ASN-0120's `#u_j ≥ 2` (Conflicts
     /// §12). `Addrs` slots get no wf step: T4 validity is the whole
     /// precondition, already carried by the `Address` type.

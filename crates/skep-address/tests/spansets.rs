@@ -319,6 +319,13 @@ fn equiv_compares_canonical_forms() {
     // Two internally-uniform sets in DIFFERENT length classes: Ok(false), not Err (§7).
     let other_class = spanset(&[sp(&[1, 0], &[1, 5])]);
     assert_eq!(equiv(&y, &other_class), Ok(false));
+    // That is where `equiv` parts from the two sweeps, which refuse the SAME
+    // pair outright — so a caller cannot reach the partition by dispatching on
+    // `equiv`'s error, and asks `level_class` for the classes instead.
+    assert_eq!(intersect_sets(&y, &other_class), Err(LevelMismatch));
+    assert_eq!(difference_sets(&y, &other_class), Err(LevelMismatch));
+    assert_eq!(y.level_class(), Ok(Some(1)));
+    assert_eq!(other_class.level_class(), Ok(Some(2)));
     // An internally mixed set is still an error.
     let mixed = spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
     assert_eq!(equiv(&mixed, &y), Err(LevelMismatch));

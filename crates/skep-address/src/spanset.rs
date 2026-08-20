@@ -372,6 +372,12 @@ pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatc
 /// classes normalize independently and compare unequal — `Ok(false)`, NOT an
 /// error (§7; denotationally sound: equal non-empty denotations share a
 /// minimum element, forcing a single length class).
+///
+/// That is where `equiv` parts from [`intersect_sets`] and
+/// [`difference_sets`], which refuse a cross-class pair outright: a caller
+/// dispatching on `LevelMismatch` to decide when to partition gets no such
+/// signal here, and asks [`SpanSet::level_class`] — or partitions with
+/// [`SpanSet::by_level_class`] — instead.
 pub fn equiv(a: &SpanSet, b: &SpanSet) -> Result<bool, LevelMismatch> {
     Ok(a.normalize()? == b.normalize()?)
 }

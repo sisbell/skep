@@ -82,9 +82,12 @@ impl Tumbler {
         self.0.len()
     }
 
-    /// `tᵢ`, **1-based** (the spec's indexing): `None` for `i = 0` and for
-    /// `i > #t`. Fallible like every other `get` in std, so a caller reads a
-    /// component by asking rather than by proving the index first.
+    /// `tᵢ`, **1-based** (the spec's indexing) and **total**: `None` for
+    /// `i = 0` and for `i > #t`. Out of range is an answer, not a fault, so
+    /// nothing has to establish `#t` before it asks — and a caller that HAS
+    /// established it discharges that fact at the read, with an `expect` whose
+    /// message names the obligation relied on. Fallible like every other `get`
+    /// in std.
     pub fn get(&self, i: Pos) -> Option<&Nat> {
         i.checked_sub(1).and_then(|z| self.0.get(z))
     }

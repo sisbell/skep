@@ -278,11 +278,15 @@ impl Address {
 
     /// 0-based index of the `n`-th separator (zero) component, `n` 1-based to
     /// match the field numbering; `None` when fewer than `n` separators
-    /// exist. The single spelling of "where does a field begin" — every field
-    /// projection and every truncation below reads through it. Recomputed on
-    /// demand and allocation-free: `#t` is small, and the design defers any
-    /// parsed-field hint until a containment path proves hot.
+    /// exist. `n ≥ 1` is the caller's obligation — `n = 0` is not a question
+    /// about a 1-based numbering, and the debug assertion says so rather than
+    /// letting it wrap into a `None` that reads as "no such separator". The
+    /// single spelling of "where does a field begin" — every field projection
+    /// and every truncation below reads through it. Recomputed on demand and
+    /// allocation-free: `#t` is small, and the design defers any parsed-field
+    /// hint until a containment path proves hot.
     fn separator(&self, n: usize) -> Option<usize> {
+        debug_assert!(n >= 1, "separator numbering is 1-based");
         self.tumbler
             .comps()
             .iter()
@@ -326,9 +330,11 @@ impl Address {
 
     /// `element_field[0]` (T7): which subspace the element sits in —
     /// [`content_subspace`] or [`link_subspace`], disjoint by `1 < 2` at this
-    /// position, so nothing has to enforce the separation. A borrow into the
-    /// address's own components, like every other field projection: routing an
-    /// element is a comparison, and a comparison need not allocate.
+    /// position, so nothing has to enforce the separation. The index is total:
+    /// T4's no-trailing-zero clause makes a present element field nonempty. A
+    /// borrow into the address's own components, like every other field
+    /// projection: routing an element is a comparison, and a comparison need
+    /// not allocate.
     pub fn subspace(&self) -> Option<&Nat> {
         self.element_field().map(|e| &e[0])
     }
@@ -415,8 +421,11 @@ pub fn under_document(a: &Address, b: &Address) -> bool {
 /// peel — a valid address has no adjacent zeros). A *single structural peel*,
 /// NOT a guaranteed level-coarsening (a full content element peels to its
 /// subspace-base, still Element-class) and NOT the derivation parent. `None`
-/// only for a single-component node. Preserves the Address validity
-/// invariant (routed through [`validate`] defensively).
+/// only for a single-component node. The peel cannot empty the prefix: T4's
+/// no-leading-zero clause makes `comps[0]` nonzero, so the separator drop
+/// cannot fire at `end = 1` and at least one component always survives.
+/// Minted through [`validate`] — the one gate for the Address validity
+/// invariant; the `expect` states why it opens.
 pub fn parent(a: &Address) -> Option<Address> {
     let comps = a.tumbler().comps();
     if comps.len() == 1 {

@@ -21,12 +21,12 @@ pub(crate) struct DocArrangement {
 /// arrangement is authoritative MUTABLE state recovered by replay — NOT a
 /// recomputable hint (ASN-0047 P3); R is append-only and non-recomputable
 /// from the current arrangement (P2 keeps deleted pairs) but recovered by the
-/// same replay. Both maps key by the document's `Tumbler` — M1's `Address` is
-/// not `Ord` (only `Tumbler` carries the lexicographic order), so every
-/// `&Address` method converts with `doc.tumbler()`. `arrangements` is sparse:
-/// an absent doc ⇒ empty arrangement (the eager-lazy split with M3). v1 has
-/// no derived-hint fields ⇒ [`rebuild_derived`](M5State::rebuild_derived) is
-/// the identity.
+/// same replay. Both maps key by the document's `Tumbler` — M5's choice of
+/// key form, not a constraint from M1, which orders `Address` itself — so
+/// every `&Address` method converts with `doc.tumbler()`. `arrangements` is
+/// sparse: an absent doc ⇒ empty arrangement (the eager-lazy split with M3).
+/// v1 has no derived-hint fields ⇒
+/// [`rebuild_derived`](M5State::rebuild_derived) is the identity.
 ///
 /// Serialization needs the `im` crate's `serde` feature and
 /// `Tumbler: Serialize/DeserializeOwned` (M1's `num-bigint` serde feature) —

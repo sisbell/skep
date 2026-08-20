@@ -51,32 +51,32 @@ fn s5_split_widths_compose_to_the_whole() {
 /// form, with idempotence as a derived corollary.
 #[test]
 fn s10_union_laws_up_to_canonical_form() {
-    let a = set(&[sp(&[1], &[4])]);
-    let b = set(&[sp(&[3], &[6]), sp(&[9], &[12])]);
+    let a = spanset(&[sp(&[1], &[4])]);
+    let b = spanset(&[sp(&[3], &[6]), sp(&[9], &[12])]);
     // `c` carries a nested pair, so the canonical form these laws are stated
     // up to is one that coalescing actually had to decide.
-    let c = set(&[sp(&[6], &[9]), sp(&[7], &[8])]);
-    let k = |s: &SpanSet| canonical_key(s).unwrap();
-    assert_eq!(k(&union(&a, &b)), k(&union(&b, &a))); // commutative
+    let c = spanset(&[sp(&[6], &[9]), sp(&[7], &[8])]);
+    let key = |s: &SpanSet| canonical_key(s).unwrap();
+    assert_eq!(key(&union(&a, &b)), key(&union(&b, &a))); // commutative
     assert_eq!(
-        k(&union(&union(&a, &b), &c)),
-        k(&union(&a, &union(&b, &c)))
+        key(&union(&union(&a, &b), &c)),
+        key(&union(&a, &union(&b, &c)))
     ); // associative
-    assert_eq!(k(&union(&a, &a)), k(&a)); // idempotence (derived corollary)
+    assert_eq!(key(&union(&a, &a)), key(&a)); // idempotence (derived corollary)
 }
 
 /// TS1/TS3/TS4/TS5 — the ordinal-shift laws that quantify over one operand.
 /// The last two operands carry components past 2⁶⁴, where TS4's strict
 /// increase is exactly what a wrapping component add would break (T0(a)).
 #[test]
-fn ts_laws_for_the_ordinal_shift() {
+fn ts_ordinal_shift_is_strictly_increasing_length_preserving_and_additive() {
     let vs = [
         t(&[1]),
         t(&[1, 0]),
         t(&[2, 5]),
         t(&[1, 0, 2, 0, 5, 0, 1, 9]),
-        tw([Nat::from(u64::MAX)]),
-        tw([n(2), Nat::from(u64::MAX)]),
+        tumbler([Nat::from(u64::MAX)]),
+        tumbler([n(2), Nat::from(u64::MAX)]),
     ];
     for v in &vs {
         for amount in [n(1), n(2), n(7)] {
@@ -147,9 +147,9 @@ fn ta_rc_right_cancellation_fails_witness() {
 }
 
 /// D1/D2 — whenever `displacement(a, b) = Some(w)`: `a ⊕ w = b`, and nearby
-/// admissible displacements do not also reach `b` (uniqueness spot-check).
+/// admissible displacements do not also reach `b`.
 #[test]
-fn displacement_round_trip_and_uniqueness_spot_check() {
+fn displacement_round_trips_and_nearby_displacements_do_not() {
     let pairs = [
         (t(&[1, 2]), t(&[1, 5, 3])),
         (t(&[1]), t(&[4])),
@@ -187,11 +187,11 @@ fn displacement_is_exactly_the_round_trippable_window() {
     for a in &family {
         for b in &family {
             let d = displacement(a, b);
-            let rt = sub(b, a)
+            let round_trips = sub(b, a)
                 .ok()
                 .and_then(|w| add(a, &w).ok())
                 .is_some_and(|r| &r == b);
-            assert_eq!(d.is_some(), rt, "displacement({a:?}, {b:?})");
+            assert_eq!(d.is_some(), round_trips, "displacement({a:?}, {b:?})");
             if let Some(w) = &d {
                 assert_eq!(&add(a, w).unwrap(), b, "D1 round-trip for {a:?} → {b:?}");
                 let k = action_point(w).expect("a displacement is Pos");

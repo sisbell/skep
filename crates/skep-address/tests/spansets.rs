@@ -10,7 +10,7 @@ use common::*;
 use skep_address::*;
 
 #[test]
-fn empty_singleton_len_iter() {
+fn empty_has_no_members_and_a_singleton_has_one() {
     let e = SpanSet::empty();
     assert!(e.is_empty());
     assert_eq!(e.len(), 0);
@@ -22,7 +22,7 @@ fn empty_singleton_len_iter() {
 
 #[test]
 fn from_iterator_collects_as_given() {
-    let ss: SpanSet = set(&[sp(&[5], &[9]), sp(&[1], &[3])]);
+    let ss: SpanSet = spanset(&[sp(&[5], &[9]), sp(&[1], &[3])]);
     let stored: Vec<Span> = ss.iter().cloned().collect();
     assert_eq!(stored, vec![sp(&[5], &[9]), sp(&[1], &[3])]); // insertion order, no normalization
     assert!(!ss.is_normalized()); // N1 violated (descending starts)
@@ -32,7 +32,7 @@ fn from_iterator_collects_as_given() {
 /// owned, `collect` closes the round trip, and `⟨⟩` is what it defaults to.
 #[test]
 fn span_set_is_iterable_borrowed_and_owned() {
-    let ss = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     let mut walked: Vec<&Span> = Vec::new();
     for s in &ss {
         walked.push(s);
@@ -59,9 +59,9 @@ fn union_is_concatenation_only() {
 
 #[test]
 fn normalize_sorts_and_coalesces_to_the_unique_form() {
-    let raw = set(&[sp(&[5], &[9]), sp(&[1], &[3]), sp(&[3], &[5])]);
+    let raw = spanset(&[sp(&[5], &[9]), sp(&[1], &[3]), sp(&[3], &[5])]);
     let norm = raw.normalize().unwrap();
-    assert_eq!(norm, set(&[sp(&[1], &[9])])); // overlap AND adjacency coalesce (N2)
+    assert_eq!(norm, spanset(&[sp(&[1], &[9])])); // overlap AND adjacency coalesce (N2)
     assert!(norm.is_normalized());
     assert_eq!(norm.normalize().unwrap(), norm); // idempotent (unique form, S9)
     // Pinned edges: S8's n = 0 case.
@@ -75,12 +75,12 @@ fn normalize_sorts_and_coalesces_to_the_unique_form() {
 /// breaks arbitrarily and S9 says must not matter.
 #[test]
 fn normalize_keeps_the_widest_reach_of_a_coalesced_run() {
-    let whole = set(&[sp(&[1], &[9])]);
+    let whole = spanset(&[sp(&[1], &[9])]);
     let nested = [
-        set(&[sp(&[1], &[9]), sp(&[3], &[5])]), // wide first
-        set(&[sp(&[3], &[5]), sp(&[1], &[9])]), // narrow first
-        set(&[sp(&[1], &[9]), sp(&[1], &[5])]), // equal starts, wide first
-        set(&[sp(&[1], &[5]), sp(&[1], &[9])]), // equal starts, narrow first
+        spanset(&[sp(&[1], &[9]), sp(&[3], &[5])]), // wide first
+        spanset(&[sp(&[3], &[5]), sp(&[1], &[9])]), // narrow first
+        spanset(&[sp(&[1], &[9]), sp(&[1], &[5])]), // equal starts, wide first
+        spanset(&[sp(&[1], &[5]), sp(&[1], &[9])]), // equal starts, narrow first
     ];
     for raw in nested {
         assert_eq!(raw.normalize().unwrap(), whole, "swallowed reach of {raw:?}");
@@ -110,13 +110,13 @@ fn normalize_preserves_the_denotation_in_any_order() {
         for j in 0..pool.len() {
             for k in 0..pool.len() {
                 let idx = [i, j, k];
-                let raw = set(&idx.map(|x| pool[x].clone()));
+                let raw = spanset(&idx.map(|x| pool[x].clone()));
                 let norm = raw.normalize().unwrap();
-                for p in &probes {
+                for probe in &probes {
                     assert_eq!(
-                        raw.denotes(p),
-                        norm.denotes(p),
-                        "normalize({raw:?}) changed the denotation at {p:?}"
+                        raw.denotes(probe),
+                        norm.denotes(probe),
+                        "normalize({raw:?}) changed the denotation at {probe:?}"
                     );
                 }
                 assert!(norm.is_normalized(), "normalize({raw:?}) is not normalized");
@@ -151,12 +151,12 @@ fn normalize_preserves_the_denotation_in_any_order() {
 #[test]
 fn level_class_is_the_s8_gate_answered_directly() {
     assert_eq!(SpanSet::empty().level_class(), Ok(None)); // ⟨⟩: no class
-    let flat = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    let flat = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     assert_eq!(flat.level_class(), Ok(Some(1)));
-    let deep = set(&[sp(&[1, 0, 2], &[1, 0, 5])]);
+    let deep = spanset(&[sp(&[1, 0, 2], &[1, 0, 5])]);
     assert_eq!(deep.level_class(), Ok(Some(3)));
     // The two ways a set falls outside S8's domain, each refused by both.
-    let mixed = set(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
+    let mixed = spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
     assert_eq!(mixed.level_class(), Err(LevelMismatch));
     assert_eq!(mixed.normalize(), Err(LevelMismatch));
     let nu = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
@@ -185,7 +185,7 @@ fn by_level_class_partitions_into_normalizable_pieces() {
     assert!(!parts[&1].denotes(&t(&[2, 0, 9])));
     // TOTAL: a non-level-uniform member is partitioned by its start, then
     // refused by its own class's gate — exactly as the whole set refused it.
-    let with_nu = set(&[
+    let with_nu = spanset(&[
         Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
         sp(&[1], &[3]),
     ]);
@@ -197,7 +197,7 @@ fn by_level_class_partitions_into_normalizable_pieces() {
 #[test]
 fn normalize_gate_is_the_full_s8_precondition() {
     // Mutually incompatible length classes.
-    let mixed = set(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
+    let mixed = spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
     assert_eq!(mixed.normalize(), Err(LevelMismatch));
     assert!(!mixed.is_normalized());
     // A non-level-uniform component span.
@@ -207,7 +207,7 @@ fn normalize_gate_is_the_full_s8_precondition() {
 
 #[test]
 fn denotes_is_membership_in_some_component() {
-    let ss = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     assert!(ss.denotes(&t(&[1])));
     assert!(ss.denotes(&t(&[2, 5]))); // deeper extension inside a component
     assert!(!ss.denotes(&t(&[5])));
@@ -218,30 +218,30 @@ fn denotes_is_membership_in_some_component() {
 
 #[test]
 fn intersect_sets_normalizes_internally_and_emits_normalized() {
-    let a = set(&[sp(&[5], &[9]), sp(&[1], &[4])]); // deliberately un-normalized input
-    let b = set(&[sp(&[3], &[7])]);
+    let a = spanset(&[sp(&[5], &[9]), sp(&[1], &[4])]); // deliberately un-normalized input
+    let b = spanset(&[sp(&[3], &[7])]);
     let r = intersect_sets(&a, &b).unwrap();
-    assert_eq!(r, set(&[sp(&[3], &[4]), sp(&[5], &[7])]));
+    assert_eq!(r, spanset(&[sp(&[3], &[4]), sp(&[5], &[7])]));
     assert!(r.is_normalized());
     assert_eq!(intersect_sets(&a, &SpanSet::empty()).unwrap(), SpanSet::empty());
     // The two sets must be mutually level-compatible.
-    let cross = set(&[sp(&[1, 0], &[1, 5])]);
+    let cross = spanset(&[sp(&[1, 0], &[1, 5])]);
     assert_eq!(intersect_sets(&a, &cross), Err(LevelMismatch));
 }
 
 #[test]
 fn difference_sets_carves_and_emits_normalized() {
-    let a = set(&[sp(&[1], &[9])]);
-    let b = set(&[sp(&[3], &[5])]);
+    let a = spanset(&[sp(&[1], &[9])]);
+    let b = spanset(&[sp(&[3], &[5])]);
     let r = difference_sets(&a, &b).unwrap();
-    assert_eq!(r, set(&[sp(&[1], &[3]), sp(&[5], &[9])]));
+    assert_eq!(r, spanset(&[sp(&[1], &[3]), sp(&[5], &[9])]));
     assert!(r.is_normalized());
     // One b-span crossing the gap between two a-spans.
-    let a2 = set(&[sp(&[1], &[3]), sp(&[5], &[7])]);
-    let b2 = set(&[sp(&[2], &[6])]);
+    let a2 = spanset(&[sp(&[1], &[3]), sp(&[5], &[7])]);
+    let b2 = spanset(&[sp(&[2], &[6])]);
     assert_eq!(
         difference_sets(&a2, &b2).unwrap(),
-        set(&[sp(&[1], &[2]), sp(&[6], &[7])])
+        spanset(&[sp(&[1], &[2]), sp(&[6], &[7])])
     );
     assert_eq!(difference_sets(&a, &a).unwrap(), SpanSet::empty());
     // An empty subtrahend leaves every a-span whole. The sweep carries each
@@ -252,13 +252,13 @@ fn difference_sets_carves_and_emits_normalized() {
         difference_sets(&a, &SpanSet::empty()).unwrap(),
         a.normalize().unwrap()
     );
-    let deep = set(&[sp(&[1, 0, 7], &[1, 0, 9]), sp(&[2, 5, 1], &[2, 5, 8])]);
+    let deep = spanset(&[sp(&[1, 0, 7], &[1, 0, 9]), sp(&[2, 5, 1], &[2, 5, 8])]);
     assert_eq!(
         difference_sets(&deep, &SpanSet::empty()).unwrap(),
         deep.normalize().unwrap()
     );
     assert_eq!(difference_sets(&SpanSet::empty(), &a).unwrap(), SpanSet::empty());
-    let cross = set(&[sp(&[1, 0], &[1, 5])]);
+    let cross = spanset(&[sp(&[1, 0], &[1, 5])]);
     assert_eq!(difference_sets(&a, &cross), Err(LevelMismatch));
 }
 
@@ -271,14 +271,14 @@ fn difference_sets_carves_and_emits_normalized() {
 fn set_algebra_agrees_pointwise_with_the_denotations() {
     let pool = [
         SpanSet::empty(),
-        set(&[sp(&[1], &[9])]),                                 // one wide span
-        set(&[sp(&[2], &[3]), sp(&[5], &[6])]),                 // two separated
-        set(&[sp(&[5], &[6]), sp(&[2], &[3])]),                 // the same two, un-normalized
-        set(&[sp(&[1], &[3])]),
-        set(&[sp(&[3], &[5])]),                                 // touching the previous
-        set(&[sp(&[1], &[5]), sp(&[3], &[9]), sp(&[1], &[5])]), // overlapping + duplicated
-        set(&[sp(&[1], &[9]), sp(&[3], &[5])]),                 // nested
-        set(&[sp(&[9], &[12])]),
+        spanset(&[sp(&[1], &[9])]),                                 // one wide span
+        spanset(&[sp(&[2], &[3]), sp(&[5], &[6])]),                 // two separated
+        spanset(&[sp(&[5], &[6]), sp(&[2], &[3])]),                 // the same two, un-normalized
+        spanset(&[sp(&[1], &[3])]),
+        spanset(&[sp(&[3], &[5])]),                                 // touching the previous
+        spanset(&[sp(&[1], &[5]), sp(&[3], &[9]), sp(&[1], &[5])]), // overlapping + duplicated
+        spanset(&[sp(&[1], &[9]), sp(&[3], &[5])]),                 // nested
+        spanset(&[sp(&[9], &[12])]),
     ];
     let probes: Vec<Tumbler> = (0u32..14)
         .map(|x| t(&[x]))
@@ -286,45 +286,48 @@ fn set_algebra_agrees_pointwise_with_the_denotations() {
         .collect();
     for a in &pool {
         for b in &pool {
-            let i = intersect_sets(a, b).unwrap();
-            let d = difference_sets(a, b).unwrap();
-            for p in &probes {
+            let both = intersect_sets(a, b).unwrap();
+            let only_a = difference_sets(a, b).unwrap();
+            for probe in &probes {
                 assert_eq!(
-                    i.denotes(p),
-                    a.denotes(p) && b.denotes(p),
-                    "intersect_sets({a:?}, {b:?}) disagrees at {p:?}"
+                    both.denotes(probe),
+                    a.denotes(probe) && b.denotes(probe),
+                    "intersect_sets({a:?}, {b:?}) disagrees at {probe:?}"
                 );
                 assert_eq!(
-                    d.denotes(p),
-                    a.denotes(p) && !b.denotes(p),
-                    "difference_sets({a:?}, {b:?}) disagrees at {p:?}"
+                    only_a.denotes(probe),
+                    a.denotes(probe) && !b.denotes(probe),
+                    "difference_sets({a:?}, {b:?}) disagrees at {probe:?}"
                 );
             }
-            assert!(i.is_normalized(), "intersect_sets({a:?}, {b:?}) is not normalized");
-            assert!(d.is_normalized(), "difference_sets({a:?}, {b:?}) is not normalized");
+            assert!(both.is_normalized(), "intersect_sets({a:?}, {b:?}) is not normalized");
+            assert!(
+                only_a.is_normalized(),
+                "difference_sets({a:?}, {b:?}) is not normalized"
+            );
         }
     }
 }
 
 #[test]
 fn equiv_compares_canonical_forms() {
-    let x = set(&[sp(&[1], &[3]), sp(&[3], &[5])]);
-    let y = set(&[sp(&[1], &[5])]);
+    let x = spanset(&[sp(&[1], &[3]), sp(&[3], &[5])]);
+    let y = spanset(&[sp(&[1], &[5])]);
     assert_eq!(equiv(&x, &y), Ok(true)); // same denotation, different structure
     assert_ne!(x, y); // raw Eq is structural, NOT denotational
-    assert_eq!(equiv(&x, &set(&[sp(&[1], &[4])])), Ok(false));
+    assert_eq!(equiv(&x, &spanset(&[sp(&[1], &[4])])), Ok(false));
     // Two internally-uniform sets in DIFFERENT length classes: Ok(false), not Err (§7).
-    let other_class = set(&[sp(&[1, 0], &[1, 5])]);
+    let other_class = spanset(&[sp(&[1, 0], &[1, 5])]);
     assert_eq!(equiv(&y, &other_class), Ok(false));
     // An internally mixed set is still an error.
-    let mixed = set(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
+    let mixed = spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
     assert_eq!(equiv(&mixed, &y), Err(LevelMismatch));
 }
 
 #[test]
 fn canonical_key_is_the_denotational_dedup_identity() {
-    let x = set(&[sp(&[3], &[5]), sp(&[1], &[3])]);
-    let y = set(&[sp(&[1], &[5])]);
+    let x = spanset(&[sp(&[3], &[5]), sp(&[1], &[3])]);
+    let y = spanset(&[sp(&[1], &[5])]);
     let kx = canonical_key(&x).unwrap();
     let ky = canonical_key(&y).unwrap();
     assert_eq!(kx, ky); // S9: one canonical form per denotation
@@ -334,7 +337,7 @@ fn canonical_key_is_the_denotational_dedup_identity() {
     m.insert(kx, 1);
     assert_eq!(m.get(&ky), Some(&1));
     assert!(canonical_key(&SpanSet::empty()).is_ok()); // ⟨⟩ → the empty canonical form
-    assert_eq!(canonical_key(&set(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])])), Err(LevelMismatch));
+    assert_eq!(canonical_key(&spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])])), Err(LevelMismatch));
 }
 
 #[test]

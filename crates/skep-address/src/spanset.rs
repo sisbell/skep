@@ -10,7 +10,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arith::next_at_length;
+use crate::arithmetic::next_at_length;
 use crate::error::LevelMismatch;
 use crate::span::{subtree_of, Endpoints, Span};
 use crate::tumbler::Tumbler;
@@ -102,13 +102,13 @@ impl SpanSet {
         let Some(first) = self.0.front() else {
             return Ok(None);
         };
-        let class = first.start().len();
+        let shared_length = first.start().len();
         for s in self.0.iter() {
-            if !s.is_level_uniform() || s.start().len() != class {
+            if !s.is_level_uniform() || s.start().len() != shared_length {
                 return Err(LevelMismatch);
             }
         }
-        Ok(Some(class))
+        Ok(Some(shared_length))
     }
 
     /// The partition of the members by endpoint length — the decomposition
@@ -144,27 +144,27 @@ impl SpanSet {
         if self.level_class()?.is_none() {
             return Ok(SpanSet::empty());
         }
-        let mut ends: Vec<Endpoints> = self.0.iter().map(Endpoints::of).collect();
-        ends.sort_by(|x, y| x.start.cmp(&y.start));
+        let mut spans: Vec<Endpoints> = self.0.iter().map(Endpoints::of).collect();
+        spans.sort_by(|x, y| x.start.cmp(&y.start));
         let mut out: Vec<Span> = Vec::new();
-        let mut rest = ends.into_iter();
-        let mut cur = rest.next().expect("nonempty: level_class was Some");
-        for b in rest {
-            if b.start <= cur.reach {
+        let mut rest = spans.into_iter();
+        let mut run = rest.next().expect("nonempty: level_class was Some");
+        for following in rest {
+            if following.start <= run.reach {
                 // overlap or adjacency — coalesce (N2)
-                if b.reach > cur.reach {
-                    cur.reach = b.reach;
+                if following.reach > run.reach {
+                    run.reach = following.reach;
                 }
             } else {
                 out.push(
-                    cur.into_span()
+                    run.into_span()
                         .expect("gated one-length endpoints with start < reach"),
                 );
-                cur = b;
+                run = following;
             }
         }
         out.push(
-            cur.into_span()
+            run.into_span()
                 .expect("gated one-length endpoints with start < reach"),
         );
         Ok(out.into_iter().collect())
@@ -297,21 +297,21 @@ fn normalized_pair(a: &SpanSet, b: &SpanSet) -> Result<(SpanSet, SpanSet), Level
 /// both sides have members, so ⟨⟩ on either side yields ⟨⟩.
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (na, nb) = normalized_pair(a, b)?;
-    let av: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
-    let bv: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
+    let a_spans: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
+    let b_spans: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
     let (mut i, mut j) = (0usize, 0usize);
     let mut out: Vec<Span> = Vec::new();
-    while i < av.len() && j < bv.len() {
-        let lo = std::cmp::max(&av[i].start, &bv[j].start);
-        let hi = std::cmp::min(&av[i].reach, &bv[j].reach);
-        if lo < hi {
+    while i < a_spans.len() && j < b_spans.len() {
+        let start = std::cmp::max(&a_spans[i].start, &b_spans[j].start);
+        let reach = std::cmp::min(&a_spans[i].reach, &b_spans[j].reach);
+        if start < reach {
             out.push(
-                Endpoints::new(lo.clone(), hi.clone())
+                Endpoints::new(start.clone(), reach.clone())
                     .into_span()
-                    .expect("one length class with lo < hi"),
+                    .expect("one length class with start < reach"),
             );
         }
-        if av[i].reach <= bv[j].reach {
+        if a_spans[i].reach <= b_spans[j].reach {
             i += 1;
         } else {
             j += 1;
@@ -328,39 +328,39 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 /// survives whole (a \ ⟨⟩ = a).
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (na, nb) = normalized_pair(a, b)?;
-    let av: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
-    let bv: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
+    let a_spans: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
+    let b_spans: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
     let mut out: Vec<Span> = Vec::new();
     let mut j = 0usize;
-    for a in av {
+    for a_span in a_spans {
         // b-spans wholly at-or-before this a-start can touch no later a-span
         // either (starts ascend), so this cursor advances for good.
-        while j < bv.len() && bv[j].reach <= a.start {
+        while j < b_spans.len() && b_spans[j].reach <= a_span.start {
             j += 1;
         }
-        let mut cur = a.start;
+        let mut surviving_from = a_span.start;
         let mut k = j;
-        while k < bv.len() && bv[k].start < a.reach {
-            if bv[k].start > cur {
+        while k < b_spans.len() && b_spans[k].start < a_span.reach {
+            if b_spans[k].start > surviving_from {
                 out.push(
-                    Endpoints::new(cur.clone(), bv[k].start.clone())
+                    Endpoints::new(surviving_from.clone(), b_spans[k].start.clone())
                         .into_span()
-                        .expect("one length class with cur < b-start"),
+                        .expect("one length class, survivor start below the b-start"),
                 );
             }
-            if bv[k].reach > cur {
-                cur = bv[k].reach.clone();
+            if b_spans[k].reach > surviving_from {
+                surviving_from = b_spans[k].reach.clone();
             }
-            if cur >= a.reach {
+            if surviving_from >= a_span.reach {
                 break;
             }
             k += 1;
         }
-        if cur < a.reach {
+        if surviving_from < a_span.reach {
             out.push(
-                Endpoints::new(cur, a.reach)
+                Endpoints::new(surviving_from, a_span.reach)
                     .into_span()
-                    .expect("one length class with cur < reach"),
+                    .expect("one length class, survivor start below the a-span reach"),
             );
         }
     }
@@ -405,14 +405,14 @@ pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
 /// `|Σ| = |P|` unit-span cover for arbitrary P (S7) is the separate
 /// [`cover`], not this hull.
 pub fn hull(points: &[Tumbler]) -> Result<Option<Span>, LevelMismatch> {
-    let (Some(lo), Some(hi)) = (points.iter().min(), points.iter().max()) else {
+    let (Some(min_point), Some(max_point)) = (points.iter().min(), points.iter().max()) else {
         return Ok(None); // P is empty
     };
-    if lo.len() != hi.len() {
+    if min_point.len() != max_point.len() {
         return Err(LevelMismatch);
     }
     Ok(Some(
-        Span::from_endpoints(lo.clone(), &next_at_length(hi))
+        Span::from_endpoints(min_point.clone(), &next_at_length(max_point))
             .expect("min ≤ max < next_at_length(max) at one shared length, so WF fires"),
     ))
 }

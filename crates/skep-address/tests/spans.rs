@@ -55,7 +55,7 @@ fn span_new_admits_exactly_what_add_accepts() {
 }
 
 #[test]
-fn from_endpoints_wf_and_error_precedence() {
+fn from_endpoints_derives_the_width_and_checks_the_level_clause_first() {
     let s = sp(&[1, 0, 2], &[1, 0, 5]);
     assert_eq!(s.start(), &t(&[1, 0, 2]));
     assert_eq!(s.width(), &t(&[0, 0, 3]));
@@ -150,18 +150,18 @@ fn subtree_of_denotes_exactly_the_extensions_of_the_prefix() {
         for tail in [&[0u32][..], &[1][..], &[9][..], &[0, 1][..], &[7, 7][..]] {
             let mut comps: Vec<Nat> = p.iter().cloned().collect();
             comps.extend(tail.iter().map(|&c| n(c)));
-            probes.push(tw(comps));
+            probes.push(tumbler(comps));
         }
     }
     for p in &prefixes {
         let s = subtree_of(p);
-        for x in &probes {
+        for probe in &probes {
             let is_extension =
-                p.len() <= x.len() && p.iter().zip(x.iter()).all(|(a, b)| a == b);
+                p.len() <= probe.len() && p.iter().zip(probe.iter()).all(|(a, b)| a == b);
             assert_eq!(
-                s.contains(x),
+                s.contains(probe),
                 is_extension,
-                "subtree_of({p}) disagrees at {x}"
+                "subtree_of({p}) disagrees at {probe}"
             );
         }
     }
@@ -170,7 +170,7 @@ fn subtree_of_denotes_exactly_the_extensions_of_the_prefix() {
 // ---- SC classifier ----------------------------------------------------------
 
 #[test]
-fn classify_spans_five_cases() {
+fn classify_spans_decides_the_five_cases_by_endpoint_order() {
     assert_eq!(classify_spans(&sp(&[1], &[3]), &sp(&[5], &[9])), SpanRel::Separated);
     assert_eq!(classify_spans(&sp(&[1], &[3]), &sp(&[3], &[5])), SpanRel::Adjacent);
     assert_eq!(classify_spans(&sp(&[1], &[5]), &sp(&[1], &[5])), SpanRel::Equal);
@@ -240,7 +240,7 @@ fn inline_boundary_tests_agree_with_the_classifier() {
 // ---- intersect / merge / split ----------------------------------------------
 
 #[test]
-fn intersect_cases() {
+fn intersect_yields_the_shared_region_and_nothing_when_disjoint() {
     assert_eq!(
         intersect(&sp(&[1], &[5]), &sp(&[3], &[9])).unwrap(),
         Some(sp(&[3], &[5]))
@@ -254,7 +254,7 @@ fn intersect_cases() {
 }
 
 #[test]
-fn merge_cases() {
+fn merge_joins_overlapping_and_adjacent_spans_and_refuses_separated() {
     assert_eq!(
         merge(&sp(&[1], &[5]), &sp(&[3], &[9])).unwrap(),
         Some(sp(&[1], &[9]))
@@ -267,7 +267,7 @@ fn merge_cases() {
 }
 
 #[test]
-fn split_cases_and_error_precedence() {
+fn split_cuts_at_an_interior_point_and_checks_the_level_clause_first() {
     let s = sp(&[1], &[9]);
     let (l, r) = split(&s, &t(&[4])).unwrap();
     assert_eq!(l, sp(&[1], &[4]));
@@ -287,25 +287,25 @@ fn split_cases_and_error_precedence() {
 // ---- difference (S11d) ------------------------------------------------------
 
 #[test]
-fn difference_by_sc_case() {
+fn difference_yields_one_or_two_complements_by_sc_case() {
     let a = sp(&[1], &[9]);
     // separated / adjacent: ⟦a⟧ unchanged
-    assert_eq!(difference(&a, &sp(&[20], &[30])).unwrap(), set(&[a.clone()]));
-    assert_eq!(difference(&a, &sp(&[9], &[12])).unwrap(), set(&[a.clone()]));
+    assert_eq!(difference(&a, &sp(&[20], &[30])).unwrap(), spanset(&[a.clone()]));
+    assert_eq!(difference(&a, &sp(&[9], &[12])).unwrap(), spanset(&[a.clone()]));
     // proper overlap, a first: the left complement
-    assert_eq!(difference(&a, &sp(&[5], &[12])).unwrap(), set(&[sp(&[1], &[5])]));
+    assert_eq!(difference(&a, &sp(&[5], &[12])).unwrap(), spanset(&[sp(&[1], &[5])]));
     // proper overlap, b first: the right complement
     assert_eq!(
         difference(&sp(&[5], &[12]), &sp(&[1], &[9])).unwrap(),
-        set(&[sp(&[9], &[12])])
+        spanset(&[sp(&[9], &[12])])
     );
     // strict containment: two complements in N1 order, normalized by construction
     let two = difference(&a, &sp(&[3], &[5])).unwrap();
-    assert_eq!(two, set(&[sp(&[1], &[3]), sp(&[5], &[9])]));
+    assert_eq!(two, spanset(&[sp(&[1], &[3]), sp(&[5], &[9])]));
     assert!(two.is_normalized());
     // a shared boundary drops the zero-width complement (S11d's "1 or 2"; S2)
-    assert_eq!(difference(&a, &sp(&[1], &[5])).unwrap(), set(&[sp(&[5], &[9])]));
-    assert_eq!(difference(&a, &sp(&[5], &[9])).unwrap(), set(&[sp(&[1], &[5])]));
+    assert_eq!(difference(&a, &sp(&[1], &[5])).unwrap(), spanset(&[sp(&[5], &[9])]));
+    assert_eq!(difference(&a, &sp(&[5], &[9])).unwrap(), spanset(&[sp(&[1], &[5])]));
     // a ⊆ b, including equal: empty
     assert_eq!(difference(&sp(&[3], &[5]), &a).unwrap(), SpanSet::empty());
     assert_eq!(difference(&a, &a).unwrap(), SpanSet::empty());
@@ -333,20 +333,20 @@ fn difference_carves_a_not_b_in_every_orientation() {
         .collect();
     for a in &battery {
         for b in &battery {
-            let d = difference(a, b).unwrap();
-            for p in &probes {
+            let only_a = difference(a, b).unwrap();
+            for probe in &probes {
                 assert_eq!(
-                    d.denotes(p),
-                    a.contains(p) && !b.contains(p),
-                    "difference({a:?}, {b:?}) disagrees at {p:?}"
+                    only_a.denotes(probe),
+                    a.contains(probe) && !b.contains(probe),
+                    "difference({a:?}, {b:?}) disagrees at {probe:?}"
                 );
             }
             // The published bounds on the result, in every case: ≤ 2 spans
             // (S11d/S1), and normalized by construction — the N1 ordering of
             // the two complements included.
-            assert!(d.len() <= 2, "S11d fan-out on ({a:?}, {b:?})");
+            assert!(only_a.len() <= 2, "S11d fan-out on ({a:?}, {b:?})");
             assert!(
-                d.is_normalized(),
+                only_a.is_normalized(),
                 "difference({a:?}, {b:?}) is not normalized by construction"
             );
             // The two non-constructing cases return ⟦a⟧ itself, whole.
@@ -354,7 +354,7 @@ fn difference_carves_a_not_b_in_every_orientation() {
                 classify_spans(a, b),
                 SpanRel::Separated | SpanRel::Adjacent
             ) {
-                assert_eq!(d, set(std::slice::from_ref(a)));
+                assert_eq!(only_a, spanset(std::slice::from_ref(a)));
             }
         }
     }

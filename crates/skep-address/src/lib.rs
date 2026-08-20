@@ -48,7 +48,7 @@
 //! every value is immutable — recovery logic exists nowhere in this crate.
 
 mod address;
-mod arith;
+mod arithmetic;
 mod error;
 mod span;
 mod spanset;
@@ -59,7 +59,7 @@ pub use address::{
     same_account, same_document, same_node, under_document, validate, zeros, Address, Class, Level,
     T4Clause, T4Error,
 };
-pub use arith::{
+pub use arithmetic::{
     action_point, add, checked_inc, displacement, elem_addr, inc, inc_preserves_t4, shift,
     shift_ordinal, sig, sub, AddPrecond, ElemError, ElemPos, GateViolation, SubPrecond,
 };

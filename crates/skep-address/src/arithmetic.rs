@@ -85,7 +85,7 @@ pub fn add(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, AddPrecond> {
 }
 
 /// Zero-padded component at 0-based `i` — ⊖'s working view of an operand.
-fn padded<'t>(t: &'t Tumbler, i: usize, zero: &'t Nat) -> &'t Nat {
+fn padded_comp<'t>(t: &'t Tumbler, i: usize, zero: &'t Nat) -> &'t Nat {
     t.comps().get(i).unwrap_or(zero)
 }
 
@@ -112,17 +112,17 @@ pub fn sub(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, SubPrecond> {
     }
     let l = a.len().max(w.len());
     let zero = Nat::from(0u32);
-    let zpd = (0..l).find(|&i| padded(a, i, &zero) != padded(w, i, &zero));
-    match zpd {
+    let padded_divergence = (0..l).find(|&i| padded_comp(a, i, &zero) != padded_comp(w, i, &zero));
+    match padded_divergence {
         None => Ok(Tumbler::from_vec(vec![zero; l])),
         Some(d) => {
             let mut out: Vec<Nat> = Vec::with_capacity(l);
             out.resize(d, Nat::from(0u32));
             // a ≥ w puts the larger component on a's side at the divergence,
             // so this ℕ subtraction cannot underflow.
-            out.push(padded(a, d, &zero) - padded(w, d, &zero));
+            out.push(padded_comp(a, d, &zero) - padded_comp(w, d, &zero));
             for i in (d + 1)..l {
-                out.push(padded(a, i, &zero).clone());
+                out.push(padded_comp(a, i, &zero).clone());
             }
             Ok(Tumbler::from_vec(out))
         }

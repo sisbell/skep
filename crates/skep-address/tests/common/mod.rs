@@ -15,12 +15,12 @@ pub fn t(comps: &[u32]) -> Tumbler {
 
 /// Tumbler literal from arbitrary ℕ components — the door for magnitudes no
 /// `u32` literal reaches.
-pub fn tw(comps: impl IntoIterator<Item = Nat>) -> Tumbler {
+pub fn tumbler(comps: impl IntoIterator<Item = Nat>) -> Tumbler {
     Tumbler::new(comps).expect("test tumblers are nonempty")
 }
 
 /// 2⁶⁴ — a component no fixed-width representation holds (T0(a)).
-pub fn wide() -> Nat {
+pub fn beyond_u64() -> Nat {
     Nat::from(u64::MAX) + Nat::from(1u32)
 }
 
@@ -56,6 +56,6 @@ pub fn sp(s: &[u32], r: &[u32]) -> Span {
 }
 
 /// Span-set collected as-given (un-normalized).
-pub fn set(spans: &[Span]) -> SpanSet {
+pub fn spanset(spans: &[Span]) -> SpanSet {
     spans.iter().cloned().collect()
 }

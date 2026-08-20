@@ -37,7 +37,7 @@ fn add_three_region_semantics() {
 }
 
 #[test]
-fn add_preconditions() {
+fn add_requires_pos_w_and_an_action_point_within_start() {
     assert_eq!(add(&t(&[1]), &t(&[0, 0])), Err(AddPrecond)); // ¬Pos(w)
     assert_eq!(add(&t(&[1]), &t(&[0, 1])), Err(AddPrecond)); // actionPoint(w) = 2 > #a
 }
@@ -45,7 +45,7 @@ fn add_preconditions() {
 // ---- ⊖ ---------------------------------------------------------------------
 
 #[test]
-fn sub_zero_padded_divergence() {
+fn sub_subtracts_at_the_zero_padded_divergence() {
     assert_eq!(sub(&t(&[1, 0, 3]), &t(&[1, 0, 2])).unwrap(), t(&[0, 0, 1]));
     // padded-equal: the all-zero tumbler of length L (a legal non-address result)
     assert_eq!(sub(&t(&[1, 0]), &t(&[1])).unwrap(), t(&[0, 0]));
@@ -75,7 +75,7 @@ fn inc_positive_k_extends_by_k_positions() {
 }
 
 #[test]
-fn ta5a_gate_predicate() {
+fn ta5a_gate_admits_the_descent_only_for_a_non_element_address() {
     let node = addr(&[1]);
     assert!(inc_preserves_t4(&node, 0));
     assert!(inc_preserves_t4(&node, 1));
@@ -105,15 +105,21 @@ fn checked_inc_gates_and_reclassifies() {
 /// alias class T3 exists to keep empty, reopened at the top end.
 #[test]
 fn arithmetic_is_exact_above_any_fixed_width() {
-    let a = tw([n(1), wide()]);
-    let w = tw([n(0), wide()]);
+    let a = tumbler([n(1), beyond_u64()]);
+    let w = tumbler([n(0), beyond_u64()]);
     let b = add(&a, &w).unwrap();
-    assert_eq!(b.get(2), Some(&(wide() + wide()))); // 2⁶⁵ at one position, no wrap
+    assert_eq!(b.get(2), Some(&(beyond_u64() + beyond_u64()))); // 2⁶⁵ at one position, no wrap
     assert_eq!(displacement(&a, &b), Some(w)); // ⊖ recovers the wide width exactly
 
     // The two advances cross the 2⁶⁴ boundary rather than wrapping to zero.
-    assert_eq!(inc(&tw([Nat::from(u64::MAX)]), 0), tw([wide()]));
-    assert_eq!(shift(&tw([Nat::from(u64::MAX)]), &n(1)), tw([wide()]));
+    assert_eq!(
+        inc(&tumbler([Nat::from(u64::MAX)]), 0),
+        tumbler([beyond_u64()])
+    );
+    assert_eq!(
+        shift(&tumbler([Nat::from(u64::MAX)]), &n(1)),
+        tumbler([beyond_u64()])
+    );
 }
 
 // ---- displacement (D0–D2) ---------------------------------------------------

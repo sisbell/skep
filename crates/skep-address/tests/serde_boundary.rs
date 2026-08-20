@@ -17,7 +17,7 @@ fn tumbler_round_trips_and_revalidates_at_the_boundary() {
     assert!(serde_json::from_str::<Tumbler>("[]").is_err());
     // T0(a) crosses the journal boundary intact — a narrowed component would
     // truncate here, where nothing downstream could tell it had.
-    let big = tw([n(1), wide(), n(0), n(5)]);
+    let big = tumbler([n(1), beyond_u64(), n(0), n(5)]);
     let json = serde_json::to_string(&big).unwrap();
     assert_eq!(serde_json::from_str::<Tumbler>(&json).unwrap(), big);
 }
@@ -55,7 +55,7 @@ fn span_round_trips_as_the_start_width_pair() {
 
 #[test]
 fn span_set_round_trips_with_members_validated() {
-    let ss = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     let json = serde_json::to_string(&ss).unwrap();
     assert_eq!(serde_json::from_str::<SpanSet>(&json).unwrap(), ss);
     // Members deserialize through Span's shadows: one bad member poisons the set.

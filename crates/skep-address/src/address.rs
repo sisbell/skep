@@ -110,12 +110,12 @@ impl Error for T4Error {}
 fn t4_scan(t: &Tumbler) -> (usize, Vec<T4Clause>) {
     let comps = t.comps();
     let mut zero_count = 0usize;
-    let mut adjacent = false;
+    let mut adjacent_zeros = false;
     let mut prev_zero = false;
     for c in comps {
         if nat_is_zero(c) {
             if prev_zero {
-                adjacent = true;
+                adjacent_zeros = true;
             }
             zero_count += 1;
             prev_zero = true;
@@ -130,7 +130,7 @@ fn t4_scan(t: &Tumbler) -> (usize, Vec<T4Clause>) {
     if nat_is_zero(&comps[comps.len() - 1]) {
         clauses.push(T4Clause::TrailingZero);
     }
-    if adjacent {
+    if adjacent_zeros {
         clauses.push(T4Clause::AdjacentZeros);
     }
     if zero_count > 3 {

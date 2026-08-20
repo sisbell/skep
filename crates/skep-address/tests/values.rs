@@ -83,12 +83,18 @@ fn tumbler_renders_as_dotted_decimal() {
 /// what the conformance harness compares against the golden.
 #[test]
 fn values_are_exact_above_any_fixed_width() {
-    assert!(tw([wide()]) > tw([Nat::from(u64::MAX)]));
-    assert_ne!(tw([wide()]), tw([Nat::from(u64::MAX)]));
-    assert_eq!(tw([n(1), wide()]).to_string(), "1.18446744073709551616");
+    assert!(tumbler([beyond_u64()]) > tumbler([Nat::from(u64::MAX)]));
+    assert_ne!(tumbler([beyond_u64()]), tumbler([Nat::from(u64::MAX)]));
+    assert_eq!(
+        tumbler([n(1), beyond_u64()]).to_string(),
+        "1.18446744073709551616"
+    );
     // The zero scan reads magnitude-free, so a wide component is a separator
     // to nobody and the classification is unchanged by the size of a field.
-    assert_eq!(classify(&tw([wide(), n(0), wide()])), Class::Account);
+    assert_eq!(
+        classify(&tumbler([beyond_u64(), n(0), beyond_u64()])),
+        Class::Account
+    );
 }
 
 // ---- T1/T2/T3: order and identity ------------------------------------------
@@ -110,7 +116,7 @@ fn equality_is_sequence_equality() {
 }
 
 #[test]
-fn is_prefix_examples() {
+fn is_prefix_is_reflexive_and_directional() {
     assert!(is_prefix(&t(&[1, 0]), &t(&[1, 0, 2])));
     assert!(is_prefix(&t(&[1]), &t(&[1]))); // ≼ is reflexive
     assert!(!is_prefix(&t(&[1, 0, 2]), &t(&[1, 0])));
@@ -131,7 +137,7 @@ fn zeros_counts_separators_unbounded() {
 }
 
 #[test]
-fn classify_all_levels() {
+fn classify_reads_the_level_off_the_separator_count() {
     assert_eq!(classify(&t(&[1])), Class::Node);
     assert_eq!(classify(&t(&[1, 2, 3])), Class::Node); // any zero-free sequence
     assert_eq!(classify(&t(&[1, 0, 2])), Class::Account);
@@ -151,11 +157,11 @@ fn every_level_embeds_as_its_class() {
         (Level::Document, Class::Document, t(&[1, 0, 2, 0, 5])),
         (Level::Element, Class::Element, t(&[1, 0, 2, 0, 5, 0, 1, 9])),
     ];
-    for (level, class, tumbler) in pairs {
+    for (level, class, example) in pairs {
         assert_eq!(Class::from(level), class);
         // The embedding agrees with the classifier on every valid address.
-        assert_eq!(classify(&tumbler), class);
-        assert_eq!(Class::from(validate(tumbler).unwrap().level()), class);
+        assert_eq!(classify(&example), class);
+        assert_eq!(Class::from(validate(example).unwrap().level()), class);
     }
 }
 
@@ -230,7 +236,7 @@ fn t4_admission_agrees_with_the_clause_by_clause_reading() {
     for len in 1..=9usize {
         for bits in 0..(1u32 << len) {
             let comps: Vec<u32> = (0..len).map(|i| (bits >> i) & 1).collect();
-            let x = t(&comps);
+            let candidate = t(&comps);
 
             let z = comps.iter().filter(|&&c| c == 0).count();
             let mut want: Vec<T4Clause> = Vec::new();
@@ -247,8 +253,12 @@ fn t4_admission_agrees_with_the_clause_by_clause_reading() {
                 want.push(T4Clause::OverDepth);
             }
 
-            assert_eq!(zeros(&x), z, "zeros({x})");
-            assert_eq!(is_t4_valid(&x), want.is_empty(), "is_t4_valid({x})");
+            assert_eq!(zeros(&candidate), z, "zeros({candidate})");
+            assert_eq!(
+                is_t4_valid(&candidate),
+                want.is_empty(),
+                "is_t4_valid({candidate})"
+            );
             let want_class = match (want.is_empty(), z) {
                 (false, _) => Class::Invalid,
                 (true, 0) => Class::Node,
@@ -256,18 +266,21 @@ fn t4_admission_agrees_with_the_clause_by_clause_reading() {
                 (true, 2) => Class::Document,
                 (true, _) => Class::Element,
             };
-            assert_eq!(classify(&x), want_class, "classify({x})");
+            assert_eq!(classify(&candidate), want_class, "classify({candidate})");
 
-            match validate(x.clone()) {
+            match validate(candidate.clone()) {
                 Ok(a) => {
-                    assert!(want.is_empty(), "validate admitted {x}, violating {want:?}");
-                    assert_eq!(a.tumbler(), &x);
+                    assert!(
+                        want.is_empty(),
+                        "validate admitted {candidate}, violating {want:?}"
+                    );
+                    assert_eq!(a.tumbler(), &candidate);
                     assert_eq!(Class::from(a.level()), want_class);
                 }
                 Err(e) => {
                     // Exact vector equality: the full set, each clause at most
                     // once, in `T4Clause` declaration order.
-                    assert_eq!(e.clauses(), want.as_slice(), "clauses of {x}");
+                    assert_eq!(e.clauses(), want.as_slice(), "clauses of {candidate}");
                 }
             }
         }
@@ -326,7 +339,7 @@ fn address_keys_an_ordered_collection_directly() {
 // ---- T4b/T7: field projection -----------------------------------------------
 
 #[test]
-fn field_projections_by_zero_count() {
+fn field_projections_return_the_components_between_the_separators() {
     let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
     assert_eq!(e.node_field(), &[n(1)][..]);
     assert_eq!(e.account_field().unwrap(), &[n(2)][..]);
@@ -374,7 +387,7 @@ fn field_projections_carve_the_address_at_its_separators() {
             rejoined.push(n(0)); // the separator the projection dropped
             rejoined.extend(f.iter().cloned());
         }
-        assert_eq!(&tw(rejoined), a.tumbler(), "fields do not carve {a}");
+        assert_eq!(&tumbler(rejoined), a.tumbler(), "fields do not carve {a}");
     }
 }
 
@@ -436,7 +449,7 @@ fn containment_field_absence_is_decisive() {
 }
 
 #[test]
-fn containment_positive_and_negative() {
+fn containment_holds_under_the_document_and_fails_across_siblings() {
     let d = addr(&[1, 0, 2, 0, 5]);
     let v = addr(&[1, 0, 2, 0, 5, 3]); // a version of d
     let e = addr(&[1, 0, 2, 0, 5, 0, 1, 9]); // an element under d
@@ -562,7 +575,7 @@ fn document_of_truncates_to_the_origin_document() {
 }
 
 #[test]
-fn ordinal_and_level() {
+fn ordinal_is_the_last_component_and_level_is_not_a_count() {
     assert_eq!(ordinal(&t(&[1, 0, 2, 0, 5, 3])), &n(3));
     assert_eq!(ordinal(&t(&[7])), &n(7));
     // The hierarchical level is the enum, never a numeric nesting count: this

@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arith::{add, add_domain, next_at_length, sub, AddDomain};
+use crate::arithmetic::{add, add_domain, next_at_length, sub, AddDomain};
 use crate::error::LevelMismatch;
 use crate::spanset::SpanSet;
 use crate::tumbler::Tumbler;
@@ -327,11 +327,12 @@ fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     level_gate(a, b)?;
     let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
-    let lo = max(&ea.start, &eb.start);
-    let hi = min(&ea.reach, &eb.reach);
-    if lo < hi {
+    let start = max(&ea.start, &eb.start);
+    let reach = min(&ea.reach, &eb.reach);
+    if start < reach {
         Ok(Some(
-            Span::from_endpoints(lo.clone(), hi).expect("gated one-length endpoints with lo < hi"),
+            Span::from_endpoints(start.clone(), reach)
+                .expect("gated one-length endpoints with start < reach"),
         ))
     } else {
         Ok(None)
@@ -348,10 +349,11 @@ pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     if max(&ea.start, &eb.start) > min(&ea.reach, &eb.reach) {
         return Ok(None); // separated
     }
-    let lo = min(&ea.start, &eb.start).clone();
-    let hi = max(&ea.reach, &eb.reach);
+    let start = min(&ea.start, &eb.start).clone();
+    let reach = max(&ea.reach, &eb.reach);
     Ok(Some(
-        Span::from_endpoints(lo, hi).expect("non-separated gated operands give lo < hi"),
+        Span::from_endpoints(start, reach)
+            .expect("non-separated gated operands give start < reach"),
     ))
 }
 

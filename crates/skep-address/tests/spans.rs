@@ -199,9 +199,19 @@ fn pairwise_ops_gate_unconditionally_before_dispatch() {
     assert_eq!(intersect(&a, &b), Err(LevelMismatch));
     assert_eq!(merge(&a, &b), Err(LevelMismatch));
     assert_eq!(difference(&a, &b), Err(LevelMismatch));
-    // A non-level-uniform operand fails the per-span half of the gate.
+    // A non-level-uniform operand fails the per-span half of the gate — in
+    // EITHER position, on each of the three ops. The partner is level-uniform
+    // and shares its start length, so nothing but the per-span clause can
+    // refuse these pairs, and each operand is therefore asked about on its own
+    // rather than through a self-pairing that either side would answer for.
     let nu = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
+    let uniform = sp(&[1, 0, 2], &[1, 0, 5]);
     assert_eq!(intersect(&nu, &nu), Err(LevelMismatch));
+    for (x, y) in [(&nu, &uniform), (&uniform, &nu)] {
+        assert_eq!(intersect(x, y), Err(LevelMismatch));
+        assert_eq!(merge(x, y), Err(LevelMismatch));
+        assert_eq!(difference(x, y), Err(LevelMismatch));
+    }
 }
 
 /// `intersect` and `merge` each decide one boundary question inline instead

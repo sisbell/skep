@@ -183,11 +183,6 @@ impl Endpoints {
         }
     }
 
-    /// A pair of endpoints a sweep computed, still to be checked by WF.
-    pub(crate) fn new(start: Tumbler, reach: Tumbler) -> Endpoints {
-        Endpoints { start, reach }
-    }
-
     /// Back to the authoritative `(start, width)` form (WF).
     pub(crate) fn into_span(self) -> Result<Span, WfError> {
         let Endpoints { start, reach } = self;
@@ -302,19 +297,23 @@ pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
     }
 }
 
-/// S6 level gate — per-span level-uniformity ∧ mutual compatibility (every
-/// endpoint shares one length L). Runs UNCONDITIONALLY at entry on the four
-/// fallible pairwise ops, **before branch dispatch**: mismatched-level
-/// operands yield `Err(LevelMismatch)` even on non-constructing branches
-/// (Separated operands never yield `Ok(None)`/`Ok({a})`). Only
-/// [`classify_spans`] is gate-free.
+/// S6 level gate and the derived working form in one step: the two operands'
+/// endpoint pairs, obtainable only past the gate — per-span level-uniformity ∧
+/// mutual compatibility (every endpoint shares one length L). Runs
+/// UNCONDITIONALLY, **before branch dispatch**, on the three span-pair ops
+/// ([`intersect`], [`merge`], [`difference`]): mismatched-level operands yield
+/// `Err(LevelMismatch)` even on non-constructing branches (Separated operands
+/// never yield `Ok(None)`/`Ok({a})`). [`split`], whose operands are a span and
+/// a point rather than two spans, applies the same rule in its own shape and
+/// reports it as `SplitError::LevelMismatch`; [`classify_spans`] is gate-free,
+/// because it constructs nothing.
 ///
 /// One rule at two scales: this is the pairwise instance of
 /// [`SpanSet::level_class`], which asks the same question of a whole
 /// collection and answers with the shared length itself.
-fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
+fn gated_endpoints(a: &Span, b: &Span) -> Result<(Endpoints, Endpoints), LevelMismatch> {
     if a.is_level_uniform() && b.is_level_uniform() && a.start().len() == b.start().len() {
-        Ok(())
+        Ok((Endpoints::of(a), Endpoints::of(b)))
     } else {
         Err(LevelMismatch)
     }
@@ -325,8 +324,7 @@ fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
 /// `max start ≥ min reach`, failing WF's `s < r`, correctly yielding
 /// `Ok(None)` with no SC call.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
-    level_gate(a, b)?;
-    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
+    let (ea, eb) = gated_endpoints(a, b)?;
     let start = max(&ea.start, &eb.start);
     let reach = min(&ea.reach, &eb.reach);
     if start < reach {
@@ -344,8 +342,7 @@ pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
 /// decides separation first — cheaper than full SC (only SC is skipped; the
 /// gate is not).
 pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
-    level_gate(a, b)?;
-    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
+    let (ea, eb) = gated_endpoints(a, b)?;
     if max(&ea.start, &eb.start) > min(&ea.reach, &eb.reach) {
         return Ok(None); // separated
     }
@@ -415,19 +412,16 @@ pub fn split(s: &Span, p: &Tumbler) -> Result<(Span, Span), SplitError> {
 /// dispatch runs after the unconditional gate; the output is emitted in N1
 /// order (left before right) and is normalized by construction (§6).
 pub fn difference(a: &Span, b: &Span) -> Result<SpanSet, LevelMismatch> {
-    level_gate(a, b)?;
-    let (ea, eb) = (Endpoints::of(a), Endpoints::of(b));
+    let (ea, eb) = gated_endpoints(a, b)?;
     // The left complement `[start a, start b)` and the right complement
     // `[reach b, reach a)` — each built only on an arm that has already
     // established that its endpoints increase.
     let left = || {
-        Endpoints::new(ea.start.clone(), eb.start.clone())
-            .into_span()
+        Span::from_endpoints(ea.start.clone(), &eb.start)
             .expect("gated one-length endpoints with start a < start b")
     };
     let right = || {
-        Endpoints::new(eb.reach.clone(), ea.reach.clone())
-            .into_span()
+        Span::from_endpoints(eb.reach.clone(), &ea.reach)
             .expect("gated one-length endpoints with reach b < reach a")
     };
     match relate(&ea, &eb) {

@@ -125,14 +125,14 @@ impl SpanSet {
     /// partition is the whole of what M1 can offer, and offering it is
     /// better than each caller rebuilding it.
     pub fn by_level_class(&self) -> BTreeMap<usize, SpanSet> {
-        let mut out: BTreeMap<usize, SpanSet> = BTreeMap::new();
+        let mut classes: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
         for s in self.0.iter() {
-            out.entry(s.start().len())
-                .or_insert_with(SpanSet::empty)
-                .0
-                .push_back(s.clone());
+            classes.entry(s.start().len()).or_default().push(s.clone());
         }
-        out
+        classes
+            .into_iter()
+            .map(|(len, spans)| (len, spans.into_iter().collect()))
+            .collect()
     }
 
     /// S8/S9 — the unique canonical form (N1 ∧ N2): sort by start, then one
@@ -306,8 +306,7 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
         let reach = std::cmp::min(&a_spans[i].reach, &b_spans[j].reach);
         if start < reach {
             out.push(
-                Endpoints::new(start.clone(), reach.clone())
-                    .into_span()
+                Span::from_endpoints(start.clone(), reach)
                     .expect("one length class with start < reach"),
             );
         }
@@ -348,8 +347,7 @@ pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatc
         while k < b_spans.len() && b_spans[k].start < a_span.reach {
             if b_spans[k].start > surviving_from {
                 out.push(
-                    Endpoints::new(surviving_from.clone(), b_spans[k].start.clone())
-                        .into_span()
+                    Span::from_endpoints(surviving_from.clone(), &b_spans[k].start)
                         .expect("one length class, survivor start below the b-start"),
                 );
             }
@@ -363,8 +361,7 @@ pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatc
         }
         if surviving_from < a_span.reach {
             out.push(
-                Endpoints::new(surviving_from, a_span.reach)
-                    .into_span()
+                Span::from_endpoints(surviving_from, &a_span.reach)
                     .expect("one length class, survivor start below the a-span reach"),
             );
         }

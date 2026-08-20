@@ -101,13 +101,32 @@ impl fmt::Display for T4Error {
 }
 impl Error for T4Error {}
 
+/// The T4 reading of a carrier tumbler: how many separators it has, and which
+/// clauses it violates. Four projections hang off one reading — the count, the
+/// verdict, the class, and the admission — so none of them decides admission
+/// again on its own.
+struct T4Scan {
+    zeros: usize,
+    clauses: Vec<T4Clause>,
+}
+
+impl T4Scan {
+    /// The level this reading admits, or `None` when a clause was violated —
+    /// the one place T4 admission and level determination are decided
+    /// together, so [`classify`] and the `level` an [`Address`] carries cannot
+    /// disagree.
+    fn admitted_level(&self) -> Option<Level> {
+        self.clauses.is_empty().then(|| level_of_zeros(self.zeros))
+    }
+}
+
 /// One fused left-to-right O(#t) scan with O(1) carried state (design §2):
 /// the separator count plus all four T4 clauses in a single pass — a *scan,
 /// not a parse*, cheap because it streams, not because the input is bounded.
 /// The count is `usize`, unbounded per T0(b): garbage with hundreds of zeros
 /// classifies Invalid, never wraps, never faults. No early exit — `zeros(t)`
 /// must report the true count.
-fn t4_scan(t: &Tumbler) -> (usize, Vec<T4Clause>) {
+fn t4_scan(t: &Tumbler) -> T4Scan {
     let comps = t.comps();
     let mut zero_count = 0usize;
     let mut adjacent_zeros = false;
@@ -136,14 +155,17 @@ fn t4_scan(t: &Tumbler) -> (usize, Vec<T4Clause>) {
     if zero_count > 3 {
         clauses.push(T4Clause::OverDepth);
     }
-    (zero_count, clauses)
+    T4Scan {
+        zeros: zero_count,
+        clauses,
+    }
 }
 
 /// Separator (zero-component) count — UNBOUNDED per T0(b): `usize`, never
 /// `u8` (a fixed-width counter could wrap a 259-zero count to 3 and mis-read
 /// garbage as Element).
 pub fn zeros(t: &Tumbler) -> usize {
-    t4_scan(t).0
+    t4_scan(t).zeros
 }
 
 /// T4 well-formedness: all four clauses hold. The depth ceiling and every
@@ -151,7 +173,7 @@ pub fn zeros(t: &Tumbler) -> usize {
 /// the only thing stopping a four-separator tumbler from being read as a
 /// phantom fifth level.
 pub fn is_t4_valid(t: &Tumbler) -> bool {
-    t4_scan(t).1.is_empty()
+    t4_scan(t).admitted_level().is_some()
 }
 
 fn level_of_zeros(z: usize) -> Level {
@@ -169,12 +191,9 @@ fn level_of_zeros(z: usize) -> Level {
 /// to [`validate`]). Membership of the level in {0,1,2,3} comes from the
 /// arithmetic bound `zeros ≤ 3`, never from a level-name bijection.
 pub fn classify(t: &Tumbler) -> Class {
-    let (z, clauses) = t4_scan(t);
-    if clauses.is_empty() {
-        Class::from(level_of_zeros(z))
-    } else {
-        Class::Invalid
-    }
+    t4_scan(t)
+        .admitted_level()
+        .map_or(Class::Invalid, Class::from)
 }
 
 /// Admission constructor — the validate-and-classify front door, one fused
@@ -182,14 +201,13 @@ pub fn classify(t: &Tumbler) -> Class {
 /// [`T4Error`] carries only the violated clause(s) — clone before calling if
 /// you need the rejected tumbler back.
 pub fn validate(t: Tumbler) -> Result<Address, T4Error> {
-    let (z, clauses) = t4_scan(&t);
-    if clauses.is_empty() {
-        Ok(Address {
-            tumbler: t,
-            level: level_of_zeros(z),
-        })
-    } else {
-        Err(T4Error { clauses })
+    let scan = t4_scan(&t);
+    let admitted = scan.admitted_level();
+    match admitted {
+        Some(level) => Ok(Address { tumbler: t, level }),
+        None => Err(T4Error {
+            clauses: scan.clauses,
+        }),
     }
 }
 

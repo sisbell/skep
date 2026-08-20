@@ -121,15 +121,10 @@ fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
 
 /// Render a tumbler dotted-decimal — the same encoding the conformance
 /// goldens use ("1.1.0.1", zeros explicit, components canonical decimal).
+/// That encoding is M1's own `Display`, so the wire form and the tumbler's
+/// canonical text are one rendering rather than two that must be kept equal.
 pub fn tumbler_string(t: &Tumbler) -> String {
-    let mut s = String::new();
-    for i in 1..=t.len() {
-        if i > 1 {
-            s.push('.');
-        }
-        s.push_str(&t.get(i).to_string());
-    }
-    s
+    t.to_string()
 }
 
 // ── parse (wire → Request) ──────────────────────────────────────────────

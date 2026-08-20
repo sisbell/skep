@@ -201,8 +201,8 @@ const SUB_NODES: u8 = 0x02;
 pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
     let mut b = vec![Space::Namespace.tag(), SUB_NAMESPACE];
     b.extend((k.parent.len() as u32).to_be_bytes());
-    for i in 1..=k.parent.len() {
-        let c = k.parent.get(i).to_bytes_be();
+    for comp in &k.parent {
+        let c = comp.to_bytes_be();
         b.extend((c.len() as u32).to_be_bytes());
         b.extend(c);
     }
@@ -221,7 +221,7 @@ pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
 /// ≤ `#a` (= depth) candidates, never O(#allocated).
 fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Tumbler> + '_ {
     (1..=a.tumbler().len()).rev().filter_map(move |plen| {
-        let p = Tumbler::new((1..=plen).map(|i| a.tumbler().get(i).clone())).ok()?;
+        let p = Tumbler::new(a.tumbler().iter().take(plen).cloned()).ok()?;
         validate(p)
             .ok()
             .filter(|ad| zeros(ad.tumbler()) <= 1)

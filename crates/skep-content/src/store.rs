@@ -48,7 +48,7 @@ pub(crate) static S_C_SUBSPACE: std::sync::LazyLock<Nat> =
 #[cfg(feature = "content-addr-guard")]
 pub(crate) fn debug_assert_content_address(addr: &Address, site: &str) {
     debug_assert!(
-        addr.level() == Level::Element && addr.subspace() == Some(S_C_SUBSPACE.clone()),
+        addr.level() == Level::Element && addr.subspace() == Some(&*S_C_SUBSPACE),
         "content-addr-guard: {site}: not a content-subspace element address \
          (level == Element ∧ subspace == s_C = 1 required)"
     );
@@ -168,19 +168,18 @@ impl ContentWrite {
     }
 }
 
-/// Manual, not derived: renders the address by its components (via
-/// [`Tumbler::len`]/[`Tumbler::get`]) and the value by BYTE LENGTH only —
-/// [`Val`] deliberately carries no `Debug`, so blobs can never leak into
-/// diagnostics (and a derive would therefore not compile). Shape:
-/// `ContentWrite { addr: [c₁, …, c_#t], val: n bytes }`.
+/// Manual, not derived: renders the address by walking its components and
+/// the value by BYTE LENGTH only — [`Val`] deliberately carries no `Debug`,
+/// so blobs can never leak into diagnostics (and a derive would therefore not
+/// compile). Shape: `ContentWrite { addr: [c₁, …, c_#t], val: n bytes }`.
 impl fmt::Debug for ContentWrite {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ContentWrite {{ addr: [")?;
-        for i in 1..=self.addr.len() {
-            if i > 1 {
+        for (i, c) in self.addr.iter().enumerate() {
+            if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{:?}", self.addr.get(i))?;
+            write!(f, "{c:?}")?;
         }
         write!(f, "], val: {} bytes }}", self.val.len())
     }

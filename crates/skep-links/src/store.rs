@@ -255,8 +255,8 @@ fn dedup_lock_key(key: &DedupKey) -> LockKey {
                 buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
                 for t in set.iter() {
                     buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
-                    for i in 1..=t.len() {
-                        let comp = t.get(i).to_bytes_be();
+                    for c in t {
+                        let comp = c.to_bytes_be();
                         buf.extend_from_slice(&(comp.len() as u64).to_be_bytes());
                         buf.extend_from_slice(&comp);
                     }
@@ -419,9 +419,9 @@ where
                     {
                         let wf = base.m3().is_registered_document(&spec.source)
                             && spec.span.start().len() == 2
-                            && *spec.span.start().get(1) == s_c()
+                            && spec.span.start().get(1) == Some(&s_c())
                             && spec.span.width().len() == 2
-                            && spec.span.width().get(1).bits() == 0;
+                            && spec.span.width().get(1).is_some_and(|w| w.bits() == 0);
                         if !wf {
                             return Err(MakeLinkError::IllFormedSpec);
                         }
@@ -558,7 +558,7 @@ where
                 }
                 if !base.links().resident(target.tumbler()) {
                     let next = base.links().next_home_ordinal(home);
-                    let self_emitter = elem_addr(&ElemPos {
+                    let self_emitter = elem_addr(ElemPos {
                         doc: home.clone(),
                         subspace: s_l(),
                         ordinal: Nat::from(next),

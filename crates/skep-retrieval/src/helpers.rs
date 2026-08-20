@@ -90,10 +90,11 @@ pub(crate) fn run_addr(i_start: &Address, k: &Nat) -> Address {
         doc: document_of(i_start).expect("an element-level I-address has a Document prefix"),
         subspace: i_start
             .subspace()
-            .expect("an element-level I-address has a subspace component"),
+            .expect("an element-level I-address has a subspace component")
+            .clone(),
         ordinal: ordinal(i_start.tumbler()).clone(),
     };
-    elem_addr(&shift_ordinal(&p, k))
+    elem_addr(shift_ordinal(p, k))
         .expect("ordinal-shifting a valid element position stays T4-valid")
 }
 

@@ -28,6 +28,26 @@ fn from_iterator_collects_as_given() {
     assert!(!ss.is_normalized()); // N1 violated (descending starts)
 }
 
+/// A span-set is a collection and reads like one: `for` drives it borrowed or
+/// owned, `collect` closes the round trip, and `⟨⟩` is what it defaults to.
+#[test]
+fn span_set_is_iterable_borrowed_and_owned() {
+    let ss = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    let mut walked: Vec<&Span> = Vec::new();
+    for s in &ss {
+        walked.push(s);
+    }
+    assert_eq!(walked, ss.iter().collect::<Vec<_>>());
+    // Owned: the members move out, and re-collecting recovers the set.
+    let moved: Vec<Span> = ss.clone().into_iter().collect();
+    assert_eq!(moved, vec![sp(&[1], &[3]), sp(&[7], &[9])]);
+    assert_eq!(moved.into_iter().collect::<SpanSet>(), ss);
+    assert_eq!(SpanSet::empty().into_iter().count(), 0);
+    // `Default` is the empty designation, not a second spelling of it.
+    assert_eq!(SpanSet::default(), SpanSet::empty());
+    assert!(SpanSet::default().is_empty());
+}
+
 #[test]
 fn union_is_concatenation_only() {
     let a = SpanSet::singleton(sp(&[1], &[5]));

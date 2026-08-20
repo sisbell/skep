@@ -82,16 +82,19 @@ impl Tumbler {
         self.0.len()
     }
 
-    /// `tᵢ`, **1-based** (the spec's indexing). PANICS on `i = 0` or `i > #t`
-    /// — the documented panic contract for a low-level accessor.
-    pub fn get(&self, i: Pos) -> &Nat {
-        assert!(
-            i >= 1 && i <= self.0.len(),
-            "Tumbler::get: 1-based index {} out of range 1..={}",
-            i,
-            self.0.len()
-        );
-        &self.0[i - 1]
+    /// `tᵢ`, **1-based** (the spec's indexing): `None` for `i = 0` and for
+    /// `i > #t`. Fallible like every other `get` in std, so a caller reads a
+    /// component by asking rather than by proving the index first.
+    pub fn get(&self, i: Pos) -> Option<&Nat> {
+        i.checked_sub(1).and_then(|z| self.0.get(z))
+    }
+
+    /// The component sequence in order, `t₁..t_{#t}` — the walk every
+    /// rendering, encoding and prefix-reconstruction path needs. Borrowing,
+    /// because a tumbler is a value (T0) rather than a container to dismantle:
+    /// the way to a new one is [`Tumbler::new`].
+    pub fn iter(&self) -> Components<'_> {
+        Components(self.0.iter())
     }
 
     /// Internal 0-based view of the component sequence.
@@ -103,6 +106,30 @@ impl Tumbler {
     pub(crate) fn from_vec(comps: Vec<Nat>) -> Tumbler {
         debug_assert!(!comps.is_empty(), "internal tumbler construction must be nonempty");
         Tumbler(comps)
+    }
+}
+
+/// The component sequence of a [`Tumbler`], in order. Opaque, so the storage
+/// decision above stays open: the sequence is what a caller walks, and the
+/// container it is walked out of is the tumbler's own business.
+#[derive(Debug, Clone)]
+pub struct Components<'a>(std::slice::Iter<'a, Nat>);
+
+impl<'a> Iterator for Components<'a> {
+    type Item = &'a Nat;
+    fn next(&mut self) -> Option<&'a Nat> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<'a> IntoIterator for &'a Tumbler {
+    type Item = &'a Nat;
+    type IntoIter = Components<'a>;
+    fn into_iter(self) -> Components<'a> {
+        self.iter()
     }
 }
 
@@ -132,6 +159,24 @@ impl Ord for Tumbler {
 impl PartialOrd for Tumbler {
     fn partial_cmp(&self, other: &Tumbler) -> Option<Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+/// The canonical rendering: components in order, `.`-separated (`1.0.2.0.5`).
+/// Lossless and unambiguous by T3 — the representation admits no aliases, so
+/// the text and the value determine each other. This is the dotted-decimal
+/// form the daemon puts on the wire and the conformance harness compares
+/// against the golden, spelled once here because `Display` is std's trait and
+/// `Tumbler` is M1's type: no crate above can supply it.
+impl fmt::Display for Tumbler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, c) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(".")?;
+            }
+            write!(f, "{c}")?;
+        }
+        Ok(())
     }
 }
 

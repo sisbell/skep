@@ -125,7 +125,7 @@ impl Alpha {
             let prefix: Vec<String> = comps[..cut].iter().map(|c| c.to_string()).collect();
             let key = prefix.join(".");
             if let Some(base) = self.fwd.get(&key) {
-                let mut out: Vec<skep_address::Nat> = base.tumbler().comps_vec();
+                let mut out: Vec<skep_address::Nat> = base.tumbler().iter().cloned().collect();
                 out.push(skep_address::Nat::from(0u64));
                 for c in &comps[cut + 1..] {
                     out.push(skep_address::Nat::from(*c));
@@ -158,8 +158,10 @@ impl Alpha {
         if let Some(g) = self.rev.get(&s) {
             return g.clone();
         }
-        let comps: Vec<u64> = (1..=a.tumbler().len())
-            .map(|i| a.tumbler().get(i).to_string().parse().unwrap_or(0))
+        let comps: Vec<u64> = a
+            .tumbler()
+            .iter()
+            .map(|c| c.to_string().parse().unwrap_or(0))
             .collect();
         for cut in (1..comps.len()).rev() {
             if comps[cut] != 0 {
@@ -178,16 +180,6 @@ impl Alpha {
     }
 }
 
-/// Extension used by [`Alpha::translate`]: clone a tumbler's components.
-trait CompsVec {
-    fn comps_vec(&self) -> Vec<skep_address::Nat>;
-}
-
-impl CompsVec for skep_address::Tumbler {
-    fn comps_vec(&self) -> Vec<skep_address::Nat> {
-        (1..=self.len()).map(|i| self.get(i).clone()).collect()
-    }
-}
 
 /// Convenience: parse-or-None used by doc-reference resolution — an address
 /// string is anything that parses fully as dotted decimal.

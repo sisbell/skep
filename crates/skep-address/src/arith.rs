@@ -301,7 +301,11 @@ impl Error for ElemError {}
 /// (else adjacent zeros after the separator), `ordinal ≥ 1` (else a trailing
 /// zero); the constructed tumbler is routed through [`validate`] defensively.
 /// Guards run in `ElemError` declaration order.
-pub fn elem_addr(p: &ElemPos) -> Result<Address, ElemError> {
+///
+/// CONSUMES `p`, like every other admission door here: its components move
+/// into the minted address, and on the error path the position is dropped —
+/// clone before calling if you need it back.
+pub fn elem_addr(p: ElemPos) -> Result<Address, ElemError> {
     if p.doc.level() != Level::Document {
         return Err(ElemError::DocNotDocument);
     }
@@ -313,20 +317,19 @@ pub fn elem_addr(p: &ElemPos) -> Result<Address, ElemError> {
     }
     let mut comps = p.doc.tumbler().comps().to_vec();
     comps.push(Nat::from(0u32));
-    comps.push(p.subspace.clone());
-    comps.push(p.ordinal.clone());
+    comps.push(p.subspace);
+    comps.push(p.ordinal);
     Ok(validate(Tumbler::from_vec(comps))
         .expect("doc·0·subspace·ordinal under all three guards is T4-valid"))
 }
 
 /// Subspace-safe ordinal shift: `ordinal += n` ONLY — the subspace is
 /// structural context and untouched, so the TA7a content→link mis-shift is
-/// unrepresentable through this wrapper. Pure `ElemPos → ElemPos`; validity
-/// is re-discharged when the position is materialized by [`elem_addr`].
-pub fn shift_ordinal(p: &ElemPos, n: &Nat) -> ElemPos {
-    ElemPos {
-        doc: p.doc.clone(),
-        subspace: p.subspace.clone(),
-        ordinal: &p.ordinal + n,
-    }
+/// unrepresentable through this wrapper. Pure `ElemPos → ElemPos`, consuming
+/// the position it advances: the document and subspace travel through
+/// untouched rather than being copied out of a loan. Validity is re-discharged
+/// when the position is materialized by [`elem_addr`].
+pub fn shift_ordinal(mut p: ElemPos, n: &Nat) -> ElemPos {
+    p.ordinal += n;
+    p
 }

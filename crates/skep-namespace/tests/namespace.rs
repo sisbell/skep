@@ -159,7 +159,7 @@ fn pure_mints_advance_the_documented_chains() {
     // mint_content: namespace (b_C(d), 1), element field [s_C = 1, m+1] (§3).
     let (c1, rec) = m3.mint_content(&doc).expect("content mint");
     assert_eq!(c1, a(&[1, 0, 1, 0, 1, 0, 1, 1]));
-    assert_eq!(c1.subspace(), Some(Nat::from(1u32)));
+    assert_eq!(c1.subspace(), Some(&Nat::from(1u32)));
     // The mint hands back exactly the Allocate for the minted address.
     let M3Rec::Allocate { addr } = rec else {
         panic!("a mint returns M3Rec::Allocate");
@@ -173,7 +173,7 @@ fn pure_mints_advance_the_documented_chains() {
     // spaces disjoint by construction (SD/L14, T7).
     let (l1, _) = m3.mint_link(&doc).expect("link mint");
     assert_eq!(l1, a(&[1, 0, 1, 0, 1, 0, 2, 1]));
-    assert_eq!(l1.subspace(), Some(Nat::from(2u32)));
+    assert_eq!(l1.subspace(), Some(&Nat::from(2u32)));
 
     // mint_version: namespace (d, 1) — the version chain, SEPARATE from the
     // document chain (ASN-0123 VD).

@@ -60,7 +60,7 @@ impl<'s, W: M6World> Query<'s, W> {
             // Concatenate per spec, IN ORDER (R5) — no global sort. The gate
             // guarantees #start ≥ 2 and zero-free, so get(1) is the subspace
             // at any depth (1 = content, 2 = link).
-            let sub = s.span.start().get(1);
+            let sub = s.span.start().get(1).expect("the gate ⇒ #start ≥ 2");
             for run in m5.resolve(&s.doc, &s.span) {
                 // Per active position, ascending V (R3) — no dedup (R8).
                 let mut k = Nat::zero();
@@ -143,7 +143,7 @@ impl<'s, W: M6World> Query<'s, W> {
         // #min discharges D1, INCLUDING the cross-subspace box — so the
         // singleton is faithfully ASN-0112's σ_d = (origin_d, extent_d).
         Ok(SpanSet::singleton(
-            Span::from_endpoints(min, reach).expect("min < reach at one depth-2 length"),
+            Span::from_endpoints(min, &reach).expect("min < reach at one depth-2 length"),
         ))
     }
 
@@ -198,7 +198,8 @@ impl<'s, W: M6World> Query<'s, W> {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspec(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
-        let sub = span.start().get(1); // subspace at any depth (gate ⇒ #start ≥ 2)
+        // subspace at any depth (gate ⇒ #start ≥ 2)
+        let sub = span.start().get(1).expect("the gate ⇒ #start ≥ 2");
         let n_s = if *sub == *S_C {
             m5.content_count(doc)
         } else if *sub == *S_L {

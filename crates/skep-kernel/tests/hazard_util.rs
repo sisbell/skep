@@ -78,16 +78,9 @@ pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ord, width) }
 }
 
-/// `1.0.1.0.1` — dotted decimal, the human-stable tumbler rendering.
+/// `1.0.1.0.1` — dotted decimal, the tumbler's own canonical rendering.
 pub fn tum_str(t: &Tumbler) -> String {
-    let mut s = String::new();
-    for i in 1..=t.len() {
-        if i > 1 {
-            s.push('.');
-        }
-        s.push_str(&t.get(i).to_string());
-    }
-    s
+    t.to_string()
 }
 
 /// Parse [`tum_str`]'s output back (fixture components fit `u32`).

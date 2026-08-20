@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::tumbler::{nat_is_zero, Nat, Tumbler};
 
 /// The hierarchical level of a T4-valid address: zeros = 0/1/2/3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Level {
     Node,
     Account,
@@ -22,7 +22,7 @@ pub enum Level {
 /// levels plus the disjoint `Invalid` tag. A five-way sum, not four booleans:
 /// Partition (exactly-one-level) and Off-Domain Vacuity hold *by construction*
 /// because a function is single-valued and `Invalid` is a disjoint tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Class {
     Node,
     Account,
@@ -31,10 +31,10 @@ pub enum Class {
     Invalid,
 }
 
-impl Class {
-    /// The Partition embedding (`Class = Level ⊎ {Invalid}`): every level is
-    /// a class; only the classifier can answer `Invalid`.
-    fn of(level: Level) -> Class {
+/// The Partition embedding (`Class = Level ⊎ {Invalid}`): every level is a
+/// class; only the classifier can answer `Invalid`.
+impl From<Level> for Class {
+    fn from(level: Level) -> Class {
         match level {
             Level::Node => Class::Node,
             Level::Account => Class::Account,
@@ -46,7 +46,7 @@ impl Class {
 
 /// The four T4-validity clauses (T4): no leading zero (`t₁ ≠ 0`), no trailing
 /// zero (`t_{#t} ≠ 0`), no adjacent zeros, and `zeros(t) ≤ 3`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum T4Clause {
     LeadingZero,
     TrailingZero,
@@ -75,8 +75,16 @@ impl fmt::Display for T4Clause {
 /// (clauses co-occur: `[0]` violates both `LeadingZero` and `TrailingZero`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct T4Error {
-    /// The violated clauses, in `T4Clause` declaration order.
-    pub clauses: Vec<T4Clause>,
+    clauses: Vec<T4Clause>,
+}
+
+impl T4Error {
+    /// The violated clauses, in `T4Clause` declaration order, each at most
+    /// once — read-only, so a rejection can only be raised by the validator
+    /// that found the violations, never assembled by a caller.
+    pub fn clauses(&self) -> &[T4Clause] {
+        &self.clauses
+    }
 }
 
 impl fmt::Display for T4Error {
@@ -163,7 +171,7 @@ fn level_of_zeros(z: usize) -> Level {
 pub fn classify(t: &Tumbler) -> Class {
     let (z, clauses) = t4_scan(t);
     if clauses.is_empty() {
-        Class::of(level_of_zeros(z))
+        Class::from(level_of_zeros(z))
     } else {
         Class::Invalid
     }
@@ -207,12 +215,20 @@ pub struct Address {
 }
 
 /// Identity is the tumbler (T3): `level` is a function of it and cannot
-/// disagree, so hashing the tumbler alone is consistent with `Eq`. (A manual
-/// impl rather than a derive so `Level` need not carry `Hash`, which the
-/// interface does not declare for it.)
+/// disagree, so hashing the tumbler alone is consistent with `Eq` — and says
+/// in the impl what identity an `Address` has, which a derive would leave to
+/// the field list.
 impl Hash for Address {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.tumbler.hash(state);
+    }
+}
+
+/// An address renders as its tumbler — dotted decimal (T3): `level` is
+/// derived and never shown, because the tumbler already determines it.
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.tumbler.fmt(f)
     }
 }
 
@@ -310,10 +326,11 @@ impl Address {
 
     /// `element_field[0]` (T7): which subspace the element sits in —
     /// [`content_subspace`] or [`link_subspace`], disjoint by `1 < 2` at this
-    /// position, so nothing has to enforce the separation. Returns an owned
-    /// `Nat`, per the interface signature (the component is cloned).
-    pub fn subspace(&self) -> Option<Nat> {
-        self.element_field().map(|e| e[0].clone())
+    /// position, so nothing has to enforce the separation. A borrow into the
+    /// address's own components, like every other field projection: routing an
+    /// element is a comparison, and a comparison need not allocate.
+    pub fn subspace(&self) -> Option<&Nat> {
+        self.element_field().map(|e| &e[0])
     }
 
     /// The `N·0·U·0·D` component prefix — where a document's subtree begins;

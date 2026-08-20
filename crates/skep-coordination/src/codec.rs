@@ -87,8 +87,8 @@ fn w_nat(b: &mut Vec<u8>, n: &Nat) {
 
 fn w_tumbler(b: &mut Vec<u8>, t: &Tumbler) {
     w_varint(b, t.len() as u64);
-    for i in 1..=t.len() {
-        w_nat(b, t.get(i));
+    for c in t {
+        w_nat(b, c);
     }
 }
 

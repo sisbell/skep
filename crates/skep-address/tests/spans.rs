@@ -61,20 +61,20 @@ fn from_endpoints_wf_and_error_precedence() {
     assert_eq!(s.width(), &t(&[0, 0, 3]));
     assert_eq!(s.reach(), t(&[1, 0, 5])); // start ⊕ width, recomputed
     assert_eq!(
-        Span::from_endpoints(t(&[2]), t(&[2])).unwrap_err(),
+        Span::from_endpoints(t(&[2]), &t(&[2])).unwrap_err(),
         WfError::NotIncreasing
     );
     assert_eq!(
-        Span::from_endpoints(t(&[3]), t(&[2])).unwrap_err(),
+        Span::from_endpoints(t(&[3]), &t(&[2])).unwrap_err(),
         WfError::NotIncreasing
     );
     assert_eq!(
-        Span::from_endpoints(t(&[1]), t(&[1, 5])).unwrap_err(),
+        Span::from_endpoints(t(&[1]), &t(&[1, 5])).unwrap_err(),
         WfError::LevelMismatch
     );
     // The level clause runs FIRST: a pair failing BOTH yields LevelMismatch (§6).
     assert_eq!(
-        Span::from_endpoints(t(&[2, 0]), t(&[1])).unwrap_err(),
+        Span::from_endpoints(t(&[2, 0]), &t(&[1])).unwrap_err(),
         WfError::LevelMismatch
     );
 }

@@ -15,7 +15,7 @@ use skep_links::{
 };
 
 fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
-    Span::from_endpoints(from.tumbler().clone(), to.tumbler().clone())
+    Span::from_endpoints(from.tumbler().clone(), to.tumbler())
         .expect("test spans are well-formed")
 }
 

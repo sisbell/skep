@@ -175,11 +175,11 @@ where
                     let span = &spec.span;
                     if span.start().len() != 2
                         || span.width().len() != 2
-                        || !span.width().get(1).is_zero()
+                        || !span.width().get(1).is_some_and(|w| w.is_zero())
                     {
                         return Err(CopyError::BadSpan);
                     }
-                    if *span.start().get(1) != s_c() {
+                    if span.start().get(1) != Some(&s_c()) {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
                     if w.m5().content_count(&spec.source).is_zero() {

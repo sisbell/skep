@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use common::*;
 use skep_address::*;
@@ -27,20 +27,53 @@ fn tumbler_new_admits_zero_and_leading_zero_sequences() {
 fn get_is_one_based() {
     let x = t(&[7, 0, 9]);
     assert_eq!(x.len(), 3);
-    assert_eq!(x.get(1), &n(7));
-    assert_eq!(x.get(3), &n(9));
+    assert_eq!(x.get(1), Some(&n(7)));
+    assert_eq!(x.get(3), Some(&n(9)));
 }
 
+/// Out of range is an answer, not a fault: the two ends a 1-based index can
+/// fall off both read `None`, so a caller need not establish `#t` before it
+/// asks for a component.
 #[test]
-#[should_panic]
-fn get_index_zero_panics() {
-    let _ = t(&[1]).get(0);
+fn get_out_of_range_is_none() {
+    let x = t(&[1]);
+    assert_eq!(x.get(0), None); // below t₁
+    assert_eq!(x.get(2), None); // past t_{#t}
 }
 
+/// The component walk, `t₁..t_{#t}` in order — the one every rendering and
+/// encoding path needs, available directly and through `&Tumbler` in a `for`.
 #[test]
-#[should_panic]
-fn get_past_end_panics() {
-    let _ = t(&[1]).get(2);
+fn tumbler_iterates_its_components_in_order() {
+    let x = t(&[7, 0, 9]);
+    assert_eq!(x.iter().cloned().collect::<Vec<_>>(), vec![n(7), n(0), n(9)]);
+    assert_eq!(x.iter().count(), x.len());
+    let mut walked = Vec::new();
+    for c in &x {
+        walked.push(c.clone());
+    }
+    assert_eq!(walked, vec![n(7), n(0), n(9)]);
+    // The walk agrees with the indexed reads, position for position.
+    for (i, c) in x.iter().enumerate() {
+        assert_eq!(x.get(i + 1), Some(c));
+    }
+}
+
+/// Dotted decimal is the canonical text (T3): no aliases, so the rendering
+/// and the value determine each other. `Display`, so a tumbler interpolates
+/// into any message without a per-crate helper.
+#[test]
+fn tumbler_renders_as_dotted_decimal() {
+    assert_eq!(t(&[1, 0, 2, 0, 5]).to_string(), "1.0.2.0.5");
+    assert_eq!(t(&[7]).to_string(), "7");
+    assert_eq!(t(&[0, 0]).to_string(), "0.0"); // carrier sentinels render too
+    assert_eq!(format!("{}", t(&[1, 0])), "1.0");
+    // Distinct tumblers render distinctly — no leading-zero alias collapses.
+    assert_ne!(t(&[0, 1]).to_string(), t(&[1]).to_string());
+    // An address renders as its tumbler; the derived level is never shown.
+    let a = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
+    assert_eq!(a.to_string(), a.tumbler().to_string());
+    assert_eq!(a.to_string(), "1.0.2.0.5.0.1.9");
 }
 
 // ---- T1/T2/T3: order and identity ------------------------------------------
@@ -92,6 +125,53 @@ fn classify_all_levels() {
     assert_eq!(classify(&t(&[1, 0, 2, 0, 5, 0, 1, 9])), Class::Element);
 }
 
+/// The Partition embedding is a conversion, so a caller holding a `Level` can
+/// reach the `Class` without re-deriving the four-arm map — and `Invalid`
+/// stays unreachable through it, being the classifier's answer alone.
+#[test]
+fn every_level_embeds_as_its_class() {
+    let pairs = [
+        (Level::Node, Class::Node, t(&[1])),
+        (Level::Account, Class::Account, t(&[1, 0, 2])),
+        (Level::Document, Class::Document, t(&[1, 0, 2, 0, 5])),
+        (Level::Element, Class::Element, t(&[1, 0, 2, 0, 5, 0, 1, 9])),
+    ];
+    for (level, class, tumbler) in pairs {
+        assert_eq!(Class::from(level), class);
+        // The embedding agrees with the classifier on every valid address.
+        assert_eq!(classify(&tumbler), class);
+        assert_eq!(Class::from(validate(tumbler).unwrap().level()), class);
+    }
+}
+
+/// Classification answers key a map: grouping addresses by what they are is
+/// the obvious use, and only the type can supply the `Hash` that allows it.
+#[test]
+fn classification_answers_key_a_map() {
+    let mut by_level: HashMap<Level, Vec<Address>> = HashMap::new();
+    for a in [
+        addr(&[1]),
+        addr(&[2]),
+        addr(&[1, 0, 2]),
+        addr(&[1, 0, 2, 0, 5]),
+        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
+    ] {
+        by_level.entry(a.level()).or_default().push(a);
+    }
+    assert_eq!(by_level[&Level::Node].len(), 2);
+    assert_eq!(by_level[&Level::Element].len(), 1);
+    assert_eq!(by_level.get(&Level::Account).map(Vec::len), Some(1));
+    // The other three classification answers hash too.
+    let classes: HashSet<Class> = [t(&[1]), t(&[1, 0, 2]), t(&[0, 1])]
+        .iter()
+        .map(classify)
+        .collect();
+    assert_eq!(classes.len(), 3);
+    let e = validate(t(&[0])).unwrap_err();
+    let clauses: HashSet<T4Clause> = e.clauses().iter().copied().collect();
+    assert_eq!(clauses.len(), 2);
+}
+
 #[test]
 fn classify_rejects_each_t4_clause() {
     assert_eq!(classify(&t(&[0, 1])), Class::Invalid); // leading zero
@@ -113,16 +193,16 @@ fn validate_mints_classified_addresses() {
 fn validate_reports_the_violated_clauses() {
     // [0] violates both boundary clauses (the design's co-occurrence example).
     let e = validate(t(&[0])).unwrap_err();
-    assert_eq!(e.clauses.len(), 2);
-    assert!(e.clauses.contains(&T4Clause::LeadingZero));
-    assert!(e.clauses.contains(&T4Clause::TrailingZero));
+    assert_eq!(e.clauses().len(), 2);
+    assert!(e.clauses().contains(&T4Clause::LeadingZero));
+    assert!(e.clauses().contains(&T4Clause::TrailingZero));
     // [0,0] adds adjacency.
     let e = validate(t(&[0, 0])).unwrap_err();
-    assert_eq!(e.clauses.len(), 3);
-    assert!(e.clauses.contains(&T4Clause::AdjacentZeros));
+    assert_eq!(e.clauses().len(), 3);
+    assert!(e.clauses().contains(&T4Clause::AdjacentZeros));
     // Over-depth garbage reports OverDepth.
     let e = validate(t(&[1, 0, 2, 0, 3, 0, 4, 0, 5])).unwrap_err();
-    assert!(e.clauses.contains(&T4Clause::OverDepth));
+    assert!(e.clauses().contains(&T4Clause::OverDepth));
 }
 
 #[test]
@@ -158,7 +238,7 @@ fn field_projections_by_zero_count() {
     assert_eq!(e.account_field().unwrap(), &[n(2)][..]);
     assert_eq!(e.document_field().unwrap(), &[n(5)][..]);
     assert_eq!(e.element_field().unwrap(), &[n(1), n(9)][..]);
-    assert_eq!(e.subspace(), Some(content_subspace())); // T7: the content subspace
+    assert_eq!(e.subspace(), Some(&content_subspace())); // T7: the content subspace
 
     let d = addr(&[1, 0, 2, 0, 5, 3]);
     assert_eq!(d.document_field().unwrap(), &[n(5), n(3)][..]); // version components included
@@ -177,13 +257,13 @@ fn field_projections_by_zero_count() {
 fn the_two_subspaces_are_named() {
     let content = addr(&[1, 0, 2, 0, 5, 0, 1, 9]);
     let link = addr(&[1, 0, 2, 0, 5, 0, 2, 4]);
-    assert_eq!(content.subspace(), Some(content_subspace()));
-    assert_eq!(link.subspace(), Some(link_subspace()));
+    assert_eq!(content.subspace(), Some(&content_subspace()));
+    assert_eq!(link.subspace(), Some(&link_subspace()));
     assert_ne!(content_subspace(), link_subspace()); // disjoint by 1 < 2 (T7)
 
     // Both are mint-side too: the numeral an element field opens with is the
     // one `ElemPos` carries into it.
-    let minted = elem_addr(&ElemPos {
+    let minted = elem_addr(ElemPos {
         doc: addr(&[1, 0, 2, 0, 5]),
         subspace: link_subspace(),
         ordinal: n(4),

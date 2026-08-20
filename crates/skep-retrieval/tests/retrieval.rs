@@ -453,7 +453,7 @@ fn doc_vspan_synthesizes_the_bounding_span_from_counts() {
         // Content only: ([1,1], reach [1,4)).
         let got = ok_of(q.doc_vspan(&doc1()));
         let want = SpanSet::singleton(
-            Span::from_endpoints(t(&[1, 1]), t(&[1, 4])).expect("well-formed"),
+            Span::from_endpoints(t(&[1, 1]), &t(&[1, 4])).expect("well-formed"),
         );
         assert_eq!(got, want);
     }
@@ -464,7 +464,7 @@ fn doc_vspan_synthesizes_the_bounding_span_from_counts() {
     // Cross-subspace bounding box: [1,1] .. [2, n_L + 1).
     let got = ok_of(q.doc_vspan(&doc1()));
     let want =
-        SpanSet::singleton(Span::from_endpoints(t(&[1, 1]), t(&[2, 3])).expect("well-formed"));
+        SpanSet::singleton(Span::from_endpoints(t(&[1, 1]), &t(&[2, 3])).expect("well-formed"));
     assert_eq!(got, want);
     // Link-only document: the anchor moves to [2,1].
     seat_link(&k, &doc2(), &l2a(1)).expect("seat commits");
@@ -472,7 +472,7 @@ fn doc_vspan_synthesizes_the_bounding_span_from_counts() {
     let q = Query::new(&s);
     let got = ok_of(q.doc_vspan(&doc2()));
     let want =
-        SpanSet::singleton(Span::from_endpoints(t(&[2, 1]), t(&[2, 2])).expect("well-formed"));
+        SpanSet::singleton(Span::from_endpoints(t(&[2, 1]), &t(&[2, 2])).expect("well-formed"));
     assert_eq!(got, want);
 }
 

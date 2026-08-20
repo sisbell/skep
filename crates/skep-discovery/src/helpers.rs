@@ -45,7 +45,10 @@ pub(crate) fn stab_union<W: HasLinks>(w: &W, q: &Endset) -> OrdSet<Tumbler> {
 pub(crate) fn check_region(region: &[Span]) -> Result<(), QueryError> {
     for s in region {
         let (st, wd) = (s.start(), s.width());
-        let ok = st.len() == 2 && wd.len() == 2 && *st.get(1) == Nat::one() && wd.get(1).is_zero();
+        let ok = st.len() == 2
+            && wd.len() == 2
+            && st.get(1) == Some(&Nat::one())
+            && wd.get(1).is_some_and(|w| w.is_zero());
         if !ok {
             return Err(QueryError::BadRegion);
         }

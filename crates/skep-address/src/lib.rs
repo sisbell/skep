@@ -70,6 +70,6 @@ pub use span::{
 };
 pub use spanset::{
     canonical_key, cover, difference_sets, equiv, hull, intersect_sets, union, CanonicalForm,
-    SpanSet,
+    IntoSpans, SpanSet, Spans,
 };
-pub use tumbler::{is_prefix, EmptySequence, Nat, Pos, Tumbler};
+pub use tumbler::{is_prefix, Components, EmptySequence, Nat, Pos, Tumbler};

@@ -148,24 +148,12 @@ fn key(s: &str) -> Canon {
     Canon::Str(s.to_owned())
 }
 
-/// `1.0.1.0.7` — dotted decimal, the human-stable tumbler rendering.
-fn tum_str(t: &Tumbler) -> String {
-    let mut s = String::new();
-    for i in 1..=t.len() {
-        if i > 1 {
-            s.push('.');
-        }
-        s.push_str(&t.get(i).to_string());
-    }
-    s
-}
-
 fn tum_seq<'a>(it: impl Iterator<Item = &'a Tumbler>) -> Canon {
-    Canon::Seq(it.map(|t| Canon::Str(tum_str(t))).collect())
+    Canon::Seq(it.map(|t| Canon::Str(t.to_string())).collect())
 }
 
 fn addr_seq(addrs: &[Address]) -> Canon {
-    Canon::Seq(addrs.iter().map(|a| Canon::Str(tum_str(a.tumbler()))).collect())
+    Canon::Seq(addrs.iter().map(|a| Canon::Str(a.to_string())).collect())
 }
 
 /// Lift an audit-slice key to the `Address` the §F reads take (the M8-style
@@ -200,7 +188,7 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
                 audit
                     .iter()
                     .filter(|t| links.is_nullified(&lift(t)))
-                    .map(|t| Canon::Str(tum_str(t)))
+                    .map(|t| Canon::Str(t.to_string()))
                     .collect(),
             ),
         ),
@@ -231,7 +219,7 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
     for t in audit.iter() {
         let succs = links.succs(sup, &lift(t));
         if !succs.is_empty() {
-            edges.push((Canon::Str(tum_str(t)), addr_seq(&succs)));
+            edges.push((Canon::Str(t.to_string()), addr_seq(&succs)));
         }
     }
     entries.push((key("supersession"), Canon::Map(edges)));

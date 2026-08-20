@@ -211,8 +211,8 @@ fn val_wraps_bytes_and_compares_by_content() {
 
 #[test]
 fn content_write_debug_renders_components_and_byte_length_only() {
-    // §A: the manual Debug renders the address by its components (via
-    // Tumbler::len/get) and the value by byte length — never the bytes.
+    // §A: the manual Debug renders the address by walking its components and
+    // the value by byte length — never the bytes.
     let a1 = ca(7);
     let rec = stage_write(&ContentStore::default(), &a1, val(b"abc")).expect("fresh");
     assert_eq!(

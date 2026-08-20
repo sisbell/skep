@@ -113,14 +113,18 @@ impl Span {
     /// WF: `s < r ∧ #s = #r ⇒ (s, r ⊖ s)`. The level clause `#s = #r` is
     /// checked FIRST (gate-first, design §6): a pair failing both yields
     /// `LevelMismatch`, not `NotIncreasing`.
-    pub fn from_endpoints(s: Tumbler, r: Tumbler) -> Result<Span, WfError> {
+    ///
+    /// The asymmetry in the signature is the arithmetic: `s` is kept as the
+    /// span's start, `r` is only measured against it and never stored, so the
+    /// reach is borrowed and a caller holding one need not copy it to be read.
+    pub fn from_endpoints(s: Tumbler, r: &Tumbler) -> Result<Span, WfError> {
         if s.len() != r.len() {
             return Err(WfError::LevelMismatch);
         }
-        if s >= r {
+        if s >= *r {
             return Err(WfError::NotIncreasing);
         }
-        let width = sub(&r, &s).expect("s < r ⇒ r ≥ s");
+        let width = sub(r, &s).expect("s < r ⇒ r ≥ s");
         Ok(Span::new(s, width).expect("same-length s < r yields a T12-valid width"))
     }
 
@@ -186,7 +190,8 @@ impl Endpoints {
 
     /// Back to the authoritative `(start, width)` form (WF).
     pub(crate) fn into_span(self) -> Result<Span, WfError> {
-        Span::from_endpoints(self.start, self.reach)
+        let Endpoints { start, reach } = self;
+        Span::from_endpoints(start, &reach)
     }
 }
 
@@ -200,7 +205,7 @@ impl Endpoints {
 /// `[2,0]`). Total — the reach is `next_at_length(p)`, strictly greater (TS4)
 /// and length-preserving, so WF always fires; returns `Span`, not `Result`.
 pub fn subtree_of(p: &Tumbler) -> Span {
-    Span::from_endpoints(p.clone(), next_at_length(p))
+    Span::from_endpoints(p.clone(), &next_at_length(p))
         .expect("TS4: next_at_length(p) > p at the same length, so WF fires")
 }
 
@@ -215,7 +220,7 @@ pub fn subtree_of(p: &Tumbler) -> Span {
 /// the oriented classification these five cases project from; an M6/M8
 /// consumer needing direction must re-compare endpoints until the documents
 /// reconcile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpanRel {
     /// max start > min reach — no shared position.
     Separated,
@@ -326,8 +331,7 @@ pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     let hi = min(&ea.reach, &eb.reach);
     if lo < hi {
         Ok(Some(
-            Span::from_endpoints(lo.clone(), hi.clone())
-                .expect("gated one-length endpoints with lo < hi"),
+            Span::from_endpoints(lo.clone(), hi).expect("gated one-length endpoints with lo < hi"),
         ))
     } else {
         Ok(None)
@@ -345,7 +349,7 @@ pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
         return Ok(None); // separated
     }
     let lo = min(&ea.start, &eb.start).clone();
-    let hi = max(&ea.reach, &eb.reach).clone();
+    let hi = max(&ea.reach, &eb.reach);
     Ok(Some(
         Span::from_endpoints(lo, hi).expect("non-separated gated operands give lo < hi"),
     ))
@@ -387,10 +391,10 @@ pub fn split(s: &Span, p: &Tumbler) -> Result<(Span, Span), SplitError> {
     if !(s.start() < p && *p < reach) {
         return Err(SplitError::NotInterior);
     }
-    let left = Span::from_endpoints(s.start().clone(), p.clone())
+    let left = Span::from_endpoints(s.start().clone(), p)
         .expect("gated one-length endpoints with start < p");
     let right =
-        Span::from_endpoints(p.clone(), reach).expect("gated one-length endpoints with p < reach");
+        Span::from_endpoints(p.clone(), &reach).expect("gated one-length endpoints with p < reach");
     Ok((left, right))
 }
 

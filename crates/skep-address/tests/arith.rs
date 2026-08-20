@@ -142,7 +142,7 @@ fn elem_addr_mints_the_guarded_element() {
         subspace: n(1),
         ordinal: n(9),
     };
-    let a = elem_addr(&p).unwrap();
+    let a = elem_addr(p).unwrap();
     assert_eq!(a.tumbler(), &t(&[1, 0, 2, 0, 5, 0, 1, 9]));
     assert_eq!(a.level(), Level::Element);
 }
@@ -155,19 +155,19 @@ fn elem_addr_guards_each_condition() {
         subspace: n(1),
         ordinal: n(1),
     };
-    assert_eq!(elem_addr(&not_doc), Err(ElemError::DocNotDocument));
+    assert_eq!(elem_addr(not_doc), Err(ElemError::DocNotDocument));
     let sub0 = ElemPos {
         doc: doc.clone(),
         subspace: n(0),
         ordinal: n(1),
     };
-    assert_eq!(elem_addr(&sub0), Err(ElemError::SubspaceZero));
+    assert_eq!(elem_addr(sub0), Err(ElemError::SubspaceZero));
     let ord0 = ElemPos {
         doc,
         subspace: n(2),
         ordinal: n(0),
     };
-    assert_eq!(elem_addr(&ord0), Err(ElemError::OrdinalZero));
+    assert_eq!(elem_addr(ord0), Err(ElemError::OrdinalZero));
 }
 
 /// A position is its content, so the shift is asserted as a whole position —
@@ -180,7 +180,7 @@ fn shift_ordinal_leaves_the_subspace_untouched() {
         subspace: content_subspace(),
         ordinal: n(9),
     };
-    let q = shift_ordinal(&p, &n(3));
+    let q = shift_ordinal(p.clone(), &n(3));
     assert_eq!(
         q,
         ElemPos {
@@ -189,9 +189,9 @@ fn shift_ordinal_leaves_the_subspace_untouched() {
             ordinal: n(12),
         }
     );
-    assert_eq!(shift_ordinal(&p, &n(0)), p); // the identity displacement
+    assert_eq!(shift_ordinal(p.clone(), &n(0)), p); // the identity displacement
     assert_eq!(
-        elem_addr(&q).unwrap().tumbler(),
+        elem_addr(q).unwrap().tumbler(),
         &t(&[1, 0, 2, 0, 5, 0, 1, 12])
     );
 }

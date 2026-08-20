@@ -203,7 +203,7 @@ impl TypeRegistry {
             let ss = addr
                 .subspace()
                 .expect("an Element-level address carries a subspace (T7)");
-            if ss == s_c() || ss == s_l() {
+            if *ss == s_c() || *ss == s_l() {
                 return Err(RegistryError::ReservedSubspaceClash);
             }
         }

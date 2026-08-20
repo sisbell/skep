@@ -932,8 +932,8 @@ fn elem_range(s: &skep_address::Span) -> Option<(String, u64, u64)> {
     if n < 2 {
         return None;
     }
-    let last: u64 = st.get(n).to_string().parse().ok()?;
-    let prefix: Vec<String> = (1..n).map(|i| st.get(i).to_string()).collect();
+    let last: u64 = st.get(n)?.to_string().parse().ok()?;
+    let prefix: Vec<String> = st.iter().take(n - 1).map(|c| c.to_string()).collect();
     Some((prefix.join("."), last, w))
 }
 

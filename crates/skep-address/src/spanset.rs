@@ -6,6 +6,7 @@
 //! denotes an arbitrary finite point set exactly (S7's binding fact).
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
@@ -83,9 +84,11 @@ impl SpanSet {
     /// insertion order otherwise) — a structural view, like the raw
     /// `Eq`/`Hash`. This is the read surface downstream consumers walk: M7's
     /// per-slot spanfilade build, M8's RETRIEVEENDSETS/projection, M6/M10
-    /// result marshaling, and `difference`'s ≤ 2-span result.
-    pub fn iter(&self) -> impl Iterator<Item = &Span> {
-        self.0.iter()
+    /// result marshaling, and `difference`'s ≤ 2-span result. The same walk
+    /// is what `&SpanSet` yields in a `for` loop; [`IntoIterator`] on the
+    /// owned set moves the members out for a consumer that wants them.
+    pub fn iter(&self) -> Spans<'_> {
+        Spans(self.0.iter())
     }
 
     /// The one endpoint length every member shares — S8's FULL precondition,
@@ -188,6 +191,74 @@ impl SpanSet {
 impl FromIterator<Span> for SpanSet {
     fn from_iter<I: IntoIterator<Item = Span>>(iter: I) -> SpanSet {
         SpanSet(iter.into_iter().collect())
+    }
+}
+
+/// `⟨⟩` — the empty designation, so a span-set can be defaulted wherever a
+/// collection is expected. Delegates to [`SpanSet::empty`], which is the name
+/// the algebra's own prose uses.
+impl Default for SpanSet {
+    fn default() -> SpanSet {
+        SpanSet::empty()
+    }
+}
+
+/// Borrowed component spans in stored order — the iterator `&SpanSet` walks.
+/// Opaque, so the `im::Vector` backing decision stays the module's own.
+pub struct Spans<'a>(<&'a im::Vector<Span> as IntoIterator>::IntoIter);
+
+impl<'a> Iterator for Spans<'a> {
+    type Item = &'a Span;
+    fn next(&mut self) -> Option<&'a Span> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+/// The cursor, not the spans: a partly-walked iterator has no faithful
+/// rendering of what is left, and the set it came from is `Debug` already.
+impl fmt::Debug for Spans<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Spans").finish_non_exhaustive()
+    }
+}
+
+impl<'a> IntoIterator for &'a SpanSet {
+    type Item = &'a Span;
+    type IntoIter = Spans<'a>;
+    fn into_iter(self) -> Spans<'a> {
+        self.iter()
+    }
+}
+
+/// Owned component spans in stored order — the members moved out of a set the
+/// caller is finished with, so a re-collection need not clone every span.
+pub struct IntoSpans(<im::Vector<Span> as IntoIterator>::IntoIter);
+
+impl Iterator for IntoSpans {
+    type Item = Span;
+    fn next(&mut self) -> Option<Span> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+/// The cursor, not the spans — as for [`Spans`].
+impl fmt::Debug for IntoSpans {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IntoSpans").finish_non_exhaustive()
+    }
+}
+
+impl IntoIterator for SpanSet {
+    type Item = Span;
+    type IntoIter = IntoSpans;
+    fn into_iter(self) -> IntoSpans {
+        IntoSpans(self.0.into_iter())
     }
 }
 
@@ -341,7 +412,7 @@ pub fn hull(points: &[Tumbler]) -> Result<Option<Span>, LevelMismatch> {
         return Err(LevelMismatch);
     }
     Ok(Some(
-        Span::from_endpoints(lo.clone(), next_at_length(hi))
+        Span::from_endpoints(lo.clone(), &next_at_length(hi))
             .expect("min ≤ max < next_at_length(max) at one shared length, so WF fires"),
     ))
 }

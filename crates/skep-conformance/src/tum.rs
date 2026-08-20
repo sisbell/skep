@@ -27,21 +27,16 @@ pub fn addr(comps: &[u64]) -> Option<Address> {
     validate(tum(comps)).ok()
 }
 
-/// Render any tumbler dotted ("1.1.0.1"), matching the golden encoding.
+/// Render any tumbler dotted ("1.1.0.1"), matching the golden encoding —
+/// which is M1's own `Display`, so the harness compares against the goldens
+/// using the tumbler's canonical text rather than a second rendering of it.
 pub fn tum_str(t: &Tumbler) -> String {
-    let mut s = String::new();
-    for i in 1..=t.len() {
-        if i > 1 {
-            s.push('.');
-        }
-        s.push_str(&t.get(i).to_string());
-    }
-    s
+    t.to_string()
 }
 
 /// Render an address dotted.
 pub fn addr_str(a: &Address) -> String {
-    tum_str(a.tumbler())
+    a.to_string()
 }
 
 /// A golden local V-position: "1.5" → (subspace 1, ordinal 5); "2.1" →
@@ -97,11 +92,10 @@ pub fn deep_span(start: &[u64], width: &[u64]) -> Option<Span> {
 /// I-extent `Run::iextent` yields. `None` for coarser widths.
 pub fn span_elem_width(s: &Span) -> Option<u64> {
     let w = s.width();
-    let last: u64 = w.get(w.len()).to_string().parse().ok()?;
-    for i in 1..w.len() {
-        if w.get(i) != &Nat::from(0u64) {
-            return None;
-        }
+    let last: u64 = w.get(w.len())?.to_string().parse().ok()?;
+    let zero = Nat::from(0u64);
+    if w.iter().take(w.len() - 1).any(|c| *c != zero) {
+        return None;
     }
     Some(last)
 }
@@ -120,8 +114,7 @@ pub fn subspan(s: &Span, off: u64, len: u64) -> Option<Span> {
         return None;
     }
     let st = s.start();
-    let mut comps: Vec<u64> =
-        (1..=st.len()).map(|i| st.get(i).to_string().parse().unwrap_or(0)).collect();
+    let mut comps: Vec<u64> = st.iter().map(|c| c.to_string().parse().unwrap_or(0)).collect();
     let last = comps.len() - 1;
     comps[last] += off;
     let mut wcomps: Vec<u64> = vec![0; s.width().len().saturating_sub(1)];

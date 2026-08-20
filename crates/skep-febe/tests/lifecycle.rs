@@ -17,7 +17,7 @@ use skep_retrieval::{Region, Spec};
 
 /// A link-subspace element address under `doc` that no MAKELINK ever minted.
 fn ghost_link(doc: &skep_address::Address, ordinal: u32) -> skep_address::Address {
-    elem_addr(&ElemPos { doc: doc.clone(), subspace: n(2), ordinal: n(ordinal) })
+    elem_addr(ElemPos { doc: doc.clone(), subspace: n(2), ordinal: n(ordinal) })
         .unwrap_or_else(|_| panic!("valid element position"))
 }
 

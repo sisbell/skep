@@ -39,7 +39,7 @@ impl<'s, W: M6World> Query<'s, W> {
                     return Err(CompareError::DocNotRegistered(r.doc.clone()));
                 }
                 for (si, span) in r.spans.iter().enumerate() {
-                    if *span.start().get(1) != *S_C {
+                    if span.start().get(1) != Some(&S_C) {
                         // Start must lie in the content subspace (Open build
                         // decision: reject loudly, the recommended default —
                         // spans that merely DENOTE link positions from a
@@ -157,16 +157,16 @@ fn min_tumbler(a: &Tumbler, b: &Tumbler) -> Tumbler {
 /// Depth-2 V-position tumbler → `VPos`.
 fn vpos_of(t: &Tumbler) -> VPos {
     VPos {
-        subspace: t.get(1).clone(),
-        ordinal: t.get(2).clone(),
+        subspace: t.get(1).expect("gate_vspec ⇒ #t == 2").clone(),
+        ordinal: t.get(2).expect("gate_vspec ⇒ #t == 2").clone(),
     }
 }
 
 /// Advance a depth-2 V-position's ordinal by `k`.
 fn vpos_shift(v: &Tumbler, k: &Nat) -> VPos {
     VPos {
-        subspace: v.get(1).clone(),
-        ordinal: v.get(2).clone() + k,
+        subspace: v.get(1).expect("gate_vspec ⇒ #v == 2").clone(),
+        ordinal: v.get(2).expect("gate_vspec ⇒ #v == 2").clone() + k,
     }
 }
 

@@ -78,7 +78,7 @@ impl Run {
     pub fn iextent(&self) -> Span {
         Span::from_endpoints(
             self.i_start.tumbler().clone(),
-            shift(self.i_start.tumbler(), &self.width),
+            &shift(self.i_start.tumbler(), &self.width),
         )
         .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
     }

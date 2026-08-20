@@ -825,7 +825,7 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
     let s = k.snapshot();
     let m5 = s.world().m5();
     let region = SpanSet::singleton(
-        Span::from_endpoints(ca(1).tumbler().clone(), ca(4).tumbler().clone())
+        Span::from_endpoints(ca(1).tumbler().clone(), ca(4).tumbler())
             .expect("well-formed I-extent"),
     );
     // Candidate superset: both docs ever placed the region.

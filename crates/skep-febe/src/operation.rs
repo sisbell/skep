@@ -667,15 +667,15 @@ fn endset_from_vspecs(m5: &M5State, specs: &[VSpec]) -> Result<Endset, Rejection
 }
 
 /// The content-V well-formedness predicate makelink applies (M5/M7 reject ⟨⟩
-/// otherwise): a depth-2, content-subspace, ordinal-level V-span. Length
-/// checks PRECEDE every `get` — M1's `Tumbler::get` PANICS on `i > #t`, and
-/// `execute` is contracted Total, so an out-of-range `get` would breach it.
+/// otherwise): a depth-2, content-subspace, ordinal-level V-span. Every read
+/// is fallible, so a span of any shape answers rather than faulting, which is
+/// what `execute`'s Total contract needs.
 fn is_content_vspan(span: &Span) -> bool {
     let start = span.start();
     let width = span.width();
-    start.len() == 2 && width.len() == 2 // depth-2 BEFORE any get(1)
-        && *start.get(1) == Nat::from(1u32) // start's subspace component == s_C (= 1)
-        && *width.get(1) == Nat::from(0u32) // ordinal-level: width's subspace component == 0
+    start.len() == 2 && width.len() == 2
+        && start.get(1) == Some(&Nat::from(1u32)) // start's subspace component == s_C (= 1)
+        && width.get(1) == Some(&Nat::from(0u32)) // ordinal-level: width's subspace component == 0
 }
 
 #[cfg(test)]

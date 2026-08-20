@@ -86,7 +86,7 @@ fn emit_typed_rejections() {
         .clone();
 
     // Pre-transact: non-address-denoting ty (before any class computation).
-    let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler().clone())
+    let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler())
         .expect("well-formed span");
     let content_extent = Endset::from_spans([wide]);
     assert!(matches!(
@@ -378,7 +378,7 @@ fn makelink_resolves_deposits_and_seats() {
         // ML1 coverage-exactness: the recorded endsets are exactly the
         // resolved I-extents.
         let iext = |lo: u32, hi: u32| {
-            skep_address::Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler().clone())
+            skep_address::Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
                 .expect("well-formed")
         };
         assert_eq!(link.from_slot(), &Endset::from_spans([iext(1, 2)]));

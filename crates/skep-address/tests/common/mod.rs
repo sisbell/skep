@@ -20,7 +20,7 @@ pub fn addr(comps: &[u32]) -> Address {
 
 /// Level-uniform span from endpoints.
 pub fn sp(s: &[u32], r: &[u32]) -> Span {
-    Span::from_endpoints(t(s), t(r)).expect("test spans are well-formed")
+    Span::from_endpoints(t(s), &t(r)).expect("test spans are well-formed")
 }
 
 /// Span-set collected as-given (un-normalized).

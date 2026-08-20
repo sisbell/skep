@@ -63,13 +63,16 @@ impl M5State {
     /// COMPLETE precisely so M6 can pre-validate request-built V-spans and
     /// distinguish "bad request" from "genuinely empty" up front.
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
-        if span.start().len() != 2 || span.width().len() != 2 || !span.width().get(1).is_zero() {
+        if span.start().len() != 2
+            || span.width().len() != 2
+            || !span.width().get(1).is_some_and(|w| w.is_zero())
+        {
             return Vec::new();
         }
         let Some(arr) = self.arrangements.get(doc.tumbler()) else {
             return Vec::new();
         };
-        let sub = span.start().get(1);
+        let sub = span.start().get(1).expect("#start == 2");
         let list = if *sub == s_c() {
             &arr.content
         } else if *sub == s_l() {
@@ -77,7 +80,10 @@ impl M5State {
         } else {
             return Vec::new();
         };
-        list.resolve_range(span.start().get(2), span.width().get(2))
+        list.resolve_range(
+            span.start().get(2).expect("#start == 2"),
+            span.width().get(2).expect("#width == 2"),
+        )
     }
 
     /// `M(d)(v)` (§2): the I-address at V-position `v`, or `None` when
@@ -178,9 +184,14 @@ impl M5State {
                                 // extent, so both endpoints share the run's
                                 // prefix; offsets are last-component
                                 // differences.
-                                let base = run.i_start().tumbler().get(ilen);
+                                let at = |t: &Tumbler| {
+                                    t.get(ilen)
+                                        .expect("run extent endpoints have #t == ilen")
+                                        .clone()
+                                };
+                                let base = at(run.i_start().tumbler());
                                 let reach = sub.reach();
-                                Some((sub.start().get(ilen) - base, reach.get(ilen) - base))
+                                Some((at(sub.start()) - &base, at(&reach) - &base))
                             }
                         }
                     } else {

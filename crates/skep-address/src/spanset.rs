@@ -204,20 +204,28 @@ pub fn union(a: &SpanSet, b: &SpanSet) -> SpanSet {
     SpanSet(joined)
 }
 
+/// Both operands normalized and confirmed mutually level-compatible — the
+/// shared entry of the set-level algebra. Each side's own S8 gate runs inside
+/// [`SpanSet::normalize`]; what remains is the CROSS-operand question, and it
+/// arises only when both sides have a class — ⟨⟩ has none and is compatible
+/// with anything. (`level_class` on an already-normalized set cannot fail;
+/// the `?` is here so the gate keeps one spelling.)
+fn normalized_pair(a: &SpanSet, b: &SpanSet) -> Result<(SpanSet, SpanSet), LevelMismatch> {
+    let (na, nb) = (a.normalize()?, b.normalize()?);
+    match (na.level_class()?, nb.level_class()?) {
+        (Some(la), Some(lb)) if la != lb => Err(LevelMismatch),
+        _ => Ok((na, nb)),
+    }
+}
+
 /// Set intersection as one sweep-line pass over the two canonical forms.
 /// Normalizes BOTH inputs internally — so the error is honest:
 /// `LevelMismatch` fires when a set is not internally level-uniform *or* the
 /// two sets are not mutually level-compatible — and emits a normalized
-/// result.
+/// result. An empty operand needs no arm of its own: the sweep runs while
+/// both sides have members, so ⟨⟩ on either side yields ⟨⟩.
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
-    let na = a.normalize()?;
-    let nb = b.normalize()?;
-    let (Some(la), Some(lb)) = (na.level_class()?, nb.level_class()?) else {
-        return Ok(SpanSet::empty()); // ⟨⟩ on either side
-    };
-    if la != lb {
-        return Err(LevelMismatch);
-    }
+    let (na, nb) = normalized_pair(a, b)?;
     let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
     let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
     let (mut i, mut j) = (0usize, 0usize);
@@ -244,17 +252,11 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 /// Set difference `⟦a⟧ \ ⟦b⟧` as one sweep over the two canonical forms.
 /// Normalizes both inputs internally; emits a normalized result. NO proven
 /// output-size bound (open, per the design) — the result is not
-/// size-promised.
+/// size-promised. An empty operand needs no arm of its own: with no a-spans
+/// the sweep emits nothing (⟨⟩ \ b = ⟨⟩), and with no b-spans each a-span
+/// survives whole (a \ ⟨⟩ = a).
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
-    let na = a.normalize()?;
-    let nb = b.normalize()?;
-    let (Some(la), Some(lb)) = (na.level_class()?, nb.level_class()?) else {
-        // ⟨⟩ \ b = ⟨⟩ ;  a \ ⟨⟩ = a (already normalized)
-        return Ok(if na.is_empty() { SpanSet::empty() } else { na });
-    };
-    if la != lb {
-        return Err(LevelMismatch);
-    }
+    let (na, nb) = normalized_pair(a, b)?;
     let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
     let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
     let mut out: Vec<Span> = Vec::new();
@@ -316,25 +318,32 @@ pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
     Ok(CanonicalForm(s.normalize()?))
 }
 
-/// S0 — the single-span convex hull of a finite point set. The only real
-/// precondition is `#min P = #max P` (by convexity the hull then covers even
-/// a MIXED-length P): `None` if P is empty or `#min ≠ #max` (WF cannot
-/// fire); else `from_endpoints(min P, next_at_length(max P))`. The reach is
-/// the LEAST same-length tumbler exceeding max (TS4, length-preserving) — so
-/// the hull is TIGHT and the name honest; `inc(max, 0)` would also cover ⊇ P
-/// but over-captures whenever `sig(max) < #max`. One reach convention serves
-/// [`subtree_of`], [`cover`], and `hull` alike. The `|Σ| = |P|` unit-span
-/// cover for arbitrary P (S7) is the separate [`cover`], not this hull.
-pub fn hull(points: &[Tumbler]) -> Option<Span> {
-    let lo = points.iter().min()?;
-    let hi = points.iter().max()?;
+/// S0 — the single-span convex hull of a finite point set, as
+/// `from_endpoints(min P, next_at_length(max P))`. The two ways there is no
+/// hull are told apart, as they are everywhere else in the module: `Ok(None)`
+/// for an empty P, which has nothing to enclose, and `Err(LevelMismatch)`
+/// when `#min P ≠ #max P`, which is the domain violation — a straddling P
+/// spans two length classes and no single WF span reaches across them. That
+/// is the only real precondition: by convexity the hull covers even a P whose
+/// INTERIOR points mix lengths.
+///
+/// The reach is the LEAST same-length tumbler exceeding max (TS4,
+/// length-preserving) — so the hull is TIGHT and the name honest; `inc(max,
+/// 0)` would also cover ⊇ P but over-captures whenever `sig(max) < #max`. One
+/// reach convention serves [`subtree_of`], [`cover`], and `hull` alike. The
+/// `|Σ| = |P|` unit-span cover for arbitrary P (S7) is the separate
+/// [`cover`], not this hull.
+pub fn hull(points: &[Tumbler]) -> Result<Option<Span>, LevelMismatch> {
+    let (Some(lo), Some(hi)) = (points.iter().min(), points.iter().max()) else {
+        return Ok(None); // P is empty
+    };
     if lo.len() != hi.len() {
-        return None;
+        return Err(LevelMismatch);
     }
-    Some(
+    Ok(Some(
         Span::from_endpoints(lo.clone(), next_at_length(hi))
             .expect("min ≤ max < next_at_length(max) at one shared length, so WF fires"),
-    )
+    ))
 }
 
 /// S7 — the unit-span cover of a finite point set: one unit span per point

@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arith::{action_point, add, next_at_length, sub};
+use crate::arith::{add, add_domain, next_at_length, sub, AddDomain};
 use crate::error::LevelMismatch;
 use crate::spanset::SpanSet;
 use crate::tumbler::Tumbler;
@@ -98,13 +98,15 @@ impl TryFrom<(Tumbler, Tumbler)> for Span {
 }
 
 impl Span {
-    /// T12: `width > 0 ∧ actionPoint(width) ≤ #start` — both required for
-    /// `reach > start`.
+    /// T12: `width > 0 ∧ actionPoint(width) ≤ #start`. T12 IS `⊕`'s domain,
+    /// asked of `⊕` itself rather than restated here — which is what makes
+    /// [`Span::reach`] total, since the pair a `Span` holds is by
+    /// construction a pair `⊕` accepts.
     pub fn new(start: Tumbler, width: Tumbler) -> Result<Span, T12Clause> {
-        match action_point(&width) {
-            None => Err(T12Clause::ZeroWidth),
-            Some(k) if k > start.len() => Err(T12Clause::ActionPointTooDeep),
-            Some(_) => Ok(Span { start, width }),
+        match add_domain(&start, &width) {
+            Ok(_) => Ok(Span { start, width }),
+            Err(AddDomain::ZeroDisplacement) => Err(T12Clause::ZeroWidth),
+            Err(AddDomain::ActionPointTooDeep) => Err(T12Clause::ActionPointTooDeep),
         }
     }
 
@@ -245,32 +247,36 @@ enum Rel {
     OverlapBFirst,
 }
 
-/// The boundary predicates, spelled once, here — pure order, no level gate
-/// (the classifier constructs nothing), total on any spans, sentinel
-/// endpoints and mixed lengths included. Checked in this order: separated,
-/// adjacent, equal, containment, proper overlap. Past Equal and containment
-/// the starts must differ, so the overlap orientation is the one remaining
-/// comparison.
-fn relate(a: &Span, b: &Span) -> Rel {
-    let (ra, rb) = (a.reach(), b.reach());
-    let max_start = max(a.start(), b.start());
-    let min_reach = min(&ra, &rb);
+/// The one site that decides the five-case classification — pure order, no
+/// level gate (it constructs nothing), total on any pair, sentinel endpoints
+/// and mixed lengths included. Checked in this order: separated, adjacent,
+/// equal, containment, proper overlap. Past Equal and containment the starts
+/// must differ, so the overlap orientation is the one remaining comparison.
+///
+/// Takes [`Bounds`] rather than spans: every predicate below is an endpoint
+/// comparison, so the two reaches are derived once by the caller instead of
+/// once per question. [`intersect`] and [`merge`] each decide a single
+/// boundary question inline rather than classifying — a deliberate cheap
+/// path, and the reason this is not the only place a boundary is compared.
+fn relate(a: &Bounds, b: &Bounds) -> Rel {
+    let max_start = max(&a.start, &b.start);
+    let min_reach = min(&a.reach, &b.reach);
     if max_start > min_reach {
         return Rel::Separated;
     }
     if max_start == min_reach {
         return Rel::Adjacent;
     }
-    if a.start() == b.start() && ra == rb {
+    if a.start == b.start && a.reach == b.reach {
         return Rel::Equal;
     }
-    if a.start() <= b.start() && rb <= ra {
+    if a.start <= b.start && b.reach <= a.reach {
         return Rel::AContainsB;
     }
-    if b.start() <= a.start() && ra <= rb {
+    if b.start <= a.start && a.reach <= b.reach {
         return Rel::BContainsA;
     }
-    if a.start() < b.start() {
+    if a.start < b.start {
         Rel::OverlapAFirst
     } else {
         Rel::OverlapBFirst
@@ -281,7 +287,7 @@ fn relate(a: &Span, b: &Span) -> Rel {
 /// and mixed lengths included. The projection of the oriented `relate` onto
 /// the five bare cases the interface declares.
 pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
-    match relate(a, b) {
+    match relate(&Bounds::of(a), &Bounds::of(b)) {
         Rel::Separated => SpanRel::Separated,
         Rel::Adjacent => SpanRel::Adjacent,
         Rel::Equal => SpanRel::Equal,
@@ -314,9 +320,9 @@ fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
 /// `Ok(None)` with no SC call.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     level_gate(a, b)?;
-    let (ra, rb) = (a.reach(), b.reach());
-    let lo = max(a.start(), b.start());
-    let hi = min(&ra, &rb);
+    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
+    let lo = max(&ba.start, &bb.start);
+    let hi = min(&ba.reach, &bb.reach);
     if lo < hi {
         Ok(Some(
             Span::from_endpoints(lo.clone(), hi.clone())
@@ -333,12 +339,12 @@ pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
 /// gate is not).
 pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     level_gate(a, b)?;
-    let (ra, rb) = (a.reach(), b.reach());
-    if max(a.start(), b.start()) > min(&ra, &rb) {
+    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
+    if max(&ba.start, &bb.start) > min(&ba.reach, &bb.reach) {
         return Ok(None); // separated
     }
-    let lo = min(a.start(), b.start()).clone();
-    let hi = max(&ra, &rb).clone();
+    let lo = min(&ba.start, &bb.start).clone();
+    let hi = max(&ba.reach, &bb.reach).clone();
     Ok(Some(
         Span::from_endpoints(lo, hi).expect("non-separated gated operands give lo < hi"),
     ))
@@ -417,7 +423,7 @@ pub fn difference(a: &Span, b: &Span) -> Result<SpanSet, LevelMismatch> {
             .into_span()
             .expect("gated one-length endpoints with reach b < reach a")
     };
-    match relate(a, b) {
+    match relate(&ba, &bb) {
         Rel::Separated | Rel::Adjacent => Ok(SpanSet::singleton(a.clone())),
         // a ⊆ b: nothing of a survives.
         Rel::Equal | Rel::BContainsA => Ok(SpanSet::empty()),

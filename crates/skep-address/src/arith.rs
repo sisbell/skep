@@ -23,6 +23,29 @@ pub fn action_point(w: &Tumbler) -> Option<Pos> {
     w.comps().iter().position(|c| !nat_is_zero(c)).map(|i| i + 1)
 }
 
+/// The clause that puts a displacement outside `⊕`'s domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AddDomain {
+    /// `¬Pos(w)` — the displacement has no action point.
+    ZeroDisplacement,
+    /// `actionPoint(w) > #a` — it acts below the start's last position.
+    ActionPointTooDeep,
+}
+
+/// `⊕`'s domain, decided in one place: the action point `k` at which `a ⊕ w`
+/// acts, or the clause that puts `w` outside it. Two askers — [`add`], and
+/// `Span::new`, because T12 *is* this domain. `Span::reach` applies `⊕`
+/// unguarded, and that is sound only while the span constructor admits
+/// exactly what `add` accepts; asking here is what makes "exactly"
+/// structural rather than a promise repeated in two comments.
+pub(crate) fn add_domain(a: &Tumbler, w: &Tumbler) -> Result<Pos, AddDomain> {
+    let k = action_point(w).ok_or(AddDomain::ZeroDisplacement)?;
+    if k > a.len() {
+        return Err(AddDomain::ActionPointTooDeep);
+    }
+    Ok(k)
+}
+
 /// Last nonzero index, else `#t` if all-zero. For T4-valid `t`, `sig(t) = #t`
 /// (TA5-SigValid) — its own operation precisely so `inc(·, 0)` (which
 /// advances `sig`) is never conflated with the action-point-driven
@@ -52,10 +75,7 @@ impl Error for AddPrecond {}
 /// structure below `k` is discarded, so a start cannot be recovered from
 /// result-plus-displacement in general.
 pub fn add(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, AddPrecond> {
-    let k = action_point(w).ok_or(AddPrecond)?;
-    if k > a.len() {
-        return Err(AddPrecond);
-    }
+    let k = add_domain(a, w).map_err(|_| AddPrecond)?;
     let (ac, wc) = (a.comps(), w.comps());
     let mut out: Vec<Nat> = Vec::with_capacity(wc.len());
     out.extend_from_slice(&ac[..k - 1]);

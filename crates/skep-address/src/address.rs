@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tumbler::{is_prefix, nat_is_zero, Nat, Tumbler};
+use crate::tumbler::{nat_is_zero, Nat, Tumbler};
 
 /// The hierarchical level of a T4-valid address: zeros = 0/1/2/3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +315,22 @@ impl Address {
     pub fn subspace(&self) -> Option<Nat> {
         self.element_field().map(|e| e[0].clone())
     }
+
+    /// The `N·0·U·0·D` component prefix — where a document's subtree begins;
+    /// `None` when zeros < 2. The address form is [`document_of`]; this is
+    /// the same knowledge without the mint, for callers that only compare.
+    fn document_prefix(&self) -> Option<&[Nat]> {
+        let comps = self.tumbler.comps();
+        match self.level {
+            Level::Node | Level::Account => None,
+            Level::Document => Some(comps),
+            Level::Element => Some(
+                &comps[..self
+                    .separator(3)
+                    .expect("an Element address has three separators")],
+            ),
+        }
+    }
 }
 
 /// T6(a): `N(a) = N(b)` — decidable from the two addresses alone
@@ -351,8 +367,11 @@ pub fn under_document(a: &Address, b: &Address) -> bool {
     if !matches!(a.level(), Level::Document | Level::Element) {
         return false; // zeros ≥ 2 is required on BOTH operands; this is a's side
     }
-    match document_of(b) {
-        Some(doc_b) => is_prefix(doc_b.tumbler(), a.tumbler()),
+    match b.document_prefix() {
+        // A predicate compares; it does not mint. Reading the prefix in place
+        // costs one slice comparison and no allocation, which is what makes
+        // "decidable from the two addresses alone" cheap as well as true.
+        Some(p) => a.tumbler().comps().starts_with(p),
         None => false, // b's side: zeros(b) < 2
     }
 }
@@ -385,15 +404,12 @@ pub fn parent(a: &Address) -> Option<Address> {
 /// `document_field()` components. Preserves the validity invariant.
 pub fn document_of(a: &Address) -> Option<Address> {
     match a.level() {
-        // zeros < 2: no document prefix exists.
-        Level::Node | Level::Account => None,
-        // zeros = 2: already the Document.
+        // zeros = 2: already the Document — nothing to truncate.
         Level::Document => Some(a.clone()),
-        Level::Element => {
-            let z3 = a
-                .separator(3)
-                .expect("an Element address has three separators");
-            let prefix = Tumbler::from_vec(a.tumbler().comps()[..z3].to_vec());
+        // zeros < 2 has no document prefix and zeros = 3 truncates at the
+        // third separator; both answers come from the one projector.
+        _ => {
+            let prefix = Tumbler::from_vec(a.document_prefix()?.to_vec());
             Some(
                 validate(prefix)
                     .expect("the zeros=2 prefix of a T4-valid address is a valid Document"),
@@ -406,10 +422,4 @@ pub fn document_of(a: &Address) -> Option<Address> {
 /// carrier (tumblers are nonempty, T0).
 pub fn ordinal(t: &Tumbler) -> &Nat {
     t.comps().last().expect("T0: tumblers are nonempty")
-}
-
-/// §C — the hierarchical level enum: an ALIAS of `a.level()`, NOT a numeric
-/// nesting count.
-pub fn depth(a: &Address) -> Level {
-    a.level()
 }

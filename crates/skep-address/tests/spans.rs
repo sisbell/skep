@@ -21,6 +21,39 @@ fn span_new_enforces_t12() {
     );
 }
 
+/// T12 IS `⊕`'s domain, and `Span::reach` unwraps `⊕` on the strength of it.
+/// The two must admit exactly the same pairs: a `Span` that exists and a
+/// `reach()` that panics is the failure this pins, and it would surface in
+/// M5/M6/M7 rather than here.
+#[test]
+fn span_new_admits_exactly_what_add_accepts() {
+    let starts = [t(&[1]), t(&[1, 0, 2]), t(&[0, 0]), t(&[7, 3, 1, 4])];
+    let widths = [
+        t(&[0]),          // zero displacement
+        t(&[0, 0]),       // zero displacement, longer
+        t(&[1]),          // acts at position 1
+        t(&[0, 1]),       // acts at position 2
+        t(&[0, 0, 5]),    // acts at position 3
+        t(&[0, 0, 0, 2]), // acts at position 4
+        t(&[2, 9, 9]),
+    ];
+    for s in &starts {
+        for w in &widths {
+            let span = Span::new(s.clone(), w.clone());
+            assert_eq!(
+                span.is_ok(),
+                add(s, w).is_ok(),
+                "T12 and ⊕ disagree on ({s:?}, {w:?})"
+            );
+            // Where T12 admits, reach() is total and lands where ⊕ says.
+            if let Ok(span) = span {
+                assert_eq!(span.reach(), add(s, w).unwrap());
+                assert!(span.reach() > *span.start()); // T12's whole purpose
+            }
+        }
+    }
+}
+
 #[test]
 fn from_endpoints_wf_and_error_precedence() {
     let s = sp(&[1, 0, 2], &[1, 0, 5]);
@@ -130,6 +163,39 @@ fn pairwise_ops_gate_unconditionally_before_dispatch() {
     // A non-level-uniform operand fails the per-span half of the gate.
     let nu = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
     assert_eq!(intersect(&nu, &nu), Err(LevelMismatch));
+}
+
+/// `intersect` and `merge` each decide one boundary question inline instead
+/// of classifying, so their verdicts and `classify_spans`'s are reached by
+/// different code and could drift apart in silence. They may not: `merge`
+/// yields nothing exactly on Separated, `intersect` exactly on Separated or
+/// Adjacent. Every SC case appears here, in both orders.
+#[test]
+fn inline_boundary_tests_agree_with_the_classifier() {
+    let battery = [
+        sp(&[1], &[9]),   // the reference interval
+        sp(&[3], &[5]),   // strictly inside it
+        sp(&[5], &[12]),  // overlapping past its reach
+        sp(&[1], &[5]),   // sharing its start
+        sp(&[5], &[9]),   // sharing its reach
+        sp(&[9], &[12]),  // adjacent to it
+        sp(&[20], &[30]), // separated from it
+    ];
+    for a in &battery {
+        for b in &battery {
+            let rel = classify_spans(a, b);
+            assert_eq!(
+                merge(a, b).unwrap().is_none(),
+                rel == SpanRel::Separated,
+                "merge disagrees with SC on ({a:?}, {b:?})"
+            );
+            assert_eq!(
+                intersect(a, b).unwrap().is_none(),
+                matches!(rel, SpanRel::Separated | SpanRel::Adjacent),
+                "intersect disagrees with SC on ({a:?}, {b:?})"
+            );
+        }
+    }
 }
 
 // ---- intersect / merge / split ----------------------------------------------

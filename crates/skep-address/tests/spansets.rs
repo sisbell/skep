@@ -147,9 +147,18 @@ fn difference_sets_carves_and_emits_normalized() {
         set(&[sp(&[1], &[2]), sp(&[6], &[7])])
     );
     assert_eq!(difference_sets(&a, &a).unwrap(), SpanSet::empty());
+    // An empty subtrahend leaves every a-span whole. The sweep carries each
+    // one out through its derived (start, reach) form and back, so this also
+    // pins that the round trip is the IDENTITY on a level-uniform span — a
+    // multi-span, deeper-class case as well as the flat one.
     assert_eq!(
         difference_sets(&a, &SpanSet::empty()).unwrap(),
         a.normalize().unwrap()
+    );
+    let deep = set(&[sp(&[1, 0, 7], &[1, 0, 9]), sp(&[2, 5, 1], &[2, 5, 8])]);
+    assert_eq!(
+        difference_sets(&deep, &SpanSet::empty()).unwrap(),
+        deep.normalize().unwrap()
     );
     assert_eq!(difference_sets(&SpanSet::empty(), &a).unwrap(), SpanSet::empty());
     let cross = set(&[sp(&[1, 0], &[1, 5])]);
@@ -189,15 +198,17 @@ fn canonical_key_is_the_denotational_dedup_identity() {
 
 #[test]
 fn hull_is_the_tight_single_span_cover() {
-    assert_eq!(hull(&[]), None);
+    assert_eq!(hull(&[]), Ok(None)); // nothing to enclose — not a domain violation
     let p = [t(&[3]), t(&[1]), t(&[1, 5, 5])];
-    let h = hull(&p).unwrap();
+    let h = hull(&p).unwrap().unwrap();
     assert_eq!(h.start(), &t(&[1]));
-    assert_eq!(h.reach(), t(&[4])); // shift(max, 1)
+    assert_eq!(h.reach(), t(&[4])); // the reach convention on max
     assert!(p.iter().all(|x| h.contains(x))); // covers the mixed-length interior point too
-    assert_eq!(hull(&[t(&[0, 1]), t(&[5])]), None); // #min ≠ #max
+    // A STRADDLING P is the domain violation, and answers as one — distinct
+    // from the empty set's Ok(None).
+    assert_eq!(hull(&[t(&[0, 1]), t(&[5])]), Err(LevelMismatch)); // #min ≠ #max
     // Tight on a trailing-zero max: reach = [2,1], not inc(max,0) = [3,0].
-    let h2 = hull(&[t(&[1, 0]), t(&[2, 0])]).unwrap();
+    let h2 = hull(&[t(&[1, 0]), t(&[2, 0])]).unwrap().unwrap();
     assert_eq!(h2.reach(), t(&[2, 1]));
     assert!(h2.contains(&t(&[2, 0, 7])));
     assert!(!h2.contains(&t(&[2, 5])));

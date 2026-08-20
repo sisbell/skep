@@ -205,6 +205,36 @@ fn containment_positive_and_negative() {
     assert!(!under_document(&d, &v)); // not conversely
 }
 
+/// `under_document` compares a document prefix and `document_of` mints one.
+/// Both read the same projection, so the predicate and the constructor cannot
+/// disagree about where a document begins — asserted over every ordered pair
+/// of a battery spanning all four levels.
+#[test]
+fn under_document_agrees_with_document_of() {
+    let battery = [
+        addr(&[1]),
+        addr(&[1, 2]),
+        addr(&[1, 0, 2]),
+        addr(&[1, 0, 2, 0, 5]),
+        addr(&[1, 0, 2, 0, 5, 3]),
+        addr(&[1, 0, 2, 0, 5, 0, 1, 9]),
+        addr(&[1, 0, 2, 0, 6]),
+        addr(&[1, 0, 2, 0, 6, 0, 2, 4]),
+        addr(&[2, 0, 2, 0, 5, 0, 1, 9]),
+    ];
+    for a in &battery {
+        for b in &battery {
+            let via_mint = matches!(a.level(), Level::Document | Level::Element)
+                && document_of(b).is_some_and(|d| is_prefix(d.tumbler(), a.tumbler()));
+            assert_eq!(
+                under_document(a, b),
+                via_mint,
+                "under_document({a:?}, {b:?}) disagrees with document_of"
+            );
+        }
+    }
+}
+
 // ---- §C: decomposition ------------------------------------------------------
 
 #[test]
@@ -242,10 +272,10 @@ fn document_of_truncates_to_the_origin_document() {
 }
 
 #[test]
-fn ordinal_and_depth() {
+fn ordinal_and_level() {
     assert_eq!(ordinal(&t(&[1, 0, 2, 0, 5, 3])), &n(3));
     assert_eq!(ordinal(&t(&[7])), &n(7));
-    let a = addr(&[1, 0, 2]);
-    assert_eq!(depth(&a), a.level()); // depth is an alias of level, not a count
-    assert_eq!(depth(&a), Level::Account);
+    // The hierarchical level is the enum, never a numeric nesting count: this
+    // three-component address reads as Account, not as 3.
+    assert_eq!(addr(&[1, 0, 2]).level(), Level::Account);
 }

@@ -49,6 +49,54 @@ fn normalize_sorts_and_coalesces_to_the_unique_form() {
     assert!(SpanSet::empty().is_normalized());
 }
 
+/// `level_class` answers the S8 gate directly, with the same verdict
+/// `normalize` reaches through it.
+#[test]
+fn level_class_is_the_s8_gate_answered_directly() {
+    assert_eq!(SpanSet::empty().level_class(), Ok(None)); // ⟨⟩: no class
+    let flat = set(&[sp(&[1], &[3]), sp(&[7], &[9])]);
+    assert_eq!(flat.level_class(), Ok(Some(1)));
+    let deep = set(&[sp(&[1, 0, 2], &[1, 0, 5])]);
+    assert_eq!(deep.level_class(), Ok(Some(3)));
+    // The two ways a set falls outside S8's domain, each refused by both.
+    let mixed = set(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
+    assert_eq!(mixed.level_class(), Err(LevelMismatch));
+    assert_eq!(mixed.normalize(), Err(LevelMismatch));
+    let nu = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
+    assert_eq!(nu.level_class(), Err(LevelMismatch));
+    assert_eq!(nu.normalize(), Err(LevelMismatch));
+}
+
+/// `by_level_class` decomposes a set S8 refuses whole into the pieces S8
+/// admits — the partition every mixed-depth consumer needs.
+#[test]
+fn by_level_class_partitions_into_normalizable_pieces() {
+    assert!(SpanSet::empty().by_level_class().is_empty());
+    let mixed = cover(&[t(&[1]), t(&[2, 0]), t(&[3])]);
+    assert_eq!(mixed.normalize(), Err(LevelMismatch)); // refused whole
+    let parts = mixed.by_level_class();
+    assert_eq!(parts.keys().copied().collect::<Vec<_>>(), vec![1, 2]);
+    assert_eq!(parts[&1].len(), 2);
+    assert_eq!(parts[&2].len(), 1);
+    for (len, part) in &parts {
+        assert_eq!(part.level_class(), Ok(Some(*len))); // each piece is inside S8
+        assert!(part.normalize().is_ok());
+    }
+    // Every member survives, in its own class and no other.
+    assert!(parts[&1].denotes(&t(&[1])));
+    assert!(parts[&2].denotes(&t(&[2, 0, 9])));
+    assert!(!parts[&1].denotes(&t(&[2, 0, 9])));
+    // TOTAL: a non-level-uniform member is partitioned by its start, then
+    // refused by its own class's gate — exactly as the whole set refused it.
+    let with_nu = set(&[
+        Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
+        sp(&[1], &[3]),
+    ]);
+    let parts = with_nu.by_level_class();
+    assert_eq!(parts[&3].level_class(), Err(LevelMismatch));
+    assert_eq!(parts[&1].level_class(), Ok(Some(1)));
+}
+
 #[test]
 fn normalize_gate_is_the_full_s8_precondition() {
     // Mutually incompatible length classes.

@@ -205,3 +205,44 @@ fn difference_by_sc_case() {
     assert_eq!(difference(&sp(&[3], &[5]), &a).unwrap(), SpanSet::empty());
     assert_eq!(difference(&a, &a).unwrap(), SpanSet::empty());
 }
+
+/// `classify_spans` and `difference` read ONE classification, so the
+/// orientation cannot drift between them: whichever way a pair is ordered,
+/// the result denotes exactly the part of `a` outside `b` — never `b`'s
+/// complement, and never anything outside `a`. Every SC case appears in the
+/// battery, each in both orders.
+#[test]
+fn difference_carves_a_not_b_in_every_orientation() {
+    let battery = [
+        sp(&[1], &[9]),   // the reference interval
+        sp(&[3], &[5]),   // strictly inside it
+        sp(&[5], &[12]),  // overlapping past its reach
+        sp(&[1], &[5]),   // sharing its start
+        sp(&[5], &[9]),   // sharing its reach
+        sp(&[9], &[12]),  // adjacent to it
+        sp(&[20], &[30]), // separated from it
+    ];
+    let probes: Vec<Tumbler> = [1u32, 3, 4, 5, 8, 9, 11, 12, 20, 25, 30]
+        .iter()
+        .map(|&x| t(&[x]))
+        .collect();
+    for a in &battery {
+        for b in &battery {
+            let d = difference(a, b).unwrap();
+            for p in &probes {
+                assert_eq!(
+                    d.denotes(p),
+                    a.contains(p) && !b.contains(p),
+                    "difference({a:?}, {b:?}) disagrees at {p:?}"
+                );
+            }
+            // The two non-constructing cases return ⟦a⟧ itself, whole.
+            if matches!(
+                classify_spans(a, b),
+                SpanRel::Separated | SpanRel::Adjacent
+            ) {
+                assert_eq!(d, set(std::slice::from_ref(a)));
+            }
+        }
+    }
+}

@@ -260,37 +260,35 @@ impl Address {
         self.level
     }
 
-    /// 0-based indices of the separator (zero) components — at most 3 for a
-    /// valid address. Recomputed on demand: `#t` is small, and the design
-    /// defers any parsed-field hint until a containment path proves hot.
-    fn separators(&self) -> Vec<usize> {
+    /// 0-based index of the `n`-th separator (zero) component, `n` 1-based to
+    /// match the field numbering; `None` when fewer than `n` separators
+    /// exist. The single spelling of "where does a field begin" — every field
+    /// projection and every truncation below reads through it. Recomputed on
+    /// demand and allocation-free: `#t` is small, and the design defers any
+    /// parsed-field hint until a containment path proves hot.
+    fn separator(&self, n: usize) -> Option<usize> {
         self.tumbler
             .comps()
             .iter()
             .enumerate()
             .filter(|&(_, c)| nat_is_zero(c))
             .map(|(i, _)| i)
-            .collect()
+            .nth(n - 1)
     }
 
     /// The field between the `n`-th separator (1-based) and the next
     /// separator or the end; `None` when fewer than `n` separators exist
     /// (T4b: present-or-absent is encoded by `Option`, never a sentinel).
     fn field(&self, n: usize) -> Option<&[Nat]> {
-        let seps = self.separators();
-        if seps.len() < n {
-            return None;
-        }
-        let start = seps[n - 1] + 1;
-        let end = seps.get(n).copied().unwrap_or(self.tumbler.len());
+        let start = self.separator(n)? + 1;
+        let end = self.separator(n + 1).unwrap_or(self.tumbler.len());
         Some(&self.tumbler.comps()[start..end])
     }
 
     /// T4b `N` — always present: the components before the first separator.
     pub fn node_field(&self) -> &[Nat] {
         let comps = self.tumbler.comps();
-        let end = comps.iter().position(nat_is_zero).unwrap_or(comps.len());
-        &comps[..end]
+        &comps[..self.separator(1).unwrap_or(comps.len())]
     }
 
     /// T4b `U` — `Some` iff zeros ≥ 1.
@@ -350,7 +348,7 @@ pub fn same_document(a: &Address, b: &Address) -> bool {
 /// from what — derivation history is a separate version graph (M3/M5),
 /// explicitly not M1's.
 pub fn under_document(a: &Address, b: &Address) -> bool {
-    if a.document_field().is_none() {
+    if !matches!(a.level(), Level::Document | Level::Element) {
         return false; // zeros ≥ 2 is required on BOTH operands; this is a's side
     }
     match document_of(b) {
@@ -386,13 +384,15 @@ pub fn parent(a: &Address) -> Option<Address> {
 /// *construction* stays in M1, so M6 never reassembles from raw
 /// `document_field()` components. Preserves the validity invariant.
 pub fn document_of(a: &Address) -> Option<Address> {
-    let seps = a.separators();
-    if seps.len() < 2 {
-        return None; // zeros < 2: no document prefix exists
-    }
-    match seps.get(2) {
-        None => Some(a.clone()), // zeros = 2: already the Document
-        Some(&z3) => {
+    match a.level() {
+        // zeros < 2: no document prefix exists.
+        Level::Node | Level::Account => None,
+        // zeros = 2: already the Document.
+        Level::Document => Some(a.clone()),
+        Level::Element => {
+            let z3 = a
+                .separator(3)
+                .expect("an Element address has three separators");
             let prefix = Tumbler::from_vec(a.tumbler().comps()[..z3].to_vec());
             Some(
                 validate(prefix)

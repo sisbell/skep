@@ -5,12 +5,14 @@
 //! (deeper sub-extensions fill every interval), which is why no span-set
 //! denotes an arbitrary finite point set exactly (S7's binding fact).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::arith::shift;
+use crate::arith::next_at_length;
 use crate::error::LevelMismatch;
-use crate::span::{subtree_of, Span};
-use crate::tumbler::{Nat, Tumbler};
+use crate::span::{subtree_of, Bounds, Span};
+use crate::tumbler::Tumbler;
 
 /// An unordered union-denoting collection of spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
 ///
@@ -86,49 +88,80 @@ impl SpanSet {
         self.0.iter()
     }
 
-    /// S8/S9 — the unique canonical form (N1 ∧ N2): sort by start, then one
-    /// linear sweep coalescing every overlapping or adjacent pair
-    /// (`reachᵢ ≥ startᵢ₊₁`); O(n log n), dominated by the sort. Gate — the
-    /// FULL S8 precondition: every component span level-uniform
-    /// (`#start = #width`, without which the coalescing start↔reach
-    /// arithmetic breaks) AND all components mutually level-compatible
-    /// (starts of one length), else `Err(LevelMismatch)`. Pinned edge:
-    /// `normalize(⟨⟩) = Ok(⟨⟩)` — S8's n = 0 case, vacuously N1 ∧ N2.
-    pub fn normalize(&self) -> Result<SpanSet, LevelMismatch> {
-        let Some(class) = self.length_class() else {
-            return Ok(SpanSet::empty());
+    /// The one endpoint length every member shares — S8's FULL precondition,
+    /// spelled once and answerable on demand. `Ok(None)` for ⟨⟩;
+    /// `Err(LevelMismatch)` when some member is not level-uniform
+    /// (`#start ≠ #width`, without which the start↔reach arithmetic breaks)
+    /// or the members disagree on `#start`. Every set operation gates through
+    /// this, so a caller can ask the question before it asks for the answer,
+    /// and gets the same verdict either way.
+    pub fn level_class(&self) -> Result<Option<usize>, LevelMismatch> {
+        let Some(first) = self.0.front() else {
+            return Ok(None);
         };
+        let class = first.start().len();
         for s in self.0.iter() {
             if !s.is_level_uniform() || s.start().len() != class {
                 return Err(LevelMismatch);
             }
         }
-        let mut endpoints: Vec<(Tumbler, Tumbler)> = self
-            .0
-            .iter()
-            .map(|s| (s.start().clone(), s.reach()))
-            .collect();
-        endpoints.sort_by(|x, y| x.0.cmp(&y.0));
+        Ok(Some(class))
+    }
+
+    /// The partition of the members by endpoint length — the decomposition
+    /// that turns a set outside S8's domain into sets inside it, keyed by the
+    /// `#start` each class shares. TOTAL: a member that is not level-uniform
+    /// lands in its start's class and is refused there by that class's own
+    /// gate, exactly as it would be here.
+    ///
+    /// This is the per-level-class discipline every consumer whose span-set
+    /// can mix origin depths needs — a transcluded I-coverage, a
+    /// heterogeneous-length endset: partition, operate within each class,
+    /// union the results. Cross-length denotational canonicalization is
+    /// genuinely absent from the source algebra ([`canonical_key`]), so the
+    /// partition is the whole of what M1 can offer, and offering it is
+    /// better than each caller rebuilding it.
+    pub fn by_level_class(&self) -> BTreeMap<usize, SpanSet> {
+        let mut out: BTreeMap<usize, SpanSet> = BTreeMap::new();
+        for s in self.0.iter() {
+            out.entry(s.start().len())
+                .or_insert_with(SpanSet::empty)
+                .0
+                .push_back(s.clone());
+        }
+        out
+    }
+
+    /// S8/S9 — the unique canonical form (N1 ∧ N2): sort by start, then one
+    /// linear sweep coalescing every overlapping or adjacent pair
+    /// (`reachᵢ ≥ startᵢ₊₁`); O(n log n), dominated by the sort. Gated on the
+    /// full S8 precondition, [`SpanSet::level_class`]. Pinned edge:
+    /// `normalize(⟨⟩) = Ok(⟨⟩)` — S8's n = 0 case, vacuously N1 ∧ N2.
+    pub fn normalize(&self) -> Result<SpanSet, LevelMismatch> {
+        if self.level_class()?.is_none() {
+            return Ok(SpanSet::empty());
+        }
+        let mut bounds: Vec<Bounds> = self.0.iter().map(Bounds::of).collect();
+        bounds.sort_by(|x, y| x.start.cmp(&y.start));
         let mut out: Vec<Span> = Vec::new();
-        let mut rest = endpoints.into_iter();
-        let (mut cur_start, mut cur_reach) = rest.next().expect("nonempty: length_class was Some");
-        for (s, r) in rest {
-            if s <= cur_reach {
+        let mut rest = bounds.into_iter();
+        let mut cur = rest.next().expect("nonempty: level_class was Some");
+        for b in rest {
+            if b.start <= cur.reach {
                 // overlap or adjacency — coalesce (N2)
-                if r > cur_reach {
-                    cur_reach = r;
+                if b.reach > cur.reach {
+                    cur.reach = b.reach;
                 }
             } else {
                 out.push(
-                    Span::from_endpoints(cur_start, cur_reach)
+                    cur.into_span()
                         .expect("gated one-length endpoints with start < reach"),
                 );
-                cur_start = s;
-                cur_reach = r;
+                cur = b;
             }
         }
         out.push(
-            Span::from_endpoints(cur_start, cur_reach)
+            cur.into_span()
                 .expect("gated one-length endpoints with start < reach"),
         );
         Ok(out.into_iter().collect())
@@ -147,12 +180,6 @@ impl SpanSet {
     /// ⟦Σ⟧ membership: some component span contains `t`; ⟨⟩ denotes nothing.
     pub fn denotes(&self, t: &Tumbler) -> bool {
         self.0.iter().any(|s| s.contains(t))
-    }
-
-    /// The start-length of the first component — `None` for ⟨⟩. Meaningful
-    /// as *the* single length class only under the level gate.
-    fn length_class(&self) -> Option<usize> {
-        self.0.front().map(|s| s.start().len())
     }
 }
 
@@ -185,26 +212,27 @@ pub fn union(a: &SpanSet, b: &SpanSet) -> SpanSet {
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let na = a.normalize()?;
     let nb = b.normalize()?;
-    let (Some(la), Some(lb)) = (na.length_class(), nb.length_class()) else {
+    let (Some(la), Some(lb)) = (na.level_class()?, nb.level_class()?) else {
         return Ok(SpanSet::empty()); // ⟨⟩ on either side
     };
     if la != lb {
         return Err(LevelMismatch);
     }
-    let av: Vec<(Tumbler, Tumbler)> = na.iter().map(|s| (s.start().clone(), s.reach())).collect();
-    let bv: Vec<(Tumbler, Tumbler)> = nb.iter().map(|s| (s.start().clone(), s.reach())).collect();
+    let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
+    let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
     let (mut i, mut j) = (0usize, 0usize);
     let mut out: Vec<Span> = Vec::new();
     while i < av.len() && j < bv.len() {
-        let lo = std::cmp::max(&av[i].0, &bv[j].0);
-        let hi = std::cmp::min(&av[i].1, &bv[j].1);
+        let lo = std::cmp::max(&av[i].start, &bv[j].start);
+        let hi = std::cmp::min(&av[i].reach, &bv[j].reach);
         if lo < hi {
             out.push(
-                Span::from_endpoints(lo.clone(), hi.clone())
+                Bounds::new(lo.clone(), hi.clone())
+                    .into_span()
                     .expect("one length class with lo < hi"),
             );
         }
-        if av[i].1 <= bv[j].1 {
+        if av[i].reach <= bv[j].reach {
             i += 1;
         } else {
             j += 1;
@@ -220,42 +248,47 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let na = a.normalize()?;
     let nb = b.normalize()?;
-    let (Some(la), Some(lb)) = (na.length_class(), nb.length_class()) else {
+    let (Some(la), Some(lb)) = (na.level_class()?, nb.level_class()?) else {
         // ⟨⟩ \ b = ⟨⟩ ;  a \ ⟨⟩ = a (already normalized)
         return Ok(if na.is_empty() { SpanSet::empty() } else { na });
     };
     if la != lb {
         return Err(LevelMismatch);
     }
-    let av: Vec<(Tumbler, Tumbler)> = na.iter().map(|s| (s.start().clone(), s.reach())).collect();
-    let bv: Vec<(Tumbler, Tumbler)> = nb.iter().map(|s| (s.start().clone(), s.reach())).collect();
+    let av: Vec<Bounds> = na.iter().map(Bounds::of).collect();
+    let bv: Vec<Bounds> = nb.iter().map(Bounds::of).collect();
     let mut out: Vec<Span> = Vec::new();
     let mut j = 0usize;
-    for (s, r) in av {
+    for a in av {
         // b-spans wholly at-or-before this a-start can touch no later a-span
         // either (starts ascend), so this cursor advances for good.
-        while j < bv.len() && bv[j].1 <= s {
+        while j < bv.len() && bv[j].reach <= a.start {
             j += 1;
         }
-        let mut cur = s;
+        let mut cur = a.start;
         let mut k = j;
-        while k < bv.len() && bv[k].0 < r {
-            if bv[k].0 > cur {
+        while k < bv.len() && bv[k].start < a.reach {
+            if bv[k].start > cur {
                 out.push(
-                    Span::from_endpoints(cur.clone(), bv[k].0.clone())
+                    Bounds::new(cur.clone(), bv[k].start.clone())
+                        .into_span()
                         .expect("one length class with cur < b-start"),
                 );
             }
-            if bv[k].1 > cur {
-                cur = bv[k].1.clone();
+            if bv[k].reach > cur {
+                cur = bv[k].reach.clone();
             }
-            if cur >= r {
+            if cur >= a.reach {
                 break;
             }
             k += 1;
         }
-        if cur < r {
-            out.push(Span::from_endpoints(cur, r).expect("one length class with cur < reach"));
+        if cur < a.reach {
+            out.push(
+                Bounds::new(cur, a.reach)
+                    .into_span()
+                    .expect("one length class with cur < reach"),
+            );
         }
     }
     Ok(out.into_iter().collect())
@@ -277,8 +310,8 @@ pub fn equiv(a: &SpanSet, b: &SpanSet) -> Result<bool, LevelMismatch> {
 /// succeeds with the empty canonical form. A heterogeneous-length endset
 /// falls outside S8/S9 and yields `LevelMismatch` — cross-length denotational
 /// canonicalization is genuinely absent from the source algebra, so M7
-/// partitions by endpoint length and composes per-class keys (read back
-/// through [`CanonicalForm::as_set`]).
+/// partitions with [`SpanSet::by_level_class`] and composes per-class keys
+/// (read back through [`CanonicalForm::as_set`]).
 pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
     Ok(CanonicalForm(s.normalize()?))
 }
@@ -286,11 +319,10 @@ pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
 /// S0 — the single-span convex hull of a finite point set. The only real
 /// precondition is `#min P = #max P` (by convexity the hull then covers even
 /// a MIXED-length P): `None` if P is empty or `#min ≠ #max` (WF cannot
-/// fire); else `from_endpoints(min P, shift(max P, 1))`. The reach is
-/// `shift(max, 1)` — the LEAST same-length tumbler exceeding max (TS4,
-/// length-preserving) — so the hull is TIGHT and the name honest;
-/// `inc(max, 0)` would also cover ⊇ P but over-captures whenever
-/// `sig(max) < #max`. One reach convention — `shift(·, 1)` — serves
+/// fire); else `from_endpoints(min P, next_at_length(max P))`. The reach is
+/// the LEAST same-length tumbler exceeding max (TS4, length-preserving) — so
+/// the hull is TIGHT and the name honest; `inc(max, 0)` would also cover ⊇ P
+/// but over-captures whenever `sig(max) < #max`. One reach convention serves
 /// [`subtree_of`], [`cover`], and `hull` alike. The `|Σ| = |P|` unit-span
 /// cover for arbitrary P (S7) is the separate [`cover`], not this hull.
 pub fn hull(points: &[Tumbler]) -> Option<Span> {
@@ -299,10 +331,9 @@ pub fn hull(points: &[Tumbler]) -> Option<Span> {
     if lo.len() != hi.len() {
         return None;
     }
-    let reach = shift(hi, &Nat::from(1u32));
     Some(
-        Span::from_endpoints(lo.clone(), reach)
-            .expect("min ≤ max < shift(max,1) at one shared length, so WF fires"),
+        Span::from_endpoints(lo.clone(), next_at_length(hi))
+            .expect("min ≤ max < next_at_length(max) at one shared length, so WF fires"),
     )
 }
 

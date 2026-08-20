@@ -11,10 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arith::{action_point, add, shift, sub};
+use crate::arith::{action_point, add, next_at_length, sub};
 use crate::error::LevelMismatch;
 use crate::spanset::SpanSet;
-use crate::tumbler::{Nat, Tumbler};
+use crate::tumbler::Tumbler;
 
 /// [`Span::new`] rejection — the violated T12 clause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +150,43 @@ impl Span {
     }
 }
 
+/// A span in its DERIVED `(start, reach)` form — the working shape of a
+/// sweep, where every comparison is between endpoints rather than between a
+/// start and a displacement, and the reach is worth computing once at the
+/// head instead of at each step.
+///
+/// It carries a name because `(start, width)` is the authoritative form and
+/// the two pairs are not interchangeable: read as a width, a reach denotes a
+/// different span entirely, and an anonymous pair of tumblers says which of
+/// the two it is nowhere. The way back to the authoritative form is
+/// [`Bounds::into_span`] — `from_endpoints` IS that conversion, so WF travels
+/// with it.
+#[derive(Debug, Clone)]
+pub(crate) struct Bounds {
+    pub(crate) start: Tumbler,
+    pub(crate) reach: Tumbler,
+}
+
+impl Bounds {
+    /// The derived form of `s` — one `reach()` recomputation.
+    pub(crate) fn of(s: &Span) -> Bounds {
+        Bounds {
+            start: s.start().clone(),
+            reach: s.reach(),
+        }
+    }
+
+    /// A pair of endpoints a sweep computed, still to be checked by WF.
+    pub(crate) fn new(start: Tumbler, reach: Tumbler) -> Bounds {
+        Bounds { start, reach }
+    }
+
+    /// Back to the authoritative `(start, width)` form (WF).
+    pub(crate) fn into_span(self) -> Result<Span, WfError> {
+        Span::from_endpoints(self.start, self.reach)
+    }
+}
+
 /// T5 subtree-capture: the span denoting exactly prefix `p`'s subtree — every
 /// extension of `p` — for ANY carrier prefix, trailing zero included.
 /// Warranted by T5's contiguity (ASN-0034: a prefix's subtree is a contiguous
@@ -157,12 +194,11 @@ impl Span {
 /// witness (ASN-0053). The width advances position `#p`, NOT `sig(p)`: using
 /// `inc(p, 0)` would over-capture on a trailing-zero prefix (e.g.
 /// `inc([2,0],0) = [3,0]` admits `[2,1]`, which is not an extension of
-/// `[2,0]`). Total — `shift(p,1) > p` (TS4) and length-preserving, so WF
-/// always fires; returns `Span`, not `Result`.
+/// `[2,0]`). Total — the reach is `next_at_length(p)`, strictly greater (TS4)
+/// and length-preserving, so WF always fires; returns `Span`, not `Result`.
 pub fn subtree_of(p: &Tumbler) -> Span {
-    let reach = shift(p, &Nat::from(1u32));
-    Span::from_endpoints(p.clone(), reach)
-        .expect("TS4: shift(p,1) > p at the same length, so WF fires")
+    Span::from_endpoints(p.clone(), next_at_length(p))
+        .expect("TS4: next_at_length(p) > p at the same length, so WF fires")
 }
 
 /// SC's five mutually-exclusive cases, decided by pure endpoint comparison.
@@ -172,9 +208,10 @@ pub fn subtree_of(p: &Tumbler) -> Span {
 /// first_starts_first }`, `Containment { first_contains_second }`) so S11d
 /// consumers need not re-compare endpoints; the interface — the verbatim
 /// binding for dependents — declares bare unit variants, implemented here
-/// exactly. [`difference`] recovers orientation internally by endpoint
-/// comparison; M6/M8 consumers needing direction must do the same until the
-/// documents reconcile.
+/// exactly. Orientation survives inside M1, where [`difference`] reads it off
+/// the oriented classification these five cases project from; an M6/M8
+/// consumer needing direction must re-compare endpoints until the documents
+/// reconcile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpanRel {
     /// max start > min reach — no shared position.
@@ -189,29 +226,68 @@ pub enum SpanRel {
     Equal,
 }
 
-/// SC — pure order, **no level gate** (the classifier constructs nothing);
-/// total on any spans, sentinel endpoints and mixed lengths included. The
-/// five boundary predicates are spelled once, here, checked in this order:
-/// separated, adjacent, equal, containment, proper overlap.
-pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
+/// SC with the orientation kept: which operand contains which, and which
+/// starts first. [`SpanRel`] is this with the orientation dropped, and
+/// [`difference`] — the one operation whose construction depends on it —
+/// reads it here rather than re-deriving it from the endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rel {
+    Separated,
+    Adjacent,
+    Equal,
+    /// `a` strictly brackets `b`.
+    AContainsB,
+    /// `b` strictly brackets `a`.
+    BContainsA,
+    /// Proper overlap, `a` starting first.
+    OverlapAFirst,
+    /// Proper overlap, `b` starting first.
+    OverlapBFirst,
+}
+
+/// The boundary predicates, spelled once, here — pure order, no level gate
+/// (the classifier constructs nothing), total on any spans, sentinel
+/// endpoints and mixed lengths included. Checked in this order: separated,
+/// adjacent, equal, containment, proper overlap. Past Equal and containment
+/// the starts must differ, so the overlap orientation is the one remaining
+/// comparison.
+fn relate(a: &Span, b: &Span) -> Rel {
     let (ra, rb) = (a.reach(), b.reach());
     let max_start = max(a.start(), b.start());
     let min_reach = min(&ra, &rb);
     if max_start > min_reach {
-        return SpanRel::Separated;
+        return Rel::Separated;
     }
     if max_start == min_reach {
-        return SpanRel::Adjacent;
+        return Rel::Adjacent;
     }
     if a.start() == b.start() && ra == rb {
-        return SpanRel::Equal;
+        return Rel::Equal;
     }
-    let a_brackets_b = a.start() <= b.start() && rb <= ra;
-    let b_brackets_a = b.start() <= a.start() && ra <= rb;
-    if a_brackets_b || b_brackets_a {
-        return SpanRel::Containment;
+    if a.start() <= b.start() && rb <= ra {
+        return Rel::AContainsB;
     }
-    SpanRel::ProperOverlap
+    if b.start() <= a.start() && ra <= rb {
+        return Rel::BContainsA;
+    }
+    if a.start() < b.start() {
+        Rel::OverlapAFirst
+    } else {
+        Rel::OverlapBFirst
+    }
+}
+
+/// SC — pure order, **no level gate**; total on any spans, sentinel endpoints
+/// and mixed lengths included. The projection of the oriented `relate` onto
+/// the five bare cases the interface declares.
+pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
+    match relate(a, b) {
+        Rel::Separated => SpanRel::Separated,
+        Rel::Adjacent => SpanRel::Adjacent,
+        Rel::Equal => SpanRel::Equal,
+        Rel::AContainsB | Rel::BContainsA => SpanRel::Containment,
+        Rel::OverlapAFirst | Rel::OverlapBFirst => SpanRel::ProperOverlap,
+    }
 }
 
 /// S6 level gate — per-span level-uniformity ∧ mutual compatibility (every
@@ -220,6 +296,10 @@ pub fn classify_spans(a: &Span, b: &Span) -> SpanRel {
 /// operands yield `Err(LevelMismatch)` even on non-constructing branches
 /// (Separated operands never yield `Ok(None)`/`Ok({a})`). Only
 /// [`classify_spans`] is gate-free.
+///
+/// One rule at two scales: this is the pairwise instance of
+/// [`SpanSet::level_class`], which asks the same question of a whole
+/// collection and answers with the shared length itself.
 fn level_gate(a: &Span, b: &Span) -> Result<(), LevelMismatch> {
     if a.is_level_uniform() && b.is_level_uniform() && a.start().len() == b.start().len() {
         Ok(())
@@ -323,41 +403,35 @@ pub fn split(s: &Span, p: &Tumbler) -> Result<(Span, Span), SplitError> {
 /// order (left before right) and is normalized by construction (§6).
 pub fn difference(a: &Span, b: &Span) -> Result<SpanSet, LevelMismatch> {
     level_gate(a, b)?;
-    let (ra, rb) = (a.reach(), b.reach());
-    match classify_spans(a, b) {
-        SpanRel::Separated | SpanRel::Adjacent => Ok(SpanSet::singleton(a.clone())),
-        SpanRel::Equal => Ok(SpanSet::empty()),
-        SpanRel::Containment => {
-            if a.start() <= b.start() && rb <= ra {
-                // a ⊃ b (Equal already excluded)
-                let mut parts: Vec<Span> = Vec::with_capacity(2);
-                if a.start() < b.start() {
-                    parts.push(
-                        Span::from_endpoints(a.start().clone(), b.start().clone())
-                            .expect("gated one-length endpoints with start a < start b"),
-                    );
-                }
-                if rb < ra {
-                    parts.push(
-                        Span::from_endpoints(rb, ra)
-                            .expect("gated one-length endpoints with reach b < reach a"),
-                    );
-                }
-                Ok(parts.into_iter().collect())
-            } else {
-                // a ⊂ b: nothing of a survives
-                Ok(SpanSet::empty())
+    let (ba, bb) = (Bounds::of(a), Bounds::of(b));
+    // The left complement `[start a, start b)` and the right complement
+    // `[reach b, reach a)` — each built only on an arm that has already
+    // established that its endpoints increase.
+    let left = || {
+        Bounds::new(ba.start.clone(), bb.start.clone())
+            .into_span()
+            .expect("gated one-length endpoints with start a < start b")
+    };
+    let right = || {
+        Bounds::new(bb.reach.clone(), ba.reach.clone())
+            .into_span()
+            .expect("gated one-length endpoints with reach b < reach a")
+    };
+    match relate(a, b) {
+        Rel::Separated | Rel::Adjacent => Ok(SpanSet::singleton(a.clone())),
+        // a ⊆ b: nothing of a survives.
+        Rel::Equal | Rel::BContainsA => Ok(SpanSet::empty()),
+        Rel::AContainsB => {
+            let mut parts: Vec<Span> = Vec::with_capacity(2);
+            if ba.start < bb.start {
+                parts.push(left());
             }
+            if bb.reach < ba.reach {
+                parts.push(right());
+            }
+            Ok(parts.into_iter().collect())
         }
-        SpanRel::ProperOverlap => {
-            let part = if a.start() < b.start() {
-                Span::from_endpoints(a.start().clone(), b.start().clone())
-                    .expect("gated one-length endpoints with start a < start b")
-            } else {
-                Span::from_endpoints(rb, ra)
-                    .expect("gated one-length endpoints with reach b < reach a")
-            };
-            Ok(SpanSet::singleton(part))
-        }
+        Rel::OverlapAFirst => Ok(SpanSet::singleton(left())),
+        Rel::OverlapBFirst => Ok(SpanSet::singleton(right())),
     }
 }

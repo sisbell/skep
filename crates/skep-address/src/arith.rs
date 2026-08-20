@@ -204,20 +204,39 @@ pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
 /// Precondition `n ≥ 1` (OrdinalDisplacement); `shift(v, 0) = v` is the
 /// explicit total extension (identity displacement).
 ///
-/// PRIMITIVE — TA7a hazard: the last component is the ordinal only for a FULL
-/// element position `doc·0·subspace·ordinal`; a raw shift of a subspace
-/// *base* `doc·0·subspace` (whose last component IS the subspace id) silently
-/// advances text → link. Hold a verified full element position, or use
-/// [`shift_ordinal`], which makes the mis-shift unrepresentable for callers
-/// that go through it. (OPEN DECISION resolved to the documented default:
-/// `shift` stays public-but-annotated rather than crate-private — the
-/// un-violable property is the wrapper's, not the whole API's.)
+/// PRIMITIVE serving two obligations. The first is the §E ordinal advance,
+/// and it carries the TA7a hazard: the last component is the ordinal only
+/// for a FULL element position `doc·0·subspace·ordinal`; a raw shift of a
+/// subspace *base* `doc·0·subspace` (whose last component IS the subspace id)
+/// silently advances text → link. Hold a verified full element position, or
+/// use [`shift_ordinal`], which makes the mis-shift unrepresentable for
+/// callers that go through it. (OPEN DECISION resolved to the documented
+/// default: `shift` stays public-but-annotated rather than crate-private —
+/// the un-violable property is the wrapper's, not the whole API's.) The
+/// second obligation is the reach convention, where the operand is an
+/// arbitrary carrier tumbler and no ordinal is meant at all; that one is
+/// `next_at_length`, and the hazard above does not reach it.
 pub fn shift(v: &Tumbler, n: &Nat) -> Tumbler {
     let mut out = v.comps().to_vec();
     let last = out.len() - 1;
     let bumped = &out[last] + n;
     out[last] = bumped;
     Tumbler::from_vec(out)
+}
+
+/// The least tumbler of the same length strictly above `t` — the REACH
+/// convention, which every half-open interval built from a single point
+/// uses: `subtree_of`'s capture of `t`'s subtree, `cover`'s unit spans, and
+/// `hull`'s tight upper end. Strictly greater (TS4) and length-preserving,
+/// so WF always fires on `(t, next_at_length(t))`.
+///
+/// Distinct from an ordinal advance in what it means, not in what it
+/// computes: the operand here is an arbitrary carrier prefix or a point-set
+/// maximum, and the position advanced is `#t` because that is where the
+/// half-open bound belongs — no element position is assumed, so no subspace
+/// can be crossed.
+pub(crate) fn next_at_length(t: &Tumbler) -> Tumbler {
+    shift(t, &Nat::from(1u32))
 }
 
 /// A full element position with the subspace stripped into structural context

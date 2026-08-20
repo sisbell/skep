@@ -276,9 +276,9 @@ impl M5State {
     /// false negatives — a genuinely contained address forces order-overlap);
     /// FINDDOCSCONTAINING narrows each candidate with
     /// `project(d, coverage) ≠ ⟨⟩` off the same snapshot. Returns
-    /// `Vec<Address>` in distinct, deterministic Tumbler order (`Address` is
-    /// not `Ord`, so an ordered-set surface is impossible; the `OrdMap` walk
-    /// supplies the order). M5 owns R and any index over it (Open decision
+    /// `Vec<Address>` in distinct, deterministic Tumbler order (the `OrdMap`
+    /// walk supplies the order; the sequence shape is M5's own choice of
+    /// surface). M5 owns R and any index over it (Open decision
     /// #3: v1 scans `prov_by_doc`); M6 owns only the composing query.
     pub fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         let mut out = Vec::new();

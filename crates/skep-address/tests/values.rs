@@ -4,6 +4,8 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use common::*;
 use skep_address::*;
 
@@ -128,6 +130,23 @@ fn address_orders_by_the_tumbler_order() {
     let mut v = vec![addr(&[2]), addr(&[1, 0, 2]), addr(&[1])];
     v.sort();
     assert_eq!(v, vec![addr(&[1]), addr(&[1, 0, 2]), addr(&[2])]);
+    // `level` plays no part: an Element sorts directly under its Document.
+    assert!(addr(&[1, 0, 2, 0, 5]) < addr(&[1, 0, 2, 0, 5, 0, 1, 9]));
+}
+
+/// The order is `Ord`, not a comparator every caller supplies: an `Address`
+/// keys an ordered collection directly — no `.tumbler()` detour, no
+/// `sort_by`, and the walk comes out in T1 order.
+#[test]
+fn address_keys_an_ordered_collection_directly() {
+    let s: BTreeSet<Address> = [addr(&[2]), addr(&[1, 0, 2]), addr(&[1]), addr(&[2])]
+        .into_iter()
+        .collect();
+    assert_eq!(s.len(), 3); // Ord agrees with Eq, so the repeat collapses
+    assert_eq!(
+        s.into_iter().collect::<Vec<_>>(),
+        vec![addr(&[1]), addr(&[1, 0, 2]), addr(&[2])]
+    );
 }
 
 // ---- T4b/T7: field projection -----------------------------------------------

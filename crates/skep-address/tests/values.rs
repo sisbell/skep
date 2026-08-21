@@ -675,22 +675,31 @@ fn every_t4_derived_projection_holds_over_the_whole_family() {
             assert_eq!(a.account_field().is_some(), z >= 1, "U presence on {a}");
             assert_eq!(a.document_field().is_some(), z >= 2, "D presence on {a}");
             assert_eq!(a.element_field().is_some(), z == 3, "E presence on {a}");
-            // No field is empty, and the fields carve the address: the
-            // leading-, trailing- and adjacent-zero clauses are exactly what
-            // leaves a component on both sides of every separator.
+            // No field is empty, every field opens on a nonzero component, and
+            // the fields carve the address: the leading-, trailing- and
+            // adjacent-zero clauses are exactly what leaves a nonzero component
+            // on both sides of every separator. Both facts make indexing a
+            // present field total, which the projections' contracts promise.
             assert!(!a.node_field().is_empty(), "empty N on {a}");
+            assert_ne!(a.node_field()[0], n(0), "N opens on a zero on {a}");
             let mut rejoined: Vec<Nat> = a.node_field().to_vec();
             for f in [a.account_field(), a.document_field(), a.element_field()]
                 .into_iter()
                 .flatten()
             {
                 assert!(!f.is_empty(), "empty field on {a}");
+                assert_ne!(f[0], n(0), "field opens on a zero on {a}");
                 rejoined.push(n(0)); // the separator the projection dropped
                 rejoined.extend(f.iter().cloned());
             }
             assert_eq!(&tumbler(rejoined), a.tumbler(), "fields do not carve {a}");
-            // T7's index into the element field is total exactly at Element level.
+            // T7's index into the element field is total exactly at Element
+            // level, and the numeral it reads is never the zero `elem_addr`
+            // refuses on the mint side.
             assert_eq!(a.subspace().is_some(), z == 3, "subspace presence on {a}");
+            if let Some(s) = a.subspace() {
+                assert_ne!(s, &n(0), "subspace numeral is zero on {a}");
+            }
 
             // §C: both projectors total on their stated domains, and neither
             // mints an address the validator would refuse.

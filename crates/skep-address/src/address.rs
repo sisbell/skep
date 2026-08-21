@@ -348,25 +348,34 @@ impl Address {
         Some(&self.tumbler.comps()[start..end])
     }
 
-    /// T4b `N` — always present: the components before the first separator.
+    /// T4b `N` — the components before the first separator. Always present,
+    /// always nonempty, and opening on a nonzero component: T4's
+    /// no-leading-zero clause puts a nonzero component at `t₁`.
     pub fn node_field(&self) -> &[Nat] {
         let comps = self.tumbler.comps();
         &comps[..self.separator(1).unwrap_or(comps.len())]
     }
 
-    /// T4b `U` — `Some` iff zeros ≥ 1.
+    /// T4b `U` — `Some` iff zeros ≥ 1; nonempty when present, and opening on a
+    /// nonzero component: no-adjacent-zeros supplies a component after the
+    /// separator, and no-trailing-zero keeps the separator off the end. So
+    /// indexing a present field is total, and its first numeral is `≥ 1`.
     pub fn account_field(&self) -> Option<&[Nat]> {
         self.field(1)
     }
 
     /// T4b `D` — `Some` iff zeros ≥ 2 (the full document field, version
-    /// components included).
+    /// components included); nonempty when present, and opening on a nonzero
+    /// component, by the same two clauses that carry
+    /// [`account_field`](Self::account_field).
     pub fn document_field(&self) -> Option<&[Nat]> {
         self.field(2)
     }
 
     /// T4b `E` — `Some` iff zeros = 3 (T4 caps zeros at 3, so ≥ 3 ⟺ = 3);
-    /// nonempty for a valid address (no trailing zero).
+    /// nonempty for a valid address (no trailing zero) and opening on a
+    /// nonzero component (no adjacent zeros) — which is what makes
+    /// [`subspace`](Self::subspace) a numeral rather than a possibility.
     pub fn element_field(&self) -> Option<&[Nat]> {
         self.field(3)
     }
@@ -374,10 +383,14 @@ impl Address {
     /// `element_field[0]` (T7): which subspace the element sits in —
     /// [`content_subspace`] or [`link_subspace`], disjoint by `1 < 2` at this
     /// position, so nothing has to enforce the separation. The index is total:
-    /// T4's no-trailing-zero clause makes a present element field nonempty. A
-    /// borrow into the address's own components, like every other field
-    /// projection: routing an element is a comparison, and a comparison need
-    /// not allocate.
+    /// T4's no-trailing-zero clause makes a present element field nonempty.
+    ///
+    /// The numeral is `≥ 1` — the read side of the guard [`crate::elem_addr`]
+    /// states as `SubspaceZero` — so an element field matching neither
+    /// [`content_subspace`] nor [`link_subspace`] carries a further subdivision
+    /// T7 leaves open, never a zero. A borrow into the address's own
+    /// components, like every other field projection: routing an element is a
+    /// comparison, and a comparison need not allocate.
     pub fn subspace(&self) -> Option<&Nat> {
         self.element_field().map(|e| &e[0])
     }

@@ -412,7 +412,14 @@ fn hull_is_the_tight_single_span_cover() {
     assert!(p.iter().all(|x| h.contains(x))); // covers the mixed-length interior point too
     // A STRADDLING P is the domain violation, and answers as one — distinct
     // from the empty set's Ok(None).
-    assert_eq!(hull(&[t(&[0, 1]), t(&[5])]), Err(LevelMismatch)); // #min ≠ #max
+    let straddling = [t(&[0, 1]), t(&[5])];
+    assert_eq!(hull(&straddling), Err(LevelMismatch)); // #min ≠ #max
+    // What the domain excludes is a tight span, not a covering one: a WF span
+    // does enclose a straddling P (the all-zero sentinel is a legal start,
+    // TA6), and it fails to be a hull because its reach is not the least
+    // tumbler above max P.
+    let covering = Span::from_endpoints(t(&[0, 0]), &t(&[6, 0])).unwrap();
+    assert!(straddling.iter().all(|x| covering.contains(x)));
     // Tight on a trailing-zero max: reach = [2,1], not inc(max,0) = [3,0].
     let h2 = hull(&[t(&[1, 0]), t(&[2, 0])]).unwrap().unwrap();
     assert_eq!(h2.reach(), t(&[2, 1]));

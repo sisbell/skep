@@ -454,10 +454,14 @@ pub fn canonical_key(set: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
 /// `from_endpoints(min P, next_at_length(max P))`. The two ways there is no
 /// hull are told apart, as they are everywhere else in the module: `Ok(None)`
 /// for an empty P, which has nothing to enclose, and `Err(LevelMismatch)`
-/// when `#min P ≠ #max P`, which is the domain violation — a straddling P
-/// spans two length classes and no single WF span reaches across them. That
-/// is the only real precondition: by convexity the hull covers even a P whose
-/// INTERIOR points mix lengths.
+/// when `#min P ≠ #max P` — the domain violation: `(min P,
+/// next_at_length(max P))` puts its two endpoints in different length classes
+/// and is not WF, so the tight span the name promises does not exist here.
+/// Covering spans across classes do exist (WF admits the all-zero sentinel as
+/// a start, TA6); none of them is a hull, which is why S0's domain is one
+/// length class — not because coverage is impossible. That is the only real
+/// precondition: by convexity the hull covers even a P whose INTERIOR points
+/// mix lengths.
 ///
 /// The reach is the LEAST same-length tumbler exceeding max (TS4,
 /// length-preserving) — so the hull is TIGHT and the name honest; `inc(max,

@@ -102,6 +102,12 @@ impl Span {
     /// asked of `⊕` itself rather than restated here — which is what makes
     /// [`Span::reach`] total, since the pair a `Span` holds is by
     /// construction a pair `⊕` accepts.
+    ///
+    /// CONSUMES both tumblers, like every other admission door here: on the
+    /// refusal path they are dropped and [`T12Clause`] carries only the
+    /// violated clause — clone before calling if you need the rejected pair
+    /// back, the same convention [`crate::validate`] and [`crate::elem_addr`]
+    /// state.
     pub fn new(start: Tumbler, width: Tumbler) -> Result<Span, T12Clause> {
         match add_domain(&start, &width) {
             Ok(_) => Ok(Span { start, width }),
@@ -335,9 +341,15 @@ fn gated_endpoints(a: &Span, b: &Span) -> Result<(Endpoints, Endpoints), LevelMi
     }
 }
 
-/// S11a — the intersection after the gate; ≤ 1 span (S1). The construction is
-/// `intersection`, which the set-level sweep emits through as well, so the
-/// intersection of two endpoint pairs is decided in one place.
+/// S11a — `⟦a⟧ ∩ ⟦b⟧` as ≤ 1 span (S1): `Ok(Some([max start, min reach)))`
+/// when the operands share a position, and `Ok(None)` when they are separated
+/// or merely **adjacent** — half-open, so a coinciding boundary shares no
+/// position and the intersection is empty rather than a point. The level gate
+/// runs unconditionally, before that dispatch, so mismatched-level operands
+/// yield `Err` even when they are separated.
+///
+/// The construction is `intersection`, which the set-level sweep emits through
+/// as well, so the intersection of two endpoint pairs is decided in one place.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     let (ea, eb) = gated_endpoints(a, b)?;
     Ok(intersection(&ea, &eb))

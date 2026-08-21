@@ -20,6 +20,7 @@ use std::io::{self, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7).
@@ -83,6 +84,25 @@ fn invalid_data(e: bincode::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
 
+/// One `W::Record`'s wire form — the `bytes` a [`LogRecord`] frame carries.
+///
+/// Stated as a pair with [`decode_record`], here, because the encode and the
+/// decode are one agreement: a change to either that the other does not match
+/// turns every healthy journal into one that cannot be replayed. M2 never
+/// inspects a record, so the serializer's own account is the whole of what
+/// identifies a refusal, and it travels.
+pub(crate) fn encode_record<R: Serialize>(record: &R) -> io::Result<Vec<u8>> {
+    bincode::serialize(record).map_err(invalid_data)
+}
+
+/// Read back what [`encode_record`] wrote. `Err` is a committed, CRC-intact
+/// record that does not decode as this `W::Record` — corrupt committed data,
+/// or a writer/reader skew, either way something the fold cannot supply and
+/// must not skip (§7).
+pub(crate) fn decode_record<R: DeserializeOwned>(bytes: &[u8]) -> io::Result<R> {
+    bincode::deserialize(bytes).map_err(invalid_data)
+}
+
 /// Append one framed payload to `buf`: `[magic][len][crc(len+payload)][payload]`.
 fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
     if payload.len() as u64 > MAX_FRAME_LEN as u64 {
@@ -108,11 +128,12 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// this call, and a commit is no place to copy every record a second time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
-/// already minted: [`crate::Kernel::transact`] is the one mint site, and it
-/// draws the whole run `first_seq..=first_seq + (n - 1)` through a checked
-/// add before any of it reaches this function (§2). The parenthesisation is
-/// load-bearing at the ceiling: `first_seq + (n - 1)` computes no
-/// intermediate above the last coordinate the run legitimately holds.
+/// already minted: [`crate::Kernel::transact`] draws the whole run
+/// `first_seq..=first_seq + (n - 1)` from the kernel's sequencer — the one
+/// mint site — through a checked add before any of it reaches this function
+/// (§2). The parenthesisation is load-bearing at the ceiling:
+/// `first_seq + (n - 1)` computes no intermediate above the last coordinate
+/// the run legitimately holds.
 fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     let n = records.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -241,9 +262,10 @@ pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
 /// `Seq > S_load` filter handles a straddler's leftovers. On return the
 /// directory durably reflects whatever this call removed, with no case split
 /// on whether that was anything.
-pub(crate) fn reclaim_below(dir: &Path, segs: &[SegmentMeta], floor: u64) -> io::Result<()> {
+pub(crate) fn reclaim_below(dir: &Path, floor: u64) -> io::Result<()> {
+    let segs = list_segments(dir)?;
     for (i, seg) in segs.iter().enumerate() {
-        match inferred_last_seq(segs, i) {
+        match inferred_last_seq(&segs, i) {
             Some(last) if last <= floor => fs::remove_file(&seg.path)?,
             _ => break,
         }
@@ -570,13 +592,31 @@ pub(crate) struct ScanOutcome {
     /// boundaries of the scanned region, which [`ScanOutcome::require_boundary`]
     /// answers from.
     committed_boundaries: Vec<u64>,
-    /// Corrupt runs in scan order.
-    pub runs: Vec<RunEnd>,
+    /// Corrupt runs in scan order — what [`ScanOutcome::fatal_run_to_head`]
+    /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
+    /// run belongs to those, not to a caller re-deriving the classifier.
+    runs: Vec<RunEnd>,
     /// The tail-truncation cut, `None` when nothing was scanned.
     pub tail: Option<TailCut>,
 }
 
 impl ScanOutcome {
+    /// The corrupt run a RECOVERY fold cannot answer around, classified within
+    /// the committed region this scan derived: a run above the committed head
+    /// is the un-acked / torn tail, which recovery is about to discard (§7).
+    pub(crate) fn fatal_run_to_head(&self) -> Option<u64> {
+        self.fatal_run(Some(self.committed_head))
+    }
+
+    /// The corrupt run a BOUNDED READ cannot answer around, at any height. A
+    /// read truncates nothing, so a run above the committed head is at-rest
+    /// damage rather than a tail — and since a run's own seqs are unreadable,
+    /// its reach below `inferred_max` is unknowable, so answering around it
+    /// could answer from a hole (§7).
+    pub(crate) fn fatal_run_anywhere(&self) -> Option<u64> {
+        self.fatal_run(None)
+    }
+
     /// The corrupt run a fold over `(s_load, upto]` cannot answer around: the
     /// `at` payload of the first run whose inferred `Seq` max lands in that
     /// range — durable committed data the folded state needs, and unreadable.
@@ -590,7 +630,7 @@ impl ScanOutcome {
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
-    pub(crate) fn fatal_run(&self, upto: Option<u64>) -> Option<u64> {
+    fn fatal_run(&self, upto: Option<u64>) -> Option<u64> {
         self.runs.iter().find_map(|run| match *run {
             RunEnd::Landed { inferred_max, at }
                 if inferred_max > self.s_load && upto.is_none_or(|c| inferred_max <= c) =>
@@ -829,8 +869,10 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// A record's bytes as the commit path produces them, so a fixture cannot
+    /// drift from the wire form the real writer uses.
     fn rec(x: u64) -> Vec<u8> {
-        bincode::serialize(&x).unwrap()
+        encode_record(&x).unwrap()
     }
 
     /// A fixture commit. These journals stand alone — there is no root to

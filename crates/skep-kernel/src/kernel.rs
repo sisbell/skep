@@ -179,10 +179,66 @@ impl Cadence {
     }
 }
 
-/// State owned by the single applier lock (§3/§8): the `Seq` high-water, the
+/// The `Seq` order's high-water and the two operations that move it (§2):
+/// minting the run a transaction commits at, and reclaiming a failed
+/// transaction's burned run. Lives in the applier-locked state, so the order is
+/// drawn under the same lock that installs — which is what makes it gap-free
+/// under [`BurnedSeqPolicy::Rollback`] and a composite's records `Seq`-
+/// contiguous. The burned-`Seq` policy is captured here at `open`, so the
+/// commit path asks the configuration nothing.
+///
+/// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
+struct Sequencer {
+    hi: u64,
+    rolls_back: bool,
+}
+
+impl Sequencer {
+    /// The order a recovery hands over. The single `Seq` high-water is the
+    /// WHOLE of the recovered sequencer state: `Txn` is a transaction's first
+    /// `Seq`, so the next session's first `Txn` = W + 1 needs no second
+    /// counter (§1/§7).
+    fn recovered(head: Seq, rolls_back: bool) -> Sequencer {
+        Sequencer {
+            hi: head.0,
+            rolls_back,
+        }
+    }
+
+    /// Draw the run `first..=last` this transaction commits at — the ONE site
+    /// a `Seq` is minted (§2). `None` when the order has no room left for it:
+    /// the coordinates are exhausted and renumbering over a committed
+    /// predecessor is not an option, so there is nothing this order can answer
+    /// with, and what to do about that is the kernel's to decide.
+    ///
+    /// `n ≥ 1`, which is the caller's to hold and the journal's encoder to
+    /// assert: a zero-record transaction reaches neither.
+    fn mint(&mut self, n: u64) -> Option<(u64, u64)> {
+        let last = self.hi.checked_add(n)?;
+        let first = self.hi + 1; // n ≥ 1, so this is at most `last`
+        self.hi = last;
+        Some((first, last))
+    }
+
+    /// Reclaim a failed transaction's burned run — an absolute set back to the
+    /// last committed marker's `last_seq`, hence idempotent — iff
+    /// [`BurnedSeqPolicy::Rollback`] is in force. Under
+    /// [`BurnedSeqPolicy::TolerateGap`] this does nothing and the order relaxes
+    /// to monotone-only, with recovery tolerating the gap (§1/§3).
+    ///
+    /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
+    /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
+    fn reclaim(&mut self, base: Seq) {
+        if self.rolls_back {
+            self.hi = base.0;
+        }
+    }
+}
+
+/// State owned by the single applier lock (§3/§8): the `Seq` order, the
 /// journal, and the §6 on-commit checkpoint trigger.
 struct ApplierState {
-    seq_hi: u64,
+    seq: Sequencer,
     journal: Journal,
     cadence: Cadence,
 }
@@ -362,7 +418,7 @@ impl<W: WorldState> Kernel<W> {
         // and EOF runs are the un-acked/torn tail, physically discarded
         // below; runs at or below S_load are already embodied in the base.
         let scan = journal::scan(&segs, s_load)?;
-        if let Some(at) = scan.fatal_run(Some(scan.committed_head)) {
+        if let Some(at) = scan.fatal_run_to_head() {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
 
@@ -416,14 +472,11 @@ impl<W: WorldState> Kernel<W> {
         lock: Option<File>,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint);
-        // The single Seq high-water is the WHOLE of the recovered sequencer
-        // state: Txn is a transaction's first Seq, so the next session's
-        // first Txn = W + 1 needs no second counter (§1/§7).
-        let seq_hi = root.seq.0;
+        let seq = Sequencer::recovered(root.seq, cfg.durability.rolls_back_burned_seqs());
         Kernel {
             root: ArcSwap::from_pointee(root),
             applier: Mutex::new(ApplierState {
-                seq_hi,
+                seq,
                 journal,
                 cadence,
             }),
@@ -540,25 +593,21 @@ impl<W: WorldState> Kernel<W> {
             records,
         } = stg;
 
-        // Linearization (§2): Seqs assigned under the applier lock, so the
+        // Linearization (§2): the run is drawn under the applier lock, so the
         // order is gap-free (under Rollback) and a composite's records are
-        // Seq-contiguous. This is the ONE site a `Seq` is minted, so it is
-        // where the order's ceiling is answered for: a sequencer with no room
-        // left for this transaction cannot commit it and cannot renumber it
-        // over a predecessor, which leaves halting as the only sound answer.
+        // Seq-contiguous. An order with no room left for this transaction
+        // cannot commit it and cannot renumber it over a committed
+        // predecessor, which leaves halting as the only sound answer.
         let state = &mut *applier;
         let n = records.len() as u64;
-        let Some(last) = state.seq_hi.checked_add(n) else {
+        let Some((first, last)) = state.seq.mint(n) else {
             self.poisoned.store(true, Ordering::Release);
             return Err(TxnError::Poisoned);
         };
-        let first = state.seq_hi + 1; // n ≥ 1, so this is at most `last`
-        state.seq_hi = last;
         let committed = Committed {
             seq: Seq(last),
             world: working,
         };
-        let rollback = self.cfg.durability.rolls_back_burned_seqs();
 
         // The commit region: serialize, then commit through the journal (§1:
         // append records → marker → ONE fsync → install). Run under
@@ -579,9 +628,8 @@ impl<W: WorldState> Kernel<W> {
             catch_unwind(AssertUnwindSafe(move || {
                 let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
                 for record in records.iter() {
-                    record_bytes.push(bincode::serialize(record).map_err(|e| {
-                        CommitFail::Unencodable(io::Error::new(io::ErrorKind::InvalidData, e))
-                    })?);
+                    record_bytes
+                        .push(journal::encode_record(record).map_err(CommitFail::Unencodable)?);
                 }
                 state.journal.commit_txn(first, record_bytes, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
@@ -594,11 +642,7 @@ impl<W: WorldState> Kernel<W> {
             // §3 unwind guard: repair, then let the panic propagate.
             Err(payload) => {
                 match state.journal.repair_after_unwind() {
-                    UnwindRepair::Clean => {
-                        if rollback {
-                            state.seq_hi = base.seq.0; // absolute set — idempotent (§3)
-                        }
-                    }
+                    UnwindRepair::Clean => state.seq.reclaim(base.seq),
                     // A surviving un-acked marker would let a successor
                     // collide on recovery, and a durably committed txn whose
                     // effect never installed would have later txns folding
@@ -617,18 +661,14 @@ impl<W: WorldState> Kernel<W> {
             // back where this txn found it — a TRUE no-op the caller may
             // re-invoke.
             Ok(Err(CommitFail::Clean(e))) => {
-                if rollback {
-                    state.seq_hi = base.seq.0;
-                }
+                state.seq.reclaim(base.seq);
                 Err(TxnError::Durability(e))
             }
             // Nothing ever became frames, so the journal is where this txn
             // found it — the same no-op, burning the same Seqs, and a
             // different answer to "retry?" (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
-                if rollback {
-                    state.seq_hi = base.seq.0;
-                }
+                state.seq.reclaim(base.seq);
                 Err(TxnError::Unencodable(e))
             }
             // The truncation itself could not complete durably (§1).
@@ -700,10 +740,10 @@ impl<W: WorldState> Kernel<W> {
         let _serial = self.checkpoint_mutex.lock();
         let snap = self.root.load_full();
         let s = snap.seq;
-        // Authoritative state serialized; hints may #[serde(skip)] and be
-        // reseeded by rebuild_derived at load (§6/§7).
-        let body = bincode::serialize(&snap.world).map_err(|e| CheckpointError::Serialize(e))?;
-        checkpoint::write(dir, s.0, &body)?;
+        checkpoint::write(dir, s.0, &snap.world).map_err(|fail| match fail {
+            checkpoint::WriteFail::Serialize(e) => CheckpointError::Serialize(e),
+            checkpoint::WriteFail::Io(e) => CheckpointError::Io(e),
+        })?;
         // Retention policy — how many bases to keep — applied to the
         // checkpoint set, which answers with the oldest survivor. There is
         // always one: `retain_checkpoints ≥ 1` is validated at `open`, and
@@ -713,8 +753,7 @@ impl<W: WorldState> Kernel<W> {
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).
-        let segs = journal::list_segments(dir)?;
-        journal::reclaim_below(dir, &segs, s_old)?;
+        journal::reclaim_below(dir, s_old)?;
         Ok(s)
     }
 
@@ -809,12 +848,10 @@ impl<W: WorldState> Kernel<W> {
         }
         let scan = journal::scan(&segs, s_load)?;
         // Any at-rest corrupt run not wholly embodied in the base is a halt,
-        // even beyond `at` — hence the open ceiling: a run's own seqs are
-        // unreadable, so its reach below `inferred_max` is unknowable, and
-        // answering around it could answer from a hole. (A racing live append
-        // never produces a Landed run: it can tear only the file's suffix,
-        // after the last committed marker, which reaches EOF.)
-        if let Some(run_at) = scan.fatal_run(None) {
+        // even beyond `at`. (A racing live append never produces a Landed run:
+        // it can tear only the file's suffix, after the last committed marker,
+        // which reaches EOF.)
+        if let Some(run_at) = scan.fatal_run_anywhere() {
             return Err(HistoryError::Corruption { at: Seq(run_at) });
         }
         if let Err(nearest) = scan.require_boundary(at.0) {
@@ -875,7 +912,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let rec = |x: u64| bincode::serialize(&x).unwrap();
+            let rec = |x: u64| journal::encode_record(&x).unwrap();
             // A journal built without a kernel: no root to install into.
             assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
             assert!(writer.commit_txn(5, vec![rec(50), rec(60)], || {}).is_ok()); // burned 2..=4
@@ -898,7 +935,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let rec = |x: u64| bincode::serialize(&x).unwrap();
+            let rec = |x: u64| journal::encode_record(&x).unwrap();
             assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
             assert!(writer.commit_txn(1, vec![rec(20)], || {}).is_ok());
         }
@@ -919,7 +956,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let record = bincode::serialize(&10u64).unwrap();
+            let record = journal::encode_record(&10u64).unwrap();
             assert!(writer.commit_txn(u64::MAX, vec![record], || {}).is_ok());
         }
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
@@ -941,7 +978,7 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-        k.applier.lock().seq_hi = u64::MAX;
+        k.applier.lock().seq.hi = u64::MAX;
         let out = k.transact::<_, ()>(&[], |s| {
             s.push(10);
             Ok(())
@@ -1049,7 +1086,7 @@ mod tests {
         assert!(!checkpoints.is_empty(), "the fixture writes checkpoints");
         for cp in &checkpoints {
             assert!(
-                checkpoint::load::<Vec<u64>>(&cp.path, cp.seq).is_some(),
+                cp.load::<Vec<u64>>().is_some(),
                 "checkpoint {} does not load — two writers shared checkpoint.tmp",
                 cp.seq
             );

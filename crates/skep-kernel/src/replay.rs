@@ -9,7 +9,7 @@
 //! exactly-once fold are stated once, here, and each caller supplies its
 //! bound and its own error vocabulary.
 
-use crate::checkpoint::{self, CheckpointMeta};
+use crate::checkpoint::CheckpointMeta;
 use crate::journal::{self, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
@@ -53,7 +53,7 @@ pub(crate) fn select_base<W: WorldState>(
         if ceiling.is_some_and(|c| cp.seq > c) {
             continue;
         }
-        if let Some(world) = checkpoint::load::<W>(&cp.path, cp.seq) {
+        if let Some(world) = cp.load::<W>() {
             return Ok(Base {
                 s_load: cp.seq,
                 world: world.rebuild_derived(),
@@ -80,7 +80,8 @@ pub(crate) fn select_base<W: WorldState>(
 /// `Err` carries the `Seq` of a committed, CRC-intact record that fails to
 /// decode as `W::Record` — corrupt committed data the derived state needs —
 /// or one the committed set presents TWICE. That `Seq` is the record's own,
-/// readable one, unlike a corrupt run's (see [`ScanOutcome::fatal_run`]).
+/// readable one, unlike a corrupt run's (see
+/// [`ScanOutcome::fatal_run_anywhere`]).
 /// Halt, never drop, and never twice (§7): the sequencer mints each `Seq`
 /// once, so a repeat is a journal this kernel did not write, and folding a
 /// coordinate twice through a fold that need not be idempotent is exactly
@@ -102,7 +103,7 @@ pub(crate) fn fold_to<W: WorldState>(
             return Err(seq);
         }
         prev = Some(seq);
-        let record: W::Record = bincode::deserialize(&bytes).map_err(|_| seq)?;
+        let record: W::Record = journal::decode_record(&bytes).map_err(|_| seq)?;
         world = world.apply(&record);
     }
     Ok(world)

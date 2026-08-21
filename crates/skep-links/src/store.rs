@@ -208,6 +208,7 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
     match e {
         TxnError::Rejected(n) => TxnError::Rejected(n.into()),
         TxnError::Durability(io) => TxnError::Durability(io),
+        TxnError::Unencodable(io) => TxnError::Unencodable(io),
         TxnError::Poisoned => TxnError::Poisoned,
     }
 }

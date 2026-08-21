@@ -594,6 +594,11 @@ where
             // Operators see the I/O cause behind the Retry hint.
             TxnError::Durability(io) => Rejection::classified(op, RejectCode::Durability, None)
                 .with_detail(io.to_string()),
+            // Nothing committed, and the request itself is what M2 could not
+            // journal — so re-sending it is futile and the client is told so
+            // (Malformed ⇒ Permanent, §5), with the encoder's own account.
+            TxnError::Unencodable(io) => Rejection::classified(op, RejectCode::Malformed, None)
+                .with_detail(io.to_string()),
             TxnError::Poisoned => {
                 self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
                 Rejection::classified(op, RejectCode::Poisoned, None)
@@ -893,7 +898,9 @@ mod tests {
     }
 
     /// §5: `Durability` threads the io::Error text (Retry hint with an
-    /// operator-visible cause); a typed `Rejected(E)` lowers verbatim.
+    /// operator-visible cause); `Unencodable` threads its cause too but
+    /// disposes Permanent — the same no-op, and one no retry can fix; a typed
+    /// `Rejected(E)` lowers verbatim.
     #[test]
     fn map_txn_lowers_durability_and_rejected() {
         let op = operation();
@@ -904,6 +911,20 @@ mod tests {
         assert_eq!(rej.code, RejectCode::Durability);
         assert_eq!(rej.disposition, Disposition::Retry);
         assert!(rej.detail.as_deref().is_some_and(|d| d.contains("disk gone")));
+        let rej = op.map_txn::<InsertError>(
+            OpKind::Insert,
+            TxnError::Unencodable(std::io::Error::other("record too large")),
+        );
+        assert_eq!(rej.code, RejectCode::Malformed);
+        assert_eq!(
+            rej.disposition,
+            Disposition::Permanent,
+            "a record M2 cannot journal must never be advertised as retryable"
+        );
+        assert!(rej
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("record too large")));
         let rej = op.map_txn(OpKind::Insert, TxnError::Rejected(InsertError::EmptyContent));
         assert_eq!(rej.code, RejectCode::EmptyContent);
         assert_eq!(rej.disposition, Disposition::Permanent);

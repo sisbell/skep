@@ -480,3 +480,115 @@ fn d_trial(trial: u64) -> (usize, u64) {
     assert_eq!(live, again, "FINDING ({ctx}): recovery is not idempotent");
     (acks.len(), head - max_ack)
 }
+
+// ── E. Seeded random mutation ────────────────────────────────────────────
+
+/// Scenario E: the shapes A–D do not reach — a few seeded-random bytes flipped
+/// ANYWHERE in the journal, rather than at a cut point, a tail, or a
+/// hand-picked frame offset. Two grids, because two different judgments are
+/// available:
+///
+/// * flips confined to the FINAL transaction leave every earlier boundary
+///   intact, so the boundary rule applies unchanged and the judgment is
+///   scenario A's — recover to EXACTLY the boundary the intact prefix
+///   supports, byte-equal to the oracle there — plus the reopen, since a
+///   recovery that truncated a tail must answer the same on its second look;
+/// * flips anywhere can tear an interior transaction, which is durable
+///   committed data and licenses the halt, so the judgment is the one that
+///   holds either way: it answers at all (no panic, no wedge), and a refusal
+///   REPEATS, since the halt paths write nothing and a refusal that repairs
+///   itself is one no operator can act on.
+///
+/// This is the in-gate stand-in for a coverage-guided fuzzer over the frame
+/// parser and the scan. The crafted shapes such a fuzzer would want seeding
+/// with — a transaction repeating a `Seq`, a marker at the `Seq` ceiling —
+/// are pinned as unit tests inside `skep-kernel`, where the frame builder is
+/// reachable and the input can be stated exactly.
+#[test]
+fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
+    let base = tempdir().expect("tempdir");
+    let fix = Fixture::build(&base.path().join("fixture"), &[]);
+    let trials: u64 = if exhaustive() { 400 } else { 40 };
+    let cases = base.path().join("cases");
+    let last_txn_lo = fix.boundaries[fix.boundaries.len() - 2].jlen;
+    let (mut recovered, mut refused) = (0u32, 0u32);
+    for trial in 0..trials {
+        let seed = 0x00F1_1900 + trial;
+        let mut rng = Lcg::new(seed);
+        let case = cases.join(format!("e-{trial}"));
+        copy_dir(&fix.dir, &case);
+        let final_txn_only = trial % 2 == 0;
+        let lo = if final_txn_only { last_txn_lo } else { 0 };
+        let mut offs: Vec<u64> = (0..1 + rng.next_range(4))
+            .map(|_| lo + rng.next_range(fix.full_len - lo))
+            .collect();
+        offs.sort_unstable();
+        offs.dedup();
+        for &off in &offs {
+            flip_byte(&seg1(&case), off);
+        }
+        let first = offs[0];
+        let ctx = format!(
+            "E trial {trial}: seed {seed:#x}, flipped {offs:?} of {} ({})",
+            fix.full_len,
+            if final_txn_only { "final txn" } else { "anywhere" }
+        );
+        if final_txn_only {
+            // Nothing below the first flip changed, so the boundary rule
+            // binds exactly as it does under a clean truncation there.
+            recovered += 1;
+            let head = judge_prefix(&fix, &case, first, trial % 8 == 0, &ctx);
+            let again = timed_open(&case, &ctx).world_dump();
+            assert_eq!(
+                again,
+                *fix.dump_for(head),
+                "FINDING ({ctx}): recovery is not idempotent"
+            );
+        } else {
+            match timed_open_result(&case, &ctx) {
+                Ok(engine) => {
+                    recovered += 1;
+                    let head = engine.kernel().current_seq();
+                    assert!(
+                        head.0 <= fix.last_seq(),
+                        "FINDING ({ctx}): recovered head {head} above the fixture's own {}",
+                        fix.last_seq()
+                    );
+                    let live = engine.world_dump();
+                    let at_head = engine.world_at(head).unwrap_or_else(|e| {
+                        panic!("FINDING ({ctx}): recovered head {head} unanswerable: {e}")
+                    });
+                    assert_eq!(
+                        live,
+                        dump(&at_head, &fix.genesis),
+                        "FINDING ({ctx}): fold ≢ checkpoint+replay"
+                    );
+                    engine
+                        .check_hints()
+                        .unwrap_or_else(|e| panic!("FINDING ({ctx}): hint divergence: {e}"));
+                    drop(engine);
+                    let again = timed_open(&case, &ctx).world_dump();
+                    assert_eq!(live, again, "FINDING ({ctx}): recovery is not idempotent");
+                }
+                Err(e) => {
+                    refused += 1;
+                    let ctx = format!("{ctx} — first open refused with {e}");
+                    if let Ok(engine) = timed_open_result(&case, &ctx) {
+                        panic!(
+                            "FINDING ({ctx}): the second open SUCCEEDED at head {} — a halt \
+                             writes nothing, so a refusal that repairs itself is one nobody \
+                             can act on",
+                            engine.kernel().current_seq()
+                        );
+                    }
+                }
+            }
+        }
+        fs::remove_dir_all(&case).expect("case cleanup");
+    }
+    println!(
+        "E: {trials} seeded mutation trials (seeds 0xF11900+trial, exhaustive={}): \
+         {recovered} recovered, {refused} refused loudly",
+        exhaustive()
+    );
+}

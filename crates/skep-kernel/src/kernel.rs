@@ -296,15 +296,23 @@ impl<W: WorldState> Kernel<W> {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
 
+        // The coordinate this session would commit at. A journal whose head
+        // leaves none is one this kernel's sequencer cannot have written, and
+        // an unaccountable durable head is the operator-intervention
+        // condition — halt, before the tail is touched (§1/§2/§7).
+        let head = scan.committed_head;
+        let next_seq = head
+            .checked_add(1)
+            .ok_or(OpenError::Corruption { at: Seq(head) })?;
+
         // Tail truncation — before any write is served (§7).
         journal::truncate_tail(dir, &scan)?;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
-        let head = scan.committed_head;
         let world = replay::fold_to(base, scan, head)
             .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
 
-        let writer = JournalWriter::open_active(dir, head + 1)?;
+        let writer = JournalWriter::open_active(dir, next_seq)?;
         Ok((
             Committed {
                 seq: Seq(head),
@@ -373,6 +381,11 @@ impl<W: WorldState> Kernel<W> {
     /// op evaluated against (A2/V1; under per-commit `Fsync` that base is
     /// durable, so a zero-step op never waits).
     ///
+    /// Staged records that cannot be journaled — a serializer that refuses,
+    /// or a record past the journal's frame size — are
+    /// [`TxnError::Unencodable`]: a no-op like [`TxnError::Durability`], and
+    /// unlike it, one that re-invoking with the same records cannot fix.
+    ///
     /// NON-REENTRANT: `f` MUST NOT call `transact` (or any kernel write path)
     /// — the applier lock is held, so a nested write DEADLOCKS. A composite
     /// composes neighbors' PURE math inside ONE closure (§3; seam contract 3).
@@ -420,11 +433,17 @@ impl<W: WorldState> Kernel<W> {
 
         // Linearization (§2): Seqs assigned under the applier lock, so the
         // order is gap-free (under Rollback) and a composite's records are
-        // Seq-contiguous.
+        // Seq-contiguous. This is the ONE site a `Seq` is minted, so it is
+        // where the order's ceiling is answered for: a sequencer with no room
+        // left for this transaction cannot commit it and cannot renumber it
+        // over a predecessor, which leaves halting as the only sound answer.
         let st = &mut *applier;
         let n = records.len() as u64;
-        let first = st.seq_hi + 1;
-        let last = st.seq_hi + n;
+        let Some(last) = st.seq_hi.checked_add(n) else {
+            self.poisoned.store(true, Ordering::Release);
+            return Err(TxnError::Poisoned);
+        };
+        let first = st.seq_hi + 1; // n ≥ 1, so this is at most `last`
         st.seq_hi = last;
         let committed = Committed {
             seq: Seq(last),
@@ -437,6 +456,13 @@ impl<W: WorldState> Kernel<W> {
         // catch_unwind so the §3 guard can repair a mid-commit unwind; it
         // fires only on unwind — the error returns below carry the journal's
         // own verdict on what its failure left behind.
+        //
+        // A transaction's serialized bytes live here twice for the length of
+        // the region — once as records, once as the frames they become — and
+        // all of it under the applier lock, so it is also the length of time
+        // every other writer waits. The journal caps a FRAME, not a
+        // transaction; how many bytes one transaction may stage is the
+        // caller's to bound.
         let commit_out: std::thread::Result<Result<u64, CommitFail>> = {
             let st_in = &mut *st;
             let root = &self.root;
@@ -445,7 +471,7 @@ impl<W: WorldState> Kernel<W> {
                 let mut rec_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
                 for r in records.iter() {
                     rec_bytes.push(bincode::serialize(r).map_err(|e| {
-                        CommitFail::Clean(io::Error::new(io::ErrorKind::InvalidData, e))
+                        CommitFail::Unencodable(io::Error::new(io::ErrorKind::InvalidData, e))
                     })?);
                 }
                 st_in.journal.commit_txn(first, rec_bytes, move || {
@@ -486,6 +512,15 @@ impl<W: WorldState> Kernel<W> {
                     st.seq_hi = base.seq.0;
                 }
                 Err(TxnError::Durability(e))
+            }
+            // Nothing ever became frames, so the journal is where this txn
+            // found it — the same no-op, burning the same Seqs, and a
+            // different answer to "retry?" (§1/§3).
+            Ok(Err(CommitFail::Unencodable(e))) => {
+                if rollback {
+                    st.seq_hi = base.seq.0;
+                }
+                Err(TxnError::Unencodable(e))
             }
             // The truncation itself could not complete durably (§1).
             Ok(Err(CommitFail::Unrepaired)) => {
@@ -596,15 +631,29 @@ impl<W: WorldState> Kernel<W> {
     /// so the bounded fold applies journaled deltas onto exactly the genesis
     /// recovery would.
     ///
+    /// COST, per call, uncached: one whole checkpoint file read and
+    /// deserialized into a `W`, [`WorldState::rebuild_derived`] run over all
+    /// of it, every journal segment above that base read, and every committed
+    /// record in them materialized before the fold begins. Nothing here is
+    /// memoized and nothing here is bounded by the size of `at` — a caller
+    /// choosing `at` chooses the base and the fold length, and peak memory is
+    /// that figure times the number of calls in flight. Admission and
+    /// concurrency are the caller's to gate; this method gates neither.
+    ///
     /// Safe concurrently with the live appender and with `checkpoint()`:
     /// takes no kernel lock and writes nothing. Every frame of a commit
     /// `≤ current_seq()` is fully durable before that head was installed
     /// (§1 durable-before-visible), so the bounded region is stable under
     /// the reader; a racing append can contribute at most a torn suffix,
     /// which classifies as an EOF run beyond the last committed marker and
-    /// is ignored here. A concurrent checkpoint's retention can remove a file
-    /// between listing and reading — that surfaces as a transient
-    /// [`HistoryError::Io`]/[`HistoryError::Reclaimed`], never a wrong world.
+    /// is ignored here. Two things a concurrent writer can still make this
+    /// call refuse with, both transient and neither a wrong world: a
+    /// checkpoint's retention removing a file between listing and reading
+    /// ([`HistoryError::Io`]/[`HistoryError::Reclaimed`]), and a commit whose
+    /// barrier fails truncating its tail while a read is mid-file, which
+    /// leaves the read holding a discontinuity that classifies as at-rest
+    /// [`HistoryError::Corruption`]. A retry re-derives from the file as it
+    /// now stands.
     pub fn world_at(&self, at: Seq) -> Result<W, HistoryError> {
         let head = self.current_seq();
         if at > head {
@@ -711,6 +760,68 @@ mod tests {
         .unwrap();
         assert_eq!(k.current_seq(), Seq(6));
         assert_eq!(k.snapshot().world().as_slice(), &[10, 50, 60]);
+    }
+
+    #[test]
+    fn two_committed_txns_at_one_seq_halt_rather_than_fold_twice() {
+        // Two transactions, each committed, each claiming `Seq(1)`. The
+        // sequencer mints a coordinate once, so this is a journal no kernel
+        // wrote — and `apply` is not idempotent, so folding both is the one
+        // outcome recovery may not have. Halt (§7).
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let r = |x: u64| bincode::serialize(&x).unwrap();
+            assert!(w.commit_txn(1, vec![r(10)], || {}).is_ok());
+            assert!(w.commit_txn(1, vec![r(20)], || {}).is_ok());
+        }
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("a repeated Seq is not something to fold twice");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(1) }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_head_at_the_seq_ceiling_refuses_to_open() {
+        // The committed head is the coordinate the next transaction is minted
+        // above. A journal whose head leaves none cannot be committed onto
+        // without renumbering over it, so opening it is refused rather than
+        // wrapped (§2/§7).
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let r = bincode::serialize(&10u64).unwrap();
+            assert!(w.commit_txn(u64::MAX, vec![r], || {}).is_ok());
+        }
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("a head with no successor coordinate is unaccountable");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(u64::MAX) }),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_sequencer_with_no_room_left_halts_instead_of_wrapping() {
+        // The mint site's own door, reached from a live kernel: with the
+        // high-water at the ceiling there is no coordinate to commit at, and
+        // the order cannot be renumbered over a committed predecessor —
+        // so the kernel halts, and its reads keep serving (§1/§2/§3).
+        let c = KernelCfg {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        k.applier.lock().seq_hi = u64::MAX;
+        let out = k.transact::<_, ()>(&[], |s| {
+            s.push(10);
+            Ok(())
+        });
+        assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
+        assert!(k.poisoned.load(Ordering::Acquire));
+        assert_eq!(k.snapshot().world().as_slice(), &[] as &[u64]);
     }
 
     #[test]

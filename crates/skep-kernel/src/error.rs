@@ -217,13 +217,26 @@ pub enum TxnError<E> {
     ///
     /// [`Poisoned`]: TxnError::Poisoned
     Durability(io::Error),
-    /// The kernel was halted by a prior UNRECOVERABLE failure (§1/§3): a
+    /// The staged records could not be turned into journal frames at all — a
+    /// record whose serializer refuses, or one whose serialized form exceeds
+    /// the journal's frame size. Nothing was appended and nothing installed,
+    /// so this is a true no-op like [`Durability`] — but the refusal is a
+    /// property of the RECORDS, so re-invoking with the same records fails
+    /// the same way, however healthy the disk. The serializer's own account
+    /// travels, since M2 never inspects `W::Record`.
+    ///
+    /// [`Durability`]: TxnError::Durability
+    Unencodable(io::Error),
+    /// The kernel was halted by an UNRECOVERABLE failure (§1/§3): a
     /// durability-failure or panic-guard truncation that itself failed to
-    /// complete durably, or an unwind after a successful barrier but before
-    /// install. Returned by the poisoning call ITSELF (in place of
-    /// `Durability`; a panic-path poisoning propagates the panic instead) and
-    /// by every later `transact`; reads (`snapshot`/`current_seq`) keep
-    /// serving the last consistent root. Do not re-invoke.
+    /// complete durably, an unwind after a successful barrier but before
+    /// install, or a `Seq` order with no room left for another transaction
+    /// (§2 — the coordinates are exhausted, and renumbering over a committed
+    /// predecessor is not an option). Returned by the poisoning call ITSELF
+    /// (in place of `Durability`; a panic-path poisoning propagates the panic
+    /// instead) and by every later `transact`; reads
+    /// (`snapshot`/`current_seq`) keep serving the last consistent root. Do
+    /// not re-invoke.
     Poisoned,
 }
 
@@ -234,6 +247,9 @@ impl<E: fmt::Display> fmt::Display for TxnError<E> {
             TxnError::Durability(e) => {
                 write!(f, "durability barrier failed before install (true no-op): {e}")
             }
+            TxnError::Unencodable(e) => {
+                write!(f, "records cannot be journaled (true no-op, not retryable): {e}")
+            }
             TxnError::Poisoned => write!(f, "kernel is poisoned; write paths are halted"),
         }
     }
@@ -242,7 +258,7 @@ impl<E: fmt::Display> fmt::Display for TxnError<E> {
 impl<E: fmt::Debug + fmt::Display> std::error::Error for TxnError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            TxnError::Durability(e) => Some(e),
+            TxnError::Durability(e) | TxnError::Unencodable(e) => Some(e),
             _ => None,
         }
     }

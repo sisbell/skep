@@ -39,8 +39,8 @@ enum TestRec {
     /// region, where the §3 guard rather than the closure phase answers.
     PanicOnSerialize(Unserializable),
     /// Stages and folds like any record and then FAILS to serialize in the
-    /// commit region — the one way a test can drive §1's barrier-failure arm
-    /// without an fs fault injector.
+    /// commit region — a record the journal cannot frame, whatever the disk
+    /// is doing.
     FailsToSerialize(RefusesSerialization),
 }
 
@@ -61,9 +61,10 @@ impl<'de> Deserialize<'de> for Unserializable {
 }
 
 /// Returns a serializer ERROR rather than panicking. `transact` serializes
-/// each staged record inside the commit region, so a refusal there raises the
-/// same non-unwind `io::Error` a failed append would (§3), which is what
-/// carries a transaction into the durability-failure arm.
+/// each staged record inside the commit region, so a refusal there is a
+/// transaction that never becomes frames — the [`TxnError::Unencodable`] arm,
+/// which shares the no-op discipline of §1's barrier failure and differs from
+/// it in exactly one thing: no retry can succeed.
 #[derive(Clone, Debug)]
 struct RefusesSerialization;
 
@@ -762,25 +763,33 @@ fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
 }
 
 #[test]
-fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
-    // §1: the barrier never completed before install, the txn's tail is
-    // durably gone, and the Seqs it drew are burned per BurnedSeqPolicy — so
-    // nothing was committed, the kernel is NOT poisoned, and the call may be
-    // re-invoked. Under the default Rollback the order stays gap-free.
+fn an_unencodable_record_is_a_no_op_that_re_invoking_cannot_fix() {
+    // A transaction that never becomes frames leaves exactly what a failed
+    // barrier leaves (§1): nothing installed, the Seqs it drew burned per
+    // BurnedSeqPolicy, no poison, and nothing on disk to recover — while
+    // saying the one thing the barrier arm must not, namely that the records
+    // themselves are the refusal, so the same call fails the same way.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     push(&k, 10);
-    let out: Result<((), Seq), TxnError<()>> = k.transact(&[], |stg| {
-        stg.push(TestRec::FailsToSerialize(RefusesSerialization));
-        Ok(())
-    });
+    let attempt = || -> Result<((), Seq), TxnError<()>> {
+        k.transact(&[], |stg| {
+            stg.push(TestRec::FailsToSerialize(RefusesSerialization));
+            Ok(())
+        })
+    };
+    let out = attempt();
     assert!(
-        matches!(out, Err(TxnError::Durability(_))),
-        "expected a durability failure, got {out:?}"
+        matches!(out, Err(TxnError::Unencodable(_))),
+        "expected an unencodable-record failure, got {out:?}"
     );
-    // Nothing installed: the install follows the barrier that never passed.
+    // Nothing installed: the install follows a barrier that was never reached.
     assert_eq!(k.current_seq(), Seq(1));
     assert_eq!(items(&k), vec![10]);
+    // Re-invoking is what the disposition would have a client do, and it
+    // lands in exactly the same place — which is why this is not `Durability`.
+    assert!(matches!(attempt(), Err(TxnError::Unencodable(_))));
+    assert_eq!(k.current_seq(), Seq(1));
     // Not poisoned, and the burned coordinate is REUSED — gap-free (§1/§3).
     assert_eq!(push(&k, 20), Seq(2));
     drop(k);
@@ -811,8 +820,8 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
         Ok(())
     });
     assert!(
-        matches!(out, Err(TxnError::Durability(_))),
-        "expected a durability failure, got {out:?}"
+        matches!(out, Err(TxnError::Unencodable(_))),
+        "expected a failed txn, got {out:?}"
     );
     assert_eq!(push(&k, 20), Seq(3), "Seq 2 was burned and must not be reused");
     drop(k);

@@ -15,7 +15,6 @@
 //! (active) segment has no trusted `lastSeq`: always scanned by recovery,
 //! never range-reclaimed (§1/§6/§7).
 
-use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::ops::Range;
@@ -58,8 +57,10 @@ pub(crate) struct LogRecord {
 /// Per-txn commit marker — the terminal frame of a transaction. In v1 a
 /// committed marker (intact, durable, `records_checksum`-valid) *is* the
 /// commit ack (§1). `records_checksum` is CRC32C over the concatenated payload
-/// bytes of the txn's record frames, in `Seq` order — distinct from the
-/// marker's own per-frame `crc`, and byte-reproducible at recovery (§1/§7).
+/// bytes of the txn's record frames, in `Seq` order — which is the order they
+/// are framed in, so recovery reproduces it by streaming the frames as it
+/// reads them. Distinct from the marker's own per-frame `crc`, and
+/// byte-reproducible at recovery (§1/§7).
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Marker {
     pub txn: Txn,
@@ -101,6 +102,13 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// fsync (§1/§3). `records` are the already-serialized `W::Record` bytes, and
 /// they are consumed into their frames: the caller has no use for them past
 /// this call, and a commit is no place to copy every record a second time.
+///
+/// The `Seq` arithmetic here stays in range because the coordinates were
+/// already minted: [`crate::Kernel::transact`] is the one mint site, and it
+/// draws the whole run `first_seq..=first_seq + (n - 1)` through a checked
+/// add before any of it reaches this function (§2). The parenthesisation is
+/// load-bearing at the ceiling: `first_seq + (n - 1)` computes no
+/// intermediate above the last coordinate the run legitimately holds.
 fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     let n = records.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -117,7 +125,7 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
         checksum = crc32c::crc32c_append(checksum, &payload);
         push_frame(&mut buf, &payload)?;
     }
-    let last_seq = first_seq + n - 1;
+    let last_seq = first_seq + (n - 1);
     let payload = bincode::serialize(&FramePayload::Marker(Marker {
         txn,
         last_seq,
@@ -269,15 +277,23 @@ pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
 }
 
 /// How a commit failed (§1). The distinction IS the caller's decision: a
-/// cleanly-failed transaction left nothing behind and may be re-invoked, while
-/// an unrepaired one may have left a durable un-acked marker that a successor
-/// would collide with on recovery.
+/// cleanly-failed transaction left nothing behind and may be re-invoked, an
+/// unencodable one left nothing behind and re-invoking cannot change that,
+/// and an unrepaired one may have left a durable un-acked marker that a
+/// successor would collide with on recovery.
 pub(crate) enum CommitFail {
     /// The active segment is durably back where this transaction found it: no
     /// frame of it survives — a CLEAN failure, a TRUE no-op (§1). Carries what
     /// failed, which the caller may surface: the transaction is safe to
     /// re-invoke.
     Clean(io::Error),
+    /// The transaction's records could not be turned into frames at all — a
+    /// record that refuses to serialize, or a payload past
+    /// [`MAX_FRAME_LEN`]. Nothing reached the file, so this is a no-op like
+    /// [`CommitFail::Clean`]; what differs is the answer to "retry?", since
+    /// the refusal is a property of the records and the same records fail the
+    /// same way forever.
+    Unencodable(io::Error),
     /// The truncation could not itself complete durably; frames of this
     /// transaction, possibly including its marker, may survive (§1/§3). The
     /// only sound response is to halt, so no error travels with it — nothing
@@ -369,7 +385,8 @@ impl JournalWriter {
     /// pre-transaction mark durably truncates back to it before returning, so
     /// [`CommitFail::Clean`] states that nothing of the transaction survives.
     /// Only a truncation that cannot itself complete durably answers
-    /// [`CommitFail::Unrepaired`].
+    /// [`CommitFail::Unrepaired`]. A transaction that never became frames at
+    /// all answers [`CommitFail::Unencodable`], before the segment is touched.
     ///
     /// `install` makes the committed effect visible, and runs HERE — after
     /// the barrier, before this returns — because the window between a
@@ -383,7 +400,7 @@ impl JournalWriter {
         records: Vec<Vec<u8>>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
-        let buf = encode_txn(first_seq, records).map_err(CommitFail::Clean)?;
+        let buf = encode_txn(first_seq, records).map_err(CommitFail::Unencodable)?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
         self.in_flight = InFlight::Appending { mark };
@@ -600,12 +617,59 @@ impl ScanOutcome {
     }
 }
 
-struct PendingRec {
-    seq: u64,
-    /// The frame payload exactly as framed — what `records_checksum` covers.
-    payload: Vec<u8>,
-    /// The serialized `W::Record` carried inside.
-    bytes: Vec<u8>,
+/// The record frames of the ONE transaction a scan currently has open,
+/// accumulated as they arrive (§1/§7).
+///
+/// A scan holds one of these at a time. That is the writer's own shape:
+/// [`encode_txn`] emits a transaction's records contiguously and closes them
+/// with its marker, so a group left open by an intervening transaction's
+/// record can never be closed by a later marker — and holding one group is
+/// what bounds a scan's own memory to a transaction rather than to the whole
+/// scanned region.
+struct PendingTxn {
+    txn: Txn,
+    /// CRC32C over the record-frame payloads in ARRIVAL order — which is `Seq`
+    /// order for anything this writer produced. Streaming it is what lets the
+    /// group carry one copy of each record instead of a second copy kept only
+    /// to checksum later.
+    checksum: u32,
+    last_seq: Option<u64>,
+    /// Cleared by a record that does not exceed its predecessor. That is a
+    /// transaction this writer cannot emit, and it is the shape that would
+    /// have a non-idempotent [`crate::WorldState::apply`] fold one coordinate
+    /// twice, so such a transaction never commits however its checksum lands.
+    ordered: bool,
+    /// `(seq, serialized W::Record bytes)`, in arrival order.
+    recs: Vec<(u64, Vec<u8>)>,
+}
+
+impl PendingTxn {
+    fn open(txn: Txn) -> PendingTxn {
+        PendingTxn {
+            txn,
+            checksum: 0,
+            last_seq: None,
+            ordered: true,
+            recs: Vec::new(),
+        }
+    }
+
+    /// Take one record frame of this transaction: `payload` is the frame
+    /// payload exactly as framed, which is what `records_checksum` covers.
+    fn push(&mut self, r: LogRecord, payload: &[u8]) {
+        if self.last_seq.is_some_and(|prev| r.seq <= prev) {
+            self.ordered = false;
+        }
+        self.last_seq = Some(r.seq);
+        self.checksum = crc32c::crc32c_append(self.checksum, payload);
+        self.recs.push((r.seq, r.bytes));
+    }
+
+    /// Whether `m` commits this group: intact + durable (it is on the disk we
+    /// read) + `records_checksum`-valid over a `Seq`-ascending run (§1).
+    fn commits(&self, m: &Marker) -> bool {
+        self.ordered && self.checksum == m.records_checksum
+    }
 }
 
 /// Pass 1 (§7): scan in file order (== `Seq` order — in-order append plus the
@@ -615,11 +679,19 @@ struct PendingRec {
 /// frames by `txn` — NOT file position — to validate each marker's
 /// `records_checksum`, and deriving `W`.
 ///
+/// A transaction commits only if its records arrive `Seq`-ascending as well
+/// as checksum-valid ([`PendingTxn`]), so no journal can present one
+/// coordinate twice inside a transaction and have it folded twice.
+///
 /// Closed segments whose inferred `lastSeq` (successor's `firstSeq` − 1, a
 /// conservative upper bound under TolerateGap burns) is `≤ s_load` are
 /// skipped without opening them; the active (final) segment is always scanned
 /// (§1/§7). A corrupt run persists across a segment boundary: the journal is
 /// one logical `Seq`-ordered stream.
+///
+/// Memory: one segment's bytes, one transaction's records, and the committed
+/// records of the whole scanned region — the last of which is the term that
+/// grows with the journal, and is what a caller bounds by checkpointing.
 pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome> {
     let mut out = ScanOutcome {
         s_load,
@@ -631,7 +703,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     };
     let mut cut: Option<(usize, u64)> = None;
     let mut first_scanned: Option<usize> = None;
-    let mut pending: HashMap<Txn, Vec<PendingRec>> = HashMap::new();
+    let mut pending: Option<PendingTxn> = None;
     let mut run_open = false;
     for (i, seg) in segs.iter().enumerate() {
         if inferred_last_seq(segs, i).is_some_and(|last| last <= s_load) {
@@ -654,35 +726,33 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                                 });
                                 run_open = false;
                             }
-                            pending.entry(r.txn).or_default().push(PendingRec {
-                                seq: r.seq,
-                                payload: buf[payload].to_vec(),
-                                bytes: r.bytes,
-                            });
+                            let mut group = pending
+                                .take()
+                                .filter(|g| g.txn == r.txn)
+                                .unwrap_or_else(|| PendingTxn::open(r.txn));
+                            group.push(r, &buf[payload]);
+                            pending = Some(group);
                             pos = end;
                         }
                         Ok(FramePayload::Marker(m)) => {
                             if run_open {
                                 out.runs.push(RunEnd::Landed {
                                     inferred_max: m.last_seq,
-                                    at: m.last_seq + 1,
+                                    // A marker carries no `Seq` of its own, so
+                                    // the coordinate it contributes is one past
+                                    // its own. At the ceiling there is no such
+                                    // coordinate, and the run is reported at the
+                                    // ceiling itself.
+                                    at: m.last_seq.saturating_add(1),
                                 });
                                 run_open = false;
                             }
-                            if let Some(mut group) = pending.remove(&m.txn) {
-                                group.sort_by_key(|p| p.seq);
-                                let mut checksum = 0u32;
-                                for p in &group {
-                                    checksum = crc32c::crc32c_append(checksum, &p.payload);
-                                }
-                                if checksum == m.records_checksum {
-                                    // Committed: intact + durable (it is on the
-                                    // disk we read) + records_checksum-valid (§1).
+                            if let Some(group) = pending.take_if(|g| g.txn == m.txn) {
+                                if group.commits(&m) {
                                     out.committed_head = out.committed_head.max(m.last_seq);
                                     cut = Some((i, end as u64));
                                     out.committed_boundaries.push(m.last_seq);
-                                    out.committed_records
-                                        .extend(group.into_iter().map(|p| (p.seq, p.bytes)));
+                                    out.committed_records.extend(group.recs);
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -823,6 +893,85 @@ mod tests {
         let mut badlen = buf;
         badlen[5] ^= 0xFF;
         assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad));
+    }
+
+    #[test]
+    fn push_frame_refuses_a_payload_past_the_frame_cap() {
+        // The writer's half of the cap the reader relies on: a claimed `len`
+        // above MAX_FRAME_LEN is corrupt precisely because nothing here can
+        // write one (§1).
+        let mut buf = Vec::new();
+        let over = vec![0u8; MAX_FRAME_LEN as usize + 1];
+        let e = push_frame(&mut buf, &over).expect_err("an oversize payload is refused");
+        assert_eq!(e.kind(), io::ErrorKind::InvalidData);
+        assert!(buf.is_empty(), "a refused frame appends nothing");
+        // And the cap itself is writable, so the refusal is the boundary and
+        // not a fence one short of it.
+        push_frame(&mut buf, &over[..MAX_FRAME_LEN as usize]).unwrap();
+        assert!(matches!(parse_frame(&buf, 0), Parsed::Intact { .. }));
+    }
+
+    #[test]
+    fn a_txn_repeating_a_seq_never_commits() {
+        // Two record frames at ONE `Seq`, under a marker whose checksum covers
+        // both: a transaction this writer cannot emit, and the shape that
+        // would have a non-idempotent fold apply one coordinate twice. The
+        // scan refuses it outright, so nothing downstream has to notice.
+        let mut buf = Vec::new();
+        let mut checksum = 0u32;
+        for bytes in [vec![1u8], vec![2u8]] {
+            let payload = bincode::serialize(&FramePayload::Record(LogRecord {
+                seq: 2,
+                txn: Txn(2),
+                bytes,
+            }))
+            .unwrap();
+            checksum = crc32c::crc32c_append(checksum, &payload);
+            push_frame(&mut buf, &payload).unwrap();
+        }
+        let payload = bincode::serialize(&FramePayload::Marker(Marker {
+            txn: Txn(2),
+            last_seq: 2,
+            records_checksum: checksum,
+        }))
+        .unwrap();
+        push_frame(&mut buf, &payload).unwrap();
+
+        let dir = tempdir().unwrap();
+        fs::write(segment_path(dir.path(), 2), &buf).unwrap();
+        let segs = list_segments(dir.path()).unwrap();
+        let out = scan(&segs, 1).unwrap();
+        assert_eq!(out.committed_head, 1, "the repeat must not commit");
+        assert!(out.committed_records.is_empty());
+        assert!(out.committed_boundaries.is_empty());
+    }
+
+    #[test]
+    fn a_marker_at_the_seq_ceiling_classifies_without_wrapping() {
+        // A marker contributes the coordinate one past its own `last_seq`. At
+        // the ceiling there is no such coordinate, and the run is reported at
+        // the ceiling — never wrapped to 0, which would report a run above the
+        // base as one below it (§7).
+        let mut buf = vec![0xABu8; 8]; // no magic: a corrupt run opens here
+        let payload = bincode::serialize(&FramePayload::Marker(Marker {
+            txn: Txn(u64::MAX),
+            last_seq: u64::MAX,
+            records_checksum: 0,
+        }))
+        .unwrap();
+        push_frame(&mut buf, &payload).unwrap();
+
+        let dir = tempdir().unwrap();
+        fs::write(segment_path(dir.path(), 1), &buf).unwrap();
+        let segs = list_segments(dir.path()).unwrap();
+        let out = scan(&segs, 0).unwrap();
+        assert_eq!(
+            out.runs,
+            vec![RunEnd::Landed {
+                inferred_max: u64::MAX,
+                at: u64::MAX
+            }]
+        );
     }
 
     #[test]

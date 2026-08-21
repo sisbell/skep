@@ -78,9 +78,13 @@ pub(crate) fn select_base<W: WorldState>(
 /// contiguity required, since a burned-`Seq` gap folds harmlessly (§6/§7).
 ///
 /// `Err` carries the `Seq` of a committed, CRC-intact record that fails to
-/// decode as `W::Record`: corrupt committed data the derived state needs —
-/// halt, never drop (§7). That `Seq` is the record's own, readable one,
-/// unlike a corrupt run's (see [`ScanOutcome::fatal_run`]).
+/// decode as `W::Record` — corrupt committed data the derived state needs —
+/// or one the committed set presents TWICE. That `Seq` is the record's own,
+/// readable one, unlike a corrupt run's (see [`ScanOutcome::fatal_run`]).
+/// Halt, never drop, and never twice (§7): the sequencer mints each `Seq`
+/// once, so a repeat is a journal this kernel did not write, and folding a
+/// coordinate twice through a fold that need not be idempotent is exactly
+/// what recovery may not do.
 pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
     scan: ScanOutcome,
@@ -89,10 +93,15 @@ pub(crate) fn fold_to<W: WorldState>(
     let mut recs = scan.committed_records;
     recs.sort_by_key(|(seq, _)| *seq);
     let mut world = base.world;
+    let mut prev: Option<u64> = None;
     for (seq, bytes) in recs {
         if seq <= base.s_load || seq > upto {
             continue;
         }
+        if prev == Some(seq) {
+            return Err(seq);
+        }
+        prev = Some(seq);
         let rec: W::Record = bincode::deserialize(&bytes).map_err(|_| seq)?;
         world = world.apply(&rec);
     }

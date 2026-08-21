@@ -1004,11 +1004,30 @@ mod tests {
                 .commit_txn(u64::MAX, vec![record], || {})
                 .expect("fixture commit");
         }
+        // A torn tail past the last committed marker, so there IS something a
+        // truncation would take — without it the cut lands at end-of-file and
+        // the assertion below could not tell a halt from a truncation.
+        let seg = journal::segment_path(dir.path(), 1);
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&seg).unwrap();
+            f.write_all(&[0xAB, 0xCD, 0xEF]).unwrap();
+        }
+        let before = fs::read(&seg).unwrap();
+
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a head with no successor coordinate is unaccountable");
         assert!(
             matches!(err, OpenError::Corruption { at: Seq(u64::MAX) }),
             "got {err:?}"
+        );
+        // A halt cuts nothing: the exhausted order is judged before the tail
+        // truncation, so the store an operator images after a `Corruption` is
+        // the store that was there.
+        assert_eq!(
+            fs::read(&seg).unwrap(),
+            before,
+            "a halted open truncated the journal"
         );
     }
 
@@ -1036,7 +1055,7 @@ mod tests {
     #[test]
     fn retain_checkpoints_zero_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = KernelConfig {
+        let bad_cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 0,
@@ -1044,7 +1063,9 @@ mod tests {
             },
             checkpoint: CheckpointPolicy::Manual,
         };
-        let err = Kernel::<Vec<u64>>::open(cfg, Vec::new()).err().unwrap();
+        let err = Kernel::<Vec<u64>>::open(bad_cfg.clone(), Vec::new())
+            .err()
+            .unwrap();
         // A configuration this kernel does not offer, not an environmental
         // failure: it says so on its own channel, so a caller backing off and
         // retrying `Io` does not retry a caller's bug forever.
@@ -1052,6 +1073,16 @@ mod tests {
             matches!(err, OpenError::InvalidConfig("retain_checkpoints must be >= 1")),
             "got {err:?}"
         );
+
+        // …and it precedes the journal lock. With a kernel already holding this
+        // journal, a validation done later would answer `Io` — the acquisition
+        // failure — and a caller backing off on `Io` would retry a config bug
+        // forever, looking for a second process that is the wrong culprit.
+        let live = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect("the first open holds the journal lock");
+        let err = Kernel::<Vec<u64>>::open(bad_cfg, Vec::new()).err().unwrap();
+        assert!(matches!(err, OpenError::InvalidConfig(_)), "got {err:?}");
+        drop(live);
     }
 
     #[test]

@@ -687,10 +687,24 @@ fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
     // T2's marker, so at = last_seq + 1 = 3 and inferred max = 2 ∈ (0, 3] —
     // durable committed data the recovered state needs: halt, never drop (§7).
     flip_byte(&seg, spans[2].0 + 12 + 1);
+    // A torn tail past the last committed marker, so there IS something a
+    // truncation would take — without it the cut lands at end-of-file and no
+    // assertion could tell a halt from a truncation.
+    append_bytes(&seg, &[0xAB, 0xCD, 0xEF]);
+    let before = fs::read(&seg).unwrap();
+
     let err = Kernel::open(cfg_fsync(dir.path()), genesis()).err().unwrap();
     assert!(
         matches!(err, OpenError::Corruption { at: Seq(3) }),
         "got {err:?}"
+    );
+    // A halt cuts nothing: the classification precedes the tail truncation, so
+    // the store an operator images after a `Corruption` is the store that was
+    // there (§7 — destroying evidence ahead of intervention would be wrong).
+    assert_eq!(
+        fs::read(&seg).unwrap(),
+        before,
+        "a halted open truncated the journal"
     );
 }
 
@@ -825,6 +839,30 @@ fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
 }
 
 #[test]
+fn world_at_halts_on_at_rest_damage_before_judging_the_boundary() {
+    // §7 refusal precedence: a corrupt run makes the boundary SET itself
+    // underivable — the damage can swallow a marker — so `Corruption` speaks
+    // before `NotABoundary`. Here Seq(2) IS a boundary `transact` returned and
+    // the damage merely hides it; judging membership first would tell a caller
+    // that their own committed coordinate was never a boundary at all.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(push(&k, 10), Seq(1));
+    assert_eq!(push(&k, 20), Seq(2)); // a real boundary, about to be hidden
+    assert_eq!(push(&k, 30), Seq(3));
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    assert_eq!(spans.len(), 6);
+    // Rot T2's MARKER: its txn stops being committed, so Seq(2) drops out of
+    // the boundary set, and the resync lands on T3's record (inferred max 2).
+    flip_byte(&seg, spans[3].0 + 12 + 1);
+    match k.world_at(Seq(2)) {
+        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(3)),
+        other => panic!("expected Corruption before the boundary judgment, got {other:?}"),
+    }
+}
+
+#[test]
 fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
     // §3 unwind guard, pre-barrier arm: an unwind out of the commit region
     // with nothing durably appended is repaired to a TRUE no-op — staging
@@ -890,6 +928,55 @@ fn an_unencodable_record_is_a_no_op_that_re_invoking_cannot_fix() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
+}
+
+#[test]
+fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
+    // §1/§3: an `io::Error` from the append path BEFORE the barrier is a TRUE
+    // no-op — nothing installed, no durable marker, the Seqs burned per
+    // `BurnedSeqPolicy` — and, unlike `Unencodable`, one the caller may safely
+    // re-invoke: the refusal was the environment's, not the records'.
+    // Injected at the one point in that path a test can reach deterministically
+    // and without root-dependent permissions: rotation opens the next segment
+    // BY NAME, so a directory squatting on that name fails the open (EISDIR).
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    for _ in 0..4 {
+        push_blob(&k); // past the 1 MiB threshold: txn 5 is the one that rotates
+    }
+    assert_eq!(k.current_seq(), Seq(4));
+    fs::create_dir(seg_file(dir.path(), 5)).unwrap();
+
+    let attempt = || -> Result<((), Seq), TxnError<()>> {
+        k.transact(&[], |stg| {
+            stg.push(TestRec::Blob(vec![7u8; BLOB]));
+            Ok(())
+        })
+    };
+    let out = attempt();
+    assert!(
+        matches!(out, Err(TxnError::Durability(_))),
+        "expected a pre-barrier append failure, got {out:?}"
+    );
+    // Nothing installed: the install follows a barrier that was never reached.
+    assert_eq!(k.current_seq(), Seq(4));
+    assert_eq!(items(&k).len(), 4);
+
+    // Re-invoking is what the disposition has a caller do, and with the
+    // environment repaired it SUCCEEDS — the one thing separating this from
+    // `Unencodable`, which fails the same way forever.
+    fs::remove_dir(seg_file(dir.path(), 5)).unwrap();
+    let (_, seq) = attempt().expect("a true no-op is safe to re-invoke");
+    // The burned coordinate was REUSED: the order stayed gap-free (§1).
+    assert_eq!(seq, Seq(5));
+    // …and the retry re-entered rotation, as the writer's own contract says.
+    assert!(seg_file(dir.path(), 5).is_file());
+    assert_eq!(items(&k).len(), 5);
+    drop(k);
+    // Nothing of the failed attempt is on disk to recover.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k).len(), 5);
+    assert_eq!(k.current_seq(), Seq(5));
 }
 
 #[test]
@@ -1190,6 +1277,34 @@ fn every_n_trigger_fires_on_commit_and_manual_calls_do_not_reset_it() {
 }
 
 #[test]
+fn every_n_restarts_its_window_at_the_crossing() {
+    // §6: a crossing resets the counters, so the next window starts at that
+    // commit — which is what makes `EveryN(n)` "every n" rather than "every
+    // commit from the nth on", a degeneration nothing else would report.
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 4);
+    cfg.checkpoint = CheckpointPolicy::EveryN(3);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for x in 1..=6u64 {
+        push(&k, x);
+    }
+    assert!(
+        ckpt_file(dir.path(), 3).exists(),
+        "the first window did not fire"
+    );
+    assert!(
+        !ckpt_file(dir.path(), 4).exists(),
+        "the window did not restart"
+    );
+    assert!(!ckpt_file(dir.path(), 5).exists());
+    assert!(
+        ckpt_file(dir.path(), 6).exists(),
+        "the second window did not fire"
+    );
+    assert_eq!(checkpoint_count(dir.path()), 2);
+}
+
+#[test]
 fn manual_policy_never_auto_checkpoints() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // Manual
@@ -1283,6 +1398,21 @@ fn interval_does_not_fire_before_its_window_elapses() {
 }
 
 // ---- lifecycle & modes ----
+
+#[test]
+fn open_creates_the_journal_directory_it_was_pointed_at() {
+    // The `journal_path` caller contract: `open()` creates it if absent, which
+    // is what lets a first run of a fresh install start at all.
+    let tmp = tempdir().unwrap();
+    let dir = tmp.path().join("not-yet");
+    assert!(!dir.exists());
+    let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
+    assert_eq!(push(&k, 1), Seq(1));
+    drop(k);
+    // …and what it created is a journal a reopen recovers from.
+    let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
+    assert_eq!(items(&k), vec![1]);
+}
 
 #[test]
 fn second_open_of_a_live_journal_fails() {

@@ -65,6 +65,15 @@ fn span_set_round_trips_with_component_spans_validated() {
     let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     let json = serde_json::to_string(&ss).unwrap();
     assert_eq!(serde_json::from_str::<SpanSet>(&json).unwrap(), ss);
+    // The shape the refusal below is written against: a sequence of
+    // (start, width) pairs, each minted through `Span::new`. Without this, the
+    // `is_err()` beneath would hold just as well if the set's wire shape were
+    // something else entirely, and would say nothing about T12.
+    let good = serde_json::to_string(&vec![(t(&[1]), t(&[2]))]).unwrap();
+    assert_eq!(
+        serde_json::from_str::<SpanSet>(&good).unwrap(),
+        SpanSet::singleton(sp(&[1], &[3])) // start [1] ⊕ width [2] = reach [3]
+    );
     // Component spans deserialize through Span's shadows: one bad span poisons
     // the set.
     let bad = serde_json::to_string(&vec![(t(&[1]), t(&[0, 1]))]).unwrap(); // ActionPointTooDeep
@@ -72,9 +81,22 @@ fn span_set_round_trips_with_component_spans_validated() {
 }
 
 #[test]
-fn level_round_trips() {
+fn level_and_class_round_trip() {
     for l in [Level::Node, Level::Account, Level::Document, Level::Element] {
         let json = serde_json::to_string(&l).unwrap();
         assert_eq!(serde_json::from_str::<Level>(&json).unwrap(), l);
+    }
+    // The classifier's five answers, `Invalid` included: neither carries a
+    // standing invariant, so both sides are derived and the round trip is the
+    // whole claim.
+    for c in [
+        Class::Node,
+        Class::Account,
+        Class::Document,
+        Class::Element,
+        Class::Invalid,
+    ] {
+        let json = serde_json::to_string(&c).unwrap();
+        assert_eq!(serde_json::from_str::<Class>(&json).unwrap(), c);
     }
 }

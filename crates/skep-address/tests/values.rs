@@ -341,6 +341,14 @@ fn t4_error_renders_every_violated_clause() {
         e.to_string(),
         "tumbler is not T4-valid; violated clause(s): LeadingZero, TrailingZero"
     );
+    // The fourth clause, which co-occurs with none of the others: four
+    // separators, with no leading, trailing or adjacent zero.
+    let e = validate(t(&[1, 0, 2, 0, 3, 0, 4, 0, 5])).unwrap_err();
+    assert_eq!(e.clauses(), &[T4Clause::OverDepth][..]);
+    assert_eq!(
+        e.to_string(),
+        "tumbler is not T4-valid; violated clause(s): OverDepth"
+    );
 }
 
 #[test]
@@ -365,6 +373,37 @@ fn address_keys_an_ordered_collection_directly() {
         s.into_iter().collect::<Vec<_>>(),
         vec![addr(&[1]), addr(&[1, 0, 2]), addr(&[2])]
     );
+}
+
+/// T3 — identity is the component sequence, so a tumbler keys a hash map: one
+/// sequence built two ways is one key, and distinct sequences stay distinct.
+/// Three crates key maps by `Tumbler` (M4's content store, M2's memo table,
+/// M6's origin dedup), and only M1 can supply the `Hash` that allows it.
+/// `Address` hashes the tumbler alone through a hand-written impl, so its
+/// agreement with `Eq` is asserted beside it.
+#[test]
+fn tumblers_and_addresses_key_a_hash_map() {
+    // One value, two construction paths: the public constructor, and the
+    // internal one every arithmetic result comes out of.
+    let literal = t(&[1, 0, 2, 0, 6]);
+    let computed = inc(&t(&[1, 0, 2, 0, 5]), 0);
+    assert_eq!(literal, computed);
+    let mut by_tumbler: HashMap<Tumbler, &str> = HashMap::new();
+    by_tumbler.insert(literal, "here");
+    assert_eq!(by_tumbler.get(&computed), Some(&"here")); // Eq ⇒ equal hashes
+
+    // No alias collapses (T3): three distinct sequences are three keys, and
+    // only the repeat folds.
+    let distinct: HashSet<Tumbler> = [t(&[1]), t(&[1, 0]), t(&[0, 1]), t(&[1, 0])]
+        .into_iter()
+        .collect();
+    assert_eq!(distinct.len(), 3);
+
+    // An Address hashes as its tumbler, so the same two paths agree for it.
+    let mut by_address: HashMap<Address, &str> = HashMap::new();
+    by_address.insert(addr(&[1, 0, 2, 0, 5]), "doc");
+    let minted = checked_inc(&addr(&[1, 0, 2, 0, 4]), 0).unwrap();
+    assert_eq!(by_address.get(&minted), Some(&"doc"));
 }
 
 // ---- T4b/T7: field projection -----------------------------------------------

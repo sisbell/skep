@@ -276,6 +276,50 @@ fn merge_joins_overlapping_and_adjacent_spans_and_refuses_separated() {
     assert_eq!(merge(&sp(&[1], &[3]), &sp(&[7], &[9])).unwrap(), None); // separated
 }
 
+/// S3 — where `merge` constructs at all, `(min start, max reach)` denotes
+/// exactly `⟦a⟧ ∪ ⟦b⟧`, and which operand is written first cannot change the
+/// answer. Every SC case appears in the battery, in both orders — containment
+/// and b-starts-first included, which is where a construction that fixed on
+/// one operand's endpoint would show. Every non-separated pair here is
+/// overlapping or adjacent, hence contiguous, so the union claim is exact
+/// throughout; the `Ok(None)` case belongs to
+/// [`inline_boundary_tests_agree_with_the_classifier`].
+#[test]
+fn merge_yields_the_union_in_every_orientation() {
+    let battery = [
+        sp(&[1], &[9]),   // the reference interval
+        sp(&[3], &[5]),   // strictly inside it
+        sp(&[5], &[12]),  // overlapping past its reach
+        sp(&[1], &[5]),   // sharing its start
+        sp(&[5], &[9]),   // sharing its reach
+        sp(&[9], &[12]),  // adjacent to it
+        sp(&[20], &[30]), // separated from it
+    ];
+    let probes: Vec<Tumbler> = [1u32, 3, 4, 5, 8, 9, 11, 12, 20, 25, 30]
+        .iter()
+        .map(|&x| t(&[x]))
+        .collect();
+    for a in &battery {
+        for b in &battery {
+            let joined = merge(a, b).unwrap();
+            assert_eq!(
+                joined,
+                merge(b, a).unwrap(),
+                "merge is not symmetric on ({a:?}, {b:?})"
+            );
+            if let Some(m) = &joined {
+                for probe in &probes {
+                    assert_eq!(
+                        m.contains(probe),
+                        a.contains(probe) || b.contains(probe),
+                        "merge({a:?}, {b:?}) disagrees at {probe:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn split_cuts_at_an_interior_point_and_checks_the_level_clause_first() {
     let s = sp(&[1], &[9]);

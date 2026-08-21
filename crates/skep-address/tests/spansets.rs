@@ -194,6 +194,21 @@ fn level_class_is_the_s8_gate_answered_directly() {
     let nu = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
     assert_eq!(nu.level_class(), Err(LevelMismatch));
     assert_eq!(nu.normalize(), Err(LevelMismatch));
+    // The per-span clause at a position past the first. The partner is
+    // level-uniform and shares its `#start`, so nothing but the uniformity
+    // clause can refuse this set, and the clause is therefore asked of every
+    // component span rather than only of the one the shared length is read
+    // from. A set that got past this gate would reach `normalize`'s sweep,
+    // where a component span whose reach is a different length fails WF inside
+    // an `expect`.
+    let nu_second = spanset(&[
+        sp(&[1, 0, 2], &[1, 0, 5]),
+        Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
+    ]);
+    assert_eq!(nu_second.level_class(), Err(LevelMismatch));
+    assert_eq!(nu_second.normalize(), Err(LevelMismatch));
+    assert!(!nu_second.is_normalized());
+    assert_eq!(canonical_key(&nu_second), Err(LevelMismatch));
 }
 
 /// `by_level_class` decomposes a set S8 refuses whole into the pieces S8

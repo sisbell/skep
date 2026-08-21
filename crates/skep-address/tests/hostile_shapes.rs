@@ -60,11 +60,14 @@ fn a_deeply_separated_tumbler_classifies_without_faulting() {
 }
 
 /// The two set-level sweeps interleave two canonical forms, and their cursor
-/// logic is what keeps each pass linear: `difference_sets`' outer cursor
-/// advances for good across a-spans, so each b-span is revisited at most once.
-/// Nothing else runs them at a size where a quadratic sweep would show.
+/// logic decides which pieces are emitted: `difference_sets`' outer cursor
+/// advances for good across a-spans, so a cursor that ran past a still-relevant
+/// b-span changes the answer rather than merely the cost. Two thousand cursor
+/// advances of sustained alternation is what this size buys — nothing else runs
+/// the sweeps long enough for an off-by-one that only manifests after many
+/// crossings to surface.
 #[test]
-fn the_set_sweeps_stay_linear_and_bounded_at_a_thousand_spans() {
+fn the_set_sweeps_interleave_a_thousand_spans_apiece_without_losing_pieces() {
     let a: SpanSet = (0..1000u32).map(|i| sp(&[4 * i + 1], &[4 * i + 3])).collect();
     let b: SpanSet = (0..1000u32).map(|i| sp(&[4 * i + 2], &[4 * i + 4])).collect();
     assert!(a.is_normalized() && b.is_normalized());

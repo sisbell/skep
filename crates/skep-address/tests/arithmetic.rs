@@ -224,6 +224,31 @@ fn elem_addr_guards_each_condition() {
     assert_eq!(elem_addr(ord0), Err(ElemError::OrdinalZero));
 }
 
+/// The guards run in `ElemError` declaration order, so a position violating
+/// several is reported by the first — the gate-first discipline `WfError` and
+/// `SplitError` state and this suite pins for both.
+#[test]
+fn elem_addr_reports_the_earliest_violated_guard() {
+    // All three violated: the doc clause speaks.
+    assert_eq!(
+        elem_addr(ElemPos {
+            doc: addr(&[1, 0, 2]),
+            subspace: n(0),
+            ordinal: n(0),
+        }),
+        Err(ElemError::DocNotDocument)
+    );
+    // Doc admitted, the last two violated: the subspace clause speaks.
+    assert_eq!(
+        elem_addr(ElemPos {
+            doc: addr(&[1, 0, 2, 0, 5]),
+            subspace: n(0),
+            ordinal: n(0),
+        }),
+        Err(ElemError::SubspaceZero)
+    );
+}
+
 /// A position is its content, so the shift is asserted as a whole position —
 /// which pins the document and the subspace as surviving the advance, not
 /// just the ordinal that moved.

@@ -348,6 +348,73 @@ fn history_answers_survive_restart() {
     }
 }
 
+/// The reconstruction permit: at most 2 `world_at` rebuilds run at once;
+/// a surplus caller is refused `503 history_busy` instead of queueing.
+/// A real reconstruction finishes in milliseconds, so true concurrency
+/// cannot be raced from the wire — the permits are pinned through the
+/// daemon's doc(hidden) test hook (holding one is exactly what an
+/// in-flight `world_at` holds), and the counter accounting is asserted
+/// directly alongside the wire's busy answer.
+#[test]
+fn op_at_reconstruction_is_permit_bounded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let h = seed(port);
+
+    // Sanity: the historical read serves before any permit is pinned.
+    op_at_ok(port, h.at_i1, &retrieve(&h.doc1, 5));
+
+    // The accounting, directly: 2 acquires succeed, the 3rd fails, a drop
+    // reopens exactly one slot.
+    let daemon = sd.daemon();
+    let p1 = daemon.try_hold_reconstruction_permit().expect("permit 1 of 2");
+    let p2 = daemon.try_hold_reconstruction_permit().expect("permit 2 of 2");
+    assert!(
+        daemon.try_hold_reconstruction_permit().is_none(),
+        "the reconstruction permit is exactly 2"
+    );
+
+    // N+1 concurrent /op-at calls while both slots are held: every one is
+    // answered 503 history_busy at once — none queues behind replay.
+    let answers: Vec<(u16, Value)> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..3)
+            .map(|_| s.spawn(|| op_at(port, h.at_i1, &retrieve(&h.doc1, 5))))
+            .collect();
+        handles.into_iter().map(|jh| jh.join().expect("op-at caller thread")).collect()
+    });
+    for (st, v) in &answers {
+        assert_eq!(*st, 503, "saturated reconstruction must answer busy: {v}");
+        assert_eq!(v["error"].as_str(), Some("history_busy"), "{v}");
+    }
+
+    // Only position-addressed reconstruction is gated: live reads (and the
+    // plain head dump) serve while history is saturated.
+    let v = op(port, None, &retrieve(&h.doc1, 3));
+    expect_resp(&v, "delivery");
+    #[cfg(feature = "observe")]
+    {
+        let (st, _body) = get(port, "/dump");
+        assert_eq!(st, 200, "the head dump is not permit-gated");
+        let (st, body) = get(port, &format!("/dump?at={}", h.at_i1));
+        assert_eq!(st, 503, "/dump?at rides the same permit");
+        assert_eq!(json(&body)["error"].as_str(), Some("history_busy"));
+    }
+
+    // Releasing one slot restores service through the wire, and the wire
+    // call returns its permit: the slot is reusable afterwards.
+    drop(p1);
+    let v = op_at_ok(port, h.at_i1, &retrieve(&h.doc1, 5));
+    assert_eq!(v["as_of"].as_u64(), Some(h.at_i1));
+    let p3 = daemon.try_hold_reconstruction_permit().expect("the wire call released its permit");
+    assert!(daemon.try_hold_reconstruction_permit().is_none());
+    drop(p3);
+    drop(p2);
+    op_at_ok(port, h.at_i1, &retrieve(&h.doc1, 5));
+
+    sd.shutdown();
+}
+
 #[cfg(feature = "observe")]
 #[test]
 fn dump_at_is_deterministic_and_head_matches_live() {

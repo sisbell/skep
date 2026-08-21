@@ -80,6 +80,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "no_such_endpoint",
     "method_not_allowed",
     "history_reclaimed",
+    "history_busy",
     "internal_panic",
     "history_io",
     "history_corrupt",

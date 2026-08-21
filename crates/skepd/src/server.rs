@@ -89,7 +89,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -142,6 +142,13 @@ const HEAD_MAX: usize = 64 * 1024;
 /// REVISIT at the media round: blob upload will raise this for its route
 /// only (a route-scoped cap, not a bigger global one).
 const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
+
+/// Concurrent historical reconstructions (`Engine::world_at` behind
+/// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
+/// deserialize plus journal fold, per call, uncached — two keeps history
+/// panes serviceable without letting core-bound replay occupy the whole
+/// worker pool. Surplus callers get `503 history_busy`, never a queue.
+const OPAT_MAX_CONCURRENT: usize = 2;
 
 /// `/changes` page size when `limit` is absent.
 const CHANGES_LIMIT_DEFAULT: usize = 256;
@@ -275,6 +282,10 @@ pub struct Daemon {
     /// tail — either way the reopen walk re-covers the gap as bare
     /// entries. Reads never take this lock.
     write_serial: Mutex<()>,
+    /// Bounds concurrent `world_at` reconstructions ([`OPAT_MAX_CONCURRENT`]);
+    /// `/op-at` needs no session and reconstruction is per-call uncached, so
+    /// without this any local caller could pin every worker on replay.
+    reconstruct_permits: ReconstructPermits,
 }
 
 impl Daemon {
@@ -315,6 +326,7 @@ impl Daemon {
             feed,
             sidecar,
             write_serial: Mutex::new(()),
+            reconstruct_permits: ReconstructPermits::new(OPAT_MAX_CONCURRENT),
         })
     }
 
@@ -484,6 +496,29 @@ impl Daemon {
         self.op.execute(sid, req)
     }
 
+    /// `Engine::world_at` under a reconstruction permit
+    /// ([`OPAT_MAX_CONCURRENT`]). The permit spans the engine call alone,
+    /// never the surrounding request, and exhaustion answers `Err` with the
+    /// wire's `503 history_busy` — no queueing: a worker parked behind a
+    /// core-bound replay is a worker lost to live traffic.
+    fn world_at_permitted(&self, at: Seq) -> Result<World, Reply> {
+        let Some(_permit) = self.reconstruct_permits.try_acquire() else {
+            return Err(busy_reply());
+        };
+        self.engine.world_at(at).map_err(history_error_reply)
+    }
+
+    /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
+    /// stable API): hold one reconstruction permit exactly as an in-flight
+    /// `world_at` does, or `None` when all [`OPAT_MAX_CONCURRENT`] are
+    /// taken. Real reconstructions finish in milliseconds, so the
+    /// integration tests pin the counter through this instead of racing
+    /// the engine.
+    #[doc(hidden)]
+    pub fn try_hold_reconstruction_permit(&self) -> Option<impl Drop + '_> {
+        self.reconstruct_permits.try_acquire()
+    }
+
     /// `POST /op-at` — answer one READ frame as of a committed position:
     /// envelope `{"at": <position>, "frame": {<op>}}`. The frame goes through
     /// the same codec as `/op`; the answer is the same response document with
@@ -513,9 +548,9 @@ impl Daemon {
             m.insert("error".into(), Value::String("write_at_history".into()));
             return Reply::json(400, Value::Object(m));
         }
-        let world = match self.engine.world_at(at) {
+        let world = match self.world_at_permitted(at) {
             Ok(w) => w,
-            Err(e) => return history_error_reply(e),
+            Err(reply) => return reply,
         };
         let mut resp = execute_read_on(world, req);
         stamp_as_of(&mut resp, at);
@@ -613,9 +648,9 @@ impl Daemon {
         };
         let dump = match at {
             None => self.engine.world_dump(),
-            Some(at) => match self.engine.world_at(at) {
+            Some(at) => match self.world_at_permitted(at) {
                 Ok(w) => skep_engine::observe::dump(&w, self.engine.genesis_config()),
-                Err(e) => return history_error_reply(e),
+                Err(reply) => return reply,
             },
         };
         Reply {
@@ -793,6 +828,50 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
     v.parse::<u64>()
         .map(|n| Some(Seq(n)))
         .map_err(|_| format!("at: '{v}' is not a position (a non-negative integer)"))
+}
+
+/// The reconstruction bound behind [`OPAT_MAX_CONCURRENT`]: a counting
+/// try-acquire with no queue and no blocking — plain atomics, no new
+/// dependency. The guard returns its permit on drop, early returns and
+/// panics included.
+struct ReconstructPermits {
+    available: AtomicUsize,
+}
+
+/// One held permit; dropping it releases the slot.
+struct ReconstructPermit<'a> {
+    permits: &'a ReconstructPermits,
+}
+
+impl ReconstructPermits {
+    fn new(n: usize) -> ReconstructPermits {
+        ReconstructPermits { available: AtomicUsize::new(n) }
+    }
+
+    /// One permit, or `None` right now — never blocks.
+    fn try_acquire(&self) -> Option<ReconstructPermit<'_>> {
+        self.available
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+            .ok()
+            .map(|_| ReconstructPermit { permits: self })
+    }
+}
+
+impl Drop for ReconstructPermit<'_> {
+    fn drop(&mut self) {
+        self.permits.available.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// The permit-exhausted refusal: `503 history_busy`, the wire's one
+/// retry-class transport error (wire.md §Reading history). Distinct from
+/// every position error — the position may be fine; the daemon is
+/// momentarily saturated with reconstructions, so try again shortly.
+fn busy_reply() -> Reply {
+    Reply::json(
+        503,
+        err_body("history_busy", Some("all reconstruction permits are in use; retry shortly")),
+    )
 }
 
 /// Map a bounded-replay failure onto the wire's transport errors. The two
@@ -1394,6 +1473,7 @@ fn reason(status: u16) -> &'static str {
         410 => "Gone",
         413 => "Payload Too Large",
         500 => "Internal Server Error",
+        503 => "Service Unavailable",
         _ => "Status",
     }
 }
@@ -1440,4 +1520,56 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
 /// position alone).
 fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
     stream.write_all(format!("event: commit\ndata: {{\"log_position\":{}}}\n\n", at.0).as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The counter is exact: [`OPAT_MAX_CONCURRENT`] acquires succeed, the
+    /// next fails, and a drop returns exactly one slot.
+    #[test]
+    fn reconstruct_permits_account_exactly() {
+        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
+        let first = permits.try_acquire().expect("permit 1 of 2");
+        let second = permits.try_acquire().expect("permit 2 of 2");
+        assert!(permits.try_acquire().is_none(), "the cap is exactly {OPAT_MAX_CONCURRENT}");
+        drop(first);
+        let third = permits.try_acquire().expect("a dropped permit reopens its slot");
+        assert!(permits.try_acquire().is_none(), "still exactly one slot came back");
+        drop(second);
+        drop(third);
+        let a = permits.try_acquire().expect("all slots return");
+        let b = permits.try_acquire().expect("all slots return");
+        drop((a, b));
+    }
+
+    /// Under real threads, at most [`OPAT_MAX_CONCURRENT`] holders exist at
+    /// any instant — the invariant is asserted inside the hold, so any
+    /// overshoot fails loudly regardless of scheduling.
+    #[test]
+    fn reconstruct_permits_bound_concurrent_holders() {
+        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
+        let holding = AtomicUsize::new(0);
+        let granted = AtomicUsize::new(0);
+        thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    for _ in 0..200 {
+                        let Some(permit) = permits.try_acquire() else { continue };
+                        let now = holding.fetch_add(1, Ordering::AcqRel) + 1;
+                        assert!(
+                            now <= OPAT_MAX_CONCURRENT,
+                            "{now} concurrent holders exceeds the permit of {OPAT_MAX_CONCURRENT}"
+                        );
+                        granted.fetch_add(1, Ordering::Relaxed);
+                        std::hint::spin_loop();
+                        holding.fetch_sub(1, Ordering::AcqRel);
+                        drop(permit);
+                    }
+                });
+            }
+        });
+        assert!(granted.load(Ordering::Relaxed) > 0, "some acquires must have succeeded");
+    }
 }

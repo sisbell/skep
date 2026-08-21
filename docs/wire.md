@@ -163,6 +163,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 405    | `method_not_allowed`        | known path, wrong method                |
 | 413    | `payload_too_large`         | the declared `Content-Length` exceeds the 8 MiB request-body cap |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
+| 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`) are in use; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
@@ -1013,7 +1014,12 @@ at the current head is byte-identical to the same frame on `/op`.
 folding the journal forward from the nearest on-disk checkpoint at or
 below it — per request, uncached. This is an observation surface, not a
 serving path: fine for history panes and diff tooling, wrong for a hot
-loop. Retention is exactly what the journal already provides: the daemon
+loop. Reconstruction is bounded: at most **2** run concurrently, and a
+call that finds every slot taken is refused at once with
+`503 {"error": "history_busy"}` — a retry-class refusal, never a queue —
+so historical reads cannot pin the whole worker pool. Live reads (`/op`,
+plain `GET /dump`) are never gated. Retention is exactly what the journal
+already provides: the daemon
 retains recent checkpoints and reclaims journal segments below the oldest
 retained one, so a sufficiently old position can stop being derivable.
 Asking for one:
@@ -1029,8 +1035,9 @@ this surface extends retention.
 **`GET /dump?at=<position>`** (only in `observe` builds) — the
 deterministic world dump (§The other endpoints) of the state at that
 position. Two calls with equal `at` are byte-equal; `at` = the current
-head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s;
-a malformed query is `400 {"error": "malformed_at", "detail": …}`.
+head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s,
+the reconstruction bound included (`503 history_busy`); a malformed query
+is `400 {"error": "malformed_at", "detail": …}`.
 
 ## The commit stream
 

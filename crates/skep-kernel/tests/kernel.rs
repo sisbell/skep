@@ -176,14 +176,17 @@ fn cfg_retain(dir: &Path, retain: usize) -> KernelConfig {
     }
 }
 
-fn cfg_mem() -> KernelConfig {
+fn cfg_in_memory() -> KernelConfig {
     KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     }
 }
 
-fn push(k: &Kernel<TestWorld>, x: u64) -> Seq {
+/// One whole committed transaction staging one record, answering its
+/// boundary `Seq` — distinct from `Staging::push`, which stages one record
+/// inside a closure and commits nothing.
+fn commit(k: &Kernel<TestWorld>, x: u64) -> Seq {
     k.transact(&[], |stg| {
         stg.push(TestRec::Push(x));
         Ok::<(), ()>(())
@@ -201,6 +204,10 @@ fn items(k: &Kernel<TestWorld>) -> Vec<u64> {
 }
 
 // ---- physical-layer helpers (the on-disk format the design fixes: §1/§6) ----
+
+/// The journal's frame header: magic + len + crc. Restated here because this
+/// tier reads the format as bytes rather than through the crate's own parser.
+const FRAME_HEADER_LEN: u64 = 12;
 
 fn seg_file(dir: &Path, first_seq: u64) -> PathBuf {
     dir.join(format!("seg-{first_seq}.wal"))
@@ -227,11 +234,12 @@ fn frame_spans(path: &Path) -> Vec<(u64, u64)> {
     let buf = fs::read(path).unwrap();
     let mut spans = Vec::new();
     let mut pos = 0usize;
-    while pos + 12 <= buf.len() {
+    let header = FRAME_HEADER_LEN as usize;
+    while pos + header <= buf.len() {
         assert_eq!(&buf[pos..pos + 4], b"SKJ1", "expected a clean frame stream");
         let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
-        spans.push((pos as u64, (12 + len) as u64));
-        pos += 12 + len;
+        spans.push((pos as u64, (header + len) as u64));
+        pos += header + len;
     }
     spans
 }
@@ -265,7 +273,7 @@ fn segment_count(dir: &Path) -> usize {
 
 #[test]
 fn transact_commits_and_returns_last_seq() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     // A multi-record composite returns its terminal last_seq — the one
     // observable coordinate (§2); interior seqs are M2-internal.
     let (_, seq) = k
@@ -297,8 +305,8 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     // lock-free read from inside the closure is exactly what an external
     // reader would take mid-composite — `snapshot`/`current_seq` take no
     // applier lock, which `transact`'s precondition states as a permission.
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 1);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 1);
     let pinned = k.snapshot();
     k.transact(&[], |stg| {
         stg.push(TestRec::Push(2));
@@ -333,8 +341,8 @@ fn a_nested_transact_is_answered_as_the_callers_bug_it_is() {
     // than as the permanent wedge a non-reentrant lock would otherwise give,
     // which no operator can act on and no supervisor can distinguish from a
     // slow fsync.
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 1);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 1);
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = k.transact::<(), ()>(&[], |stg| {
             stg.push(TestRec::Push(2));
@@ -353,7 +361,7 @@ fn a_nested_transact_is_answered_as_the_callers_bug_it_is() {
     // out, so the kernel is left usable and gap-free: neither transaction
     // drew a `Seq`.
     assert_eq!(k.current_seq(), Seq(1));
-    assert_eq!(push(&k, 4), Seq(2));
+    assert_eq!(commit(&k, 4), Seq(2));
     assert_eq!(items(&k), vec![1, 4]);
 }
 
@@ -362,8 +370,8 @@ fn the_reentrancy_refusal_is_scoped_to_the_one_kernel_holding_the_lock() {
     // One thread transacting on two DISTINCT kernels is honest input: the
     // second kernel's applier is free, so its write proceeds. Refusing here
     // would panic on a program that has nothing wrong with it.
-    let a = Kernel::open(cfg_mem(), genesis()).unwrap();
-    let b = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let a = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    let b = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     let (_, seq) = a
         .transact(&[], |stg| {
             stg.push(TestRec::Push(1));
@@ -386,7 +394,7 @@ fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
     // observes the transaction in flight.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
+    commit(&k, 10);
     k.transact(&[], |stg| {
         stg.push(TestRec::Push(20));
         assert_eq!(k.current_seq(), Seq(1));
@@ -411,13 +419,13 @@ fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
 
 #[test]
 fn zero_step_returns_base_seq_and_commits_nothing() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     // A1 zero-step: Ok with zero staged records → no commit; the returned Seq
     // is the base Committed's seq — the committed index the op evaluated
     // against (A2/V1).
     let (v, seq) = k.transact(&[], |_| Ok::<_, ()>(42)).unwrap();
     assert_eq!((v, seq), (42, Seq(0)));
-    push(&k, 9);
+    commit(&k, 9);
     let (v, seq) = k.transact(&[], |_| Ok::<_, ()>(43)).unwrap();
     assert_eq!((v, seq), (43, Seq(1)));
     assert_eq!(k.current_seq(), Seq(1));
@@ -425,7 +433,7 @@ fn zero_step_returns_base_seq_and_commits_nothing() {
 
 #[test]
 fn rejected_leaves_state_untouched() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     // f → Err is a clean typed rejection: nothing committed, no dangling
     // state — even when records were pushed before the Err (§3).
     let out: Result<((), Seq), TxnError<&str>> = k.transact(&[], |stg| {
@@ -436,13 +444,13 @@ fn rejected_leaves_state_untouched() {
     assert_eq!(k.current_seq(), Seq(0));
     assert_eq!(items(&k), Vec::<u64>::new());
     // The rejected txn drew no Seq: the next commit is Seq(1).
-    assert_eq!(push(&k, 1), Seq(1));
+    assert_eq!(commit(&k, 1), Seq(1));
 }
 
 #[test]
 fn staging_working_folds_pushes_and_base_stays() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 5);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 5);
     k.transact(&[], |stg| {
         assert_eq!(stg.base().items.len(), 1);
         assert_eq!(stg.working().items.len(), 1); // == base before the first push
@@ -466,11 +474,11 @@ fn staging_working_folds_pushes_and_base_stays() {
 
 #[test]
 fn snapshot_pins_one_committed_state() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 10);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 10);
     let s = k.snapshot();
     assert_eq!(s.seq(), Seq(1));
-    push(&k, 20);
+    commit(&k, 20);
     // The pinned view is stable across later installs (MIC-4/6; V0/V2)…
     assert_eq!(s.seq(), Seq(1));
     assert_eq!(s.world().items.iter().copied().collect::<Vec<_>>(), vec![10]);
@@ -485,11 +493,11 @@ fn a_cloned_snapshot_is_the_same_pinned_state() {
     // A clone is a refcount bump on ONE root, so a multi-read verdict split
     // across places still reads one committed state (MIC-4/6; V2) — which
     // taking a second `snapshot()` would not give.
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 10);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 10);
     let s = k.snapshot();
     let also = s.clone();
-    push(&k, 20);
+    commit(&k, 20);
     assert_eq!((s.seq(), also.seq()), (Seq(1), Seq(1)));
     assert_eq!(item_list(s.world()), item_list(also.world()));
     // A clone outlives the value it came from, and stays pinned to its state.
@@ -515,8 +523,8 @@ fn the_kernel_and_its_handles_carry_the_traits_callers_build_on() {
 
     // The rendering names the coordinate, never the world (`TestWorld` is
     // large and is not required to be `Debug` at all).
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    push(&k, 10);
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    commit(&k, 10);
     let rendered = format!("{:?}", k.snapshot());
     assert!(rendered.contains("Seq(1)"), "got {rendered}");
     let rendered = format!("{k:?}");
@@ -580,7 +588,7 @@ fn transact_accepts_the_seam_keys_and_returns_a_copyable_seq() {
     assert_eq!(by_value, Seq(7));
 
     // Keys pass through transact (the v1 seam — subsumed by the global lock).
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     let (_, seq) = k
         .transact(&[LockKey::new(Space::Namespace, b"home")], |stg| {
             stg.push(TestRec::Push(1));
@@ -599,9 +607,9 @@ fn recovery_replays_journal_exactly_once() {
     // Fsync-path open runs rebuild_derived once on the loaded base (genesis
     // here) — and never again on live commits.
     assert_eq!(k.snapshot().world().rebuilds, 1);
-    push(&k, 1);
-    push(&k, 2);
-    push(&k, 3);
+    commit(&k, 1);
+    commit(&k, 2);
+    commit(&k, 3);
     assert_eq!(k.snapshot().world().rebuilds, 1);
     k.flush().unwrap(); // no-op Ok under per-commit Fsync
     drop(k);
@@ -624,12 +632,12 @@ fn recovery_replays_journal_exactly_once() {
 fn recovery_with_checkpoint_replays_only_the_tail() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 1);
-    push(&k, 2);
-    push(&k, 3);
+    commit(&k, 1);
+    commit(&k, 2);
+    commit(&k, 3);
     assert_eq!(k.checkpoint().unwrap(), Seq(3));
-    push(&k, 4);
-    push(&k, 5);
+    commit(&k, 4);
+    commit(&k, 5);
     drop(k);
 
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
@@ -647,9 +655,9 @@ fn recovery_with_checkpoint_replays_only_the_tail() {
 fn torn_tail_is_physically_truncated_and_seqs_reused() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
-    push(&k, 30);
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
     drop(k);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
@@ -666,7 +674,7 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
     assert_eq!(fs::metadata(&seg).unwrap().len(), spans[4].0);
     // Under Rollback the next session reuses the discarded coordinates —
     // safe exactly because the stale tail is gone (§1/§7 Txn uniqueness).
-    assert_eq!(push(&k, 30), Seq(3));
+    assert_eq!(commit(&k, 30), Seq(3));
     drop(k);
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20, 30]);
@@ -677,16 +685,16 @@ fn torn_tail_is_physically_truncated_and_seqs_reused() {
 fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
-    push(&k, 30);
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
     drop(k);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     // Corrupt T2's record (an INTERIOR committed txn): the resync lands on
     // T2's marker, so at = last_seq + 1 = 3 and inferred max = 2 ∈ (0, 3] —
     // durable committed data the recovered state needs: halt, never drop (§7).
-    flip_byte(&seg, spans[2].0 + 12 + 1);
+    flip_byte(&seg, spans[2].0 + FRAME_HEADER_LEN + 1);
     // A torn tail past the last committed marker, so there IS something a
     // truncation would take — without it the cut lands at end-of-file and no
     // assertion could tell a halt from a truncation.
@@ -712,11 +720,11 @@ fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
 fn corruption_below_s_load_is_harmless_including_the_boundary_frame() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
-    push(&k, 30);
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
     assert_eq!(k.checkpoint().unwrap(), Seq(3));
-    push(&k, 40);
+    commit(&k, 40);
     drop(k);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
@@ -726,7 +734,7 @@ fn corruption_below_s_load_is_harmless_including_the_boundary_frame() {
     // even though the payload coordinate is S_load + 1 — classifying by `at`
     // instead of the inferred max would spuriously halt on exactly this
     // boundary frame (§7).
-    flip_byte(&seg, spans[4].0 + 12 + 1);
+    flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1);
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20, 30, 40]);
     assert_eq!(k.snapshot().world().sum, 100);
@@ -741,13 +749,13 @@ fn post_commit_rot_of_the_final_txn_demotes_w_silently() {
     // as tail — no Corruption signal (out of scope for v1).
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
-    push(&k, 30);
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
     drop(k);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
-    flip_byte(&seg, spans[4].0 + 12 + 1); // T3's record
+    flip_byte(&seg, spans[4].0 + FRAME_HEADER_LEN + 1); // T3's record
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
@@ -758,11 +766,11 @@ fn post_commit_rot_of_the_final_txn_demotes_w_silently() {
 fn bad_newest_checkpoint_falls_back_to_older_retained_base() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
-    push(&k, 10);
-    push(&k, 20);
+    commit(&k, 10);
+    commit(&k, 20);
     assert_eq!(k.checkpoint().unwrap(), Seq(2));
-    push(&k, 30);
-    push(&k, 40);
+    commit(&k, 30);
+    commit(&k, 40);
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
     drop(k);
     // Corrupt the newest checkpoint's body: its header checksum fails, and
@@ -784,13 +792,13 @@ fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
     // answer is the same world whichever base carries it (§6/§7).
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
-    push(&k, 10);
-    push(&k, 20);
+    commit(&k, 10);
+    commit(&k, 20);
     assert_eq!(k.checkpoint().unwrap(), Seq(2));
-    push(&k, 30);
-    push(&k, 40);
+    commit(&k, 30);
+    commit(&k, 40);
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
-    push(&k, 50);
+    commit(&k, 50);
     let whole = vec![10, 20, 30, 40, 50];
     assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
 
@@ -818,11 +826,11 @@ fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
     // checkpoint that embodies it — does not.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
-    push(&k, 30);
+    commit(&k, 10);
+    commit(&k, 20);
+    commit(&k, 30);
     assert_eq!(k.checkpoint().unwrap(), Seq(3));
-    push(&k, 40);
+    commit(&k, 40);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     assert_eq!(spans.len(), 8);
@@ -830,7 +838,7 @@ fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
     // journal under the appender, which is where at-rest damage meets it.
     // The resync lands on T4's marker: a run whose inferred max (4) is above
     // the base, so a fold that must cross it could answer from a hole (§7).
-    flip_byte(&seg, spans[6].0 + 12 + 1);
+    flip_byte(&seg, spans[6].0 + FRAME_HEADER_LEN + 1);
     match k.world_at(Seq(4)) {
         Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(5)),
         other => panic!("expected Corruption, got {other:?}"),
@@ -847,15 +855,15 @@ fn world_at_halts_on_at_rest_damage_before_judging_the_boundary() {
     // that their own committed coordinate was never a boundary at all.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    assert_eq!(push(&k, 10), Seq(1));
-    assert_eq!(push(&k, 20), Seq(2)); // a real boundary, about to be hidden
-    assert_eq!(push(&k, 30), Seq(3));
+    assert_eq!(commit(&k, 10), Seq(1));
+    assert_eq!(commit(&k, 20), Seq(2)); // a real boundary, about to be hidden
+    assert_eq!(commit(&k, 30), Seq(3));
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     assert_eq!(spans.len(), 6);
     // Rot T2's MARKER: its txn stops being committed, so Seq(2) drops out of
     // the boundary set, and the resync lands on T3's record (inferred max 2).
-    flip_byte(&seg, spans[3].0 + 12 + 1);
+    flip_byte(&seg, spans[3].0 + FRAME_HEADER_LEN + 1);
     match k.world_at(Seq(2)) {
         Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(3)),
         other => panic!("expected Corruption before the boundary judgment, got {other:?}"),
@@ -870,7 +878,7 @@ fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
     // and the coordinates the failed txn drew are reused by the next commit.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
+    commit(&k, 10);
 
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = k.transact::<(), ()>(&[], |stg| {
@@ -884,7 +892,7 @@ fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
     assert_eq!(k.current_seq(), Seq(1));
 
     // Not poisoned: the write path still works, gap-free.
-    assert_eq!(push(&k, 20), Seq(2));
+    assert_eq!(commit(&k, 20), Seq(2));
     assert_eq!(items(&k), vec![10, 20]);
     drop(k);
     // Nothing of the panicking txn is on disk to recover.
@@ -902,7 +910,7 @@ fn an_unencodable_record_is_a_no_op_that_re_invoking_cannot_fix() {
     // themselves are the refusal, so the same call fails the same way.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
+    commit(&k, 10);
     let attempt = || -> Result<((), Seq), TxnError<()>> {
         k.transact(&[], |stg| {
             stg.push(TestRec::FailsToSerialize(RefusesSerialization));
@@ -922,7 +930,7 @@ fn an_unencodable_record_is_a_no_op_that_re_invoking_cannot_fix() {
     assert!(matches!(attempt(), Err(TxnError::Unencodable(_))));
     assert_eq!(k.current_seq(), Seq(1));
     // Not poisoned, and the burned coordinate is REUSED — gap-free (§1/§3).
-    assert_eq!(push(&k, 20), Seq(2));
+    assert_eq!(commit(&k, 20), Seq(2));
     drop(k);
     // Nothing of the failed txn is on disk to recover.
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
@@ -942,7 +950,7 @@ fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     for _ in 0..4 {
-        push_blob(&k); // past the 1 MiB threshold: txn 5 is the one that rotates
+        commit_blob(&k); // past the 1 MiB threshold: txn 5 is the one that rotates
     }
     assert_eq!(k.current_seq(), Seq(4));
     fs::create_dir(seg_file(dir.path(), 5)).unwrap();
@@ -994,7 +1002,7 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
         checkpoint: CheckpointPolicy::Manual,
     };
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
-    push(&k, 10);
+    commit(&k, 10);
     let out: Result<((), Seq), TxnError<()>> = k.transact(&[], |stg| {
         stg.push(TestRec::FailsToSerialize(RefusesSerialization));
         Ok(())
@@ -1003,7 +1011,7 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
         matches!(out, Err(TxnError::Unencodable(_))),
         "expected a failed txn, got {out:?}"
     );
-    assert_eq!(push(&k, 20), Seq(3), "Seq 2 was burned and must not be reused");
+    assert_eq!(commit(&k, 20), Seq(3), "Seq 2 was burned and must not be reused");
     drop(k);
     let k = Kernel::open(cfg, genesis()).unwrap();
     assert_eq!(items(&k), vec![10, 20]);
@@ -1072,7 +1080,9 @@ fn an_auto_triggered_checkpoint_failure_never_fails_the_committed_txn() {
 /// a segment past the threshold, the fifth rotates.
 const BLOB: usize = 300 * 1024;
 
-fn push_blob(k: &Kernel<TestWorld>) -> Seq {
+/// [`commit`] staging one [`BLOB`]-sized record instead — the fat commit the
+/// rotation, reclamation and byte-trigger fixtures are built from.
+fn commit_blob(k: &Kernel<TestWorld>) -> Seq {
     k.transact(&[], |stg| {
         stg.push(TestRec::Blob(vec![7u8; BLOB]));
         Ok::<(), ()>(())
@@ -1086,11 +1096,11 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
     for _ in 0..4 {
-        push_blob(&k);
+        commit_blob(&k);
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
     for _ in 0..4 {
-        push_blob(&k);
+        commit_blob(&k);
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(8));
     // Rotation at the txn boundary: txn 5 opened seg-5 (§1 name-by-firstSeq).
@@ -1115,7 +1125,7 @@ fn retention_keeps_the_newest_n_checkpoints() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
     for x in 1..=3u64 {
-        push(&k, x);
+        commit(&k, x);
         assert_eq!(k.checkpoint().unwrap(), Seq(x));
     }
     // The third checkpoint pushes the first out (§6).
@@ -1136,13 +1146,13 @@ fn retention_keeps_the_newest_n_checkpoints() {
 }
 
 #[test]
-fn bad_checkpoint_when_chain_exhausted_and_genesis_unreachable() {
+fn an_exhausted_fallback_chain_refuses_to_open() {
     let dir = tempdir().unwrap();
     // Retain 1: newest is the sole base — no fallback (§6).
     let cfg = cfg_retain(dir.path(), 1);
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     for _ in 0..8 {
-        push_blob(&k);
+        commit_blob(&k);
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(8));
     drop(k);
@@ -1160,7 +1170,7 @@ fn world_at_refuses_a_boundary_below_the_reclamation_floor() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
     for _ in 0..8 {
-        push_blob(&k);
+        commit_blob(&k);
     }
     assert_eq!(k.checkpoint().unwrap(), Seq(8));
     // Reclamation dropped seg-1: genesis is no longer reachable, and every
@@ -1190,8 +1200,8 @@ fn world_at_answers_the_same_world_under_a_live_appender() {
     // as a wrong answer.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20); // boundary Seq(2), below everything the writer adds
+    commit(&k, 10);
+    commit(&k, 20); // boundary Seq(2), below everything the writer adds
     let writing = AtomicBool::new(true);
     std::thread::scope(|s| {
         let kw = &k;
@@ -1199,7 +1209,7 @@ fn world_at_answers_the_same_world_under_a_live_appender() {
         s.spawn(move || {
             // Fat records, so the appends straddle rotations.
             for _ in 0..20 {
-                push_blob(kw);
+                commit_blob(kw);
             }
             flag.store(false, Ordering::Release);
         });
@@ -1230,8 +1240,8 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     // halting on it (§7), and answers the boundary it was asked for.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
-    push(&k, 10);
-    push(&k, 20);
+    commit(&k, 10);
+    commit(&k, 20);
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     assert_eq!(spans.len(), 4); // T1 rec/marker, T2 rec/marker
@@ -1265,14 +1275,14 @@ fn every_n_trigger_fires_on_commit_and_manual_calls_do_not_reset_it() {
     let mut cfg = cfg_retain(dir.path(), 3);
     cfg.checkpoint = CheckpointPolicy::EveryN(3);
     let k = Kernel::open(cfg, genesis()).unwrap();
-    push(&k, 1);
-    push(&k, 2);
+    commit(&k, 1);
+    commit(&k, 2);
     assert_eq!(checkpoint_count(dir.path()), 0); // threshold not crossed
     assert_eq!(k.checkpoint().unwrap(), Seq(2)); // caller-invoked
     assert!(ckpt_file(dir.path(), 2).exists());
     // A caller-invoked checkpoint() cannot touch the applier-locked cadence
     // counters, so the third commit still crosses EveryN(3) and auto-fires.
-    push(&k, 3);
+    commit(&k, 3);
     assert!(ckpt_file(dir.path(), 3).exists(), "auto-trigger did not fire");
 }
 
@@ -1286,7 +1296,7 @@ fn every_n_restarts_its_window_at_the_crossing() {
     cfg.checkpoint = CheckpointPolicy::EveryN(3);
     let k = Kernel::open(cfg, genesis()).unwrap();
     for x in 1..=6u64 {
-        push(&k, x);
+        commit(&k, x);
     }
     assert!(
         ckpt_file(dir.path(), 3).exists(),
@@ -1309,7 +1319,7 @@ fn manual_policy_never_auto_checkpoints() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // Manual
     for x in 0..5 {
-        push(&k, x);
+        commit(&k, x);
     }
     assert_eq!(checkpoint_count(dir.path()), 0);
 }
@@ -1323,10 +1333,10 @@ fn journal_bytes_trigger_counts_bytes_not_commits() {
     cfg.checkpoint = CheckpointPolicy::JournalBytes(4096);
     let k = Kernel::open(cfg, genesis()).unwrap();
     for x in 1..=5u64 {
-        push(&k, x); // a few dozen journal bytes each
+        commit(&k, x); // a few dozen journal bytes each
     }
     assert_eq!(checkpoint_count(dir.path()), 0);
-    push_blob(&k); // one commit, far past the threshold
+    commit_blob(&k); // one commit, far past the threshold
     assert!(ckpt_file(dir.path(), 6).exists(), "the byte trigger did not fire");
 }
 
@@ -1349,14 +1359,14 @@ fn a_zero_step_op_neither_journals_nor_advances_the_cadence() {
         "a zero-step op journals nothing"
     );
     assert_eq!(checkpoint_count(dir.path()), 0);
-    push(&k, 1); // the FIRST commit: 1 of 2
+    commit(&k, 1); // the FIRST commit: 1 of 2
     assert_eq!(
         checkpoint_count(dir.path()),
         0,
         "the zero-step ops advanced the cadence"
     );
     k.transact(&[], |_| Ok::<_, ()>(())).unwrap();
-    push(&k, 2); // the second commit crosses
+    commit(&k, 2); // the second commit crosses
     assert!(
         ckpt_file(dir.path(), 2).exists(),
         "the trigger counts commits, not calls"
@@ -1378,7 +1388,7 @@ fn interval_is_evaluated_on_commit_never_on_a_clock() {
         0,
         "a quiescent kernel fired the trigger"
     );
-    push(&k, 1);
+    commit(&k, 1);
     assert!(
         ckpt_file(dir.path(), 1).exists(),
         "the first commit past the window did not fire"
@@ -1392,7 +1402,7 @@ fn interval_does_not_fire_before_its_window_elapses() {
     cfg.checkpoint = CheckpointPolicy::Interval(Duration::from_secs(3600));
     let k = Kernel::open(cfg, genesis()).unwrap();
     for x in 1..=5 {
-        push(&k, x);
+        commit(&k, x);
     }
     assert_eq!(checkpoint_count(dir.path()), 0);
 }
@@ -1407,7 +1417,7 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
     let dir = tmp.path().join("not-yet");
     assert!(!dir.exists());
     let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
-    assert_eq!(push(&k, 1), Seq(1));
+    assert_eq!(commit(&k, 1), Seq(1));
     drop(k);
     // …and what it created is a journal a reopen recovers from.
     let k = Kernel::open(cfg_fsync(&dir), genesis()).unwrap();
@@ -1440,8 +1450,8 @@ fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     // "Directly from genesis": no load, no rebuild_derived (Lifecycle).
     assert_eq!(k.snapshot().world().rebuilds, 0);
-    assert_eq!(push(&k, 1), Seq(1));
-    assert_eq!(push(&k, 2), Seq(2));
+    assert_eq!(commit(&k, 1), Seq(1));
+    assert_eq!(commit(&k, 2), Seq(2));
     assert_eq!(k.checkpoint().unwrap(), Seq(2)); // no-op returning current_seq (§6)
     k.flush().unwrap();
     drop(k);
@@ -1455,7 +1465,7 @@ fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
 
 #[test]
 fn panic_in_closure_leaves_kernel_usable_and_gap_free() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     // A panic in f unwinds before any Seq is drawn: staging is discarded, the
     // panic propagates, the kernel is NOT poisoned, and the order stays
     // gap-free (§3).
@@ -1468,7 +1478,7 @@ fn panic_in_closure_leaves_kernel_usable_and_gap_free() {
     assert!(unwound.is_err());
     assert_eq!(k.current_seq(), Seq(0));
     assert_eq!(items(&k), Vec::<u64>::new());
-    assert_eq!(push(&k, 7), Seq(1));
+    assert_eq!(commit(&k, 7), Seq(1));
     assert_eq!(items(&k), vec![7]);
 }
 
@@ -1476,7 +1486,7 @@ fn panic_in_closure_leaves_kernel_usable_and_gap_free() {
 
 #[test]
 fn concurrent_writers_serialize_into_one_gap_free_order() {
-    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     let mut all: Vec<u64> = Vec::new();
     std::thread::scope(|s| {
         let mut handles = Vec::new();

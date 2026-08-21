@@ -64,10 +64,10 @@
 //! #[derive(Clone, Serialize, Deserialize)]
 //! struct World { log: Vec<u64> }
 //! #[derive(Clone, Serialize, Deserialize)]
-//! struct Rec(u64);
+//! struct Append(u64);
 //! impl WorldState for World {
-//!     type Record = Rec;
-//!     fn apply(&self, record: &Rec) -> World {
+//!     type Record = Append;
+//!     fn apply(&self, record: &Append) -> World {
 //!         let mut w = self.clone();
 //!         w.log.push(record.0);
 //!         w
@@ -85,7 +85,7 @@
 //! let kernel = Kernel::open(cfg, World { log: vec![] }).unwrap();
 //! let (_, seq) = kernel
 //!     .transact::<_, ()>(&[], |stg| {
-//!         stg.push(Rec(7));
+//!         stg.push(Append(7));
 //!         Ok(())
 //!     })
 //!     .unwrap();

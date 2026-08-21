@@ -276,20 +276,20 @@ fn parse_segment_name(name: &str) -> Option<u64> {
 /// All segments in `dir`, ascending by `firstSeq`. Non-segment files
 /// (checkpoints, the lock file) fail the name parse and are skipped.
 pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
-    let mut v = Vec::new();
+    let mut segs = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
         let Some(first_seq) = name.to_str().and_then(parse_segment_name) else {
             continue;
         };
-        v.push(SegmentMeta {
+        segs.push(SegmentMeta {
             first_seq,
             path: entry.path(),
         });
     }
-    v.sort_by_key(|s| s.first_seq);
-    Ok(v)
+    segs.sort_by_key(|seg| seg.first_seq);
+    Ok(segs)
 }
 
 /// The `lastSeq` segment `i` covers, inferred from its successor's name
@@ -308,7 +308,7 @@ pub(crate) fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
 /// that began the log, which is what makes genesis unusable as a fallback
 /// base (§6/§7).
 pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
-    segs.first().is_none_or(|s| s.first_seq == 1)
+    segs.first().is_none_or(|seg| seg.first_seq == 1)
 }
 
 /// Reclaim whole *closed* segments covering nothing above `floor`: the
@@ -844,12 +844,12 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     let mut first_scanned: Option<usize> = None;
     let mut pending: Option<PendingTxn> = None;
     let mut run_open = false;
-    for (i, seg) in segs.iter().enumerate() {
-        if inferred_last_seq(segs, i).is_some_and(|last| last <= s_load) {
+    for (seg_index, seg) in segs.iter().enumerate() {
+        if inferred_last_seq(segs, seg_index).is_some_and(|last| last <= s_load) {
             continue;
         }
         if first_scanned.is_none() {
-            first_scanned = Some(i);
+            first_scanned = Some(seg_index);
         }
         let buf = fs::read(&seg.path)?;
         // This segment's resynchronization budget. EVERY rejected candidate
@@ -863,40 +863,40 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
             match parse_frame(&buf, pos) {
                 Parsed::Intact { payload, end } => {
                     match bincode::deserialize::<FramePayload>(&buf[payload.clone()]) {
-                        Ok(FramePayload::Record(r)) => {
+                        Ok(FramePayload::Record(record)) => {
                             if run_open {
                                 out.runs.push(RunEnd::Landed {
-                                    inferred_max: r.seq.saturating_sub(1),
-                                    at: r.seq,
+                                    inferred_max: record.seq.saturating_sub(1),
+                                    at: record.seq,
                                 });
                                 run_open = false;
                             }
                             let mut group = pending
                                 .take()
-                                .filter(|g| g.txn == r.txn)
-                                .unwrap_or_else(|| PendingTxn::open(r.txn));
-                            group.push(r, &buf[payload]);
+                                .filter(|group| group.txn == record.txn)
+                                .unwrap_or_else(|| PendingTxn::open(record.txn));
+                            group.push(record, &buf[payload]);
                             pending = Some(group);
                             pos = end;
                         }
-                        Ok(FramePayload::Marker(m)) => {
+                        Ok(FramePayload::Marker(marker)) => {
                             if run_open {
                                 out.runs.push(RunEnd::Landed {
-                                    inferred_max: m.last_seq,
+                                    inferred_max: marker.last_seq,
                                     // A marker carries no `Seq` of its own, so
                                     // the coordinate it contributes is one past
                                     // its own. At the ceiling there is no such
                                     // coordinate, and the run is reported at the
                                     // ceiling itself.
-                                    at: m.last_seq.saturating_add(1),
+                                    at: marker.last_seq.saturating_add(1),
                                 });
                                 run_open = false;
                             }
-                            if let Some(group) = pending.take_if(|g| g.txn == m.txn) {
-                                if group.commits(&m) {
-                                    out.committed_head = out.committed_head.max(m.last_seq);
-                                    cut = Some((i, end as u64));
-                                    out.committed_boundaries.push(m.last_seq);
+                            if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
+                                if group.commits(&marker) {
+                                    out.committed_head = out.committed_head.max(marker.last_seq);
+                                    cut = Some((seg_index, end as u64));
+                                    out.committed_boundaries.push(marker.last_seq);
                                     out.committed_records.extend(group.records);
                                 }
                                 // else: torn txn — not committed; its frames are
@@ -942,10 +942,13 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     // (inferred max ≤ `s_load`) sit below the cut and are not touched.
     out.tail = cut
         .or_else(|| first_scanned.map(|first| (first, 0)))
-        .map(|(i, offset)| TailCut {
-            segment: segs[i].path.clone(),
+        .map(|(seg_index, offset)| TailCut {
+            segment: segs[seg_index].path.clone(),
             offset,
-            discard: segs[i + 1..].iter().map(|s| s.path.clone()).collect(),
+            discard: segs[seg_index + 1..]
+                .iter()
+                .map(|seg| seg.path.clone())
+                .collect(),
         });
     Ok(out)
 }

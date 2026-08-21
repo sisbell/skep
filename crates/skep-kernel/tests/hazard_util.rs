@@ -431,30 +431,39 @@ pub fn judge_prefix(
 ) -> u64 {
     let engine = timed_open(case_dir, ctx);
     let head = engine.kernel().current_seq().0;
-    let expect = fixture.expected_boundary(prefix_len);
+    let expected = fixture.expected_boundary(prefix_len);
     assert_eq!(
-        head, expect,
+        head, expected,
         "FINDING ({ctx}): boundary rule violated — recovered head {head}, the intact prefix \
-         supports exactly {expect}"
+         supports exactly {expected}"
     );
-    let d = engine.world_dump();
+    let recovered = engine.world_dump();
     assert_eq!(
-        &d,
+        &recovered,
         fixture.dump_for(head),
         "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
     );
     if depth == Depth::Full {
-        let g = dump(&engine.world_at(Seq(0)).expect("genesis answers"), &fixture.genesis);
-        assert_eq!(g, fixture.genesis_dump, "FINDING ({ctx}): genesis boundary diverged");
-        for b in fixture.boundaries.iter().filter(|b| b.seq <= head) {
-            let w = engine.world_at(Seq(b.seq)).unwrap_or_else(|e| {
-                panic!("FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}", b.seq)
+        let at_genesis = dump(
+            &engine.world_at(Seq(0)).expect("genesis answers"),
+            &fixture.genesis,
+        );
+        assert_eq!(
+            at_genesis, fixture.genesis_dump,
+            "FINDING ({ctx}): genesis boundary diverged"
+        );
+        for boundary in fixture.boundaries.iter().filter(|b| b.seq <= head) {
+            let world = engine.world_at(Seq(boundary.seq)).unwrap_or_else(|e| {
+                panic!(
+                    "FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}",
+                    boundary.seq
+                )
             });
             assert_eq!(
-                dump(&w, &fixture.genesis),
-                b.dump,
+                dump(&world, &fixture.genesis),
+                boundary.dump,
                 "FINDING ({ctx}): history at boundary {} diverges from ground truth",
-                b.seq
+                boundary.seq
             );
         }
         engine
@@ -466,7 +475,7 @@ pub fn judge_prefix(
 
 /// [`judge_prefix`] where FULL recovery is the only acceptable outcome
 /// (checkpoint faults: the journal is intact, so no rollback is licensed).
-pub fn judge_full(fixture: &Fixture, case_dir: &Path, ctx: &str) {
+pub fn judge_full_recovery(fixture: &Fixture, case_dir: &Path, ctx: &str) {
     let head = judge_prefix(fixture, case_dir, fixture.full_len, Depth::Full, ctx);
     assert_eq!(head, fixture.last_seq(), "FINDING ({ctx}): full recovery was required");
 }

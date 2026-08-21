@@ -189,7 +189,7 @@ impl Cadence {
 ///
 /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
 struct Sequencer {
-    hi: u64,
+    high_water: u64,
     burned_seq: BurnedSeqPolicy,
 }
 
@@ -200,7 +200,7 @@ impl Sequencer {
     /// counter (§1/§7).
     fn recovered(head: Seq, burned_seq: BurnedSeqPolicy) -> Sequencer {
         Sequencer {
-            hi: head.0,
+            high_water: head.0,
             burned_seq,
         }
     }
@@ -214,9 +214,9 @@ impl Sequencer {
     /// `n ≥ 1`, which is the caller's to hold and the journal's encoder to
     /// assert: a zero-record transaction reaches neither.
     fn mint(&mut self, n: u64) -> Option<(u64, u64)> {
-        let last = self.hi.checked_add(n)?;
-        let first = self.hi + 1; // n ≥ 1, so this is at most `last`
-        self.hi = last;
+        let last = self.high_water.checked_add(n)?;
+        let first = self.high_water + 1; // n ≥ 1, so this is at most `last`
+        self.high_water = last;
         Some((first, last))
     }
 
@@ -230,7 +230,7 @@ impl Sequencer {
     /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
     fn roll_back_to(&mut self, base: Seq) {
         if self.burned_seq == BurnedSeqPolicy::Rollback {
-            self.hi = base.0;
+            self.high_water = base.0;
         }
     }
 }
@@ -1043,9 +1043,9 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-        k.applier.lock().seq.hi = u64::MAX;
-        let out = k.transact::<_, ()>(&[], |s| {
-            s.push(10);
+        k.applier.lock().seq.high_water = u64::MAX;
+        let out = k.transact::<_, ()>(&[], |stg| {
+            stg.push(10);
             Ok(())
         });
         assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
@@ -1095,8 +1095,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .unwrap();
-        k.transact::<_, ()>(&[], |s| {
-            s.push(10);
+        k.transact::<_, ()>(&[], |stg| {
+            stg.push(10);
             Ok(())
         })
         .unwrap();
@@ -1104,9 +1104,9 @@ mod tests {
 
         // Writes halt — and `f` never runs: the refusal precedes it.
         let ran = std::cell::Cell::new(false);
-        let out = k.transact::<(), ()>(&[], |s| {
+        let out = k.transact::<(), ()>(&[], |stg| {
             ran.set(true);
-            s.push(20);
+            stg.push(20);
             Ok(())
         });
         assert!(matches!(out, Err(TxnError::Poisoned)));
@@ -1151,8 +1151,8 @@ mod tests {
             let k = &k;
             s.spawn(move || {
                 for x in 0..32u64 {
-                    k.transact::<_, ()>(&[], |st| {
-                        st.push(x);
+                    k.transact::<_, ()>(&[], |stg| {
+                        stg.push(x);
                         Ok(())
                     })
                     .unwrap();
@@ -1176,19 +1176,19 @@ mod tests {
         let k =
             Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
                 .unwrap();
-        let (_, s1) = k.transact::<_, ()>(&[], |s| {
-            s.push(10);
+        let (_, s1) = k.transact::<_, ()>(&[], |stg| {
+            stg.push(10);
             Ok(())
         })
         .unwrap();
-        let (_, s2) = k.transact::<_, ()>(&[], |s| {
-            s.push(20);
-            s.push(30); // a composite: seqs 2..=3, boundary 3
+        let (_, s2) = k.transact::<_, ()>(&[], |stg| {
+            stg.push(20);
+            stg.push(30); // a composite: seqs 2..=3, boundary 3
             Ok(())
         })
         .unwrap();
-        let (_, s3) = k.transact::<_, ()>(&[], |s| {
-            s.push(40);
+        let (_, s3) = k.transact::<_, ()>(&[], |stg| {
+            stg.push(40);
             Ok(())
         })
         .unwrap();
@@ -1228,15 +1228,15 @@ mod tests {
             Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
                 .unwrap();
         for x in [10u64, 20, 30] {
-            k.transact::<_, ()>(&[], |s| {
-                s.push(x);
+            k.transact::<_, ()>(&[], |stg| {
+                stg.push(x);
                 Ok(())
             })
             .unwrap();
         }
         assert_eq!(k.checkpoint().unwrap(), Seq(3));
-        k.transact::<_, ()>(&[], |s| {
-            s.push(40);
+        k.transact::<_, ()>(&[], |stg| {
+            stg.push(40);
             Ok(())
         })
         .unwrap();
@@ -1258,8 +1258,8 @@ mod tests {
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         for x in [10u64, 20] {
-            k.transact::<_, ()>(&[], |s| {
-                s.push(x);
+            k.transact::<_, ()>(&[], |stg| {
+                stg.push(x);
                 Ok(())
             })
             .unwrap();

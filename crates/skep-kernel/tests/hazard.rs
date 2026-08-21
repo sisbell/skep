@@ -48,13 +48,13 @@ use tempfile::tempdir;
 fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
     let tmp = tempdir().expect("tempdir");
     let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
-    let full = fixture.full_len;
+    let full_len = fixture.full_len;
     let n = fixture.boundaries.len();
     let dense_lo = fixture.boundaries[n - 3].journal_len;
     let prefix_lens: Vec<u64> = if exhaustive() {
-        (0..full).rev().collect()
+        (0..full_len).rev().collect()
     } else {
-        let mut v: Vec<u64> = (dense_lo..full).rev().collect();
+        let mut v: Vec<u64> = (dense_lo..full_len).rev().collect();
         v.extend((0..dense_lo).step_by(37));
         v
     };
@@ -65,7 +65,7 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
         let case = cases.join(format!("a-{prefix_len}"));
         copy_dir(&fixture.dir, &case);
         truncate_file(&seg1(&case), prefix_len);
-        let ctx = format!("A: torn tail, prefix {prefix_len} of {full}");
+        let ctx = format!("A: torn tail, prefix {prefix_len} of {full_len}");
         // Deep history probes on a sample; head + dump equality on every one.
         let depth = if i % 25 == 0 { Depth::Full } else { Depth::Head };
         let head = judge_prefix(&fixture, &case, prefix_len, depth, &ctx);
@@ -77,7 +77,7 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
          recovered-boundary distribution: {:?}",
         prefix_lens.len(),
         dense_lo,
-        full,
+        full_len,
         exhaustive(),
         by_boundary
     );
@@ -94,16 +94,16 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
 fn b_garbage_tail_classifies_as_eof_not_as_records() {
     let tmp = tempdir().expect("tempdir");
     let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
-    let full = fixture.full_len;
+    let full_len = fixture.full_len;
     let n = fixture.boundaries.len();
 
     // Cut points: for each covered txn its clean boundary, boundary−1, and
     // a mid-txn byte; plus the clean full journal (pure garbage beyond it).
-    let first_txn = if exhaustive() { 1 } else { n - 3 };
-    let mut cuts: Vec<u64> = vec![full];
-    for k in first_txn..n {
-        let lo = fixture.boundaries[k - 1].journal_len;
-        let hi = fixture.boundaries[k].journal_len;
+    let first_boundary = if exhaustive() { 1 } else { n - 3 };
+    let mut cuts: Vec<u64> = vec![full_len];
+    for boundary_index in first_boundary..n {
+        let lo = fixture.boundaries[boundary_index - 1].journal_len;
+        let hi = fixture.boundaries[boundary_index].journal_len;
         cuts.push(hi - 1);
         cuts.push(lo + (hi - lo) / 2);
         cuts.push(lo);
@@ -127,7 +127,7 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                 truncate_file(&seg1(&case), cut);
                 append_bytes(&seg1(&case), &pattern.bytes(junk_len as usize));
                 let ctx = format!(
-                    "B: cut {cut} of {full} + {} junk ×{junk_len} appended \
+                    "B: cut {cut} of {full_len} + {} junk ×{junk_len} appended \
                      (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
@@ -135,12 +135,12 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
-            if cut < full {
+            if cut < full_len {
                 let case = cases.join(format!("b-ovr-{cut}-{}", pattern.name()));
                 copy_dir(&fixture.dir, &case);
-                overwrite_range(&seg1(&case), cut, &pattern.bytes((full - cut) as usize));
+                overwrite_range(&seg1(&case), cut, &pattern.bytes((full_len - cut) as usize));
                 let ctx = format!(
-                    "B: in-place {} overwrite of [{cut}, {full}) \
+                    "B: in-place {} overwrite of [{cut}, {full_len}) \
                      (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
@@ -158,6 +158,18 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
 }
 
 // ── C. Checkpoint corruption ─────────────────────────────────────────────
+
+/// A checkpoint file's header: magic + seq + crc + body_len. Restated here
+/// because this tier damages the format as bytes rather than through the
+/// crate's own writer; the body starts at this offset.
+const CHECKPOINT_HEADER_LEN: u64 = 24;
+
+/// The offset halfway through the body of a checkpoint file of `len` bytes —
+/// where a flip or a cut lands in the serialized `W` rather than in a header
+/// field, so the damage is the body checksum's to catch.
+fn mid_body(len: u64) -> u64 {
+    CHECKPOINT_HEADER_LEN + (len - CHECKPOINT_HEADER_LEN) / 2
+}
 
 /// Scenario C (i)–(iii) plus the stray-`.tmp` case: with two retained
 /// checkpoints and an intact journal, ANY damage to checkpoints — a flipped
@@ -189,21 +201,21 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
         let case = cases.join(format!("c-{judged}"));
         copy_dir(&fixture.dir, &case);
         mutate(&case);
-        judge_full(&fixture, &case, &format!("C: {label}"));
+        judge_full_recovery(&fixture, &case, &format!("C: {label}"));
         fs::remove_dir_all(&case).expect("case cleanup");
         judged += 1;
     };
 
     // (i) one flipped byte: magic, seq field, crc field, body_len field,
     // mid-body, last byte.
-    for off in [0, 5, 13, 20, 24 + (newest_len - 24) / 2, newest_len - 1] {
+    for off in [0, 5, 13, 20, mid_body(newest_len), newest_len - 1] {
         let name = newest_name.clone();
         run(format!("newest checkpoint byte {off} flipped"), &move |case| {
             flip_byte(&case.join(&name), off)
         });
     }
     // (ii) truncations: empty, mid-header, header-only, mid-body, last-byte.
-    for cut in [0, 10, 24, 24 + (newest_len - 24) / 2, newest_len - 1] {
+    for cut in [0, 10, CHECKPOINT_HEADER_LEN, mid_body(newest_len), newest_len - 1] {
         let name = newest_name.clone();
         run(format!("newest checkpoint truncated to {cut}"), &move |case| {
             truncate_file(&case.join(&name), cut)
@@ -225,9 +237,9 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
     {
         let (newest_name, older_name) = (newest_name.clone(), older_name.clone());
         run("both checkpoints flipped mid-body".into(), &move |case| {
-            flip_byte(&case.join(&newest_name), 24 + (newest_len - 24) / 2);
+            flip_byte(&case.join(&newest_name), mid_body(newest_len));
             let older_len = fs::metadata(case.join(&older_name)).expect("older").len();
-            flip_byte(&case.join(&older_name), 24 + (older_len - 24) / 2);
+            flip_byte(&case.join(&older_name), mid_body(older_len));
         });
     }
     {
@@ -309,7 +321,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
         let case = tmp.path().join(format!("c2-{}", if mutate { "flip" } else { "del" }));
         copy_dir(&dir, &case);
         if mutate {
-            flip_byte(&case.join(&cp_name), 24 + (cp_len - 24) / 2);
+            flip_byte(&case.join(&cp_name), mid_body(cp_len));
         } else {
             fs::remove_file(case.join(&cp_name)).expect("delete sole checkpoint");
         }
@@ -380,9 +392,9 @@ fn d_kill_mid_checkpoint_loses_no_acked_commit() {
     let mut total_acks = 0usize;
     let mut unacked_replays = 0u64;
     for trial in 0..trials {
-        let (acks, tail) = d_trial(trial);
+        let (acks, unacked) = d_trial(trial);
         total_acks += acks;
-        unacked_replays += tail;
+        unacked_replays += unacked;
     }
     println!(
         "D: {trials} SIGKILL trials (seeds 0xD00D+trial), {total_acks} acked commits verified, \
@@ -525,17 +537,17 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
         copy_dir(&fixture.dir, &case);
         let final_txn_only = trial % 2 == 0;
         let lo = if final_txn_only { last_txn_lo } else { 0 };
-        let mut offs: Vec<u64> = (0..1 + rng.next_range(4))
+        let mut offsets: Vec<u64> = (0..1 + rng.next_range(4))
             .map(|_| lo + rng.next_range(fixture.full_len - lo))
             .collect();
-        offs.sort_unstable();
-        offs.dedup();
-        for &off in &offs {
+        offsets.sort_unstable();
+        offsets.dedup();
+        for &off in &offsets {
             flip_byte(&seg1(&case), off);
         }
-        let first_flip = offs[0];
+        let first_flip = offsets[0];
         let ctx = format!(
-            "E trial {trial}: seed {seed:#x}, flipped {offs:?} of {} ({})",
+            "E trial {trial}: seed {seed:#x}, flipped {offsets:?} of {} ({})",
             fixture.full_len,
             if final_txn_only { "final txn" } else { "anywhere" }
         );

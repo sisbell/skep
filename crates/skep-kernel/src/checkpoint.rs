@@ -86,20 +86,20 @@ fn parse_checkpoint_name(name: &str) -> Option<u64> {
 /// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
 /// names fail the name parse and are skipped.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
-    let mut v = Vec::new();
+    let mut checkpoints = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
         let Some(seq) = name.to_str().and_then(parse_checkpoint_name) else {
             continue;
         };
-        v.push(CheckpointMeta {
+        checkpoints.push(CheckpointMeta {
             seq,
             path: entry.path(),
         });
     }
-    v.sort_by_key(|cp| cp.seq);
-    Ok(v)
+    checkpoints.sort_by_key(|cp| cp.seq);
+    Ok(checkpoints)
 }
 
 /// Keep the newest `keep` checkpoints, delete the rest, and fsync the
@@ -184,13 +184,13 @@ mod tests {
         let data = fs::read(checkpoint_path(dir.path(), 7)).unwrap();
         let body = bincode::serialize(&world()).unwrap();
 
-        let mut expect = Vec::new();
-        expect.extend_from_slice(b"SKC1");
-        expect.extend_from_slice(&7u64.to_le_bytes()); // seq
-        expect.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
-        expect.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
-        assert_eq!(expect.len(), HEADER_LEN, "the header is what `load` splits at");
-        assert_eq!(&data[..HEADER_LEN], expect.as_slice());
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"SKC1");
+        expected.extend_from_slice(&7u64.to_le_bytes()); // seq
+        expected.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
+        expected.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
+        assert_eq!(expected.len(), HEADER_LEN, "the header is what `load` splits at");
+        assert_eq!(&data[..HEADER_LEN], expected.as_slice());
         assert_eq!(&data[HEADER_LEN..], body.as_slice());
 
         // …and the whole file loads back through the door every base walks

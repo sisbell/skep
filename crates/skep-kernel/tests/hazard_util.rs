@@ -270,7 +270,7 @@ impl Fixture {
         let genesis = GenesisConfig::standard();
         let engine = Engine::open(manual_cfg(dir), genesis.clone()).expect("fixture open");
         let genesis_dump =
-            dump(&engine.world_at(Seq(0)).expect("genesis position answers"), &genesis);
+            dump(&engine.world_at(Seq(0)).expect("genesis boundary answers"), &genesis);
         let seg = seg1(dir);
         let mut boundaries: Vec<BoundaryOracle> = Vec::new();
 
@@ -419,7 +419,7 @@ pub fn judge_prefix(fix: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool,
     );
     if deep {
         let g = dump(&engine.world_at(Seq(0)).expect("genesis answers"), &fix.genesis);
-        assert_eq!(g, fix.genesis_dump, "FINDING ({ctx}): genesis position diverged");
+        assert_eq!(g, fix.genesis_dump, "FINDING ({ctx}): genesis boundary diverged");
         for b in fix.boundaries.iter().filter(|b| b.seq <= head) {
             let w = engine.world_at(Seq(b.seq)).unwrap_or_else(|e| {
                 panic!("FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}", b.seq)

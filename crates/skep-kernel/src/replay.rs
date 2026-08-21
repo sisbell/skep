@@ -1,15 +1,15 @@
 //! Deriving a world from the journal (§6/§7): choose a base at or below a
-//! position, then fold the committed records above it up to that position.
+//! boundary, then fold the committed records above it up to that boundary.
 //!
 //! Recovery and bounded replay are the SAME derivation — they differ only in
-//! their bound (recovery's is the trustworthy boundary `W`, bounded replay's
-//! is the requested position) and in what else they do around it (recovery
-//! truncates the tail; bounded replay checks the position is a boundary). So
+//! their bound (recovery's is §7's `W`, bounded replay's is the requested
+//! boundary) and in what else they do around it (recovery truncates the tail;
+//! bounded replay checks the requested value is a boundary at all). So
 //! the base-selection fallback chain, the `rebuild_derived` seeding and the
 //! exactly-once fold are stated once, here, and each caller supplies its
 //! bound and its own error vocabulary.
 
-use crate::checkpoint::{self, CkptMeta};
+use crate::checkpoint::{self, CheckpointMeta};
 use crate::journal::{self, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
@@ -20,10 +20,10 @@ pub(crate) struct Base<W> {
     pub world: W,
 }
 
-/// No base at or below the requested position remains derivable: no retained
+/// No base at or below the requested boundary remains derivable: no retained
 /// checkpoint there loads, and the journal no longer reaches back to `Seq(1)`
 /// so genesis cannot stand in (§6/§7). `floor` is the oldest retained
-/// checkpoint's seq when one exists — the oldest position a base could still
+/// checkpoint's seq when one exists — the oldest boundary a base could still
 /// be derived at.
 pub(crate) struct Unreachable {
     pub floor: Option<u64>,
@@ -41,7 +41,7 @@ pub(crate) struct Unreachable {
 /// carries the hints forward across everything above it (§7, seam
 /// contract 2).
 pub(crate) fn select_base<W: WorldState>(
-    cps: &[CkptMeta],
+    cps: &[CheckpointMeta],
     segs: &[SegmentMeta],
     ceiling: Option<u64>,
     genesis: W,

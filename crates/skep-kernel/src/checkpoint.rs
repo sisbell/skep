@@ -20,14 +20,14 @@ use crate::journal::fsync_dir;
 const CKPT_MAGIC: [u8; 4] = *b"SKC1";
 const HEADER_LEN: usize = 24;
 
-pub(crate) struct CkptMeta {
+pub(crate) struct CheckpointMeta {
     pub seq: u64,
     pub path: PathBuf,
 }
 
 /// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
 /// names fail the numeric parse and are skipped.
-pub(crate) fn list(dir: &Path) -> io::Result<Vec<CkptMeta>> {
+pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     let mut v = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
@@ -37,7 +37,7 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CkptMeta>> {
             continue;
         };
         let Ok(seq) = stem.parse::<u64>() else { continue };
-        v.push(CkptMeta {
+        v.push(CheckpointMeta {
             seq,
             path: entry.path(),
         });
@@ -46,13 +46,13 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CkptMeta>> {
     Ok(v)
 }
 
-/// Keep the newest `retain` checkpoints, delete the rest, and fsync the
+/// Keep the newest `keep` checkpoints, delete the rest, and fsync the
 /// directory so the unlinks are durable. Answers the oldest retained seq —
 /// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
 /// or `None` when no checkpoint remains.
-pub(crate) fn prune(dir: &Path, retain: usize) -> io::Result<Option<u64>> {
+pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
     let mut cps = list(dir)?;
-    while cps.len() > retain {
+    while cps.len() > keep {
         let victim = cps.remove(0);
         fs::remove_file(&victim.path)?;
     }

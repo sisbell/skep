@@ -69,8 +69,8 @@ impl From<io::Error> for OpenError {
 /// Failure of [`crate::Kernel::checkpoint`] (§6).
 #[derive(Debug)]
 pub enum CheckpointError {
-    /// I/O failure persisting the checkpoint, pruning retention, or reclaiming
-    /// journal segments.
+    /// I/O failure persisting the checkpoint, applying retention, or
+    /// reclaiming journal segments.
     Io(io::Error),
     /// The world failed to serialize.
     Serialize,
@@ -106,19 +106,19 @@ impl From<io::Error> for CheckpointError {
 
 /// Failure of [`crate::Kernel::world_at`] — the read-only bounded replay
 /// (observation-surface API). None of these poisons the kernel or perturbs
-/// the live write path; every variant is an honest "this position cannot be
+/// the live write path; every variant is an honest "this boundary cannot be
 /// answered" (or a genuine at-rest corruption find).
 #[derive(Debug)]
 pub enum HistoryError {
     /// `at` exceeds the committed head at the time of the call. `head` is
-    /// that head — the greatest currently answerable position.
+    /// that head — the greatest currently answerable boundary.
     BeyondHead {
         /// The committed head observed by this call.
         head: Seq,
     },
     /// `at` is not a committed transaction boundary: it names an interior
     /// `Seq` of a multi-record commit (never externally observable — §2/§3)
-    /// or a burned `Seq` under `TolerateGap`. Positions are the `Seq` values
+    /// or a burned `Seq` under `TolerateGap`. Boundaries are the `Seq` values
     /// `transact` returns; nothing else is one.
     NotABoundary {
         /// The greatest committed boundary at or below the requested value
@@ -129,7 +129,7 @@ pub enum HistoryError {
     /// sits above it and the journal below the oldest retained checkpoint
     /// has been reclaimed (§6), so genesis is unreachable. `floor` is the
     /// oldest retained checkpoint's seq — the oldest still-answerable
-    /// position — when one exists.
+    /// boundary — when one exists.
     Reclaimed {
         /// Oldest retained checkpoint seq, if any checkpoint exists.
         floor: Option<Seq>,
@@ -155,11 +155,11 @@ impl fmt::Display for HistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HistoryError::BeyondHead { head } => {
-                write!(f, "position beyond the committed head {}", head.0)
+                write!(f, "boundary beyond the committed head {}", head.0)
             }
             HistoryError::NotABoundary { nearest } => write!(
                 f,
-                "not a committed position; nearest boundary at or below is {}",
+                "not a committed boundary; nearest at or below is {}",
                 nearest.0
             ),
             HistoryError::Reclaimed { floor: Some(fl) } => write!(

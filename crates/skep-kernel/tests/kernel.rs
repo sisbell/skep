@@ -530,9 +530,9 @@ fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
 }
 
 #[test]
-fn world_at_answers_a_base_position_without_consulting_the_journal() {
-    // Bit-rot above the base: every position that must fold over the damaged
-    // region halts, and the base's own position — answered wholly from the
+fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
+    // Bit-rot above the base: every boundary that must fold over the damaged
+    // region halts, and the base's own boundary — answered wholly from the
     // checkpoint that embodies it — does not.
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();

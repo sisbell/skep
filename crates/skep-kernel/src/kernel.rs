@@ -163,12 +163,12 @@ pub struct Kernel<W: WorldState> {
     /// §6: serializes `checkpoint()` against itself (caller calls and the
     /// on-commit auto-trigger); distinct from the applier lock so persisting
     /// and reclaiming never block writers.
-    ckpt: Mutex<()>,
+    checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
     cfg: KernelCfg,
     /// Σ₀ — the genesis world this kernel was opened under, kept because it
     /// is the base every derivation falls back to when no checkpoint covers
-    /// the position ([`Kernel::world_at`]).
+    /// the boundary ([`Kernel::world_at`]).
     genesis: W,
     /// The `open()`-held exclusive advisory lock (Lifecycle); `None` under
     /// `Durability::InMemory`. Held for the kernel's lifetime.
@@ -223,7 +223,7 @@ impl<W: WorldState> Kernel<W> {
     fn open_durable(cfg: KernelCfg, genesis: W) -> Result<Self, OpenError> {
         cfg.validate()?;
         fs::create_dir_all(&cfg.journal_path)?;
-        let lock = journal::acquire_dir_lock(&cfg.journal_path)?;
+        let lock = journal::acquire_journal_lock(&cfg.journal_path)?;
         let segs = journal::list_segments(&cfg.journal_path)?;
         let cps = checkpoint::list(&cfg.journal_path)?;
 
@@ -238,7 +238,7 @@ impl<W: WorldState> Kernel<W> {
         // and EOF runs are the un-acked/torn tail, physically discarded
         // below; runs at or below S_load are already embodied in the base.
         let scan = journal::scan(&segs, s_load)?;
-        if let Some(at) = scan.fatal_run(s_load, scan.w) {
+        if let Some(at) = scan.fatal_run(s_load, scan.committed_head) {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
 
@@ -246,14 +246,14 @@ impl<W: WorldState> Kernel<W> {
         journal::truncate_tail(&cfg.journal_path, &scan)?;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
-        let w = scan.w;
-        let world =
-            replay::fold_to(base, scan, w).map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
+        let head = scan.committed_head;
+        let world = replay::fold_to(base, scan, head)
+            .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
 
-        let writer = JournalWriter::open_active(&cfg.journal_path, w + 1)?;
+        let writer = JournalWriter::open_active(&cfg.journal_path, head + 1)?;
         Ok(Self::assemble(
             cfg,
-            Seq(w),
+            Seq(head),
             world,
             genesis,
             Journal::Segments(writer),
@@ -291,7 +291,7 @@ impl<W: WorldState> Kernel<W> {
                 journal,
                 cadence,
             }),
-            ckpt: Mutex::new(()),
+            checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             cfg,
             genesis,
@@ -388,7 +388,7 @@ impl<W: WorldState> Kernel<W> {
                 let mut rec_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
                 for r in records.iter() {
                     rec_bytes.push(bincode::serialize(r).map_err(|e| {
-                        CommitFail::RolledBack(io::Error::new(io::ErrorKind::InvalidData, e))
+                        CommitFail::Clean(io::Error::new(io::ErrorKind::InvalidData, e))
                     })?);
                 }
                 st_in.journal.commit_txn(first, &rec_bytes, move || {
@@ -424,13 +424,13 @@ impl<W: WorldState> Kernel<W> {
             // §1/§3: the barrier never completed and the journal is durably
             // back where this txn found it — a TRUE no-op the caller may
             // re-invoke.
-            Ok(Err(CommitFail::RolledBack(e))) => {
+            Ok(Err(CommitFail::Clean(e))) => {
                 if rollback {
                     st.seq_hi = base.seq.0;
                 }
                 Err(TxnError::Durability(e))
             }
-            // The repair itself could not complete durably (§1).
+            // The truncation itself could not complete durably (§1).
             Ok(Err(CommitFail::Unrepaired)) => {
                 self.poisoned.store(true, Ordering::Release);
                 Err(TxnError::Poisoned)
@@ -494,7 +494,7 @@ impl<W: WorldState> Kernel<W> {
         let Some(dir) = self.journal_dir() else {
             return Ok(self.current_seq()); // nothing to persist or reclaim (§6)
         };
-        let _serial = self.ckpt.lock();
+        let _serial = self.checkpoint_mutex.lock();
         let snap = self.root.load_full();
         let s = snap.seq;
         // Authoritative state serialized; hints may #[serde(skip)] and be
@@ -503,7 +503,7 @@ impl<W: WorldState> Kernel<W> {
         checkpoint::write(dir, s.0, &body)?;
         // Retention policy — how many bases to keep — applied to the
         // checkpoint set, which answers with the oldest survivor.
-        let s_old = checkpoint::prune(dir, self.cfg.retain_checkpoints)?.unwrap_or(s.0);
+        let s_old = checkpoint::retain(dir, self.cfg.retain_checkpoints)?.unwrap_or(s.0);
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).
@@ -512,7 +512,7 @@ impl<W: WorldState> Kernel<W> {
         Ok(s)
     }
 
-    /// The committed world as of position `at` — READ-ONLY bounded replay
+    /// The committed world as of boundary `at` — READ-ONLY bounded replay
     /// over this kernel's own journal directory (observation-surface API;
     /// the journal already holds every committed state, this makes a prefix
     /// of it answerable). Base = the newest retained checkpoint at or below
@@ -531,7 +531,7 @@ impl<W: WorldState> Kernel<W> {
     /// A corrupt run at rest anywhere in the scanned region is a halt
     /// ([`HistoryError::Corruption`]), independently of where `at` sits: a
     /// run's own seqs are unreadable, so answering around it could answer
-    /// from a hole. A position that IS the base — a retained checkpoint's seq,
+    /// from a hole. A boundary that IS the base — a retained checkpoint's seq,
     /// or 0 — is answered from that base without consulting the journal, and
     /// so never halts.
     ///
@@ -545,10 +545,9 @@ impl<W: WorldState> Kernel<W> {
     /// (§1 durable-before-visible), so the bounded region is stable under
     /// the reader; a racing append can contribute at most a torn suffix,
     /// which classifies as an EOF run beyond the last committed marker and
-    /// is ignored here. A concurrent checkpoint's retention pruning can
-    /// remove a file between listing and reading — that surfaces as a
-    /// transient [`HistoryError::Io`]/[`HistoryError::Reclaimed`], never a
-    /// wrong world.
+    /// is ignored here. A concurrent checkpoint's retention can remove a file
+    /// between listing and reading — that surfaces as a transient
+    /// [`HistoryError::Io`]/[`HistoryError::Reclaimed`], never a wrong world.
     pub fn world_at(&self, at: Seq) -> Result<W, HistoryError> {
         let head = self.current_seq();
         if at > head {
@@ -558,7 +557,7 @@ impl<W: WorldState> Kernel<W> {
             return Err(HistoryError::Unjournaled);
         };
         // The same base selection recovery runs, capped at `at` so a later
-        // checkpoint cannot stand in for an earlier position.
+        // checkpoint cannot stand in for an earlier boundary.
         let cps = checkpoint::list(dir)?;
         let segs = journal::list_segments(dir)?;
         let base = replay::select_base(&cps, &segs, Some(at.0), self.genesis.clone())
@@ -566,7 +565,7 @@ impl<W: WorldState> Kernel<W> {
                 floor: u.floor.map(Seq),
             })?;
         let s_load = base.s_load;
-        // A position that IS the base is answered wholly from that base:
+        // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
         // installed root) and 0 is genesis, so there is nothing to fold, and
         // consulting the journal could only refuse a question the base already
@@ -641,7 +640,7 @@ mod tests {
         {
             let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
             let r = |x: u64| bincode::serialize(&x).unwrap();
-            // A journal built without a kernel: nothing to publish into.
+            // A journal built without a kernel: no root to install into.
             assert!(w.commit_txn(1, &[r(10)], || {}).is_ok());
             assert!(w.commit_txn(5, &[r(50), r(60)], || {}).is_ok()); // burned 2..=4
         }
@@ -705,8 +704,8 @@ mod tests {
     }
 
     #[test]
-    fn world_at_selects_the_base_below_the_position() {
-        // A checkpoint above `at` must be skipped (positions before it still
+    fn world_at_selects_the_base_below_the_boundary() {
+        // A checkpoint above `at` must be skipped (boundaries before it still
         // fold from genesis); a checkpoint at/below `at` is a valid base and
         // yields the same value the genesis fold would (§6 consistency).
         let dir = tempfile::tempdir().unwrap();

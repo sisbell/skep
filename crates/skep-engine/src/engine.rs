@@ -25,7 +25,8 @@ use crate::world::World;
 pub enum EngineError {
     /// `TypeRegistry::build` / `LinkState::genesis` rejected the config.
     Registry(RegistryError),
-    /// `Kernel::open` failed (`Io` / `BadCheckpoint` / `Corruption`).
+    /// `Kernel::open` failed (`InvalidConfig` / `Io` / `BadCheckpoint` /
+    /// `Corruption`).
     Open(OpenError),
     /// The recovered world's genesis-sealed type config disagrees with the
     /// configuration passed to this open on the named shipped class — the

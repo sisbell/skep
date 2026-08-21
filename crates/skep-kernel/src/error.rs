@@ -8,6 +8,10 @@ use crate::Seq;
 /// Failure of [`crate::Kernel::open`] (§6/§7).
 #[derive(Debug)]
 pub enum OpenError {
+    /// The configuration is not one this kernel offers; the payload names the
+    /// rule broken. Not an environmental failure: no retry and no operator
+    /// action on the store changes it, only a corrected configuration does.
+    InvalidConfig(&'static str),
     /// I/O failure during open/recovery — including a recovery tail-truncation
     /// that fails to complete durably (§7; `open()` then fails, the step is
     /// idempotent and the next `open()` retries it) and a failed acquisition
@@ -38,6 +42,7 @@ pub enum OpenError {
 impl fmt::Display for OpenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            OpenError::InvalidConfig(msg) => write!(f, "invalid kernel configuration: {msg}"),
             OpenError::Io(e) => write!(f, "journal open/recovery I/O failure: {e}"),
             OpenError::BadCheckpoint => {
                 write!(f, "no retained checkpoint loads and genesis is unreachable")
@@ -65,18 +70,27 @@ impl From<io::Error> for OpenError {
     }
 }
 
-/// Failure of [`crate::Kernel::checkpoint`] (§6).
+/// Failure of [`crate::Kernel::checkpoint`] (§6). A failed checkpoint never
+/// poisons the kernel and never disturbs the write path; each variant states
+/// what it left behind, since that is what decides the caller's next move.
 #[derive(Debug)]
 pub enum CheckpointError {
     /// I/O failure persisting the checkpoint, applying retention, or
-    /// reclaiming journal segments.
+    /// reclaiming journal segments. What survives is benign in each case: a
+    /// checkpoint written but not yet retained-against is a valid base, an
+    /// unapplied retention leaves extra bases, and an unreclaimed segment is
+    /// space. So the call is safe to retry, and a retry re-does the whole
+    /// sequence from a fresh root.
     Io(io::Error),
     /// The world failed to serialize. Carries the serializer's own account of
     /// which part of the world it could not encode — the only thing that
-    /// identifies the failure, since M2 never inspects `W`.
+    /// identifies the failure, since M2 never inspects `W`. Nothing was
+    /// written, not even a temp file: the encode precedes the first file
+    /// operation. Retrying repeats the refusal until `W` itself encodes.
     Serialize(Box<dyn std::error::Error + Send + Sync + 'static>),
     /// A prior barrier/truncation/unwind failure has halted the kernel
-    /// (§1/§3); no further checkpoint is taken.
+    /// (§1/§3). No checkpoint was attempted, nothing was written, and none
+    /// will be until the kernel is reopened.
     Poisoned,
 }
 
@@ -125,17 +139,25 @@ pub enum HistoryError {
     /// or a burned `Seq` under `TolerateGap`. Boundaries are the `Seq` values
     /// `transact` returns; nothing else is one.
     NotABoundary {
-        /// The greatest committed boundary at or below the requested value
-        /// (0 = genesis).
+        /// The greatest boundary at or below the requested value that THIS
+        /// call can still answer — never below the base it selected, since a
+        /// segment straddling that base contributes boundaries below it with
+        /// no base left to fold from (0 = genesis). It is therefore the value
+        /// a caller may safely re-ask with; a boundary lower still may be
+        /// answerable in its own right, from the older base a lower `at`
+        /// would select.
         nearest: Seq,
     },
     /// No base at or below `at` remains derivable: every retained checkpoint
     /// sits above it and the journal below the oldest retained checkpoint
-    /// has been reclaimed (§6), so genesis is unreachable. `floor` is the
-    /// oldest retained checkpoint's seq — the oldest still-answerable
-    /// boundary — when one exists.
+    /// has been reclaimed (§6), so genesis is unreachable. `floor` names the
+    /// oldest boundary a base could still be derived at, when a checkpoint
+    /// exists to derive it from.
     Reclaimed {
-        /// Oldest retained checkpoint seq, if any checkpoint exists.
+        /// The oldest retained checkpoint's seq — the oldest boundary a base
+        /// could still be derived at — or `None` when no checkpoint exists.
+        /// That checkpoint is the oldest CANDIDATE, not a guarantee: one that
+        /// fails its own header checksum refuses this way again.
         floor: Option<Seq>,
     },
     /// The kernel runs under [`crate::Durability::InMemory`]: there is no

@@ -1,7 +1,6 @@
 //! Kernel configuration — the knobs the design's Open-build-decisions section
 //! selects, carried on [`KernelConfig`] (§Public interface).
 
-use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -17,6 +16,13 @@ pub struct KernelConfig {
     /// auto-trigger, leaving cadence to the caller. Meaningful in both
     /// durability modes: under [`Durability::InMemory`] the trigger still
     /// evaluates and the `checkpoint()` it fires is a no-op.
+    ///
+    /// A checkpoint the trigger fires runs on the committing thread, after
+    /// that commit is durable and installed, and its failure is DISCARDED —
+    /// the transaction is already acknowledged, so the error has no sound
+    /// path out (§3/§6). A caller who needs to know whether checkpointing is
+    /// succeeding calls [`crate::Kernel::checkpoint`] itself and reads the
+    /// result.
     pub checkpoint: CheckpointPolicy,
 }
 
@@ -24,16 +30,14 @@ impl KernelConfig {
     /// The interface's `N ≥ 1` retention rule (§Public interface). A violation
     /// is surfaced rather than silently clamped: `N = 0` asks for a journal
     /// with no base to recover from, which is a caller's mistake and not a
-    /// mode this kernel offers.
-    pub(crate) fn validate(&self) -> Result<(), io::Error> {
+    /// mode this kernel offers. `Err` names the rule broken, which is the
+    /// whole of what a caller can act on.
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
         match self.durability {
             Durability::Fsync {
                 retain_checkpoints: 0,
                 ..
-            } => Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "retain_checkpoints must be >= 1",
-            )),
+            } => Err("retain_checkpoints must be >= 1"),
             _ => Ok(()),
         }
     }
@@ -52,6 +56,15 @@ pub enum Durability {
     Fsync {
         /// Directory for journal segments + checkpoints + the `open()`-held
         /// exclusion lock file (Lifecycle).
+        ///
+        /// CALLER CONTRACT — this directory belongs to the kernel alone.
+        /// `open()` creates it if absent, and the kernel creates, reads and
+        /// DELETES the files in it named `seg-<n>.wal`, `checkpoint.<n>`,
+        /// `checkpoint.tmp` and `kernel.lock`: checkpoint retention and
+        /// journal reclamation are deletions, and a foreign file bearing one
+        /// of those names is a base or a segment as far as recovery is
+        /// concerned. The `open()`-held flock excludes a second kernel and
+        /// nothing else. M2 cannot check this.
         journal_path: PathBuf,
         /// `N ≥ 1` most-recent checkpoints kept; the journal is reclaimed only
         /// BELOW the OLDEST retained one, so `BadCheckpoint` can fall back to
@@ -64,6 +77,15 @@ pub enum Durability {
     /// Fully in-memory: no journal, no barrier, no recovery (MIC-faithful —
     /// ASN-0134 is silent on durability; atomicity/isolation intact).
     /// `checkpoint()` and `flush()` are then no-ops (§6/Lifecycle).
+    ///
+    /// Records are still SERIALIZED on every commit: the encode step precedes
+    /// the journal and runs in both modes, and this mode drops the bytes it
+    /// produces. So an in-memory kernel pays a full serialization per record,
+    /// and can still refuse with [`crate::TxnError::Unencodable`] — the same
+    /// records are refused in both modes, which is what lets an in-memory
+    /// test catch an encoding bug. What it has no path to is
+    /// [`crate::TxnError::Durability`], which is a barrier's failure and
+    /// there is no barrier.
     InMemory,
 }
 
@@ -71,8 +93,9 @@ impl Durability {
     /// Whether the `Seq`s a failed transaction burned are rolled back
     /// (keeping the order gap-free) or left advanced (relaxing it to
     /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
-    /// of its own: its commit path has no barrier to fail, and its panic-path
-    /// rollback keeps the order gap-free, so it answers with the default.
+    /// of its own: its commit path has no barrier to fail, so the two ways it
+    /// burns coordinates are an unencodable record and an unwind, and the
+    /// default it answers with reclaims both, keeping its order gap-free.
     pub(crate) fn rolls_back_burned_seqs(&self) -> bool {
         match self {
             Durability::Fsync { burned_seq, .. } => *burned_seq == BurnedSeqPolicy::Rollback,
@@ -152,8 +175,8 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         assert_eq!(
-            bad.validate().unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
+            bad.validate().unwrap_err(),
+            "retain_checkpoints must be >= 1"
         );
         let mem = KernelConfig {
             durability: Durability::InMemory,

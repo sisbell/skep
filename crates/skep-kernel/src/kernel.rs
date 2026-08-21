@@ -4,14 +4,15 @@
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
+use std::ops::{Deref, DerefMut};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::checkpoint;
 use crate::config::{CheckpointPolicy, Durability, KernelConfig};
@@ -186,6 +187,60 @@ struct ApplierState {
     cadence: Cadence,
 }
 
+/// A process-unique, non-zero token per thread. `0` is issued to no thread, so
+/// it doubles as "the applier is held by nobody".
+fn applier_token() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    thread_local! {
+        static TOKEN: u64 = NEXT.fetch_add(1, Ordering::Relaxed);
+    }
+    TOKEN.with(|token| *token)
+}
+
+/// The applier lock together with the token of the thread holding it — the one
+/// fact [`Kernel::transact`] needs to answer a nested call as the precondition
+/// failure it is, rather than as the deadlock it would otherwise be. The owner
+/// is cleared BEFORE the lock is released (a value's own `Drop::drop` runs
+/// before its fields drop), so no thread observes a stale owner while another
+/// holds the lock.
+///
+/// `Relaxed` suffices throughout: the only value ever compared is the reading
+/// thread's OWN token, which no other thread stores, and a thread's own store
+/// precedes its own load in program order. Other threads' stores are invisible
+/// to the comparison because they can only be `0` or a token belonging to
+/// somebody else.
+struct Applier<'k> {
+    owner: &'k AtomicU64,
+    state: MutexGuard<'k, ApplierState>,
+}
+
+impl<'k> Applier<'k> {
+    fn acquire(owner: &'k AtomicU64, lock: &'k Mutex<ApplierState>, me: u64) -> Applier<'k> {
+        let state = lock.lock();
+        owner.store(me, Ordering::Relaxed);
+        Applier { owner, state }
+    }
+}
+
+impl Drop for Applier<'_> {
+    fn drop(&mut self) {
+        self.owner.store(0, Ordering::Relaxed);
+    }
+}
+
+impl Deref for Applier<'_> {
+    type Target = ApplierState;
+    fn deref(&self) -> &ApplierState {
+        &self.state
+    }
+}
+
+impl DerefMut for Applier<'_> {
+    fn deref_mut(&mut self) -> &mut ApplierState {
+        &mut self.state
+    }
+}
+
 /// The transactional kernel over an engine-supplied `W` (§Public interface).
 /// v1 concurrency realization: the single applier (§8) — every write runs to
 /// completion under one global lock, subsuming the `LockKey` seam; the
@@ -193,6 +248,11 @@ struct ApplierState {
 pub struct Kernel<W: WorldState> {
     root: ArcSwap<Committed<W>>,
     applier: Mutex<ApplierState>,
+    /// The token of the thread currently inside `transact`'s applier-locked
+    /// region, or `0` for none. Scoped per kernel, not per thread: one thread
+    /// transacting on two DISTINCT kernels is honest input and must not be
+    /// refused.
+    applier_owner: AtomicU64,
     /// §6: serializes `checkpoint()` against itself (caller calls and the
     /// on-commit auto-trigger); distinct from the applier lock so persisting
     /// and reclaiming never block writers.
@@ -226,6 +286,10 @@ impl<W: WorldState> fmt::Debug for Kernel<W> {
 impl<W: WorldState> Kernel<W> {
     /// Recover or init (Lifecycle, §7).
     ///
+    /// The configuration is validated FIRST — a rule this kernel does not
+    /// offer is refused with [`OpenError::InvalidConfig`] before the journal
+    /// lock is taken and before any file is read.
+    ///
     /// Under [`Durability::Fsync`]: take the exclusive advisory journal lock
     /// (a second `open()` of the same journal fails with [`OpenError::Io`]);
     /// load the latest valid RETAINED checkpoint @`S_load` — on a bad one fall
@@ -246,13 +310,19 @@ impl<W: WorldState> Kernel<W> {
     /// Under [`Durability::InMemory`]: no journal to name, no recovery, and
     /// the root is initialized directly from `genesis` (`S_load = 0`).
     ///
+    /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
+    /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
+    /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
+    /// precedes [`OpenError::Corruption`], and `Corruption` precedes the tail
+    /// truncation, which is why a halt never cuts anything.
+    ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
     /// `open()` of a given journal: recovery folds journaled DELTAS onto it,
     /// never onto a journaled root; a drifting `genesis` silently
     /// mis-recovers. M2 cannot check this (ASN-0047's fixed Σ₀ satisfies it
     /// by construction).
     pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
-        cfg.validate()?;
+        cfg.validate().map_err(OpenError::InvalidConfig)?;
         let (root, journal, lock) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
             // no rebuild_derived — the caller's live value is the root.
@@ -357,6 +427,7 @@ impl<W: WorldState> Kernel<W> {
                 journal,
                 cadence,
             }),
+            applier_owner: AtomicU64::new(0),
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             cfg,
@@ -379,20 +450,52 @@ impl<W: WorldState> Kernel<W> {
     /// zero-step op (A1: read-only / idem-hit / nullify-hit), no commit; the
     /// returned `Seq` is the base `Committed`'s seq — the committed index the
     /// op evaluated against (A2/V1; under per-commit `Fsync` that base is
-    /// durable, so a zero-step op never waits).
+    /// durable, so a zero-step op never waits on the durability barrier —
+    /// like every transaction it waits for the applier lock, which is why
+    /// [`Kernel::snapshot`] and not a zero-step `transact` is the read path,
+    /// §5).
     ///
     /// Staged records that cannot be journaled — a serializer that refuses,
     /// or a record past the journal's frame size — are
     /// [`TxnError::Unencodable`]: a no-op like [`TxnError::Durability`], and
     /// unlike it, one that re-invoking with the same records cannot fix.
     ///
-    /// NON-REENTRANT: `f` MUST NOT call `transact` (or any kernel write path)
-    /// — the applier lock is held, so a nested write DEADLOCKS. A composite
-    /// composes neighbors' PURE math inside ONE closure (§3; seam contract 3).
+    /// On a POISONED kernel the refusal PRECEDES `f`: the call returns
+    /// [`TxnError::Poisoned`] without running the closure, so a closure with
+    /// effects of its own does not run for a transaction that cannot commit.
+    ///
+    /// PRECONDITION — `f` MUST NOT call `transact` on this kernel; this call
+    /// holds the applier lock for the whole of `f`, so a nested write can
+    /// never proceed. The violation is a caller's bug and is answered as one
+    /// — a panic naming the broken obligation — not as the deadlock it would
+    /// otherwise be. `f` MAY take this kernel's reads
+    /// ([`Kernel::snapshot`], [`Kernel::current_seq`], [`Kernel::world_at`]):
+    /// they acquire no applier lock and observe Σ, the base, never the staged
+    /// Σᵢ — which is what makes a composite's intermediates invisible to
+    /// external readers (§3). [`Kernel::checkpoint`] likewise acquires no
+    /// applier lock; one taken from inside `f` embodies Σ, not the
+    /// transaction in flight. A composite composes neighbors' PURE math
+    /// inside ONE closure (§3; seam contract 3).
     ///
     /// Under the v1 single applier the global lock subsumes `keys` (§4):
     /// callers still pass the keys they would need under the deferred per-key
     /// realization, so it slots in later without changing any call shape.
+    /// `keys` is a SET as far as this kernel is concerned — order and
+    /// duplicates are the kernel's to normalize under any realization, never
+    /// the caller's to arrange — so no store invents an ordering discipline
+    /// the deferred per-key realization would then have to honour.
+    ///
+    /// A committing call may additionally take a checkpoint before it
+    /// returns: the §6 on-commit trigger is evaluated under the applier lock
+    /// and, when it crosses, [`Kernel::checkpoint`] runs to completion on
+    /// this thread — serializing `W`, writing and fsyncing a file, applying
+    /// retention, reclaiming segments — after the commit is durable and
+    /// installed. Its failure is DISCARDED: the transaction is already
+    /// acknowledged, so there is no sound path for that error through
+    /// [`TxnError`], and v1 has no logging seam. A caller who needs to know
+    /// whether checkpointing is succeeding must call [`Kernel::checkpoint`]
+    /// itself and read the result; a store that has stopped checkpointing
+    /// goes on committing and says nothing.
     ///
     /// A panic unwinding out of `f` or the commit path is handled by the §3
     /// unwind guard (pre-barrier: discard staging, durably truncate any
@@ -408,7 +511,13 @@ impl<W: WorldState> Kernel<W> {
         f: impl FnOnce(&mut Staging<W>) -> Result<T, E>,
     ) -> Result<(T, Seq), TxnError<E>> {
         let _ = keys; // §4: subsumed by the single applier's global lock in v1.
-        let mut applier = self.applier.lock();
+        let me = applier_token();
+        assert!(
+            self.applier_owner.load(Ordering::Relaxed) != me,
+            "transact is not reentrant: the closure called `transact` on this kernel, \
+             which holds the applier lock for the whole of `f` (§3)"
+        );
+        let mut applier = Applier::acquire(&self.applier_owner, &self.applier, me);
         if self.poisoned.load(Ordering::Acquire) {
             return Err(TxnError::Poisoned);
         }
@@ -574,9 +683,11 @@ impl<W: WorldState> Kernel<W> {
     /// applier lock) and serialized against itself by the dedicated
     /// checkpoint mutex. Cadence counters live in `transact`'s applier-locked
     /// state — a caller-invoked `checkpoint()` does NOT reset them (§6).
-    /// Returns the checkpointed seq, or [`CheckpointError::Poisoned`] if a
-    /// prior failure halted the kernel. Under [`Durability::InMemory`] it is
-    /// a no-op returning [`current_seq`].
+    /// Returns the checkpointed seq. [`CheckpointError::Poisoned`] — a prior
+    /// failure halted the kernel — outranks every other answer, the
+    /// in-memory no-op included, so a halted kernel takes no checkpoint in
+    /// either mode. Under [`Durability::InMemory`] and unpoisoned it is a
+    /// no-op returning [`current_seq`].
     ///
     /// [`current_seq`]: Kernel::current_seq
     pub fn checkpoint(&self) -> Result<Seq, CheckpointError> {
@@ -594,8 +705,11 @@ impl<W: WorldState> Kernel<W> {
         let body = bincode::serialize(&snap.world).map_err(|e| CheckpointError::Serialize(e))?;
         checkpoint::write(dir, s.0, &body)?;
         // Retention policy — how many bases to keep — applied to the
-        // checkpoint set, which answers with the oldest survivor.
-        let s_old = checkpoint::retain(dir, retain_checkpoints)?.unwrap_or(s.0);
+        // checkpoint set, which answers with the oldest survivor. There is
+        // always one: `retain_checkpoints ≥ 1` is validated at `open`, and
+        // this call has just added to the set the retention is applied to.
+        let s_old = checkpoint::retain(dir, retain_checkpoints)?
+            .expect("retention keeps N ≥ 1 of a set this call just added to");
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).
@@ -631,6 +745,15 @@ impl<W: WorldState> Kernel<W> {
     /// so the bounded fold applies journaled deltas onto exactly the genesis
     /// recovery would.
     ///
+    /// REFUSAL PRECEDENCE — several of these can hold at once, and this is
+    /// the order in which they speak: [`HistoryError::Unjournaled`] first,
+    /// being a property of the kernel that no choice of `at` can avoid; then
+    /// [`HistoryError::BeyondHead`]; then [`HistoryError::Reclaimed`], since
+    /// with no base the journal's contents cannot matter; then
+    /// [`HistoryError::Corruption`], since a corrupt run makes the boundary
+    /// set itself underivable; and last [`HistoryError::NotABoundary`].
+    /// [`HistoryError::Io`] speaks wherever the read that failed sits.
+    ///
     /// COST, per call, uncached: one whole checkpoint file read and
     /// deserialized into a `W`, [`WorldState::rebuild_derived`] run over all
     /// of it, every journal segment above that base read, and every committed
@@ -655,13 +778,17 @@ impl<W: WorldState> Kernel<W> {
     /// [`HistoryError::Corruption`]. A retry re-derives from the file as it
     /// now stands.
     pub fn world_at(&self, at: Seq) -> Result<W, HistoryError> {
+        // A kernel with no journal can answer no boundary, so that refusal
+        // precedes every question about `at`: a caller told `BeyondHead` here
+        // would walk `at` down to genesis before learning that none of it was
+        // ever answerable.
+        let Some((dir, _)) = self.journal_cfg() else {
+            return Err(HistoryError::Unjournaled);
+        };
         let head = self.current_seq();
         if at > head {
             return Err(HistoryError::BeyondHead { head });
         }
-        let Some((dir, _)) = self.journal_cfg() else {
-            return Err(HistoryError::Unjournaled);
-        };
         // The same base selection recovery runs, capped at `at` so a later
         // checkpoint cannot stand in for an earlier boundary.
         let checkpoints = checkpoint::list(dir)?;
@@ -836,7 +963,13 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         let err = Kernel::<Vec<u64>>::open(cfg, Vec::new()).err().unwrap();
-        assert!(matches!(err, OpenError::Io(_)));
+        // A configuration this kernel does not offer, not an environmental
+        // failure: it says so on its own channel, so a caller backing off and
+        // retrying `Io` does not retry a caller's bug forever.
+        assert!(
+            matches!(err, OpenError::InvalidConfig("retain_checkpoints must be >= 1")),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -999,15 +1132,29 @@ mod tests {
     }
 
     #[test]
-    fn world_at_is_unjournaled_in_memory() {
+    fn world_at_is_unjournaled_in_memory_at_every_boundary() {
+        // `Unjournaled` is a property of the kernel that no choice of `at`
+        // can avoid, so it outranks every question about `at` — including
+        // the boundary judgment, which would otherwise answer `BeyondHead`
+        // above the head and send a caller walking `at` down to genesis
+        // before learning that no boundary here was ever answerable.
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-        assert!(matches!(
-            k.world_at(Seq(0)),
-            Err(HistoryError::Unjournaled)
-        ));
+        for x in [10u64, 20] {
+            k.transact::<_, ()>(&[], |s| {
+                s.push(x);
+                Ok(())
+            })
+            .unwrap();
+        }
+        for at in [Seq(0), Seq(1), Seq(2), Seq(3), Seq(99)] {
+            assert!(
+                matches!(k.world_at(at), Err(HistoryError::Unjournaled)),
+                "at {at} answered something other than Unjournaled"
+            );
+        }
     }
 }

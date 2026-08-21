@@ -296,7 +296,7 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     // single atomic install (A0/A4; "none-or-all to external readers"). A
     // lock-free read from inside the closure is exactly what an external
     // reader would take mid-composite — `snapshot`/`current_seq` take no
-    // applier lock, and only nested WRITES are forbidden.
+    // applier lock, which `transact`'s precondition states as a permission.
     let k = Kernel::open(cfg_mem(), genesis()).unwrap();
     push(&k, 1);
     let pinned = k.snapshot();
@@ -314,6 +314,99 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     assert_eq!(items(&k), vec![1, 2, 3]);
     assert_eq!(k.current_seq(), Seq(3));
     assert_eq!(item_list(pinned.world()), vec![1]);
+}
+
+/// The panic message of a caught unwind, whichever way the payload was boxed.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic payload>")
+}
+
+#[test]
+fn a_nested_transact_is_answered_as_the_callers_bug_it_is() {
+    // `transact` holds the applier lock for the whole of `f`, so a nested
+    // write can never proceed. That is a precondition violation — a caller's
+    // bug — and it arrives as a panic naming the broken obligation rather
+    // than as the permanent wedge a non-reentrant lock would otherwise give,
+    // which no operator can act on and no supervisor can distinguish from a
+    // slow fsync.
+    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    push(&k, 1);
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        let _ = k.transact::<(), ()>(&[], |stg| {
+            stg.push(TestRec::Push(2));
+            let _ = k.transact::<(), ()>(&[], |inner| {
+                inner.push(TestRec::Push(3));
+                Ok(())
+            });
+            Ok(())
+        });
+    }));
+    let payload = unwound.expect_err("a nested transact must not proceed");
+    let msg = panic_message(&*payload);
+    assert!(msg.contains("not reentrant"), "got {msg:?}");
+
+    // The refusal precedes the lock and the guard clears its owner on the way
+    // out, so the kernel is left usable and gap-free: neither transaction
+    // drew a `Seq`.
+    assert_eq!(k.current_seq(), Seq(1));
+    assert_eq!(push(&k, 4), Seq(2));
+    assert_eq!(items(&k), vec![1, 4]);
+}
+
+#[test]
+fn the_reentrancy_refusal_is_scoped_to_the_one_kernel_holding_the_lock() {
+    // One thread transacting on two DISTINCT kernels is honest input: the
+    // second kernel's applier is free, so its write proceeds. Refusing here
+    // would panic on a program that has nothing wrong with it.
+    let a = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let b = Kernel::open(cfg_mem(), genesis()).unwrap();
+    let (_, seq) = a
+        .transact(&[], |stg| {
+            stg.push(TestRec::Push(1));
+            b.transact(&[], |inner| {
+                inner.push(TestRec::Push(2));
+                Ok::<(), ()>(())
+            })
+        })
+        .unwrap();
+    assert_eq!(seq, Seq(1));
+    assert_eq!(items(&a), vec![1]);
+    assert_eq!(items(&b), vec![2]);
+}
+
+#[test]
+fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
+    // The other half of the precondition: only nested WRITES are forbidden.
+    // The reads take no applier lock, and `checkpoint()` takes only its own
+    // mutex — so each answers from Σ, the installed root, and none of them
+    // observes the transaction in flight.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+    k.transact(&[], |stg| {
+        stg.push(TestRec::Push(20));
+        assert_eq!(k.current_seq(), Seq(1));
+        assert_eq!(item_list(k.snapshot().world()), vec![10]);
+        // A bounded read derives from the journal, which holds Σ and nothing
+        // of the transaction in flight.
+        assert_eq!(item_list(&k.world_at(Seq(1)).unwrap()), vec![10]);
+        // …and a checkpoint taken here embodies Σ, at Σ's own coordinate.
+        assert_eq!(k.checkpoint().unwrap(), Seq(1));
+        Ok::<(), ()>(())
+    })
+    .unwrap();
+    assert!(ckpt_file(dir.path(), 1).exists());
+    assert_eq!(items(&k), vec![10, 20]);
+    // That mid-composite checkpoint is a real base: reopening onto it and
+    // replaying the tail lands on the whole world, the composite included.
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
+    assert_eq!(k.current_seq(), Seq(2));
 }
 
 #[test]

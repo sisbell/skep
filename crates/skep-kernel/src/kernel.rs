@@ -15,7 +15,7 @@ use arc_swap::ArcSwap;
 use parking_lot::{Mutex, MutexGuard};
 
 use crate::checkpoint;
-use crate::config::{CheckpointPolicy, Durability, KernelConfig};
+use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
 use crate::journal::{self, CommitFail, Journal, JournalWriter, UnwindRepair};
 use crate::replay;
@@ -180,17 +180,17 @@ impl Cadence {
 }
 
 /// The `Seq` order's high-water and the two operations that move it (§2):
-/// minting the run a transaction commits at, and reclaiming a failed
-/// transaction's burned run. Lives in the applier-locked state, so the order is
-/// drawn under the same lock that installs — which is what makes it gap-free
-/// under [`BurnedSeqPolicy::Rollback`] and a composite's records `Seq`-
-/// contiguous. The burned-`Seq` policy is captured here at `open`, so the
-/// commit path asks the configuration nothing.
+/// minting the contiguous `Seq` range a transaction commits at, and rolling
+/// back a failed transaction's burned range. Lives in the applier-locked
+/// state, so the order is drawn under the same lock that installs — which is
+/// what makes it gap-free under [`BurnedSeqPolicy::Rollback`] and a
+/// composite's records `Seq`-contiguous. The burned-`Seq` policy is captured
+/// here at `open`, so the commit path asks the configuration nothing.
 ///
 /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
 struct Sequencer {
     hi: u64,
-    rolls_back: bool,
+    burned_seq: BurnedSeqPolicy,
 }
 
 impl Sequencer {
@@ -198,18 +198,18 @@ impl Sequencer {
     /// WHOLE of the recovered sequencer state: `Txn` is a transaction's first
     /// `Seq`, so the next session's first `Txn` = W + 1 needs no second
     /// counter (§1/§7).
-    fn recovered(head: Seq, rolls_back: bool) -> Sequencer {
+    fn recovered(head: Seq, burned_seq: BurnedSeqPolicy) -> Sequencer {
         Sequencer {
             hi: head.0,
-            rolls_back,
+            burned_seq,
         }
     }
 
-    /// Draw the run `first..=last` this transaction commits at — the ONE site
-    /// a `Seq` is minted (§2). `None` when the order has no room left for it:
-    /// the coordinates are exhausted and renumbering over a committed
-    /// predecessor is not an option, so there is nothing this order can answer
-    /// with, and what to do about that is the kernel's to decide.
+    /// Draw the contiguous range `first..=last` this transaction commits at —
+    /// the ONE site a `Seq` is minted (§2). `None` when the order has no room
+    /// left for it: the coordinates are exhausted and renumbering over a
+    /// committed predecessor is not an option, so there is nothing this order
+    /// can answer with, and what to do about that is the kernel's to decide.
     ///
     /// `n ≥ 1`, which is the caller's to hold and the journal's encoder to
     /// assert: a zero-record transaction reaches neither.
@@ -220,16 +220,16 @@ impl Sequencer {
         Some((first, last))
     }
 
-    /// Reclaim a failed transaction's burned run — an absolute set back to the
-    /// last committed marker's `last_seq`, hence idempotent — iff
+    /// Roll back a failed transaction's burned range — an absolute set back to
+    /// the last committed marker's `last_seq`, hence idempotent — iff
     /// [`BurnedSeqPolicy::Rollback`] is in force. Under
     /// [`BurnedSeqPolicy::TolerateGap`] this does nothing and the order relaxes
     /// to monotone-only, with recovery tolerating the gap (§1/§3).
     ///
     /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
     /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
-    fn reclaim(&mut self, base: Seq) {
-        if self.rolls_back {
+    fn roll_back_to(&mut self, base: Seq) {
+        if self.burned_seq == BurnedSeqPolicy::Rollback {
             self.hi = base.0;
         }
     }
@@ -428,13 +428,13 @@ impl<W: WorldState> Kernel<W> {
         // leaves none is one this kernel's sequencer cannot have written, and
         // an unaccountable durable head is the operator-intervention
         // condition (§1/§2/§7).
-        let head = scan.committed_head;
-        let next_seq = head
-            .checked_add(1)
-            .ok_or(OpenError::Corruption { at: Seq(head) })?;
+        let committed_head = scan.committed_head;
+        let next_seq = committed_head.checked_add(1).ok_or(OpenError::Corruption {
+            at: Seq(committed_head),
+        })?;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
-        let world = replay::fold_to(base, &scan, head)
+        let world = replay::fold_to(base, &scan, committed_head)
             .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
 
         // Tail truncation: after every refusal, and before any write is
@@ -446,7 +446,7 @@ impl<W: WorldState> Kernel<W> {
         let writer = JournalWriter::open_active(dir, next_seq)?;
         Ok((
             Committed {
-                seq: Seq(head),
+                seq: Seq(committed_head),
                 world,
             },
             Journal::Segments(writer),
@@ -477,7 +477,7 @@ impl<W: WorldState> Kernel<W> {
         lock: Option<File>,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint);
-        let seq = Sequencer::recovered(root.seq, cfg.durability.rolls_back_burned_seqs());
+        let seq = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
         Kernel {
             root: ArcSwap::from_pointee(root),
             applier: Mutex::new(ApplierState {
@@ -604,7 +604,7 @@ impl<W: WorldState> Kernel<W> {
             records,
         } = stg;
 
-        // Linearization (§2): the run is drawn under the applier lock, so the
+        // Linearization (§2): the range is drawn under the applier lock, so the
         // order is gap-free (under Rollback) and a composite's records are
         // Seq-contiguous. An order with no room left for this transaction
         // cannot commit it and cannot renumber it over a committed
@@ -653,7 +653,7 @@ impl<W: WorldState> Kernel<W> {
             // §3 unwind guard: repair, then let the panic propagate.
             Err(payload) => {
                 match state.journal.repair_after_unwind() {
-                    UnwindRepair::Clean => state.seq.reclaim(base.seq),
+                    UnwindRepair::Clean => state.seq.roll_back_to(base.seq),
                     // A surviving un-acked marker would let a successor
                     // collide on recovery, and a durably committed txn whose
                     // effect never installed would have later txns folding
@@ -672,14 +672,14 @@ impl<W: WorldState> Kernel<W> {
             // back where this txn found it — a TRUE no-op the caller may
             // re-invoke.
             Ok(Err(CommitFail::Clean(e))) => {
-                state.seq.reclaim(base.seq);
+                state.seq.roll_back_to(base.seq);
                 Err(TxnError::Durability(e))
             }
             // Nothing ever became frames, so the journal is where this txn
             // found it — the same no-op, burning the same Seqs, and a
             // different answer to "retry?" (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
-                state.seq.reclaim(base.seq);
+                state.seq.roll_back_to(base.seq);
                 Err(TxnError::Unencodable(e))
             }
             // The truncation itself could not complete durably (§1).
@@ -769,10 +769,10 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// The committed world as of boundary `at` — READ-ONLY bounded replay
-    /// over this kernel's own journal directory (observation-surface API;
-    /// the journal already holds every committed state, this makes a prefix
-    /// of it answerable). Base = the newest retained checkpoint at or below
-    /// `at` (else `genesis` while the journal still reaches back to `Seq(1)`),
+    /// over this kernel's own journal directory (the journal already holds
+    /// every committed state; this makes a prefix of it answerable). Base =
+    /// the newest retained checkpoint at or below `at` (else `genesis` while
+    /// the journal still reaches back to `Seq(1)`),
     /// seeded through [`WorldState::rebuild_derived`], then folded over
     /// exactly `(base, at]` — recovery's Pass 2 with `W := at`. Deterministic:
     /// the same `at` yields a value-equal world on every call, across
@@ -792,7 +792,7 @@ impl<W: WorldState> Kernel<W> {
     /// so never halts.
     ///
     /// The Σ₀ the fold starts from is the one this kernel was opened under,
-    /// so the bounded fold applies journaled deltas onto exactly the genesis
+    /// so the bounded replay applies journaled deltas onto exactly the genesis
     /// recovery would.
     ///
     /// REFUSAL PRECEDENCE — several of these can hold at once, and this is
@@ -835,9 +835,11 @@ impl<W: WorldState> Kernel<W> {
         let Some((dir, _)) = self.journal_cfg() else {
             return Err(HistoryError::Unjournaled);
         };
-        let head = self.current_seq();
-        if at > head {
-            return Err(HistoryError::BeyondHead { head });
+        let installed_head = self.current_seq();
+        if at > installed_head {
+            return Err(HistoryError::BeyondHead {
+                head: installed_head,
+            });
         }
         // The same base selection recovery runs, capped at `at` so a later
         // checkpoint cannot stand in for an earlier boundary.
@@ -879,8 +881,8 @@ impl<W: WorldState> Kernel<W> {
     /// likewise a no-op, and on a POISONED kernel it is a no-op returning
     /// `Ok`. Retained as the slot-in point for the deferred group-commit
     /// (`FsyncBatch`) durability mode, where it would flush the pending batch
-    /// and advance the `Clean` watermark (Open build decisions) — the API is
-    /// invariant across durability modes.
+    /// and advance that mode's `Clean{through}` durability watermark (Open
+    /// build decisions) — the API is invariant across durability modes.
     pub fn flush(&self) -> io::Result<()> {
         Ok(())
     }
@@ -889,7 +891,6 @@ impl<W: WorldState> Kernel<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::BurnedSeqPolicy;
     use crate::journal::JournalWriter;
 
     // A minimal world for kernel-internal tests. WorldState is a local trait,

@@ -894,7 +894,7 @@ fn an_unencodable_record_is_a_no_op_that_re_invoking_cannot_fix() {
 
 #[test]
 fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
-    // The knob's other setting: the burned Seq is NOT reclaimed, the order
+    // The knob's other setting: the burned Seq is NOT rolled back, the order
     // relaxes to monotone-only, and recovery folds the gap harmlessly — no
     // contiguity is required over the replayed range (§1/§7).
     let dir = tempdir().unwrap();

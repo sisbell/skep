@@ -126,16 +126,19 @@ impl From<io::Error> for CheckpointError {
     }
 }
 
-/// Failure of [`crate::Kernel::world_at`] — the read-only bounded replay
-/// (observation-surface API). None of these poisons the kernel or perturbs
-/// the live write path; every variant is an honest "this boundary cannot be
-/// answered" (or a genuine at-rest corruption find).
+/// Failure of [`crate::Kernel::world_at`] — the read-only bounded replay.
+/// None of these poisons the kernel or perturbs the live write path; every
+/// variant is an honest "this boundary cannot be answered" (or a genuine
+/// at-rest corruption find).
 #[derive(Debug)]
 pub enum HistoryError {
-    /// `at` exceeds the committed head at the time of the call. `head` is
-    /// that head — the greatest currently answerable boundary.
+    /// `at` is above the INSTALLED head at the time of the call — the
+    /// installed root's seq ([`crate::Kernel::current_seq`]), which is the
+    /// greatest boundary this kernel answers. Not §7's committed head: a
+    /// kernel poisoned after a barrier but before its install holds a durable
+    /// committed boundary above this one, and refuses it.
     BeyondHead {
-        /// The committed head observed by this call.
+        /// The installed head observed by this call.
         head: Seq,
     },
     /// `at` is not a committed transaction boundary: it names an interior
@@ -185,7 +188,7 @@ impl fmt::Display for HistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HistoryError::BeyondHead { head } => {
-                write!(f, "boundary beyond the committed head {head}")
+                write!(f, "boundary beyond the installed head {head}")
             }
             HistoryError::NotABoundary { nearest } => {
                 write!(f, "not a committed boundary; nearest at or below is {nearest}")

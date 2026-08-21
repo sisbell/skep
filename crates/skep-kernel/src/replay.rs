@@ -44,7 +44,7 @@ pub(crate) struct Unreachable {
 }
 
 /// Choose the base (§6/§7): the newest checkpoint that loads — at or below
-/// `ceiling`, when one is given — else genesis while it is still reachable.
+/// `bound`, when one is given — else genesis while it is still reachable.
 /// A checkpoint failing its header checksum is skipped and the next-older
 /// RETAINED one tried, which is what makes the fallback chain real rather
 /// than nominal.
@@ -60,11 +60,11 @@ pub(crate) struct Unreachable {
 pub(crate) fn select_base<W: WorldState>(
     checkpoints: &[CheckpointMeta],
     segs: &[SegmentMeta],
-    ceiling: Option<u64>,
+    bound: Option<u64>,
     genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
     for cp in checkpoints.iter().rev() {
-        if ceiling.is_some_and(|c| cp.seq > c) {
+        if bound.is_some_and(|b| cp.seq > b) {
             continue;
         }
         if let Some(world) = cp.load::<W>() {
@@ -87,7 +87,7 @@ pub(crate) fn select_base<W: WorldState>(
 }
 
 /// Fold the scanned region's committed records onto `base`, in `Seq` order,
-/// over exactly `(base.s_load, upto]` — each record exactly once, since
+/// over exactly `(base.s_load, bound]` — each record exactly once, since
 /// [`WorldState::apply`] is not required to be idempotent, and with no
 /// contiguity required, since a burned-`Seq` gap folds harmlessly (§6/§7).
 ///
@@ -107,14 +107,14 @@ pub(crate) fn select_base<W: WorldState>(
 pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
     scan: &ScanOutcome,
-    upto: u64,
+    bound: u64,
 ) -> Result<W, u64> {
     let mut records: Vec<&(u64, Vec<u8>)> = scan.committed_records.iter().collect();
     records.sort_by_key(|entry| entry.0);
     let mut world = base.world;
     let mut prev: Option<u64> = None;
     for &(seq, ref bytes) in records {
-        if seq <= base.s_load || seq > upto {
+        if seq <= base.s_load || seq > bound {
             continue;
         }
         if prev == Some(seq) {

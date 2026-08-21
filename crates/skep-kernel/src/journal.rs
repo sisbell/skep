@@ -128,12 +128,12 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// this call, and a commit is no place to copy every record a second time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
-/// already minted: [`crate::Kernel::transact`] draws the whole run
+/// already minted: [`crate::Kernel::transact`] draws the whole range
 /// `first_seq..=first_seq + (n - 1)` from the kernel's sequencer — the one
 /// mint site — through a checked add before any of it reaches this function
 /// (§2). The parenthesisation is load-bearing at the ceiling:
 /// `first_seq + (n - 1)` computes no intermediate above the last coordinate
-/// the run legitimately holds.
+/// the range legitimately holds.
 fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     let n = records.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -619,26 +619,26 @@ pub(crate) struct ScanOutcome {
 }
 
 impl ScanOutcome {
-    /// The corrupt run a RECOVERY fold cannot answer around, classified within
+    /// The corrupt run a RECOVERY cannot answer around, classified within
     /// the committed region this scan derived: a run above the committed head
     /// is the un-acked / torn tail, which recovery is about to discard (§7).
     pub(crate) fn fatal_run_to_head(&self) -> Option<u64> {
         self.fatal_run(Some(self.committed_head))
     }
 
-    /// The corrupt run a BOUNDED READ cannot answer around, at any height. A
-    /// read truncates nothing, so a run above the committed head is at-rest
-    /// damage rather than a tail — and since a run's own seqs are unreadable,
-    /// its reach below `inferred_max` is unknowable, so answering around it
-    /// could answer from a hole (§7).
+    /// The corrupt run a BOUNDED REPLAY cannot answer around, at any height. A
+    /// bounded replay truncates nothing, so a run above the committed head is
+    /// at-rest damage rather than a tail — and since a run's own seqs are
+    /// unreadable, its reach below `inferred_max` is unknowable, so answering
+    /// around it could answer from a hole (§7).
     pub(crate) fn fatal_run_anywhere(&self) -> Option<u64> {
         self.fatal_run(None)
     }
 
-    /// The corrupt run a fold over `(s_load, upto]` cannot answer around: the
+    /// The corrupt run a fold over `(s_load, bound]` cannot answer around: the
     /// `at` payload of the first run whose inferred `Seq` max lands in that
     /// range — durable committed data the folded state needs, and unreadable.
-    /// Halt, never drop (§7). `upto = None` is an open ceiling: every run
+    /// Halt, never drop (§7). `bound = None` is unbounded above: every run
     /// above the base is fatal, however far above it lands.
     ///
     /// The run is classified by its `inferred_max` and REPORTED by its `at`,
@@ -648,10 +648,10 @@ impl ScanOutcome {
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
-    fn fatal_run(&self, upto: Option<u64>) -> Option<u64> {
+    fn fatal_run(&self, bound: Option<u64>) -> Option<u64> {
         self.runs.iter().find_map(|run| match *run {
             RunEnd::Landed { inferred_max, at }
-                if inferred_max > self.s_load && upto.is_none_or(|c| inferred_max <= c) =>
+                if inferred_max > self.s_load && bound.is_none_or(|b| inferred_max <= b) =>
             {
                 Some(at)
             }
@@ -661,7 +661,7 @@ impl ScanOutcome {
 
     /// Whether `at` is one of the committed transaction boundaries this scan
     /// saw — the values [`crate::Kernel::transact`] returns, and the only ones
-    /// a bounded fold may answer at. `Err` carries the greatest boundary at or
+    /// a bounded replay may answer at. `Err` carries the greatest boundary at or
     /// below `at`, never below the base: the base's own seq is itself a
     /// boundary, and a segment straddling it contributes boundaries below it
     /// that no longer have a base to fold from.
@@ -728,7 +728,7 @@ impl PendingTxn {
     }
 
     /// Whether `marker` commits this group: intact + durable (it is on the
-    /// disk we read) + `records_checksum`-valid over a `Seq`-ascending run
+    /// disk we read) + `records_checksum`-valid over a `Seq`-ascending group
     /// (§1).
     fn commits(&self, marker: &Marker) -> bool {
         self.ordered && self.checksum == marker.records_checksum

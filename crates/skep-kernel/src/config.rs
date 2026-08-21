@@ -90,16 +90,16 @@ pub enum Durability {
 }
 
 impl Durability {
-    /// Whether the `Seq`s a failed transaction burned are rolled back
+    /// What becomes of the `Seq`s a failed transaction burned: rolled back
     /// (keeping the order gap-free) or left advanced (relaxing it to
     /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
     /// of its own: its commit path has no barrier to fail, so the two ways it
     /// burns coordinates are an unencodable record and an unwind, and the
-    /// default it answers with reclaims both, keeping its order gap-free.
-    pub(crate) fn rolls_back_burned_seqs(&self) -> bool {
+    /// default it answers with rolls both back, keeping its order gap-free.
+    pub(crate) fn burned_seq_policy(&self) -> BurnedSeqPolicy {
         match self {
-            Durability::Fsync { burned_seq, .. } => *burned_seq == BurnedSeqPolicy::Rollback,
-            Durability::InMemory => BurnedSeqPolicy::default() == BurnedSeqPolicy::Rollback,
+            Durability::Fsync { burned_seq, .. } => *burned_seq,
+            Durability::InMemory => BurnedSeqPolicy::default(),
         }
     }
 }
@@ -154,12 +154,21 @@ mod tests {
     }
 
     #[test]
-    fn burned_seq_rollback_is_a_property_of_the_durability_mode() {
-        assert!(fsync_mode(BurnedSeqPolicy::Rollback).rolls_back_burned_seqs());
-        assert!(!fsync_mode(BurnedSeqPolicy::TolerateGap).rolls_back_burned_seqs());
+    fn the_burned_seq_policy_is_a_property_of_the_durability_mode() {
+        assert_eq!(
+            fsync_mode(BurnedSeqPolicy::Rollback).burned_seq_policy(),
+            BurnedSeqPolicy::Rollback
+        );
+        assert_eq!(
+            fsync_mode(BurnedSeqPolicy::TolerateGap).burned_seq_policy(),
+            BurnedSeqPolicy::TolerateGap
+        );
         // The in-memory mode carries no policy of its own and answers with
         // the default, which keeps its order gap-free.
-        assert!(Durability::InMemory.rolls_back_burned_seqs());
+        assert_eq!(
+            Durability::InMemory.burned_seq_policy(),
+            BurnedSeqPolicy::default()
+        );
     }
 
     #[test]

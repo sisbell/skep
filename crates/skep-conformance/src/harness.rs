@@ -70,10 +70,8 @@ pub type RigError = String;
 impl Rig {
     pub fn new() -> Result<Rig, RigError> {
         let cfg = KernelCfg {
-            journal_path: std::path::PathBuf::new(), // ignored by InMemory
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
-            retain_checkpoints: 1,
         };
         let engine = Engine::open(cfg, GenesisConfig::standard())
             .map_err(|e| format!("engine open: {e}"))?;

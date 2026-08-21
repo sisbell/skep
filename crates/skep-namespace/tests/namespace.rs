@@ -7,7 +7,7 @@
 //! contract prescribes: `HasM3` read accessor, `From<M3Rec>` record lift,
 //! `apply` dispatching into `M3State::apply_ns`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -74,23 +74,20 @@ fn genesis_world() -> World {
 
 fn mem_kernel(genesis: World) -> Arc<Kernel<World>> {
     let cfg = KernelCfg {
-        // InMemory ignores the path entirely (M2 Lifecycle).
-        journal_path: PathBuf::from("/nonexistent/skep-namespace-ignored"),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     };
     Arc::new(Kernel::open(cfg, genesis).expect("in-memory open"))
 }
 
 fn cfg_fsync(dir: &Path) -> KernelCfg {
     KernelCfg {
-        journal_path: dir.to_path_buf(),
         durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 1,
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     }
 }
 

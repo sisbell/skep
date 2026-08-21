@@ -53,19 +53,19 @@ pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
 
 pub fn mem_cfg() -> KernelCfg {
     KernelCfg {
-        journal_path: std::path::PathBuf::new(),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     }
 }
 
 pub fn fsync_cfg(path: &Path) -> KernelCfg {
     KernelCfg {
-        journal_path: path.to_path_buf(),
-        durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
+        durability: Durability::Fsync {
+            journal_path: path.to_path_buf(),
+            retain_checkpoints: 1,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     }
 }
 

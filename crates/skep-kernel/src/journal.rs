@@ -98,23 +98,26 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 
 /// Encode one whole transaction: its record frames (seqs `first_seq..`) then
 /// its terminal commit marker, ready for a single `write_all` + one barrier
-/// fsync (§1/§3). `records` are the already-serialized `W::Record` bytes.
-fn encode_txn(first_seq: u64, records: &[Vec<u8>]) -> io::Result<Vec<u8>> {
-    assert!(!records.is_empty(), "zero-step ops never reach the journal");
+/// fsync (§1/§3). `records` are the already-serialized `W::Record` bytes, and
+/// they are consumed into their frames: the caller has no use for them past
+/// this call, and a commit is no place to copy every record a second time.
+fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
+    let n = records.len() as u64;
+    assert!(n > 0, "zero-step ops never reach the journal");
     let txn = Txn(first_seq);
     let mut buf = Vec::new();
     let mut checksum = 0u32;
-    for (i, bytes) in records.iter().enumerate() {
+    for (i, bytes) in records.into_iter().enumerate() {
         let payload = bincode::serialize(&FramePayload::Record(LogRecord {
             seq: first_seq + i as u64,
             txn,
-            bytes: bytes.clone(),
+            bytes,
         }))
         .map_err(invalid_data)?;
         checksum = crc32c::crc32c_append(checksum, &payload);
         push_frame(&mut buf, &payload)?;
     }
-    let last_seq = first_seq + records.len() as u64 - 1;
+    let last_seq = first_seq + n - 1;
     let payload = bincode::serialize(&FramePayload::Marker(Marker {
         txn,
         last_seq,
@@ -377,7 +380,7 @@ impl JournalWriter {
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
-        records: &[Vec<u8>],
+        records: Vec<Vec<u8>>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
         let buf = encode_txn(first_seq, records).map_err(CommitFail::Clean)?;
@@ -477,7 +480,7 @@ impl Journal {
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
-        records: &[Vec<u8>],
+        records: Vec<Vec<u8>>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
         match self {
@@ -529,6 +532,11 @@ pub(crate) struct TailCut {
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records,
 /// the corrupt runs, and where the tail to truncate begins.
 pub(crate) struct ScanOutcome {
+    /// The base this scan ran against — §7's `S_load`. Every judgment it
+    /// answers is relative to that base, so it is carried here rather than
+    /// re-supplied per question, where a caller could hand back a different
+    /// one than the scan was run with.
+    s_load: u64,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
     /// `S_load` itself and Pass 2 folds nothing).
@@ -548,21 +556,24 @@ pub(crate) struct ScanOutcome {
 }
 
 impl ScanOutcome {
-    /// The corrupt run a fold over `(above, upto]` cannot answer around: the
+    /// The corrupt run a fold over `(s_load, upto]` cannot answer around: the
     /// `at` payload of the first run whose inferred `Seq` max lands in that
     /// range — durable committed data the folded state needs, and unreadable.
-    /// Halt, never drop (§7).
+    /// Halt, never drop (§7). `upto = None` is an open ceiling: every run
+    /// above the base is fatal, however far above it lands.
     ///
     /// The run is classified by its `inferred_max` and REPORTED by its `at`,
     /// and keeping the two apart is what the boundary case turns on: a run
     /// wholly embodied in the base can still land on the very next coordinate
-    /// (`at = above + 1`), which is harmless — its content is already in the
+    /// (`at = s_load + 1`), which is harmless — its content is already in the
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
-    pub(crate) fn fatal_run(&self, above: u64, upto: u64) -> Option<u64> {
+    pub(crate) fn fatal_run(&self, upto: Option<u64>) -> Option<u64> {
         self.runs.iter().find_map(|run| match *run {
-            RunEnd::Landed { inferred_max, at } if inferred_max > above && inferred_max <= upto => {
+            RunEnd::Landed { inferred_max, at }
+                if inferred_max > self.s_load && upto.is_none_or(|c| inferred_max <= c) =>
+            {
                 Some(at)
             }
             _ => None,
@@ -572,10 +583,10 @@ impl ScanOutcome {
     /// Whether `at` is one of the committed transaction boundaries this scan
     /// saw — the values [`crate::Kernel::transact`] returns, and the only ones
     /// a bounded fold may answer at. `Err` carries the greatest boundary at or
-    /// below `at`, never below `s_load`: the base's own seq is itself a
+    /// below `at`, never below the base: the base's own seq is itself a
     /// boundary, and a segment straddling it contributes boundaries below it
     /// that no longer have a base to fold from.
-    pub(crate) fn require_boundary(&self, at: u64, s_load: u64) -> Result<(), u64> {
+    pub(crate) fn require_boundary(&self, at: u64) -> Result<(), u64> {
         if self.committed_boundaries.contains(&at) {
             return Ok(());
         }
@@ -585,7 +596,7 @@ impl ScanOutcome {
             .copied()
             .filter(|&b| b < at)
             .max()
-            .map_or(s_load, |m| m.max(s_load)))
+            .map_or(self.s_load, |m| m.max(self.s_load)))
     }
 }
 
@@ -611,6 +622,7 @@ struct PendingRec {
 /// one logical `Seq`-ordered stream.
 pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome> {
     let mut out = ScanOutcome {
+        s_load,
         committed_head: s_load,
         committed_records: Vec::new(),
         committed_boundaries: Vec::new(),
@@ -748,11 +760,8 @@ mod tests {
 
     /// A fixture commit. These journals stand alone — there is no root to
     /// install into — so the install step is empty.
-    fn write_txn(w: &mut JournalWriter, first: u64, records: &[Vec<u8>]) {
-        assert!(
-            w.commit_txn(first, records, || {}).is_ok(),
-            "fixture commit"
-        );
+    fn write_txn(w: &mut JournalWriter, first: u64, records: Vec<Vec<u8>>) {
+        assert!(w.commit_txn(first, records, || {}).is_ok(), "fixture commit");
     }
 
     /// Frame spans of a CLEAN journal file, via the real parser.
@@ -823,7 +832,7 @@ mod tests {
         // with a [`Txn`] occupying exactly the `u64` it wraps. A journal
         // written by one build is read by the next, so the layout is pinned
         // here rather than left to whatever the derives happen to produce.
-        let buf = encode_txn(2, &[vec![9u8, 8, 7]]).unwrap();
+        let buf = encode_txn(2, vec![vec![9u8, 8, 7]]).unwrap();
 
         let mut expect_record = Vec::new();
         expect_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
@@ -857,7 +866,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
         let mut installed = false;
-        assert!(w.commit_txn(1, &[rec(10)], || installed = true).is_ok());
+        assert!(w.commit_txn(1, vec![rec(10)], || installed = true).is_ok());
         assert!(installed, "the commit installs before it returns");
         assert!(matches!(w.repair_after_unwind(), UnwindRepair::Clean));
     }
@@ -870,7 +879,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = w.commit_txn(1, &[rec(10)], || panic!("install unwinds"));
+            let _ = w.commit_txn(1, vec![rec(10)], || panic!("install unwinds"));
         }));
         assert!(unwound.is_err(), "the panic reaches the caller");
         assert!(matches!(w.repair_after_unwind(), UnwindRepair::AfterBarrier));
@@ -882,8 +891,8 @@ mod tests {
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 2, &[rec(20), rec(21)]); // seqs 2, 3
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 2, vec![rec(20), rec(21)]); // seqs 2, 3
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.committed_head, 3);
@@ -901,8 +910,8 @@ mod tests {
         // folds harmlessly; a missing Seq is never corruption.
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 5, &[rec(50), rec(60)]); // burned 2..=4
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 5, vec![rec(50), rec(60)]); // burned 2..=4
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.committed_head, 6);
@@ -917,9 +926,9 @@ mod tests {
         // inferred max = last_seq (markers carry no Seq of their own; §7).
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 2, &[rec(20)]);
-        write_txn(&mut w, 3, &[rec(30)]);
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 2, vec![rec(20)]);
+        write_txn(&mut w, 3, vec![rec(30)]);
         let segs = list_segments(dir.path()).unwrap();
         let spans = spans_of(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
@@ -944,9 +953,9 @@ mod tests {
         // record (seq 4) — a record landing: at = seq, inferred max = seq − 1.
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 2, &[rec(20), rec(21)]);
-        write_txn(&mut w, 4, &[rec(40)]);
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 2, vec![rec(20), rec(21)]);
+        write_txn(&mut w, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
         let spans = spans_of(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
@@ -974,8 +983,8 @@ mod tests {
         evil.extend_from_slice(b"xx");
         evil.extend_from_slice(&MAGIC);
         evil.extend_from_slice(b"yyyyyyyy");
-        write_txn(&mut w, 1, &[evil]);
-        write_txn(&mut w, 2, &[rec(20)]);
+        write_txn(&mut w, 1, vec![evil]);
+        write_txn(&mut w, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
         let spans = spans_of(&segs[0].path);
         flip(&segs[0].path, spans[0].0 + FRAME_HEADER + 1);
@@ -995,8 +1004,8 @@ mod tests {
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 2, &[rec(20)]);
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 2, vec![rec(20)]);
         // Crash mid-append: a partial header at the tail.
         w.append(&[0xAB, 0xCD, 0xEF]).unwrap();
         let segs = list_segments(dir.path()).unwrap();
@@ -1016,8 +1025,8 @@ mod tests {
         // younger segment is tail to discard (§7).
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[vec![7u8; SEGMENT_MAX_BYTES as usize]]); // fills seg-1
-        write_txn(&mut w, 2, &[rec(20)]); // rotates into seg-2
+        write_txn(&mut w, 1, vec![vec![7u8; SEGMENT_MAX_BYTES as usize]]); // fills seg-1
+        write_txn(&mut w, 2, vec![rec(20)]); // rotates into seg-2
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(segs.len(), 2, "the fixture rotates");
         // Tear seg-2's marker: its txn is no longer committed.
@@ -1035,22 +1044,22 @@ mod tests {
     fn require_boundary_answers_from_the_committed_markers() {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, &[rec(10)]);
-        write_txn(&mut w, 2, &[rec(20), rec(21)]); // a composite: boundary 3
-        write_txn(&mut w, 4, &[rec(40)]);
+        write_txn(&mut w, 1, vec![rec(10)]);
+        write_txn(&mut w, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
+        write_txn(&mut w, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
 
         let out = scan(&segs, 0).unwrap();
-        assert_eq!(out.require_boundary(3, 0), Ok(()));
+        assert_eq!(out.require_boundary(3), Ok(()));
         // A composite's interior Seq was never a boundary (§3).
-        assert_eq!(out.require_boundary(2, 0), Err(1));
+        assert_eq!(out.require_boundary(2), Err(1));
 
         // The active segment is always scanned, so it reports boundaries
         // below a base too — but those have no base left to fold from, and
         // the nearest ANSWERABLE boundary is the base's own seq.
         let out = scan(&segs, 3).unwrap();
-        assert_eq!(out.require_boundary(4, 3), Ok(()));
-        assert_eq!(out.require_boundary(2, 3), Err(3));
+        assert_eq!(out.require_boundary(4), Ok(()));
+        assert_eq!(out.require_boundary(2), Err(3));
     }
 
     /// Byte offset just past the last INTACT frame (walks until a bad frame).

@@ -40,11 +40,14 @@ pub(crate) struct Unreachable {
 /// seed stands in for the fold over `Seq ≤ s_load`, and [`WorldState::apply`]
 /// carries the hints forward across everything above it (§7, seam
 /// contract 2).
+///
+/// `genesis` is borrowed and copied only on the branch that uses it, so the
+/// common case — a checkpoint that loads — costs no copy of a world at all.
 pub(crate) fn select_base<W: WorldState>(
     cps: &[CheckpointMeta],
     segs: &[SegmentMeta],
     ceiling: Option<u64>,
-    genesis: W,
+    genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
     for cp in cps.iter().rev() {
         if ceiling.is_some_and(|c| cp.seq > c) {
@@ -65,7 +68,7 @@ pub(crate) fn select_base<W: WorldState>(
     }
     Ok(Base {
         s_load: 0,
-        world: genesis.rebuild_derived(),
+        world: genesis.clone().rebuild_derived(),
     })
 }
 

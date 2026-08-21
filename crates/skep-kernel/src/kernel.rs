@@ -1,6 +1,7 @@
 //! The kernel: single-applier transaction commit (§3), lock-free snapshot
 //! reads (§5), on-commit checkpointing (§6), and two-pass recovery (§7).
 
+use std::fmt;
 use std::fs::{self, File};
 use std::io;
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
@@ -53,6 +54,26 @@ impl<W: WorldState> Snapshot<W> {
     }
 }
 
+impl<W: WorldState> Clone for Snapshot<W> {
+    /// A refcount bump on the pinned root — never a copy of `W`. Clone freely
+    /// to read ONE committed state from several places; that is what keeps a
+    /// multi-read verdict on one snapshot (MIC clause 6 / V2) where taking a
+    /// second [`Kernel::snapshot`] would silently read a later state.
+    fn clone(&self) -> Self {
+        Snapshot(Arc::clone(&self.0))
+    }
+}
+
+impl<W: WorldState> fmt::Debug for Snapshot<W> {
+    /// The coordinate, not the world: `W` is the whole engine state and is
+    /// not required to be `Debug` (§Public interface).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Snapshot")
+            .field("seq", &self.0.seq)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The in-flight state of one transaction's closure (§3): `base` = Σ (the
 /// installed root at txn start), `working` = Σᵢ (base folded with the records
 /// staged so far — ASN-0047's "observable intermediate states", visible ONLY
@@ -95,6 +116,18 @@ impl<W: WorldState> Staging<W> {
     pub fn push(&mut self, r: W::Record) {
         self.working = self.working.apply(&r);
         self.records.push(r);
+    }
+}
+
+impl<W: WorldState> fmt::Debug for Staging<W> {
+    /// The base coordinate and how many records are staged against it — the
+    /// two facts that place a transaction in flight. Neither world is printed:
+    /// `W` is the whole engine state and is not required to be `Debug`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Staging")
+            .field("base_seq", &self.base.seq)
+            .field("staged", &self.records.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -175,6 +208,21 @@ pub struct Kernel<W: WorldState> {
     _journal_lock: Option<File>,
 }
 
+impl<W: WorldState> fmt::Debug for Kernel<W> {
+    /// The installed head, whether the write paths are halted, and the
+    /// configuration — read lock-free, so this is safe to call from anywhere,
+    /// including a `Drop` under the applier lock. The world itself is not
+    /// printed: `W` is the whole engine state and is not required to be
+    /// `Debug`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Kernel")
+            .field("seq", &self.current_seq())
+            .field("poisoned", &self.poisoned.load(Ordering::Relaxed))
+            .field("cfg", &self.cfg)
+            .finish_non_exhaustive()
+    }
+}
+
 impl<W: WorldState> Kernel<W> {
     /// Recover or init (Lifecycle, §7).
     ///
@@ -195,9 +243,8 @@ impl<W: WorldState> Kernel<W> {
     /// fold harmlessly). A committed-but-unacked tail marker is REPLAYED — the
     /// lost-ack case is the client's (ASN-0134 SAFE(b)(iii)), not a phantom.
     ///
-    /// Under [`Durability::InMemory`]: ignores `journal_path`, runs no
-    /// recovery, and initializes the root directly from `genesis`
-    /// (`S_load = 0`).
+    /// Under [`Durability::InMemory`]: no journal to name, no recovery, and
+    /// the root is initialized directly from `genesis` (`S_load = 0`).
     ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
     /// `open()` of a given journal: recovery folds journaled DELTAS onto it,
@@ -205,32 +252,39 @@ impl<W: WorldState> Kernel<W> {
     /// mis-recovers. M2 cannot check this (ASN-0047's fixed Σ₀ satisfies it
     /// by construction).
     pub fn open(cfg: KernelCfg, genesis: W) -> Result<Self, OpenError> {
-        match cfg.durability {
+        cfg.validate()?;
+        let (root, journal, lock) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
             // no rebuild_derived — the caller's live value is the root.
-            Durability::InMemory => Ok(Self::assemble(
-                cfg,
-                Seq(0),
-                genesis.clone(),
-                genesis,
+            Durability::InMemory => (
+                Committed {
+                    seq: Seq(0),
+                    world: genesis.clone(),
+                },
                 Journal::InMemory,
                 None,
-            )),
-            Durability::Fsync { .. } => Self::open_durable(cfg, genesis),
-        }
+            ),
+            Durability::Fsync { journal_path, .. } => {
+                let (root, journal, lock) = Self::recover(journal_path, &genesis)?;
+                (root, journal, Some(lock))
+            }
+        };
+        Ok(Self::assemble(cfg, root, genesis, journal, lock))
     }
 
-    fn open_durable(cfg: KernelCfg, genesis: W) -> Result<Self, OpenError> {
-        cfg.validate()?;
-        fs::create_dir_all(&cfg.journal_path)?;
-        let lock = journal::acquire_journal_lock(&cfg.journal_path)?;
-        let segs = journal::list_segments(&cfg.journal_path)?;
-        let cps = checkpoint::list(&cfg.journal_path)?;
+    /// Recover the journal at `dir` into the root it commits from, its live
+    /// appender, and the exclusion lock the kernel holds for its lifetime
+    /// (§7).
+    fn recover(dir: &Path, genesis: &W) -> Result<(Committed<W>, Journal, File), OpenError> {
+        fs::create_dir_all(dir)?;
+        let lock = journal::acquire_journal_lock(dir)?;
+        let segs = journal::list_segments(dir)?;
+        let cps = checkpoint::list(dir)?;
 
         // The base, with its whole fallback chain: newest valid retained
         // checkpoint → next-older retained → genesis-while-reachable; an
         // exhausted chain is the operator-intervention condition (§6/§7).
-        let base = replay::select_base(&cps, &segs, None, genesis.clone())
+        let base = replay::select_base(&cps, &segs, None, genesis)
             .map_err(|_| OpenError::BadCheckpoint)?;
         let s_load = base.s_load;
 
@@ -238,56 +292,60 @@ impl<W: WorldState> Kernel<W> {
         // and EOF runs are the un-acked/torn tail, physically discarded
         // below; runs at or below S_load are already embodied in the base.
         let scan = journal::scan(&segs, s_load)?;
-        if let Some(at) = scan.fatal_run(s_load, scan.committed_head) {
+        if let Some(at) = scan.fatal_run(Some(scan.committed_head)) {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
 
         // Tail truncation — before any write is served (§7).
-        journal::truncate_tail(&cfg.journal_path, &scan)?;
+        journal::truncate_tail(dir, &scan)?;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
         let head = scan.committed_head;
         let world = replay::fold_to(base, scan, head)
             .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
 
-        let writer = JournalWriter::open_active(&cfg.journal_path, head + 1)?;
-        Ok(Self::assemble(
-            cfg,
-            Seq(head),
-            world,
-            genesis,
+        let writer = JournalWriter::open_active(dir, head + 1)?;
+        Ok((
+            Committed {
+                seq: Seq(head),
+                world,
+            },
             Journal::Segments(writer),
-            Some(lock),
+            lock,
         ))
     }
 
-    /// The journal directory, or `None` under [`Durability::InMemory`] — the
-    /// one place that knows `cfg.journal_path` is meaningless in that mode
-    /// (Lifecycle). Every path that touches files goes through here.
-    fn journal_dir(&self) -> Option<&Path> {
-        match self.cfg.durability {
+    /// This kernel's journal configuration — where its files live and how many
+    /// checkpoint bases it retains — or `None` under [`Durability::InMemory`],
+    /// which has no journal at all (Lifecycle). Every path that touches files
+    /// goes through here, so the mode question is asked in one place.
+    fn journal_cfg(&self) -> Option<(&Path, usize)> {
+        match &self.cfg.durability {
             Durability::InMemory => None,
-            Durability::Fsync { .. } => Some(&self.cfg.journal_path),
+            Durability::Fsync {
+                journal_path,
+                retain_checkpoints,
+                ..
+            } => Some((journal_path, *retain_checkpoints)),
         }
     }
 
     fn assemble(
         cfg: KernelCfg,
-        seq: Seq,
-        world: W,
+        root: Committed<W>,
         genesis: W,
         journal: Journal,
         lock: Option<File>,
     ) -> Self {
         let cadence = Cadence::new(cfg.checkpoint);
+        // The single Seq high-water is the WHOLE of the recovered sequencer
+        // state: Txn is a transaction's first Seq, so the next session's
+        // first Txn = W + 1 needs no second counter (§1/§7).
+        let seq_hi = root.seq.0;
         Kernel {
-            root: ArcSwap::from_pointee(Committed { seq, world }),
+            root: ArcSwap::from_pointee(root),
             applier: Mutex::new(ApplierState {
-                // The single Seq high-water is the WHOLE of the recovered
-                // sequencer state: Txn is a transaction's first Seq, so the
-                // next session's first Txn = W + 1 needs no second counter
-                // (§1/§7).
-                seq_hi: seq.0,
+                seq_hi,
                 journal,
                 cadence,
             }),
@@ -347,10 +405,9 @@ impl<W: WorldState> Kernel<W> {
         // Closure phase. Nothing is allocated or appended yet, so an unwind
         // here needs no repair: staging is discarded, the lock releases on
         // unwind, no Seq was drawn (§3).
-        let v = match catch_unwind(AssertUnwindSafe(|| f(&mut stg))) {
-            Err(payload) => resume_unwind(payload),
-            Ok(Err(e)) => return Err(TxnError::Rejected(e)),
-            Ok(Ok(v)) => v,
+        let v = match f(&mut stg) {
+            Err(e) => return Err(TxnError::Rejected(e)),
+            Ok(v) => v,
         };
         if stg.records.is_empty() {
             return Ok((v, base.seq)); // zero-step (A1); V1 = the base index read.
@@ -391,7 +448,7 @@ impl<W: WorldState> Kernel<W> {
                         CommitFail::Clean(io::Error::new(io::ErrorKind::InvalidData, e))
                     })?);
                 }
-                st_in.journal.commit_txn(first, &rec_bytes, move || {
+                st_in.journal.commit_txn(first, rec_bytes, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
                     // visible §1): external readers see none-or-all.
                     root.store(Arc::new(committed));
@@ -474,8 +531,8 @@ impl<W: WorldState> Kernel<W> {
     }
 
     /// Persist a checkpoint embodying all records with `Seq ≤ s`, keep the
-    /// most recent `retain_checkpoints`, and reclaim whole *closed* journal
-    /// segments lying wholly BELOW the OLDEST retained checkpoint
+    /// journal's `retain_checkpoints` most recent, and reclaim whole *closed*
+    /// journal segments lying wholly BELOW the OLDEST retained checkpoint
     /// (segment-granular space reclamation, never a correctness mechanism —
     /// recovery's `Seq > S_load` filter handles straddler leftovers; §6).
     /// Non-blocking to writers (grabs a lock-free `Snapshot`, never the
@@ -491,7 +548,7 @@ impl<W: WorldState> Kernel<W> {
         if self.poisoned.load(Ordering::Acquire) {
             return Err(CheckpointError::Poisoned);
         }
-        let Some(dir) = self.journal_dir() else {
+        let Some((dir, retain_checkpoints)) = self.journal_cfg() else {
             return Ok(self.current_seq()); // nothing to persist or reclaim (§6)
         };
         let _serial = self.checkpoint_mutex.lock();
@@ -499,11 +556,11 @@ impl<W: WorldState> Kernel<W> {
         let s = snap.seq;
         // Authoritative state serialized; hints may #[serde(skip)] and be
         // reseeded by rebuild_derived at load (§6/§7).
-        let body = bincode::serialize(&snap.world).map_err(|_| CheckpointError::Serialize)?;
+        let body = bincode::serialize(&snap.world).map_err(|e| CheckpointError::Serialize(e))?;
         checkpoint::write(dir, s.0, &body)?;
         // Retention policy — how many bases to keep — applied to the
         // checkpoint set, which answers with the oldest survivor.
-        let s_old = checkpoint::retain(dir, self.cfg.retain_checkpoints)?.unwrap_or(s.0);
+        let s_old = checkpoint::retain(dir, retain_checkpoints)?.unwrap_or(s.0);
         // Reclaim the journal below the OLDEST retained checkpoint — that
         // floor, not the newest, is what keeps the BadCheckpoint fallback
         // real (§6).
@@ -553,17 +610,18 @@ impl<W: WorldState> Kernel<W> {
         if at > head {
             return Err(HistoryError::BeyondHead { head });
         }
-        let Some(dir) = self.journal_dir() else {
+        let Some((dir, _)) = self.journal_cfg() else {
             return Err(HistoryError::Unjournaled);
         };
         // The same base selection recovery runs, capped at `at` so a later
         // checkpoint cannot stand in for an earlier boundary.
         let cps = checkpoint::list(dir)?;
         let segs = journal::list_segments(dir)?;
-        let base = replay::select_base(&cps, &segs, Some(at.0), self.genesis.clone())
-            .map_err(|u| HistoryError::Reclaimed {
+        let base = replay::select_base(&cps, &segs, Some(at.0), &self.genesis).map_err(|u| {
+            HistoryError::Reclaimed {
                 floor: u.floor.map(Seq),
-            })?;
+            }
+        })?;
         let s_load = base.s_load;
         // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
@@ -580,10 +638,10 @@ impl<W: WorldState> Kernel<W> {
         // answering around it could answer from a hole. (A racing live append
         // never produces a Landed run: it can tear only the file's suffix,
         // after the last committed marker, which reaches EOF.)
-        if let Some(run_at) = scan.fatal_run(s_load, u64::MAX) {
+        if let Some(run_at) = scan.fatal_run(None) {
             return Err(HistoryError::Corruption { at: Seq(run_at) });
         }
-        if let Err(nearest) = scan.require_boundary(at.0, s_load) {
+        if let Err(nearest) = scan.require_boundary(at.0) {
             return Err(HistoryError::NotABoundary {
                 nearest: Seq(nearest),
             });
@@ -600,7 +658,7 @@ impl<W: WorldState> Kernel<W> {
     /// (`FsyncBatch`) durability mode, where it would flush the pending batch
     /// and advance the `Clean` watermark (Open build decisions) — the API is
     /// invariant across durability modes.
-    pub fn flush(&self) -> Result<(), io::Error> {
+    pub fn flush(&self) -> io::Result<()> {
         Ok(())
     }
 }
@@ -624,10 +682,12 @@ mod tests {
 
     fn cfg(dir: &std::path::Path, burned_seq: BurnedSeqPolicy) -> KernelCfg {
         KernelCfg {
-            journal_path: dir.to_path_buf(),
-            durability: Durability::Fsync { burned_seq },
+            durability: Durability::Fsync {
+                journal_path: dir.to_path_buf(),
+                retain_checkpoints: 1,
+                burned_seq,
+            },
             checkpoint: CheckpointPolicy::Manual,
-            retain_checkpoints: 1,
         }
     }
 
@@ -641,8 +701,8 @@ mod tests {
             let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
             let r = |x: u64| bincode::serialize(&x).unwrap();
             // A journal built without a kernel: no root to install into.
-            assert!(w.commit_txn(1, &[r(10)], || {}).is_ok());
-            assert!(w.commit_txn(5, &[r(50), r(60)], || {}).is_ok()); // burned 2..=4
+            assert!(w.commit_txn(1, vec![r(10)], || {}).is_ok());
+            assert!(w.commit_txn(5, vec![r(50), r(60)], || {}).is_ok()); // burned 2..=4
         }
         let k = Kernel::<Vec<u64>>::open(
             cfg(dir.path(), BurnedSeqPolicy::TolerateGap),
@@ -656,8 +716,14 @@ mod tests {
     #[test]
     fn retain_checkpoints_zero_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let mut c = cfg(dir.path(), BurnedSeqPolicy::Rollback);
-        c.retain_checkpoints = 0;
+        let c = KernelCfg {
+            durability: Durability::Fsync {
+                journal_path: dir.path().to_path_buf(),
+                retain_checkpoints: 0,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
+            checkpoint: CheckpointPolicy::Manual,
+        };
         let err = Kernel::<Vec<u64>>::open(c, Vec::new()).err().unwrap();
         assert!(matches!(err, OpenError::Io(_)));
     }
@@ -733,10 +799,8 @@ mod tests {
     #[test]
     fn world_at_is_unjournaled_in_memory() {
         let c = KernelCfg {
-            journal_path: std::path::PathBuf::new(),
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
-            retain_checkpoints: 1,
         };
         let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
         assert!(matches!(

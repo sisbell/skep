@@ -88,7 +88,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -278,10 +278,12 @@ impl Daemon {
     /// and exit, never retry.
     pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
         let cfg = KernelCfg {
-            journal_path: data_dir.to_path_buf(),
-            durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
+            durability: Durability::Fsync {
+                journal_path: data_dir.to_path_buf(),
+                retain_checkpoints: RETAINED_CHECKPOINTS,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
-            retain_checkpoints: RETAINED_CHECKPOINTS,
         };
         let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
         let sidecar = Sidecar::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
@@ -841,10 +843,8 @@ fn history_error_reply(e: HistoryError) -> Reply {
 /// write would meet M10's own `Unauthenticated` wall rather than a store.
 fn execute_read_on(world: World, req: Request) -> Response {
     let cfg = KernelCfg {
-        journal_path: PathBuf::new(),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     };
     let kernel =
         Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));

@@ -185,7 +185,7 @@ fn document_ns(a: &Address) -> NsKey {
 /// `*_ns` helper and THIS encoding, so the held lock key and the staged
 /// frontier key are the same bytes by one code path.
 pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
-    let mut b = vec![Space::Namespace.tag()];
+    let mut b = Vec::new();
     b.extend((k.parent.len() as u32).to_be_bytes());
     for comp in &k.parent {
         let c = comp.to_bytes_be();
@@ -193,7 +193,7 @@ pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
         b.extend(c);
     }
     b.push(k.g);
-    LockKey(b)
+    LockKey::new(Space::Namespace, &b)
 }
 
 /// `a`'s T4-valid, `zeros ≤ 1` prefixes, LONGEST FIRST (O1a) — the ω
@@ -348,7 +348,7 @@ impl M3State {
     /// it pre-reads the stable ω(d_src). Redundant under M2 v1's global
     /// applier lock.
     pub fn principals_lock_key() -> LockKey {
-        LockKey(vec![Space::Principals.tag()])
+        LockKey::new(Space::Principals, &[])
     }
 
     /// Coarse node-registry key — held by `register_node` so a concurrent
@@ -358,7 +358,7 @@ impl M3State {
     /// rejection under per-key concurrency. Redundant under v1's global lock,
     /// exactly like [`M3State::principals_lock_key`].
     pub fn node_lock_key() -> LockKey {
-        LockKey(vec![Space::Nodes.tag()])
+        LockKey::new(Space::Nodes, &[])
     }
 }
 

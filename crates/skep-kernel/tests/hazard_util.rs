@@ -96,10 +96,12 @@ pub fn parse_addr(s: &str) -> Address {
 
 pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCfg {
     KernelCfg {
-        journal_path: dir.to_path_buf(),
-        durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
+        durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: retain,
+            burned_seq: BurnedSeqPolicy::Rollback,
+        },
         checkpoint,
-        retain_checkpoints: retain,
     }
 }
 

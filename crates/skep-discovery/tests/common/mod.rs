@@ -254,10 +254,8 @@ pub fn genesis_world() -> World {
 /// journal, no recovery).
 pub fn kernel() -> Kernel<World> {
     let cfg = KernelCfg {
-        journal_path: std::path::PathBuf::new(),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     };
     Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail")
 }

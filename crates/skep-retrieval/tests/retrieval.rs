@@ -18,8 +18,6 @@
 //! contract prescribes; all state is arranged through M5's real `Vstream`
 //! ops (M5Rec is sealed to foreign crates).
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
@@ -236,10 +234,8 @@ fn genesis() -> World {
 
 fn mem_kernel() -> Kernel<World> {
     let cfg = KernelCfg {
-        journal_path: PathBuf::from("/nonexistent/skep-retrieval-ignored"),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     };
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }

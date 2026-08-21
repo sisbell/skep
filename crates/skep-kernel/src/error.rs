@@ -44,8 +44,7 @@ impl fmt::Display for OpenError {
             }
             OpenError::Corruption { at } => write!(
                 f,
-                "durable committed data corrupt in the replayed range; next intact frame at seq {}",
-                at.0
+                "durable committed data corrupt in the replayed range; next intact frame at seq {at}"
             ),
         }
     }
@@ -72,8 +71,10 @@ pub enum CheckpointError {
     /// I/O failure persisting the checkpoint, applying retention, or
     /// reclaiming journal segments.
     Io(io::Error),
-    /// The world failed to serialize.
-    Serialize,
+    /// The world failed to serialize. Carries the serializer's own account of
+    /// which part of the world it could not encode — the only thing that
+    /// identifies the failure, since M2 never inspects `W`.
+    Serialize(Box<dyn std::error::Error + Send + Sync + 'static>),
     /// A prior barrier/truncation/unwind failure has halted the kernel
     /// (§1/§3); no further checkpoint is taken.
     Poisoned,
@@ -83,7 +84,9 @@ impl fmt::Display for CheckpointError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CheckpointError::Io(e) => write!(f, "checkpoint I/O failure: {e}"),
-            CheckpointError::Serialize => write!(f, "checkpoint world serialization failed"),
+            CheckpointError::Serialize(e) => {
+                write!(f, "checkpoint world serialization failed: {e}")
+            }
             CheckpointError::Poisoned => write!(f, "kernel is poisoned; no checkpoint taken"),
         }
     }
@@ -93,7 +96,8 @@ impl std::error::Error for CheckpointError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CheckpointError::Io(e) => Some(e),
-            _ => None,
+            CheckpointError::Serialize(e) => Some(&**e),
+            CheckpointError::Poisoned => None,
         }
     }
 }
@@ -155,17 +159,14 @@ impl fmt::Display for HistoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HistoryError::BeyondHead { head } => {
-                write!(f, "boundary beyond the committed head {}", head.0)
+                write!(f, "boundary beyond the committed head {head}")
             }
-            HistoryError::NotABoundary { nearest } => write!(
-                f,
-                "not a committed boundary; nearest at or below is {}",
-                nearest.0
-            ),
+            HistoryError::NotABoundary { nearest } => {
+                write!(f, "not a committed boundary; nearest at or below is {nearest}")
+            }
             HistoryError::Reclaimed { floor: Some(fl) } => write!(
                 f,
-                "history below the oldest retained checkpoint (seq {}) has been reclaimed",
-                fl.0
+                "history below the oldest retained checkpoint (seq {fl}) has been reclaimed"
             ),
             HistoryError::Reclaimed { floor: None } => {
                 write!(f, "no checkpoint and no genesis-reaching journal; history unavailable")
@@ -176,8 +177,7 @@ impl fmt::Display for HistoryError {
             HistoryError::Io(e) => write!(f, "history read I/O failure: {e}"),
             HistoryError::Corruption { at } => write!(
                 f,
-                "journal corrupt at rest in the scanned region; next intact frame at seq {}",
-                at.0
+                "journal corrupt at rest in the scanned region; next intact frame at seq {at}"
             ),
         }
     }

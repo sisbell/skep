@@ -8,49 +8,56 @@ use std::time::Duration;
 /// Kernel configuration, passed to [`crate::Kernel::open`].
 #[derive(Clone, Debug)]
 pub struct KernelCfg {
-    /// Directory for journal segments + checkpoints + the `open()`-held
-    /// exclusion lock file (Lifecycle). The in-memory mode ignores it.
-    pub journal_path: PathBuf,
     /// Per-commit [`Durability::Fsync`] (the canonical durable-before-visible
-    /// barrier, with its burned-Seq policy) or [`Durability::InMemory`]
+    /// barrier, carrying the journal it writes to) or [`Durability::InMemory`]
     /// (no journal/barrier/recovery — MIC-faithful).
     pub durability: Durability,
     /// Auto-checkpoint trigger, evaluated by an ON-COMMIT check inside
     /// `transact` (§6). No background timer; `Manual` disables the
-    /// auto-trigger, leaving cadence to the caller.
+    /// auto-trigger, leaving cadence to the caller. Meaningful in both
+    /// durability modes: under [`Durability::InMemory`] the trigger still
+    /// evaluates and the `checkpoint()` it fires is a no-op.
     pub checkpoint: CheckpointPolicy,
-    /// `N ≥ 1` most-recent checkpoints kept; the journal is reclaimed only
-    /// BELOW the OLDEST retained one, so `BadCheckpoint` can fall back to an
-    /// older retained base. `N = 1` ⇒ newest is the sole base, no fallback
-    /// (§6/§7).
-    pub retain_checkpoints: usize,
 }
 
 impl KernelCfg {
-    /// The interface's `N ≥ 1` retention rule (§Public interface), checked
-    /// against a journal-backed configuration before it is used. A violation
+    /// The interface's `N ≥ 1` retention rule (§Public interface). A violation
     /// is surfaced rather than silently clamped: `N = 0` asks for a journal
     /// with no base to recover from, which is a caller's mistake and not a
     /// mode this kernel offers.
     pub(crate) fn validate(&self) -> Result<(), io::Error> {
-        if self.retain_checkpoints == 0 {
-            return Err(io::Error::new(
+        match self.durability {
+            Durability::Fsync {
+                retain_checkpoints: 0,
+                ..
+            } => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "retain_checkpoints must be >= 1",
-            ));
+            )),
+            _ => Ok(()),
         }
-        Ok(())
     }
 }
 
-/// Durability mode (§1, Conflicts #3).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Durability mode (§1, Conflicts #3). The journal's own knobs ride on the
+/// variant that has a journal, so a configuration cannot name a directory or
+/// a retention count for a kernel that writes nothing.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Durability {
     /// The ONE v1 ordering — durable-before-visible (§1): append records →
     /// append commit marker → barrier (one records+marker fsync) → atomic
     /// install. A committed marker *is* the commit ack (§1); `burned_seq`
     /// governs the durability-failure rollback.
     Fsync {
+        /// Directory for journal segments + checkpoints + the `open()`-held
+        /// exclusion lock file (Lifecycle).
+        journal_path: PathBuf,
+        /// `N ≥ 1` most-recent checkpoints kept; the journal is reclaimed only
+        /// BELOW the OLDEST retained one, so `BadCheckpoint` can fall back to
+        /// an older retained base. `N = 1` ⇒ newest is the sole base, no
+        /// fallback (§6/§7).
+        retain_checkpoints: usize,
         /// Policy for the `Seq`s a failed (truncated) transaction burned.
         burned_seq: BurnedSeqPolicy,
     },
@@ -66,9 +73,9 @@ impl Durability {
     /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
     /// of its own: its commit path has no barrier to fail, and its panic-path
     /// rollback keeps the order gap-free, so it answers with the default.
-    pub(crate) fn rolls_back_burned_seqs(self) -> bool {
+    pub(crate) fn rolls_back_burned_seqs(&self) -> bool {
         match self {
-            Durability::Fsync { burned_seq } => burned_seq == BurnedSeqPolicy::Rollback,
+            Durability::Fsync { burned_seq, .. } => *burned_seq == BurnedSeqPolicy::Rollback,
             Durability::InMemory => BurnedSeqPolicy::default() == BurnedSeqPolicy::Rollback,
         }
     }
@@ -94,6 +101,7 @@ pub enum BurnedSeqPolicy {
 /// (§6); there is no timer thread. The *mechanism* (on-commit trigger,
 /// counters in the applier-locked state, reset by the triggering commit) is
 /// fixed; only the variant/threshold is the open knob.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckpointPolicy {
     /// Checkpoint after every `n` commits.
@@ -114,18 +122,43 @@ pub enum CheckpointPolicy {
 mod tests {
     use super::*;
 
+    fn fsync(burned_seq: BurnedSeqPolicy) -> Durability {
+        Durability::Fsync {
+            journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
+            retain_checkpoints: 1,
+            burned_seq,
+        }
+    }
+
     #[test]
     fn burned_seq_rollback_is_a_property_of_the_durability_mode() {
-        assert!(Durability::Fsync {
-            burned_seq: BurnedSeqPolicy::Rollback
-        }
-        .rolls_back_burned_seqs());
-        assert!(!Durability::Fsync {
-            burned_seq: BurnedSeqPolicy::TolerateGap
-        }
-        .rolls_back_burned_seqs());
+        assert!(fsync(BurnedSeqPolicy::Rollback).rolls_back_burned_seqs());
+        assert!(!fsync(BurnedSeqPolicy::TolerateGap).rolls_back_burned_seqs());
         // The in-memory mode carries no policy of its own and answers with
         // the default, which keeps its order gap-free.
         assert!(Durability::InMemory.rolls_back_burned_seqs());
+    }
+
+    #[test]
+    fn the_retention_rule_binds_the_journal_and_nothing_else() {
+        // `N ≥ 1` is a rule about a journal's fallback chain, so it is
+        // checked where a journal is configured and is vacuous where none is.
+        let bad = KernelCfg {
+            durability: Durability::Fsync {
+                journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
+                retain_checkpoints: 0,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        assert_eq!(
+            bad.validate().unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+        let mem = KernelCfg {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        assert!(mem.validate().is_ok());
     }
 }

@@ -377,10 +377,12 @@ fn pre_feature_positions_answer_bare_entries() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
         let cfg = KernelCfg {
-            journal_path: dir.path().to_path_buf(),
-            durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
+            durability: Durability::Fsync {
+                journal_path: dir.path().to_path_buf(),
+                retain_checkpoints: 2,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
             checkpoint: CheckpointPolicy::EveryN(1024),
-            retain_checkpoints: 2,
         };
         let engine = Engine::open(cfg, GenesisConfig::standard()).expect("engine genesis");
         let op = Operation::new(Box::new(engine.stores()));

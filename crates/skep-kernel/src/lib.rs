@@ -47,10 +47,11 @@
 //! space tag locally (cross-store uniqueness without a crate cycle — the engine
 //! crate depends on every store and would cycle). The tags are all M2 can hold:
 //! a `key(home, …) -> LockKey` constructor names M1's `Address`, and M2 carries
-//! no edge to M1. So each store builds its own keys from these tags — M3's
-//! `skep-namespace` constructors (`content_lock_key`, `link_lock_key`,
-//! `version_lock_key`, `document_lock_key`, `principals_lock_key`,
-//! `node_lock_key`) are the ones every other store's writes go through.
+//! no edge to M1. So each store builds its own keys in these spaces through
+//! [`LockKey::new`] — M3's `skep-namespace` constructors (`content_lock_key`,
+//! `link_lock_key`, `version_lock_key`, `document_lock_key`,
+//! `principals_lock_key`, `node_lock_key`) are the ones every other store's
+//! writes go through.
 //!
 //! ## Example
 //!
@@ -74,10 +75,12 @@
 //! }
 //!
 //! let cfg = KernelCfg {
-//!     journal_path: "/var/lib/skep/journal".into(),
-//!     durability: Durability::Fsync { burned_seq: BurnedSeqPolicy::Rollback },
+//!     durability: Durability::Fsync {
+//!         journal_path: "/var/lib/skep/journal".into(),
+//!         retain_checkpoints: 2,
+//!         burned_seq: BurnedSeqPolicy::Rollback,
+//!     },
 //!     checkpoint: CheckpointPolicy::EveryN(1024),
-//!     retain_checkpoints: 2,
 //! };
 //! let kernel = Kernel::open(cfg, World { log: vec![] }).unwrap();
 //! let (_, seq) = kernel
@@ -101,6 +104,8 @@ mod replay;
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
 pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
 pub use kernel::{Kernel, Snapshot, Staging};
+
+use std::fmt;
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -164,17 +169,38 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Seq(pub u64);
 
+impl fmt::Display for Seq {
+    /// The bare coordinate, as every error message that names one spells it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// Opaque serialization key — the documented serialization seam M3/M7 code
 /// against (MIC clauses 2/5/7). M2 only `Eq`/`Hash`/`Ord`-s the bytes (`Ord`
-/// is bytewise, NOT tumbler order). Callers prefix a 1-byte space tag drawn
-/// from the central [`Space`] enum so distinct key spaces (e.g.
+/// is bytewise, NOT tumbler order). A key is built by [`LockKey::new`] from a
+/// [`Space`] and the caller's own bytes, so the 1-byte space tag every key
+/// carries is prefixed in one place and distinct key spaces (e.g.
 /// `(home, subspace)` vs coverage-class) never collide.
 ///
 /// Under the v1 single applier the global applier lock subsumes the keys
 /// (§4/§8) — they are the seam, not a live lock table — so the deferred
 /// per-key realization slots in without changing any caller's call shape.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct LockKey(pub Vec<u8>);
+pub struct LockKey(Vec<u8>);
+
+impl LockKey {
+    /// A key in `space`, over the caller's own opaque bytes. The 1-byte tag is
+    /// prefixed HERE, so no store can forget it or choose one locally — which
+    /// is what makes the cross-store uniqueness [`Space`] promises structural
+    /// rather than a convention each store re-keeps.
+    pub fn new(space: Space, bytes: &[u8]) -> LockKey {
+        let mut v = Vec::with_capacity(1 + bytes.len());
+        v.push(space.tag());
+        v.extend_from_slice(bytes);
+        LockKey(v)
+    }
+}
 
 /// The SINGLE CENTRAL lock-key space-tag enum (§4, §Dependencies & seams;
 /// Engine Composition Contract). It names only 1-byte constants — no store
@@ -187,6 +213,7 @@ pub struct LockKey(pub Vec<u8>);
 ///
 /// Dormant under the v1 single applier (the global lock subsumes all keys —
 /// §4/§8); load-bearing under the deferred per-key realization.
+#[non_exhaustive]
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Space {
@@ -210,7 +237,9 @@ pub enum Space {
 }
 
 impl Space {
-    /// The 1-byte tag a caller prefixes onto its [`LockKey`] bytes.
+    /// The 1-byte tag this space's keys carry, which [`LockKey::new`] writes.
+    /// Public so the assignment is inspectable — the uniqueness the enum
+    /// exists for is a claim about these bytes.
     pub const fn tag(self) -> u8 {
         self as u8
     }

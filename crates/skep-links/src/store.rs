@@ -268,11 +268,11 @@ fn dedup_lock_key(key: &DedupKey) -> LockKey {
             ),
         }
     }
-    let mut bytes = vec![Space::CoverageClass.tag()];
+    let mut bytes = Vec::new();
     push_class(&mut bytes, &key.ty);
     push_class(&mut bytes, &key.from);
     push_class(&mut bytes, &key.to);
-    LockKey(bytes)
+    LockKey::new(Space::CoverageClass, &bytes)
 }
 
 /// The single choke point both write surfaces share (§2), run INSIDE one

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelCfg, LockKey,
-    OpenError, Seq, Space, TxnError, WorldState,
+    OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
 };
 use tempfile::tempdir;
 
@@ -97,24 +97,26 @@ fn genesis() -> TestWorld {
 }
 
 fn cfg_fsync(dir: &Path) -> KernelCfg {
+    cfg_retain(dir, 2)
+}
+
+/// A journal-backed configuration keeping `retain` checkpoint bases — the
+/// knob rides on the journal, so a test that varies it names the journal.
+fn cfg_retain(dir: &Path, retain: usize) -> KernelCfg {
     KernelCfg {
-        journal_path: dir.to_path_buf(),
         durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: retain,
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 2,
     }
 }
 
 fn cfg_mem() -> KernelCfg {
     KernelCfg {
-        // InMemory must ignore this entirely (Lifecycle); a kernel that
-        // touched it would fail loudly.
-        journal_path: PathBuf::from("/nonexistent/skep-kernel-ignored"),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     }
 }
 
@@ -283,18 +285,67 @@ fn snapshot_pins_one_committed_state() {
 }
 
 #[test]
+fn a_cloned_snapshot_is_the_same_pinned_state() {
+    // A clone is a refcount bump on ONE root, so a multi-read verdict split
+    // across places still reads one committed state (MIC-4/6; V2) — which
+    // taking a second `snapshot()` would not give.
+    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    push(&k, 10);
+    let s = k.snapshot();
+    let also = s.clone();
+    push(&k, 20);
+    assert_eq!((s.seq(), also.seq()), (Seq(1), Seq(1)));
+    assert_eq!(item_list(s.world()), item_list(also.world()));
+    // A clone outlives the value it came from, and stays pinned to its state.
+    drop(s);
+    assert_eq!(also.seq(), Seq(1));
+    assert_eq!(item_list(also.world()), vec![10]);
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
+#[test]
+fn the_kernel_and_its_handles_carry_the_traits_callers_build_on() {
+    // Send + Sync is a promise a private field can silently revoke, so it is
+    // asserted rather than inferred: every consumer shares one `Kernel`
+    // across threads, and a `Snapshot` is a value they move.
+    fn shareable<T: Send + Sync>() {}
+    shareable::<Kernel<TestWorld>>();
+    shareable::<Snapshot<TestWorld>>();
+    // Debug is what lets a consumer derive it on a struct that holds these.
+    fn debuggable<T: std::fmt::Debug>() {}
+    debuggable::<Kernel<TestWorld>>();
+    debuggable::<Snapshot<TestWorld>>();
+    debuggable::<Staging<TestWorld>>();
+
+    // The rendering names the coordinate, never the world (`TestWorld` is
+    // large and is not required to be `Debug` at all).
+    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    push(&k, 10);
+    let rendered = format!("{:?}", k.snapshot());
+    assert!(rendered.contains("Seq(1)"), "got {rendered}");
+    let rendered = format!("{k:?}");
+    assert!(rendered.contains("poisoned: false"), "got {rendered}");
+}
+
+#[test]
 fn lock_key_space_and_seq_basics() {
-    // LockKey order is bytewise (never tumbler order), space tags are 1-byte
-    // and centrally unique (§4).
-    assert!(LockKey(vec![1, 2]) < LockKey(vec![2, 1]));
-    assert!(LockKey(vec![1]) < LockKey(vec![1, 0]));
+    // Within one space, LockKey order is bytewise over the caller's own bytes
+    // (never tumbler order) (§4).
+    let ns = |b: &[u8]| LockKey::new(Space::Namespace, b);
+    assert!(ns(&[1, 2]) < ns(&[2, 1]));
+    assert!(ns(&[1]) < ns(&[1, 0]));
+    // The space tag leads, so keys in distinct spaces cannot interleave —
+    // which is what the ordering owes the seam, not merely that it is total.
+    assert!(ns(&[0xFF]) < LockKey::new(Space::CoverageClass, &[0x00]));
     assert_eq!(Space::Namespace.tag(), 0x01);
     assert_eq!(Space::CoverageClass.tag(), 0x02);
     assert_eq!(Space::Principals.tag(), 0x03);
     assert_eq!(Space::Nodes.tag(), 0x04);
     // Every key space in the system draws its tag here, so the uniqueness
     // that keeps two stores' keys from aliasing is checkable in one place
-    // (§4) — which is the whole reason the enum is central.
+    // (§4) — which is the whole reason the enum is central. Two stores that
+    // pick the same bytes in different spaces still get different keys,
+    // because the tag is prefixed by the constructor and not by them.
     let tags = [
         Space::Namespace.tag(),
         Space::CoverageClass.tag(),
@@ -306,15 +357,28 @@ fn lock_key_space_and_seq_basics() {
             assert_ne!(tags[i], tags[j], "space tags {i} and {j} alias");
         }
     }
+    let spaces = [
+        Space::Namespace,
+        Space::CoverageClass,
+        Space::Principals,
+        Space::Nodes,
+    ];
+    for i in 0..spaces.len() {
+        for j in (i + 1)..spaces.len() {
+            assert_ne!(
+                LockKey::new(spaces[i], b"same bytes"),
+                LockKey::new(spaces[j], b"same bytes"),
+                "spaces {i} and {j} alias on identical payloads"
+            );
+        }
+    }
     let by_value: Seq = Seq(7); // Copy
     assert_eq!(by_value, Seq(7));
 
     // Keys pass through transact (the v1 seam — subsumed by the global lock).
     let k = Kernel::open(cfg_mem(), genesis()).unwrap();
-    let mut key = vec![Space::Namespace.tag()];
-    key.extend_from_slice(b"home");
     let (_, seq) = k
-        .transact(&[LockKey(key)], |stg| {
+        .transact(&[LockKey::new(Space::Namespace, b"home")], |stg| {
             stg.push(TestRec::Push(1));
             Ok::<(), ()>(())
         })
@@ -659,8 +723,8 @@ fn retention_keeps_the_newest_n_checkpoints() {
 #[test]
 fn bad_checkpoint_when_chain_exhausted_and_genesis_unreachable() {
     let dir = tempdir().unwrap();
-    let mut cfg = cfg_fsync(dir.path());
-    cfg.retain_checkpoints = 1; // newest is the sole base — no fallback (§6)
+    // Retain 1: newest is the sole base — no fallback (§6).
+    let cfg = cfg_retain(dir.path(), 1);
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     for _ in 0..8 {
         push_blob(&k);
@@ -681,9 +745,8 @@ fn bad_checkpoint_when_chain_exhausted_and_genesis_unreachable() {
 #[test]
 fn every_n_trigger_fires_on_commit_and_manual_calls_do_not_reset_it() {
     let dir = tempdir().unwrap();
-    let mut cfg = cfg_fsync(dir.path());
+    let mut cfg = cfg_retain(dir.path(), 3);
     cfg.checkpoint = CheckpointPolicy::EveryN(3);
-    cfg.retain_checkpoints = 3;
     let k = Kernel::open(cfg, genesis()).unwrap();
     push(&k, 1);
     push(&k, 2);
@@ -732,13 +795,14 @@ fn second_open_of_a_live_journal_fails() {
 
 #[test]
 fn in_memory_mode_touches_no_disk_and_recovers_nothing() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("never-created");
+    // The mode names no journal — [`Durability::InMemory`] carries no path
+    // and no retention count — so "it writes nothing" needs no assertion
+    // here; there is nothing to point a stray write at. What remains
+    // checkable is the behaviour: genesis directly, an auto-trigger that
+    // evaluates over a `checkpoint()` that is a no-op, and no recovery.
     let cfg = KernelCfg {
-        journal_path: path.clone(),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::EveryN(1), // trigger evaluates; checkpoint() is a no-op
-        retain_checkpoints: 1,
     };
     let k = Kernel::open(cfg.clone(), genesis()).unwrap();
     // "Directly from genesis": no load, no rebuild_derived (Lifecycle).
@@ -747,7 +811,6 @@ fn in_memory_mode_touches_no_disk_and_recovers_nothing() {
     assert_eq!(push(&k, 2), Seq(2));
     assert_eq!(k.checkpoint().unwrap(), Seq(2)); // no-op returning current_seq (§6)
     k.flush().unwrap();
-    assert!(!path.exists(), "InMemory must ignore journal_path");
     drop(k);
     // No journal → no recovery story: a reopen starts from genesis.
     let k = Kernel::open(cfg, genesis()).unwrap();

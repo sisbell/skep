@@ -801,10 +801,8 @@ mod tests {
 
     fn kernel() -> Arc<Kernel<World>> {
         let cfg = KernelCfg {
-            journal_path: std::path::PathBuf::new(),
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
-            retain_checkpoints: 1,
         };
         Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
     }

@@ -13,7 +13,7 @@
 //! mutated (accessors only), and everything below drives the system through
 //! `Vstream`/`stage_seat_link`/`seat_link` alone.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
@@ -194,22 +194,20 @@ fn genesis() -> World {
 
 fn mem_kernel() -> Kernel<World> {
     let cfg = KernelCfg {
-        journal_path: PathBuf::from("/nonexistent/skep-arrangement-ignored"),
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     };
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }
 
 fn cfg_fsync(dir: &Path) -> KernelCfg {
     KernelCfg {
-        journal_path: dir.to_path_buf(),
         durability: Durability::Fsync {
+            journal_path: dir.to_path_buf(),
+            retain_checkpoints: 1,
             burned_seq: BurnedSeqPolicy::Rollback,
         },
         checkpoint: CheckpointPolicy::Manual,
-        retain_checkpoints: 1,
     }
 }
 

@@ -399,8 +399,6 @@ mod tests {
     //! world — `HasM5 + HasM3`, `Record = M5Rec` (the identity `From`) —
     //! drives `delete` and `rearrange`; no content store, no `From<M3Rec>`.
 
-    use std::path::PathBuf;
-
     use serde::{Deserialize, Serialize};
     use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg};
     use skep_namespace::M3State;
@@ -442,10 +440,8 @@ mod tests {
             runs: vec![run(&ca(1), 5)],
         });
         let cfg = KernelCfg {
-            journal_path: PathBuf::from("/nonexistent/skep-arrangement-ignored"),
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
-            retain_checkpoints: 1,
         };
         Kernel::open(cfg, MiniWorld { m3: seeded_m3(), m5 }).expect("in-memory open")
     }

@@ -125,7 +125,14 @@ impl Tumbler {
 /// The component sequence of a [`Tumbler`], in order. Opaque, so the storage
 /// decision above stays open: the sequence is what a caller walks, and the
 /// container it is walked out of is the tumbler's own business.
+///
+/// Opacity hides the *container*, never the walk's capabilities: the reverse
+/// walk, the exact length and the fused guarantee are all forwarded below,
+/// because the tail of a tumbler is where the meaning is — `sig` is an
+/// `rposition`, `ordinal` is a `last`, and a caller that could not reach
+/// backwards would have to clone every component to read the final two.
 #[derive(Debug, Clone)]
+#[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Components<'a>(std::slice::Iter<'a, Nat>);
 
 impl<'a> Iterator for Components<'a> {
@@ -137,6 +144,20 @@ impl<'a> Iterator for Components<'a> {
         self.0.size_hint()
     }
 }
+
+impl<'a> DoubleEndedIterator for Components<'a> {
+    fn next_back(&mut self) -> Option<&'a Nat> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for Components<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for Components<'_> {}
 
 impl<'a> IntoIterator for &'a Tumbler {
     type Item = &'a Nat;

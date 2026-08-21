@@ -62,6 +62,13 @@
 //! carries no edge to `skep-kernel` (M2). M1 holds no persistent state:
 //! "authoritative vs hint" collapses to "primary value vs derived value", and
 //! every value is immutable — recovery logic exists nowhere in this crate.
+//!
+//! The one obligation M1 carries without any signature stating it is the auto
+//! traits: the stores above hold these values inside a world that is required
+//! to be `Send + Sync + 'static`, so every value type here owes those, and
+//! owes them by what its private fields contain rather than by anything a
+//! caller can see. The block below the re-exports discharges that obligation
+//! in the build that ships.
 
 mod address;
 mod arithmetic;
@@ -89,3 +96,37 @@ pub use spanset::{
     IntoSpans, SpanSet, Spans,
 };
 pub use tumbler::{is_prefix, Components, EmptySequence, Nat, Pos, Tumbler};
+
+/// The auto traits every M1 value promises without saying. The store crates
+/// above hold these values inside a world whose trait bound is
+/// `Send + Sync + 'static`, so the promise reaches back here through types no
+/// signature in this crate mentions — and it is kept by what the private
+/// fields contain, so a backing swap (`im` for the `Rc`-backed `im-rc`, say)
+/// would revoke it with no signature changing and nothing in this crate
+/// failing to build. Asserted in the library rather than the suite, because
+/// that is the build a dependency change is made in.
+const _: fn() = || {
+    fn owed<T: Send + Sync + 'static>() {}
+    owed::<Tumbler>();
+    owed::<Address>();
+    owed::<Span>();
+    owed::<SpanSet>();
+    owed::<CanonicalForm>();
+    owed::<ElemPos>();
+    owed::<Level>();
+    owed::<Class>();
+    owed::<SpanRel>();
+    owed::<T4Clause>();
+    // Every rejection too: a caller that boxes one meets
+    // `Box<dyn Error + Send + Sync>`, which is the crossing form.
+    owed::<EmptySequence>();
+    owed::<T4Error>();
+    owed::<AddPrecond>();
+    owed::<SubPrecond>();
+    owed::<GateViolation>();
+    owed::<ElemError>();
+    owed::<T12Clause>();
+    owed::<WfError>();
+    owed::<SplitError>();
+    owed::<LevelMismatch>();
+};

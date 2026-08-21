@@ -214,6 +214,14 @@ impl Default for SpanSet {
 
 /// Borrowed component spans in stored order — the iterator `&SpanSet` walks.
 /// Opaque, so the `im::Vector` backing decision stays the module's own.
+///
+/// Opacity hides the *container*, never the walk's capabilities: the reverse
+/// walk, the exact length and the fused guarantee are forwarded below, so a
+/// consumer sweeping a normalized set from its high end (N1 puts the greatest
+/// start last) need not collect it first. `Clone` is the one capability the
+/// backing withholds — `im`'s vector iterator is not cloneable — so a caller
+/// that needs two independent cursors takes them from the set, which is.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Spans<'a>(<&'a im::Vector<Span> as IntoIterator>::IntoIter);
 
 impl<'a> Iterator for Spans<'a> {
@@ -225,6 +233,20 @@ impl<'a> Iterator for Spans<'a> {
         self.0.size_hint()
     }
 }
+
+impl<'a> DoubleEndedIterator for Spans<'a> {
+    fn next_back(&mut self) -> Option<&'a Span> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for Spans<'_> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for Spans<'_> {}
 
 /// The cursor, not the spans: a partly-walked iterator has no faithful
 /// rendering of what is left, and the set it came from is `Debug` already.
@@ -244,6 +266,10 @@ impl<'a> IntoIterator for &'a SpanSet {
 
 /// Owned component spans in stored order — the component spans moved out of a
 /// set the caller is finished with, so a re-collection need not clone each one.
+/// Carries the same reverse walk, exact length and fused guarantee as
+/// [`Spans`], and withholds `Clone` for the same reason: the backing's
+/// consuming iterator is not cloneable.
+#[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct IntoSpans(<im::Vector<Span> as IntoIterator>::IntoIter);
 
 impl Iterator for IntoSpans {
@@ -255,6 +281,20 @@ impl Iterator for IntoSpans {
         self.0.size_hint()
     }
 }
+
+impl DoubleEndedIterator for IntoSpans {
+    fn next_back(&mut self) -> Option<Span> {
+        self.0.next_back()
+    }
+}
+
+impl ExactSizeIterator for IntoSpans {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl std::iter::FusedIterator for IntoSpans {}
 
 /// The cursor, not the spans — as for [`Spans`].
 impl fmt::Debug for IntoSpans {
@@ -278,6 +318,7 @@ impl IntoIterator for SpanSet {
 /// in any order to a deterministic canonical result, coordination-free.
 /// Normalization is the caller's separate (eager or lazy) step — the merge
 /// path stays union-only because difference is not order-free.
+#[must_use = "union returns the joined span-set; it does not modify its operands"]
 pub fn union(a: &SpanSet, b: &SpanSet) -> SpanSet {
     let mut joined = a.0.clone();
     joined.append(b.0.clone());
@@ -424,10 +465,27 @@ pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
 /// reach convention serves [`subtree_of`], [`cover`], and `hull` alike. The
 /// `|Σ| = |P|` unit-span cover for arbitrary P (S7) is the separate
 /// [`cover`], not this hull.
-pub fn hull(points: &[Tumbler]) -> Result<Option<Span>, LevelMismatch> {
-    let (Some(min_point), Some(max_point)) = (points.iter().min(), points.iter().max()) else {
+///
+/// P is any walk over borrowed points, read once: the extremes are all this
+/// needs, so a caller holding an endset, a set or a filtered view hands its
+/// own iterator over rather than materializing a buffer of owned tumblers to
+/// have them compared.
+pub fn hull<'p>(
+    points: impl IntoIterator<Item = &'p Tumbler>,
+) -> Result<Option<Span>, LevelMismatch> {
+    let mut points = points.into_iter();
+    let Some(first) = points.next() else {
         return Ok(None); // P is empty
     };
+    let (mut min_point, mut max_point) = (first, first);
+    for p in points {
+        if p < min_point {
+            min_point = p;
+        }
+        if p > max_point {
+            max_point = p;
+        }
+    }
     if min_point.len() != max_point.len() {
         return Err(LevelMismatch);
     }
@@ -442,15 +500,19 @@ pub fn hull(points: &[Tumbler]) -> Result<Option<Span>, LevelMismatch> {
 /// `subtree_of(t)`, so `cover` and `subtree_of` share one construction —
 /// `union`-joined (concatenation). `|Σ| = |P|` and `⟦Σ⟧ ⊇ P` — a COVER, not
 /// exact (S7's binding fact: no span-set denotes an arbitrary finite P
-/// exactly). `points` is a SLICE, not a set: duplicate points yield duplicate
-/// unit spans, so `|Σ|` equals the slice length — still a cover; dedup first
-/// if S7's set-cardinality reading matters. NOT `inc(t, 0)`: that advances
-/// `sig(t)` and over-captures past a trailing-zero point's subtree. Total
-/// over a MIXED-length P (per-point spans are never merged, so no level
-/// gate) — but a mixed-length output is un-normalizable BY DESIGN (S8's gate
-/// fires on `normalize`). NOT normalized — normalizing could coalesce and
-/// break `|Σ| = |P|`; the caller normalizes for a minimal form (one-length P
-/// only). `cover(&[]) = ⟨⟩`.
-pub fn cover(points: &[Tumbler]) -> SpanSet {
-    points.iter().map(subtree_of).collect()
+/// exactly). `points` is a SEQUENCE, not a set: duplicate points yield
+/// duplicate unit spans, so `|Σ|` equals the number of points yielded — still
+/// a cover; dedup first if S7's set-cardinality reading matters. NOT
+/// `inc(t, 0)`: that advances `sig(t)` and over-captures past a trailing-zero
+/// point's subtree. Total over a MIXED-length P (per-point spans are never
+/// merged, so no level gate) — but a mixed-length output is un-normalizable
+/// BY DESIGN (S8's gate fires on `normalize`). NOT normalized — normalizing
+/// could coalesce and break `|Σ| = |P|`; the caller normalizes for a minimal
+/// form (one-length P only). An empty P covers `⟨⟩`.
+///
+/// P is any walk over borrowed points, read once — the same shape [`hull`]
+/// takes, so the two S0/S7 point-set operations accept one caller's iterator
+/// alike.
+pub fn cover<'p>(points: impl IntoIterator<Item = &'p Tumbler>) -> SpanSet {
+    points.into_iter().map(subtree_of).collect()
 }

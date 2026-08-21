@@ -4,7 +4,7 @@
 
 mod common;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use common::*;
 use skep_address::*;
@@ -46,6 +46,37 @@ fn span_set_is_iterable_borrowed_and_owned() {
     // `Default` is the empty designation, not a second spelling of it.
     assert_eq!(SpanSet::default(), SpanSet::empty());
     assert!(SpanSet::default().is_empty());
+}
+
+/// Both walks run backwards, report their exact length, and are fused — so a
+/// consumer reading a normalized set from its high end (N1 puts the greatest
+/// start last) works with the walk instead of collecting it first, borrowed or
+/// owned alike.
+#[test]
+fn both_span_walks_run_both_ways_and_report_their_length() {
+    fn double_ended_exact_and_fused<I>(_: I)
+    where
+        I: DoubleEndedIterator + ExactSizeIterator + std::iter::FusedIterator,
+    {
+    }
+
+    let ss = spanset(&[sp(&[1], &[3]), sp(&[5], &[7]), sp(&[9], &[12])]);
+    double_ended_exact_and_fused(ss.iter());
+    double_ended_exact_and_fused(ss.clone().into_iter());
+
+    assert_eq!(ss.iter().len(), ss.len()); // exact, before a single step
+    assert_eq!(ss.iter().next_back(), Some(&sp(&[9], &[12]))); // greatest start, no collect
+    let descending = vec![sp(&[9], &[12]), sp(&[5], &[7]), sp(&[1], &[3])];
+    assert_eq!(ss.iter().cloned().rev().collect::<Vec<_>>(), descending);
+    // Owned from the high end: the component spans move out in reverse.
+    assert_eq!(ss.clone().into_iter().rev().collect::<Vec<_>>(), descending);
+    assert_eq!(ss.clone().into_iter().len(), 3);
+    // A cursor walked from both ends still knows what is left.
+    let mut walk = ss.iter();
+    walk.next();
+    walk.next_back();
+    assert_eq!(walk.len(), 1);
+    assert_eq!(walk.next(), Some(&sp(&[5], &[7])));
 }
 
 #[test]
@@ -374,10 +405,33 @@ fn hull_is_the_tight_single_span_cover() {
     assert!(!h2.contains(&t(&[2, 5])));
 }
 
+/// P is a walk, not a buffer: both point-set operations read each point once
+/// through a borrow, so a caller hands over the iterator it already holds — a
+/// deduplicating set, a filtered view, a borrowed sequence — instead of
+/// materializing owned tumblers to have them compared.
+#[test]
+fn the_point_set_operations_take_any_walk_over_borrowed_points() {
+    let owned = vec![t(&[3]), t(&[1]), t(&[7])];
+
+    // A set — what a caller holding S7's set-cardinality reading has already
+    // built. Nothing is copied to be compared, and nothing is collected first.
+    let deduped: BTreeSet<Tumbler> = [t(&[3]), t(&[1]), t(&[7]), t(&[1])].into_iter().collect();
+    assert_eq!(hull(&deduped), hull(&owned));
+    assert_eq!(cover(&deduped).len(), 3); // |Σ| = the points yielded
+
+    // A filtered view — a caller that selected before calling.
+    let selected = owned.iter().filter(|x| **x > t(&[1]));
+    assert_eq!(hull(selected), hull(&[t(&[3]), t(&[7])]));
+
+    // A borrowed sequence still reads as one point set, by slice or by walk.
+    assert_eq!(hull(&owned[..]), hull(&owned));
+    assert_eq!(cover(owned.iter()), cover(&owned));
+}
+
 #[test]
 fn cover_is_one_unit_span_per_point() {
     assert_eq!(cover(&[]), SpanSet::empty());
-    let p = [t(&[1]), t(&[2]), t(&[1])]; // duplicates allowed: |Σ| = slice length
+    let p = [t(&[1]), t(&[2]), t(&[1])]; // duplicates allowed: |Σ| = points yielded
     let c = cover(&p);
     assert_eq!(c.len(), 3);
     assert!(p.iter().all(|x| c.denotes(x))); // ⟦Σ⟧ ⊇ P

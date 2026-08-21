@@ -59,6 +59,37 @@ fn tumbler_iterates_its_components_in_order() {
     }
 }
 
+/// The walk runs backwards, reports its exact length, and is fused. That
+/// matters here more than for a general sequence: the tail of a tumbler is
+/// where the meaning is — `sig` reads an `rposition`, the ordinal is the last
+/// component — so a consumer holding only the published walk reads from that
+/// end directly rather than cloning every component to reach it.
+#[test]
+fn the_component_walk_runs_both_ways_and_reports_its_length() {
+    fn double_ended_exact_and_fused<I>(_: I)
+    where
+        I: DoubleEndedIterator + ExactSizeIterator + std::iter::FusedIterator,
+    {
+    }
+
+    let x = t(&[1, 0, 2, 0, 5]);
+    double_ended_exact_and_fused(x.iter());
+    assert_eq!(x.iter().len(), x.len()); // exact, before a single step
+    assert_eq!(
+        x.iter().cloned().rev().collect::<Vec<_>>(),
+        vec![n(5), n(0), n(2), n(0), n(1)]
+    );
+    // The two reads a caller wants from the tail, neither copying the head.
+    assert_eq!(x.iter().next_back(), x.get(x.len()));
+    assert_eq!(x.iter().rposition(|c| *c == n(0)), Some(3));
+    // A cursor walked from both ends still knows what is left.
+    let mut walk = x.iter();
+    walk.next();
+    walk.next_back();
+    assert_eq!(walk.len(), 3);
+    assert_eq!(walk.cloned().collect::<Vec<_>>(), vec![n(0), n(2), n(0)]);
+}
+
 /// Dotted decimal is the canonical text (T3): no aliases, so the rendering
 /// and the value determine each other. `Display`, so a tumbler interpolates
 /// into any message without a per-crate helper.

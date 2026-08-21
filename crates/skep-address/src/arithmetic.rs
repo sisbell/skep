@@ -143,12 +143,11 @@ pub fn sub(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, SubPrecond> {
 /// pass 2) or routes through [`checked_inc`], whose gate caps it at 2 — a `k`
 /// derived from input would be an allocation the input sizes, and would yield
 /// nothing usable either, since the gate refuses every `k ≥ 3`.
+#[must_use = "inc returns the advanced tumbler; it does not modify `t`"]
 pub fn inc(t: &Tumbler, k: usize) -> Tumbler {
     let mut out = t.comps().to_vec();
     if k == 0 {
-        let i = sig(t) - 1; // 0-based position named by sig
-        let bumped = &out[i] + &Nat::from(1u32);
-        out[i] = bumped;
+        out[sig(t) - 1] += Nat::from(1u32); // 0-based position named by sig
     } else {
         out.extend(std::iter::repeat_with(|| Nat::from(0u32)).take(k - 1));
         out.push(Nat::from(1u32));
@@ -236,11 +235,10 @@ pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
 /// second obligation is the reach convention, where the operand is an
 /// arbitrary carrier tumbler and no ordinal is meant at all; that one is
 /// `next_at_length`, and the hazard above does not reach it.
+#[must_use = "shift returns the advanced tumbler; it does not modify `v`"]
 pub fn shift(v: &Tumbler, n: &Nat) -> Tumbler {
     let mut out = v.comps().to_vec();
-    let last = out.len() - 1;
-    let bumped = &out[last] + n;
-    out[last] = bumped;
+    *out.last_mut().expect("T0: tumblers are nonempty") += n;
     Tumbler::from_vec(out)
 }
 
@@ -330,6 +328,7 @@ pub fn elem_addr(p: ElemPos) -> Result<Address, ElemError> {
 /// the position it advances: the document and subspace travel through
 /// untouched rather than being copied out of a loan. Validity is re-discharged
 /// when the position is materialized by [`elem_addr`].
+#[must_use = "shift_ordinal consumes the position and returns the advanced one"]
 pub fn shift_ordinal(mut p: ElemPos, n: &Nat) -> ElemPos {
     p.ordinal += n;
     p

@@ -145,10 +145,10 @@ fn t4_scan(t: &Tumbler) -> T4Scan {
         }
     }
     let mut clauses = Vec::new();
-    if nat_is_zero(&comps[0]) {
+    if nat_is_zero(comps.first().expect("T0: tumblers are nonempty")) {
         clauses.push(T4Clause::LeadingZero);
     }
-    if nat_is_zero(&comps[comps.len() - 1]) {
+    if nat_is_zero(comps.last().expect("T0: tumblers are nonempty")) {
         clauses.push(T4Clause::TrailingZero);
     }
     if adjacent_zeros {
@@ -314,16 +314,21 @@ impl Address {
     }
 
     /// 0-based index of the `n`-th separator (zero) component, `n` 1-based to
-    /// match the field numbering; `None` when fewer than `n` separators
-    /// exist. `n ≥ 1` is the caller's obligation — `n = 0` is not a question
-    /// about a 1-based numbering, and the debug assertion says so rather than
-    /// letting it wrap into a `None` that reads as "no such separator". The
-    /// single spelling of "where does a field begin" — every field projection
-    /// and every truncation below reads through it. Recomputed on demand and
-    /// allocation-free: `#t` is small, and the design defers any parsed-field
-    /// hint until a containment path proves hot.
+    /// match the field numbering; `None` when fewer than `n` separators exist.
+    ///
+    /// `n ≥ 1` is the caller's obligation, refused in EVERY build: `n = 0` is
+    /// not a question about a 1-based numbering, and the alternative to
+    /// refusing it is not a fault but a wrong answer — `n - 1` wraps and the
+    /// walk runs to exhaustion, yielding the `None` that means "fewer than `n`
+    /// separators", which is a legitimate answer to a legitimate question and
+    /// so travels on to [`field`](Self::field) indistinguishable from one.
+    ///
+    /// The single spelling of "where does a field begin" — every field
+    /// projection and every truncation below reads through it. Recomputed on
+    /// demand and allocation-free: `#t` is small, and the design defers any
+    /// parsed-field hint until a containment path proves hot.
     fn separator(&self, n: usize) -> Option<usize> {
-        debug_assert!(n >= 1, "separator numbering is 1-based");
+        assert!(n >= 1, "separator numbering is 1-based");
         self.tumbler
             .comps()
             .iter()

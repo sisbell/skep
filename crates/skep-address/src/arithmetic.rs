@@ -185,6 +185,11 @@ impl Error for GateViolation {}
 /// `inc` + TA5a gate + reclassify — an `Address` mint site: the advanced
 /// tumbler is minted through [`validate`], the one gate for the validity
 /// invariant, and the `expect` states why it opens.
+///
+/// The gate is consulted BEFORE [`inc`], so a `k` outside its domain is
+/// refused as a value, in constant time and without allocating — which is
+/// what makes this, and not `inc`, the door a caller may hand a `k` it
+/// derived from input.
 pub fn checked_inc(t: &Address, k: usize) -> Result<Address, GateViolation> {
     if !inc_preserves_t4(t, k) {
         return Err(GateViolation);

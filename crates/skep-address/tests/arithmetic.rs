@@ -128,6 +128,24 @@ fn checked_inc_gates_and_reclassifies() {
     assert_eq!(next.level(), Level::Document);
 }
 
+/// `checked_inc` refuses BEFORE it allocates. `inc`'s result carries `#t + k`
+/// components, so a `k` a caller derived from input would size an allocation —
+/// and the TA5a gate is what stops it, but only while the gate runs first. A
+/// `k` no address could satisfy is refused as a value, in constant time and
+/// with no allocation.
+///
+/// Under the reordering this pins against — compute the candidate, then check
+/// it — the failure is an abort at `Vec` capacity, not an assertion: the same
+/// signal the daemon would give with a peer's number in place of the literal,
+/// which is why the constant is `usize::MAX` rather than merely a large one.
+#[test]
+fn checked_inc_refuses_an_unsatisfiable_k_before_it_allocates() {
+    let doc = addr(&[1, 0, 2, 0, 5]);
+    assert!(!inc_preserves_t4(&doc, usize::MAX));
+    assert_eq!(checked_inc(&doc, usize::MAX), Err(GateViolation));
+    assert_eq!(checked_inc(&addr(&[1]), usize::MAX), Err(GateViolation));
+}
+
 /// T0(a) — component magnitude is unbounded, and the arithmetic is exact at
 /// magnitudes no fixed-width component holds. This is the clause that deletes
 /// the reference design's silent digit-overflow wrap in `tumbleradd`: a

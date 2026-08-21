@@ -24,17 +24,21 @@ pub enum OpenError {
     /// genesis-while-reachable (§6/§7); this is returned only when that whole
     /// chain is exhausted. Operator-intervention condition — not auto-retried.
     BadCheckpoint,
-    /// A corrupt run whose INFERRED `Seq` max (= next-intact coordinate − 1,
-    /// the CLASSIFIER; a record landing contributes its `seq`, a marker
-    /// landing `last_seq + 1` — §7) falls in the genuinely-replayed range
-    /// `(S_load, W]` — durable committed data the recovered state needs is
-    /// corrupt; halt, never drop. `at` is only the PAYLOAD: the next-intact
-    /// coordinate the magic-resync lands on (the run's own seqs are
-    /// unreadable; at a marker landing, `at = last_seq + 1`). An EOF-reaching
-    /// run classes as the tail, so `Corruption` never carries an EOF payload
-    /// (§7). Operator-intervention condition — not auto-retried.
+    /// Durable committed data the recovered state needs cannot be read. Three
+    /// conditions reach here: a corrupt run inside the genuinely-replayed
+    /// range `(S_load, W]` (a run reaching EOF is the un-acked / torn tail,
+    /// not this); a committed record that does not decode as `W::Record`, or
+    /// one the committed set presents twice; and a committed head that leaves
+    /// no coordinate for a successor, which no sequencer here could have
+    /// written. Halt, never drop — nothing is folded, nothing is installed,
+    /// and nothing is truncated. Operator-intervention condition — not
+    /// auto-retried (§7).
     Corruption {
-        /// The next intact frame's coordinate (see above).
+        /// The coordinate naming the damage, which differs by condition: for
+        /// a corrupt run, the next INTACT frame's coordinate — the run's own
+        /// seqs are unreadable, so this bounds the damage rather than
+        /// locating it; for an undecodable or repeated record, that record's
+        /// own `Seq`; for an exhausted order, the committed head itself.
         at: Seq,
     },
 }

@@ -211,22 +211,32 @@ pub(crate) struct SegmentMeta {
     pub path: PathBuf,
 }
 
+/// Where a segment beginning at `first_seq` lives: `seg-<firstSeq>.wal` (§1).
+///
+/// Stated as a pair with [`parse_segment_name`], because the format and the
+/// parse are one agreement: a change to either that the other does not match
+/// makes every segment on disk invisible to recovery, which reads as an empty
+/// store rather than as a failure.
 pub(crate) fn segment_path(dir: &Path, first_seq: u64) -> PathBuf {
     dir.join(format!("seg-{first_seq}.wal"))
 }
 
+/// Read back the `firstSeq` [`segment_path`] wrote. `None` for any other
+/// name — a checkpoint, the lock file, or something foreign.
+fn parse_segment_name(name: &str) -> Option<u64> {
+    name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()
+}
+
 /// All segments in `dir`, ascending by `firstSeq`. Non-segment files
-/// (checkpoints, the lock file) are skipped by the name filter.
+/// (checkpoints, the lock file) fail the name parse and are skipped.
 pub(crate) fn list_segments(dir: &Path) -> io::Result<Vec<SegmentMeta>> {
     let mut v = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(stem) = name.strip_prefix("seg-").and_then(|r| r.strip_suffix(".wal")) else {
+        let Some(first_seq) = name.to_str().and_then(parse_segment_name) else {
             continue;
         };
-        let Ok(first_seq) = stem.parse::<u64>() else { continue };
         v.push(SegmentMeta {
             first_seq,
             path: entry.path(),
@@ -486,6 +496,12 @@ impl JournalWriter {
     /// txn is on disk (the §3 pre-append discipline applies) and the next
     /// attempt re-enters rotation.
     fn maybe_rotate(&mut self, first_seq: u64) -> io::Result<()> {
+        // The first disjunct is redundant while the threshold is a positive
+        // constant, and it states the rule the rotation rests on: an EMPTY
+        // segment never rotates. Without it a zero threshold would answer
+        // every transaction with a fresh empty file and accumulate them
+        // forever, so the guard is what keeps the threshold a tuning knob
+        // rather than a correctness one.
         if self.len == 0 || self.len < SEGMENT_ROTATE_BYTES {
             return Ok(());
         }
@@ -596,8 +612,10 @@ pub(crate) struct ScanOutcome {
     /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
     /// run belongs to those, not to a caller re-deriving the classifier.
     runs: Vec<RunEnd>,
-    /// The tail-truncation cut, `None` when nothing was scanned.
-    pub tail: Option<TailCut>,
+    /// The tail-truncation cut, `None` when nothing was scanned — what
+    /// [`truncate_tail`] cuts. Resolved here and read there, so no caller can
+    /// aim a truncation at a region other than the one this scan judged.
+    tail: Option<TailCut>,
 }
 
 impl ScanOutcome {
@@ -737,6 +755,10 @@ impl PendingTxn {
 /// Memory: one segment's bytes, one transaction's records, and the committed
 /// records of the whole scanned region — the last of which is the term that
 /// grows with the journal, and is what a caller bounds by checkpointing.
+///
+/// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
+/// the base it selected. A scan and the fold that consumes it must agree on
+/// their base, and that is the one route where they cannot disagree.
 pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome> {
     let mut out = ScanOutcome {
         s_load,

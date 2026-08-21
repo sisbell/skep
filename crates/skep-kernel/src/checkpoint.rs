@@ -54,24 +54,39 @@ impl CheckpointMeta {
     }
 }
 
+/// Where the checkpoint embodying `Seq ≤ seq` lives: `checkpoint.<seq>` (§6).
+///
+/// Stated as a pair with [`parse_checkpoint_name`], because the format and the
+/// parse are one agreement: a change to either that the other does not match
+/// makes every retained base invisible, and recovery then falls all the way
+/// down its chain to genesis without a word.
+fn checkpoint_path(dir: &Path, seq: u64) -> PathBuf {
+    dir.join(format!("checkpoint.{seq}"))
+}
+
+/// Read back the seq [`checkpoint_path`] wrote. `None` for any other name —
+/// `checkpoint.tmp` among them, which is why a crash mid-write leaves at most
+/// a file recovery ignores.
+fn parse_checkpoint_name(name: &str) -> Option<u64> {
+    name.strip_prefix("checkpoint.")?.parse().ok()
+}
+
 /// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
-/// names fail the numeric parse and are skipped.
+/// names fail the name parse and are skipped.
 pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
     let mut v = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let Some(stem) = name.strip_prefix("checkpoint.") else {
+        let Some(seq) = name.to_str().and_then(parse_checkpoint_name) else {
             continue;
         };
-        let Ok(seq) = stem.parse::<u64>() else { continue };
         v.push(CheckpointMeta {
             seq,
             path: entry.path(),
         });
     }
-    v.sort_by_key(|c| c.seq);
+    v.sort_by_key(|cp| cp.seq);
     Ok(v)
 }
 
@@ -127,7 +142,7 @@ pub(crate) fn write<W: Serialize>(dir: &Path, seq: u64, world: &W) -> Result<(),
     f.write_all(&header)?;
     f.write_all(&body)?;
     f.sync_all()?;
-    fs::rename(&tmp, dir.join(format!("checkpoint.{seq}")))?;
+    fs::rename(&tmp, checkpoint_path(dir, seq))?;
     fsync_dir(dir)?;
     Ok(())
 }

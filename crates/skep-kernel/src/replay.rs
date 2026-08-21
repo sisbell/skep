@@ -9,6 +9,8 @@
 //! exactly-once fold are stated once, here, and each caller supplies its
 //! bound and its own error vocabulary.
 
+use std::io;
+
 use crate::checkpoint::CheckpointMeta;
 use crate::journal::{self, ScanOutcome, SegmentMeta};
 use crate::WorldState;
@@ -18,6 +20,18 @@ use crate::WorldState;
 pub(crate) struct Base<W> {
     pub s_load: u64,
     pub world: W,
+}
+
+impl<W> Base<W> {
+    /// Scan the journal above THIS base (§7). The base a scan is judged
+    /// against is the base it will be folded onto, by construction: this takes
+    /// no `S_load` a caller could have got from somewhere else, and a scan run
+    /// against a lower base than the fold believes would skip closed segments
+    /// the fold then counts as folded — a world missing records, answered
+    /// `Ok`.
+    pub(crate) fn scan(&self, segs: &[SegmentMeta]) -> io::Result<ScanOutcome> {
+        journal::scan(segs, self.s_load)
+    }
 }
 
 /// No base at or below the requested boundary remains derivable: no retained
@@ -77,6 +91,10 @@ pub(crate) fn select_base<W: WorldState>(
 /// [`WorldState::apply`] is not required to be idempotent, and with no
 /// contiguity required, since a burned-`Seq` gap folds harmlessly (§6/§7).
 ///
+/// The scan is BORROWED, so its other answers — the tail cut among them —
+/// outlive the fold. That is what lets a caller refuse on this fold's verdict
+/// before it acts on any of them.
+///
 /// `Err` carries the `Seq` of a committed, CRC-intact record that fails to
 /// decode as `W::Record` — corrupt committed data the derived state needs —
 /// or one the committed set presents TWICE. That `Seq` is the record's own,
@@ -88,14 +106,14 @@ pub(crate) fn select_base<W: WorldState>(
 /// what recovery may not do.
 pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
-    scan: ScanOutcome,
+    scan: &ScanOutcome,
     upto: u64,
 ) -> Result<W, u64> {
-    let mut records = scan.committed_records;
-    records.sort_by_key(|(seq, _)| *seq);
+    let mut records: Vec<&(u64, Vec<u8>)> = scan.committed_records.iter().collect();
+    records.sort_by_key(|entry| entry.0);
     let mut world = base.world;
     let mut prev: Option<u64> = None;
-    for (seq, bytes) in records {
+    for &(seq, ref bytes) in records {
         if seq <= base.s_load || seq > upto {
             continue;
         }
@@ -103,7 +121,7 @@ pub(crate) fn fold_to<W: WorldState>(
             return Err(seq);
         }
         prev = Some(seq);
-        let record: W::Record = journal::decode_record(&bytes).map_err(|_| seq)?;
+        let record: W::Record = journal::decode_record(bytes).map_err(|_| seq)?;
         world = world.apply(&record);
     }
     Ok(world)

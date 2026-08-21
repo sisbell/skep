@@ -355,13 +355,14 @@ impl<W: WorldState> Kernel<W> {
     /// [`WorldState::rebuild_derived`], scan the journal (Pass 1: derive `W`
     /// = the last committed marker's `last_seq`, classify corrupt runs by
     /// inferred `Seq` max — in `(S_load, W]` ⟹ [`OpenError::Corruption`],
-    /// halt, never drop), durably TRUNCATE the un-acked/torn tail beyond `W`
-    /// before any write is served (skipped on the halt paths; a truncation
-    /// failure fails `open()` with `Io` — idempotent, retried next `open()`),
-    /// then replay exactly `S_load < Seq ≤ W` through [`WorldState::apply`]
-    /// in `Seq` order (Pass 2 — no contiguity required: `TolerateGap` burns
-    /// fold harmlessly). A committed-but-unacked tail marker is REPLAYED — the
-    /// lost-ack case is the client's (ASN-0134 SAFE(b)(iii)), not a phantom.
+    /// halt, never drop), replay exactly `S_load < Seq ≤ W` through
+    /// [`WorldState::apply`] in `Seq` order (Pass 2 — no contiguity required:
+    /// `TolerateGap` burns fold harmlessly), then durably TRUNCATE the
+    /// un-acked/torn tail beyond `W` before any write is served (skipped on
+    /// every halt path; a truncation failure fails `open()` with `Io` —
+    /// idempotent, retried next `open()`). A committed-but-unacked tail marker
+    /// is REPLAYED — the lost-ack case is the client's (ASN-0134
+    /// SAFE(b)(iii)), not a phantom.
     ///
     /// Under [`Durability::InMemory`]: no journal to name, no recovery, and
     /// the root is initialized directly from `genesis` (`S_load = 0`).
@@ -369,7 +370,9 @@ impl<W: WorldState> Kernel<W> {
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
     /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
-    /// precedes [`OpenError::Corruption`], and `Corruption` precedes the tail
+    /// precedes [`OpenError::Corruption`], and EVERY route to `Corruption` —
+    /// the classified corrupt run, the exhausted `Seq` order, and the fold's
+    /// own verdict on an undecodable or repeated record — precedes the tail
     /// truncation, which is why a halt never cuts anything.
     ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
@@ -412,12 +415,11 @@ impl<W: WorldState> Kernel<W> {
         // exhausted chain is the operator-intervention condition (§6/§7).
         let base = replay::select_base(&checkpoints, &segs, None, genesis)
             .map_err(|_| OpenError::BadCheckpoint)?;
-        let s_load = base.s_load;
 
         // Pass 1: derive W and classify the corrupt runs (§7). Runs beyond W
         // and EOF runs are the un-acked/torn tail, physically discarded
         // below; runs at or below S_load are already embodied in the base.
-        let scan = journal::scan(&segs, s_load)?;
+        let scan = base.scan(&segs)?;
         if let Some(at) = scan.fatal_run_to_head() {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
@@ -425,18 +427,21 @@ impl<W: WorldState> Kernel<W> {
         // The coordinate this session would commit at. A journal whose head
         // leaves none is one this kernel's sequencer cannot have written, and
         // an unaccountable durable head is the operator-intervention
-        // condition — halt, before the tail is touched (§1/§2/§7).
+        // condition (§1/§2/§7).
         let head = scan.committed_head;
         let next_seq = head
             .checked_add(1)
             .ok_or(OpenError::Corruption { at: Seq(head) })?;
 
-        // Tail truncation — before any write is served (§7).
-        journal::truncate_tail(dir, &scan)?;
-
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
-        let world = replay::fold_to(base, scan, head)
+        let world = replay::fold_to(base, &scan, head)
             .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
+
+        // Tail truncation: after every refusal, and before any write is
+        // served (§7). The fold serves none, so the §7 obligation is kept
+        // while an `open()` that refuses leaves the journal exactly as it
+        // found it — which is what an operator images after a halt.
+        journal::truncate_tail(dir, &scan)?;
 
         let writer = JournalWriter::open_active(dir, next_seq)?;
         Ok((
@@ -550,12 +555,18 @@ impl<W: WorldState> Kernel<W> {
     /// itself and read the result; a store that has stopped checkpointing
     /// goes on committing and says nothing.
     ///
-    /// A panic unwinding out of `f` or the commit path is handled by the §3
-    /// unwind guard (pre-barrier: discard staging, durably truncate any
-    /// partial append, roll the high-water back per [`BurnedSeqPolicy`] —
-    /// poisoning if the truncation cannot complete durably; post-barrier
-    /// pre-install: poison — the committed-but-uninstalled txn replays at the
-    /// next `open()` as a lost-ack op); the panic propagates to the caller.
+    /// A panic out of `f` propagates with nothing of the transaction
+    /// surviving, and needs no guard to do so: no `Seq` was drawn and nothing
+    /// was appended, so the staging drop and the applier lock's release are
+    /// the whole repair. The kernel is not poisoned and the order stays
+    /// gap-free.
+    ///
+    /// A panic out of the commit path is what the §3 unwind guard answers
+    /// (pre-barrier: durably truncate any partial append and roll the
+    /// high-water back per [`BurnedSeqPolicy`] — poisoning if the truncation
+    /// cannot complete durably; post-barrier pre-install: poison — the
+    /// committed-but-uninstalled txn replays at the next `open()` as a
+    /// lost-ack op); the panic then propagates to the caller.
     ///
     /// [`BurnedSeqPolicy`]: crate::BurnedSeqPolicy
     pub fn transact<T, E>(
@@ -837,16 +848,15 @@ impl<W: WorldState> Kernel<W> {
                 floor: u.floor.map(Seq),
             }
         })?;
-        let s_load = base.s_load;
         // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
         // installed root) and 0 is genesis, so there is nothing to fold, and
         // consulting the journal could only refuse a question the base already
         // answers — the corruption sweep below is what it would refuse with.
-        if at.0 == s_load {
+        if at.0 == base.s_load {
             return Ok(base.world);
         }
-        let scan = journal::scan(&segs, s_load)?;
+        let scan = base.scan(&segs)?;
         // Any at-rest corrupt run not wholly embodied in the base is a halt,
         // even beyond `at`. (A racing live append never produces a Landed run:
         // it can tear only the file's suffix, after the last committed marker,
@@ -860,7 +870,7 @@ impl<W: WorldState> Kernel<W> {
             });
         }
         // Recovery's fold, bounded at `at` (§6/§7).
-        replay::fold_to(base, scan, at.0).map_err(|seq| HistoryError::Corruption { at: Seq(seq) })
+        replay::fold_to(base, &scan, at.0).map_err(|seq| HistoryError::Corruption { at: Seq(seq) })
     }
 
     /// Shutdown/checkpoint hook. Under per-commit `Fsync` every commit
@@ -939,11 +949,30 @@ mod tests {
             assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
             assert!(writer.commit_txn(1, vec![rec(20)], || {}).is_ok());
         }
+        // A torn tail past the last committed marker, so there IS something a
+        // truncation would take — without it the cut lands at end-of-file and
+        // the assertion below could not tell a halt from a truncation.
+        let seg = journal::segment_path(dir.path(), 1);
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&seg).unwrap();
+            f.write_all(&[0xAB, 0xCD, 0xEF]).unwrap();
+        }
+        let before = fs::read(&seg).unwrap();
+
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a repeated Seq is not something to fold twice");
         assert!(
             matches!(err, OpenError::Corruption { at: Seq(1) }),
             "got {err:?}"
+        );
+        // A halt cuts nothing: the fold's refusal precedes the tail
+        // truncation, so the store an operator images after a `Corruption` is
+        // the store that was there.
+        assert_eq!(
+            fs::read(&seg).unwrap(),
+            before,
+            "a halted open truncated the journal"
         );
     }
 

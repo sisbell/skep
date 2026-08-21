@@ -1,6 +1,7 @@
 //! Kernel configuration — the knobs the design's Open-build-decisions section
 //! selects, carried on [`KernelCfg`] (§Public interface).
 
+use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +24,23 @@ pub struct KernelCfg {
     /// older retained base. `N = 1` ⇒ newest is the sole base, no fallback
     /// (§6/§7).
     pub retain_checkpoints: usize,
+}
+
+impl KernelCfg {
+    /// The interface's `N ≥ 1` retention rule (§Public interface), checked
+    /// against a journal-backed configuration before it is used. A violation
+    /// is surfaced rather than silently clamped: `N = 0` asks for a journal
+    /// with no base to recover from, which is a caller's mistake and not a
+    /// mode this kernel offers.
+    pub(crate) fn validate(&self) -> Result<(), io::Error> {
+        if self.retain_checkpoints == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "retain_checkpoints must be >= 1",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Durability mode (§1, Conflicts #3).

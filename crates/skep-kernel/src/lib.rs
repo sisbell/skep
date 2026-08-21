@@ -94,6 +94,7 @@ mod config;
 mod error;
 mod journal;
 mod kernel;
+mod replay;
 
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
 pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
@@ -195,6 +196,14 @@ pub enum Space {
     /// Coverage-class keys — M7's idem=⊤ dedup critical sections (MIC clause
     /// 7 / G2: read-decide-deposit is one action under this key).
     CoverageClass = 0x02,
+    /// THE principal registry — M3's single global `principals_lock_key`,
+    /// which serializes delegation's id-freshness read; that race is
+    /// CROSS-namespace, so it cannot ride on a namespace key.
+    Principals = 0x03,
+    /// THE node registry — M3's `node_lock_key`, which keeps a concurrent
+    /// duplicate `RegisterNode` a typed rejection rather than a silent
+    /// coalesce.
+    Nodes = 0x04,
 }
 
 impl Space {

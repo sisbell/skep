@@ -172,34 +172,20 @@ fn document_ns(a: &Address) -> NsKey {
 // The three key domains M3 serializes on — namespace frontiers, THE principal
 // registry, THE node registry — must occupy disjoint byte spaces (§1/§8: an
 // alias would under-serialize a namespace and REUSE an address, the one fatal
-// error).
-//
-// OPEN DECISION (drift-forced; §1 / Open build decisions "Space-tag
-// encoding"): the design declares three variants — `Space::Namespace`,
-// `Space::Principals`, `Space::Nodes` — in M2's central `Space` enum, but
-// skep-kernel's actual enum declares only `Namespace` and `CoverageClass`, and
-// an upstream crate is never edited from here. The design's documented
-// byte-equivalent alternative is taken instead: ONE central tag
-// (`Space::Namespace` — the tag the central enum itself assigns to M3's
-// entity allocation) plus a second sub-tag byte selecting
-// namespace/principals/nodes — same byte-level disjointness, literal
-// one-tag-per-store conformance. Every `Namespace`-tagged key in the system
-// routes through M3's constructors (they supersede the composition contract's
-// base-crate `key(home, …)` sketch — §1), so the sub-tag byte is universal
-// and the three domains can never alias.
-const SUB_NAMESPACE: u8 = 0x00;
-const SUB_PRINCIPALS: u8 = 0x01;
-const SUB_NODES: u8 = 0x02;
+// error). Each takes its own tag from M2's central `Space` enum
+// (`Space::Namespace` / `Space::Principals` / `Space::Nodes`), where every
+// tag in the system is assigned, so the disjointness holds against the other
+// stores' key spaces too and not merely against M3's own.
 
 /// The injective, space-tagged `NsKey → LockKey` encoding (§1): tag byte,
-/// sub-tag byte, 4-byte BE component count, each component length-delimited
-/// (4-byte BE length + minimal BE magnitude bytes), then `g`. Injectivity is
-/// what guarantees distinct namespaces map to distinct locks; both the
+/// 4-byte BE component count, each component length-delimited (4-byte BE
+/// length + minimal BE magnitude bytes), then `g`. Injectivity is what
+/// guarantees distinct namespaces map to distinct locks; both the
 /// `*_lock_key` constructors and the frontier advance route through the SAME
 /// `*_ns` helper and THIS encoding, so the held lock key and the staged
 /// frontier key are the same bytes by one code path.
 pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
-    let mut b = vec![Space::Namespace.tag(), SUB_NAMESPACE];
+    let mut b = vec![Space::Namespace.tag()];
     b.extend((k.parent.len() as u32).to_be_bytes());
     for comp in &k.parent {
         let c = comp.to_bytes_be();
@@ -362,7 +348,7 @@ impl M3State {
     /// it pre-reads the stable ω(d_src). Redundant under M2 v1's global
     /// applier lock.
     pub fn principals_lock_key() -> LockKey {
-        LockKey(vec![Space::Namespace.tag(), SUB_PRINCIPALS])
+        LockKey(vec![Space::Principals.tag()])
     }
 
     /// Coarse node-registry key — held by `register_node` so a concurrent
@@ -372,7 +358,7 @@ impl M3State {
     /// rejection under per-key concurrency. Redundant under v1's global lock,
     /// exactly like [`M3State::principals_lock_key`].
     pub fn node_lock_key() -> LockKey {
-        LockKey(vec![Space::Namespace.tag(), SUB_NODES])
+        LockKey(vec![Space::Nodes.tag()])
     }
 }
 

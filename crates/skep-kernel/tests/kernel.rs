@@ -32,6 +32,26 @@ struct TestWorld {
 enum TestRec {
     Push(u64),
     Blob(Vec<u8>),
+    /// Stages and folds like any record and then panics when the commit
+    /// region serializes it — the one way a test can unwind INSIDE that
+    /// region, where the §3 guard rather than the closure phase answers.
+    PanicOnSerialize(Unserializable),
+}
+
+#[derive(Clone, Debug)]
+struct Unserializable;
+
+impl Serialize for Unserializable {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        panic!("record serialization panicked inside the commit region");
+    }
+}
+
+impl<'de> Deserialize<'de> for Unserializable {
+    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
+        // Nothing that panics on the way out ever reaches the journal.
+        unreachable!("never serialized, so never journaled, so never read back")
+    }
 }
 
 impl WorldState for TestWorld {
@@ -49,6 +69,10 @@ impl WorldState for TestWorld {
             TestRec::Blob(b) => {
                 next.items.push_back(b.len() as u64);
                 next.sum += b.len() as u64;
+            }
+            // Folds like any other record; the panic waits for the journal.
+            TestRec::PanicOnSerialize(_) => {
+                next.items.push_back(0);
             }
         }
         next
@@ -103,8 +127,12 @@ fn push(k: &Kernel<TestWorld>, x: u64) -> Seq {
     .1
 }
 
+fn item_list(w: &TestWorld) -> Vec<u64> {
+    w.items.iter().copied().collect()
+}
+
 fn items(k: &Kernel<TestWorld>) -> Vec<u64> {
-    k.snapshot().world().items.iter().copied().collect()
+    item_list(k.snapshot().world())
 }
 
 // ---- physical-layer helpers (the on-disk format the design fixes: §1/§6) ----
@@ -262,7 +290,22 @@ fn lock_key_space_and_seq_basics() {
     assert!(LockKey(vec![1]) < LockKey(vec![1, 0]));
     assert_eq!(Space::Namespace.tag(), 0x01);
     assert_eq!(Space::CoverageClass.tag(), 0x02);
-    assert_ne!(Space::Namespace.tag(), Space::CoverageClass.tag());
+    assert_eq!(Space::Principals.tag(), 0x03);
+    assert_eq!(Space::Nodes.tag(), 0x04);
+    // Every key space in the system draws its tag here, so the uniqueness
+    // that keeps two stores' keys from aliasing is checkable in one place
+    // (§4) — which is the whole reason the enum is central.
+    let tags = [
+        Space::Namespace.tag(),
+        Space::CoverageClass.tag(),
+        Space::Principals.tag(),
+        Space::Nodes.tag(),
+    ];
+    for i in 0..tags.len() {
+        for j in (i + 1)..tags.len() {
+            assert_ne!(tags[i], tags[j], "space tags {i} and {j} alias");
+        }
+    }
     let by_value: Seq = Seq(7); // Copy
     assert_eq!(by_value, Seq(7));
 
@@ -449,6 +492,72 @@ fn bad_newest_checkpoint_falls_back_to_older_retained_base() {
     assert_eq!(items(&k), vec![10, 20, 30, 40]);
     assert_eq!(k.snapshot().world().sum, 100);
     assert_eq!(k.current_seq(), Seq(4));
+}
+
+#[test]
+fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
+    // Bounded replay derives its world the way recovery does, so it inherits
+    // the whole fallback chain: a base that fails its checksum is skipped for
+    // the next-older RETAINED one, then for genesis while reachable, and the
+    // answer is the same world whichever base carries it (§6/§7).
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    push(&k, 10);
+    push(&k, 20);
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    push(&k, 30);
+    push(&k, 40);
+    assert_eq!(k.checkpoint().unwrap(), Seq(4));
+    push(&k, 50);
+    let whole = vec![10, 20, 30, 40, 50];
+    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+
+    // Newest base unusable → the older retained one carries the answer.
+    let cp4 = ckpt_file(dir.path(), 4);
+    let len = fs::metadata(&cp4).unwrap().len();
+    flip_byte(&cp4, len - 1);
+    assert_eq!(item_list(&k.world_at(Seq(4)).unwrap()), vec![10, 20, 30, 40]);
+    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+
+    // Both bases unusable → genesis carries it, replaying everything.
+    let cp2 = ckpt_file(dir.path(), 2);
+    let len = fs::metadata(&cp2).unwrap().len();
+    flip_byte(&cp2, len - 1);
+    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+    // The hint arrives seeded whichever base was chosen (§7 seam contract 2).
+    assert_eq!(k.world_at(Seq(5)).unwrap().sum, 150);
+}
+
+#[test]
+fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
+    // §3 unwind guard, pre-barrier arm: an unwind out of the commit region
+    // with nothing durably appended is repaired to a TRUE no-op — staging
+    // discarded, the high-water rolled back per BurnedSeqPolicy, NO poison —
+    // and the coordinates the failed txn drew are reused by the next commit.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        let _ = k.transact::<(), ()>(&[], |stg| {
+            // Staged fine; it panics in the commit region, where the closure
+            // phase's own guard no longer covers it.
+            stg.push(TestRec::PanicOnSerialize(Unserializable));
+            Ok(())
+        });
+    }));
+    assert!(unwound.is_err(), "the panic must propagate to the caller");
+    assert_eq!(k.current_seq(), Seq(1));
+
+    // Not poisoned: the write path still works, gap-free.
+    assert_eq!(push(&k, 20), Seq(2));
+    assert_eq!(items(&k), vec![10, 20]);
+    drop(k);
+    // Nothing of the panicking txn is on disk to recover.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
+    assert_eq!(k.current_seq(), Seq(2));
 }
 
 // ---- segments, retention & reclamation (§1/§6) ----

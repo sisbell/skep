@@ -169,16 +169,12 @@ impl Engine {
     }
 
     /// The committed world as of position `at` — M2's read-only bounded
-    /// replay ([`Kernel::world_at`]) fed with THE genesis world of this
-    /// engine's one configuration, so the historical fold starts from the
-    /// same Σ₀ every recovery starts from (the byte-identical-genesis
-    /// contract, discharged here rather than left to the binary).
-    /// Observation-surface API: writes nothing, takes no kernel lock, and
-    /// leaves the live paths untouched.
+    /// replay ([`Kernel::world_at`]), which folds from the Σ₀ the kernel was
+    /// opened under, so a historical position starts from the same genesis
+    /// every recovery starts from. Observation-surface API: writes nothing,
+    /// takes no kernel lock, and leaves the live paths untouched.
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
-        let genesis = World::genesis(&self.genesis)
-            .expect("the engine's own genesis config validated at Engine::open");
-        self.kernel.world_at(genesis, at)
+        self.kernel.world_at(at)
     }
 }
 

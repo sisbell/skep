@@ -25,7 +25,7 @@ pub fn action_point(w: &Tumbler) -> Option<Pos> {
 
 /// The clause that puts a displacement outside `⊕`'s domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AddDomain {
+pub(crate) enum AddDomainClause {
     /// `¬Pos(w)` — the displacement has no action point.
     ZeroDisplacement,
     /// `actionPoint(w) > #a` — it acts at a position past `#a`, the start's
@@ -39,10 +39,10 @@ pub(crate) enum AddDomain {
 /// unguarded, and that is sound only while the span constructor admits
 /// exactly what `add` accepts; asking here is what makes "exactly"
 /// structural rather than a promise repeated in two comments.
-pub(crate) fn add_domain(a: &Tumbler, w: &Tumbler) -> Result<Pos, AddDomain> {
-    let k = action_point(w).ok_or(AddDomain::ZeroDisplacement)?;
+pub(crate) fn add_domain(a: &Tumbler, w: &Tumbler) -> Result<Pos, AddDomainClause> {
+    let k = action_point(w).ok_or(AddDomainClause::ZeroDisplacement)?;
     if k > a.len() {
-        return Err(AddDomain::ActionPointTooDeep);
+        return Err(AddDomainClause::ActionPointTooDeep);
     }
     Ok(k)
 }
@@ -77,11 +77,11 @@ impl Error for AddPrecond {}
 /// result-plus-displacement in general.
 pub fn add(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, AddPrecond> {
     let k = add_domain(a, w).map_err(|_| AddPrecond)?;
-    let (ac, wc) = (a.comps(), w.comps());
-    let mut out: Vec<Nat> = Vec::with_capacity(wc.len());
-    out.extend_from_slice(&ac[..k - 1]);
-    out.push(&ac[k - 1] + &wc[k - 1]);
-    out.extend_from_slice(&wc[k..]);
+    let (a_comps, w_comps) = (a.comps(), w.comps());
+    let mut out: Vec<Nat> = Vec::with_capacity(w_comps.len());
+    out.extend_from_slice(&a_comps[..k - 1]);
+    out.push(&a_comps[k - 1] + &w_comps[k - 1]);
+    out.extend_from_slice(&w_comps[k..]);
     Ok(Tumbler::from_vec(out))
 }
 
@@ -111,18 +111,19 @@ pub fn sub(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, SubPrecond> {
     if a < w {
         return Err(SubPrecond);
     }
-    let l = a.len().max(w.len());
+    let padded_len = a.len().max(w.len());
     let zero = Nat::from(0u32);
-    let padded_divergence = (0..l).find(|&i| padded_comp(a, i, &zero) != padded_comp(w, i, &zero));
+    let padded_divergence =
+        (0..padded_len).find(|&i| padded_comp(a, i, &zero) != padded_comp(w, i, &zero));
     match padded_divergence {
-        None => Ok(Tumbler::from_vec(vec![zero; l])),
+        None => Ok(Tumbler::from_vec(vec![zero; padded_len])),
         Some(d) => {
-            let mut out: Vec<Nat> = Vec::with_capacity(l);
+            let mut out: Vec<Nat> = Vec::with_capacity(padded_len);
             out.resize(d, Nat::from(0u32));
             // a ≥ w puts the larger component on a's side at the divergence,
             // so this ℕ subtraction cannot underflow.
             out.push(padded_comp(a, d, &zero) - padded_comp(w, d, &zero));
-            for i in (d + 1)..l {
+            for i in (d + 1)..padded_len {
                 out.push(padded_comp(a, i, &zero).clone());
             }
             Ok(Tumbler::from_vec(out))
@@ -163,15 +164,15 @@ pub fn inc(t: &Tumbler, k: usize) -> Tumbler {
 /// Correctness is owed here; *enforcement* — and the frontier the gate guards
 /// — is M3's obligation: an allocator that skips it emits T4-invalid
 /// addresses and breaks the level determination GlobalUniqueness rests on.
-pub fn inc_preserves_t4(t: &Address, k: usize) -> bool {
+pub fn inc_preserves_t4(a: &Address, k: usize) -> bool {
     match k {
         0 | 1 => true,
-        2 => t.level() != Level::Element,
+        2 => a.level() != Level::Element,
         _ => false,
     }
 }
 
-/// [`checked_inc`]: the TA5a gate refused — `inc_preserves_t4(t, k)` is false.
+/// [`checked_inc`]: the TA5a gate refused — `inc_preserves_t4(a, k)` is false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GateViolation;
 
@@ -190,11 +191,11 @@ impl Error for GateViolation {}
 /// refused as a value, in constant time and without allocating — which is
 /// what makes this, and not `inc`, the door a caller may hand a `k` it
 /// derived from input.
-pub fn checked_inc(t: &Address, k: usize) -> Result<Address, GateViolation> {
-    if !inc_preserves_t4(t, k) {
+pub fn checked_inc(a: &Address, k: usize) -> Result<Address, GateViolation> {
+    if !inc_preserves_t4(a, k) {
         return Err(GateViolation);
     }
-    let next = inc(t.tumbler(), k);
+    let next = inc(a.tumbler(), k);
     Ok(validate(next).expect("TA5a gate passed ⇒ inc preserves T4"))
 }
 

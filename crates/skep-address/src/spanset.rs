@@ -446,8 +446,8 @@ pub fn equiv(a: &SpanSet, b: &SpanSet) -> Result<bool, LevelMismatch> {
 /// canonicalization is genuinely absent from the source algebra, so M7
 /// partitions with [`SpanSet::by_level_class`] and composes per-class keys
 /// (read back through [`CanonicalForm::as_set`]).
-pub fn canonical_key(s: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
-    Ok(CanonicalForm(s.normalize()?))
+pub fn canonical_key(set: &SpanSet) -> Result<CanonicalForm, LevelMismatch> {
+    Ok(CanonicalForm(set.normalize()?))
 }
 
 /// S0 — the single-span convex hull of a finite point set, as

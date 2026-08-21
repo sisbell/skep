@@ -34,13 +34,13 @@ pub fn tumblers_upto(alphabet: &[u32], max_len: usize) -> Vec<Tumbler> {
         let mut next = Vec::with_capacity(rows.len() * alphabet.len());
         for row in &rows {
             for &c in alphabet {
-                let mut r = row.clone();
-                r.push(c);
-                next.push(r);
+                let mut extended = row.clone();
+                extended.push(c);
+                next.push(extended);
             }
         }
         rows = next;
-        out.extend(rows.iter().map(|r| t(r)));
+        out.extend(rows.iter().map(|row| t(row)));
     }
     out
 }

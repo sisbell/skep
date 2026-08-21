@@ -191,9 +191,9 @@ fn level_class_is_the_s8_gate_answered_directly() {
     let mixed = spanset(&[sp(&[1], &[3]), sp(&[1, 0], &[1, 5])]);
     assert_eq!(mixed.level_class(), Err(LevelMismatch));
     assert_eq!(mixed.normalize(), Err(LevelMismatch));
-    let nu = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
-    assert_eq!(nu.level_class(), Err(LevelMismatch));
-    assert_eq!(nu.normalize(), Err(LevelMismatch));
+    let non_uniform = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
+    assert_eq!(non_uniform.level_class(), Err(LevelMismatch));
+    assert_eq!(non_uniform.normalize(), Err(LevelMismatch));
     // The per-span clause at a position past the first. The partner is
     // level-uniform and shares its `#start`, so nothing but the uniformity
     // clause can refuse this set, and the clause is therefore asked of every
@@ -201,14 +201,14 @@ fn level_class_is_the_s8_gate_answered_directly() {
     // from. A set that got past this gate would reach `normalize`'s sweep,
     // where a component span whose reach is a different length fails WF inside
     // an `expect`.
-    let nu_second = spanset(&[
+    let non_uniform_second = spanset(&[
         sp(&[1, 0, 2], &[1, 0, 5]),
         Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
     ]);
-    assert_eq!(nu_second.level_class(), Err(LevelMismatch));
-    assert_eq!(nu_second.normalize(), Err(LevelMismatch));
-    assert!(!nu_second.is_normalized());
-    assert_eq!(canonical_key(&nu_second), Err(LevelMismatch));
+    assert_eq!(non_uniform_second.level_class(), Err(LevelMismatch));
+    assert_eq!(non_uniform_second.normalize(), Err(LevelMismatch));
+    assert!(!non_uniform_second.is_normalized());
+    assert_eq!(canonical_key(&non_uniform_second), Err(LevelMismatch));
 }
 
 /// `by_level_class` decomposes a set S8 refuses whole into the pieces S8
@@ -233,11 +233,11 @@ fn by_level_class_partitions_into_normalizable_pieces() {
     // TOTAL: a non-level-uniform component span is partitioned by its start,
     // then refused by its own class's gate — exactly as the whole set refused
     // it.
-    let with_nu = spanset(&[
+    let with_non_uniform = spanset(&[
         Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
         sp(&[1], &[3]),
     ]);
-    let parts = with_nu.by_level_class();
+    let parts = with_non_uniform.by_level_class();
     assert_eq!(parts[&3].level_class(), Err(LevelMismatch));
     assert_eq!(parts[&1].level_class(), Ok(Some(1)));
 }
@@ -249,8 +249,8 @@ fn normalize_gate_is_the_full_s8_precondition() {
     assert_eq!(mixed.normalize(), Err(LevelMismatch));
     assert!(!mixed.is_normalized());
     // A non-level-uniform component span.
-    let nu = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
-    assert_eq!(nu.normalize(), Err(LevelMismatch));
+    let non_uniform = SpanSet::singleton(Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap());
+    assert_eq!(non_uniform.normalize(), Err(LevelMismatch));
 }
 
 #[test]

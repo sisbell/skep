@@ -56,7 +56,7 @@ fn s10_union_laws_up_to_canonical_form() {
     // `c` carries a nested pair, so the canonical form these laws are stated
     // up to is one that coalescing actually had to decide.
     let c = spanset(&[sp(&[6], &[9]), sp(&[7], &[8])]);
-    let key = |s: &SpanSet| canonical_key(s).unwrap();
+    let key = |set: &SpanSet| canonical_key(set).unwrap();
     assert_eq!(key(&union(&a, &b)), key(&union(&b, &a))); // commutative
     assert_eq!(
         key(&union(&union(&a, &b), &c)),
@@ -140,7 +140,7 @@ fn ta_lc_left_cancellation_holds() {
 /// `a ⊕ w = b ⊕ w` exists (the tail below the action point is discarded).
 /// The test asserts the failure, not a law.
 #[test]
-fn ta_rc_right_cancellation_fails_witness() {
+fn ta_rc_right_cancellation_fails() {
     let (a, b, w) = (t(&[1, 7]), t(&[1, 9]), t(&[2]));
     assert_ne!(a, b);
     assert_eq!(add(&a, &w).unwrap(), add(&b, &w).unwrap());

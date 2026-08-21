@@ -204,10 +204,10 @@ fn pairwise_ops_gate_unconditionally_before_dispatch() {
     // and shares its start length, so nothing but the per-span clause can
     // refuse these pairs, and each operand is therefore asked about on its own
     // rather than through a self-pairing that either side would answer for.
-    let nu = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
+    let non_uniform = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
     let uniform = sp(&[1, 0, 2], &[1, 0, 5]);
-    assert_eq!(intersect(&nu, &nu), Err(LevelMismatch));
-    for (x, y) in [(&nu, &uniform), (&uniform, &nu)] {
+    assert_eq!(intersect(&non_uniform, &non_uniform), Err(LevelMismatch));
+    for (x, y) in [(&non_uniform, &uniform), (&uniform, &non_uniform)] {
         assert_eq!(intersect(x, y), Err(LevelMismatch));
         assert_eq!(merge(x, y), Err(LevelMismatch));
         assert_eq!(difference(x, y), Err(LevelMismatch));
@@ -307,10 +307,10 @@ fn merge_yields_the_union_in_every_orientation() {
                 merge(b, a).unwrap(),
                 "merge is not symmetric on ({a:?}, {b:?})"
             );
-            if let Some(m) = &joined {
+            if let Some(merged) = &joined {
                 for probe in &probes {
                     assert_eq!(
-                        m.contains(probe),
+                        merged.contains(probe),
                         a.contains(probe) || b.contains(probe),
                         "merge({a:?}, {b:?}) disagrees at {probe:?}"
                     );
@@ -334,8 +334,11 @@ fn split_cuts_at_an_interior_point_and_checks_the_level_clause_first() {
     assert_eq!(split(&s, &t(&[5, 0])), Err(SplitError::LevelMismatch));
     assert_eq!(split(&s, &t(&[9, 5])), Err(SplitError::LevelMismatch));
     // σ itself must be level-uniform (S4).
-    let nu = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
-    assert_eq!(split(&nu, &t(&[1, 0, 3])), Err(SplitError::LevelMismatch));
+    let non_uniform = Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap();
+    assert_eq!(
+        split(&non_uniform, &t(&[1, 0, 3])),
+        Err(SplitError::LevelMismatch)
+    );
 }
 
 // ---- difference (S11d) ------------------------------------------------------
@@ -354,9 +357,9 @@ fn difference_yields_one_or_two_complements_by_sc_case() {
         spanset(&[sp(&[9], &[12])])
     );
     // strict containment: two complements in N1 order, normalized by construction
-    let two = difference(&a, &sp(&[3], &[5])).unwrap();
-    assert_eq!(two, spanset(&[sp(&[1], &[3]), sp(&[5], &[9])]));
-    assert!(two.is_normalized());
+    let complements = difference(&a, &sp(&[3], &[5])).unwrap();
+    assert_eq!(complements, spanset(&[sp(&[1], &[3]), sp(&[5], &[9])]));
+    assert!(complements.is_normalized());
     // a shared boundary drops the zero-width complement (S11d's "1 or 2"; S2)
     assert_eq!(difference(&a, &sp(&[1], &[5])).unwrap(), spanset(&[sp(&[5], &[9])]));
     assert_eq!(difference(&a, &sp(&[5], &[9])).unwrap(), spanset(&[sp(&[1], &[5])]));

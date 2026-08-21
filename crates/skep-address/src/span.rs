@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::arithmetic::{add, add_domain, next_at_length, sub, AddDomain};
+use crate::arithmetic::{add, add_domain, next_at_length, sub, AddDomainClause};
 use crate::error::LevelMismatch;
 use crate::spanset::SpanSet;
 use crate::tumbler::Tumbler;
@@ -105,8 +105,8 @@ impl Span {
     pub fn new(start: Tumbler, width: Tumbler) -> Result<Span, T12Clause> {
         match add_domain(&start, &width) {
             Ok(_) => Ok(Span { start, width }),
-            Err(AddDomain::ZeroDisplacement) => Err(T12Clause::ZeroWidth),
-            Err(AddDomain::ActionPointTooDeep) => Err(T12Clause::ActionPointTooDeep),
+            Err(AddDomainClause::ZeroDisplacement) => Err(T12Clause::ZeroWidth),
+            Err(AddDomainClause::ActionPointTooDeep) => Err(T12Clause::ActionPointTooDeep),
         }
     }
 

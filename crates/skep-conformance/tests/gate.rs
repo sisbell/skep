@@ -9,8 +9,34 @@
 use skep_conformance::outcome::Verdict;
 use skep_conformance::runner::run_all;
 
+/// `harness_integrity` and `conformance_ratchet` both drive [`run_all`],
+/// which writes the ONE operator-facing report under `target/conformance/`.
+/// Cargo runs them on parallel threads of this binary, so without this lock
+/// the second run truncates the file the first is about to `stat` — observed
+/// as a one-in-many flake, 2026-08-21.
+///
+/// Serialized rather than given separate output directories ON PURPOSE: the
+/// report is a single canonical artifact operators read (the harness's
+/// product, §gate docs above), and fragmenting it per test would trade a
+/// real property for a test convenience. Both tests run the full sweep, so
+/// parallelism bought little here anyway.
+///
+/// `report_is_deterministic` writes no files and is deliberately NOT gated.
+static REPORT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the report lock, ignoring poisoning: if a sibling test panicked, that
+/// panic is the finding — the other test should still run and report its own
+/// verdict rather than fail with a lock error.
+fn report_guard() -> std::sync::MutexGuard<'static, ()> {
+    REPORT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[test]
 fn harness_integrity() {
+    // Held for the WHOLE body: the metadata assertions below read the file
+    // this run wrote, so releasing after `run_all` would leave exactly the
+    // truncate-while-stat window this lock exists to close.
+    let _report = report_guard();
     let out = run_all().expect("the harness must load goldens, run, and write reports");
 
     // The vendored corpus: 263 original + 34 corpus-extension scenarios. A
@@ -111,6 +137,7 @@ fn conformance_ratchet() {
         }
     }
 
+    let _report = report_guard();
     let out = run_all().expect("sweep must run");
     let mut violations = Vec::new();
     let mut improved = Vec::new();

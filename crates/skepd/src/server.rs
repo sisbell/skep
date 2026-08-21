@@ -134,8 +134,14 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const CORS_MAX_AGE_SECS: &str = "86400";
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
-/// body, which keeps its no-daemon-cap policy (local trust, as before).
+/// body, capped separately by [`MAX_REQUEST_BODY`].
 const HEAD_MAX: usize = 64 * 1024;
+
+/// Request-body cap, enforced on the declared `Content-Length` before any
+/// body byte is read or allocated. Pre-media value — wire frames are small.
+/// REVISIT at the media round: blob upload will raise this for its route
+/// only (a route-scoped cap, not a bigger global one).
+const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
 
 /// `/changes` page size when `limit` is absent.
 const CHANGES_LIMIT_DEFAULT: usize = 256;
@@ -1162,8 +1168,18 @@ fn serve_connection(
         // Clean close before any byte (a port probe, shutdown's wake
         // connect): no request, so no reply owed.
         Ok(None) => return,
-        Err(detail) => {
-            let reply = Reply::json(400, err_body("malformed_http", Some(&detail)));
+        Err(refusal) => {
+            let reply = match refusal {
+                ReadError::Malformed(detail) => {
+                    Reply::json(400, err_body("malformed_http", Some(&detail)))
+                }
+                ReadError::BodyTooLarge(declared) => {
+                    let detail = format!(
+                        "Content-Length {declared} exceeds the {MAX_REQUEST_BODY}-byte body cap"
+                    );
+                    Reply::json(413, err_body("payload_too_large", Some(&detail)))
+                }
+            };
             let _ = write_reply(&mut stream, &reply);
             return;
         }
@@ -1195,6 +1211,29 @@ fn serve_connection(
     }
 }
 
+/// A refused request read: which transport-error reply the connection is
+/// owed. Everything malformed is one bucket; the body cap gets its own
+/// honest disposition (`413 payload_too_large`), not a generic parse error.
+enum ReadError {
+    /// Not the HTTP subset this daemon speaks → `400 malformed_http`.
+    Malformed(String),
+    /// The declared `Content-Length` exceeds [`MAX_REQUEST_BODY`] →
+    /// `413 payload_too_large`. Raised before any body byte is read.
+    BodyTooLarge(usize),
+}
+
+impl From<String> for ReadError {
+    fn from(detail: String) -> ReadError {
+        ReadError::Malformed(detail)
+    }
+}
+
+impl From<&str> for ReadError {
+    fn from(detail: &str) -> ReadError {
+        ReadError::Malformed(detail.into())
+    }
+}
+
 /// One parsed request. `body` is exactly `Content-Length` bytes.
 struct HttpRequest {
     method: String,
@@ -1205,11 +1244,12 @@ struct HttpRequest {
 }
 
 /// Read one request off the socket. `Ok(None)` = clean close before any
-/// byte; `Err(detail)` = not the HTTP subset this daemon speaks (the caller
-/// answers `400 malformed_http`). The subset: one request per connection,
-/// HTTP/1.0 or 1.1, bodies by `Content-Length` (absent = empty),
-/// `Expect: 100-continue` honored, `Transfer-Encoding` refused.
-fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
+/// byte; `Err(_)` = the request is refused (the caller answers the
+/// [`ReadError`]'s reply and closes). The subset: one request per
+/// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
+/// empty, capped at [`MAX_REQUEST_BODY`]), `Expect: 100-continue`
+/// honored, `Transfer-Encoding` refused.
+fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let head_end = loop {
@@ -1225,7 +1265,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
             Ok(0) => return Err("connection closed inside the request head".into()),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
             Err(_) if buf.is_empty() => return Ok(None),
-            Err(e) => return Err(format!("read: {e}")),
+            Err(e) => return Err(format!("read: {e}").into()),
         }
     };
     let head = std::str::from_utf8(&buf[..head_end])
@@ -1245,7 +1285,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
         return Err("malformed request line".into());
     }
     if version != "HTTP/1.1" && version != "HTTP/1.0" {
-        return Err(format!("unsupported protocol '{version}'"));
+        return Err(format!("unsupported protocol '{version}'").into());
     }
     if method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) {
         return Err("malformed method token".into());
@@ -1279,6 +1319,13 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
     };
     let mut body = buf[head_end + 4..].to_vec();
     let want = content_length.unwrap_or(0);
+    // The one unbounded-allocation vector: refuse on the declared length
+    // alone, before 100-continue invites the body and before the loop reads
+    // (and allocates) a single byte of it. The media round's blob upload
+    // will raise this for its route only.
+    if want > MAX_REQUEST_BODY {
+        return Err(ReadError::BodyTooLarge(want));
+    }
     if expects_continue && body.len() < want {
         // The client is holding the body until told to send it (curl does
         // this for large payloads).
@@ -1291,7 +1338,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, String> {
         match stream.read(&mut chunk) {
             Ok(0) => return Err("connection closed inside the request body".into()),
             Ok(n) => body.extend_from_slice(&chunk[..n]),
-            Err(e) => return Err(format!("read: {e}")),
+            Err(e) => return Err(format!("read: {e}").into()),
         }
     }
     // A byte past Content-Length would be a pipelined second request; this
@@ -1345,6 +1392,7 @@ fn reason(status: u16) -> &'static str {
         404 => "Not Found",
         405 => "Method Not Allowed",
         410 => "Gone",
+        413 => "Payload Too Large",
         500 => "Internal Server Error",
         _ => "Status",
     }

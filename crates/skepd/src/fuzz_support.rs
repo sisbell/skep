@@ -76,6 +76,7 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "malformed_at",
     "malformed_changes",
     "malformed_http",
+    "payload_too_large",
     "no_such_endpoint",
     "method_not_allowed",
     "history_reclaimed",

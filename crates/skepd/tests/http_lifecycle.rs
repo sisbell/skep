@@ -1,10 +1,15 @@
 //! End-to-end over a real socket: session → delegate → create → insert →
 //! retrieve → makelink → findlinks, with sessions interleaved, the guest
-//! (session-less) path, unparseable frames, transport errors, idempotent
-//! retry, and concurrent clients on one world. Store semantics are trusted
-//! to the stores' own tests — these assert the transport.
+//! (session-less) path, unparseable frames, transport errors, the
+//! request-body cap, idempotent retry, and concurrent clients on one
+//! world. Store semantics are trusted to the stores' own tests — these
+//! assert the transport.
 
 mod common;
+
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 
 use common::*;
 use serde_json::Value;
@@ -413,6 +418,65 @@ fn transport_errors_are_json() {
     let (st, body) = get(port, "/op");
     assert_eq!(st, 405);
     assert_eq!(json(&body)["error"].as_str(), Some("method_not_allowed"));
+
+    sd.shutdown();
+}
+
+/// The documented request-body cap (wire.md §Transport, pre-media value);
+/// the daemon's `MAX_REQUEST_BODY` moving without the doc fails here.
+const BODY_CAP: usize = 8 * 1024 * 1024;
+
+#[test]
+fn a_body_at_the_cap_is_served() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // Exactly-at-cap non-JSON: the transport must read all of it and hand
+    // it to the codec — 200 with the marshaled unparseable rejection, not
+    // a refusal.
+    let body = vec![b'x'; BODY_CAP];
+    let (st, resp) = http(port, "POST", "/op", None, &body);
+    assert_eq!(st, 200, "a body at the cap is served: {}", String::from_utf8_lossy(&resp));
+    let v = json(&resp);
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["op"].as_str(), Some("unparseable"));
+
+    sd.shutdown();
+}
+
+#[test]
+fn a_byte_over_the_cap_is_refused_on_the_declared_length_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // Declare one byte past the cap and send NO body. The refusal must
+    // arrive on the declared Content-Length alone — before the daemon
+    // reads (or allocates for) a single body byte. The client deadline
+    // sits well under the server's 30 s request read timeout, so a daemon
+    // that entered the body loop (blocking on bytes that never come)
+    // fails here instead of allocating.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+    let head = format!(
+        "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+        BODY_CAP + 1
+    );
+    stream.write_all(head.as_bytes()).expect("write head");
+    let mut raw = Vec::new();
+    stream
+        .read_to_end(&mut raw)
+        .expect("the refusal arrives without any body byte being sent");
+    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("response separator");
+    let head = std::str::from_utf8(&raw[..sep]).expect("ascii response head");
+    assert!(
+        head.starts_with("HTTP/1.1 413 "),
+        "the payload-too-large disposition, not a generic parse error: {head}"
+    );
+    let v = json(&raw[sep + 4..]);
+    assert_eq!(v["error"].as_str(), Some("payload_too_large"), "refusal body: {v}");
+    assert!(v["detail"].is_string(), "the refusal names the declared length: {v}");
 
     sd.shutdown();
 }

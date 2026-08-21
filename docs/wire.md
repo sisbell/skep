@@ -44,7 +44,9 @@ a client opens a fresh connection per call. `GET /events` is the one
 long-lived response — a single unbounded body, ended by the daemon (clean
 close) at shutdown. HTTP/1.0 and 1.1 are accepted; request bodies ride
 with `Content-Length` (absent means empty; `Transfer-Encoding` is refused
-with `400 malformed_http`); `Expect: 100-continue` is honored.
+with `400 malformed_http`); `Expect: 100-continue` is honored. Bodies are
+capped at **8 MiB**: a larger declared `Content-Length` is refused with
+`413 payload_too_large` before any body byte is read.
 
 ### Identity — a scope decision
 
@@ -159,6 +161,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
+| 413    | `payload_too_large`         | the declared `Content-Length` exceeds the 8 MiB request-body cap |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |

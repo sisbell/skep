@@ -10,7 +10,7 @@
 //! bound and its own error vocabulary.
 
 use crate::checkpoint::{self, CkptMeta};
-use crate::journal::{ScanOutcome, SegmentMeta};
+use crate::journal::{self, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
@@ -57,9 +57,8 @@ pub(crate) fn select_base<W: WorldState>(
             });
         }
     }
-    // Genesis is reachable while the earliest surviving segment still starts
-    // at `Seq(1)` — an empty journal reaches it trivially.
-    if !(segs.is_empty() || segs[0].first_seq == 1) {
+    // Genesis stands in only while the journal still reaches back to it.
+    if !journal::reaches_genesis(segs) {
         return Err(Unreachable {
             floor: cps.first().map(|c| c.seq),
         });

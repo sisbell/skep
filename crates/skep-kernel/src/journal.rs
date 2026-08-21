@@ -203,13 +203,22 @@ pub(crate) fn inferred_last_seq(segs: &[SegmentMeta], i: usize) -> Option<u64> {
     segs.get(i + 1).map(|next| next.first_seq.saturating_sub(1))
 }
 
+/// Whether the surviving segments still cover `Seq(1)` — whether a fold from
+/// genesis can still reach the present. True for an empty journal (nothing
+/// has been reclaimed yet); false once reclamation has dropped the segment
+/// that began the log, which is what makes genesis unusable as a fallback
+/// base (§6/§7).
+pub(crate) fn reaches_genesis(segs: &[SegmentMeta]) -> bool {
+    segs.first().is_none_or(|s| s.first_seq == 1)
+}
+
 /// Reclaim whole *closed* segments covering nothing above `floor`: the
 /// qualifying segments form a prefix, so the walk stops at the first that
 /// does not qualify, and the active segment never does (§6). Space
 /// reclamation only — never a correctness mechanism; recovery's
-/// `Seq > S_load` filter handles a straddler's leftovers. The directory is
-/// fsynced whether or not anything was removed, so a caller's own preceding
-/// deletions in `dir` are durable when this returns.
+/// `Seq > S_load` filter handles a straddler's leftovers. On return the
+/// directory durably reflects whatever this call removed, with no case split
+/// on whether that was anything.
 pub(crate) fn reclaim_below(dir: &Path, segs: &[SegmentMeta], floor: u64) -> io::Result<()> {
     for (i, seg) in segs.iter().enumerate() {
         match inferred_last_seq(segs, i) {
@@ -272,8 +281,9 @@ pub(crate) enum UnwindRepair {
     Clean,
     /// The repair could not complete durably: an un-acked marker may survive.
     Unrepaired,
-    /// The unwind came after the barrier, so the transaction is durably
-    /// committed while its effect went uninstalled.
+    /// The unwind came after the barrier: the transaction is durably
+    /// committed, and whether its effect was ever published cannot be
+    /// accounted for from here.
     AfterBarrier,
 }
 
@@ -284,8 +294,7 @@ enum InFlight {
     Idle,
     /// Frames may be appended past `mark` and none of them are durable yet.
     Appending { mark: u64 },
-    /// The barrier passed: durably committed, effect not yet acknowledged as
-    /// installed.
+    /// The barrier passed: durably committed, publication in progress.
     Barriered,
 }
 
@@ -296,6 +305,11 @@ pub(crate) struct JournalWriter {
     dir: PathBuf,
     file: File,
     len: u64,
+    /// What the transaction in progress has reached. Every path out of this
+    /// writer leaves it [`InFlight::Idle`] except the two that halt the
+    /// kernel — a truncation that could not itself complete durably, and an
+    /// unwind through the publication — so a transaction never starts against
+    /// a predecessor's leavings (§3).
     in_flight: InFlight,
 }
 
@@ -335,22 +349,29 @@ impl JournalWriter {
         })
     }
 
-    /// Commit one whole transaction (§1: append records → append marker →
-    /// ONE records+marker fsync), rotating first at this txn boundary if the
-    /// active segment is over the threshold, and answering the byte count
-    /// appended.
+    /// Commit one whole transaction and publish its effect (§1: append
+    /// records → append marker → ONE records+marker fsync → `install`),
+    /// rotating first at this txn boundary if the active segment is over the
+    /// threshold, and answering the byte count appended.
     ///
     /// The segment is this writer's to repair: a failure anywhere past the
     /// pre-transaction mark durably truncates back to it before returning, so
     /// [`CommitFail::RolledBack`] states that nothing of the transaction
     /// survives. Only a truncation that cannot itself complete durably
     /// answers [`CommitFail::Unrepaired`].
+    ///
+    /// `install` makes the committed effect visible, and runs HERE — after
+    /// the barrier, before this returns — because the window between a
+    /// durable commit and its publication is the one failure this writer
+    /// cannot repair (§3). Bounding it inside the call is what keeps a caller
+    /// from leaving the writer believing a committed transaction is still in
+    /// flight.
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
         records: &[Vec<u8>],
+        install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
-        self.in_flight = InFlight::Idle;
         let buf = encode_txn(first_seq, records).map_err(CommitFail::RolledBack)?;
         self.maybe_rotate(first_seq).map_err(CommitFail::RolledBack)?;
         let mark = self.len;
@@ -358,6 +379,8 @@ impl JournalWriter {
         match self.append(&buf).and_then(|()| self.barrier()) {
             Ok(()) => {
                 self.in_flight = InFlight::Barriered;
+                install();
+                self.in_flight = InFlight::Idle;
                 Ok(buf.len() as u64)
             }
             Err(e) => Err(if self.roll_back_to(mark) {
@@ -366,12 +389,6 @@ impl JournalWriter {
                 CommitFail::Unrepaired
             }),
         }
-    }
-
-    /// The committed transaction's effect is installed: nothing is in flight,
-    /// so a later unwind has nothing of it to repair (§3).
-    pub(crate) fn installed(&mut self) {
-        self.in_flight = InFlight::Idle;
     }
 
     /// Repair the active segment after an unwind out of the commit region and
@@ -447,22 +464,20 @@ pub(crate) enum Journal {
 
 impl Journal {
     /// [`JournalWriter::commit_txn`]; the in-memory journal appends no bytes
-    /// and cannot fail.
+    /// and cannot fail, and publishes where the durable one publishes — after
+    /// a barrier it has no need of.
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
         records: &[Vec<u8>],
+        install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
         match self {
-            Journal::InMemory => Ok(0),
-            Journal::Segments(w) => w.commit_txn(first_seq, records),
-        }
-    }
-
-    /// [`JournalWriter::installed`].
-    pub(crate) fn installed(&mut self) {
-        if let Journal::Segments(w) = self {
-            w.installed();
+            Journal::InMemory => {
+                install();
+                Ok(0)
+            }
+            Journal::Segments(w) => w.commit_txn(first_seq, records, install),
         }
     }
 
@@ -493,8 +508,18 @@ pub(crate) enum RunEnd {
     Eof,
 }
 
+/// Where the un-acked / torn tail begins: the segment file to cut, the offset
+/// to cut it at, and the wholly-later segment files to remove (§7). Resolved
+/// to paths by the scan itself, while the segment list is in hand, so a
+/// truncation cannot be aimed at a list other than the one that was scanned.
+pub(crate) struct TailCut {
+    at: PathBuf,
+    off: u64,
+    discard: Vec<PathBuf>,
+}
+
 /// Pass-1 result (§7): the trustworthy boundary `W`, the committed records,
-/// the corrupt runs, and the physical cut point for tail truncation.
+/// the corrupt runs, and where the tail to truncate begins.
 pub(crate) struct ScanOutcome {
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` (if no
     /// committed marker sits above the loaded checkpoint, `W = S_load` and
@@ -505,18 +530,13 @@ pub(crate) struct ScanOutcome {
     /// to `(S_load, W]`).
     pub committed_records: Vec<(u64, Vec<u8>)>,
     /// Every committed marker's `last_seq`, in scan order — the transaction
-    /// boundaries of the scanned region. Recovery ignores this; bounded
-    /// replay (`Kernel::world_at`) uses it to tell a position (a boundary)
-    /// from a composite's interior `Seq`.
-    pub committed_boundaries: Vec<u64>,
+    /// boundaries of the scanned region, which [`ScanOutcome::require_boundary`]
+    /// answers from.
+    committed_boundaries: Vec<u64>,
     /// Corrupt runs in scan order.
     pub runs: Vec<RunEnd>,
-    /// `(segment index, byte offset of the last committed marker's frame
-    /// end)` — the tail-truncation cut (§7). `None` when no committed marker
-    /// was seen in the scanned region.
-    pub cut: Option<(usize, u64)>,
-    /// Index of the first scanned segment, `None` iff there are no segments.
-    pub first_scanned: Option<usize>,
+    /// The tail-truncation cut, `None` when nothing was scanned.
+    pub tail: Option<TailCut>,
 }
 
 impl ScanOutcome {
@@ -539,6 +559,25 @@ impl ScanOutcome {
             }
             _ => None,
         })
+    }
+
+    /// Whether `at` is one of the committed transaction boundaries this scan
+    /// saw — the positions [`crate::Kernel::transact`] returns, and the only
+    /// ones a bounded fold may answer at. `Err` carries the greatest boundary
+    /// at or below `at`, never below `floor`: the base's own seq is itself a
+    /// boundary, and a segment straddling it contributes boundaries below it
+    /// that no longer have a base to fold from.
+    pub(crate) fn require_boundary(&self, at: u64, floor: u64) -> Result<(), u64> {
+        if self.committed_boundaries.contains(&at) {
+            return Ok(());
+        }
+        Err(self
+            .committed_boundaries
+            .iter()
+            .copied()
+            .filter(|&b| b < at)
+            .max()
+            .map_or(floor, |m| m.max(floor)))
     }
 }
 
@@ -568,17 +607,18 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
         committed_records: Vec::new(),
         committed_boundaries: Vec::new(),
         runs: Vec::new(),
-        cut: None,
-        first_scanned: None,
+        tail: None,
     };
+    let mut cut: Option<(usize, u64)> = None;
+    let mut first_scanned: Option<usize> = None;
     let mut pending: HashMap<u64, Vec<PendingRec>> = HashMap::new();
     let mut run_open = false;
     for (i, seg) in segs.iter().enumerate() {
         if inferred_last_seq(segs, i).is_some_and(|last| last <= s_load) {
             continue;
         }
-        if out.first_scanned.is_none() {
-            out.first_scanned = Some(i);
+        if first_scanned.is_none() {
+            first_scanned = Some(i);
         }
         let buf = fs::read(&seg.path)?;
         let mut pos = 0usize;
@@ -619,7 +659,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                                     // Committed: intact + durable (it is on the
                                     // disk we read) + records_checksum-valid (§1).
                                     out.w = out.w.max(m.last_seq);
-                                    out.cut = Some((i, end as u64));
+                                    cut = Some((i, end as u64));
                                     out.committed_boundaries.push(m.last_seq);
                                     out.committed_records
                                         .extend(group.into_iter().map(|p| (p.seq, p.bytes)));
@@ -652,6 +692,17 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     if run_open {
         out.runs.push(RunEnd::Eof);
     }
+    // Everything past the last committed marker is tail. When the scanned
+    // region holds no committed marker at all, everything scanned is tail:
+    // the first scanned segment is cut at offset 0. Harmless corrupt runs
+    // (inferred max ≤ `s_load`) sit below the cut and are not touched.
+    out.tail = cut
+        .or_else(|| first_scanned.map(|first| (first, 0)))
+        .map(|(i, off)| TailCut {
+            at: segs[i].path.clone(),
+            off,
+            discard: segs[i + 1..].iter().map(|s| s.path.clone()).collect(),
+        });
     Ok(out)
 }
 
@@ -663,23 +714,17 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
 /// cross-session `Txn` uniqueness and file-order == `Seq`-order true at the
 /// next recovery (§1/§7). Idempotent; a failure fails `open()` with `Io`.
 ///
-/// When the scanned region holds no committed marker, everything scanned is
-/// tail: the first scanned segment is cut at offset 0. Harmless corrupt runs
-/// (inferred max ≤ `S_load`) sit below the cut and are not touched.
-pub(crate) fn truncate_tail(dir: &Path, segs: &[SegmentMeta], scan: &ScanOutcome) -> io::Result<()> {
-    let cut = match (scan.cut, scan.first_scanned) {
-        (Some(c), _) => Some(c),
-        (None, Some(first)) => Some((first, 0)),
-        (None, None) => None,
-    };
-    let Some((idx, off)) = cut else {
+/// The files are the scan's own [`TailCut`], so this cuts exactly what was
+/// scanned and nothing else.
+pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<()> {
+    let Some(tail) = &scan.tail else {
         return Ok(());
     };
-    let f = OpenOptions::new().write(true).open(&segs[idx].path)?;
-    f.set_len(off)?;
+    let f = OpenOptions::new().write(true).open(&tail.at)?;
+    f.set_len(tail.off)?;
     f.sync_data()?;
-    for seg in &segs[idx + 1..] {
-        fs::remove_file(&seg.path)?;
+    for path in &tail.discard {
+        fs::remove_file(path)?;
     }
     fsync_dir(dir)
 }
@@ -693,8 +738,13 @@ mod tests {
         bincode::serialize(&x).unwrap()
     }
 
+    /// A fixture commit. These journals stand alone — there is no root to
+    /// publish into — so the install step is empty.
     fn write_txn(w: &mut JournalWriter, first: u64, records: &[Vec<u8>]) {
-        assert!(w.commit_txn(first, records).is_ok(), "fixture commit");
+        assert!(
+            w.commit_txn(first, records, || {}).is_ok(),
+            "fixture commit"
+        );
     }
 
     /// Frame spans of a CLEAN journal file, via the real parser.
@@ -726,6 +776,15 @@ mod tests {
         s
     }
 
+    /// The scan aims truncation at `path` @ `off`, with nothing later to
+    /// discard (these fixtures hold one segment).
+    fn assert_tail(out: &ScanOutcome, path: &Path, off: u64) {
+        let tail = out.tail.as_ref().expect("a scanned region has a cut");
+        assert_eq!(tail.at, path);
+        assert_eq!(tail.off, off);
+        assert!(tail.discard.is_empty());
+    }
+
     #[test]
     fn frame_roundtrip_and_crc_covers_len() {
         let payload = b"hello frame".to_vec();
@@ -750,6 +809,35 @@ mod tests {
     }
 
     #[test]
+    fn a_published_commit_leaves_nothing_in_flight() {
+        // Publication happens inside the commit, so a published transaction
+        // is behind the writer by the time it returns: a later unwind finds
+        // nothing of it to repair, and the next transaction starts clean (§3).
+        let dir = tempdir().unwrap();
+        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut published = false;
+        assert!(w.commit_txn(1, &[rec(10)], || published = true).is_ok());
+        assert!(published, "the commit publishes before it returns");
+        assert!(matches!(w.repair_after_unwind(), UnwindRepair::Clean));
+    }
+
+    #[test]
+    fn an_unwind_through_the_publication_is_beyond_repair() {
+        // The one window the writer cannot repair: durably committed, with
+        // the publication unaccounted for. Its record+marker tail stays —
+        // removing an acked commit is what recovery may never do (§3).
+        let dir = tempdir().unwrap();
+        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = w.commit_txn(1, &[rec(10)], || panic!("publication unwinds"));
+        }));
+        assert!(unwound.is_err(), "the panic reaches the caller");
+        assert!(matches!(w.repair_after_unwind(), UnwindRepair::AfterBarrier));
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(scan(&segs, 0).unwrap().w, 1);
+    }
+
+    #[test]
     fn scan_groups_by_txn_and_derives_w() {
         let dir = tempdir().unwrap();
         let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
@@ -760,9 +848,10 @@ mod tests {
         assert_eq!(out.w, 3);
         assert!(out.runs.is_empty());
         assert_eq!(committed_seqs(&out), vec![1, 2, 3]);
-        assert_eq!(out.first_scanned, Some(0));
+        // Naming seg-1 as the cut file is also what proves it was scanned
+        // rather than skipped.
         let file_len = fs::metadata(&segs[0].path).unwrap().len();
-        assert_eq!(out.cut, Some((0, file_len)));
+        assert_tail(&out, &segs[0].path, file_len);
     }
 
     #[test]
@@ -876,7 +965,51 @@ mod tests {
         assert_eq!(committed_seqs(&out), vec![1, 2]);
         // The cut sits at the last committed marker's frame end.
         let prefix_end = intact_prefix_end(&segs[0].path);
-        assert_eq!(out.cut, Some((0, prefix_end)));
+        assert_tail(&out, &segs[0].path, prefix_end);
+    }
+
+    #[test]
+    fn the_cut_names_the_segment_holding_the_last_committed_marker() {
+        // A rotation, then a crash leaving the NEW segment's transaction
+        // torn: the cut aims at the older segment's marker end, and the whole
+        // younger segment is tail to discard (§7).
+        let dir = tempdir().unwrap();
+        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut w, 1, &[vec![7u8; SEGMENT_MAX_BYTES as usize]]); // fills seg-1
+        write_txn(&mut w, 2, &[rec(20)]); // rotates into seg-2
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(segs.len(), 2, "the fixture rotates");
+        // Tear seg-2's marker: its txn is no longer committed.
+        let spans = spans_of(&segs[1].path);
+        flip(&segs[1].path, spans[1].0 + FRAME_HEADER + 1);
+        let out = scan(&segs, 0).unwrap();
+        assert_eq!(out.w, 1);
+        let tail = out.tail.as_ref().expect("a scanned region has a cut");
+        assert_eq!(tail.at, segs[0].path);
+        assert_eq!(tail.off, fs::metadata(&segs[0].path).unwrap().len());
+        assert_eq!(tail.discard, vec![segs[1].path.clone()]);
+    }
+
+    #[test]
+    fn require_boundary_answers_from_the_committed_markers() {
+        let dir = tempdir().unwrap();
+        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut w, 1, &[rec(10)]);
+        write_txn(&mut w, 2, &[rec(20), rec(21)]); // a composite: boundary 3
+        write_txn(&mut w, 4, &[rec(40)]);
+        let segs = list_segments(dir.path()).unwrap();
+
+        let out = scan(&segs, 0).unwrap();
+        assert_eq!(out.require_boundary(3, 0), Ok(()));
+        // A composite's interior Seq was never a position (§3).
+        assert_eq!(out.require_boundary(2, 0), Err(1));
+
+        // The active segment is always scanned, so it reports boundaries
+        // below a base too — but those have no base left to fold from, and
+        // the nearest ANSWERABLE position is the base's own seq.
+        let out = scan(&segs, 3).unwrap();
+        assert_eq!(out.require_boundary(4, 3), Ok(()));
+        assert_eq!(out.require_boundary(2, 3), Err(3));
     }
 
     /// Byte offset just past the last INTACT frame (walks until a bad frame).

@@ -60,6 +60,20 @@ pub enum Durability {
     InMemory,
 }
 
+impl Durability {
+    /// Whether the `Seq`s a failed transaction burned are rolled back
+    /// (keeping the order gap-free) or left advanced (relaxing it to
+    /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
+    /// of its own: its commit path has no barrier to fail, and its panic-path
+    /// rollback keeps the order gap-free, so it answers with the default.
+    pub(crate) fn rolls_back_burned_seqs(self) -> bool {
+        match self {
+            Durability::Fsync { burned_seq } => burned_seq == BurnedSeqPolicy::Rollback,
+            Durability::InMemory => BurnedSeqPolicy::default() == BurnedSeqPolicy::Rollback,
+        }
+    }
+}
+
 /// What happens to the `Seq`s a durability-failed transaction had been
 /// assigned (§1: barrier failure is a true no-op, tail truncated, Seqs
 /// burned).
@@ -94,4 +108,24 @@ pub enum CheckpointPolicy {
     JournalBytes(u64),
     /// No auto-trigger — the caller drives `checkpoint()` from its own loop.
     Manual,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn burned_seq_rollback_is_a_property_of_the_durability_mode() {
+        assert!(Durability::Fsync {
+            burned_seq: BurnedSeqPolicy::Rollback
+        }
+        .rolls_back_burned_seqs());
+        assert!(!Durability::Fsync {
+            burned_seq: BurnedSeqPolicy::TolerateGap
+        }
+        .rolls_back_burned_seqs());
+        // The in-memory mode carries no policy of its own and answers with
+        // the default, which keeps its order gap-free.
+        assert!(Durability::InMemory.rolls_back_burned_seqs());
+    }
 }

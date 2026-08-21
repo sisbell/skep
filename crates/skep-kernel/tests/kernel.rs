@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, LockKey, OpenError, Seq,
-    Space, TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelCfg, LockKey,
+    OpenError, Seq, Space, TxnError, WorldState,
 };
 use tempfile::tempdir;
 
@@ -530,6 +530,33 @@ fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
 }
 
 #[test]
+fn world_at_answers_a_base_position_without_consulting_the_journal() {
+    // Bit-rot above the base: every position that must fold over the damaged
+    // region halts, and the base's own position — answered wholly from the
+    // checkpoint that embodies it — does not.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+    push(&k, 20);
+    push(&k, 30);
+    assert_eq!(k.checkpoint().unwrap(), Seq(3));
+    push(&k, 40);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    assert_eq!(spans.len(), 8);
+    // Rot in T4's record while the kernel lives — `world_at` reads the
+    // journal under the appender, which is where at-rest damage meets it.
+    // The resync lands on T4's marker: a run whose inferred max (4) is above
+    // the base, so a fold that must cross it could answer from a hole (§7).
+    flip_byte(&seg, spans[6].0 + 12 + 1);
+    match k.world_at(Seq(4)) {
+        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(5)),
+        other => panic!("expected Corruption, got {other:?}"),
+    }
+    assert_eq!(item_list(&k.world_at(Seq(3)).unwrap()), vec![10, 20, 30]);
+}
+
+#[test]
 fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
     // §3 unwind guard, pre-barrier arm: an unwind out of the commit region
     // with nothing durably appended is repaired to a TRUE no-op — staging
@@ -602,6 +629,31 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     assert_eq!(items(&k).len(), 8);
     assert_eq!(k.snapshot().world().sum, 8 * BLOB as u64);
     assert_eq!(k.current_seq(), Seq(8));
+}
+
+#[test]
+fn retention_keeps_the_newest_n_checkpoints() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    for x in 1..=3u64 {
+        push(&k, x);
+        assert_eq!(k.checkpoint().unwrap(), Seq(x));
+    }
+    // The third checkpoint pushes the first out (§6).
+    assert_eq!(checkpoint_count(dir.path()), 2);
+    assert!(!ckpt_file(dir.path(), 1).exists());
+    assert!(ckpt_file(dir.path(), 2).exists());
+    assert!(ckpt_file(dir.path(), 3).exists());
+    drop(k);
+    // What retention keeps is a REAL fallback base: destroy the newest and
+    // recovery lands on the whole world from the one below it.
+    let cp = ckpt_file(dir.path(), 3);
+    let len = fs::metadata(&cp).unwrap().len();
+    flip_byte(&cp, len - 1);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![1, 2, 3]);
+    assert_eq!(k.snapshot().world().sum, 6);
+    assert_eq!(k.current_seq(), Seq(3));
 }
 
 #[test]

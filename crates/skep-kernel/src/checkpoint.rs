@@ -46,6 +46,20 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CkptMeta>> {
     Ok(v)
 }
 
+/// Keep the newest `retain` checkpoints, delete the rest, and fsync the
+/// directory so the unlinks are durable. Answers the oldest retained seq —
+/// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
+/// or `None` when no checkpoint remains.
+pub(crate) fn prune(dir: &Path, retain: usize) -> io::Result<Option<u64>> {
+    let mut cps = list(dir)?;
+    while cps.len() > retain {
+        let victim = cps.remove(0);
+        fs::remove_file(&victim.path)?;
+    }
+    fsync_dir(dir)?;
+    Ok(cps.first().map(|c| c.seq))
+}
+
 /// Persist a checkpoint embodying all records with `Seq ≤ seq`:
 /// temp → fsync → atomic-rename → dir fsync (§6).
 pub(crate) fn write(dir: &Path, seq: u64, body: &[u8]) -> io::Result<()> {

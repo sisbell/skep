@@ -45,10 +45,12 @@
 //! M2 sits below every store: it has no upstream module dependency, and the
 //! central [`Space`] tag enum lives here precisely so no store picks a lock-key
 //! space tag locally (cross-store uniqueness without a crate cycle — the engine
-//! crate depends on every store and would cycle). The shared
-//! `key(home, …) -> LockKey` constructor names M1's `Address` and therefore
-//! CANNOT live here (M2 carries no edge to M1) — it belongs to the shared base
-//! crate over `skep-address` + `skep-kernel`.
+//! crate depends on every store and would cycle). The tags are all M2 can hold:
+//! a `key(home, …) -> LockKey` constructor names M1's `Address`, and M2 carries
+//! no edge to M1. So each store builds its own keys from these tags — M3's
+//! `skep-namespace` constructors (`content_lock_key`, `link_lock_key`,
+//! `version_lock_key`, `document_lock_key`, `principals_lock_key`,
+//! `node_lock_key`) are the ones every other store's writes go through.
 //!
 //! ## Example
 //!
@@ -190,8 +192,9 @@ pub struct LockKey(pub Vec<u8>);
 pub enum Space {
     /// `(home, subspace)` namespace/frontier keys — entity allocation (M3),
     /// content writes (M4), placement (M5), link allocation (M7): byte-equal
-    /// by construction via the shared base-crate `key(...)` constructor, so
-    /// they serialize against each other (MIC clause 2 / H0 discipline).
+    /// by construction because every one of them is built by M3's
+    /// `*_lock_key` constructors over one encoding, so they serialize against
+    /// each other (MIC clause 2 / H0 discipline).
     Namespace = 0x01,
     /// Coverage-class keys — M7's idem=⊤ dedup critical sections (MIC clause
     /// 7 / G2: read-decide-deposit is one action under this key).

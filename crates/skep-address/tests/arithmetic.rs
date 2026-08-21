@@ -167,7 +167,7 @@ fn displacement_returns_the_round_trippable_witness() {
 fn displacement_refuses_outside_d0_d2() {
     assert_eq!(displacement(&t(&[1, 2]), &t(&[1, 2])), None); // ¬(a < b)
     assert_eq!(displacement(&t(&[1, 5]), &t(&[1, 2])), None); // a > b
-    assert_eq!(displacement(&t(&[1, 2]), &t(&[1, 2, 5])), None); // proper prefix: divergence > #a
+    assert_eq!(displacement(&t(&[1, 2]), &t(&[1, 2, 5])), None); // proper prefix: D1 refuses
     assert_eq!(displacement(&t(&[1, 2, 3]), &t(&[2, 4])), None); // #a > #b
 }
 

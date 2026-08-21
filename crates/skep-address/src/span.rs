@@ -284,6 +284,22 @@ fn relate(a: &Endpoints, b: &Endpoints) -> OrientedRel {
     }
 }
 
+/// The shared region of two endpoint pairs — `(max start, min reach)` when
+/// that is a WF span, `None` when the operands are disjoint or merely adjacent
+/// (S11a's ≤ 1 span). Self-guarding on disjointness: there
+/// `max start ≥ min reach`, which fails WF's `s < r`, so no SC call is needed
+/// to tell the cases apart. The caller owes the shared endpoint length —
+/// [`gated_endpoints`] establishes it pairwise, and normalization within one
+/// length class establishes it for the set-level sweep.
+pub(crate) fn shared_region(a: &Endpoints, b: &Endpoints) -> Option<Span> {
+    let start = max(&a.start, &b.start);
+    let reach = min(&a.reach, &b.reach);
+    (start < reach).then(|| {
+        Span::from_endpoints(start.clone(), reach)
+            .expect("level-compatible endpoints with start < reach")
+    })
+}
+
 /// SC — pure order, **no level gate**; total on any spans, sentinel endpoints
 /// and mixed lengths included. The projection of the oriented `relate` onto
 /// the five bare cases the interface declares.
@@ -319,22 +335,12 @@ fn gated_endpoints(a: &Span, b: &Span) -> Result<(Endpoints, Endpoints), LevelMi
     }
 }
 
-/// S11a — `(max start, min reach)` after the gate; ≤ 1 span (S1).
-/// Self-guarding on disjointness: disjoint or adjacent operands give
-/// `max start ≥ min reach`, failing WF's `s < r`, correctly yielding
-/// `Ok(None)` with no SC call.
+/// S11a — the shared region after the gate; ≤ 1 span (S1). The construction
+/// is `shared_region`, which the set-level sweep emits through as well, so the
+/// meet of two endpoint pairs is decided in one place.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     let (ea, eb) = gated_endpoints(a, b)?;
-    let start = max(&ea.start, &eb.start);
-    let reach = min(&ea.reach, &eb.reach);
-    if start < reach {
-        Ok(Some(
-            Span::from_endpoints(start.clone(), reach)
-                .expect("gated one-length endpoints with start < reach"),
-        ))
-    } else {
-        Ok(None)
-    }
+    Ok(shared_region(&ea, &eb))
 }
 
 /// S3 — `(min start, max reach)`: exactly 1 span when overlapping or adjacent

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arithmetic::next_at_length;
 use crate::error::LevelMismatch;
-use crate::span::{subtree_of, Endpoints, Span};
+use crate::span::{shared_region, subtree_of, Endpoints, Span};
 use crate::tumbler::Tumbler;
 
 /// An unordered union-denoting collection of spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
@@ -66,6 +66,12 @@ impl SpanSet {
         SpanSet(im::Vector::new())
     }
 
+    /// `⟨σ⟩` — the one-member set. No gate and no normalization: like
+    /// [`FromIterator`], it takes the span AS GIVEN, so a non-level-uniform
+    /// member is admitted here and refused later by the first operation that
+    /// needs the class. This is how [`crate::difference`] returns its one-span
+    /// cases, and how a caller lifts a single span — a run's I-extent, one
+    /// endset member — into the set algebra.
     pub fn singleton(s: Span) -> SpanSet {
         SpanSet(im::Vector::unit(s))
     }
@@ -275,18 +281,30 @@ pub fn union(a: &SpanSet, b: &SpanSet) -> SpanSet {
     SpanSet(joined)
 }
 
-/// Both operands normalized and confirmed mutually level-compatible — the
-/// shared entry of the set-level algebra. Each side's own S8 gate runs inside
-/// [`SpanSet::normalize`]; what remains is the CROSS-operand question, and it
-/// arises only when both sides have a class — ⟨⟩ has none and is compatible
-/// with anything. (`level_class` on an already-normalized set cannot fail;
-/// the `?` is here so the gate keeps one spelling.)
-fn normalized_pair(a: &SpanSet, b: &SpanSet) -> Result<(SpanSet, SpanSet), LevelMismatch> {
+/// Both operands normalized, confirmed mutually level-compatible, and handed
+/// back in the sweeps' working `(start, reach)` form — the shared entry of the
+/// set-level algebra, and the set-level counterpart of `gated_endpoints`.
+/// Each side's own S8 gate runs inside [`SpanSet::normalize`]; what remains is
+/// the CROSS-operand question, and it arises only when both sides have a class
+/// — ⟨⟩ has none and is compatible with anything. (`level_class` on an
+/// already-normalized set cannot fail; the `?` is here so the gate keeps one
+/// spelling.) Like the pairwise gate, the working form is obtainable only past
+/// the gate, so no sweep can be written against un-normalized members or pay
+/// `reach()` per comparison.
+fn normalized_endpoints(
+    a: &SpanSet,
+    b: &SpanSet,
+) -> Result<(Vec<Endpoints>, Vec<Endpoints>), LevelMismatch> {
     let (na, nb) = (a.normalize()?, b.normalize()?);
-    match (na.level_class()?, nb.level_class()?) {
-        (Some(la), Some(lb)) if la != lb => Err(LevelMismatch),
-        _ => Ok((na, nb)),
+    if let (Some(la), Some(lb)) = (na.level_class()?, nb.level_class()?) {
+        if la != lb {
+            return Err(LevelMismatch);
+        }
     }
+    Ok((
+        na.iter().map(Endpoints::of).collect(),
+        nb.iter().map(Endpoints::of).collect(),
+    ))
 }
 
 /// Set intersection as one sweep-line pass over the two canonical forms.
@@ -296,19 +314,12 @@ fn normalized_pair(a: &SpanSet, b: &SpanSet) -> Result<(SpanSet, SpanSet), Level
 /// result. An empty operand needs no arm of its own: the sweep runs while
 /// both sides have members, so ⟨⟩ on either side yields ⟨⟩.
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
-    let (na, nb) = normalized_pair(a, b)?;
-    let a_spans: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
-    let b_spans: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
+    let (a_spans, b_spans) = normalized_endpoints(a, b)?;
     let (mut i, mut j) = (0usize, 0usize);
     let mut out: Vec<Span> = Vec::new();
     while i < a_spans.len() && j < b_spans.len() {
-        let start = std::cmp::max(&a_spans[i].start, &b_spans[j].start);
-        let reach = std::cmp::min(&a_spans[i].reach, &b_spans[j].reach);
-        if start < reach {
-            out.push(
-                Span::from_endpoints(start.clone(), reach)
-                    .expect("one length class with start < reach"),
-            );
+        if let Some(s) = shared_region(&a_spans[i], &b_spans[j]) {
+            out.push(s);
         }
         if a_spans[i].reach <= b_spans[j].reach {
             i += 1;
@@ -331,9 +342,7 @@ pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch
 /// most one gap; normalizing grows neither operand, so the two counts bound
 /// against the inputs as given.
 pub fn difference_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
-    let (na, nb) = normalized_pair(a, b)?;
-    let a_spans: Vec<Endpoints> = na.iter().map(Endpoints::of).collect();
-    let b_spans: Vec<Endpoints> = nb.iter().map(Endpoints::of).collect();
+    let (a_spans, b_spans) = normalized_endpoints(a, b)?;
     let mut out: Vec<Span> = Vec::new();
     let mut j = 0usize;
     for a_span in a_spans {

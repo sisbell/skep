@@ -13,7 +13,7 @@ use std::error::Error;
 use std::fmt;
 
 use crate::address::{validate, Address, Level};
-use crate::tumbler::{nat_is_zero, Nat, Pos, Tumbler};
+use crate::tumbler::{is_prefix, nat_is_zero, Nat, Pos, Tumbler};
 
 /// First nonzero index (1-based) — the level at which a displacement acts;
 /// the shared kernel of `⊕`, the ordinal shift, and the span-length
@@ -193,25 +193,14 @@ pub fn checked_inc(t: &Address, k: usize) -> Result<Address, GateViolation> {
     Ok(validate(next).expect("TA5a gate passed ⇒ inc preserves T4"))
 }
 
-/// The first index (1-based) at which two tumblers cease to agree: the least
-/// shared-position `k` with `aₖ ≠ bₖ`, or `#shorter + 1` when every shared
-/// component agrees (the prefix case). The un-padded sibling of ⊖'s
-/// zero-padded divergence, and the one helper [`displacement`]'s D1 gate
-/// cannot be built without.
-fn divergence(a: &Tumbler, b: &Tumbler) -> Pos {
-    let (ac, bc) = (a.comps(), b.comps());
-    let shared = ac.len().min(bc.len());
-    (0..shared)
-        .find(|&i| ac[i] != bc[i])
-        .map_or(shared + 1, |i| i + 1)
-}
-
 /// `b ⊖ a`, returned only when the round-trip `a ⊕ (b ⊖ a) = b` is guaranteed
 /// (D0–D2: `a < b`, `divergence(a, b) ≤ #a`, `#a ≤ #b`); otherwise `None` —
-/// store endpoints, don't recompute. The divergence gate is load-bearing
-/// precisely through the prefix case: a proper-prefix `a` has
-/// `divergence = #a + 1 > #a` and is correctly excluded (there `b ⊖ a` would
-/// not round-trip).
+/// store endpoints, don't recompute.
+///
+/// Past D0 and D2, D1's divergence clause IS "`a` is not a prefix of `b`":
+/// with `#a ≤ #b` established, the divergence exceeds `#a` exactly when every
+/// shared component agrees, which is [`is_prefix`]. That case is what the gate
+/// exists for — there `b ⊖ a` would not round-trip.
 pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
     if a >= b {
         return None; // D0: a < b
@@ -219,8 +208,8 @@ pub fn displacement(a: &Tumbler, b: &Tumbler) -> Option<Tumbler> {
     if a.len() > b.len() {
         return None; // D2: #a ≤ #b
     }
-    if divergence(a, b) > a.len() {
-        return None; // D1: divergence ≤ #a
+    if is_prefix(a, b) {
+        return None; // D1: past D0/D2, divergence > #a ⟺ a is a prefix of b
     }
     Some(sub(b, a).expect("a < b ⇒ b ≥ a"))
 }

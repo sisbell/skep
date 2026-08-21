@@ -161,9 +161,21 @@ fn t4_scan(t: &Tumbler) -> T4Scan {
     }
 }
 
-/// Separator (zero-component) count — UNBOUNDED per T0(b): `usize`, never
-/// `u8` (a fixed-width counter could wrap a 259-zero count to 3 and mis-read
-/// garbage as Element).
+/// Separator (zero-component) count of a **carrier** tumbler — what T4's
+/// `zeros(t) ≤ 3` clause reads, and what a caller holding a tumbler that may
+/// not be an address needs (a span endpoint, a displacement, a V-spec whose
+/// zero-freeness is being checked).
+///
+/// NOT the way to ask an `Address` for its level. `level_of_zeros` is the one
+/// place the count↔level map lives, and an `Address` has already been through
+/// it: [`Address::level`] is that answer, carried on the value, in the level
+/// vocabulary, with no second pass. `zeros(a.tumbler()) == 1` is
+/// `a.level() == Level::Account` spelled in the implementation's terms — the
+/// spelling that goes silently wrong if the encoding ever moves, because
+/// nothing at the call site relates the numeral to the level.
+///
+/// UNBOUNDED per T0(b): `usize`, never `u8` (a fixed-width counter could wrap
+/// a 259-zero count to 3 and mis-read garbage as Element).
 pub fn zeros(t: &Tumbler) -> usize {
     t4_scan(t).zeros
 }
@@ -289,7 +301,12 @@ impl Address {
         &self.tumbler
     }
 
-    /// The derived hierarchical level (ASN-0045 level stability).
+    /// The derived hierarchical level (ASN-0045 level stability) — the
+    /// standing answer to every level question about this address: which level
+    /// it is, whether it is one of a set of levels, whether it agrees with
+    /// another address's. Nothing holding an `Address` needs to count
+    /// separators to ask any of them; [`zeros`] is for carrier tumblers that
+    /// have never been through the classifier.
     pub fn level(&self) -> Level {
         self.level
     }

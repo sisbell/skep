@@ -7,11 +7,13 @@
 use std::fs::{self, OpenOptions};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, HistoryError, Kernel, KernelCfg, LockKey,
-    OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
+    KernelCfg, LockKey, OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
 };
 use tempfile::tempdir;
 
@@ -36,6 +38,10 @@ enum TestRec {
     /// region serializes it — the one way a test can unwind INSIDE that
     /// region, where the §3 guard rather than the closure phase answers.
     PanicOnSerialize(Unserializable),
+    /// Stages and folds like any record and then FAILS to serialize in the
+    /// commit region — the one way a test can drive §1's barrier-failure arm
+    /// without an fs fault injector.
+    FailsToSerialize(RefusesSerialization),
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +56,25 @@ impl Serialize for Unserializable {
 impl<'de> Deserialize<'de> for Unserializable {
     fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
         // Nothing that panics on the way out ever reaches the journal.
+        unreachable!("never serialized, so never journaled, so never read back")
+    }
+}
+
+/// Returns a serializer ERROR rather than panicking. `transact` serializes
+/// each staged record inside the commit region, so a refusal there raises the
+/// same non-unwind `io::Error` a failed append would (§3), which is what
+/// carries a transaction into the durability-failure arm.
+#[derive(Clone, Debug)]
+struct RefusesSerialization;
+
+impl Serialize for RefusesSerialization {
+    fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+        Err(serde::ser::Error::custom("record refused to serialize"))
+    }
+}
+
+impl<'de> Deserialize<'de> for RefusesSerialization {
+    fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
         unreachable!("never serialized, so never journaled, so never read back")
     }
 }
@@ -70,8 +95,10 @@ impl WorldState for TestWorld {
                 next.items.push_back(b.len() as u64);
                 next.sum += b.len() as u64;
             }
-            // Folds like any other record; the panic waits for the journal.
-            TestRec::PanicOnSerialize(_) => {
+            // Fold like any other record; the refusal waits for the journal.
+            // A staged 0 leaves `sum` alone, so `rebuild_derived` agrees with
+            // `apply` on it — and a leaked commit is still visible in `items`.
+            TestRec::PanicOnSerialize(_) | TestRec::FailsToSerialize(_) => {
                 next.items.push_back(0);
             }
         }
@@ -93,6 +120,41 @@ fn genesis() -> TestWorld {
         items: im::Vector::new(),
         sum: 0,
         rebuilds: 0,
+    }
+}
+
+/// A world that refuses to serialize once a record has broken it. M2 never
+/// inspects `W`, so `W`'s own serializer is the only thing that can fail a
+/// checkpoint — which makes this the only route to
+/// [`CheckpointError::Serialize`] and to §3/§6's logged-and-dropped rule.
+#[derive(Clone, Debug, Default, Deserialize)]
+struct FragileWorld {
+    commits: u64,
+    broken: bool,
+}
+
+impl Serialize for FragileWorld {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        if self.broken {
+            return Err(serde::ser::Error::custom("world refused to serialize"));
+        }
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("FragileWorld", 2)?;
+        st.serialize_field("commits", &self.commits)?;
+        st.serialize_field("broken", &self.broken)?;
+        st.end()
+    }
+}
+
+impl WorldState for FragileWorld {
+    /// `true` breaks the world's serializer; the record itself always encodes.
+    type Record = bool;
+
+    fn apply(&self, break_it: &bool) -> Self {
+        FragileWorld {
+            commits: self.commits + 1,
+            broken: self.broken || *break_it,
+        }
     }
 }
 
@@ -184,6 +246,20 @@ fn truncate_file(path: &Path, len: u64) {
     f.set_len(len).unwrap();
 }
 
+fn append_bytes(path: &Path, bytes: &[u8]) {
+    use std::io::Write as _;
+    let mut f = OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(bytes).unwrap();
+}
+
+fn segment_count(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.unwrap().file_name().into_string().ok())
+        .filter(|n| n.starts_with("seg-") && n.ends_with(".wal"))
+        .count()
+}
+
 // ---- writes & reads ----
 
 #[test]
@@ -211,6 +287,32 @@ fn transact_commits_and_returns_last_seq() {
     assert_eq!(seq, Seq(5));
     assert_eq!(items(&k), vec![1, 2, 3, 4, 5]);
     assert_eq!(k.snapshot().world().sum, 15); // hint maintained by apply on every commit
+}
+
+#[test]
+fn a_composites_intermediates_are_invisible_to_external_readers() {
+    // §3: Σᵢ belongs to the executing closure; external readers see only the
+    // single atomic install (A0/A4; "none-or-all to external readers"). A
+    // lock-free read from inside the closure is exactly what an external
+    // reader would take mid-composite — `snapshot`/`current_seq` take no
+    // applier lock, and only nested WRITES are forbidden.
+    let k = Kernel::open(cfg_mem(), genesis()).unwrap();
+    push(&k, 1);
+    let pinned = k.snapshot();
+    k.transact(&[], |stg| {
+        stg.push(TestRec::Push(2));
+        assert_eq!(items(&k), vec![1], "a reader observed Σᵢ, not Σ");
+        assert_eq!(k.current_seq(), Seq(1));
+        stg.push(TestRec::Push(3));
+        assert_eq!(items(&k), vec![1], "a reader observed Σᵢ, not Σ");
+        assert_eq!(stg.working().items.len(), 3); // the closure DOES see them
+        Ok::<(), ()>(())
+    })
+    .unwrap();
+    // …and then all at once, at the install.
+    assert_eq!(items(&k), vec![1, 2, 3]);
+    assert_eq!(k.current_seq(), Seq(3));
+    assert_eq!(item_list(pinned.world()), vec![1]);
 }
 
 #[test]
@@ -328,7 +430,7 @@ fn the_kernel_and_its_handles_carry_the_traits_callers_build_on() {
 }
 
 #[test]
-fn lock_key_space_and_seq_basics() {
+fn lock_key_order_is_bytewise_and_the_space_tag_leads() {
     // Within one space, LockKey order is bytewise over the caller's own bytes
     // (never tumbler order) (§4).
     let ns = |b: &[u8]| LockKey::new(Space::Namespace, b);
@@ -337,6 +439,10 @@ fn lock_key_space_and_seq_basics() {
     // The space tag leads, so keys in distinct spaces cannot interleave —
     // which is what the ordering owes the seam, not merely that it is total.
     assert!(ns(&[0xFF]) < LockKey::new(Space::CoverageClass, &[0x00]));
+}
+
+#[test]
+fn no_two_spaces_share_a_tag_or_alias_on_identical_bytes() {
     assert_eq!(Space::Namespace.tag(), 0x01);
     assert_eq!(Space::CoverageClass.tag(), 0x02);
     assert_eq!(Space::Principals.tag(), 0x03);
@@ -372,6 +478,10 @@ fn lock_key_space_and_seq_basics() {
             );
         }
     }
+}
+
+#[test]
+fn transact_accepts_the_seam_keys_and_returns_a_copyable_seq() {
     let by_value: Seq = Seq(7); // Copy
     assert_eq!(by_value, Seq(7));
 
@@ -651,6 +761,122 @@ fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
     assert_eq!(k.current_seq(), Seq(2));
 }
 
+#[test]
+fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
+    // §1: the barrier never completed before install, the txn's tail is
+    // durably gone, and the Seqs it drew are burned per BurnedSeqPolicy — so
+    // nothing was committed, the kernel is NOT poisoned, and the call may be
+    // re-invoked. Under the default Rollback the order stays gap-free.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+    let out: Result<((), Seq), TxnError<()>> = k.transact(&[], |stg| {
+        stg.push(TestRec::FailsToSerialize(RefusesSerialization));
+        Ok(())
+    });
+    assert!(
+        matches!(out, Err(TxnError::Durability(_))),
+        "expected a durability failure, got {out:?}"
+    );
+    // Nothing installed: the install follows the barrier that never passed.
+    assert_eq!(k.current_seq(), Seq(1));
+    assert_eq!(items(&k), vec![10]);
+    // Not poisoned, and the burned coordinate is REUSED — gap-free (§1/§3).
+    assert_eq!(push(&k, 20), Seq(2));
+    drop(k);
+    // Nothing of the failed txn is on disk to recover.
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
+#[test]
+fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
+    // The knob's other setting: the burned Seq is NOT reclaimed, the order
+    // relaxes to monotone-only, and recovery folds the gap harmlessly — no
+    // contiguity is required over the replayed range (§1/§7).
+    let dir = tempdir().unwrap();
+    let cfg = KernelCfg {
+        durability: Durability::Fsync {
+            journal_path: dir.path().to_path_buf(),
+            retain_checkpoints: 2,
+            burned_seq: BurnedSeqPolicy::TolerateGap,
+        },
+        checkpoint: CheckpointPolicy::Manual,
+    };
+    let k = Kernel::open(cfg.clone(), genesis()).unwrap();
+    push(&k, 10);
+    let out: Result<((), Seq), TxnError<()>> = k.transact(&[], |stg| {
+        stg.push(TestRec::FailsToSerialize(RefusesSerialization));
+        Ok(())
+    });
+    assert!(
+        matches!(out, Err(TxnError::Durability(_))),
+        "expected a durability failure, got {out:?}"
+    );
+    assert_eq!(push(&k, 20), Seq(3), "Seq 2 was burned and must not be reused");
+    drop(k);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
+    assert_eq!(k.current_seq(), Seq(3));
+}
+
+// ---- checkpoint failure (§3/§6) ----
+
+#[test]
+fn checkpoint_surfaces_the_serializers_account_of_an_unencodable_world() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), FragileWorld::default()).unwrap();
+    k.transact::<_, ()>(&[], |stg| {
+        stg.push(true);
+        Ok(())
+    })
+    .unwrap();
+    let err = k
+        .checkpoint()
+        .expect_err("an unencodable world cannot be checkpointed");
+    assert!(matches!(err, CheckpointError::Serialize(_)), "got {err:?}");
+    // The cause travels: M2 never inspects `W`, so the serializer's own
+    // account is the only thing that identifies the failure.
+    assert!(std::error::Error::source(&err).is_some());
+    // Nothing half-written, not even a stray tmp (§6's crash argument).
+    assert_eq!(checkpoint_count(dir.path()), 0);
+    assert!(!dir.path().join("checkpoint.tmp").exists());
+    // A failed checkpoint is not a poison: the write path still works.
+    k.transact::<_, ()>(&[], |stg| {
+        stg.push(false);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
+#[test]
+fn an_auto_triggered_checkpoint_failure_never_fails_the_committed_txn() {
+    // §3/§6: the txn is already durable and installed, so there is no sound
+    // path for the checkpoint's error through TxnError — surfacing it would
+    // un-acknowledge a real effect. It is logged and dropped.
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_fsync(dir.path());
+    cfg.checkpoint = CheckpointPolicy::EveryN(1);
+    let k = Kernel::open(cfg, FragileWorld::default()).unwrap();
+    k.transact::<_, ()>(&[], |stg| {
+        stg.push(false);
+        Ok(())
+    })
+    .unwrap();
+    assert!(ckpt_file(dir.path(), 1).exists(), "the auto-trigger is live");
+    let (_, seq) = k
+        .transact::<_, ()>(&[], |stg| {
+            stg.push(true);
+            Ok(())
+        })
+        .expect("the commit is durable and installed; its checkpoint's failure is not its own");
+    assert_eq!(seq, Seq(2));
+    assert!(!ckpt_file(dir.path(), 2).exists()); // the checkpoint did fail
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
 // ---- segments, retention & reclamation (§1/§6) ----
 
 /// ~300 KiB per record against the 1 MiB rotation threshold: four commits fill
@@ -740,6 +966,108 @@ fn bad_checkpoint_when_chain_exhausted_and_genesis_unreachable() {
     assert!(matches!(err, OpenError::BadCheckpoint), "got {err:?}");
 }
 
+#[test]
+fn world_at_refuses_a_boundary_below_the_reclamation_floor() {
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_retain(dir.path(), 1), genesis()).unwrap();
+    for _ in 0..8 {
+        push_blob(&k);
+    }
+    assert_eq!(k.checkpoint().unwrap(), Seq(8));
+    // Reclamation dropped seg-1: genesis is no longer reachable, and every
+    // retained checkpoint sits above these boundaries, so no base at or below
+    // them remains derivable (§6/§7). Refusing is the only honest answer —
+    // folding a partial journal onto genesis would serve a wrong world.
+    assert!(!seg_file(dir.path(), 1).exists());
+    for at in [Seq(4), Seq(5)] {
+        match k.world_at(at) {
+            Err(HistoryError::Reclaimed { floor }) => assert_eq!(floor, Some(Seq(8))),
+            other => panic!("expected Reclaimed at {at}, got {other:?}"),
+        }
+    }
+    // The floor the error names IS answerable — from the base embodying it.
+    assert_eq!(k.world_at(Seq(8)).unwrap().items.len(), 8);
+}
+
+#[test]
+fn world_at_answers_the_same_world_under_a_live_appender() {
+    // The read path takes no kernel lock and opens the journal files while
+    // the appender is writing them and rotation is adding new ones. Every
+    // frame at or below the head is durable before that head was installed
+    // (§1 durable-before-visible), so a boundary answered under a live writer
+    // answers exactly as it does at rest — including reaching back past a
+    // rotation for a boundary in an older segment. Nothing reclaims here
+    // (Manual), so no transient is licensed: a refusal is as much a finding
+    // as a wrong answer.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+    push(&k, 20); // boundary Seq(2), below everything the writer adds
+    let writing = AtomicBool::new(true);
+    std::thread::scope(|s| {
+        let kw = &k;
+        let flag = &writing;
+        s.spawn(move || {
+            // Fat records, so the appends straddle rotations.
+            for _ in 0..20 {
+                push_blob(kw);
+            }
+            flag.store(false, Ordering::Release);
+        });
+        let mut reads = 0u32;
+        while writing.load(Ordering::Acquire) || reads < 20 {
+            assert_eq!(
+                item_list(&k.world_at(Seq(2)).expect("a live appender never refuses a read")),
+                vec![10, 20],
+                "history diverged under a concurrent appender"
+            );
+            reads += 1;
+        }
+    });
+    assert!(
+        segment_count(dir.path()) > 1,
+        "the fixture must rotate, so the reads reach back past a rotation"
+    );
+    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+}
+
+#[test]
+fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
+    // What a racing append can leave, injected deterministically at rest: a
+    // record frame that landed without its marker, then a frame torn
+    // mid-write. Neither belongs to a committed transaction; the torn one
+    // classifies as an EOF run — the un-acked/torn tail, which the last
+    // committed marker precedes — so a bounded read ignores it rather than
+    // halting on it (§7), and answers the boundary it was asked for.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    push(&k, 10);
+    push(&k, 20);
+    let seg = seg_file(dir.path(), 1);
+    let spans = frame_spans(&seg);
+    assert_eq!(spans.len(), 4); // T1 rec/marker, T2 rec/marker
+    let full = fs::metadata(&seg).unwrap().len();
+
+    // A record frame that landed while its marker had not: intact, its txn
+    // uncommitted, so it is never folded into an answer.
+    let buf = fs::read(&seg).unwrap();
+    let (off, len) = (spans[2].0 as usize, spans[2].1 as usize);
+    append_bytes(&seg, &buf[off..off + len]);
+    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+
+    // A frame torn mid-write: a header claiming a payload that never landed.
+    let mut torn = b"SKJ1".to_vec();
+    torn.extend_from_slice(&4096u32.to_le_bytes()); // a length…
+    torn.extend_from_slice(&0u32.to_le_bytes()); // …a crc…
+    torn.extend_from_slice(b"xyz"); // …and the payload stops here
+    append_bytes(&seg, &torn);
+    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(item_list(&k.world_at(Seq(1)).unwrap()), vec![10]);
+
+    // A bounded read writes nothing: the suffix it ignored is still there.
+    assert!(fs::metadata(&seg).unwrap().len() > full);
+}
+
 // ---- checkpoint trigger discipline (§6) ----
 
 #[test]
@@ -770,13 +1098,86 @@ fn manual_policy_never_auto_checkpoints() {
 }
 
 #[test]
-fn journal_bytes_trigger_fires_once_crossed() {
+fn journal_bytes_trigger_counts_bytes_not_commits() {
+    // The threshold is one no count of commits can reach, so the trigger
+    // fires only on the commit that actually appends that many bytes (§6).
     let dir = tempdir().unwrap();
     let mut cfg = cfg_fsync(dir.path());
-    cfg.checkpoint = CheckpointPolicy::JournalBytes(1);
+    cfg.checkpoint = CheckpointPolicy::JournalBytes(4096);
     let k = Kernel::open(cfg, genesis()).unwrap();
-    push(&k, 1); // any commit appends ≥ 1 byte
-    assert!(ckpt_file(dir.path(), 1).exists());
+    for x in 1..=5u64 {
+        push(&k, x); // a few dozen journal bytes each
+    }
+    assert_eq!(checkpoint_count(dir.path()), 0);
+    push_blob(&k); // one commit, far past the threshold
+    assert!(ckpt_file(dir.path(), 6).exists(), "the byte trigger did not fire");
+}
+
+#[test]
+fn a_zero_step_op_neither_journals_nor_advances_the_cadence() {
+    // §6: a zero-step op installs nothing, so it never advances a counter or
+    // trips the trigger — which is also what keeps `Interval` measuring from
+    // real work rather than from read traffic.
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_retain(dir.path(), 3);
+    cfg.checkpoint = CheckpointPolicy::EveryN(2);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    let seg = seg_file(dir.path(), 1);
+    for _ in 0..3 {
+        assert_eq!(k.transact(&[], |_| Ok::<_, ()>(())).unwrap().1, Seq(0));
+    }
+    assert_eq!(
+        fs::metadata(&seg).unwrap().len(),
+        0,
+        "a zero-step op journals nothing"
+    );
+    assert_eq!(checkpoint_count(dir.path()), 0);
+    push(&k, 1); // the FIRST commit: 1 of 2
+    assert_eq!(
+        checkpoint_count(dir.path()),
+        0,
+        "the zero-step ops advanced the cadence"
+    );
+    k.transact(&[], |_| Ok::<_, ()>(())).unwrap();
+    push(&k, 2); // the second commit crosses
+    assert!(
+        ckpt_file(dir.path(), 2).exists(),
+        "the trigger counts commits, not calls"
+    );
+}
+
+#[test]
+fn interval_is_evaluated_on_commit_never_on_a_clock() {
+    // Duration::ZERO: the window is always elapsed, so the first COMMIT
+    // crosses — while a quiescent kernel fires nothing at all, which is what
+    // lets §6 do without a timer thread and its shutdown coordination.
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_fsync(dir.path());
+    cfg.checkpoint = CheckpointPolicy::Interval(Duration::ZERO);
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    k.transact(&[], |_| Ok::<_, ()>(())).unwrap(); // a read: nothing new to persist
+    assert_eq!(
+        checkpoint_count(dir.path()),
+        0,
+        "a quiescent kernel fired the trigger"
+    );
+    push(&k, 1);
+    assert!(
+        ckpt_file(dir.path(), 1).exists(),
+        "the first commit past the window did not fire"
+    );
+}
+
+#[test]
+fn interval_does_not_fire_before_its_window_elapses() {
+    let dir = tempdir().unwrap();
+    let mut cfg = cfg_fsync(dir.path());
+    cfg.checkpoint = CheckpointPolicy::Interval(Duration::from_secs(3600));
+    let k = Kernel::open(cfg, genesis()).unwrap();
+    for x in 1..=5 {
+        push(&k, x);
+    }
+    assert_eq!(checkpoint_count(dir.path()), 0);
 }
 
 // ---- lifecycle & modes ----
@@ -794,7 +1195,7 @@ fn second_open_of_a_live_journal_fails() {
 }
 
 #[test]
-fn in_memory_mode_touches_no_disk_and_recovers_nothing() {
+fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
     // The mode names no journal — [`Durability::InMemory`] carries no path
     // and no retention count — so "it writes nothing" needs no assertion
     // here; there is nothing to point a stray write at. What remains

@@ -729,6 +729,90 @@ mod tests {
     }
 
     #[test]
+    fn a_poisoned_kernel_halts_writes_and_keeps_serving_reads() {
+        // §1/§3's halt, staged directly: the transitions into it need a
+        // failing fs, while what poison MEANS is four documented promises
+        // (§5/Invariants). Fsync mode, so no precedence between `Poisoned`
+        // and the in-memory no-ops is pinned by accident.
+        let dir = tempfile::tempdir().unwrap();
+        let k = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .unwrap();
+        k.transact::<_, ()>(&[], |s| {
+            s.push(10);
+            Ok(())
+        })
+        .unwrap();
+        k.poisoned.store(true, Ordering::Release);
+
+        // Writes halt — and `f` never runs: the refusal precedes it.
+        let ran = std::cell::Cell::new(false);
+        let out = k.transact::<(), ()>(&[], |s| {
+            ran.set(true);
+            s.push(20);
+            Ok(())
+        });
+        assert!(matches!(out, Err(TxnError::Poisoned)));
+        assert!(!ran.get(), "a poisoned transact must not run the closure");
+        // Checkpoints halt.
+        assert!(matches!(k.checkpoint(), Err(CheckpointError::Poisoned)));
+        // Reads keep serving the last consistent committed root: the poison
+        // paths leave it a whole committed state, so reads stay sound.
+        assert_eq!(k.current_seq(), Seq(1));
+        assert_eq!(k.snapshot().seq(), Seq(1));
+        assert_eq!(k.snapshot().world().as_slice(), &[10]);
+        // flush stays a no-op Ok.
+        k.flush().unwrap();
+    }
+
+    #[test]
+    fn concurrent_checkpoints_each_leave_a_loadable_base() {
+        // §6: the API permits concurrent calls — an explicit caller call
+        // racing the on-commit auto-trigger, or two callers — and the
+        // dedicated checkpoint mutex is what keeps two of them off one
+        // `checkpoint.tmp`. A base that fails its own header checksum is
+        // useless, and under `N = 1` it would be the only one.
+        let dir = tempfile::tempdir().unwrap();
+        let c = KernelCfg {
+            durability: Durability::Fsync {
+                journal_path: dir.path().to_path_buf(),
+                retain_checkpoints: 64, // keep every base a racing call wrote
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                let k = &k;
+                s.spawn(move || {
+                    for _ in 0..8 {
+                        k.checkpoint().expect("concurrent checkpoint");
+                    }
+                });
+            }
+            let k = &k;
+            s.spawn(move || {
+                for x in 0..32u64 {
+                    k.transact::<_, ()>(&[], |st| {
+                        st.push(x);
+                        Ok(())
+                    })
+                    .unwrap();
+                }
+            });
+        });
+        let cps = checkpoint::list(dir.path()).unwrap();
+        assert!(!cps.is_empty(), "the fixture writes checkpoints");
+        for c in &cps {
+            assert!(
+                checkpoint::load::<Vec<u64>>(&c.path, c.seq).is_some(),
+                "checkpoint {} does not load — two writers shared checkpoint.tmp",
+                c.seq
+            );
+        }
+    }
+
+    #[test]
     fn world_at_answers_every_boundary_and_refuses_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let k =
@@ -766,6 +850,13 @@ mod tests {
         match k.world_at(Seq(9)) {
             Err(HistoryError::BeyondHead { head }) => assert_eq!(head, Seq(4)),
             other => panic!("expected BeyondHead, got {other:?}"),
+        }
+        // head + 1 — the commonest caller mistake, asking for the commit that
+        // has not happened yet — answers the same way, rather than falling
+        // through to the boundary machinery.
+        match k.world_at(Seq(5)) {
+            Err(HistoryError::BeyondHead { head }) => assert_eq!(head, Seq(4)),
+            other => panic!("expected BeyondHead at head + 1, got {other:?}"),
         }
     }
 

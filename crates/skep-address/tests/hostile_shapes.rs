@@ -64,7 +64,7 @@ fn a_deeply_separated_tumbler_classifies_without_faulting() {
 /// advances for good across a-spans, so each b-span is revisited at most once.
 /// Nothing else runs them at a size where a quadratic sweep would show.
 #[test]
-fn the_set_sweeps_stay_linear_and_bounded_at_a_thousand_members() {
+fn the_set_sweeps_stay_linear_and_bounded_at_a_thousand_spans() {
     let a: SpanSet = (0..1000u32).map(|i| sp(&[4 * i + 1], &[4 * i + 3])).collect();
     let b: SpanSet = (0..1000u32).map(|i| sp(&[4 * i + 2], &[4 * i + 4])).collect();
     assert!(a.is_normalized() && b.is_normalized());

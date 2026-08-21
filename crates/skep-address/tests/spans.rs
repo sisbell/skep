@@ -250,7 +250,7 @@ fn inline_boundary_tests_agree_with_the_classifier() {
 // ---- intersect / merge / split ----------------------------------------------
 
 #[test]
-fn intersect_yields_the_shared_region_and_nothing_when_disjoint() {
+fn intersect_yields_the_intersection_and_nothing_when_disjoint() {
     assert_eq!(
         intersect(&sp(&[1], &[5]), &sp(&[3], &[9])).unwrap(),
         Some(sp(&[3], &[5]))

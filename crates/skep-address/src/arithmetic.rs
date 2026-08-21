@@ -28,7 +28,8 @@ pub fn action_point(w: &Tumbler) -> Option<Pos> {
 pub(crate) enum AddDomain {
     /// `¬Pos(w)` — the displacement has no action point.
     ZeroDisplacement,
-    /// `actionPoint(w) > #a` — it acts below the start's last position.
+    /// `actionPoint(w) > #a` — it acts at a position past `#a`, the start's
+    /// last.
     ActionPointTooDeep,
 }
 
@@ -72,7 +73,7 @@ impl Error for AddPrecond {}
 /// With `k = actionPoint(w)`: copy `a₁..a_{k-1}`, set `a_k + w_k`, take
 /// `w_{k+1..}` as the tail — result length `#w`; the common case touches one
 /// component, with no carry. **Many-to-one** (TA-MTO/TA-RC): the start's
-/// structure below `k` is discarded, so a start cannot be recovered from
+/// structure past `k` is discarded, so a start cannot be recovered from
 /// result-plus-displacement in general.
 pub fn add(a: &Tumbler, w: &Tumbler) -> Result<Tumbler, AddPrecond> {
     let k = add_domain(a, w).map_err(|_| AddPrecond)?;

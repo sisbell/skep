@@ -10,7 +10,7 @@ use common::*;
 use skep_address::*;
 
 #[test]
-fn empty_has_no_members_and_a_singleton_has_one() {
+fn empty_has_no_component_spans_and_a_singleton_has_one() {
     let e = SpanSet::empty();
     assert!(e.is_empty());
     assert_eq!(e.len(), 0);
@@ -38,7 +38,7 @@ fn span_set_is_iterable_borrowed_and_owned() {
         walked.push(s);
     }
     assert_eq!(walked, ss.iter().collect::<Vec<_>>());
-    // Owned: the members move out, and re-collecting recovers the set.
+    // Owned: the component spans move out, and re-collecting recovers the set.
     let moved: Vec<Span> = ss.clone().into_iter().collect();
     assert_eq!(moved, vec![sp(&[1], &[3]), sp(&[7], &[9])]);
     assert_eq!(moved.into_iter().collect::<SpanSet>(), ss);
@@ -88,9 +88,9 @@ fn normalize_keeps_the_widest_reach_of_a_coalesced_run() {
 }
 
 /// S8's loop invariant J is denotation preservation, and S9 makes the result
-/// unique — so it cannot depend on the order the members arrive in. Asserted
-/// over every ordered triple drawn from a pool of six, which visits nested,
-/// overlapping, adjacent, separated and duplicated shapes nobody chose.
+/// unique — so it cannot depend on the order the component spans arrive in.
+/// Asserted over every ordered triple drawn from a pool of six, which visits
+/// nested, overlapping, adjacent, separated and duplicated shapes nobody chose.
 #[test]
 fn normalize_preserves_the_denotation_in_any_order() {
     let pool = [
@@ -121,10 +121,11 @@ fn normalize_preserves_the_denotation_in_any_order() {
                 }
                 assert!(norm.is_normalized(), "normalize({raw:?}) is not normalized");
                 assert_eq!(norm.normalize().unwrap(), norm, "normalize is idempotent");
-                // N1 ∧ N2 read directly: starts ascend and no two members
-                // touch, which is what `is_normalized` decides via equality.
-                let members: Vec<&Span> = norm.iter().collect();
-                for w in members.windows(2) {
+                // N1 ∧ N2 read directly: starts ascend and no two component
+                // spans touch, which is what `is_normalized` decides via
+                // equality.
+                let component_spans: Vec<&Span> = norm.iter().collect();
+                for w in component_spans.windows(2) {
                     assert!(
                         w[0].reach() < *w[1].start(),
                         "N1/N2: {:?} and {:?} should have coalesced",
@@ -179,12 +180,13 @@ fn by_level_class_partitions_into_normalizable_pieces() {
         assert_eq!(part.level_class(), Ok(Some(*len))); // each piece is inside S8
         assert!(part.normalize().is_ok());
     }
-    // Every member survives, in its own class and no other.
+    // Every component span survives, in its own class and no other.
     assert!(parts[&1].denotes(&t(&[1])));
     assert!(parts[&2].denotes(&t(&[2, 0, 9])));
     assert!(!parts[&1].denotes(&t(&[2, 0, 9])));
-    // TOTAL: a non-level-uniform member is partitioned by its start, then
-    // refused by its own class's gate — exactly as the whole set refused it.
+    // TOTAL: a non-level-uniform component span is partitioned by its start,
+    // then refused by its own class's gate — exactly as the whole set refused
+    // it.
     let with_nu = spanset(&[
         Span::new(t(&[1, 0, 2]), t(&[0, 1])).unwrap(),
         sp(&[1], &[3]),
@@ -206,10 +208,10 @@ fn normalize_gate_is_the_full_s8_precondition() {
 }
 
 #[test]
-fn denotes_is_membership_in_some_component() {
+fn denotes_is_membership_in_some_component_span() {
     let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     assert!(ss.denotes(&t(&[1])));
-    assert!(ss.denotes(&t(&[2, 5]))); // deeper extension inside a component
+    assert!(ss.denotes(&t(&[2, 5]))); // deeper extension inside a component span
     assert!(!ss.denotes(&t(&[5])));
     assert!(ss.denotes(&t(&[7])));
     assert!(!ss.denotes(&t(&[9])));

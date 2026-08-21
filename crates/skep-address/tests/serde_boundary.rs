@@ -61,11 +61,12 @@ fn span_round_trips_as_the_start_width_pair() {
 }
 
 #[test]
-fn span_set_round_trips_with_members_validated() {
+fn span_set_round_trips_with_component_spans_validated() {
     let ss = spanset(&[sp(&[1], &[3]), sp(&[7], &[9])]);
     let json = serde_json::to_string(&ss).unwrap();
     assert_eq!(serde_json::from_str::<SpanSet>(&json).unwrap(), ss);
-    // Members deserialize through Span's shadows: one bad member poisons the set.
+    // Component spans deserialize through Span's shadows: one bad span poisons
+    // the set.
     let bad = serde_json::to_string(&vec![(t(&[1]), t(&[0, 1]))]).unwrap(); // ActionPointTooDeep
     assert!(serde_json::from_str::<SpanSet>(&bad).is_err());
 }

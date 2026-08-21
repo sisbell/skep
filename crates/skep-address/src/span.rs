@@ -284,14 +284,14 @@ fn relate(a: &Endpoints, b: &Endpoints) -> OrientedRel {
     }
 }
 
-/// The shared region of two endpoint pairs — `(max start, min reach)` when
+/// The intersection of two endpoint pairs — `(max start, min reach)` when
 /// that is a WF span, `None` when the operands are disjoint or merely adjacent
 /// (S11a's ≤ 1 span). Self-guarding on disjointness: there
 /// `max start ≥ min reach`, which fails WF's `s < r`, so no SC call is needed
 /// to tell the cases apart. The caller owes the shared endpoint length —
 /// [`gated_endpoints`] establishes it pairwise, and normalization within one
 /// length class establishes it for the set-level sweep.
-pub(crate) fn shared_region(a: &Endpoints, b: &Endpoints) -> Option<Span> {
+pub(crate) fn intersection(a: &Endpoints, b: &Endpoints) -> Option<Span> {
     let start = max(&a.start, &b.start);
     let reach = min(&a.reach, &b.reach);
     (start < reach).then(|| {
@@ -335,12 +335,12 @@ fn gated_endpoints(a: &Span, b: &Span) -> Result<(Endpoints, Endpoints), LevelMi
     }
 }
 
-/// S11a — the shared region after the gate; ≤ 1 span (S1). The construction
-/// is `shared_region`, which the set-level sweep emits through as well, so the
-/// meet of two endpoint pairs is decided in one place.
+/// S11a — the intersection after the gate; ≤ 1 span (S1). The construction is
+/// `intersection`, which the set-level sweep emits through as well, so the
+/// intersection of two endpoint pairs is decided in one place.
 pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     let (ea, eb) = gated_endpoints(a, b)?;
-    Ok(shared_region(&ea, &eb))
+    Ok(intersection(&ea, &eb))
 }
 
 /// S3 — `(min start, max reach)`: exactly 1 span when overlapping or adjacent
@@ -414,8 +414,8 @@ pub fn split(s: &Span, p: &Tumbler) -> Result<(Span, Span), SplitError> {
 /// | Containment, a ⊂ b / Equal | ∅ | 0 |
 ///
 /// A coinciding boundary makes that complement zero-width; it fails WF and is
-/// dropped — no algebra result ever carries a zero-width member (S2). The
-/// dispatch runs after the unconditional gate; the output is emitted in N1
+/// dropped — no algebra result ever carries a zero-width component span (S2).
+/// The dispatch runs after the unconditional gate; the output is emitted in N1
 /// order (left before right) and is normalized by construction (§6).
 pub fn difference(a: &Span, b: &Span) -> Result<SpanSet, LevelMismatch> {
     let (ea, eb) = gated_endpoints(a, b)?;

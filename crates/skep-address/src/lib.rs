@@ -36,9 +36,9 @@
 //! the two sides agree and a self-describing format round-trips by
 //! construction rather than by coincidence. [`SpanSet`], [`Level`] and
 //! [`Class`] derive both sides: none carries a standing invariant, and a
-//! span-set's members validate through `Span`'s shadows, so the round trip is
-//! inherited. [`CanonicalForm`] carries no serde at all; what a future one
-//! would have to re-establish is recorded on the type.
+//! span-set's component spans validate through `Span`'s shadows, so the round
+//! trip is inherited. [`CanonicalForm`] carries no serde at all; what a future
+//! one would have to re-establish is recorded on the type.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!

@@ -45,7 +45,9 @@ impl From<Level> for Class {
 }
 
 /// The four T4-validity clauses (T4): no leading zero (`t₁ ≠ 0`), no trailing
-/// zero (`t_{#t} ≠ 0`), no adjacent zeros, and `zeros(t) ≤ 3`.
+/// zero (`t_{#t} ≠ 0`), no adjacent zeros, and `zeros(t) ≤ 3` — the
+/// separator-count ceiling `OverDepth` names, which is the hierarchy depth,
+/// not a tumbler length or a component position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum T4Clause {
     LeadingZero,
@@ -333,7 +335,8 @@ impl Address {
 
     /// The field between the `n`-th separator (1-based) and the next
     /// separator or the end; `None` when fewer than `n` separators exist
-    /// (T4b: present-or-absent is encoded by `Option`, never a sentinel).
+    /// (T4b: present-or-absent is encoded by `Option`, never an in-band
+    /// marker).
     fn field(&self, n: usize) -> Option<&[Nat]> {
         let start = self.separator(n)? + 1;
         let end = self.separator(n + 1).unwrap_or(self.tumbler.len());

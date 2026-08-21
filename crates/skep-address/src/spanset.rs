@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::arithmetic::next_at_length;
 use crate::error::LevelMismatch;
-use crate::span::{shared_region, subtree_of, Endpoints, Span};
+use crate::span::{intersection, subtree_of, Endpoints, Span};
 use crate::tumbler::Tumbler;
 
-/// An unordered union-denoting collection of spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
+/// A union-denoting sequence of component spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
+/// Order-independence is a property of the *denotation* (S10, and only up to
+/// the canonical form), never of the value: component spans keep their stored
+/// order, and the raw `Eq` below distinguishes it.
 ///
 /// Raw `PartialEq`/`Eq`/`Hash` are **STRUCTURAL** — they distinguish
 /// un-normalized forms and are NOT denotational identity. The denotational,
@@ -27,8 +30,8 @@ use crate::tumbler::Tumbler;
 /// cheap-versioned-immutable-value shape wanted here (this is where `im`
 /// earns its keep, not on the tumbler). Serde: both sides derived — raw
 /// `SpanSet` carries no standing invariant (un-normalized is legal), and the
-/// members serialize and validate through `Span`'s own symmetric shadows, so
-/// the round-trip guarantee is inherited.
+/// component spans serialize and validate through `Span`'s own symmetric
+/// shadows, so the round-trip guarantee is inherited.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SpanSet(im::Vector<Span>);
 
@@ -66,12 +69,12 @@ impl SpanSet {
         SpanSet(im::Vector::new())
     }
 
-    /// `⟨σ⟩` — the one-member set. No gate and no normalization: like
+    /// `⟨σ⟩` — the one-span set. No gate and no normalization: like
     /// [`FromIterator`], it takes the span AS GIVEN, so a non-level-uniform
-    /// member is admitted here and refused later by the first operation that
+    /// span is admitted here and refused later by the first operation that
     /// needs the class. This is how [`crate::difference`] returns its one-span
     /// cases, and how a caller lifts a single span — a run's I-extent, one
-    /// endset member — into the set algebra.
+    /// span of an endset — into the set algebra.
     pub fn singleton(s: Span) -> SpanSet {
         SpanSet(im::Vector::unit(s))
     }
@@ -92,18 +95,18 @@ impl SpanSet {
     /// per-slot spanfilade build, M8's RETRIEVEENDSETS/projection, M6/M10
     /// result marshaling, and `difference`'s ≤ 2-span result. The same walk
     /// is what `&SpanSet` yields in a `for` loop; [`IntoIterator`] on the
-    /// owned set moves the members out for a consumer that wants them.
+    /// owned set moves the component spans out for a consumer that wants them.
     pub fn iter(&self) -> Spans<'_> {
         Spans(self.0.iter())
     }
 
-    /// The one endpoint length every member shares — S8's FULL precondition,
-    /// spelled once and answerable on demand. `Ok(None)` for ⟨⟩;
-    /// `Err(LevelMismatch)` when some member is not level-uniform
+    /// The one endpoint length every component span shares — S8's FULL
+    /// precondition, spelled once and answerable on demand. `Ok(None)` for ⟨⟩;
+    /// `Err(LevelMismatch)` when some component span is not level-uniform
     /// (`#start ≠ #width`, without which the start↔reach arithmetic breaks)
-    /// or the members disagree on `#start`. Every set operation gates through
-    /// this, so a caller can ask the question before it asks for the answer,
-    /// and gets the same verdict either way.
+    /// or the component spans disagree on `#start`. Every set operation gates
+    /// through this, so a caller can ask the question before it asks for the
+    /// answer, and gets the same verdict either way.
     pub fn level_class(&self) -> Result<Option<usize>, LevelMismatch> {
         let Some(first) = self.0.front() else {
             return Ok(None);
@@ -117,14 +120,14 @@ impl SpanSet {
         Ok(Some(shared_length))
     }
 
-    /// The partition of the members by endpoint length — the decomposition
-    /// that turns a set outside S8's domain into sets inside it, keyed by the
-    /// `#start` each class shares. TOTAL: a member that is not level-uniform
-    /// lands in its start's class and is refused there by that class's own
-    /// gate, exactly as it would be here.
+    /// The partition of the component spans by endpoint length — the
+    /// decomposition that turns a set outside S8's domain into sets inside it,
+    /// keyed by the `#start` each class shares. TOTAL: a component span that is
+    /// not level-uniform lands in its start's class and is refused there by
+    /// that class's own gate, exactly as it would be here.
     ///
     /// This is the per-level-class discipline every consumer whose span-set
-    /// can mix origin depths needs — a transcluded I-coverage, a
+    /// can mix origin lengths needs — a transcluded I-coverage, a
     /// heterogeneous-length endset: partition, operate within each class,
     /// union the results. Cross-length denotational canonicalization is
     /// genuinely absent from the source algebra ([`canonical_key`]), so the
@@ -239,8 +242,8 @@ impl<'a> IntoIterator for &'a SpanSet {
     }
 }
 
-/// Owned component spans in stored order — the members moved out of a set the
-/// caller is finished with, so a re-collection need not clone every span.
+/// Owned component spans in stored order — the component spans moved out of a
+/// set the caller is finished with, so a re-collection need not clone each one.
 pub struct IntoSpans(<im::Vector<Span> as IntoIterator>::IntoIter);
 
 impl Iterator for IntoSpans {
@@ -289,8 +292,8 @@ pub fn union(a: &SpanSet, b: &SpanSet) -> SpanSet {
 /// — ⟨⟩ has none and is compatible with anything. (`level_class` on an
 /// already-normalized set cannot fail; the `?` is here so the gate keeps one
 /// spelling.) Like the pairwise gate, the working form is obtainable only past
-/// the gate, so no sweep can be written against un-normalized members or pay
-/// `reach()` per comparison.
+/// the gate, so no sweep can be written against un-normalized component spans
+/// or pay `reach()` per comparison.
 fn normalized_endpoints(
     a: &SpanSet,
     b: &SpanSet,
@@ -312,13 +315,13 @@ fn normalized_endpoints(
 /// `LevelMismatch` fires when a set is not internally level-uniform *or* the
 /// two sets are not mutually level-compatible — and emits a normalized
 /// result. An empty operand needs no arm of its own: the sweep runs while
-/// both sides have members, so ⟨⟩ on either side yields ⟨⟩.
+/// both sides have component spans, so ⟨⟩ on either side yields ⟨⟩.
 pub fn intersect_sets(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, LevelMismatch> {
     let (a_spans, b_spans) = normalized_endpoints(a, b)?;
     let (mut i, mut j) = (0usize, 0usize);
     let mut out: Vec<Span> = Vec::new();
     while i < a_spans.len() && j < b_spans.len() {
-        if let Some(s) = shared_region(&a_spans[i], &b_spans[j]) {
+        if let Some(s) = intersection(&a_spans[i], &b_spans[j]) {
             out.push(s);
         }
         if a_spans[i].reach <= b_spans[j].reach {

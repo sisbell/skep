@@ -209,6 +209,7 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
         TxnError::Rejected(n) => TxnError::Rejected(n.into()),
         TxnError::Durability(io) => TxnError::Durability(io),
         TxnError::Unencodable(io) => TxnError::Unencodable(io),
+        TxnError::OverBudget { bytes } => TxnError::OverBudget { bytes },
         TxnError::Poisoned => TxnError::Poisoned,
     }
 }

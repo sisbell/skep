@@ -525,7 +525,9 @@ address…) is answered on the same channel:
 ### Rejection codes
 
 Transport/lifecycle: `unauthenticated`, `malformed`, `durability`,
-`poisoned`.
+`txn_over_budget` (the request's records all encode, but the transaction
+as a whole exceeds the kernel's per-transaction byte budget — permanent;
+split the request), `poisoned`.
 
 Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered`, `parent_not_registered`, `not_registered`,

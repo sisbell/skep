@@ -1252,6 +1252,7 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::Unauthenticated => "unauthenticated",
         RejectCode::Malformed => "malformed",
         RejectCode::Durability => "durability",
+        RejectCode::TxnOverBudget => "txn_over_budget",
         RejectCode::Poisoned => "poisoned",
         RejectCode::HomeNotRegistered => "home_not_registered",
         RejectCode::DocNotRegistered => "doc_not_registered",

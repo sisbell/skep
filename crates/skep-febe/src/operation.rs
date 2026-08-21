@@ -599,6 +599,15 @@ where
             // (Malformed ⇒ Permanent, §5), with the encoder's own account.
             TxnError::Unencodable(io) => Rejection::classified(op, RejectCode::Malformed, None)
                 .with_detail(io.to_string()),
+            // Nothing committed; every record encodes, the transaction as a
+            // whole is past M2's per-transaction budget — Permanent, and the
+            // remedy travels: split the request rather than resend it.
+            TxnError::OverBudget { bytes } => {
+                Rejection::classified(op, RejectCode::TxnOverBudget, None).with_detail(format!(
+                    "transaction encodes to {bytes} bytes, over the journal's \
+                     per-transaction budget; split it"
+                ))
+            }
             TxnError::Poisoned => {
                 self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
                 Rejection::classified(op, RejectCode::Poisoned, None)
@@ -925,6 +934,16 @@ mod tests {
             .detail
             .as_deref()
             .is_some_and(|d| d.contains("record too large")));
+        // OverBudget: its own code (never Malformed — the records are fine),
+        // Permanent per the 2026-08-21 ruling, with the accounted size and
+        // the split remedy threaded for the operator.
+        let rej = op.map_txn::<InsertError>(OpKind::Insert, TxnError::OverBudget { bytes: 99 });
+        assert_eq!(rej.code, RejectCode::TxnOverBudget);
+        assert_eq!(rej.disposition, Disposition::Permanent);
+        assert!(rej
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("99") && d.contains("split")));
         let rej = op.map_txn(OpKind::Insert, TxnError::Rejected(InsertError::EmptyContent));
         assert_eq!(rej.code, RejectCode::EmptyContent);
         assert_eq!(rej.disposition, Disposition::Permanent);

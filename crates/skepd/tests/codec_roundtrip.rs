@@ -491,13 +491,14 @@ fn every_response_shape_marshals_deterministically() {
     }
 }
 
-/// The full `RejectCode` wire-name table — all 59 codes, pinned.
+/// The full `RejectCode` wire-name table — all 60 codes, pinned.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 59] = [
+    let table: [(RejectCode, &str); 60] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
+        (RejectCode::TxnOverBudget, "txn_over_budget"),
         (RejectCode::Poisoned, "poisoned"),
         (RejectCode::HomeNotRegistered, "home_not_registered"),
         (RejectCode::DocNotRegistered, "doc_not_registered"),

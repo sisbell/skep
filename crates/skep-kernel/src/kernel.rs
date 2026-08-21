@@ -517,7 +517,16 @@ impl<W: WorldState> Kernel<W> {
     /// Staged records that cannot be journaled — a serializer that refuses,
     /// or a record past the journal's frame size — are
     /// [`TxnError::Unencodable`]: a no-op like [`TxnError::Durability`], and
-    /// unlike it, one that re-invoking with the same records cannot fix.
+    /// unlike it, one that re-invoking with the same records cannot fix. A
+    /// transaction whose records all encode but whose whole encoded form —
+    /// frames, marker and headers — exceeds the journal's per-transaction
+    /// budget (`MAX_TXN_BYTES`, one frame's worth: 64 MiB) is
+    /// [`TxnError::OverBudget`]: the same no-op with a different remedy — no
+    /// record is at fault, the staging is, and the caller splits the
+    /// transaction where fixing a value cannot help. Both size refusals are
+    /// judged ABOVE the durability-mode branch, so an in-memory kernel
+    /// refuses exactly what a journaled one refuses — a store that passes an
+    /// in-memory test does not meet a size refusal only in production.
     ///
     /// On a POISONED kernel the refusal PRECEDES `f`: the call returns
     /// [`TxnError::Poisoned`] without running the closure, so a closure with
@@ -528,11 +537,14 @@ impl<W: WorldState> Kernel<W> {
     /// bug and answered before the applier lock is even taken; then
     /// [`TxnError::Poisoned`], before `f` runs; then `f`'s own
     /// [`TxnError::Rejected`]; then the zero-step `Ok`; and inside the commit
-    /// region [`TxnError::Unencodable`] before [`TxnError::Durability`], since
-    /// the encode precedes the first file operation and a refusal that belongs
-    /// to the RECORDS must not be reported on the channel a caller retries.
-    /// `Poisoned` displaces `Durability` where the tail truncation itself
-    /// cannot complete durably, which [`TxnError::Durability`] states.
+    /// region [`TxnError::Unencodable`] before [`TxnError::OverBudget`]
+    /// before [`TxnError::Durability`]: the encode and the size accounting
+    /// precede the first file operation, a refusal that belongs to the
+    /// records must not be reported on the channel a caller retries, and a
+    /// record's own refusal precedes the transaction's, so a caller fixing a
+    /// value is not first told to split. `Poisoned` displaces `Durability`
+    /// where the tail truncation itself cannot complete durably, which
+    /// [`TxnError::Durability`] states.
     ///
     /// PRECONDITION — `f` MUST NOT call `transact` on this kernel; this call
     /// holds the applier lock for the whole of `f`, so a nested write can
@@ -547,17 +559,22 @@ impl<W: WorldState> Kernel<W> {
     /// transaction in flight. A composite composes neighbors' PURE math
     /// inside ONE closure (§3; seam contract 3).
     ///
-    /// CALLER CONTRACT — the caller bounds how many bytes one transaction
-    /// stages. M2 caps a FRAME (the journal's frame size), never a transaction
-    /// and never the record count. Three consequences, all the caller's: the
-    /// whole transaction is serialized under the applier lock, so every other
-    /// writer in the process waits behind it; its serialized bytes live twice
-    /// for the length of the commit region, once as records and once as the
-    /// frames they become; and — because a transaction never spans a segment —
-    /// the segment holding it is at least that large, and recovery reads a
-    /// segment whole, so an oversized transaction raises the memory floor of
-    /// every later `open()` and every [`Kernel::world_at`] above that base. M2
-    /// cannot check this.
+    /// TRANSACTION BUDGET — one transaction's encoded form is capped at the
+    /// journal's `MAX_TXN_BYTES` (one frame's worth, 64 MiB), and a
+    /// transaction past it is REFUSED with [`TxnError::OverBudget`], in both
+    /// durability modes, before the journal is touched. The cap bounds three
+    /// costs that scale with a transaction's size, the first two transient
+    /// and the third durable: the whole transaction is serialized under the
+    /// applier lock, so every other writer in the process waits behind it;
+    /// its serialized bytes live twice for the length of the commit region,
+    /// once as records and once as the frames they become; and — because a
+    /// transaction never spans a segment — the segment holding it is at
+    /// least that large, and recovery reads a segment WHOLE, so the cap is
+    /// what keeps the memory floor of every later `open()` and every
+    /// [`Kernel::world_at`] bounded, and identical on every replica. A
+    /// composite too large for the budget is split by the caller; atomicity
+    /// of the split is then the caller's, as it already is for every
+    /// multi-`transact` batch (ASN-0134 A5).
     ///
     /// Under the v1 single applier the global lock subsumes `keys` (§4):
     /// callers still pass the keys they would need under the deferred per-key
@@ -657,9 +674,10 @@ impl<W: WorldState> Kernel<W> {
         // A transaction's serialized bytes live here twice for the length of
         // the region — once as records, once as the frames they become — and
         // all of it under the applier lock, so it is also the length of time
-        // every other writer waits. The journal caps a FRAME, not a
-        // transaction; how many bytes one transaction may stage is the
-        // caller's to bound.
+        // every other writer waits. `check_txn_size`, sitting ABOVE the
+        // journal's mode branch, is what bounds both: the frame cap per
+        // record and MAX_TXN_BYTES per transaction, refused identically in
+        // both durability modes.
         let commit_out: std::thread::Result<Result<u64, CommitFail>> = {
             let state = &mut *state;
             let root = &self.root;
@@ -670,6 +688,9 @@ impl<W: WorldState> Kernel<W> {
                     record_bytes
                         .push(journal::encode_record(record).map_err(CommitFail::Unencodable)?);
                 }
+                // The mode-independent size refusals, above the
+                // InMemory/Segments split — both modes refuse identically.
+                journal::check_txn_size(&record_bytes)?;
                 state.journal.commit_txn(first, record_bytes, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
                     // visible §1): external readers see none-or-all.
@@ -709,6 +730,13 @@ impl<W: WorldState> Kernel<W> {
             Ok(Err(CommitFail::Unencodable(e))) => {
                 state.seq.roll_back_to(base_seq);
                 Err(TxnError::Unencodable(e))
+            }
+            // The same no-op with the third answer to "retry?": no record
+            // refused, the staging as a whole is past the transaction budget,
+            // and only splitting it changes that (§1/§3).
+            Ok(Err(CommitFail::OverBudget { bytes })) => {
+                state.seq.roll_back_to(base_seq);
+                Err(TxnError::OverBudget { bytes })
             }
             // The truncation itself could not complete durably (§1).
             Ok(Err(CommitFail::Unrepaired)) => {
@@ -941,6 +969,157 @@ mod tests {
             },
             checkpoint: CheckpointPolicy::Manual,
         }
+    }
+
+    // A world of raw byte records, for the size-refusal tests: `Vec<u64>`'s
+    // fixed 8-byte records cannot reach the frame cap or the budget.
+    impl WorldState for Vec<Vec<u8>> {
+        type Record = Vec<u8>;
+        fn apply(&self, r: &Vec<u8>) -> Self {
+            let mut v = self.clone();
+            v.push(r.clone());
+            v
+        }
+    }
+
+    /// Run one size-refusal test under BOTH durability modes: the refusals
+    /// are judged above the journal's mode branch, and the parity — not
+    /// either mode alone — is what these tests pin (F3).
+    fn in_each_mode(f: impl Fn(Kernel<Vec<Vec<u8>>>, &str)) {
+        let dir = tempfile::tempdir().unwrap();
+        f(
+            Kernel::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new()).unwrap(),
+            "Fsync",
+        );
+        let mem = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        f(Kernel::open(mem, Vec::new()).unwrap(), "InMemory");
+    }
+
+    #[test]
+    fn a_txn_at_the_budget_commits_and_one_past_is_refused_in_both_modes() {
+        // The budget is judged above the mode branch (F1): a transaction at
+        // MAX_TXN_BYTES commits — the refusal is the boundary, not a fence
+        // one short of it — and one byte past is OverBudget in BOTH modes,
+        // with identical accounting.
+        let overhead = journal::txn_encoded_len(&[
+            journal::encode_record(&Vec::<u8>::new()).unwrap(),
+            journal::encode_record(&Vec::<u8>::new()).unwrap(),
+        ]);
+        // A record's encoded length grows byte-for-byte with its body, so
+        // these two bodies land the accounted total exactly on the cap.
+        let body = journal::MAX_TXN_BYTES - overhead;
+        let (l1, l2) = ((body / 2) as usize, (body - body / 2) as usize);
+        in_each_mode(|k, mode| {
+            let (_, seq) = k
+                .transact::<_, ()>(&[], |stg| {
+                    stg.push(vec![7u8; l1]);
+                    stg.push(vec![7u8; l2]);
+                    Ok(())
+                })
+                .unwrap_or_else(|e| panic!("{mode}: at-budget txn must commit: {e:?}"));
+            assert_eq!(seq, Seq(2), "{mode}");
+            let out = k.transact::<_, ()>(&[], |stg| {
+                stg.push(vec![7u8; l1]);
+                stg.push(vec![7u8; l2 + 1]);
+                Ok(())
+            });
+            match out {
+                Err(TxnError::OverBudget { bytes }) => {
+                    assert_eq!(bytes, journal::MAX_TXN_BYTES + 1, "{mode}")
+                }
+                other => panic!("{mode}: expected OverBudget, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn a_record_past_the_frame_cap_is_unencodable_in_both_modes() {
+        // F3: the frame cap used to live only in the journal's frame builder,
+        // which the in-memory mode never reaches — a store whose values can
+        // exceed it passed every in-memory test and met the refusal in
+        // production. The cap is now judged above the mode branch; the
+        // InMemory arm here is red without that.
+        //
+        // The record also busts the whole-txn budget, and the record's own
+        // refusal speaks first: a caller fixing a value is not told to split.
+        let empty = journal::encode_record(&Vec::<u8>::new()).unwrap().len();
+        let over = journal::MAX_FRAME_LEN as usize
+            - journal::RECORD_PAYLOAD_OVERHEAD as usize
+            - empty
+            + 1;
+        in_each_mode(|k, mode| {
+            let out = k.transact::<_, ()>(&[], |stg| {
+                stg.push(vec![7u8; over]);
+                Ok(())
+            });
+            assert!(
+                matches!(out, Err(TxnError::Unencodable(_))),
+                "{mode}: expected Unencodable, got {out:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_size_refusal_is_a_true_no_op_in_both_modes() {
+        // The refusal leaves what the contract already promises for
+        // `Durability`: nothing installed, no Seq burned (Rollback), and the
+        // caller may re-invoke — here split into two transactions, since one
+        // oversized record cannot be split in place.
+        let overhead =
+            journal::txn_encoded_len(&[journal::encode_record(&Vec::<u8>::new()).unwrap()]);
+        let over = (journal::MAX_TXN_BYTES - overhead) as usize + 1;
+        in_each_mode(|k, mode| {
+            k.transact::<_, ()>(&[], |stg| {
+                stg.push(vec![1u8]);
+                Ok(())
+            })
+            .unwrap();
+            let before = k.snapshot();
+            let out = k.transact::<_, ()>(&[], |stg| {
+                stg.push(vec![7u8; over]);
+                Ok(())
+            });
+            assert!(
+                matches!(out, Err(TxnError::OverBudget { .. })),
+                "{mode}: got {out:?}"
+            );
+            // State unchanged, seq not advanced.
+            assert_eq!(k.current_seq(), Seq(1), "{mode}");
+            assert_eq!(k.snapshot().seq(), before.seq(), "{mode}");
+            assert_eq!(k.snapshot().world().len(), 1, "{mode}");
+            // The caller re-invokes split, and commits at the next Seqs: the
+            // refused transaction burned nothing.
+            for i in 0..2u64 {
+                let (_, seq) = k
+                    .transact::<_, ()>(&[], |stg| {
+                        stg.push(vec![7u8; over / 2]);
+                        Ok(())
+                    })
+                    .unwrap_or_else(|e| panic!("{mode}: split half must commit: {e:?}"));
+                assert_eq!(seq, Seq(2 + i), "{mode}");
+            }
+        });
+    }
+
+    #[test]
+    fn the_budget_does_not_bite_a_txn_of_many_small_records() {
+        // The cap exists for pathological stagings; a composite of a thousand
+        // small records is the honest shape §3 recommends and stays far under
+        // it, in both modes.
+        in_each_mode(|k, mode| {
+            let (_, seq) = k
+                .transact::<_, ()>(&[], |stg| {
+                    for i in 0..1000u32 {
+                        stg.push(i.to_le_bytes().to_vec());
+                    }
+                    Ok(())
+                })
+                .unwrap_or_else(|e| panic!("{mode}: {e:?}"));
+            assert_eq!(seq, Seq(1000), "{mode}");
+        });
     }
 
     #[test]

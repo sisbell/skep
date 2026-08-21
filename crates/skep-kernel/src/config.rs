@@ -102,14 +102,15 @@ pub enum Durability {
     /// Records are still SERIALIZED on every commit: the encode step precedes
     /// the journal and runs in both modes, and this mode drops the bytes it
     /// produces. So an in-memory kernel pays a full serialization per record,
-    /// and can still refuse with [`crate::TxnError::Unencodable`] — a record
-    /// whose own SERIALIZER refuses is refused in both modes, which is what
-    /// lets an in-memory test catch an encoding bug. A record whose serialized
-    /// FORM exceeds the journal's frame size is refused only under
-    /// [`Durability::Fsync`], because this mode never builds the frames that
-    /// cap would apply to. What it has no path to at all is
-    /// [`crate::TxnError::Durability`], which is a barrier's failure and
-    /// there is no barrier.
+    /// and refuses everything a journaled one refuses of the records
+    /// themselves: [`crate::TxnError::Unencodable`] — a serializer's own
+    /// refusal, or a record whose serialized form exceeds the journal's
+    /// frame cap — and [`crate::TxnError::OverBudget`] — a transaction past
+    /// the per-transaction byte budget. Both are judged above the mode
+    /// branch, which is what lets an in-memory test catch every encoding and
+    /// size refusal a journaled deployment would meet. What this mode has no
+    /// path to at all is [`crate::TxnError::Durability`], which is a
+    /// barrier's failure and there is no barrier.
     InMemory,
 }
 
@@ -117,9 +118,10 @@ impl Durability {
     /// What becomes of the `Seq`s a failed transaction burned: rolled back
     /// (keeping the order gap-free) or left advanced (relaxing it to
     /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
-    /// of its own: its commit path has no barrier to fail, so the two ways it
-    /// burns coordinates are an unencodable record and an unwind, and the
-    /// default it answers with rolls both back, keeping its order gap-free.
+    /// of its own: its commit path has no barrier to fail, so the ways it
+    /// burns coordinates are a size-refused transaction (unencodable or
+    /// over-budget) and an unwind, and the default it answers with rolls
+    /// them all back, keeping its order gap-free.
     pub(crate) fn burned_seq_policy(&self) -> BurnedSeqPolicy {
         match self {
             Durability::Fsync { burned_seq, .. } => *burned_seq,

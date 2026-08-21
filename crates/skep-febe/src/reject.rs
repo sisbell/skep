@@ -64,6 +64,7 @@ pub enum RejectCode {
     Unauthenticated,
     Malformed,
     Durability,
+    TxnOverBudget,
     Poisoned,
     // ── registration / residence (M3/M5/M7/M8) ──
     HomeNotRegistered,
@@ -141,7 +142,9 @@ const GATE_DETAIL: &str = "inc-gate tripped: corrupted frontier — operator con
 ///
 /// Named `Permanent` calls (not left to the catch-all by accident — §5):
 /// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
-/// allocations), `Gate` (store corruption), and the recovery-steering
+/// allocations), `Gate` (store corruption), `TxnOverBudget` (M2's
+/// per-transaction byte budget, ruled Permanent 2026-08-21 — no retry
+/// shrinks a transaction; the client splits it), and the recovery-steering
 /// `NotNextForm` (re-derive via `NextAccountPrefix`, a *different* request).
 /// The conservatively-`Permanent` state-dependent codes (`NotArranged`,
 /// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
@@ -222,6 +225,7 @@ mod tests {
             RejectCode::NotRegistered,
             RejectCode::NotFresh,
             RejectCode::Gate,
+            RejectCode::TxnOverBudget,
             RejectCode::NotNextForm,
             RejectCode::NotArranged,
             RejectCode::OutOfBounds,

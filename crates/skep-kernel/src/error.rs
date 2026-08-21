@@ -261,12 +261,35 @@ pub enum TxnError<E> {
     /// the same way, however healthy the disk. The serializer's own account
     /// travels, since M2 never inspects `W::Record`.
     ///
-    /// Of the two, only the serializer's refusal arises under
-    /// [`crate::Durability::InMemory`]: that mode builds no frames, so the
-    /// frame-size half is a property of the journaled mode alone.
+    /// Both halves arise in BOTH durability modes: the encode runs before
+    /// the journal is consulted, and the frame-size half is judged there too
+    /// — against the frames the journaled mode would build — so an in-memory
+    /// kernel refuses exactly what a journaled one refuses.
     ///
     /// [`Durability`]: TxnError::Durability
     Unencodable(io::Error),
+    /// The staged records all encode, and their whole encoded form — record
+    /// frames, commit marker and headers — exceeds the journal's
+    /// per-transaction budget (`MAX_TXN_BYTES`: one frame's worth, 64 MiB).
+    /// Refused in BOTH durability modes, above the journal's mode branch,
+    /// before anything is appended or installed: a true no-op like
+    /// [`Durability`]. Unlike [`Unencodable`] the refusal is a property of
+    /// the STAGING, not of any one record — the serializer refused nothing —
+    /// so the remedy is to SPLIT the transaction, where fixing a value cannot
+    /// help and re-invoking unsplit fails the same way forever.
+    ///
+    /// The budget is what keeps recovery's memory floor replica-independent:
+    /// a transaction never spans a journal segment and recovery reads a
+    /// segment whole, so an uncapped transaction would permanently raise the
+    /// cost of every later `open()` of the store it committed to.
+    ///
+    /// [`Durability`]: TxnError::Durability
+    /// [`Unencodable`]: TxnError::Unencodable
+    OverBudget {
+        /// The transaction's accounted encoded size — what the journal would
+        /// have had to hold, and what the caller's split must get under.
+        bytes: u64,
+    },
     /// The kernel was halted by an UNRECOVERABLE failure (§1/§3): a
     /// durability-failure or panic-guard truncation that itself failed to
     /// complete durably, an unwind after a successful barrier but before
@@ -290,6 +313,11 @@ impl<E: fmt::Display> fmt::Display for TxnError<E> {
             TxnError::Unencodable(e) => {
                 write!(f, "records cannot be journaled (true no-op, not retryable): {e}")
             }
+            TxnError::OverBudget { bytes } => write!(
+                f,
+                "transaction encodes to {bytes} bytes, over the journal's per-transaction \
+                 budget (true no-op; split the transaction)"
+            ),
             TxnError::Poisoned => write!(f, "kernel is poisoned; write paths are halted"),
         }
     }

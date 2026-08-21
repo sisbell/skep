@@ -29,7 +29,22 @@ const MAGIC: [u8; 4] = *b"SKJ1";
 pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// Sanity bound on a single frame (open build decision: max frame size). The
 /// writer enforces it, so recovery may treat a larger claimed `len` as corrupt.
-const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
+pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
+/// The most bytes one TRANSACTION may occupy in the journal — record frames,
+/// commit marker and headers together, [`txn_encoded_len`]'s accounting.
+/// Equal to [`MAX_FRAME_LEN`] as a RELATIONSHIP, not a free knob: a
+/// transaction is at most one frame's worth, so a segment — which rotates
+/// only at a transaction boundary — is at most [`SEGMENT_ROTATE_BYTES`] plus
+/// one frame, and recovery, which reads a segment WHOLE, has a memory floor
+/// that is bounded and IDENTICAL ON EVERY REPLICA. Untie the two and the
+/// second clause fails where it hurts: a transaction never spans a segment,
+/// so one oversized transaction permanently raises the floor of every later
+/// `open()` and every `world_at` above that base — a store that opens on the
+/// machine that wrote it and not on the replica.
+///
+/// Enforced by [`check_txn_size`] from [`crate::Kernel::transact`], ABOVE the
+/// [`Journal`] mode branch, so both durability modes refuse identically.
+pub(crate) const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// Rotation threshold (open build decision), tested BEFORE a transaction is
 /// appended and only at a txn boundary — so a closed segment holds this many
 /// bytes plus one whole transaction, and a caller bounding memory or file size
@@ -181,6 +196,60 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     .map_err(invalid_data)?;
     push_frame(&mut buf, &payload)?;
     Ok(buf)
+}
+
+/// What [`encode_txn`] wraps around one record's own bytes inside its frame
+/// payload: the [`FramePayload`] variant tag (4), `seq` (8), `txn` (8) and
+/// the byte-vector's length prefix (8) — bincode's fixed-width encoding,
+/// value-independent. A constant so [`check_txn_size`] can judge a record
+/// without building its frame; the accounting test pins it to the encoder's
+/// own output, so a codec change breaks the gate rather than the cap.
+pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
+/// The marker frame's whole encoded size: header (12) plus the tagged
+/// [`Marker`] payload — tag (4), `txn` (8), `last_seq` (8),
+/// `records_checksum` (4). Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
+const MARKER_FRAME_LEN: u64 = FRAME_HEADER_LEN as u64 + 24;
+
+/// The exact byte length [`encode_txn`] emits for these already-encoded
+/// records: each record frame (header + wrapped payload) plus the terminal
+/// marker frame. Saturating, so a sum no allocator could hold refuses as
+/// over-budget rather than wrapping back under the cap.
+pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
+    record_bytes.iter().fold(MARKER_FRAME_LEN, |total, bytes| {
+        total
+            .saturating_add(FRAME_HEADER_LEN as u64 + RECORD_PAYLOAD_OVERHEAD)
+            .saturating_add(bytes.len() as u64)
+    })
+}
+
+/// The two size refusals NO durability mode may skip, judged in one pass over
+/// the already-encoded records BEFORE the [`Journal`] mode branch: a record
+/// whose frame payload would exceed [`MAX_FRAME_LEN`] — the refusal
+/// [`push_frame`] would give it, [`CommitFail::Unencodable`], a property of
+/// that record — then a transaction whose whole encoded form exceeds
+/// [`MAX_TXN_BYTES`] — [`CommitFail::OverBudget`], a property of the staging:
+/// every record is fine, the caller staged too much at once. The record's own
+/// refusal precedes the transaction's, so a caller fixing a value is not
+/// first told to split.
+///
+/// This is the ONE spelling of the transaction accounting. [`push_frame`]'s
+/// own frame-cap refusal deliberately stays: writer and reader sit on
+/// opposite sides of a trust boundary, and the writer's guard is what
+/// entitles recovery to treat a larger claimed `len` as corrupt.
+pub(crate) fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
+    for bytes in record_bytes {
+        if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
+            return Err(CommitFail::Unencodable(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "record's serialized form exceeds the journal's frame cap",
+            )));
+        }
+    }
+    let bytes = txn_encoded_len(record_bytes);
+    if bytes > MAX_TXN_BYTES {
+        return Err(CommitFail::OverBudget { bytes });
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -362,9 +431,10 @@ pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
 
 /// How a commit failed (§1). The distinction IS the caller's decision: a
 /// cleanly-failed transaction left nothing behind and may be re-invoked, an
-/// unencodable one left nothing behind and re-invoking cannot change that,
-/// and an unrepaired one may have left a durable un-acked marker that a
-/// successor would collide with on recovery.
+/// unencodable or over-budget one left nothing behind and re-invoking cannot
+/// change that (fix the record / split the transaction, respectively), and an
+/// unrepaired one may have left a durable un-acked marker that a successor
+/// would collide with on recovery.
 #[derive(Debug)]
 pub(crate) enum CommitFail {
     /// The active segment is durably back where this transaction found it: no
@@ -379,6 +449,14 @@ pub(crate) enum CommitFail {
     /// the refusal is a property of the records and the same records fail the
     /// same way forever.
     Unencodable(io::Error),
+    /// The transaction's whole encoded form — record frames, marker and
+    /// headers, [`txn_encoded_len`]'s accounting — exceeds [`MAX_TXN_BYTES`].
+    /// Nothing reached the file, so this is a no-op like
+    /// [`CommitFail::Clean`]; what differs is the remedy: no record refused
+    /// ([`CommitFail::Unencodable`] is that), the caller staged too much at
+    /// once, and the same staging refuses the same way forever — split the
+    /// transaction. Carries the accounted size, which the caller may surface.
+    OverBudget { bytes: u64 },
     /// The truncation could not itself complete durably; frames of this
     /// transaction, possibly including its marker, may survive (§1/§3). The
     /// only sound response is to halt, so no error travels with it — nothing
@@ -587,7 +665,9 @@ pub(crate) enum Journal {
 impl Journal {
     /// [`JournalWriter::commit_txn`]; the in-memory journal appends no bytes
     /// and cannot fail, and installs where the durable one installs — after
-    /// a barrier it has no need of.
+    /// a barrier it has no need of. The mode-independent size refusals
+    /// ([`check_txn_size`]) have already run in `transact`, ABOVE this
+    /// branch, so the two arms differ only in what only a file can refuse.
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
@@ -1092,6 +1172,54 @@ mod tests {
         // not a fence one short of it.
         push_frame(&mut buf, &over[..MAX_FRAME_LEN as usize]).unwrap();
         assert!(matches!(parse_frame(&buf, 0), Parsed::Intact { .. }));
+    }
+
+    #[test]
+    fn txn_size_accounting_matches_the_encoder_to_the_byte() {
+        // The accounting stands in for building the frames, so it must match
+        // the encoder exactly — pinned at extreme field values, so a codec
+        // change toward value-dependent widths breaks here, not the cap.
+        for records in [
+            vec![vec![5u8; 3]],
+            vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
+        ] {
+            let expect = txn_encoded_len(&records);
+            let buf = encode_txn(u64::MAX - 3, records).unwrap();
+            assert_eq!(buf.len() as u64, expect);
+        }
+        // The per-record half: what push_frame judges is the wrapped payload,
+        // the record's own bytes plus RECORD_PAYLOAD_OVERHEAD exactly.
+        let payload = bincode::serialize(&FramePayload::Record(LogRecord {
+            seq: u64::MAX,
+            txn: Txn(u64::MAX),
+            bytes: vec![1, 2, 3],
+        }))
+        .unwrap();
+        assert_eq!(payload.len() as u64, 3 + RECORD_PAYLOAD_OVERHEAD);
+    }
+
+    #[test]
+    fn check_txn_size_refuses_what_no_mode_may_accept() {
+        // A record one past the frame cap's payload edge is the RECORD's own
+        // fault — Unencodable, not OverBudget, though the sum is over too: a
+        // caller fixing a value is not first told to split.
+        let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
+        let over_frame = vec![vec![0u8; cap_bytes + 1]];
+        assert!(matches!(
+            check_txn_size(&over_frame),
+            Err(CommitFail::Unencodable(_))
+        ));
+        // At the budget exactly: passes — the refusal is the boundary, not a
+        // fence one short of it. One byte past: OverBudget, carrying the size.
+        let at_cap = vec![vec![0u8; (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize]];
+        assert_eq!(txn_encoded_len(&at_cap), MAX_TXN_BYTES);
+        assert!(check_txn_size(&at_cap).is_ok());
+        let mut past_cap = at_cap;
+        past_cap[0].push(0);
+        match check_txn_size(&past_cap) {
+            Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
+            other => panic!("expected OverBudget, got {other:?}"),
+        }
     }
 
     #[test]

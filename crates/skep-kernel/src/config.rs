@@ -1,5 +1,5 @@
 //! Kernel configuration — the knobs the design's Open-build-decisions section
-//! selects, carried on [`KernelCfg`] (§Public interface).
+//! selects, carried on [`KernelConfig`] (§Public interface).
 
 use std::io;
 use std::path::PathBuf;
@@ -7,7 +7,7 @@ use std::time::Duration;
 
 /// Kernel configuration, passed to [`crate::Kernel::open`].
 #[derive(Clone, Debug)]
-pub struct KernelCfg {
+pub struct KernelConfig {
     /// Per-commit [`Durability::Fsync`] (the canonical durable-before-visible
     /// barrier, carrying the journal it writes to) or [`Durability::InMemory`]
     /// (no journal/barrier/recovery — MIC-faithful).
@@ -20,7 +20,7 @@ pub struct KernelCfg {
     pub checkpoint: CheckpointPolicy,
 }
 
-impl KernelCfg {
+impl KernelConfig {
     /// The interface's `N ≥ 1` retention rule (§Public interface). A violation
     /// is surfaced rather than silently clamped: `N = 0` asks for a journal
     /// with no base to recover from, which is a caller's mistake and not a
@@ -122,7 +122,7 @@ pub enum CheckpointPolicy {
 mod tests {
     use super::*;
 
-    fn fsync(burned_seq: BurnedSeqPolicy) -> Durability {
+    fn fsync_mode(burned_seq: BurnedSeqPolicy) -> Durability {
         Durability::Fsync {
             journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
             retain_checkpoints: 1,
@@ -132,8 +132,8 @@ mod tests {
 
     #[test]
     fn burned_seq_rollback_is_a_property_of_the_durability_mode() {
-        assert!(fsync(BurnedSeqPolicy::Rollback).rolls_back_burned_seqs());
-        assert!(!fsync(BurnedSeqPolicy::TolerateGap).rolls_back_burned_seqs());
+        assert!(fsync_mode(BurnedSeqPolicy::Rollback).rolls_back_burned_seqs());
+        assert!(!fsync_mode(BurnedSeqPolicy::TolerateGap).rolls_back_burned_seqs());
         // The in-memory mode carries no policy of its own and answers with
         // the default, which keeps its order gap-free.
         assert!(Durability::InMemory.rolls_back_burned_seqs());
@@ -143,7 +143,7 @@ mod tests {
     fn the_retention_rule_binds_the_journal_and_nothing_else() {
         // `N ≥ 1` is a rule about a journal's fallback chain, so it is
         // checked where a journal is configured and is vacuous where none is.
-        let bad = KernelCfg {
+        let bad = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: PathBuf::from("/tmp/skep-kernel-config-test"),
                 retain_checkpoints: 0,
@@ -155,7 +155,7 @@ mod tests {
             bad.validate().unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
-        let mem = KernelCfg {
+        let mem = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };

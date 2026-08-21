@@ -46,12 +46,12 @@ use tempfile::tempdir;
 /// sweeps every length from full−1 to 0.
 #[test]
 fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
-    let base = tempdir().expect("tempdir");
-    let fix = Fixture::build(&base.path().join("fixture"), &[]);
-    let full = fix.full_len;
-    let n = fix.boundaries.len();
-    let dense_lo = fix.boundaries[n - 3].jlen;
-    let ls: Vec<u64> = if exhaustive() {
+    let tmp = tempdir().expect("tempdir");
+    let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
+    let full = fixture.full_len;
+    let n = fixture.boundaries.len();
+    let dense_lo = fixture.boundaries[n - 3].journal_len;
+    let prefix_lens: Vec<u64> = if exhaustive() {
         (0..full).rev().collect()
     } else {
         let mut v: Vec<u64> = (dense_lo..full).rev().collect();
@@ -59,22 +59,22 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
         v
     };
 
-    let cases = base.path().join("cases");
+    let cases = tmp.path().join("cases");
     let mut by_boundary: std::collections::BTreeMap<u64, usize> = Default::default();
-    for (i, &l) in ls.iter().enumerate() {
-        let case = cases.join(format!("a-{l}"));
-        copy_dir(&fix.dir, &case);
-        truncate_file(&seg1(&case), l);
-        let ctx = format!("A: torn tail, prefix {l} of {full}");
-        // Deep history probes on a sample; head + dump equality on every L.
-        let head = judge_prefix(&fix, &case, l, i % 25 == 0, &ctx);
+    for (i, &prefix_len) in prefix_lens.iter().enumerate() {
+        let case = cases.join(format!("a-{prefix_len}"));
+        copy_dir(&fixture.dir, &case);
+        truncate_file(&seg1(&case), prefix_len);
+        let ctx = format!("A: torn tail, prefix {prefix_len} of {full}");
+        // Deep history probes on a sample; head + dump equality on every one.
+        let head = judge_prefix(&fixture, &case, prefix_len, i % 25 == 0, &ctx);
         *by_boundary.entry(head).or_default() += 1;
         fs::remove_dir_all(&case).expect("case cleanup");
     }
     println!(
         "A: {} prefixes judged (dense {}..{}, stride 37 below; exhaustive={}); \
          recovered-boundary distribution: {:?}",
-        ls.len(),
+        prefix_lens.len(),
         dense_lo,
         full,
         exhaustive(),
@@ -91,18 +91,18 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
 /// at the same cut point.
 #[test]
 fn b_garbage_tail_classifies_as_eof_not_as_records() {
-    let base = tempdir().expect("tempdir");
-    let fix = Fixture::build(&base.path().join("fixture"), &[]);
-    let full = fix.full_len;
-    let n = fix.boundaries.len();
+    let tmp = tempdir().expect("tempdir");
+    let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
+    let full = fixture.full_len;
+    let n = fixture.boundaries.len();
 
     // Cut points: for each covered txn its clean boundary, boundary−1, and
     // a mid-txn byte; plus the clean full journal (pure garbage beyond it).
     let first_txn = if exhaustive() { 1 } else { n - 3 };
     let mut cuts: Vec<u64> = vec![full];
     for k in first_txn..n {
-        let lo = fix.boundaries[k - 1].jlen;
-        let hi = fix.boundaries[k].jlen;
+        let lo = fixture.boundaries[k - 1].journal_len;
+        let hi = fixture.boundaries[k].journal_len;
         cuts.push(hi - 1);
         cuts.push(lo + (hi - lo) / 2);
         cuts.push(lo);
@@ -111,34 +111,39 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
     cuts.dedup();
 
     let junk_lens: &[u64] = if exhaustive() { &[1, 7, 64, 512, 4096] } else { &[7, 512] };
-    let cases = base.path().join("cases");
+    let cases = tmp.path().join("cases");
     let mut judged = 0usize;
-    for (ci, &cut) in cuts.iter().enumerate() {
-        let patterns =
-            [Junk::Zeros, Junk::Ones, Junk::Rand(0x5EED_0000 + ci as u64)];
-        for p in patterns {
-            for &jl in junk_lens {
-                let case = cases.join(format!("b-app-{cut}-{}-{jl}", p.name()));
-                copy_dir(&fix.dir, &case);
+    for (cut_index, &cut) in cuts.iter().enumerate() {
+        let patterns = [
+            Junk::Zeros,
+            Junk::Ones,
+            Junk::Rand(0x5EED_0000 + cut_index as u64),
+        ];
+        for pattern in patterns {
+            for &junk_len in junk_lens {
+                let case = cases.join(format!("b-app-{cut}-{}-{junk_len}", pattern.name()));
+                copy_dir(&fixture.dir, &case);
                 truncate_file(&seg1(&case), cut);
-                append_bytes(&seg1(&case), &p.bytes(jl as usize));
+                append_bytes(&seg1(&case), &pattern.bytes(junk_len as usize));
                 let ctx = format!(
-                    "B: cut {cut} of {full} + {} junk ×{jl} appended (seed base 0x5EED_0000+{ci})",
-                    p.name()
+                    "B: cut {cut} of {full} + {} junk ×{junk_len} appended \
+                     (seed base 0x5EED_0000+{cut_index})",
+                    pattern.name()
                 );
-                judge_prefix(&fix, &case, cut, false, &ctx);
+                judge_prefix(&fixture, &case, cut, false, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
             if cut < full {
-                let case = cases.join(format!("b-ovr-{cut}-{}", p.name()));
-                copy_dir(&fix.dir, &case);
-                overwrite_range(&seg1(&case), cut, &p.bytes((full - cut) as usize));
+                let case = cases.join(format!("b-ovr-{cut}-{}", pattern.name()));
+                copy_dir(&fixture.dir, &case);
+                overwrite_range(&seg1(&case), cut, &pattern.bytes((full - cut) as usize));
                 let ctx = format!(
-                    "B: in-place {} overwrite of [{cut}, {full}) (seed base 0x5EED_0000+{ci})",
-                    p.name()
+                    "B: in-place {} overwrite of [{cut}, {full}) \
+                     (seed base 0x5EED_0000+{cut_index})",
+                    pattern.name()
                 );
-                judge_prefix(&fix, &case, cut, false, &ctx);
+                judge_prefix(&fixture, &case, cut, false, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
@@ -167,23 +172,23 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
 /// lives in the next test, where reclamation has made genesis unreachable.
 #[test]
 fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
-    let base = tempdir().expect("tempdir");
+    let tmp = tempdir().expect("tempdir");
     // Checkpoints after ops 4 and 8: two retained bases, a replay tail.
-    let fix = Fixture::build(&base.path().join("fixture"), &[4, 8]);
-    let newest = ckpt_path(&fix.dir, fix.boundaries[7].seq);
-    let older = ckpt_path(&fix.dir, fix.boundaries[3].seq);
+    let fixture = Fixture::build(&tmp.path().join("fixture"), &[4, 8]);
+    let newest = ckpt_file(&fixture.dir, fixture.boundaries[7].seq);
+    let older = ckpt_file(&fixture.dir, fixture.boundaries[3].seq);
     assert!(newest.exists() && older.exists(), "fixture holds two retained checkpoints");
     let newest_len = fs::metadata(&newest).expect("newest checkpoint").len();
     let newest_name = newest.file_name().expect("name").to_owned();
     let older_name = older.file_name().expect("name").to_owned();
 
-    let cases = base.path().join("cases");
+    let cases = tmp.path().join("cases");
     let mut judged = 0usize;
     let mut run = |label: String, mutate: &dyn Fn(&std::path::Path)| {
         let case = cases.join(format!("c-{judged}"));
-        copy_dir(&fix.dir, &case);
+        copy_dir(&fixture.dir, &case);
         mutate(&case);
-        judge_full(&fix, &case, &format!("C: {label}"));
+        judge_full(&fixture, &case, &format!("C: {label}"));
         fs::remove_dir_all(&case).expect("case cleanup");
         judged += 1;
     };
@@ -217,25 +222,24 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
     });
     // (iv, genesis-reachable) ALL retained checkpoints damaged three ways.
     {
-        let (nn, on) = (newest_name.clone(), older_name.clone());
+        let (newest_name, older_name) = (newest_name.clone(), older_name.clone());
         run("both checkpoints flipped mid-body".into(), &move |case| {
-            flip_byte(&case.join(&nn), 24 + (newest_len - 24) / 2);
-            let ol = fs::metadata(case.join(&on)).expect("older").len();
-            flip_byte(&case.join(&on), 24 + (ol - 24) / 2);
+            flip_byte(&case.join(&newest_name), 24 + (newest_len - 24) / 2);
+            let older_len = fs::metadata(case.join(&older_name)).expect("older").len();
+            flip_byte(&case.join(&older_name), 24 + (older_len - 24) / 2);
         });
     }
     {
-        let (nn, on) = (newest_name.clone(), older_name.clone());
+        let (newest_name, older_name) = (newest_name.clone(), older_name.clone());
         run("both checkpoints truncated to 3 bytes".into(), &move |case| {
-            truncate_file(&case.join(&nn), 3);
-            truncate_file(&case.join(&on), 3);
+            truncate_file(&case.join(&newest_name), 3);
+            truncate_file(&case.join(&older_name), 3);
         });
     }
     {
-        let (nn, on) = (newest_name, older_name);
         run("both checkpoints deleted".into(), &move |case| {
-            fs::remove_file(case.join(&nn)).expect("delete newest");
-            fs::remove_file(case.join(&on)).expect("delete older");
+            fs::remove_file(case.join(&newest_name)).expect("delete newest");
+            fs::remove_file(case.join(&older_name)).expect("delete older");
         });
     }
     println!(
@@ -252,8 +256,8 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
 /// a partial world.
 #[test]
 fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
-    let base = tempdir().expect("tempdir");
-    let dir = base.path().join("fixture");
+    let tmp = tempdir().expect("tempdir");
+    let dir = tmp.path().join("fixture");
     let genesis = GenesisConfig::standard();
     const BLOB: usize = 300 * 1024;
     {
@@ -284,7 +288,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
         !seg1(&dir).exists(),
         "fixture precondition: the checkpoint's reclamation must drop seg-1 (genesis unreachable)"
     );
-    let cps: Vec<PathBuf> = fs::read_dir(&dir)
+    let checkpoints: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("fixture dir")
         .filter_map(|e| {
             let e = e.expect("entry");
@@ -293,15 +297,15 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
             Some(e.path())
         })
         .collect();
-    assert_eq!(cps.len(), 1, "retain=1 keeps exactly one checkpoint");
-    let cp_name = cps[0].file_name().expect("name").to_owned();
-    let cp_len = fs::metadata(&cps[0]).expect("checkpoint").len();
+    assert_eq!(checkpoints.len(), 1, "retain=1 keeps exactly one checkpoint");
+    let cp_name = checkpoints[0].file_name().expect("name").to_owned();
+    let cp_len = fs::metadata(&checkpoints[0]).expect("checkpoint").len();
 
     for (label, mutate) in [
         ("sole checkpoint flipped mid-body", true),
         ("sole checkpoint deleted", false),
     ] {
-        let case = base.path().join(format!("c2-{}", if mutate { "flip" } else { "del" }));
+        let case = tmp.path().join(format!("c2-{}", if mutate { "flip" } else { "del" }));
         copy_dir(&dir, &case);
         if mutate {
             flip_byte(&case.join(&cp_name), 24 + (cp_len - 24) / 2);
@@ -328,7 +332,8 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
 
 // ── D. Kill mid-checkpoint ───────────────────────────────────────────────
 
-/// The child half of scenario D: re-exec'd by `d_kill_mid_checkpoint…` with
+/// The child half of scenario D: re-exec'd by
+/// `d_kill_mid_checkpoint_loses_no_acked_commit` with
 /// `SKEP_HAZARD_D_DIR`/`SKEP_HAZARD_D_DOC` set, it recovers the store and
 /// commits 48 KiB inserts forever — checkpointing every second commit
 /// (retain generous, so no reclamation and every boundary stays
@@ -344,14 +349,14 @@ fn hazard_d_child_process_entry() {
         GenesisConfig::standard(),
     )
     .expect("hazard child: engine open");
-    const B: usize = 48 * 1024;
+    const BLOB: usize = 48 * 1024;
     let stdout = std::io::stdout();
     for i in 0u64.. {
         // One fat Val occupies ONE position: append at ordinal i+1.
         let ord = (i + 1) as u32;
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; B])])
+            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; BLOB])])
             .expect("hazard child: insert");
         let seq = engine.kernel().current_seq().0;
         let mut out = stdout.lock();
@@ -369,7 +374,7 @@ fn hazard_d_child_process_entry() {
 /// of the same head, hints match a from-scratch rebuild, and recovery is
 /// idempotent (a second reopen dumps byte-equal).
 #[test]
-fn d_kill_mid_checkpoint_never_captures_recovery() {
+fn d_kill_mid_checkpoint_loses_no_acked_commit() {
     let trials: u64 = if exhaustive() { 40 } else { 10 };
     let mut total_acks = 0usize;
     let mut unacked_replays = 0u64;
@@ -391,7 +396,7 @@ fn d_trial(trial: u64) -> (usize, u64) {
     // Prologue in THIS process: delegate an account, create the document
     // the child will write into; then release the journal lock.
     let doc_str = {
-        let engine = Engine::open(manual_cfg(&dir), genesis.clone()).expect("D prologue open");
+        let engine = Engine::open(cfg_manual(&dir), genesis.clone()).expect("D prologue open");
         let prefix = {
             let snap = engine.kernel().snapshot();
             snap.world().m3().next_account_prefix(&node1()).expect("delegable prefix")
@@ -432,7 +437,7 @@ fn d_trial(trial: u64) -> (usize, u64) {
     let mut acks = vec![rx
         .recv_timeout(Duration::from_secs(30))
         .expect("hazard D child produced no ack within 30s (startup wedge or crash)")];
-    let mut rng = Lcg::new(0xD00D + trial);
+    let mut rng = SplitMix64::new(0xD00D + trial);
     let delay = Duration::from_millis(20 + rng.next_range(330));
     let deadline = Instant::now() + delay;
     loop {
@@ -506,42 +511,42 @@ fn d_trial(trial: u64) -> (usize, u64) {
 /// reachable and the input can be stated exactly.
 #[test]
 fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
-    let base = tempdir().expect("tempdir");
-    let fix = Fixture::build(&base.path().join("fixture"), &[]);
+    let tmp = tempdir().expect("tempdir");
+    let fixture = Fixture::build(&tmp.path().join("fixture"), &[]);
     let trials: u64 = if exhaustive() { 400 } else { 40 };
-    let cases = base.path().join("cases");
-    let last_txn_lo = fix.boundaries[fix.boundaries.len() - 2].jlen;
+    let cases = tmp.path().join("cases");
+    let last_txn_lo = fixture.boundaries[fixture.boundaries.len() - 2].journal_len;
     let (mut recovered, mut refused) = (0u32, 0u32);
     for trial in 0..trials {
         let seed = 0x00F1_1900 + trial;
-        let mut rng = Lcg::new(seed);
+        let mut rng = SplitMix64::new(seed);
         let case = cases.join(format!("e-{trial}"));
-        copy_dir(&fix.dir, &case);
+        copy_dir(&fixture.dir, &case);
         let final_txn_only = trial % 2 == 0;
         let lo = if final_txn_only { last_txn_lo } else { 0 };
         let mut offs: Vec<u64> = (0..1 + rng.next_range(4))
-            .map(|_| lo + rng.next_range(fix.full_len - lo))
+            .map(|_| lo + rng.next_range(fixture.full_len - lo))
             .collect();
         offs.sort_unstable();
         offs.dedup();
         for &off in &offs {
             flip_byte(&seg1(&case), off);
         }
-        let first = offs[0];
+        let first_flip = offs[0];
         let ctx = format!(
             "E trial {trial}: seed {seed:#x}, flipped {offs:?} of {} ({})",
-            fix.full_len,
+            fixture.full_len,
             if final_txn_only { "final txn" } else { "anywhere" }
         );
         if final_txn_only {
             // Nothing below the first flip changed, so the boundary rule
             // binds exactly as it does under a clean truncation there.
             recovered += 1;
-            let head = judge_prefix(&fix, &case, first, trial % 8 == 0, &ctx);
+            let head = judge_prefix(&fixture, &case, first_flip, trial % 8 == 0, &ctx);
             let again = timed_open(&case, &ctx).world_dump();
             assert_eq!(
                 again,
-                *fix.dump_for(head),
+                *fixture.dump_for(head),
                 "FINDING ({ctx}): recovery is not idempotent"
             );
         } else {
@@ -550,9 +555,9 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
                     recovered += 1;
                     let head = engine.kernel().current_seq();
                     assert!(
-                        head.0 <= fix.last_seq(),
+                        head.0 <= fixture.last_seq(),
                         "FINDING ({ctx}): recovered head {head} above the fixture's own {}",
-                        fix.last_seq()
+                        fixture.last_seq()
                     );
                     let live = engine.world_dump();
                     let at_head = engine.world_at(head).unwrap_or_else(|e| {
@@ -560,7 +565,7 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
                     });
                     assert_eq!(
                         live,
-                        dump(&at_head, &fix.genesis),
+                        dump(&at_head, &fixture.genesis),
                         "FINDING ({ctx}): fold ≢ checkpoint+replay"
                     );
                     engine

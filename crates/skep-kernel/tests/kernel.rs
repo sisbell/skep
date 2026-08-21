@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
-    KernelCfg, LockKey, OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
+    KernelConfig, LockKey, OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
 };
 use tempfile::tempdir;
 
@@ -37,7 +37,7 @@ enum TestRec {
     /// Stages and folds like any record and then panics when the commit
     /// region serializes it — the one way a test can unwind INSIDE that
     /// region, where the §3 guard rather than the closure phase answers.
-    PanicOnSerialize(Unserializable),
+    PanicOnSerialize(PanicsOnSerialize),
     /// Stages and folds like any record and then FAILS to serialize in the
     /// commit region — a record the journal cannot frame, whatever the disk
     /// is doing.
@@ -45,15 +45,15 @@ enum TestRec {
 }
 
 #[derive(Clone, Debug)]
-struct Unserializable;
+struct PanicsOnSerialize;
 
-impl Serialize for Unserializable {
+impl Serialize for PanicsOnSerialize {
     fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
         panic!("record serialization panicked inside the commit region");
     }
 }
 
-impl<'de> Deserialize<'de> for Unserializable {
+impl<'de> Deserialize<'de> for PanicsOnSerialize {
     fn deserialize<D: serde::Deserializer<'de>>(_: D) -> Result<Self, D::Error> {
         // Nothing that panics on the way out ever reaches the journal.
         unreachable!("never serialized, so never journaled, so never read back")
@@ -159,14 +159,14 @@ impl WorldState for FragileWorld {
     }
 }
 
-fn cfg_fsync(dir: &Path) -> KernelCfg {
+fn cfg_fsync(dir: &Path) -> KernelConfig {
     cfg_retain(dir, 2)
 }
 
 /// A journal-backed configuration keeping `retain` checkpoint bases — the
 /// knob rides on the journal, so a test that varies it names the journal.
-fn cfg_retain(dir: &Path, retain: usize) -> KernelCfg {
-    KernelCfg {
+fn cfg_retain(dir: &Path, retain: usize) -> KernelConfig {
+    KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
@@ -176,8 +176,8 @@ fn cfg_retain(dir: &Path, retain: usize) -> KernelCfg {
     }
 }
 
-fn cfg_mem() -> KernelCfg {
-    KernelCfg {
+fn cfg_mem() -> KernelConfig {
+    KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     }
@@ -745,7 +745,7 @@ fn panic_inside_the_commit_region_rolls_back_and_leaves_the_kernel_usable() {
         let _ = k.transact::<(), ()>(&[], |stg| {
             // Staged fine; it panics in the commit region, where the closure
             // phase's own guard no longer covers it.
-            stg.push(TestRec::PanicOnSerialize(Unserializable));
+            stg.push(TestRec::PanicOnSerialize(PanicsOnSerialize));
             Ok(())
         });
     }));
@@ -805,7 +805,7 @@ fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
     // relaxes to monotone-only, and recovery folds the gap harmlessly — no
     // contiguity is required over the replayed range (§1/§7).
     let dir = tempdir().unwrap();
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.path().to_path_buf(),
             retain_checkpoints: 2,
@@ -1210,7 +1210,7 @@ fn in_memory_mode_starts_from_genesis_and_recovers_nothing() {
     // here; there is nothing to point a stray write at. What remains
     // checkable is the behaviour: genesis directly, an auto-trigger that
     // evaluates over a `checkpoint()` that is a no-op, and no recovery.
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::EveryN(1), // trigger evaluates; checkpoint() is a no-op
     };

@@ -14,7 +14,7 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 use crate::checkpoint;
-use crate::config::{CheckpointPolicy, Durability, KernelCfg};
+use crate::config::{CheckpointPolicy, Durability, KernelConfig};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
 use crate::journal::{self, CommitFail, Journal, JournalWriter, UnwindRepair};
 use crate::replay;
@@ -110,12 +110,12 @@ impl<W: WorldState> Staging<W> {
         &self.working
     }
 
-    /// Fold `r` into `working` and append it to the txn's records. Stage your
-    /// store's OWN record type lifted via `.into()` — never the central
+    /// Fold `record` into `working` and append it to the txn's records. Stage
+    /// your store's OWN record type lifted via `.into()` — never the central
     /// `Record` (composition contract).
-    pub fn push(&mut self, r: W::Record) {
-        self.working = self.working.apply(&r);
-        self.records.push(r);
+    pub fn push(&mut self, record: W::Record) {
+        self.working = self.working.apply(&record);
+        self.records.push(record);
     }
 }
 
@@ -139,8 +139,8 @@ impl<W: WorldState> fmt::Debug for Staging<W> {
 /// the cadence it never asked for (§6).
 struct Cadence {
     policy: CheckpointPolicy,
-    commits_since: u64,
-    bytes_since: u64,
+    commits_since_reset: u64,
+    bytes_since_reset: u64,
     /// When the counters were last reset — by the trigger crossing, which is
     /// what `Interval` measures from.
     last_reset: Instant,
@@ -150,8 +150,8 @@ impl Cadence {
     fn new(policy: CheckpointPolicy) -> Cadence {
         Cadence {
             policy,
-            commits_since: 0,
-            bytes_since: 0,
+            commits_since_reset: 0,
+            bytes_since_reset: 0,
             last_reset: Instant::now(),
         }
     }
@@ -160,18 +160,18 @@ impl Cadence {
     /// crossed the threshold. A crossing resets the counters, so the next
     /// window starts at this commit. A quiescent kernel — nothing new to
     /// charge — correctly never crosses, `Interval` included (§6).
-    fn record_commit(&mut self, bytes: u64) -> bool {
-        self.commits_since += 1;
-        self.bytes_since += bytes;
+    fn charge_commit(&mut self, bytes: u64) -> bool {
+        self.commits_since_reset += 1;
+        self.bytes_since_reset += bytes;
         let crossed = match self.policy {
-            CheckpointPolicy::EveryN(every) => self.commits_since >= every,
-            CheckpointPolicy::JournalBytes(b) => self.bytes_since >= b,
-            CheckpointPolicy::Interval(d) => self.last_reset.elapsed() >= d,
+            CheckpointPolicy::EveryN(every) => self.commits_since_reset >= every,
+            CheckpointPolicy::JournalBytes(threshold) => self.bytes_since_reset >= threshold,
+            CheckpointPolicy::Interval(window) => self.last_reset.elapsed() >= window,
             CheckpointPolicy::Manual => false,
         };
         if crossed {
-            self.commits_since = 0;
-            self.bytes_since = 0;
+            self.commits_since_reset = 0;
+            self.bytes_since_reset = 0;
             self.last_reset = Instant::now();
         }
         crossed
@@ -198,7 +198,7 @@ pub struct Kernel<W: WorldState> {
     /// and reclaiming never block writers.
     checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
-    cfg: KernelCfg,
+    cfg: KernelConfig,
     /// Σ₀ — the genesis world this kernel was opened under, kept because it
     /// is the base every derivation falls back to when no checkpoint covers
     /// the boundary ([`Kernel::world_at`]).
@@ -251,7 +251,7 @@ impl<W: WorldState> Kernel<W> {
     /// never onto a journaled root; a drifting `genesis` silently
     /// mis-recovers. M2 cannot check this (ASN-0047's fixed Σ₀ satisfies it
     /// by construction).
-    pub fn open(cfg: KernelCfg, genesis: W) -> Result<Self, OpenError> {
+    pub fn open(cfg: KernelConfig, genesis: W) -> Result<Self, OpenError> {
         cfg.validate()?;
         let (root, journal, lock) = match &cfg.durability {
             // "Directly from genesis" (Lifecycle): no journal, no recovery,
@@ -279,12 +279,12 @@ impl<W: WorldState> Kernel<W> {
         fs::create_dir_all(dir)?;
         let lock = journal::acquire_journal_lock(dir)?;
         let segs = journal::list_segments(dir)?;
-        let cps = checkpoint::list(dir)?;
+        let checkpoints = checkpoint::list(dir)?;
 
         // The base, with its whole fallback chain: newest valid retained
         // checkpoint → next-older retained → genesis-while-reachable; an
         // exhausted chain is the operator-intervention condition (§6/§7).
-        let base = replay::select_base(&cps, &segs, None, genesis)
+        let base = replay::select_base(&checkpoints, &segs, None, genesis)
             .map_err(|_| OpenError::BadCheckpoint)?;
         let s_load = base.s_load;
 
@@ -339,7 +339,7 @@ impl<W: WorldState> Kernel<W> {
     }
 
     fn assemble(
-        cfg: KernelCfg,
+        cfg: KernelConfig,
         root: Committed<W>,
         genesis: W,
         journal: Journal,
@@ -418,12 +418,12 @@ impl<W: WorldState> Kernel<W> {
         // Closure phase. Nothing is allocated or appended yet, so an unwind
         // here needs no repair: staging is discarded, the lock releases on
         // unwind, no Seq was drawn (§3).
-        let v = match f(&mut stg) {
+        let value = match f(&mut stg) {
             Err(e) => return Err(TxnError::Rejected(e)),
-            Ok(v) => v,
+            Ok(value) => value,
         };
         if stg.records.is_empty() {
-            return Ok((v, base.seq)); // zero-step (A1); V1 = the base index read.
+            return Ok((value, base.seq)); // zero-step (A1); V1 = the base index read.
         }
         let Staging {
             base: _,
@@ -437,14 +437,14 @@ impl<W: WorldState> Kernel<W> {
         // where the order's ceiling is answered for: a sequencer with no room
         // left for this transaction cannot commit it and cannot renumber it
         // over a predecessor, which leaves halting as the only sound answer.
-        let st = &mut *applier;
+        let state = &mut *applier;
         let n = records.len() as u64;
-        let Some(last) = st.seq_hi.checked_add(n) else {
+        let Some(last) = state.seq_hi.checked_add(n) else {
             self.poisoned.store(true, Ordering::Release);
             return Err(TxnError::Poisoned);
         };
-        let first = st.seq_hi + 1; // n ≥ 1, so this is at most `last`
-        st.seq_hi = last;
+        let first = state.seq_hi + 1; // n ≥ 1, so this is at most `last`
+        state.seq_hi = last;
         let committed = Committed {
             seq: Seq(last),
             world: working,
@@ -464,17 +464,17 @@ impl<W: WorldState> Kernel<W> {
         // transaction; how many bytes one transaction may stage is the
         // caller's to bound.
         let commit_out: std::thread::Result<Result<u64, CommitFail>> = {
-            let st_in = &mut *st;
+            let state = &mut *state;
             let root = &self.root;
             let records = &records;
             catch_unwind(AssertUnwindSafe(move || {
-                let mut rec_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
-                for r in records.iter() {
-                    rec_bytes.push(bincode::serialize(r).map_err(|e| {
+                let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
+                for record in records.iter() {
+                    record_bytes.push(bincode::serialize(record).map_err(|e| {
                         CommitFail::Unencodable(io::Error::new(io::ErrorKind::InvalidData, e))
                     })?);
                 }
-                st_in.journal.commit_txn(first, rec_bytes, move || {
+                state.journal.commit_txn(first, record_bytes, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
                     // visible §1): external readers see none-or-all.
                     root.store(Arc::new(committed));
@@ -484,10 +484,10 @@ impl<W: WorldState> Kernel<W> {
         match commit_out {
             // §3 unwind guard: repair, then let the panic propagate.
             Err(payload) => {
-                match st.journal.repair_after_unwind() {
+                match state.journal.repair_after_unwind() {
                     UnwindRepair::Clean => {
                         if rollback {
-                            st.seq_hi = base.seq.0; // absolute set — idempotent (§3)
+                            state.seq_hi = base.seq.0; // absolute set — idempotent (§3)
                         }
                     }
                     // A surviving un-acked marker would let a successor
@@ -509,7 +509,7 @@ impl<W: WorldState> Kernel<W> {
             // re-invoke.
             Ok(Err(CommitFail::Clean(e))) => {
                 if rollback {
-                    st.seq_hi = base.seq.0;
+                    state.seq_hi = base.seq.0;
                 }
                 Err(TxnError::Durability(e))
             }
@@ -518,7 +518,7 @@ impl<W: WorldState> Kernel<W> {
             // different answer to "retry?" (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
                 if rollback {
-                    st.seq_hi = base.seq.0;
+                    state.seq_hi = base.seq.0;
                 }
                 Err(TxnError::Unencodable(e))
             }
@@ -530,7 +530,7 @@ impl<W: WorldState> Kernel<W> {
             Ok(Ok(bytes)) => {
                 // §6 on-commit trigger: charged and tested under the applier
                 // lock; checkpoint() never touches the cadence.
-                let crossed = st.cadence.record_commit(bytes);
+                let crossed = state.cadence.charge_commit(bytes);
                 drop(applier);
                 if crossed {
                     // §3/§6: the auto-triggered checkpoint's error is
@@ -541,7 +541,7 @@ impl<W: WorldState> Kernel<W> {
                     // unreclaimed journal).
                     let _ = self.checkpoint();
                 }
-                Ok((v, Seq(last))) // commit-before-acknowledge (A7, MIC-3)
+                Ok((value, Seq(last))) // commit-before-acknowledge (A7, MIC-3)
             }
         }
     }
@@ -664,9 +664,9 @@ impl<W: WorldState> Kernel<W> {
         };
         // The same base selection recovery runs, capped at `at` so a later
         // checkpoint cannot stand in for an earlier boundary.
-        let cps = checkpoint::list(dir)?;
+        let checkpoints = checkpoint::list(dir)?;
         let segs = journal::list_segments(dir)?;
-        let base = replay::select_base(&cps, &segs, Some(at.0), &self.genesis).map_err(|u| {
+        let base = replay::select_base(&checkpoints, &segs, Some(at.0), &self.genesis).map_err(|u| {
             HistoryError::Reclaimed {
                 floor: u.floor.map(Seq),
             }
@@ -729,8 +729,8 @@ mod tests {
         }
     }
 
-    fn cfg(dir: &std::path::Path, burned_seq: BurnedSeqPolicy) -> KernelCfg {
-        KernelCfg {
+    fn cfg(dir: &std::path::Path, burned_seq: BurnedSeqPolicy) -> KernelConfig {
+        KernelConfig {
             durability: Durability::Fsync {
                 journal_path: dir.to_path_buf(),
                 retain_checkpoints: 1,
@@ -747,11 +747,11 @@ mod tests {
         // Seq is never corruption.
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let r = |x: u64| bincode::serialize(&x).unwrap();
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let rec = |x: u64| bincode::serialize(&x).unwrap();
             // A journal built without a kernel: no root to install into.
-            assert!(w.commit_txn(1, vec![r(10)], || {}).is_ok());
-            assert!(w.commit_txn(5, vec![r(50), r(60)], || {}).is_ok()); // burned 2..=4
+            assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
+            assert!(writer.commit_txn(5, vec![rec(50), rec(60)], || {}).is_ok()); // burned 2..=4
         }
         let k = Kernel::<Vec<u64>>::open(
             cfg(dir.path(), BurnedSeqPolicy::TolerateGap),
@@ -770,10 +770,10 @@ mod tests {
         // outcome recovery may not have. Halt (§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let r = |x: u64| bincode::serialize(&x).unwrap();
-            assert!(w.commit_txn(1, vec![r(10)], || {}).is_ok());
-            assert!(w.commit_txn(1, vec![r(20)], || {}).is_ok());
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let rec = |x: u64| bincode::serialize(&x).unwrap();
+            assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
+            assert!(writer.commit_txn(1, vec![rec(20)], || {}).is_ok());
         }
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a repeated Seq is not something to fold twice");
@@ -791,9 +791,9 @@ mod tests {
         // wrapped (§2/§7).
         let dir = tempfile::tempdir().unwrap();
         {
-            let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-            let r = bincode::serialize(&10u64).unwrap();
-            assert!(w.commit_txn(u64::MAX, vec![r], || {}).is_ok());
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let record = bincode::serialize(&10u64).unwrap();
+            assert!(writer.commit_txn(u64::MAX, vec![record], || {}).is_ok());
         }
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a head with no successor coordinate is unaccountable");
@@ -809,11 +809,11 @@ mod tests {
         // high-water at the ceiling there is no coordinate to commit at, and
         // the order cannot be renumbered over a committed predecessor —
         // so the kernel halts, and its reads keep serving (§1/§2/§3).
-        let c = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
-        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         k.applier.lock().seq_hi = u64::MAX;
         let out = k.transact::<_, ()>(&[], |s| {
             s.push(10);
@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn retain_checkpoints_zero_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        let c = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 0,
@@ -835,7 +835,7 @@ mod tests {
             },
             checkpoint: CheckpointPolicy::Manual,
         };
-        let err = Kernel::<Vec<u64>>::open(c, Vec::new()).err().unwrap();
+        let err = Kernel::<Vec<u64>>::open(cfg, Vec::new()).err().unwrap();
         assert!(matches!(err, OpenError::Io(_)));
     }
 
@@ -883,7 +883,7 @@ mod tests {
         // `checkpoint.tmp`. A base that fails its own header checksum is
         // useless, and under `N = 1` it would be the only one.
         let dir = tempfile::tempdir().unwrap();
-        let c = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 64, // keep every base a racing call wrote
@@ -891,7 +891,7 @@ mod tests {
             },
             checkpoint: CheckpointPolicy::Manual,
         };
-        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         std::thread::scope(|s| {
             for _ in 0..4 {
                 let k = &k;
@@ -912,13 +912,13 @@ mod tests {
                 }
             });
         });
-        let cps = checkpoint::list(dir.path()).unwrap();
-        assert!(!cps.is_empty(), "the fixture writes checkpoints");
-        for c in &cps {
+        let checkpoints = checkpoint::list(dir.path()).unwrap();
+        assert!(!checkpoints.is_empty(), "the fixture writes checkpoints");
+        for cp in &checkpoints {
             assert!(
-                checkpoint::load::<Vec<u64>>(&c.path, c.seq).is_some(),
+                checkpoint::load::<Vec<u64>>(&cp.path, cp.seq).is_some(),
                 "checkpoint {} does not load — two writers shared checkpoint.tmp",
-                c.seq
+                cp.seq
             );
         }
     }
@@ -1000,11 +1000,11 @@ mod tests {
 
     #[test]
     fn world_at_is_unjournaled_in_memory() {
-        let c = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
-        let k = Kernel::<Vec<u64>>::open(c, Vec::new()).unwrap();
+        let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
         assert!(matches!(
             k.world_at(Seq(0)),
             Err(HistoryError::Unjournaled)

@@ -14,7 +14,7 @@ use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::{Engine, GenesisConfig, World};
 use skep_febe::{Op, Operation, Request, Response, SessionId};
-use skep_kernel::{CheckpointPolicy, Durability, KernelCfg};
+use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 use skep_links::Endset;
 use skep_namespace::PrincipalId;
 
@@ -69,7 +69,7 @@ pub type RigError = String;
 
 impl Rig {
     pub fn new() -> Result<Rig, RigError> {
-        let cfg = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };

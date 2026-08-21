@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Level, Nat, Tumbler};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
 };
 use skep_namespace::{
     DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, OpError, Principal,
@@ -73,15 +73,15 @@ fn genesis_world() -> World {
 }
 
 fn mem_kernel(genesis: World) -> Arc<Kernel<World>> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };
     Arc::new(Kernel::open(cfg, genesis).expect("in-memory open"))
 }
 
-fn cfg_fsync(dir: &Path) -> KernelCfg {
-    KernelCfg {
+fn cfg_fsync(dir: &Path) -> KernelConfig {
+    KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,

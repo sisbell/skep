@@ -23,7 +23,7 @@ use skep_arrangement::{
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, Snapshot, TxnError,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Snapshot, TxnError,
     WorldState,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -193,15 +193,15 @@ fn genesis() -> World {
 }
 
 fn mem_kernel() -> Kernel<World> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };
     Kernel::open(cfg, genesis()).expect("in-memory open")
 }
 
-fn cfg_fsync(dir: &Path) -> KernelCfg {
-    KernelCfg {
+fn cfg_fsync(dir: &Path) -> KernelConfig {
+    KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: 1,

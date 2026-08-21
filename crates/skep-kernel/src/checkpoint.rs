@@ -17,7 +17,7 @@ use serde::de::DeserializeOwned;
 
 use crate::journal::fsync_dir;
 
-const CKPT_MAGIC: [u8; 4] = *b"SKC1";
+const MAGIC: [u8; 4] = *b"SKC1";
 const HEADER_LEN: usize = 24;
 
 pub(crate) struct CheckpointMeta {
@@ -51,13 +51,13 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
 /// the journal-reclamation floor and the `BadCheckpoint` fallback base (§6) —
 /// or `None` when no checkpoint remains.
 pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
-    let mut cps = list(dir)?;
-    while cps.len() > keep {
-        let victim = cps.remove(0);
+    let mut checkpoints = list(dir)?;
+    while checkpoints.len() > keep {
+        let victim = checkpoints.remove(0);
         fs::remove_file(&victim.path)?;
     }
     fsync_dir(dir)?;
-    Ok(cps.first().map(|c| c.seq))
+    Ok(checkpoints.first().map(|cp| cp.seq))
 }
 
 /// Persist a checkpoint embodying all records with `Seq ≤ seq`:
@@ -66,7 +66,7 @@ pub(crate) fn write(dir: &Path, seq: u64, body: &[u8]) -> io::Result<()> {
     let tmp = dir.join("checkpoint.tmp");
     let mut f = File::create(&tmp)?;
     let mut header = Vec::with_capacity(HEADER_LEN);
-    header.extend_from_slice(&CKPT_MAGIC);
+    header.extend_from_slice(&MAGIC);
     header.extend_from_slice(&seq.to_le_bytes());
     header.extend_from_slice(&crc32c::crc32c(body).to_le_bytes());
     header.extend_from_slice(&(body.len() as u64).to_le_bytes());
@@ -82,7 +82,7 @@ pub(crate) fn write(dir: &Path, seq: u64, body: &[u8]) -> io::Result<()> {
 /// next-older retained checkpoint, then genesis-while-reachable (§6/§7).
 pub(crate) fn load<W: DeserializeOwned>(path: &Path, expected_seq: u64) -> Option<W> {
     let data = fs::read(path).ok()?;
-    if data.len() < HEADER_LEN || data[0..4] != CKPT_MAGIC {
+    if data.len() < HEADER_LEN || data[0..4] != MAGIC {
         return None;
     }
     let seq = u64::from_le_bytes(data[4..12].try_into().ok()?);

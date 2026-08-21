@@ -100,7 +100,7 @@ use skep_address::Address;
 use skep_arrangement::Vstream;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
 use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId, Stores};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, Seq};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
 use skep_links::LinkStore;
 use skep_namespace::{Namespace, PrincipalId};
 
@@ -277,7 +277,7 @@ impl Daemon {
     /// [`DaemonError`] is an operator-intervention condition — surface it
     /// and exit, never retry.
     pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
-        let cfg = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
                 retain_checkpoints: RETAINED_CHECKPOINTS,
@@ -842,7 +842,7 @@ fn history_error_reply(e: HistoryError) -> Reply {
 /// (the guest pattern): reads are principal-free, and even a misclassified
 /// write would meet M10's own `Unauthenticated` wall rather than a store.
 fn execute_read_on(world: World, req: Request) -> Response {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };

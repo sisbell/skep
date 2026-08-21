@@ -763,7 +763,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
 
     // The dedup hint is rebuilt too: a kernel opened over the recovered world
     // dedups the same idem⊤ emission to the ORIGINAL incumbent.
-    let cfg = skep_kernel::KernelCfg {
+    let cfg = skep_kernel::KernelConfig {
         durability: skep_kernel::Durability::InMemory,
         checkpoint: skep_kernel::CheckpointPolicy::Manual,
     };

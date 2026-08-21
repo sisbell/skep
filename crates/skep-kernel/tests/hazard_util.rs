@@ -28,7 +28,7 @@ use skep_arrangement::{Caller, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::observe::{dump, WorldDump};
 use skep_engine::{Engine, EngineError, GenesisConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg, Seq};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
@@ -94,8 +94,8 @@ pub fn parse_addr(s: &str) -> Address {
 
 // ── kernel configurations ──
 
-pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCfg {
-    KernelCfg {
+pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelConfig {
+    KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
             retain_checkpoints: retain,
@@ -105,7 +105,7 @@ pub fn cfg(dir: &Path, checkpoint: CheckpointPolicy, retain: usize) -> KernelCfg
     }
 }
 
-pub fn manual_cfg(dir: &Path) -> KernelCfg {
+pub fn cfg_manual(dir: &Path) -> KernelConfig {
     cfg(dir, CheckpointPolicy::Manual, 2)
 }
 
@@ -119,7 +119,7 @@ pub fn timed_open_result(dir: &Path, ctx: &str) -> Result<Engine, EngineError> {
     let d = dir.to_path_buf();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(Engine::open(manual_cfg(&d), GenesisConfig::standard()));
+        let _ = tx.send(Engine::open(cfg_manual(&d), GenesisConfig::standard()));
     });
     match rx.recv_timeout(OPEN_TIMEOUT) {
         Ok(r) => r,
@@ -140,7 +140,7 @@ pub fn seg1(dir: &Path) -> PathBuf {
     dir.join("seg-1.wal")
 }
 
-pub fn ckpt_path(dir: &Path, seq: u64) -> PathBuf {
+pub fn ckpt_file(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("checkpoint.{seq}"))
 }
 
@@ -190,11 +190,11 @@ pub fn append_bytes(path: &Path, junk: &[u8]) {
 
 /// SplitMix64 — deterministic, dependency-free; the seed is the whole
 /// reproduction.
-pub struct Lcg(u64);
+pub struct SplitMix64(u64);
 
-impl Lcg {
-    pub fn new(seed: u64) -> Lcg {
-        Lcg(seed ^ 0x9E37_79B9_7F4A_7C15)
+impl SplitMix64 {
+    pub fn new(seed: u64) -> SplitMix64 {
+        SplitMix64(seed ^ 0x9E37_79B9_7F4A_7C15)
     }
 
     pub fn next_u64(&mut self) -> u64 {
@@ -226,7 +226,7 @@ impl Junk {
         match self {
             Junk::Zeros => vec![0x00; len],
             Junk::Ones => vec![0xFF; len],
-            Junk::Rand(seed) => Lcg::new(seed).bytes(len),
+            Junk::Rand(seed) => SplitMix64::new(seed).bytes(len),
         }
     }
 
@@ -246,7 +246,7 @@ impl Junk {
 /// capture), and the pure-fold oracle dump of the world at it.
 pub struct BoundaryOracle {
     pub seq: u64,
-    pub jlen: u64,
+    pub journal_len: u64,
     pub dump: WorldDump,
 }
 
@@ -270,20 +270,27 @@ impl Fixture {
     /// judged against it prove fold ≡ checkpoint+replay under the fault.
     pub fn build(dir: &Path, ckpt_after: &[usize]) -> Fixture {
         let genesis = GenesisConfig::standard();
-        let engine = Engine::open(manual_cfg(dir), genesis.clone()).expect("fixture open");
+        let engine = Engine::open(cfg_manual(dir), genesis.clone()).expect("fixture open");
         let genesis_dump =
             dump(&engine.world_at(Seq(0)).expect("genesis boundary answers"), &genesis);
         let seg = seg1(dir);
         let mut boundaries: Vec<BoundaryOracle> = Vec::new();
 
-        let cap = |engine: &Engine, boundaries: &mut Vec<BoundaryOracle>| {
+        let capture = |engine: &Engine, boundaries: &mut Vec<BoundaryOracle>| {
             let seq = engine.kernel().current_seq();
-            let jlen = fs::metadata(&seg).expect("active segment exists").len();
+            let journal_len = fs::metadata(&seg).expect("active segment exists").len();
             if let Some(prev) = boundaries.last() {
-                assert!(seq.0 > prev.seq && jlen > prev.jlen, "fixture commits must advance");
+                assert!(
+                    seq.0 > prev.seq && journal_len > prev.journal_len,
+                    "fixture commits must advance"
+                );
             }
             let world = engine.world_at(seq).expect("live boundary answers");
-            boundaries.push(BoundaryOracle { seq: seq.0, jlen, dump: dump(&world, &genesis) });
+            boundaries.push(BoundaryOracle {
+                seq: seq.0,
+                journal_len,
+                dump: dump(&world, &genesis),
+            });
             if ckpt_after.contains(&boundaries.len()) {
                 engine.kernel().checkpoint().expect("fixture checkpoint");
             }
@@ -301,24 +308,24 @@ impl Fixture {
             .namespace()
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegate");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 2: create the document.
         let (doc, _) =
             engine.namespace().create_new_document(USER, &acct).expect("create document");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 3–4: content (multi-value insert = a multi-record composite).
         engine
             .vstream()
             .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])])
             .expect("insert ab");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
         engine
             .vstream()
             .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])])
             .expect("insert c");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 5–6: two links (reversed endsets, so no idem dedup collapses them).
         let (l1, _) = engine
@@ -331,7 +338,7 @@ impl Fixture {
                 SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
             )
             .expect("makelink l1");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
         let (l2, _) = engine
             .linkstore()
             .makelink(
@@ -342,21 +349,21 @@ impl Fixture {
                 SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
             )
             .expect("makelink l2");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 7–8: a supersession claim, then a retraction.
         let _ = engine.linkstore().assert_sup(OWNER, &doc, &l1, &l2).expect("assert_sup");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
         let _ = engine.linkstore().nullify(OWNER, &doc, &l1).expect("nullify");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 9: a version (the copy-on-write fork).
         let _ = engine.vstream().version(USER, &doc).expect("version");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         // 10: a delete.
         engine.vstream().delete(OWNER, &doc, vp(1, 1), n(1)).expect("delete");
-        cap(&engine, &mut boundaries);
+        capture(&engine, &mut boundaries);
 
         drop(engine); // journal lock released; the fixture is now files.
 
@@ -364,7 +371,7 @@ impl Fixture {
         let full_len = fs::metadata(&seg).expect("segment").len();
         assert_eq!(
             full_len,
-            boundaries.last().expect("boundaries").jlen,
+            boundaries.last().expect("boundaries").journal_len,
             "journal length settles at the final commit"
         );
         let segs = fs::read_dir(dir)
@@ -377,9 +384,14 @@ impl Fixture {
     }
 
     /// The boundary rule: the greatest committed boundary whose bytes lie
-    /// wholly inside an intact prefix of length `l` (0 = genesis).
-    pub fn expected_boundary(&self, l: u64) -> u64 {
-        self.boundaries.iter().rev().find(|b| b.jlen <= l).map(|b| b.seq).unwrap_or(0)
+    /// wholly inside an intact prefix of length `prefix_len` (0 = genesis).
+    pub fn expected_boundary(&self, prefix_len: u64) -> u64 {
+        self.boundaries
+            .iter()
+            .rev()
+            .find(|b| b.journal_len <= prefix_len)
+            .map(|b| b.seq)
+            .unwrap_or(0)
     }
 
     pub fn dump_for(&self, seq: u64) -> &WorldDump {
@@ -404,10 +416,10 @@ impl Fixture {
 /// oracle there. `deep` additionally proves every boundary ≤ head answers
 /// `world_at` byte-equal and the hints match a from-scratch rebuild.
 /// Returns the recovered head for the caller's outcome tally.
-pub fn judge_prefix(fix: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool, ctx: &str) -> u64 {
+pub fn judge_prefix(fixture: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool, ctx: &str) -> u64 {
     let engine = timed_open(case_dir, ctx);
     let head = engine.kernel().current_seq().0;
-    let expect = fix.expected_boundary(prefix_len);
+    let expect = fixture.expected_boundary(prefix_len);
     assert_eq!(
         head, expect,
         "FINDING ({ctx}): boundary rule violated — recovered head {head}, the intact prefix \
@@ -416,18 +428,18 @@ pub fn judge_prefix(fix: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool,
     let d = engine.world_dump();
     assert_eq!(
         &d,
-        fix.dump_for(head),
+        fixture.dump_for(head),
         "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
     );
     if deep {
-        let g = dump(&engine.world_at(Seq(0)).expect("genesis answers"), &fix.genesis);
-        assert_eq!(g, fix.genesis_dump, "FINDING ({ctx}): genesis boundary diverged");
-        for b in fix.boundaries.iter().filter(|b| b.seq <= head) {
+        let g = dump(&engine.world_at(Seq(0)).expect("genesis answers"), &fixture.genesis);
+        assert_eq!(g, fixture.genesis_dump, "FINDING ({ctx}): genesis boundary diverged");
+        for b in fixture.boundaries.iter().filter(|b| b.seq <= head) {
             let w = engine.world_at(Seq(b.seq)).unwrap_or_else(|e| {
                 panic!("FINDING ({ctx}): boundary {} ≤ head unanswerable: {e}", b.seq)
             });
             assert_eq!(
-                dump(&w, &fix.genesis),
+                dump(&w, &fixture.genesis),
                 b.dump,
                 "FINDING ({ctx}): history at boundary {} diverges from ground truth",
                 b.seq
@@ -442,7 +454,7 @@ pub fn judge_prefix(fix: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool,
 
 /// [`judge_prefix`] where FULL recovery is the only acceptable outcome
 /// (checkpoint faults: the journal is intact, so no rollback is licensed).
-pub fn judge_full(fix: &Fixture, case_dir: &Path, ctx: &str) {
-    let head = judge_prefix(fix, case_dir, fix.full_len, true, ctx);
-    assert_eq!(head, fix.last_seq(), "FINDING ({ctx}): full recovery was required");
+pub fn judge_full(fixture: &Fixture, case_dir: &Path, ctx: &str) {
+    let head = judge_prefix(fixture, case_dir, fixture.full_len, true, ctx);
+    assert_eq!(head, fixture.last_seq(), "FINDING ({ctx}): full recovery was required");
 }

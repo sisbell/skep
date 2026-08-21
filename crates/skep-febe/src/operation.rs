@@ -692,7 +692,7 @@ mod tests {
     use skep_arrangement::{HasM5, InsertError, M5Rec, M5State, VPos, Vstream};
     use skep_content::{ContentStore, ContentWrite, HasContent, Val};
     use skep_kernel::{
-        CheckpointPolicy, Durability, Kernel, KernelCfg, Seq, TxnError, WorldState,
+        CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
     use skep_links::{HasLinks, LinkRec, LinkState, LinkStore, ReservedAddrs};
     use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
@@ -805,7 +805,7 @@ mod tests {
     }
 
     fn kernel() -> Arc<Kernel<World>> {
-        let cfg = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError, FindError,
@@ -233,7 +233,7 @@ fn genesis() -> World {
 }
 
 fn mem_kernel() -> Kernel<World> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };

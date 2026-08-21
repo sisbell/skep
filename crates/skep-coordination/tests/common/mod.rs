@@ -13,7 +13,7 @@ use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::{HasM5, M5Rec, M5State, VPos, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
     enc, Behavior, Endset, HasLinks, LinkRec, LinkState, LinkStore, Registration, ReservedAddrs,
     Shape, TypeDecl, TypeRegistry,
@@ -224,7 +224,7 @@ pub fn genesis_world() -> World {
 
 /// An in-memory kernel over the seeded genesis world.
 pub fn kernel() -> Arc<Kernel<World>> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };

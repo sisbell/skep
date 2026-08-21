@@ -58,7 +58,7 @@
 //! ```no_run
 //! use serde::{Deserialize, Serialize};
 //! use skep_kernel::{
-//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState,
+//!     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState,
 //! };
 //!
 //! #[derive(Clone, Serialize, Deserialize)]
@@ -67,14 +67,14 @@
 //! struct Rec(u64);
 //! impl WorldState for World {
 //!     type Record = Rec;
-//!     fn apply(&self, r: &Rec) -> World {
+//!     fn apply(&self, record: &Rec) -> World {
 //!         let mut w = self.clone();
-//!         w.log.push(r.0);
+//!         w.log.push(record.0);
 //!         w
 //!     }
 //! }
 //!
-//! let cfg = KernelCfg {
+//! let cfg = KernelConfig {
 //!     durability: Durability::Fsync {
 //!         journal_path: "/var/lib/skep/journal".into(),
 //!         retain_checkpoints: 2,
@@ -101,7 +101,7 @@ mod journal;
 mod kernel;
 mod replay;
 
-pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
+pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
 pub use kernel::{Kernel, Snapshot, Staging};
 

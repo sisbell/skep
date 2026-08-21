@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs, Shape, TypeDecl,
 };
@@ -253,7 +253,7 @@ pub fn genesis_world() -> World {
 /// An in-memory kernel over the seeded genesis world (MIC-faithful; no
 /// journal, no recovery).
 pub fn kernel() -> Kernel<World> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };

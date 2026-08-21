@@ -44,12 +44,12 @@ pub(crate) struct Unreachable {
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
 /// common case — a checkpoint that loads — costs no copy of a world at all.
 pub(crate) fn select_base<W: WorldState>(
-    cps: &[CheckpointMeta],
+    checkpoints: &[CheckpointMeta],
     segs: &[SegmentMeta],
     ceiling: Option<u64>,
     genesis: &W,
 ) -> Result<Base<W>, Unreachable> {
-    for cp in cps.iter().rev() {
+    for cp in checkpoints.iter().rev() {
         if ceiling.is_some_and(|c| cp.seq > c) {
             continue;
         }
@@ -63,7 +63,7 @@ pub(crate) fn select_base<W: WorldState>(
     // Genesis stands in only while the journal still reaches back to it.
     if !journal::reaches_genesis(segs) {
         return Err(Unreachable {
-            floor: cps.first().map(|c| c.seq),
+            floor: checkpoints.first().map(|cp| cp.seq),
         });
     }
     Ok(Base {
@@ -90,11 +90,11 @@ pub(crate) fn fold_to<W: WorldState>(
     scan: ScanOutcome,
     upto: u64,
 ) -> Result<W, u64> {
-    let mut recs = scan.committed_records;
-    recs.sort_by_key(|(seq, _)| *seq);
+    let mut records = scan.committed_records;
+    records.sort_by_key(|(seq, _)| *seq);
     let mut world = base.world;
     let mut prev: Option<u64> = None;
-    for (seq, bytes) in recs {
+    for (seq, bytes) in records {
         if seq <= base.s_load || seq > upto {
             continue;
         }
@@ -102,8 +102,8 @@ pub(crate) fn fold_to<W: WorldState>(
             return Err(seq);
         }
         prev = Some(seq);
-        let rec: W::Record = bincode::deserialize(&bytes).map_err(|_| seq)?;
-        world = world.apply(&rec);
+        let record: W::Record = bincode::deserialize(&bytes).map_err(|_| seq)?;
+        world = world.apply(&record);
     }
     Ok(world)
 }

@@ -400,7 +400,7 @@ mod tests {
     //! drives `delete` and `rearrange`; no content store, no `From<M3Rec>`.
 
     use serde::{Deserialize, Serialize};
-    use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg};
+    use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig};
     use skep_namespace::M3State;
 
     use super::*;
@@ -439,7 +439,7 @@ mod tests {
             at: n(1),
             runs: vec![run(&ca(1), 5)],
         });
-        let cfg = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };

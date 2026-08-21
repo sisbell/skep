@@ -24,7 +24,7 @@ skep-engine = { path = "../skep-engine", default-features = false }
 # M10 — the operation surface this daemon transports: Operation, Op/Response,
 # the Codec seam, and the typed Rejection model.
 skep-febe = { path = "../skep-febe" }
-# M2 — KernelCfg/Durability/CheckpointPolicy (durability is configuration,
+# M2 — KernelConfig/Durability/CheckpointPolicy (durability is configuration,
 # chosen here) and Seq.
 skep-kernel = { path = "../skep-kernel" }
 # The wire value types the codec round-trips, each from its owning crate.

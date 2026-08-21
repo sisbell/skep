@@ -25,15 +25,19 @@ use serde::{Deserialize, Serialize};
 /// Per-frame sync word anchoring recovery resynchronization (§1/§7).
 const MAGIC: [u8; 4] = *b"SKJ1";
 /// Frame header: magic (4) + len (4) + crc (4).
-pub(crate) const FRAME_HEADER: usize = 12;
+pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// Sanity bound on a single frame (open build decision: max frame size). The
 /// writer enforces it, so recovery may treat a larger claimed `len` as corrupt.
 const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
-/// Rotation threshold (open build decision). Rotation happens at txn
-/// boundaries only, so a txn's frames never span a segment; under per-commit
-/// Fsync the old segment is already durable at rotation (its last txn's
-/// barrier fsynced it), preserving marker-as-ack across the boundary (§1).
-const SEGMENT_MAX_BYTES: u64 = 1024 * 1024;
+/// Rotation threshold (open build decision), tested BEFORE a transaction is
+/// appended and only at a txn boundary — so a closed segment holds this many
+/// bytes plus one whole transaction, and a caller bounding memory or file size
+/// reckons with that transaction rather than with this figure. Rotating at txn
+/// boundaries only is what keeps a txn's frames from spanning a segment; under
+/// per-commit Fsync the old segment is already durable at rotation (its last
+/// txn's barrier fsynced it), preserving marker-as-ack across the boundary
+/// (§1).
+const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 
 /// A transaction's identity: its FIRST `Seq` (§1) — a distinguished `Seq`,
 /// never a separate counter, which is why it is unique within any scanned
@@ -145,7 +149,7 @@ enum Parsed {
 }
 
 fn parse_frame(buf: &[u8], pos: usize) -> Parsed {
-    if pos + FRAME_HEADER > buf.len() || buf[pos..pos + 4] != MAGIC {
+    if pos + FRAME_HEADER_LEN > buf.len() || buf[pos..pos + 4] != MAGIC {
         return Parsed::Bad;
     }
     let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap());
@@ -153,19 +157,19 @@ fn parse_frame(buf: &[u8], pos: usize) -> Parsed {
     if len > MAX_FRAME_LEN {
         return Parsed::Bad;
     }
-    let end = pos + FRAME_HEADER + len as usize;
+    let end = pos + FRAME_HEADER_LEN + len as usize;
     if end > buf.len() {
         return Parsed::Bad;
     }
     let computed = crc32c::crc32c_append(
         crc32c::crc32c(&buf[pos + 4..pos + 8]),
-        &buf[pos + FRAME_HEADER..end],
+        &buf[pos + FRAME_HEADER_LEN..end],
     );
     if computed != crc {
         return Parsed::Bad;
     }
     Parsed::Intact {
-        payload: pos + FRAME_HEADER..end,
+        payload: pos + FRAME_HEADER_LEN..end,
         end,
     }
 }
@@ -460,7 +464,7 @@ impl JournalWriter {
     /// txn is on disk (the §3 pre-append discipline applies) and the next
     /// attempt re-enters rotation.
     fn maybe_rotate(&mut self, first_seq: u64) -> io::Result<()> {
-        if self.len == 0 || self.len < SEGMENT_MAX_BYTES {
+        if self.len == 0 || self.len < SEGMENT_ROTATE_BYTES {
             return Ok(());
         }
         // Under per-commit Fsync the old segment is already durable (the
@@ -505,7 +509,7 @@ impl Journal {
                 install();
                 Ok(0)
             }
-            Journal::Segments(w) => w.commit_txn(first_seq, records, install),
+            Journal::Segments(writer) => writer.commit_txn(first_seq, records, install),
         }
     }
 
@@ -515,7 +519,7 @@ impl Journal {
     pub(crate) fn repair_after_unwind(&mut self) -> UnwindRepair {
         match self {
             Journal::InMemory => UnwindRepair::Clean,
-            Journal::Segments(w) => w.repair_after_unwind(),
+            Journal::Segments(writer) => writer.repair_after_unwind(),
         }
     }
 }
@@ -541,8 +545,8 @@ pub(crate) enum RunEnd {
 /// to paths by the scan itself, while the segment list is in hand, so a
 /// truncation cannot be aimed at a list other than the one that was scanned.
 pub(crate) struct TailCut {
-    at: PathBuf,
-    off: u64,
+    segment: PathBuf,
+    offset: u64,
     discard: Vec<PathBuf>,
 }
 
@@ -640,7 +644,7 @@ struct PendingTxn {
     /// twice, so such a transaction never commits however its checksum lands.
     ordered: bool,
     /// `(seq, serialized W::Record bytes)`, in arrival order.
-    recs: Vec<(u64, Vec<u8>)>,
+    records: Vec<(u64, Vec<u8>)>,
 }
 
 impl PendingTxn {
@@ -650,25 +654,26 @@ impl PendingTxn {
             checksum: 0,
             last_seq: None,
             ordered: true,
-            recs: Vec::new(),
+            records: Vec::new(),
         }
     }
 
     /// Take one record frame of this transaction: `payload` is the frame
     /// payload exactly as framed, which is what `records_checksum` covers.
-    fn push(&mut self, r: LogRecord, payload: &[u8]) {
-        if self.last_seq.is_some_and(|prev| r.seq <= prev) {
+    fn push(&mut self, record: LogRecord, payload: &[u8]) {
+        if self.last_seq.is_some_and(|prev| record.seq <= prev) {
             self.ordered = false;
         }
-        self.last_seq = Some(r.seq);
+        self.last_seq = Some(record.seq);
         self.checksum = crc32c::crc32c_append(self.checksum, payload);
-        self.recs.push((r.seq, r.bytes));
+        self.records.push((record.seq, record.bytes));
     }
 
-    /// Whether `m` commits this group: intact + durable (it is on the disk we
-    /// read) + `records_checksum`-valid over a `Seq`-ascending run (§1).
-    fn commits(&self, m: &Marker) -> bool {
-        self.ordered && self.checksum == m.records_checksum
+    /// Whether `marker` commits this group: intact + durable (it is on the
+    /// disk we read) + `records_checksum`-valid over a `Seq`-ascending run
+    /// (§1).
+    fn commits(&self, marker: &Marker) -> bool {
+        self.ordered && self.checksum == marker.records_checksum
     }
 }
 
@@ -752,7 +757,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                                     out.committed_head = out.committed_head.max(m.last_seq);
                                     cut = Some((i, end as u64));
                                     out.committed_boundaries.push(m.last_seq);
-                                    out.committed_records.extend(group.recs);
+                                    out.committed_records.extend(group.records);
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -788,9 +793,9 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
     // (inferred max ≤ `s_load`) sit below the cut and are not touched.
     out.tail = cut
         .or_else(|| first_scanned.map(|first| (first, 0)))
-        .map(|(i, off)| TailCut {
-            at: segs[i].path.clone(),
-            off,
+        .map(|(i, offset)| TailCut {
+            segment: segs[i].path.clone(),
+            offset,
             discard: segs[i + 1..].iter().map(|s| s.path.clone()).collect(),
         });
     Ok(out)
@@ -810,8 +815,8 @@ pub(crate) fn truncate_tail(dir: &Path, scan: &ScanOutcome) -> io::Result<()> {
     let Some(tail) = &scan.tail else {
         return Ok(());
     };
-    let f = OpenOptions::new().write(true).open(&tail.at)?;
-    f.set_len(tail.off)?;
+    let f = OpenOptions::new().write(true).open(&tail.segment)?;
+    f.set_len(tail.offset)?;
     f.sync_data()?;
     for path in &tail.discard {
         fs::remove_file(path)?;
@@ -830,12 +835,12 @@ mod tests {
 
     /// A fixture commit. These journals stand alone — there is no root to
     /// install into — so the install step is empty.
-    fn write_txn(w: &mut JournalWriter, first: u64, records: Vec<Vec<u8>>) {
-        assert!(w.commit_txn(first, records, || {}).is_ok(), "fixture commit");
+    fn write_txn(writer: &mut JournalWriter, first: u64, records: Vec<Vec<u8>>) {
+        assert!(writer.commit_txn(first, records, || {}).is_ok(), "fixture commit");
     }
 
     /// Frame spans of a CLEAN journal file, via the real parser.
-    fn spans_of(path: &Path) -> Vec<(usize, usize)> {
+    fn frame_spans(path: &Path) -> Vec<(usize, usize)> {
         let buf = fs::read(path).unwrap();
         let mut v = Vec::new();
         let mut pos = 0;
@@ -851,7 +856,7 @@ mod tests {
         v
     }
 
-    fn flip(path: &Path, off: usize) {
+    fn flip_byte(path: &Path, off: usize) {
         let mut data = fs::read(path).unwrap();
         data[off] ^= 0xFF;
         fs::write(path, data).unwrap();
@@ -863,12 +868,12 @@ mod tests {
         s
     }
 
-    /// The scan aims truncation at `path` @ `off`, with nothing later to
+    /// The scan aims truncation at `segment` @ `offset`, with nothing later to
     /// discard (these fixtures hold one segment).
-    fn assert_tail(out: &ScanOutcome, path: &Path, off: u64) {
+    fn assert_tail(out: &ScanOutcome, segment: &Path, offset: u64) {
         let tail = out.tail.as_ref().expect("a scanned region has a cut");
-        assert_eq!(tail.at, path);
-        assert_eq!(tail.off, off);
+        assert_eq!(tail.segment, segment);
+        assert_eq!(tail.offset, offset);
         assert!(tail.discard.is_empty());
     }
 
@@ -886,7 +891,7 @@ mod tests {
         }
         // A flipped payload byte fails the frame crc.
         let mut bad = buf.clone();
-        bad[FRAME_HEADER + 2] ^= 0xFF;
+        bad[FRAME_HEADER_LEN + 2] ^= 0xFF;
         assert!(matches!(parse_frame(&bad, 0), Parsed::Bad));
         // A corrupt len is DETECTED (crc covers len), not silently
         // mis-delimiting the following frame (§1).
@@ -1013,11 +1018,11 @@ mod tests {
         // is behind the writer by the time it returns: a later unwind finds
         // nothing of it to repair, and the next transaction starts clean (§3).
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
         let mut installed = false;
-        assert!(w.commit_txn(1, vec![rec(10)], || installed = true).is_ok());
+        assert!(writer.commit_txn(1, vec![rec(10)], || installed = true).is_ok());
         assert!(installed, "the commit installs before it returns");
-        assert!(matches!(w.repair_after_unwind(), UnwindRepair::Clean));
+        assert!(matches!(writer.repair_after_unwind(), UnwindRepair::Clean));
     }
 
     #[test]
@@ -1026,12 +1031,12 @@ mod tests {
         // the install unaccounted for. Its record+marker tail stays —
         // removing an acked commit is what recovery may never do (§3).
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = w.commit_txn(1, vec![rec(10)], || panic!("install unwinds"));
+            let _ = writer.commit_txn(1, vec![rec(10)], || panic!("install unwinds"));
         }));
         assert!(unwound.is_err(), "the panic reaches the caller");
-        assert!(matches!(w.repair_after_unwind(), UnwindRepair::AfterBarrier));
+        assert!(matches!(writer.repair_after_unwind(), UnwindRepair::AfterBarrier));
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(scan(&segs, 0).unwrap().committed_head, 1);
     }
@@ -1039,9 +1044,9 @@ mod tests {
     #[test]
     fn scan_groups_by_txn_and_derives_the_committed_head() {
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 2, vec![rec(20), rec(21)]); // seqs 2, 3
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.committed_head, 3);
@@ -1058,9 +1063,9 @@ mod tests {
         // §7: the replayed range needs NO Seq-contiguity — a TolerateGap burn
         // folds harmlessly; a missing Seq is never corruption.
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 5, vec![rec(50), rec(60)]); // burned 2..=4
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 5, vec![rec(50), rec(60)]); // burned 2..=4
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.committed_head, 6);
@@ -1074,14 +1079,14 @@ mod tests {
         // resync lands on T2's marker — a marker landing: at = last_seq + 1,
         // inferred max = last_seq (markers carry no Seq of their own; §7).
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 2, vec![rec(20)]);
-        write_txn(&mut w, 3, vec![rec(30)]);
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        write_txn(&mut writer, 3, vec![rec(30)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = spans_of(&segs[0].path);
+        let spans = frame_spans(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
-        flip(&segs[0].path, spans[2].0 + FRAME_HEADER + 1);
+        flip_byte(&segs[0].path, spans[2].0 + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0).unwrap();
         assert_eq!(
             out.runs,
@@ -1101,14 +1106,14 @@ mod tests {
         // T2 = seqs 2..=3; corrupt T2's MARKER. The resync lands on T3's first
         // record (seq 4) — a record landing: at = seq, inferred max = seq − 1.
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 2, vec![rec(20), rec(21)]);
-        write_txn(&mut w, 4, vec![rec(40)]);
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]);
+        write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = spans_of(&segs[0].path);
+        let spans = frame_spans(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
-        flip(&segs[0].path, spans[4].0 + FRAME_HEADER + 1);
+        flip_byte(&segs[0].path, spans[4].0 + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0).unwrap();
         assert_eq!(
             out.runs,
@@ -1127,16 +1132,16 @@ mod tests {
         // resync must reject the embedded magic (its crc check fails) and land
         // on the real next frame — T1's marker (§1/§7).
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
         let mut evil = Vec::new();
         evil.extend_from_slice(b"xx");
         evil.extend_from_slice(&MAGIC);
         evil.extend_from_slice(b"yyyyyyyy");
-        write_txn(&mut w, 1, vec![evil]);
-        write_txn(&mut w, 2, vec![rec(20)]);
+        write_txn(&mut writer, 1, vec![evil]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
-        let spans = spans_of(&segs[0].path);
-        flip(&segs[0].path, spans[0].0 + FRAME_HEADER + 1);
+        let spans = frame_spans(&segs[0].path);
+        flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0).unwrap();
         assert_eq!(
             out.runs,
@@ -1152,11 +1157,11 @@ mod tests {
     #[test]
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 2, vec![rec(20)]);
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
         // Crash mid-append: a partial header at the tail.
-        w.append(&[0xAB, 0xCD, 0xEF]).unwrap();
+        writer.append(&[0xAB, 0xCD, 0xEF]).unwrap();
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.runs, vec![RunEnd::Eof]);
@@ -1173,29 +1178,29 @@ mod tests {
         // torn: the cut aims at the older segment's marker end, and the whole
         // younger segment is tail to discard (§7).
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![vec![7u8; SEGMENT_MAX_BYTES as usize]]); // fills seg-1
-        write_txn(&mut w, 2, vec![rec(20)]); // rotates into seg-2
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![vec![7u8; SEGMENT_ROTATE_BYTES as usize]]); // fills seg-1
+        write_txn(&mut writer, 2, vec![rec(20)]); // rotates into seg-2
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(segs.len(), 2, "the fixture rotates");
         // Tear seg-2's marker: its txn is no longer committed.
-        let spans = spans_of(&segs[1].path);
-        flip(&segs[1].path, spans[1].0 + FRAME_HEADER + 1);
+        let spans = frame_spans(&segs[1].path);
+        flip_byte(&segs[1].path, spans[1].0 + FRAME_HEADER_LEN + 1);
         let out = scan(&segs, 0).unwrap();
         assert_eq!(out.committed_head, 1);
         let tail = out.tail.as_ref().expect("a scanned region has a cut");
-        assert_eq!(tail.at, segs[0].path);
-        assert_eq!(tail.off, fs::metadata(&segs[0].path).unwrap().len());
+        assert_eq!(tail.segment, segs[0].path);
+        assert_eq!(tail.offset, fs::metadata(&segs[0].path).unwrap().len());
         assert_eq!(tail.discard, vec![segs[1].path.clone()]);
     }
 
     #[test]
     fn require_boundary_answers_from_the_committed_markers() {
         let dir = tempdir().unwrap();
-        let mut w = JournalWriter::open_active(dir.path(), 1).unwrap();
-        write_txn(&mut w, 1, vec![rec(10)]);
-        write_txn(&mut w, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
-        write_txn(&mut w, 4, vec![rec(40)]);
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
+        write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
 
         let out = scan(&segs, 0).unwrap();

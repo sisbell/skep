@@ -9,7 +9,7 @@ use std::path::Path;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
 use skep_engine::{Engine, GenesisConfig};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelCfg};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
 
@@ -51,15 +51,15 @@ pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ord, width) }
 }
 
-pub fn mem_cfg() -> KernelCfg {
-    KernelCfg {
+pub fn mem_cfg() -> KernelConfig {
+    KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     }
 }
 
-pub fn fsync_cfg(path: &Path) -> KernelCfg {
-    KernelCfg {
+pub fn fsync_cfg(path: &Path) -> KernelConfig {
+    KernelConfig {
         durability: Durability::Fsync {
             journal_path: path.to_path_buf(),
             retain_checkpoints: 1,

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use skep_arrangement::Vstream;
 use skep_coordination::{CatalogError, Coordinator};
 use skep_febe::Stores;
-use skep_kernel::{HistoryError, Kernel, KernelCfg, OpenError, Seq};
+use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
 use skep_links::{HasLinks, LinkStore, RegistryError, ShippedType, TypeRegistry};
 use skep_namespace::Namespace;
 
@@ -92,7 +92,7 @@ impl Engine {
     /// consumers silently. (App-decl drift beyond the shipped five is not
     /// publicly enumerable from the slice; M9's catalog projection at
     /// [`Engine::coordinator`] covers the decl side.)
-    pub fn open(cfg: KernelCfg, genesis: GenesisConfig) -> Result<Engine, EngineError> {
+    pub fn open(cfg: KernelConfig, genesis: GenesisConfig) -> Result<Engine, EngineError> {
         let registry = Arc::new(
             TypeRegistry::build(genesis.reserved.clone(), genesis.decls.clone())
                 .map_err(EngineError::Registry)?,

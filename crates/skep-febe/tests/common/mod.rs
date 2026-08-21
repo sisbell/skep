@@ -15,7 +15,7 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelCfg, Seq, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkStore, ReservedAddrs,
 };
@@ -169,7 +169,7 @@ pub fn genesis_world() -> World {
 }
 
 pub fn kernel() -> Arc<Kernel<World>> {
-    let cfg = KernelCfg {
+    let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };

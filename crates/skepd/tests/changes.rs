@@ -368,7 +368,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
 /// example.
 #[test]
 fn pre_feature_positions_answer_bare_entries() {
-    use skep_engine::{Engine, GenesisConfig, KernelCfg};
+    use skep_engine::{Engine, GenesisConfig, KernelConfig};
     use skep_febe::{Codec, Operation, Response, SessionId};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
     use skep_namespace::PrincipalId;
@@ -376,7 +376,7 @@ fn pre_feature_positions_answer_bare_entries() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     {
-        let cfg = KernelCfg {
+        let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: dir.path().to_path_buf(),
                 retain_checkpoints: 2,

@@ -164,9 +164,9 @@ impl fmt::Display for HistoryError {
             HistoryError::NotABoundary { nearest } => {
                 write!(f, "not a committed boundary; nearest at or below is {nearest}")
             }
-            HistoryError::Reclaimed { floor: Some(fl) } => write!(
+            HistoryError::Reclaimed { floor: Some(floor) } => write!(
                 f,
-                "history below the oldest retained checkpoint (seq {fl}) has been reclaimed"
+                "history below the oldest retained checkpoint (seq {floor}) has been reclaimed"
             ),
             HistoryError::Reclaimed { floor: None } => {
                 write!(f, "no checkpoint and no genesis-reaching journal; history unavailable")

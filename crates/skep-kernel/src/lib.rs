@@ -119,7 +119,7 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// record type. Opaque to M2: journaled as bytes, folded via [`apply`].
     ///
     /// [`apply`]: WorldState::apply
-    type Record: Serialize + DeserializeOwned + Clone + Send + Sync + 'static;
+    type Record: Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// The ONE deterministic, total, side-effect-free fold step — drives both
     /// live commit and replay (ASN-0134 A6: every journal prefix up to a

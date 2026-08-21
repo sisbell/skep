@@ -67,7 +67,8 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
         truncate_file(&seg1(&case), prefix_len);
         let ctx = format!("A: torn tail, prefix {prefix_len} of {full}");
         // Deep history probes on a sample; head + dump equality on every one.
-        let head = judge_prefix(&fixture, &case, prefix_len, i % 25 == 0, &ctx);
+        let depth = if i % 25 == 0 { Depth::Full } else { Depth::Head };
+        let head = judge_prefix(&fixture, &case, prefix_len, depth, &ctx);
         *by_boundary.entry(head).or_default() += 1;
         fs::remove_dir_all(&case).expect("case cleanup");
     }
@@ -130,7 +131,7 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                      (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
-                judge_prefix(&fixture, &case, cut, false, &ctx);
+                judge_prefix(&fixture, &case, cut, Depth::Head, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
@@ -143,7 +144,7 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
                      (seed base 0x5EED_0000+{cut_index})",
                     pattern.name()
                 );
-                judge_prefix(&fixture, &case, cut, false, &ctx);
+                judge_prefix(&fixture, &case, cut, Depth::Head, &ctx);
                 fs::remove_dir_all(&case).expect("case cleanup");
                 judged += 1;
             }
@@ -542,7 +543,8 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
             // Nothing below the first flip changed, so the boundary rule
             // binds exactly as it does under a clean truncation there.
             recovered += 1;
-            let head = judge_prefix(&fixture, &case, first_flip, trial % 8 == 0, &ctx);
+            let depth = if trial % 8 == 0 { Depth::Full } else { Depth::Head };
+            let head = judge_prefix(&fixture, &case, first_flip, depth, &ctx);
             let again = timed_open(&case, &ctx).world_dump();
             assert_eq!(
                 again,

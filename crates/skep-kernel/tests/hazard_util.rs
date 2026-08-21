@@ -171,12 +171,8 @@ pub fn flip_byte(path: &Path, off: u64) {
 pub fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {
     let mut data = fs::read(path).expect("read for overwrite");
     let start = from as usize;
-    for (i, b) in junk.iter().enumerate() {
-        match data.get_mut(start + i) {
-            Some(slot) => *slot = *b,
-            None => break,
-        }
-    }
+    let end = (start + junk.len()).min(data.len());
+    data[start..end].copy_from_slice(&junk[..end - start]);
     fs::write(path, data).expect("write overwritten");
 }
 
@@ -411,12 +407,28 @@ impl Fixture {
     }
 }
 
+/// How far a recovered case is judged.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Depth {
+    /// The recovered head, and the world at it.
+    Head,
+    /// …and every boundary ≤ head answering `world_at` byte-equal, and the
+    /// hints against a from-scratch rebuild.
+    Full,
+}
+
 /// Open a mutilated copy and hold it to the honest outcomes: head EXACTLY
 /// at the boundary the intact prefix supports, world byte-equal to the
-/// oracle there. `deep` additionally proves every boundary ≤ head answers
-/// `world_at` byte-equal and the hints match a from-scratch rebuild.
+/// oracle there. [`Depth::Full`] additionally proves every boundary ≤ head
+/// answers `world_at` byte-equal and the hints match a from-scratch rebuild.
 /// Returns the recovered head for the caller's outcome tally.
-pub fn judge_prefix(fixture: &Fixture, case_dir: &Path, prefix_len: u64, deep: bool, ctx: &str) -> u64 {
+pub fn judge_prefix(
+    fixture: &Fixture,
+    case_dir: &Path,
+    prefix_len: u64,
+    depth: Depth,
+    ctx: &str,
+) -> u64 {
     let engine = timed_open(case_dir, ctx);
     let head = engine.kernel().current_seq().0;
     let expect = fixture.expected_boundary(prefix_len);
@@ -431,7 +443,7 @@ pub fn judge_prefix(fixture: &Fixture, case_dir: &Path, prefix_len: u64, deep: b
         fixture.dump_for(head),
         "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
     );
-    if deep {
+    if depth == Depth::Full {
         let g = dump(&engine.world_at(Seq(0)).expect("genesis answers"), &fixture.genesis);
         assert_eq!(g, fixture.genesis_dump, "FINDING ({ctx}): genesis boundary diverged");
         for b in fixture.boundaries.iter().filter(|b| b.seq <= head) {
@@ -455,6 +467,6 @@ pub fn judge_prefix(fixture: &Fixture, case_dir: &Path, prefix_len: u64, deep: b
 /// [`judge_prefix`] where FULL recovery is the only acceptable outcome
 /// (checkpoint faults: the journal is intact, so no rollback is licensed).
 pub fn judge_full(fixture: &Fixture, case_dir: &Path, ctx: &str) {
-    let head = judge_prefix(fixture, case_dir, fixture.full_len, true, ctx);
+    let head = judge_prefix(fixture, case_dir, fixture.full_len, Depth::Full, ctx);
     assert_eq!(head, fixture.last_seq(), "FINDING ({ctx}): full recovery was required");
 }

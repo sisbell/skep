@@ -586,7 +586,11 @@ impl<W: WorldState> Kernel<W> {
             return Err(TxnError::Poisoned);
         }
         let base = self.root.load_full();
-        let mut stg = Staging::new(Arc::clone(&base));
+        // The staging owns the root for the length of the closure; what
+        // outlives it here is the coordinate, which is all the zero-step
+        // return and the burned-`Seq` rollbacks below need.
+        let base_seq = base.seq;
+        let mut stg = Staging::new(base);
 
         // Closure phase. Nothing is allocated or appended yet, so an unwind
         // here needs no repair: staging is discarded, the lock releases on
@@ -596,7 +600,7 @@ impl<W: WorldState> Kernel<W> {
             Ok(value) => value,
         };
         if stg.records.is_empty() {
-            return Ok((value, base.seq)); // zero-step (A1); V1 = the base index read.
+            return Ok((value, base_seq)); // zero-step (A1); V1 = the base index read.
         }
         let Staging {
             base: _,
@@ -653,7 +657,7 @@ impl<W: WorldState> Kernel<W> {
             // §3 unwind guard: repair, then let the panic propagate.
             Err(payload) => {
                 match state.journal.repair_after_unwind() {
-                    UnwindRepair::Clean => state.seq.roll_back_to(base.seq),
+                    UnwindRepair::Clean => state.seq.roll_back_to(base_seq),
                     // A surviving un-acked marker would let a successor
                     // collide on recovery, and a durably committed txn whose
                     // effect never installed would have later txns folding
@@ -672,14 +676,14 @@ impl<W: WorldState> Kernel<W> {
             // back where this txn found it — a TRUE no-op the caller may
             // re-invoke.
             Ok(Err(CommitFail::Clean(e))) => {
-                state.seq.roll_back_to(base.seq);
+                state.seq.roll_back_to(base_seq);
                 Err(TxnError::Durability(e))
             }
             // Nothing ever became frames, so the journal is where this txn
             // found it — the same no-op, burning the same Seqs, and a
             // different answer to "retry?" (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
-                state.seq.roll_back_to(base.seq);
+                state.seq.roll_back_to(base_seq);
                 Err(TxnError::Unencodable(e))
             }
             // The truncation itself could not complete durably (§1).
@@ -925,8 +929,13 @@ mod tests {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
             let rec = |x: u64| journal::encode_record(&x).unwrap();
             // A journal built without a kernel: no root to install into.
-            assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
-            assert!(writer.commit_txn(5, vec![rec(50), rec(60)], || {}).is_ok()); // burned 2..=4
+            writer
+                .commit_txn(1, vec![rec(10)], || {})
+                .expect("fixture commit");
+            // burned 2..=4
+            writer
+                .commit_txn(5, vec![rec(50), rec(60)], || {})
+                .expect("fixture commit");
         }
         let k = Kernel::<Vec<u64>>::open(
             cfg(dir.path(), BurnedSeqPolicy::TolerateGap),
@@ -947,8 +956,12 @@ mod tests {
         {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
             let rec = |x: u64| journal::encode_record(&x).unwrap();
-            assert!(writer.commit_txn(1, vec![rec(10)], || {}).is_ok());
-            assert!(writer.commit_txn(1, vec![rec(20)], || {}).is_ok());
+            writer
+                .commit_txn(1, vec![rec(10)], || {})
+                .expect("fixture commit");
+            writer
+                .commit_txn(1, vec![rec(20)], || {})
+                .expect("fixture commit");
         }
         // A torn tail past the last committed marker, so there IS something a
         // truncation would take — without it the cut lands at end-of-file and
@@ -987,7 +1000,9 @@ mod tests {
         {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
             let record = journal::encode_record(&10u64).unwrap();
-            assert!(writer.commit_txn(u64::MAX, vec![record], || {}).is_ok());
+            writer
+                .commit_txn(u64::MAX, vec![record], || {})
+                .expect("fixture commit");
         }
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a head with no successor coordinate is unaccountable");

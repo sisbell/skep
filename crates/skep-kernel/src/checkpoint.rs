@@ -96,8 +96,8 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
 /// or `None` when no checkpoint remains.
 pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
     let mut checkpoints = list(dir)?;
-    while checkpoints.len() > keep {
-        let victim = checkpoints.remove(0);
+    let excess = checkpoints.len().saturating_sub(keep);
+    for victim in checkpoints.drain(..excess) {
         fs::remove_file(&victim.path)?;
     }
     fsync_dir(dir)?;
@@ -108,6 +108,7 @@ pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
 /// caller — a serializer refuses the same way until `W` itself changes, an I/O
 /// failure is retryable — so the distinction travels rather than being
 /// flattened here.
+#[derive(Debug)]
 pub(crate) enum WriteFail {
     /// `W`'s own serializer refused, and carries its own account of what it
     /// could not encode. Nothing was written, not even the temp file: the

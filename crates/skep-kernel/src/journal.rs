@@ -161,6 +161,7 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+#[derive(Debug)]
 enum Parsed {
     /// The frame at `pos` is intact: its own `crc` validates over `len`+payload.
     Intact { payload: Range<usize>, end: usize },
@@ -317,6 +318,7 @@ pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
 /// unencodable one left nothing behind and re-invoking cannot change that,
 /// and an unrepaired one may have left a durable un-acked marker that a
 /// successor would collide with on recovery.
+#[derive(Debug)]
 pub(crate) enum CommitFail {
     /// The active segment is durably back where this transaction found it: no
     /// frame of it survives — a CLEAN failure, a TRUE no-op (§1). Carries what
@@ -338,6 +340,7 @@ pub(crate) enum CommitFail {
 }
 
 /// What an unwind out of the commit region left in the journal (§3).
+#[derive(Debug)]
 pub(crate) enum UnwindRepair {
     /// Nothing of the transaction survives — either it never reached the
     /// file, or the repair durably removed what it had appended.
@@ -447,10 +450,9 @@ impl JournalWriter {
                 self.in_flight = InFlight::Idle;
                 Ok(buf.len() as u64)
             }
-            Err(e) => Err(if self.truncate_to(mark) {
-                CommitFail::Clean(e)
-            } else {
-                CommitFail::Unrepaired
+            Err(e) => Err(match self.truncate_to(mark) {
+                Ok(()) => CommitFail::Clean(e),
+                Err(_) => CommitFail::Unrepaired,
             }),
         }
     }
@@ -464,28 +466,25 @@ impl JournalWriter {
     pub(crate) fn repair_after_unwind(&mut self) -> UnwindRepair {
         match std::mem::replace(&mut self.in_flight, InFlight::Idle) {
             InFlight::Idle => UnwindRepair::Clean,
-            InFlight::Appending { mark } => {
-                if self.truncate_to(mark) {
-                    UnwindRepair::Clean
-                } else {
-                    UnwindRepair::Unrepaired
-                }
-            }
+            InFlight::Appending { mark } => match self.truncate_to(mark) {
+                Ok(()) => UnwindRepair::Clean,
+                Err(_) => UnwindRepair::Unrepaired,
+            },
             InFlight::Barriered => UnwindRepair::AfterBarrier,
         }
     }
 
-    /// Durably truncate back to `mark`, answering whether the segment is now
-    /// there. Idempotent — the §1 barrier-failure / §3 unwind-guard tail
-    /// truncation, retried harmlessly.
-    fn truncate_to(&mut self, mark: u64) -> bool {
-        let truncate = self.file.set_len(mark).and_then(|()| self.file.sync_data());
-        let repaired = truncate.is_ok();
-        if repaired {
-            self.len = mark;
-            self.in_flight = InFlight::Idle;
-        }
-        repaired
+    /// Durably truncate back to `mark` — the §1 barrier-failure / §3
+    /// unwind-guard tail truncation, idempotent and retried harmlessly. `Err`
+    /// is a truncation that could not itself complete durably, leaving the
+    /// segment where it was; nothing about WHICH write failed changes what
+    /// either caller must do, so both drop it.
+    fn truncate_to(&mut self, mark: u64) -> io::Result<()> {
+        self.file.set_len(mark)?;
+        self.file.sync_data()?;
+        self.len = mark;
+        self.in_flight = InFlight::Idle;
+        Ok(())
     }
 
     /// Rotate at a txn boundary if the active segment is over the threshold.
@@ -674,8 +673,7 @@ impl ScanOutcome {
             .iter()
             .copied()
             .filter(|&b| b < at)
-            .max()
-            .map_or(self.s_load, |m| m.max(self.s_load)))
+            .fold(self.s_load, u64::max))
     }
 }
 
@@ -900,7 +898,9 @@ mod tests {
     /// A fixture commit. These journals stand alone — there is no root to
     /// install into — so the install step is empty.
     fn write_txn(writer: &mut JournalWriter, first: u64, records: Vec<Vec<u8>>) {
-        assert!(writer.commit_txn(first, records, || {}).is_ok(), "fixture commit");
+        writer
+            .commit_txn(first, records, || {})
+            .expect("fixture commit");
     }
 
     /// Frame spans of a CLEAN journal file, via the real parser.
@@ -1084,9 +1084,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
         let mut installed = false;
-        assert!(writer.commit_txn(1, vec![rec(10)], || installed = true).is_ok());
+        writer
+            .commit_txn(1, vec![rec(10)], || installed = true)
+            .expect("fixture commit");
         assert!(installed, "the commit installs before it returns");
-        assert!(matches!(writer.repair_after_unwind(), UnwindRepair::Clean));
+        let repair = writer.repair_after_unwind();
+        assert!(matches!(repair, UnwindRepair::Clean), "got {repair:?}");
     }
 
     #[test]
@@ -1100,7 +1103,8 @@ mod tests {
             let _ = writer.commit_txn(1, vec![rec(10)], || panic!("install unwinds"));
         }));
         assert!(unwound.is_err(), "the panic reaches the caller");
-        assert!(matches!(writer.repair_after_unwind(), UnwindRepair::AfterBarrier));
+        let repair = writer.repair_after_unwind();
+        assert!(matches!(repair, UnwindRepair::AfterBarrier), "got {repair:?}");
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(scan(&segs, 0).unwrap().committed_head, 1);
     }

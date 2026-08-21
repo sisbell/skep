@@ -24,12 +24,14 @@ pub enum OpenError {
     /// genesis-while-reachable (§6/§7); this is returned only when that whole
     /// chain is exhausted. Operator-intervention condition — not auto-retried.
     BadCheckpoint,
-    /// Durable committed data the recovered state needs cannot be read. Three
+    /// Durable committed data the recovered state needs cannot be read. Four
     /// conditions reach here: a corrupt run inside the genuinely-replayed
     /// range `(S_load, W]` (a run reaching EOF is the un-acked / torn tail,
-    /// not this); a committed record that does not decode as `W::Record`, or
-    /// one the committed set presents twice; and a committed head that leaves
-    /// no coordinate for a successor, which no sequencer here could have
+    /// not this); a segment whose frame stream could not be enumerated in
+    /// bounded work, so nothing derived from it is more than a prefix; a
+    /// committed record that does not decode as `W::Record`, or one the
+    /// committed set presents twice; and a committed head that leaves no
+    /// coordinate for a successor, which no sequencer here could have
     /// written. Halt, never drop — nothing is folded, nothing is installed,
     /// and nothing is truncated. Operator-intervention condition — not
     /// auto-retried (§7).
@@ -37,8 +39,11 @@ pub enum OpenError {
         /// The coordinate naming the damage, which differs by condition: for
         /// a corrupt run, the next INTACT frame's coordinate — the run's own
         /// seqs are unreadable, so this bounds the damage rather than
-        /// locating it; for an undecodable or repeated record, that record's
-        /// own `Seq`; for an exhausted order, the committed head itself.
+        /// locating it; for an unbounded resynchronization, the base's own
+        /// coordinate, since the damage lies somewhere above it and the scan
+        /// could not reach past it to say where; for an undecodable or
+        /// repeated record, that record's own `Seq`; for an exhausted order,
+        /// the committed head itself.
         at: Seq,
     },
 }
@@ -175,9 +180,11 @@ pub enum HistoryError {
     /// between listing and reading); a retry re-selects a base.
     Io(io::Error),
     /// Corrupt data at rest in the scanned region (a corrupt run not wholly
-    /// embodied in the loaded base, or a committed record that fails to
+    /// embodied in the loaded base, a segment whose frame stream could not be
+    /// enumerated in bounded work, or a committed record that fails to
     /// decode) — the same halt-never-drop verdict recovery gives (§7). `at`
-    /// is the next-intact coordinate / the undecodable record's seq.
+    /// is the next-intact coordinate / the base's own coordinate / the
+    /// undecodable record's seq, in that order.
     Corruption {
         /// See above.
         at: Seq,

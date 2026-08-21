@@ -114,6 +114,15 @@ use serde::Serialize;
 /// store slices into one `World`, implements this trait for it, and
 /// instantiates [`Kernel<World>`]. M2 never names the concrete world — it only
 /// calls down through this trait (Engine Composition Contract).
+///
+/// COST OF `Clone` — M2 clones `W` once per [`Kernel::transact`], BEFORE the
+/// closure runs and therefore for rejected and zero-step transactions too, and
+/// it does so while holding the applier lock, so the clone is on the critical
+/// section every other writer in the process waits behind. `Clone` must
+/// therefore be cheap: the design's structurally-shared store slices are a
+/// requirement of this path, and a slice that moves to an eagerly-copied
+/// collection makes every transaction in the system — read-only ones included
+/// — `O(|world|)` under a global lock, which M2 has no way to report.
 pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     /// The engine's central record enum — the union of every store's own
     /// record type. Opaque to M2: journaled as bytes, folded via [`apply`].

@@ -39,6 +39,28 @@ const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// txn's barrier fsynced it), preserving marker-as-ack across the boundary
 /// (§1).
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
+/// Resynchronization budget, as a multiple of a segment's own size: how many
+/// bytes of CRC a scan will spend on rejected frame candidates before it gives
+/// up on enumerating that segment's frame stream (§7).
+///
+/// The sequential walk needs no budget — an intact frame's CRC covers exactly
+/// the bytes it advances over, so the walk sums to one pass — and this bounds
+/// the other work. A candidate the resync lands on charges the payload length
+/// it CLAIMS, which its advance does not bound: the resync moves four bytes
+/// and the claim may reach [`MAX_FRAME_LEN`], so without a budget a record
+/// whose own bytes plant frame headers makes the scan quadratic in a size that
+/// record's author chose.
+///
+/// The figure: a whole scan then costs at most this many passes over a
+/// segment, plus one candidate in flight, so the worst crafted 64 MiB segment
+/// spends 512 MiB of CRC — a twentieth of a second at hardware rates. Honest
+/// journals spend almost none of it, because a candidate must clear the magic
+/// word AND a length inside the cap before its CRC is computed at all: the
+/// sync word occurs by chance about once per 2^32 bytes, and a randomly
+/// damaged length field lands inside the cap about once in 64, so tripping
+/// eight segment-sized candidates by accident is a ~10^-15 event. Crafted
+/// content trips it after a few dozen.
+const RESYNC_BUDGET_PASSES: u64 = 8;
 
 /// A transaction's identity: its FIRST `Seq` (§1) — a distinguished `Seq`,
 /// never a separate counter, which is why it is unique within any scanned
@@ -167,28 +189,38 @@ enum Parsed {
     Intact { payload: Range<usize>, end: usize },
     /// Not a trustworthy frame start (bad magic, oversize/overrunning `len`,
     /// or CRC mismatch) — resynchronize via the magic word (§1/§7).
-    Bad,
+    ///
+    /// `crc_bytes` is what rejecting this candidate cost: the payload length
+    /// it claimed, when the CRC was computed and mismatched, and `0` for the
+    /// rejections that precede the CRC. The scan charges it against
+    /// [`RESYNC_BUDGET_PASSES`], which is why the accounting lives on the one
+    /// function that knows the cost rather than on a second header parse.
+    Bad { crc_bytes: u64 },
 }
 
 fn parse_frame(buf: &[u8], pos: usize) -> Parsed {
+    // The rejections above the CRC cost nothing to reach, so they charge
+    // nothing: a candidate is free until its claimed payload is read.
     if pos + FRAME_HEADER_LEN > buf.len() || buf[pos..pos + 4] != MAGIC {
-        return Parsed::Bad;
+        return Parsed::Bad { crc_bytes: 0 };
     }
     let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap());
     let crc = u32::from_le_bytes(buf[pos + 8..pos + 12].try_into().unwrap());
     if len > MAX_FRAME_LEN {
-        return Parsed::Bad;
+        return Parsed::Bad { crc_bytes: 0 };
     }
     let end = pos + FRAME_HEADER_LEN + len as usize;
     if end > buf.len() {
-        return Parsed::Bad;
+        return Parsed::Bad { crc_bytes: 0 };
     }
     let computed = crc32c::crc32c_append(
         crc32c::crc32c(&buf[pos + 4..pos + 8]),
         &buf[pos + FRAME_HEADER_LEN..end],
     );
     if computed != crc {
-        return Parsed::Bad;
+        return Parsed::Bad {
+            crc_bytes: len as u64,
+        };
     }
     Parsed::Intact {
         payload: pos + FRAME_HEADER_LEN..end,
@@ -212,20 +244,33 @@ pub(crate) struct SegmentMeta {
     pub path: PathBuf,
 }
 
-/// Where a segment beginning at `first_seq` lives: `seg-<firstSeq>.wal` (§1).
+/// The one file name a segment beginning at `first_seq` has:
+/// `seg-<firstSeq>.wal` (§1).
 ///
-/// Stated as a pair with [`parse_segment_name`], because the format and the
-/// parse are one agreement: a change to either that the other does not match
-/// makes every segment on disk invisible to recovery, which reads as an empty
-/// store rather than as a failure.
-pub(crate) fn segment_path(dir: &Path, first_seq: u64) -> PathBuf {
-    dir.join(format!("seg-{first_seq}.wal"))
+/// Stated as a pair with [`parse_segment_name`], which reads it back by
+/// re-emitting it, because the format and the parse are one agreement: a
+/// change to either that the other does not match makes every segment on disk
+/// invisible to recovery, which reads as an empty store rather than as a
+/// failure.
+fn segment_name(first_seq: u64) -> String {
+    format!("seg-{first_seq}.wal")
 }
 
-/// Read back the `firstSeq` [`segment_path`] wrote. `None` for any other
-/// name — a checkpoint, the lock file, or something foreign.
+/// Where a segment beginning at `first_seq` lives (§1).
+pub(crate) fn segment_path(dir: &Path, first_seq: u64) -> PathBuf {
+    dir.join(segment_name(first_seq))
+}
+
+/// Read back the `firstSeq` [`segment_name`] wrote — and ONLY the spelling it
+/// writes. `u64::from_str` accepts a leading `+` and any number of leading
+/// zeros, so the round trip is what keeps `seg-01.wal` from claiming a live
+/// segment's `firstSeq`: two entries at one coordinate make
+/// [`inferred_last_seq`] answer `0` for the first of them, and
+/// [`reclaim_below`] deletes on that inference. `None` for any other name — a
+/// checkpoint, the lock file, or something foreign.
 fn parse_segment_name(name: &str) -> Option<u64> {
-    name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()
+    let first_seq: u64 = name.strip_prefix("seg-")?.strip_suffix(".wal")?.parse().ok()?;
+    (name == segment_name(first_seq)).then_some(first_seq)
 }
 
 /// All segments in `dir`, ascending by `firstSeq`. Non-segment files
@@ -575,6 +620,13 @@ pub(crate) enum RunEnd {
     /// the un-acked / torn tail (`> W`), sound because the last committed
     /// marker is itself intact and so precedes any EOF-reaching run (§7).
     Eof,
+    /// Resynchronization exceeded [`RESYNC_BUDGET_PASSES`]: the frame stream
+    /// could not be enumerated in bounded work, so everything the outcome
+    /// carries is a PREFIX of what the segment holds — a committed head that
+    /// may be short, records that may be missing, a boundary set that may not
+    /// be the journal's. Fatal at any height, since the damage lies somewhere
+    /// above the base and the scan could not reach past it to say where (§7).
+    Unbounded,
 }
 
 /// Where the un-acked / torn tail begins: the segment file to cut, the offset
@@ -647,8 +699,13 @@ impl ScanOutcome {
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
+    ///
+    /// A [`RunEnd::Unbounded`] run is fatal whatever the bound, and reported
+    /// at the base's own coordinate: the scan could not enumerate the stream,
+    /// so no coordinate localizes the damage and no ceiling can exclude it.
     fn fatal_run(&self, bound: Option<u64>) -> Option<u64> {
         self.runs.iter().find_map(|run| match *run {
+            RunEnd::Unbounded => Some(self.s_load),
             RunEnd::Landed { inferred_max, at }
                 if inferred_max > self.s_load && bound.is_none_or(|b| inferred_max <= b) =>
             {
@@ -727,9 +784,20 @@ impl PendingTxn {
 
     /// Whether `marker` commits this group: intact + durable (it is on the
     /// disk we read) + `records_checksum`-valid over a `Seq`-ascending group
-    /// (§1).
+    /// that the marker's own `last_seq` closes (§1).
+    ///
+    /// The `last_seq` conjunct is the one the checksum cannot supply: the
+    /// checksum ties the RECORDS to the marker, while `last_seq` is a separate
+    /// field under no protection but the frame CRC. [`encode_txn`] sets it to
+    /// the last record's own `Seq`, so a marker claiming less is one this
+    /// writer cannot emit — and it is the shape that has the fold drop
+    /// committed records above the claim while the sequencer restarts over
+    /// their coordinates, which the next recovery then meets as one `Seq`
+    /// presented twice.
     fn commits(&self, marker: &Marker) -> bool {
-        self.ordered && self.checksum == marker.records_checksum
+        self.ordered
+            && self.last_seq == Some(marker.last_seq)
+            && self.checksum == marker.records_checksum
     }
 }
 
@@ -753,6 +821,12 @@ impl PendingTxn {
 /// Memory: one segment's bytes, one transaction's records, and the committed
 /// records of the whole scanned region — the last of which is the term that
 /// grows with the journal, and is what a caller bounds by checkpointing.
+///
+/// Work: the sequential walk is one pass per scanned segment, and
+/// resynchronization is capped at [`RESYNC_BUDGET_PASSES`] more. A segment
+/// that exhausts that budget answers [`RunEnd::Unbounded`] and stops there,
+/// so a payload that plants frame headers costs a bounded scan and a halt
+/// rather than an unbounded one.
 ///
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
 /// the base it selected. A scan and the fold that consumes it must agree on
@@ -778,6 +852,12 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
             first_scanned = Some(i);
         }
         let buf = fs::read(&seg.path)?;
+        // This segment's resynchronization budget. EVERY rejected candidate
+        // charges, not only the ones a resync landed on: a payload can plant
+        // a valid frame between two expensive rejections, which clears the
+        // resync and would leave the alternation uncharged.
+        let budget = (buf.len() as u64).saturating_mul(RESYNC_BUDGET_PASSES);
+        let mut spent = 0u64;
         let mut pos = 0usize;
         while pos < buf.len() {
             match parse_frame(&buf, pos) {
@@ -834,7 +914,16 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                         }
                     }
                 }
-                Parsed::Bad => {
+                Parsed::Bad { crc_bytes } => {
+                    spent += crc_bytes;
+                    if spent > budget {
+                        // Everything derived so far is a prefix, so no verdict
+                        // is drawn from it and no truncation is aimed with it:
+                        // `tail` stays `None`, and both classifiers answer
+                        // fatal on the run this pushes.
+                        out.runs.push(RunEnd::Unbounded);
+                        return Ok(out);
+                    }
                     run_open = true;
                     pos = match find_magic(&buf, pos + 1) {
                         Some(p) => p,
@@ -914,7 +1003,7 @@ mod tests {
                     v.push((pos, end - pos));
                     pos = end;
                 }
-                Parsed::Bad => panic!("clean journal expected"),
+                Parsed::Bad { .. } => panic!("clean journal expected"),
             }
         }
         v
@@ -951,17 +1040,17 @@ mod tests {
                 assert_eq!(&buf[p], payload.as_slice());
                 assert_eq!(end, buf.len());
             }
-            Parsed::Bad => panic!("intact frame expected"),
+            Parsed::Bad { .. } => panic!("intact frame expected"),
         }
         // A flipped payload byte fails the frame crc.
         let mut bad = buf.clone();
         bad[FRAME_HEADER_LEN + 2] ^= 0xFF;
-        assert!(matches!(parse_frame(&bad, 0), Parsed::Bad));
+        assert!(matches!(parse_frame(&bad, 0), Parsed::Bad { .. }));
         // A corrupt len is DETECTED (crc covers len), not silently
         // mis-delimiting the following frame (§1).
         let mut badlen = buf;
         badlen[5] ^= 0xFF;
-        assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad));
+        assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad { .. }));
     }
 
     #[test]
@@ -1011,6 +1100,44 @@ mod tests {
         let segs = list_segments(dir.path()).unwrap();
         let out = scan(&segs, 1).unwrap();
         assert_eq!(out.committed_head, 1, "the repeat must not commit");
+        assert!(out.committed_records.is_empty());
+        assert!(out.committed_boundaries.is_empty());
+    }
+
+    #[test]
+    fn a_marker_that_disagrees_with_its_records_never_commits() {
+        // A marker whose `last_seq` sits BELOW the group it closes. Its
+        // checksum validates — that field ties the records to the marker and
+        // says nothing about `last_seq` — so without the third conjunct the
+        // txn commits at 5, the fold silently drops the committed records at
+        // 6 and 7 as out of range, and the sequencer restarts over
+        // coordinates that are still on disk. A transaction this writer
+        // cannot emit, refused outright.
+        let mut buf = Vec::new();
+        let mut checksum = 0u32;
+        for seq in 5..=7u64 {
+            let payload = bincode::serialize(&FramePayload::Record(LogRecord {
+                seq,
+                txn: Txn(5),
+                bytes: rec(seq * 10),
+            }))
+            .unwrap();
+            checksum = crc32c::crc32c_append(checksum, &payload);
+            push_frame(&mut buf, &payload).unwrap();
+        }
+        let payload = bincode::serialize(&FramePayload::Marker(Marker {
+            txn: Txn(5),
+            last_seq: 5, // the group reaches 7
+            records_checksum: checksum,
+        }))
+        .unwrap();
+        push_frame(&mut buf, &payload).unwrap();
+
+        let dir = tempdir().unwrap();
+        fs::write(segment_path(dir.path(), 5), &buf).unwrap();
+        let segs = list_segments(dir.path()).unwrap();
+        let out = scan(&segs, 4).unwrap();
+        assert_eq!(out.committed_head, 4, "a short marker must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
     }
@@ -1107,6 +1234,29 @@ mod tests {
         assert!(matches!(repair, UnwindRepair::AfterBarrier), "got {repair:?}");
         let segs = list_segments(dir.path()).unwrap();
         assert_eq!(scan(&segs, 0).unwrap().committed_head, 1);
+    }
+
+    #[test]
+    fn only_the_name_the_writer_emits_is_a_segment() {
+        // `seg-01.wal` and `seg-+7.wal` parse as 1 and 7 under a bare
+        // `u64::from_str`, so without the round trip they alias live segments'
+        // `firstSeq`s. Two entries at one coordinate sort adjacent, which
+        // makes the first one's inferred `lastSeq` 0 — and `reclaim_below`
+        // deletes every segment whose inference is at or below the floor.
+        let dir = tempdir().unwrap();
+        fs::write(segment_path(dir.path(), 1), b"").unwrap();
+        fs::write(dir.path().join("seg-01.wal"), b"").unwrap();
+        fs::write(dir.path().join("seg-+7.wal"), b"").unwrap();
+        fs::write(dir.path().join("seg-0007.wal"), b"").unwrap();
+        let segs = list_segments(dir.path()).unwrap();
+        assert_eq!(segs.len(), 1, "only one spelling names a segment");
+        assert_eq!(segs[0].first_seq, 1);
+        assert_eq!(segs[0].path, segment_path(dir.path(), 1));
+        // The active segment is never range-reclaimed, and it is the only one
+        // here — so nothing is deleted, where an aliased name would have made
+        // the real `seg-1.wal` a closed segment covering nothing.
+        reclaim_below(dir.path(), 100).unwrap();
+        assert!(segment_path(dir.path(), 1).exists(), "a live segment was reclaimed");
     }
 
     #[test]
@@ -1223,6 +1373,40 @@ mod tests {
     }
 
     #[test]
+    fn resynchronization_over_planted_frame_headers_is_bounded() {
+        // A committed record whose own bytes plant a frame header every 16
+        // bytes, each claiming a payload that fits the file. Corrupt the frame
+        // carrying them and every planted header becomes a resync candidate
+        // whose CRC must be computed: without a budget the scan does
+        // (payload / 16) × (claimed len) bytes of work — quadratic in a record
+        // whose size the caller chooses, and an `open()` that never returns.
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        let mut evil = Vec::new();
+        while evil.len() < 256 * 1024 {
+            evil.extend_from_slice(&MAGIC);
+            evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
+            evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
+            evil.extend_from_slice(&[0u8; 4]);
+        }
+        write_txn(&mut writer, 1, vec![evil]);
+        write_txn(&mut writer, 2, vec![rec(20)]);
+        let segs = list_segments(dir.path()).unwrap();
+        let spans = frame_spans(&segs[0].path);
+        flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
+
+        let out = scan(&segs, 0).unwrap();
+        assert_eq!(out.runs.last(), Some(&RunEnd::Unbounded));
+        // Both classifiers refuse: what the scan derived is a prefix, so no
+        // world may be folded from it at any height.
+        assert_eq!(out.fatal_run_to_head(), Some(0), "recovery must halt");
+        assert_eq!(out.fatal_run_anywhere(), Some(0), "a bounded replay must halt");
+        // …and nothing aims a truncation at a region the scan never finished
+        // judging.
+        assert!(out.tail.is_none(), "an abandoned scan resolves no cut");
+    }
+
+    #[test]
     fn torn_tail_reaches_eof() {
         let dir = tempdir().unwrap();
         let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
@@ -1291,7 +1475,7 @@ mod tests {
         loop {
             match parse_frame(&buf, pos) {
                 Parsed::Intact { end, .. } => pos = end,
-                Parsed::Bad => return pos as u64,
+                Parsed::Bad { .. } => return pos as u64,
             }
         }
     }

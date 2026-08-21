@@ -509,9 +509,10 @@ impl<W: WorldState> Kernel<W> {
     /// returned `Seq` is the base `Committed`'s seq — the committed index the
     /// op evaluated against (A2/V1; under per-commit `Fsync` that base is
     /// durable, so a zero-step op never waits on the durability barrier —
-    /// like every transaction it waits for the applier lock, which is why
-    /// [`Kernel::snapshot`] and not a zero-step `transact` is the read path,
-    /// §5).
+    /// but like every transaction it waits for the applier lock and then
+    /// clones `W` to stage against, both of which a zero-step op pays in
+    /// full, which is why [`Kernel::snapshot`] and not a zero-step `transact`
+    /// is the read path, §5).
     ///
     /// Staged records that cannot be journaled — a serializer that refuses,
     /// or a record past the journal's frame size — are

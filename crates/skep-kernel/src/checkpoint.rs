@@ -54,21 +54,33 @@ impl CheckpointMeta {
     }
 }
 
-/// Where the checkpoint embodying `Seq ≤ seq` lives: `checkpoint.<seq>` (§6).
+/// The one file name the checkpoint embodying `Seq ≤ seq` has:
+/// `checkpoint.<seq>` (§6).
 ///
-/// Stated as a pair with [`parse_checkpoint_name`], because the format and the
-/// parse are one agreement: a change to either that the other does not match
-/// makes every retained base invisible, and recovery then falls all the way
-/// down its chain to genesis without a word.
-fn checkpoint_path(dir: &Path, seq: u64) -> PathBuf {
-    dir.join(format!("checkpoint.{seq}"))
+/// Stated as a pair with [`parse_checkpoint_name`], which reads it back by
+/// re-emitting it, because the format and the parse are one agreement: a
+/// change to either that the other does not match makes every retained base
+/// invisible, and recovery then falls all the way down its chain to genesis
+/// without a word.
+fn checkpoint_name(seq: u64) -> String {
+    format!("checkpoint.{seq}")
 }
 
-/// Read back the seq [`checkpoint_path`] wrote. `None` for any other name —
-/// `checkpoint.tmp` among them, which is why a crash mid-write leaves at most
-/// a file recovery ignores.
+/// Where the checkpoint embodying `Seq ≤ seq` lives (§6).
+fn checkpoint_path(dir: &Path, seq: u64) -> PathBuf {
+    dir.join(checkpoint_name(seq))
+}
+
+/// Read back the seq [`checkpoint_name`] wrote — and ONLY the spelling it
+/// writes. `u64::from_str` accepts a leading `+` and any number of leading
+/// zeros, so the round trip is what keeps `checkpoint.07` from counting as a
+/// second base beside `checkpoint.7`, where [`retain`] counts entries and a
+/// configured fallback chain of `N` would silently hold fewer. `None` for any
+/// other name — `checkpoint.tmp` among them, which is why a crash mid-write
+/// leaves at most a file recovery ignores.
 fn parse_checkpoint_name(name: &str) -> Option<u64> {
-    name.strip_prefix("checkpoint.")?.parse().ok()
+    let seq: u64 = name.strip_prefix("checkpoint.")?.parse().ok()?;
+    (name == checkpoint_name(seq)).then_some(seq)
 }
 
 /// All checkpoints in `dir`, ascending by seq. `checkpoint.tmp` and foreign
@@ -146,4 +158,80 @@ pub(crate) fn write<W: Serialize>(dir: &Path, seq: u64, world: &W) -> Result<(),
     fs::rename(&tmp, checkpoint_path(dir, seq))?;
     fsync_dir(dir)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// A stand-in world: the format is generic over `W`, so what a fixture
+    /// needs is something that serializes, not something that resembles one.
+    fn world() -> Vec<u64> {
+        vec![10, 20, 30]
+    }
+
+    #[test]
+    fn checkpoint_header_layout_is_magic_seq_crc_and_body_len() {
+        // A checkpoint file written by one build is read by the next, so the
+        // layout is pinned here rather than left to whatever `write`'s four
+        // appends and `load`'s `HEADER_LEN` split happen to agree on. A field
+        // added to one without the other makes `body_len` disagree with the
+        // body, which makes EVERY retained base unloadable — and recovery
+        // then falls silently to genesis, or refuses with `BadCheckpoint`.
+        let dir = tempdir().unwrap();
+        write(dir.path(), 7, &world()).expect("fixture checkpoint");
+        let data = fs::read(checkpoint_path(dir.path(), 7)).unwrap();
+        let body = bincode::serialize(&world()).unwrap();
+
+        let mut expect = Vec::new();
+        expect.extend_from_slice(b"SKC1");
+        expect.extend_from_slice(&7u64.to_le_bytes()); // seq
+        expect.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
+        expect.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len
+        assert_eq!(expect.len(), HEADER_LEN, "the header is what `load` splits at");
+        assert_eq!(&data[..HEADER_LEN], expect.as_slice());
+        assert_eq!(&data[HEADER_LEN..], body.as_slice());
+
+        // …and the whole file loads back through the door every base walks
+        // through.
+        let listed = list(dir.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].seq, 7);
+        assert_eq!(listed[0].load::<Vec<u64>>(), Some(world()));
+
+        // A crash mid-write leaves a `.tmp`, which is not a base.
+        fs::write(dir.path().join("checkpoint.tmp"), b"not a checkpoint").unwrap();
+        assert_eq!(list(dir.path()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_flipped_body_byte_refuses_the_base() {
+        // The header checksum is what `load` validates before trusting a base,
+        // because serde alone does not reliably detect bit-rot and a silently
+        // wrong base would defeat the whole `BadCheckpoint` fallback chain.
+        let dir = tempdir().unwrap();
+        write(dir.path(), 3, &world()).expect("fixture checkpoint");
+        let path = checkpoint_path(dir.path(), 3);
+        let mut data = fs::read(&path).unwrap();
+        let last = data.len() - 1;
+        data[last] ^= 0xFF;
+        fs::write(&path, &data).unwrap();
+        assert_eq!(list(dir.path()).unwrap()[0].load::<Vec<u64>>(), None);
+    }
+
+    #[test]
+    fn only_the_name_the_writer_emits_is_a_checkpoint() {
+        // `checkpoint.07` parses as 7 under a bare `u64::from_str`, so without
+        // the round trip it is a second entry at one coordinate — and
+        // `retain` counts entries, so a configured `N = 2` fallback chain
+        // would silently hold one real base and one alias of it.
+        let dir = tempdir().unwrap();
+        write(dir.path(), 7, &world()).expect("fixture checkpoint");
+        fs::copy(checkpoint_path(dir.path(), 7), dir.path().join("checkpoint.07")).unwrap();
+        fs::copy(checkpoint_path(dir.path(), 7), dir.path().join("checkpoint.+7")).unwrap();
+        let listed = list(dir.path()).unwrap();
+        assert_eq!(listed.len(), 1, "only one spelling names a checkpoint");
+        assert_eq!(listed[0].seq, 7);
+    }
 }

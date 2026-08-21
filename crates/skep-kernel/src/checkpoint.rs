@@ -143,6 +143,14 @@ impl From<io::Error> for WriteFail {
 /// authoritative state need survive the round trip — a world may
 /// `#[serde(skip)]` its derived hints and reseed them through
 /// [`crate::WorldState::rebuild_derived`] at load (§6/§7).
+///
+/// CALLER OBLIGATION — this builds through the FIXED `checkpoint.tmp` in
+/// `dir`, so calls against one directory must be serialized by the caller.
+/// Two concurrent ones interleave into that single file and rename the
+/// mixture into place: `load`'s header checksum catches it, so nothing wrong
+/// is ever served, but the base is then useless — and under the documented
+/// `N = 1` retention it is the only one. [`crate::Kernel::checkpoint`]'s
+/// checkpoint mutex is the one place that obligation is discharged.
 pub(crate) fn write<W: Serialize>(dir: &Path, seq: u64, world: &W) -> Result<(), WriteFail> {
     let body = bincode::serialize(world).map_err(|e| WriteFail::Serialize(e))?;
     let tmp = dir.join("checkpoint.tmp");

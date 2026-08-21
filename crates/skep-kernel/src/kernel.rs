@@ -523,6 +523,17 @@ impl<W: WorldState> Kernel<W> {
     /// [`TxnError::Poisoned`] without running the closure, so a closure with
     /// effects of its own does not run for a transaction that cannot commit.
     ///
+    /// REFUSAL PRECEDENCE — several of these can hold at once, and this is the
+    /// order in which they speak: the reentrancy panic first, being a caller's
+    /// bug and answered before the applier lock is even taken; then
+    /// [`TxnError::Poisoned`], before `f` runs; then `f`'s own
+    /// [`TxnError::Rejected`]; then the zero-step `Ok`; and inside the commit
+    /// region [`TxnError::Unencodable`] before [`TxnError::Durability`], since
+    /// the encode precedes the first file operation and a refusal that belongs
+    /// to the RECORDS must not be reported on the channel a caller retries.
+    /// `Poisoned` displaces `Durability` where the tail truncation itself
+    /// cannot complete durably, which [`TxnError::Durability`] states.
+    ///
     /// PRECONDITION — `f` MUST NOT call `transact` on this kernel; this call
     /// holds the applier lock for the whole of `f`, so a nested write can
     /// never proceed. The violation is a caller's bug and is answered as one
@@ -535,6 +546,18 @@ impl<W: WorldState> Kernel<W> {
     /// applier lock; one taken from inside `f` embodies Σ, not the
     /// transaction in flight. A composite composes neighbors' PURE math
     /// inside ONE closure (§3; seam contract 3).
+    ///
+    /// CALLER CONTRACT — the caller bounds how many bytes one transaction
+    /// stages. M2 caps a FRAME (the journal's frame size), never a transaction
+    /// and never the record count. Three consequences, all the caller's: the
+    /// whole transaction is serialized under the applier lock, so every other
+    /// writer in the process waits behind it; its serialized bytes live twice
+    /// for the length of the commit region, once as records and once as the
+    /// frames they become; and — because a transaction never spans a segment —
+    /// the segment holding it is at least that large, and recovery reads a
+    /// segment whole, so an oversized transaction raises the memory floor of
+    /// every later `open()` and every [`Kernel::world_at`] above that base. M2
+    /// cannot check this.
     ///
     /// Under the v1 single applier the global lock subsumes `keys` (§4):
     /// callers still pass the keys they would need under the deferred per-key

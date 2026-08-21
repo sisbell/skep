@@ -238,7 +238,9 @@ fn find_magic(buf: &[u8], from: usize) -> Option<usize> {
         .map(|p| from + p)
 }
 
-/// A journal segment file, named by its `firstSeq` (§1).
+/// A journal segment file, named by its `firstSeq` (§1). Every operation over
+/// a slice of these reads a neighbour's name as this segment's bound, so the
+/// slice must be ascending by `first_seq` as [`list_segments`] produces it.
 pub(crate) struct SegmentMeta {
     pub first_seq: u64,
     pub path: PathBuf,
@@ -416,11 +418,13 @@ pub(crate) struct JournalWriter {
     dir: PathBuf,
     file: File,
     len: u64,
-    /// What the transaction in progress has reached. Every path out of this
-    /// writer leaves it [`InFlight::Idle`] except the two that halt the
-    /// kernel — a truncation that could not itself complete durably, and an
-    /// unwind through the install — so a transaction never starts against a
-    /// predecessor's leavings (§3).
+    /// What the transaction in progress has reached. On entry to
+    /// [`JournalWriter::commit_txn`] this is always [`InFlight::Idle`]: every
+    /// path that returns to a caller who may commit again leaves it so, and
+    /// the two that do not — a truncation that could not itself complete
+    /// durably, and an unwind through the install — halt the kernel, so no
+    /// transaction follows them. That is what lets the commit path start
+    /// against this field rather than resetting it defensively first (§3).
     in_flight: InFlight,
 }
 
@@ -508,6 +512,10 @@ impl JournalWriter {
     /// transaction that passed its barrier is durably committed and beyond
     /// repair — its record+marker tail must stay, since removing an acked
     /// commit is the one thing recovery may never do.
+    ///
+    /// This CONSUMES the in-flight state, so it answers once per unwind. Both
+    /// non-[`UnwindRepair::Clean`] answers halt the kernel, and this writer is
+    /// not used again.
     pub(crate) fn repair_after_unwind(&mut self) -> UnwindRepair {
         match std::mem::replace(&mut self.in_flight, InFlight::Idle) {
             InFlight::Idle => UnwindRepair::Clean,
@@ -641,6 +649,14 @@ pub(crate) struct TailCut {
 
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records,
 /// the corrupt runs, and where the tail to truncate begins.
+///
+/// Everything here is meaningful only while [`ScanOutcome::fatal_run_to_head`]
+/// / [`ScanOutcome::fatal_run_anywhere`] answers `None`. A scan that exhausts
+/// its resynchronization budget stops where it stands, so a committed head may
+/// be short, records may be missing and the boundary set may not be the
+/// journal's — the run it pushes is what says so, and it is fatal at any
+/// height ([`RunEnd::Unbounded`]). Ask one of those two first; nothing below
+/// carries the qualification on its own.
 pub(crate) struct ScanOutcome {
     /// The base this scan ran against — §7's `S_load`. Every judgment it
     /// answers is relative to that base, so it is carried here rather than
@@ -827,6 +843,12 @@ impl PendingTxn {
 /// that exhausts that budget answers [`RunEnd::Unbounded`] and stops there,
 /// so a payload that plants frame headers costs a bounded scan and a halt
 /// rather than an unbounded one.
+///
+/// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
+/// The skip test, the tail resolution and [`inferred_last_seq`] all read a
+/// neighbour's name as this segment's bound, so an out-of-order slice makes
+/// those inferences meaningless — and [`reclaim_below`], which reads the same
+/// order, deletes on one of them.
 ///
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
 /// the base it selected. A scan and the fold that consumes it must agree on

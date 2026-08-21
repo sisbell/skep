@@ -157,6 +157,16 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// in for, the recovered hint diverges from the live-maintained one and
     /// reads go wrong. M2 cannot check this.
     ///
+    /// WHAT MAY BE SKIPPED (§6/§7): a checkpoint is a serialized `W` standing
+    /// in for the fold over `Seq ≤ S`, so ONLY state this method can
+    /// reconstruct may be `#[serde(skip)]`ped. Authoritative state must
+    /// survive the serde round trip: [`Kernel::world_at`] promises the same
+    /// world at a boundary whichever base carries it, and a skipped
+    /// authoritative field makes a checkpoint-based derivation differ from a
+    /// genesis-based one by exactly that field, silently. A world that skips
+    /// nothing needs no override at all, which is why the default is identity.
+    /// M2 cannot check this either.
+    ///
     /// [`apply`]: WorldState::apply
     fn rebuild_derived(self) -> Self {
         self

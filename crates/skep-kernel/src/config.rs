@@ -27,17 +27,38 @@ pub struct KernelConfig {
 }
 
 impl KernelConfig {
-    /// The interface's `N ≥ 1` retention rule (§Public interface). A violation
-    /// is surfaced rather than silently clamped: `N = 0` asks for a journal
-    /// with no base to recover from, which is a caller's mistake and not a
-    /// mode this kernel offers. `Err` names the rule broken, which is the
-    /// whole of what a caller can act on.
+    /// The rules this configuration must satisfy, in field order: the
+    /// interface's `N ≥ 1` retention rule (§Public interface), then the
+    /// auto-trigger's own `n ≥ 1`. A violation is surfaced rather than
+    /// silently clamped: `N = 0` asks for a journal with no base to recover
+    /// from, and a threshold of `0` asks for a checkpoint after every zero
+    /// commits — each a caller's mistake and not a mode this kernel offers.
+    /// Clamping the second would be the worse charity of the two: `0` reads
+    /// as "disabled" in most configurations, and the nearest meaning here is
+    /// [`CheckpointPolicy::Manual`]'s opposite — a whole checkpoint on the
+    /// committing thread at every commit, whose failure
+    /// [`crate::Kernel::transact`] discards. `Err` names the rule broken,
+    /// which is the whole of what a caller can act on.
+    ///
+    /// [`CheckpointPolicy::Interval`] is deliberately NOT refused at
+    /// [`Duration::ZERO`]: an always-elapsed window is a coherent reading of a
+    /// zero interval, it is what that variant documents, and it is what the
+    /// suite pins.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        match self.durability {
-            Durability::Fsync {
-                retain_checkpoints: 0,
-                ..
-            } => Err("retain_checkpoints must be >= 1"),
+        if let Durability::Fsync {
+            retain_checkpoints: 0,
+            ..
+        } = self.durability
+        {
+            return Err("retain_checkpoints must be >= 1");
+        }
+        match self.checkpoint {
+            CheckpointPolicy::EveryN(0) => {
+                Err("CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger")
+            }
+            CheckpointPolicy::JournalBytes(0) => Err(
+                "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger",
+            ),
             _ => Ok(()),
         }
     }
@@ -81,9 +102,12 @@ pub enum Durability {
     /// Records are still SERIALIZED on every commit: the encode step precedes
     /// the journal and runs in both modes, and this mode drops the bytes it
     /// produces. So an in-memory kernel pays a full serialization per record,
-    /// and can still refuse with [`crate::TxnError::Unencodable`] — the same
-    /// records are refused in both modes, which is what lets an in-memory
-    /// test catch an encoding bug. What it has no path to is
+    /// and can still refuse with [`crate::TxnError::Unencodable`] — a record
+    /// whose own SERIALIZER refuses is refused in both modes, which is what
+    /// lets an in-memory test catch an encoding bug. A record whose serialized
+    /// FORM exceeds the journal's frame size is refused only under
+    /// [`Durability::Fsync`], because this mode never builds the frames that
+    /// cap would apply to. What it has no path to at all is
     /// [`crate::TxnError::Durability`], which is a barrier's failure and
     /// there is no barrier.
     InMemory,
@@ -127,15 +151,23 @@ pub enum BurnedSeqPolicy {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckpointPolicy {
-    /// Checkpoint after every `n` commits.
+    /// Checkpoint after every `n` commits, `n ≥ 1`. [`Manual`] is how the
+    /// auto-trigger is disabled; `0` is refused at [`crate::Kernel::open`].
+    ///
+    /// [`Manual`]: CheckpointPolicy::Manual
     EveryN(u64),
     /// Checkpoint when at least this much wall time has passed since the last
     /// auto-trigger reset, evaluated on-commit (a quiescent kernel — nothing
-    /// new to persist — correctly never fires; §6).
+    /// new to persist — correctly never fires; §6). [`Duration::ZERO`] is an
+    /// always-elapsed window: the first commit after each reset crosses.
     Interval(Duration),
     /// Checkpoint after this many journal bytes appended since the last
-    /// auto-trigger reset (always zero under [`Durability::InMemory`], which
-    /// journals nothing).
+    /// auto-trigger reset, `n ≥ 1` (always zero under
+    /// [`Durability::InMemory`], which journals nothing). [`Manual`] is how
+    /// the auto-trigger is disabled; `0` is refused at
+    /// [`crate::Kernel::open`].
+    ///
+    /// [`Manual`]: CheckpointPolicy::Manual
     JournalBytes(u64),
     /// No auto-trigger — the caller drives `checkpoint()` from its own loop.
     Manual,
@@ -192,5 +224,51 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         assert!(mem.validate().is_ok());
+    }
+
+    #[test]
+    fn a_zero_auto_trigger_threshold_is_refused_in_either_durability_mode() {
+        // "Checkpoint after every 0 commits" has no meaning, and coercing it
+        // would read as the most expensive mode this kernel has — a whole
+        // checkpoint on the committing thread at every commit, whose failure
+        // `transact` discards. `Manual` is what asks for no auto-trigger, so
+        // the mistake has an answer and gets named rather than performed.
+        let with = |checkpoint| KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint,
+        };
+        assert_eq!(
+            with(CheckpointPolicy::EveryN(0)).validate().unwrap_err(),
+            "CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger"
+        );
+        assert_eq!(
+            with(CheckpointPolicy::JournalBytes(0))
+                .validate()
+                .unwrap_err(),
+            "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger"
+        );
+        // The trigger has no journal to ride on, so the rule binds both modes
+        // — and it is the trigger's rule that speaks, not the retention one.
+        let fsync = KernelConfig {
+            durability: fsync_mode(BurnedSeqPolicy::Rollback),
+            checkpoint: CheckpointPolicy::EveryN(0),
+        };
+        assert_eq!(
+            fsync.validate().unwrap_err(),
+            "CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger"
+        );
+
+        // Everything at or above the floor validates — including a zero
+        // `Interval`, which is an always-elapsed window rather than a
+        // thresholdless one, and is what `interval_is_evaluated_on_commit…`
+        // pins.
+        for ok in [
+            CheckpointPolicy::EveryN(1),
+            CheckpointPolicy::JournalBytes(1),
+            CheckpointPolicy::Interval(Duration::ZERO),
+            CheckpointPolicy::Manual,
+        ] {
+            assert!(with(ok).validate().is_ok(), "{ok:?} is a mode this offers");
+        }
     }
 }

@@ -261,6 +261,10 @@ pub enum TxnError<E> {
     /// the same way, however healthy the disk. The serializer's own account
     /// travels, since M2 never inspects `W::Record`.
     ///
+    /// Of the two, only the serializer's refusal arises under
+    /// [`crate::Durability::InMemory`]: that mode builds no frames, so the
+    /// frame-size half is a property of the journaled mode alone.
+    ///
     /// [`Durability`]: TxnError::Durability
     Unencodable(io::Error),
     /// The kernel was halted by an UNRECOVERABLE failure (§1/§3): a

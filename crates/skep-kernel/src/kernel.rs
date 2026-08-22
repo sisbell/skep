@@ -416,6 +416,16 @@ impl<W: WorldState> Kernel<W> {
     /// Under [`Durability::InMemory`]: no journal to name, no recovery, and
     /// the root is initialized directly from `genesis` (`S_load = 0`).
     ///
+    /// DAMAGE MODEL — what recovery detects is FRAMES THAT FAIL THEIR CRC. A
+    /// segment that is ABSENT leaves no run to classify and no gap to detect:
+    /// §7 requires no `Seq` contiguity over the replayed range, so a missing
+    /// segment is indistinguishable from a burned range, and this answers `Ok`
+    /// with a world short by exactly that segment's records — at the true
+    /// head, so nothing about the answer looks wrong. The `journal_path`
+    /// caller contract is what keeps that out of reach; nothing here detects
+    /// it, and `an_absent_segment_shortens_the_world_where_a_damaged_one_halts`
+    /// is what pins the asymmetry.
+    ///
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
     /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
@@ -470,7 +480,7 @@ impl<W: WorldState> Kernel<W> {
         // halts here. Of the runs it does report, those beyond W and the EOF
         // ones are the un-acked/torn tail, physically discarded below, and
         // those at or below S_load are already embodied in the base.
-        let scan = base.scan(&segs).map_err(|fail| match fail {
+        let scan = base.scan(&segs, None).map_err(|fail| match fail {
             ScanFail::Io(e) => OpenError::Io(e),
             ScanFail::Unbounded { at } => OpenError::Corruption {
                 at: Seq(at),
@@ -947,11 +957,13 @@ impl<W: WorldState> Kernel<W> {
     ///
     /// COST, per call, uncached: one whole checkpoint file read and
     /// deserialized into a `W`, [`WorldState::rebuild_derived`] run over all
-    /// of it, every journal segment above that base read, and every committed
-    /// record in them materialized before the fold begins. Nothing here is
-    /// memoized and nothing here is bounded by the size of `at` — a caller
-    /// choosing `at` chooses the base and the fold length, and peak memory is
-    /// that figure times the number of calls in flight. Admission and
+    /// of it, every journal segment above that base READ, and every committed
+    /// record in `(base, at]` materialized before the fold begins. Segments
+    /// above `at` are read and not collected — the corrupt-run sweep is at any
+    /// height, so they must be read, and nothing above `at` is folded — so a
+    /// caller choosing `at` chooses the base, the fold length and the records
+    /// held, but not the bytes read. Nothing here is memoized, and peak memory
+    /// is that figure times the number of calls in flight. Admission and
     /// concurrency are the caller's to gate; this method gates neither.
     ///
     /// Safe concurrently with the live appender and with `checkpoint()`:
@@ -999,7 +1011,7 @@ impl<W: WorldState> Kernel<W> {
         if at.0 == base.s_load() {
             return Ok(base.into_world());
         }
-        let scan = base.scan(&segs).map_err(|fail| match fail {
+        let scan = base.scan(&segs, Some(at.0)).map_err(|fail| match fail {
             ScanFail::Io(e) => HistoryError::Io(e),
             ScanFail::Unbounded { at } => HistoryError::Corruption {
                 at: Seq(at),

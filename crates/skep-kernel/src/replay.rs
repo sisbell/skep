@@ -44,8 +44,17 @@ impl<W> Base<W> {
     /// no `S_load` a caller could have got from somewhere else, and a scan run
     /// against a HIGHER base than this one would skip closed segments whose
     /// records the fold still wants — a world missing records, answered `Ok`.
-    pub(crate) fn scan(&self, segs: &[SegmentMeta]) -> Result<ScanOutcome, ScanFail> {
-        journal::scan(segs, self.s_load)
+    ///
+    /// `bound` is the boundary this base will be folded to, when the caller has
+    /// one: the scan then collects only what a fold to it can read. Recovery
+    /// passes `None`, since its own bound is the committed head the scan is
+    /// about to derive.
+    pub(crate) fn scan(
+        &self,
+        segs: &[SegmentMeta],
+        bound: Option<u64>,
+    ) -> Result<ScanOutcome, ScanFail> {
+        journal::scan(segs, self.s_load, bound)
     }
 }
 

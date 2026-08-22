@@ -312,6 +312,15 @@ pub enum TxnError<E> {
     /// SPLIT the transaction, where fixing a value cannot help and
     /// re-invoking unsplit fails the same way forever.
     ///
+    /// ONE EXCEPTION, where splitting cannot discharge that remedy: a SINGLE
+    /// record whose own frame plus the commit marker exceeds
+    /// [`crate::MAX_TXN_BYTES`] is refused this way too, and a caller splitting
+    /// until one record remains meets it again. There the record must shrink.
+    /// The largest committable record is [`crate::MAX_TXN_BYTES`] less the
+    /// marker frame, the record's own frame header and its frame-payload
+    /// overhead — a little under the frame cap, which is why the cap admits a
+    /// record slightly larger than any transaction can carry.
+    ///
     /// The budget is what keeps recovery's memory floor replica-independent:
     /// a transaction never spans a journal segment and recovery reads a
     /// segment whole, so an unbounded transaction would permanently raise the

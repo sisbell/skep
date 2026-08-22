@@ -131,6 +131,15 @@ use serde::Serialize;
 /// the `Seq` order back below a root that is already installed, and
 /// [`Kernel::current_seq`] would regress, which its own contract says it never
 /// does. M2 cannot check this.
+///
+/// HOSTILE-INPUT OBLIGATION — `W` is decoded from a checkpoint body, which is
+/// bytes M2 does not trust: the header checksum proves they are the bytes that
+/// were written, and nothing about whether decoding them is safe. So this
+/// type's `Deserialize` must terminate and must not exhaust the stack on any
+/// byte string. The same obligation binds [`Record`], and is written out in
+/// full there. M2 cannot check this.
+///
+/// [`Record`]: WorldState::Record
 pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     /// The engine's central record enum — the union of every store's own
     /// record type. Opaque to M2: journaled as bytes, folded via [`apply`].
@@ -146,6 +155,19 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`Kernel::world_at`] answers a world [`Kernel::snapshot`] never held.
     /// Nothing a record carries that [`apply`] does not read need survive the
     /// round trip. M2 cannot check this.
+    ///
+    /// HOSTILE-INPUT OBLIGATION — M2 decodes this type from bytes it does not
+    /// trust: a journal frame is validated by a CRC, which proves the bytes are
+    /// the ones that were written and nothing about whether decoding them is
+    /// safe. So this type's `Deserialize` must terminate and must not exhaust
+    /// the stack on any byte string. Two shapes break that, and NEITHER is
+    /// caught here: a recursive type has no depth limit under this journal's
+    /// codec, and a stack overflow ABORTS rather than unwinding — no error, no
+    /// [`crate::OpenError::Corruption`], and [`Kernel::open`] does not return;
+    /// and a sequence whose element consumes no bytes turns a length prefix
+    /// into an unbounded loop. Bound recursion depth where a value is
+    /// ADMITTED, not where it is decoded — by then the bytes have already been
+    /// accepted. M2 cannot check this.
     ///
     /// [`apply`]: WorldState::apply
     type Record: Serialize + DeserializeOwned + Send + Sync + 'static;

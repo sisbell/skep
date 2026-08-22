@@ -48,6 +48,14 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
 /// above that base — a store that opens on the machine that wrote it and not
 /// on the replica.
+///
+/// Being EQUAL rather than nested, the two limits do not stack: a transaction
+/// carries its records' frames and a commit marker, so the largest record this
+/// budget admits is smaller than the largest the frame cap admits, and the top
+/// of the frame cap is unreachable in practice. A record in that band frames
+/// and cannot commit, which is the one case where
+/// [`crate::TxnError::OverBudget`]'s remedy is to shrink the record rather
+/// than to split the transaction — as that variant states.
 pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// Rotation threshold (open build decision), tested BEFORE a transaction is
 /// appended and only at a txn boundary — so a closed segment holds this many
@@ -903,14 +911,21 @@ pub(crate) struct ScanOutcome {
     s_load: u64,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
-    /// `S_load` itself and Pass 2 folds nothing).
+    /// `S_load` itself and Pass 2 folds nothing). Never bounded: it is
+    /// recovery's own fold bound, so it names the last committed marker of the
+    /// whole scanned region.
     pub committed_head: u64,
-    /// Every record belonging to a committed transaction, unordered (the
-    /// caller sorts by `Seq` and filters to `(S_load, W]`).
+    /// Every committed record at or below the scan's `bound`, unordered (the
+    /// caller sorts by `Seq` and filters to `(S_load, bound]`). Records above
+    /// the bound are read and dropped rather than collected: no caller reads
+    /// them, and holding them is what made a one-transaction bounded replay
+    /// cost the whole retained window.
     pub committed_records: Vec<CommittedRecord>,
-    /// Every committed marker's `last_seq`, in scan order — the transaction
-    /// boundaries of the scanned region, which [`ScanOutcome::require_boundary`]
-    /// answers from.
+    /// Every committed marker's `last_seq` at or below the scan's `bound`, in
+    /// scan order — the transaction boundaries a bounded replay may be asked
+    /// about, which [`ScanOutcome::require_boundary`] answers from. That
+    /// question reads the requested value and the boundaries below it, so a
+    /// boundary above the bound is one nothing can ask for.
     committed_boundaries: Vec<u64>,
     /// Corrupt runs in scan order — what [`ScanOutcome::fatal_run_to_head`]
     /// and [`ScanOutcome::fatal_run_anywhere`] answer from. The verdict on a
@@ -1111,9 +1126,20 @@ impl PendingTxn {
 /// (§1/§7). A corrupt run persists across a segment boundary: the journal is
 /// one logical `Seq`-ordered stream.
 ///
+/// `bound` is the boundary the caller will fold to, when it has one: committed
+/// records and boundaries above it are not COLLECTED, since no caller reads
+/// them, so a bounded replay of one transaction above a checkpoint no longer
+/// materializes every committed record in the retained window. `None` collects
+/// the whole scanned region, which recovery needs — its own bound is
+/// [`ScanOutcome::committed_head`], and that is not known until this returns.
+/// Every segment above the base is still READ either way: the corrupt-run
+/// classification is at any height, and [`ScanOutcome::committed_head`] and the
+/// tail cut must name the last committed marker wherever it sits.
+///
 /// Memory: one segment's bytes, one transaction's records, and the committed
-/// records of the whole scanned region — the last of which is the term that
-/// grows with the journal, and is what a caller bounds by checkpointing.
+/// records of the scanned region at or below `bound` — the last of which is
+/// the term that grows with the journal, and is what a caller bounds by
+/// checkpointing, or by asking for a lower boundary.
 ///
 /// Work: the sequential walk is one pass per scanned segment, and
 /// resynchronization is bounded at [`RESYNC_BUDGET_PASSES`] more. A segment
@@ -1131,7 +1157,11 @@ impl PendingTxn {
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
 /// the base it selected. A scan and the fold that consumes it must agree on
 /// their base, and that is the one route where they cannot disagree.
-pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, ScanFail> {
+pub(crate) fn scan(
+    segs: &[SegmentMeta],
+    s_load: u64,
+    bound: Option<u64>,
+) -> Result<ScanOutcome, ScanFail> {
     let mut outcome = ScanOutcome {
         s_load,
         committed_head: s_load,
@@ -1196,10 +1226,25 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
+                                    // The head and the cut are unbounded: the
+                                    // first is recovery's own fold bound, and
+                                    // the second must name the last committed
+                                    // marker wherever it sits. Only what a
+                                    // caller READS above `bound` is dropped,
+                                    // and it is dropped per RECORD rather than
+                                    // per group, so a group straddling the
+                                    // bound keeps the half below it.
                                     outcome.committed_head = outcome.committed_head.max(marker.last_seq);
                                     cut = Some((seg_index, end as u64));
-                                    outcome.committed_boundaries.push(marker.last_seq);
-                                    outcome.committed_records.extend(group.records);
+                                    if bound.is_none_or(|b| marker.last_seq <= b) {
+                                        outcome.committed_boundaries.push(marker.last_seq);
+                                    }
+                                    outcome.committed_records.extend(
+                                        group
+                                            .records
+                                            .into_iter()
+                                            .filter(|entry| bound.is_none_or(|b| entry.seq <= b)),
+                                    );
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -1579,7 +1624,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 2), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 1).unwrap();
+        let out = scan(&segs, 1, None).unwrap();
         assert_eq!(out.committed_head, 1, "the repeat must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
@@ -1617,7 +1662,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 5), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 4).unwrap();
+        let out = scan(&segs, 4, None).unwrap();
         assert_eq!(out.committed_head, 4, "a short marker must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
@@ -1691,7 +1736,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(segment_path(dir.path(), 1), &buf).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -1765,7 +1810,7 @@ mod tests {
         let repair = writer.repair_after_unwind();
         assert!(matches!(repair, UnwindRepair::AfterBarrier), "got {repair:?}");
         let segs = list_segments(dir.path()).unwrap();
-        assert_eq!(scan(&segs, 0).unwrap().committed_head, 1);
+        assert_eq!(scan(&segs, 0, None).unwrap().committed_head, 1);
     }
 
     #[test]
@@ -1798,7 +1843,7 @@ mod tests {
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // seqs 2, 3
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.committed_head, 3);
         assert!(out.runs.is_empty());
         assert_eq!(committed_seqs(&out), vec![1, 2, 3]);
@@ -1817,7 +1862,7 @@ mod tests {
         write_txn(&mut writer, 1, vec![rec(10)]);
         write_txn(&mut writer, 5, vec![rec(50), rec(60)]); // burned 2..=4
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.committed_head, 6);
         assert!(out.runs.is_empty());
         assert_eq!(committed_seqs(&out), vec![1, 5, 6]);
@@ -1837,7 +1882,7 @@ mod tests {
         let spans = frame_spans(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2=T2 rec, 3=T2 marker, 4=T3 rec, 5=T3 marker.
         flip_byte(&segs[0].path, spans[2].0 + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -1864,7 +1909,7 @@ mod tests {
         let spans = frame_spans(&segs[0].path);
         // Frames: 0=T1 rec, 1=T1 marker, 2..=3=T2 recs, 4=T2 marker, 5=T3 rec, 6=T3 marker.
         flip_byte(&segs[0].path, spans[4].0 + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -1892,7 +1937,7 @@ mod tests {
         let segs = list_segments(dir.path()).unwrap();
         let spans = frame_spans(&segs[0].path);
         flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(
             out.runs,
             vec![RunEnd::Landed {
@@ -1931,7 +1976,7 @@ mod tests {
         // whole of what there is to check here: what such a scan derived is a
         // prefix, so it produces no outcome at all — there is no committed
         // head to read short, and no cut for a truncation to be aimed with.
-        let fail = scan(&segs, 0).err();
+        let fail = scan(&segs, 0, None).err();
         assert!(
             matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
             "got {fail:?}"
@@ -1947,7 +1992,7 @@ mod tests {
         // Crash mid-append: a partial header at the tail.
         writer.append(&[0xAB, 0xCD, 0xEF]).unwrap();
         let segs = list_segments(dir.path()).unwrap();
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.runs, vec![RunEnd::Eof]);
         assert_eq!(out.committed_head, 2);
         assert_eq!(committed_seqs(&out), vec![1, 2]);
@@ -1970,7 +2015,7 @@ mod tests {
         // Tear seg-2's marker: its txn is no longer committed.
         let spans = frame_spans(&segs[1].path);
         flip_byte(&segs[1].path, spans[1].0 + FRAME_HEADER_LEN + 1);
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.committed_head, 1);
         let tail = out.tail.as_ref().expect("a scanned region has a cut");
         assert_eq!(tail.segment, segs[0].path);
@@ -1987,7 +2032,7 @@ mod tests {
         write_txn(&mut writer, 4, vec![rec(40)]);
         let segs = list_segments(dir.path()).unwrap();
 
-        let out = scan(&segs, 0).unwrap();
+        let out = scan(&segs, 0, None).unwrap();
         assert_eq!(out.require_boundary(3), Ok(()));
         // A composite's interior Seq was never a boundary (§3).
         assert_eq!(out.require_boundary(2), Err(1));
@@ -1995,9 +2040,42 @@ mod tests {
         // The active segment is always scanned, so it reports boundaries
         // below a base too — but those have no base left to fold from, and
         // the nearest ANSWERABLE boundary is the base's own seq.
-        let out = scan(&segs, 3).unwrap();
+        let out = scan(&segs, 3, None).unwrap();
         assert_eq!(out.require_boundary(4), Ok(()));
         assert_eq!(out.require_boundary(2), Err(3));
+    }
+
+    #[test]
+    fn a_bound_keeps_what_a_fold_to_it_reads_and_drops_the_rest() {
+        // A bounded scan collects for a fold to `bound` and nothing else, so a
+        // bounded replay of one transaction above a base does not materialize
+        // the whole retained window. What a fold to `bound` reads is exactly
+        // `bound` itself, the boundaries below it, and the records at or below
+        // it — so the edge is inclusive at all three, and a bound that dropped
+        // its own coordinate would answer a short world.
+        let dir = tempdir().unwrap();
+        let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+        write_txn(&mut writer, 1, vec![rec(10)]);
+        write_txn(&mut writer, 2, vec![rec(20), rec(21)]); // a composite: boundary 3
+        write_txn(&mut writer, 4, vec![rec(40)]);
+        let segs = list_segments(dir.path()).unwrap();
+
+        let out = scan(&segs, 0, Some(3)).unwrap();
+        assert_eq!(committed_seqs(&out), vec![1, 2, 3], "the bound is inclusive");
+        assert_eq!(out.require_boundary(3), Ok(()), "…of its own boundary too");
+        assert_eq!(out.require_boundary(1), Ok(()));
+        // The head and the cut are NOT bounded: recovery folds to the first and
+        // truncates at the second, and both must name the whole scanned region.
+        assert_eq!(out.committed_head, 4);
+        assert_tail(&out, &segs[0].path, fs::metadata(&segs[0].path).unwrap().len());
+
+        // A composite STRADDLING the bound keeps the half below it: its group
+        // is filtered per record, not discarded whole.
+        let out = scan(&segs, 0, Some(2)).unwrap();
+        assert_eq!(committed_seqs(&out), vec![1, 2]);
+        // …and 3 is then a boundary nothing can ask about, so the nearest
+        // answerable one is 1 — never the interior coordinate 2.
+        assert_eq!(out.require_boundary(3), Err(1));
     }
 
     /// Byte offset just past the last INTACT frame (walks until a bad frame).

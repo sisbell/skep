@@ -1346,6 +1346,65 @@ fn recovery_skips_only_the_segments_the_base_already_embodies() {
     assert_eq!(k.snapshot().world().sum, 9 * BLOB as u64);
 }
 
+/// Every regular file of `src` into a fresh `dst`, so one built fixture can be
+/// damaged two ways without rebuilding it.
+fn copy_store(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), dst.join(entry.file_name())).unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_absent_segment_shortens_the_world_where_a_damaged_one_halts() {
+    // Recovery's damage model is FRAMES THAT FAIL THEIR CRC. Damaging a
+    // segment's bytes opens a corrupt run that classifies inside the replayed
+    // range and halts. REMOVING that segment leaves no run to classify and no
+    // gap to detect — §7 requires no `Seq` contiguity, so a missing segment is
+    // indistinguishable from a burned range — and recovery answers `Ok` with a
+    // world short by exactly that segment's records, at the true head.
+    //
+    // The `journal_path` caller contract is what keeps this out of reach:
+    // nothing in this module detects it. Asserting both on one fixture is what
+    // makes the ASYMMETRY the subject rather than either behaviour alone.
+    let tmp = tempdir().unwrap();
+    let fixture = tmp.path().join("fixture");
+    let k = Kernel::open(cfg_fsync(&fixture), genesis()).unwrap();
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1; the fifth rotates into seg-5
+    }
+    for _ in 0..4 {
+        commit_blob(&k); // three fill seg-5; the fourth rotates into seg-9
+    }
+    drop(k);
+    assert_eq!(segment_count(&fixture), 3, "the fixture must rotate twice");
+
+    // Damaged: the middle segment's frames stop passing their CRC, so the
+    // resync opens a run inside (S_load, W] — a loud halt, nothing folded.
+    let damaged = tmp.path().join("damaged");
+    copy_store(&fixture, &damaged);
+    let mid = seg_file(&damaged, 5);
+    let len = fs::metadata(&mid).unwrap().len() as usize;
+    fs::write(&mid, vec![0u8; len]).unwrap();
+    let err = Kernel::<TestWorld>::open(cfg_fsync(&damaged), genesis())
+        .expect_err("a corrupt run in the replayed range is a halt");
+    assert!(matches!(err, OpenError::Corruption { .. }), "got {err:?}");
+
+    // Absent: the same records, unreachable the other way — and this one is
+    // silent. The head is the true head, so nothing about the answer looks
+    // wrong; only the four records seg-5 held are missing.
+    let absent = tmp.path().join("absent");
+    copy_store(&fixture, &absent);
+    fs::remove_file(seg_file(&absent, 5)).unwrap();
+    let k = Kernel::<TestWorld>::open(cfg_fsync(&absent), genesis())
+        .expect("a missing segment is not something this module detects");
+    assert_eq!(k.current_seq(), Seq(9), "the head is the true head");
+    assert_eq!(items(&k).len(), 5, "…and the world is short by seg-5's records");
+}
+
 #[test]
 fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
     // §7's tail truncation is two acts: cut the segment holding the last

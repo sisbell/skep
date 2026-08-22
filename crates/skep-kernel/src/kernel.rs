@@ -1414,6 +1414,9 @@ mod tests {
         assert_eq!(k.current_seq(), Seq(1));
         assert_eq!(k.snapshot().seq(), Seq(1));
         assert_eq!(k.snapshot().world().as_slice(), &[10]);
+        // …and the bounded read too: it is neither a write nor a checkpoint,
+        // so the poison has no refusal to offer it (§5/Invariants).
+        assert_eq!(k.world_at(Seq(1)).unwrap().as_slice(), &[10]);
         // flush stays a no-op Ok.
         k.flush().unwrap();
     }

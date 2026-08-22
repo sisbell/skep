@@ -1197,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_roundtrip_and_crc_covers_len() {
+    fn frame_roundtrip_and_a_corrupt_length_is_detected() {
         let payload = b"hello frame".to_vec();
         let mut buf = Vec::new();
         push_frame(&mut buf, &payload).unwrap();
@@ -1214,11 +1214,18 @@ mod tests {
         let mut bad = buf.clone();
         bad[FRAME_HEADER_LEN + 2] ^= 0xFF;
         assert!(matches!(parse_frame(&bad, 0), Parsed::Bad { .. }));
-        // A corrupt len is DETECTED (crc covers len), not silently
-        // mis-delimiting the following frame (§1).
-        let mut badlen = buf;
+        // A corrupt len is DETECTED, not silently mis-delimiting the frame
+        // that follows (§1) — the length that OVERRUNS the buffer, which the
+        // bounds check refuses before any crc is computed…
+        let mut badlen = buf.clone();
         badlen[5] ^= 0xFF;
-        assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad { .. }));
+        assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad { crc_bytes: 0 }));
+        // …and the one that FITS, where nothing but the crc can reject it: a
+        // reader trusting this length would take a 5-byte payload and resume
+        // mid-frame. `crc_bytes` names which door refused it.
+        let mut shortlen = buf;
+        shortlen[4..8].copy_from_slice(&5u32.to_le_bytes());
+        assert!(matches!(parse_frame(&shortlen, 0), Parsed::Bad { crc_bytes: 5 }));
     }
 
     #[test]

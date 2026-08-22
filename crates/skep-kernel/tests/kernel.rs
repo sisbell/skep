@@ -1006,6 +1006,36 @@ fn a_durability_failure_is_a_true_no_op_the_caller_may_re_invoke() {
 }
 
 #[test]
+fn a_records_own_refusal_precedes_the_environments() {
+    // Both refusals hold at once here — the record cannot be journaled AND the
+    // next segment cannot be created — and the record's must speak, because
+    // `Durability` says "a TRUE no-op the caller may safely re-invoke" and a
+    // client honouring that retries a record that can never succeed, forever,
+    // each turn cloning `W` under the applier lock.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    for _ in 0..4 {
+        commit_blob(&k); // past the threshold: txn 5 is the one that rotates
+    }
+    fs::create_dir(seg_file(dir.path(), 5)).unwrap();
+
+    // The environment is genuinely broken: an encodable txn fails on it.
+    let out = k.transact::<(), ()>(&[], |stg| {
+        stg.push(TestRec::Blob(vec![7u8; BLOB]));
+        Ok(())
+    });
+    assert!(matches!(out, Err(TxnError::Durability(_))), "got {out:?}");
+    // …and on that same broken environment, a record that cannot be journaled
+    // is reported as the records' refusal, which re-invoking cannot fix.
+    let out = k.transact::<(), ()>(&[], |stg| {
+        stg.push(TestRec::FailsToSerialize(RefusesSerialization));
+        Ok(())
+    });
+    assert!(matches!(out, Err(TxnError::Unencodable(_))), "got {out:?}");
+    assert_eq!(k.current_seq(), Seq(4), "neither refusal installed anything");
+}
+
+#[test]
 fn under_tolerate_gap_a_failed_txn_leaves_the_high_water_advanced() {
     // The knob's other setting: the burned Seq is NOT rolled back, the order
     // relaxes to monotone-only, and recovery folds the gap harmlessly — no
@@ -1063,6 +1093,41 @@ fn checkpoint_surfaces_the_serializers_account_of_an_unencodable_world() {
         Ok(())
     })
     .unwrap();
+    assert_eq!(k.current_seq(), Seq(2));
+}
+
+#[test]
+fn a_checkpoint_io_failure_is_retryable_and_never_poisons() {
+    // §6: a failed checkpoint leaves at most an ignored `.tmp` and an
+    // unreclaimed journal, so it is safe to retry — the opposite disposition
+    // from `Serialize`, which repeats until `W` itself encodes. The two share
+    // one two-arm match, and only one arm was exercised.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    // The write builds through the FIXED `checkpoint.tmp`, so a directory on
+    // that name fails `File::create` (EISDIR).
+    fs::create_dir(dir.path().join("checkpoint.tmp")).unwrap();
+    let err = k
+        .checkpoint()
+        .expect_err("a checkpoint that cannot be written fails");
+    assert!(matches!(err, CheckpointError::Io(_)), "got {err:?}");
+    // The cause travels, and it is the environment's — not `W`'s.
+    assert!(std::error::Error::source(&err).is_some());
+    assert_eq!(checkpoint_count(dir.path()), 0);
+    // Never a poison, and never a disturbance to the write path.
+    assert!(!k.is_poisoned());
+    assert_eq!(commit(&k, 20), Seq(2));
+
+    // "Safe to retry, and a retry re-does the whole sequence from a fresh
+    // root": the base it then writes is at the NEW head, and it is a base a
+    // reopen actually loads.
+    fs::remove_dir(dir.path().join("checkpoint.tmp")).unwrap();
+    assert_eq!(k.checkpoint().unwrap(), Seq(2));
+    assert!(ckpt_file(dir.path(), 2).exists());
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k), vec![10, 20]);
     assert_eq!(k.current_seq(), Seq(2));
 }
 
@@ -1136,6 +1201,44 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     assert_eq!(items(&k).len(), 8);
     assert_eq!(k.snapshot().world().sum, 8 * BLOB as u64);
     assert_eq!(k.current_seq(), Seq(8));
+}
+
+#[test]
+fn recovery_deletes_the_wholly_later_segments_the_tail_spans() {
+    // §7's tail truncation is two acts: cut the segment holding the last
+    // committed marker, and DELETE every wholly-later segment. Only the first
+    // is exercised elsewhere — every other fixture's tail sits in the segment
+    // it cuts.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1 past the threshold; the fifth rotates
+    }
+    drop(k);
+    assert_eq!(segment_count(dir.path()), 2, "the fixture must rotate");
+    let seg5 = seg_file(dir.path(), 5);
+    let spans = frame_spans(&seg5);
+    assert_eq!(spans.len(), 2); // T5's record and its marker
+    // Crash mid-append of T5's marker: seg-5 holds no committed marker, so the
+    // whole segment is tail and the cut lands at seg-1's end.
+    truncate_file(&seg5, spans[1].0 + 3);
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(k.current_seq(), Seq(4));
+    assert_eq!(items(&k).len(), 4);
+    // DURABLY REMOVED, not merely filtered out of the fold: the appender
+    // reopens the LAST segment on disk, so a survivor is the file the next
+    // session appends into (§1/§7).
+    assert!(!seg5.exists(), "the tail's later segment survived recovery");
+
+    // …which is what makes reusing the discarded coordinate safe: the next
+    // commit takes Seq(5) again, and the session after it recovers rather than
+    // meeting one Seq presented twice.
+    assert_eq!(commit_blob(&k), Seq(5));
+    drop(k);
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    assert_eq!(items(&k).len(), 5);
+    assert_eq!(k.current_seq(), Seq(5));
 }
 
 #[test]

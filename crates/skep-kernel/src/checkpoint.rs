@@ -109,8 +109,8 @@ pub(crate) fn list(dir: &Path) -> io::Result<Vec<CheckpointMeta>> {
 pub(crate) fn retain(dir: &Path, keep: usize) -> io::Result<Option<u64>> {
     let mut checkpoints = list(dir)?;
     let excess = checkpoints.len().saturating_sub(keep);
-    for victim in checkpoints.drain(..excess) {
-        fs::remove_file(&victim.path)?;
+    for cp in checkpoints.drain(..excess) {
+        fs::remove_file(&cp.path)?;
     }
     fsync_dir(dir)?;
     Ok(checkpoints.first().map(|cp| cp.seq))

@@ -172,9 +172,9 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 
 /// Encode one whole transaction: its record frames (seqs `first_seq..`) then
 /// its terminal commit marker, ready for a single `write_all` + one barrier
-/// fsync (§1/§3). `records` are the already-serialized `W::Record` bytes, and
-/// they are consumed into their frames: the caller has no use for them past
-/// this call, and a commit is no place to copy every record a second time.
+/// fsync (§1/§3). The bytes are consumed into their frames: the caller has no
+/// use for them past this call, and a commit is no place to copy every record
+/// a second time.
 ///
 /// The `Seq` arithmetic here stays in range because the coordinates were
 /// already minted: [`crate::Kernel::transact`] draws the whole range
@@ -183,17 +183,17 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// (§2). The parenthesisation is load-bearing at the ceiling:
 /// `first_seq + (n - 1)` computes no intermediate above the last coordinate
 /// the range legitimately holds.
-fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
-    let n = records.len() as u64;
+fn encode_txn(first_seq: u64, record_bytes: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
+    let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
     let txn = Txn(first_seq);
     // The exact figure, not a guess: [`txn_encoded_len`] is what this function
     // emits, pinned to it by the accounting test. Reserving it is what holds
     // the commit region to the two copies of a transaction's bytes its own
     // contract budgets for — a doubling `Vec` transiently holds a third.
-    let mut buf = Vec::with_capacity(txn_encoded_len(&records) as usize);
+    let mut buf = Vec::with_capacity(txn_encoded_len(&record_bytes) as usize);
     let mut checksum = 0u32;
-    for (i, bytes) in records.into_iter().enumerate() {
+    for (i, bytes) in record_bytes.into_iter().enumerate() {
         let payload = bincode::serialize(&FramePayload::Record(LogRecord {
             seq: first_seq + i as u64,
             txn,
@@ -579,11 +579,11 @@ impl JournalWriter {
     pub(crate) fn commit_txn(
         &mut self,
         first_seq: u64,
-        records: Vec<Vec<u8>>,
+        record_bytes: Vec<Vec<u8>>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
-        let buf =
-            encode_txn(first_seq, records).map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
+        let buf = encode_txn(first_seq, record_bytes)
+            .map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
         self.in_flight = InFlight::Appending { mark };
@@ -1060,7 +1060,7 @@ impl PendingTxn {
 /// the base it selected. A scan and the fold that consumes it must agree on
 /// their base, and that is the one route where they cannot disagree.
 pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, ScanFail> {
-    let mut out = ScanOutcome {
+    let mut outcome = ScanOutcome {
         s_load,
         committed_head: s_load,
         committed_records: Vec::new(),
@@ -1098,7 +1098,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                     match bincode::deserialize::<FramePayload>(frame) {
                         Ok(FramePayload::Record(record)) => {
                             if run_open {
-                                out.runs.push(RunEnd::Landed {
+                                outcome.runs.push(RunEnd::Landed {
                                     inferred_max: record.seq.saturating_sub(1),
                                     at: record.seq,
                                 });
@@ -1113,7 +1113,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                         }
                         Ok(FramePayload::Marker(marker)) => {
                             if run_open {
-                                out.runs.push(RunEnd::Landed {
+                                outcome.runs.push(RunEnd::Landed {
                                     inferred_max: marker.last_seq,
                                     // A marker carries no `Seq` of its own, so
                                     // the coordinate it contributes is one past
@@ -1126,10 +1126,10 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {
                                 if group.commits(&marker) {
-                                    out.committed_head = out.committed_head.max(marker.last_seq);
+                                    outcome.committed_head = outcome.committed_head.max(marker.last_seq);
                                     cut = Some((seg_index, end as u64));
-                                    out.committed_boundaries.push(marker.last_seq);
-                                    out.committed_records.extend(group.records);
+                                    outcome.committed_boundaries.push(marker.last_seq);
+                                    outcome.committed_records.extend(group.records);
                                 }
                                 // else: torn txn — not committed; its frames are
                                 // either beyond W (tail, truncated) or explained
@@ -1161,13 +1161,13 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
         }
     }
     if run_open {
-        out.runs.push(RunEnd::Eof);
+        outcome.runs.push(RunEnd::Eof);
     }
     // Everything past the last committed marker is tail. When the scanned
     // region holds no committed marker at all, everything scanned is tail:
     // the first scanned segment is cut at offset 0. Harmless corrupt runs
     // (inferred max ≤ `s_load`) sit below the cut and are not touched.
-    out.tail = cut
+    outcome.tail = cut
         .or_else(|| first_scanned.map(|first| (first, 0)))
         .map(|(seg_index, offset)| TailCut {
             segment: segs[seg_index].path.clone(),
@@ -1177,7 +1177,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                 .map(|seg| seg.path.clone())
                 .collect(),
         });
-    Ok(out)
+    Ok(outcome)
 }
 
 /// The tail-truncation step (§7), run between Pass 1 and Pass 2 — only on a
@@ -1216,9 +1216,9 @@ mod tests {
 
     /// A fixture commit. These journals stand alone — there is no root to
     /// install into — so the install step is empty.
-    fn write_txn(writer: &mut JournalWriter, first: u64, records: Vec<Vec<u8>>) {
+    fn write_txn(writer: &mut JournalWriter, first: u64, record_bytes: Vec<Vec<u8>>) {
         writer
-            .commit_txn(first, records, || {})
+            .commit_txn(first, record_bytes, || {})
             .expect("fixture commit");
     }
 
@@ -1239,9 +1239,9 @@ mod tests {
         v
     }
 
-    fn flip_byte(path: &Path, off: usize) {
+    fn flip_byte(path: &Path, offset: usize) {
         let mut data = fs::read(path).unwrap();
-        data[off] ^= 0xFF;
+        data[offset] ^= 0xFF;
         fs::write(path, data).unwrap();
     }
 
@@ -1281,15 +1281,15 @@ mod tests {
         // A corrupt len is DETECTED, not silently mis-delimiting the frame
         // that follows (§1) — the length that OVERRUNS the buffer, which the
         // bounds check refuses before any crc is computed…
-        let mut badlen = buf.clone();
-        badlen[5] ^= 0xFF;
-        assert!(matches!(parse_frame(&badlen, 0), Parsed::Bad { crc_bytes: 0 }));
+        let mut bad_len = buf.clone();
+        bad_len[5] ^= 0xFF;
+        assert!(matches!(parse_frame(&bad_len, 0), Parsed::Bad { crc_bytes: 0 }));
         // …and the one that FITS, where nothing but the crc can reject it: a
         // reader trusting this length would take a 5-byte payload and resume
         // mid-frame. `crc_bytes` names which door refused it.
-        let mut shortlen = buf;
-        shortlen[4..8].copy_from_slice(&5u32.to_le_bytes());
-        assert!(matches!(parse_frame(&shortlen, 0), Parsed::Bad { crc_bytes: 5 }));
+        let mut short_len = buf;
+        short_len[4..8].copy_from_slice(&5u32.to_le_bytes());
+        assert!(matches!(parse_frame(&short_len, 0), Parsed::Bad { crc_bytes: 5 }));
     }
 
     #[test]
@@ -1318,9 +1318,9 @@ mod tests {
             vec![vec![5u8; 3]],
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
         ] {
-            let expect = txn_encoded_len(&records);
+            let expected = txn_encoded_len(&records);
             let buf = encode_txn(u64::MAX - 3, records).unwrap();
-            assert_eq!(buf.len() as u64, expect);
+            assert_eq!(buf.len() as u64, expected);
         }
         // The per-record half: what push_frame judges is the wrapped payload,
         // the record's own bytes plus RECORD_PAYLOAD_OVERHEAD exactly.
@@ -1436,8 +1436,9 @@ mod tests {
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The frame cap, which is a property of frames this arm never builds.
+        let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
-        let over_frame = vec![vec![0u8; cap_bytes + 1 - 8]]; // −8: the len prefix
+        let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
         let out = memory.commit_txn(1, &over_frame, || installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         drop(over_frame);
@@ -1793,11 +1794,11 @@ mod tests {
         // on the real next frame — T1's marker (§1/§7).
         let dir = tempdir().unwrap();
         let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
-        let mut evil = Vec::new();
-        evil.extend_from_slice(b"xx");
-        evil.extend_from_slice(&MAGIC);
-        evil.extend_from_slice(b"yyyyyyyy");
-        write_txn(&mut writer, 1, vec![evil]);
+        let mut embedded_magic = Vec::new();
+        embedded_magic.extend_from_slice(b"xx");
+        embedded_magic.extend_from_slice(&MAGIC);
+        embedded_magic.extend_from_slice(b"yyyyyyyy");
+        write_txn(&mut writer, 1, vec![embedded_magic]);
         write_txn(&mut writer, 2, vec![rec(20)]);
         let segs = list_segments(dir.path()).unwrap();
         let spans = frame_spans(&segs[0].path);

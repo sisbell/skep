@@ -24,11 +24,11 @@ pub fn ckpt_file(dir: &Path, seq: u64) -> PathBuf {
     dir.join(format!("checkpoint.{seq}"))
 }
 
-/// Invert every bit of the byte at `off`, so a single-bit-rot fixture damages
-/// exactly the field it names and nothing beside it.
-pub fn flip_byte(path: &Path, off: u64) {
+/// Invert every bit of the byte at `offset`, so a single-bit-rot fixture
+/// damages exactly the field it names and nothing beside it.
+pub fn flip_byte(path: &Path, offset: u64) {
     let mut data = fs::read(path).expect("read for flip");
-    data[off as usize] ^= 0xFF;
+    data[offset as usize] ^= 0xFF;
     fs::write(path, data).expect("write flipped");
 }
 

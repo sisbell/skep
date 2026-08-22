@@ -303,7 +303,7 @@ impl Fixture {
         capture(&engine, &mut boundaries);
 
         // 5–6: two links (reversed endsets, so no idem dedup collapses them).
-        let (l1, _) = engine
+        let (link1, _) = engine
             .linkstore()
             .makelink(
                 OWNER,
@@ -312,9 +312,9 @@ impl Fixture {
                 SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
             )
-            .expect("makelink l1");
+            .expect("makelink link1");
         capture(&engine, &mut boundaries);
-        let (l2, _) = engine
+        let (link2, _) = engine
             .linkstore()
             .makelink(
                 OWNER,
@@ -323,13 +323,13 @@ impl Fixture {
                 SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
                 SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
             )
-            .expect("makelink l2");
+            .expect("makelink link2");
         capture(&engine, &mut boundaries);
 
         // 7–8: a supersession claim, then a retraction.
-        let _ = engine.linkstore().assert_sup(OWNER, &doc, &l1, &l2).expect("assert_sup");
+        let _ = engine.linkstore().assert_sup(OWNER, &doc, &link1, &link2).expect("assert_sup");
         capture(&engine, &mut boundaries);
-        let _ = engine.linkstore().nullify(OWNER, &doc, &l1).expect("nullify");
+        let _ = engine.linkstore().nullify(OWNER, &doc, &link1).expect("nullify");
         capture(&engine, &mut boundaries);
 
         // 9: a version (the copy-on-write fork).

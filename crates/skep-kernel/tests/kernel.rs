@@ -199,12 +199,12 @@ fn commit(k: &Kernel<TestWorld>, x: u64) -> Seq {
     .1
 }
 
-fn item_list(w: &TestWorld) -> Vec<u64> {
+fn world_items(w: &TestWorld) -> Vec<u64> {
     w.items.iter().copied().collect()
 }
 
 fn items(k: &Kernel<TestWorld>) -> Vec<u64> {
-    item_list(k.snapshot().world())
+    world_items(k.snapshot().world())
 }
 
 // ---- physical-layer helpers (the on-disk format the design fixes: §1/§6) ----
@@ -300,7 +300,7 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     // …and then all at once, at the install.
     assert_eq!(items(&k), vec![1, 2, 3]);
     assert_eq!(k.current_seq(), Seq(3));
-    assert_eq!(item_list(pinned.world()), vec![1]);
+    assert_eq!(world_items(pinned.world()), vec![1]);
 }
 
 /// The panic message of a caught unwind, whichever way the payload was boxed.
@@ -377,10 +377,10 @@ fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
     k.transact(&[], |stg| {
         stg.push(TestRec::Push(20));
         assert_eq!(k.current_seq(), Seq(1));
-        assert_eq!(item_list(k.snapshot().world()), vec![10]);
+        assert_eq!(world_items(k.snapshot().world()), vec![10]);
         // A bounded read derives from the journal, which holds Σ and nothing
         // of the transaction in flight.
-        assert_eq!(item_list(&k.world_at(Seq(1)).unwrap()), vec![10]);
+        assert_eq!(world_items(&k.world_at(Seq(1)).unwrap()), vec![10]);
         // …and a checkpoint taken here embodies Σ, at Σ's own coordinate.
         assert_eq!(k.checkpoint().unwrap(), Seq(1));
         Ok::<(), ()>(())
@@ -478,11 +478,11 @@ fn a_cloned_snapshot_is_the_same_pinned_state() {
     let also = s.clone();
     commit(&k, 20);
     assert_eq!((s.seq(), also.seq()), (Seq(1), Seq(1)));
-    assert_eq!(item_list(s.world()), item_list(also.world()));
+    assert_eq!(world_items(s.world()), world_items(also.world()));
     // A clone outlives the value it came from, and stays pinned to its state.
     drop(s);
     assert_eq!(also.seq(), Seq(1));
-    assert_eq!(item_list(also.world()), vec![10]);
+    assert_eq!(world_items(also.world()), vec![10]);
     assert_eq!(k.current_seq(), Seq(2));
 }
 
@@ -788,21 +788,21 @@ fn world_at_falls_back_down_the_same_base_chain_recovery_uses() {
     assert_eq!(k.checkpoint().unwrap(), Seq(4));
     commit(&k, 50);
     let whole = vec![10, 20, 30, 40, 50];
-    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+    assert_eq!(world_items(&k.world_at(Seq(5)).unwrap()), whole);
 
     // Newest base unusable → the older retained one carries the answer.
     let cp4 = ckpt_file(dir.path(), 4);
     let len = fs::metadata(&cp4).unwrap().len();
     flip_byte(&cp4, len - 1);
-    assert_eq!(item_list(&k.world_at(Seq(4)).unwrap()), vec![10, 20, 30, 40]);
-    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+    assert_eq!(world_items(&k.world_at(Seq(4)).unwrap()), vec![10, 20, 30, 40]);
+    assert_eq!(world_items(&k.world_at(Seq(5)).unwrap()), whole);
 
     // Both bases unusable → genesis carries it, replaying everything.
     let cp2 = ckpt_file(dir.path(), 2);
     let len = fs::metadata(&cp2).unwrap().len();
     flip_byte(&cp2, len - 1);
-    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
-    assert_eq!(item_list(&k.world_at(Seq(5)).unwrap()), whole);
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(world_items(&k.world_at(Seq(5)).unwrap()), whole);
     // The hint arrives seeded whichever base was chosen (§7 seam contract 2).
     assert_eq!(k.world_at(Seq(5)).unwrap().sum, 150);
 }
@@ -831,7 +831,7 @@ fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
         Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(5)),
         other => panic!("expected Corruption, got {other:?}"),
     }
-    assert_eq!(item_list(&k.world_at(Seq(3)).unwrap()), vec![10, 20, 30]);
+    assert_eq!(world_items(&k.world_at(Seq(3)).unwrap()), vec![10, 20, 30]);
 }
 
 #[test]
@@ -1337,7 +1337,7 @@ fn world_at_answers_the_same_world_under_a_live_appender() {
         let mut reads = 0u32;
         while writing.load(Ordering::Acquire) || reads < 20 {
             assert_eq!(
-                item_list(&k.world_at(Seq(2)).expect("a live appender never refuses a read")),
+                world_items(&k.world_at(Seq(2)).expect("a live appender never refuses a read")),
                 vec![10, 20],
                 "history diverged under a concurrent appender"
             );
@@ -1348,7 +1348,7 @@ fn world_at_answers_the_same_world_under_a_live_appender() {
         segment_count(dir.path()) > 1,
         "the fixture must rotate, so the reads reach back past a rotation"
     );
-    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 }
 
 #[test]
@@ -1373,7 +1373,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     let buf = fs::read(&seg).unwrap();
     let (off, len) = (spans[2].0 as usize, spans[2].1 as usize);
     append_bytes(&seg, &buf[off..off + len]);
-    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 
     // A frame torn mid-write: a header claiming a payload that never landed.
     let mut torn = b"SKJ1".to_vec();
@@ -1381,8 +1381,8 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     torn.extend_from_slice(&0u32.to_le_bytes()); // …a crc…
     torn.extend_from_slice(b"xyz"); // …and the payload stops here
     append_bytes(&seg, &torn);
-    assert_eq!(item_list(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
-    assert_eq!(item_list(&k.world_at(Seq(1)).unwrap()), vec![10]);
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
+    assert_eq!(world_items(&k.world_at(Seq(1)).unwrap()), vec![10]);
 
     // A bounded read writes nothing: the suffix it ignored is still there.
     assert!(fs::metadata(&seg).unwrap().len() > full);
@@ -1546,14 +1546,16 @@ fn open_creates_the_journal_directory_it_was_pointed_at() {
 }
 
 #[test]
-fn second_open_of_a_live_journal_fails() {
+fn a_journal_admits_one_live_kernel_at_a_time() {
     let dir = tempdir().unwrap();
     let k1 = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     // Exclusive advisory ownership (Lifecycle): appender OR recoverer, never
     // both — a second open() fails with the acquisition error.
     let err = Kernel::open(cfg_fsync(dir.path()), genesis()).err().unwrap();
     assert!(matches!(err, OpenError::Io(_)), "got {err:?}");
-    drop(k1); // the lock dies with the kernel
+    // …and the exclusion ends with the kernel that held it, so the journal is
+    // reopenable rather than owned for the life of the process.
+    drop(k1);
     Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
 }
 

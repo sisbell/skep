@@ -232,9 +232,9 @@ impl Sequencer {
     ///
     /// [`BurnedSeqPolicy::Rollback`]: crate::BurnedSeqPolicy::Rollback
     /// [`BurnedSeqPolicy::TolerateGap`]: crate::BurnedSeqPolicy::TolerateGap
-    fn roll_back_to(&mut self, base: Seq) {
+    fn roll_back_to(&mut self, base_seq: Seq) {
         if self.burned_seq == BurnedSeqPolicy::Rollback {
-            self.high_water = base.0;
+            self.high_water = base_seq.0;
         }
     }
 }
@@ -1058,19 +1058,19 @@ mod tests {
         // A record's encoded length grows byte-for-byte with its body, so
         // these two bodies land the accounted total exactly on the budget.
         let body = journal::MAX_TXN_BYTES - overhead;
-        let (l1, l2) = ((body / 2) as usize, (body - body / 2) as usize);
+        let (len1, len2) = ((body / 2) as usize, (body - body / 2) as usize);
         in_each_mode(|k, mode| {
             let (_, seq) = k
                 .transact::<_, ()>(&[], |stg| {
-                    stg.push(vec![7u8; l1]);
-                    stg.push(vec![7u8; l2]);
+                    stg.push(vec![7u8; len1]);
+                    stg.push(vec![7u8; len2]);
                     Ok(())
                 })
                 .unwrap_or_else(|e| panic!("{mode}: at-budget txn must commit: {e:?}"));
             assert_eq!(seq, Seq(2), "{mode}");
             let out = k.transact::<_, ()>(&[], |stg| {
-                stg.push(vec![7u8; l1]);
-                stg.push(vec![7u8; l2 + 1]);
+                stg.push(vec![7u8; len1]);
+                stg.push(vec![7u8; len2 + 1]);
                 Ok(())
             });
             match out {
@@ -1092,10 +1092,10 @@ mod tests {
         //
         // The record also busts the whole-txn budget, and the record's own
         // refusal speaks first: a caller fixing a value is not told to split.
-        let empty = journal::encode_record(&Vec::<u8>::new()).unwrap().len();
+        let prefix = journal::encode_record(&Vec::<u8>::new()).unwrap().len();
         let over = journal::MAX_FRAME_LEN as usize
             - journal::RECORD_PAYLOAD_OVERHEAD as usize
-            - empty
+            - prefix
             + 1;
         in_each_mode(|k, mode| {
             let out = k.transact::<_, ()>(&[], |stg| {

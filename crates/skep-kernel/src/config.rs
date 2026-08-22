@@ -264,13 +264,16 @@ mod tests {
         // `Interval`, which is an always-elapsed window rather than a
         // thresholdless one, and is what `interval_is_evaluated_on_commit…`
         // pins.
-        for ok in [
+        for policy in [
             CheckpointPolicy::EveryN(1),
             CheckpointPolicy::JournalBytes(1),
             CheckpointPolicy::Interval(Duration::ZERO),
             CheckpointPolicy::Manual,
         ] {
-            assert!(with(ok).validate().is_ok(), "{ok:?} is a mode this offers");
+            assert!(
+                with(policy).validate().is_ok(),
+                "{policy:?} is a mode this offers"
+            );
         }
     }
 }

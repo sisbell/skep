@@ -219,10 +219,10 @@ impl LockKey {
     /// is what makes the cross-store uniqueness [`Space`] promises structural
     /// rather than a convention each store re-keeps.
     pub fn new(space: Space, bytes: &[u8]) -> LockKey {
-        let mut v = Vec::with_capacity(1 + bytes.len());
-        v.push(space.tag());
-        v.extend_from_slice(bytes);
-        LockKey(v)
+        let mut key = Vec::with_capacity(1 + bytes.len());
+        key.push(space.tag());
+        key.extend_from_slice(bytes);
+        LockKey(key)
     }
 }
 

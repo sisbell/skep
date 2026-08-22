@@ -228,16 +228,16 @@ pub fn decls() -> Vec<TypeDecl> {
 /// `create_new_document` would stage.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_ns(&M3Rec::Allocate { addr: t(&[1, 0, 1]) })
+        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
         .apply_ns(&M3Rec::RegisterPrincipal {
-            prefix: t(&[1, 0, 1]),
+            prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 0, 1]),
+            addr: a(&[1, 0, 1, 0, 1]),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 0, 2]),
+            addr: a(&[1, 0, 1, 0, 2]),
         })
 }
 

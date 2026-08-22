@@ -16,8 +16,8 @@ use crate::error::MintError;
 
 /// Opaque external identity, supplied by M10/session. `delegate` enforces
 /// id-injectivity ([`crate::DelegateError::DuplicateId`]) ⇒ one id ↦ one
-/// principal, which keeps [`M3State::principal_by_id`]/[`M3State::principal_prefix`]
-/// and the ω-auth gate single-valued (§6).
+/// principal, which keeps [`M3State::principal_prefix`] and the ω-auth gate
+/// single-valued (§6).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct PrincipalId(pub u64);
 
@@ -27,9 +27,11 @@ pub struct PrincipalId(pub u64);
 pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 
 /// A registered principal: opaque id plus ownership prefix — T4-valid,
-/// `zeros ≤ 1` (account/node tier only, O1a).
+/// `zeros ≤ 1` (account/node tier only, O1a). The registry's value type: the
+/// public surface answers in [`PrincipalId`] and [`Address`], so nothing
+/// outside M3 destructures one.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Principal {
+pub(crate) struct Principal {
     pub id: PrincipalId,
     pub prefix: Address,
 }
@@ -41,6 +43,11 @@ pub struct Principal {
 /// chain `(A, 2)` and the version chain `(d, 1)` on SEPARATE frontiers by
 /// construction (ASN-0123 VD — the entire fix for ASN-0103's
 /// version/document collision, requiring no length filter).
+///
+/// `parent` is a bare `Tumbler` rather than an `Address` because the content
+/// and link anchors are `inc(d, 2)` and `inc(b_C(d), 0)`, which M1 returns as
+/// tumblers: T4-validity is established once, at [`M3State::next_in`], rather
+/// than at each of the four anchor constructors.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NsKey {
     parent: Tumbler,
@@ -49,19 +56,23 @@ pub struct NsKey {
 
 /// M3's journal deltas — lifted to `W::Record` via the engine's `From<M3Rec>`
 /// impl (the write-side mirror of [`crate::HasM3`]) and folded by
-/// [`M3State::apply_ns`]. One `Allocate` variant suffices for every minted
-/// address (entity, content, link) because the frontier map is uniform; the
-/// level distinction is recovered at *query* time from `zeros`.
+/// [`M3State::apply_ns`]. Every payload is an [`Address`], so T4-validity is
+/// carried by the value: checked once where the record is built, and re-checked
+/// on the way back off the journal by M1's validating `Deserialize`. A record
+/// still journals as a bare, flat tumbler, exactly as the data model
+/// prescribes. One `Allocate` variant suffices for every minted address
+/// (entity, content, link) because the frontier map is uniform; the level
+/// distinction is recovered at *query* time from `zeros`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum M3Rec {
     /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
     /// held — frontier key and lock key are the same key.
-    Allocate { addr: Tumbler },
+    Allocate { addr: Address },
     /// External node admission (ASN-0047 NodeBaptism; §7).
-    RegisterNode { addr: Tumbler },
+    RegisterNode { addr: Address },
     /// Delegation's principal half (§6).
-    RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
+    RegisterPrincipal { prefix: Address, id: PrincipalId },
 }
 
 /// M3's slice of the engine's `WorldState`, reached via [`crate::HasM3::m3`].
@@ -97,7 +108,7 @@ pub struct M3State {
     /// ASN-0040's `baptize(node, 1)` child-node capability (Conflicts §7):
     /// internal minting never yields a zeros = 0 address; ongoing admission is
     /// `register_node`, never baptism. Seeded `{[1]}`.
-    nodes: im::OrdSet<Tumbler>,
+    nodes: im::OrdSet<Address>,
 
     /// Principal registry Π, keyed by ownership prefix. Small (node/account
     /// tier only, O1a). Append-only with immutable prefixes (O12/O13),
@@ -107,35 +118,55 @@ pub struct M3State {
     /// forest is recomputable (NestingByDelegation) and never stored. An
     /// `OrdMap` because the top-down check needs a descendant *range* probe
     /// (§6 (iv)) and ordering leaves the ω range-walk upgrade open.
-    principals: im::OrdMap<Tumbler, Principal>,
+    principals: im::OrdMap<Address, Principal>,
 }
 
 // ---------------------------------------------------------------------------
 // Pure structural helpers (the house style for pure helpers: free functions).
 // ---------------------------------------------------------------------------
 
-/// The bootstrap node root `[1]` (Σ₀).
-pub(crate) fn bootstrap_root() -> Tumbler {
-    Tumbler::new([Nat::from(1u32)]).expect("a one-component sequence is nonempty")
+/// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds
+/// from and `register_node`'s lineage check probes against.
+pub(crate) fn bootstrap_root() -> Address {
+    let root = Tumbler::new([Nat::from(1u32)]).expect("a one-component sequence is nonempty");
+    validate(root).expect("the bootstrap root [1] is T4-valid")
 }
 
-/// THE namespace derivation: the [`NsKey`] `a` sits in — chain anchor
-/// `parent(a)`, generator `g = 1` when `a` extends its parent's field (equal
-/// `zeros`) and `g = 2` when it opens the next one. Pure M1, and total:
+/// The `zeros` count of an account-tier prefix `N·0·U` (O1a): what `delegate`
+/// admits, what [`M3State::next_account_prefix`] peeks, and the floor of the
+/// ω candidate walk.
+pub(crate) const ACCOUNT_ZEROS: usize = 1;
+
+/// THE chain-family rule: the generator carrying an anchor at `anchor_zeros`
+/// to a child at `child_zeros` — `g = 1` extends the anchor's own field,
+/// `g = 2` opens the next one. Every `NsKey`'s `g` comes from here, and this
+/// is what keeps the document chain `(A, 2)` and the version chain `(d, 1)`
+/// on separate frontiers (ASN-0123 VD).
+fn generator(anchor_zeros: usize, child_zeros: usize) -> u8 {
+    if anchor_zeros == child_zeros {
+        1
+    } else {
+        2
+    }
+}
+
+/// THE namespace derivation from the child side: the [`NsKey`] `a` sits in —
+/// chain anchor `parent(a)`, generator [`generator`]. Pure M1, and total:
 /// `None` EXACTLY for a parentless 1-component node (e.g. `[7]`), which is
 /// T4-valid yet anchors no chain — M1's `parent` returns `None` there, and
 /// that is the one input for which no namespace exists.
 ///
-/// Every reader of a frontier key routes through here — `delegate` for BOTH
-/// its next-form check and its held namespace `LockKey`, membership for its
-/// chain range probe, the fold for its frontier advance — so the checked key,
-/// the locked key, and the key a staged `Allocate` advances are one and the
-/// same key by construction (§1/§2/§6). Callers that hold a ≥ 2-component
-/// address by their own gate discharge the `None` case with an `expect` that
-/// names that gate.
+/// Every child-side reader of a frontier key routes through here — `delegate`
+/// for BOTH its next-form check and its held namespace `LockKey`, membership
+/// for its chain range probe, the fold for its frontier advance — so the
+/// checked key, the locked key, and the key a staged `Allocate` advances are
+/// one and the same key by construction (§1/§2/§6). Anchor-side keys come from
+/// the `*_ns` family below; both sides take their `g` from [`generator`].
+/// Callers that hold a ≥ 2-component address by their own gate discharge the
+/// `None` case with an `expect` that names that gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
-    let g = if zeros(a.tumbler()) == zeros(par.tumbler()) { 1 } else { 2 };
+    let g = generator(zeros(par.tumbler()), zeros(a.tumbler()));
     Some(NsKey { parent: par.tumbler().clone(), g })
 }
 
@@ -145,6 +176,10 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // `.0.` separator (the corpus-wide misread to guard against); `s_C ≠ s_L` is
 // what makes content and link address spaces disjoint by construction
 // (SD/L14, T7).
+//
+// Each family's `g` is `generator` evaluated at that family's FIXED tier pair
+// — content 3 → 3, link 3 → 3, version 2 → 2, document 1 → 2 — so the literals
+// below and the chain-family rule cannot drift apart unnoticed.
 fn content_ns(d: &Address) -> NsKey {
     NsKey { parent: inc(d.tumbler(), 2), g: 1 } // b_C(d) = inc(d, 2)
 }
@@ -188,19 +223,18 @@ pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
 /// `a`'s T4-valid, `zeros ≤ 1` prefixes, LONGEST FIRST (O1a) — the ω
 /// candidate walk (§5). FREE function — pure, consults no state. For each
 /// prefix length from `#a` down to 1, reconstruct the prefix and keep it iff
-/// T4-valid ∧ zeros ≤ 1: `validate` drops the trailing-separator lengths
-/// (`N·0`, non-T4) and the zeros ≤ 1 filter caps the walk at the account
-/// field — leaving exactly the account-tier (`N·0·U[..j]`) then node-tier
-/// (`N[..i]`) prefixes. Every account-tier prefix is strictly longer than
-/// every node-tier one, so descending length is globally longest-first;
-/// ≤ `#a` (= depth) candidates, never O(#allocated).
-fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Tumbler> + '_ {
+/// T4-valid ∧ zeros ≤ [`ACCOUNT_ZEROS`]: `validate` drops the
+/// trailing-separator lengths (`N·0`, non-T4) and the tier filter caps the
+/// walk at the account field — leaving exactly the account-tier
+/// (`N·0·U[..j]`) then node-tier (`N[..i]`) prefixes. Every account-tier
+/// prefix is strictly longer than every node-tier one, so descending length is
+/// globally longest-first; ≤ `#a` (= depth) candidates, never O(#allocated).
+fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Address> + '_ {
     (1..=a.tumbler().len()).rev().filter_map(move |plen| {
         let p = Tumbler::new(a.tumbler().iter().take(plen).cloned()).ok()?;
         validate(p)
             .ok()
-            .filter(|ad| zeros(ad.tumbler()) <= 1)
-            .map(|ad| ad.tumbler().clone())
+            .filter(|ad| zeros(ad.tumbler()) <= ACCOUNT_ZEROS)
     })
 }
 
@@ -216,13 +250,12 @@ impl M3State {
     /// M2's byte-identical-genesis caller contract.
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
-        let root_addr = validate(root.clone()).expect("the bootstrap root [1] is T4-valid");
         M3State {
             frontiers: im::HashMap::new(),
             nodes: im::OrdSet::unit(root.clone()),
             principals: im::OrdMap::unit(
-                root,
-                Principal { id: BOOTSTRAP_PRINCIPAL, prefix: root_addr },
+                root.clone(),
+                Principal { id: BOOTSTRAP_PRINCIPAL, prefix: root },
             ),
         }
     }
@@ -230,27 +263,24 @@ impl M3State {
     /// M3's fold — `pub`: the engine crate wires `World::apply`'s `Record::Ns`
     /// dispatch to this. TOTALITY DOMAIN (M2's total-apply obligation, stated
     /// here at the seam the engine wires): total — deterministic,
-    /// side-effect-free, panic-free — over every record staged by M3's own
-    /// paths, the only record source (every mint extends a REGISTERED parent,
-    /// so an `Allocate` has ≥ 2 components; `delegate` tier-checks (iii)
-    /// before staging, so a `RegisterPrincipal` prefix parses `N·0·U`). A
-    /// hand-constructed malformed `M3Rec` (e.g. a 1-component `Allocate`) is
-    /// OUTSIDE this domain and fail-stops on the expects by design — as does
-    /// an `Allocate` that regresses or jumps a frontier (ordinal ≠ count + 1),
-    /// on the contiguity `debug_assert` — corruption, not a live error path.
+    /// side-effect-free, panic-free — over every record whose `Allocate`
+    /// address has a parent, which every mint's does, since a mint extends a
+    /// REGISTERED parent. T4-validity is not a precondition to state: the
+    /// [`Address`] payloads carry it, in memory and off the journal alike, so
+    /// no shape check is owed here. An `Allocate` that regresses or jumps a
+    /// frontier (ordinal ≠ count + 1) is outside the domain and fail-stops on
+    /// the contiguity `debug_assert` — corruption, not a live error path.
     pub fn apply_ns(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
             M3Rec::Allocate { addr } => {
-                let ad = validate(addr.clone()).expect("a minted address is T4-valid");
-                let key = namespace_of(&ad)
+                let key = namespace_of(addr)
                     .expect("≥ 2 components — every mint extends a registered parent");
-                let n = ordinal(addr).clone();
-                // Contiguity fail-stop (the frontier mirror of the shape
-                // expects): every record M3's own paths stage mints exactly
-                // c_{m+1}, so at fold time the ordinal is frontier + 1 — a
-                // regressed or jumped ordinal is OUTSIDE the totality domain,
-                // never silently absorbed.
+                let n = ordinal(addr.tumbler()).clone();
+                // Contiguity fail-stop: every record M3's own paths stage
+                // mints exactly c_{m+1}, so at fold time the ordinal is
+                // frontier + 1 — a regressed or jumped ordinal is OUTSIDE the
+                // totality domain, never silently absorbed.
                 debug_assert_eq!(
                     n,
                     s.frontiers.get(&key).cloned().unwrap_or_else(Nat::zero) + 1u32,
@@ -262,8 +292,10 @@ impl M3State {
                 s.nodes.insert(addr.clone());
             }
             M3Rec::RegisterPrincipal { prefix, id } => {
-                let ad = validate(prefix.clone()).expect("a registered principal prefix is T4-valid");
-                s.principals.insert(prefix.clone(), Principal { id: *id, prefix: ad });
+                s.principals.insert(
+                    prefix.clone(),
+                    Principal { id: *id, prefix: prefix.clone() },
+                );
             }
         }
         s
@@ -301,9 +333,9 @@ impl M3State {
         })
     }
 
-    /// Namespace `LockKey` for `transact`'s `keys` arg — call BEFORE the
-    /// closure; the mint advances the same key, byte-identically, because both
-    /// route through the one `content_ns` + [`ns_lock_key`] path (§1). Never a
+    /// Content-chain `LockKey`: `(b_C(home), 1)` (§1/§3). Pairs with
+    /// [`M3State::mint_content`]`(home)` — take it for `transact`'s `keys`
+    /// BEFORE the closure, and the mint inside advances this same key. Never a
     /// coarser `(home_doc, g)` key: the three g = 1 chains under one document
     /// — content `(b_C(d), 1)`, link `(b_L(d), 1)`, version `(d, 1)` — get
     /// three DISTINCT locks (B7/B8).
@@ -311,18 +343,24 @@ impl M3State {
         ns_lock_key(&content_ns(home))
     }
 
-    /// Link-chain `LockKey`: `(b_L(home), 1)` (§1/§3).
+    /// Link-chain `LockKey`: `(b_L(home), 1)` (§1/§3). Pairs with
+    /// [`M3State::mint_link`]`(home)` — take it BEFORE the closure, and the
+    /// mint inside advances this same key.
     pub fn link_lock_key(home: &Address) -> LockKey {
         ns_lock_key(&link_ns(home))
     }
 
     /// Version-chain `LockKey`: `(source, 1)` — SEPARATE from the document
-    /// chain below (ASN-0123 VD).
+    /// chain below (ASN-0123 VD). Pairs with
+    /// [`M3State::mint_version`]`(source)` — take it BEFORE the closure, and
+    /// the mint inside advances this same key.
     pub fn version_lock_key(source: &Address) -> LockKey {
         ns_lock_key(&version_ns(source))
     }
 
-    /// Document-chain `LockKey`: `(account, 2)`.
+    /// Document-chain `LockKey`: `(account, 2)`. Pairs with
+    /// [`M3State::mint_document`]`(account)` — take it BEFORE the closure, and
+    /// the mint inside advances this same key.
     pub fn document_lock_key(account: &Address) -> LockKey {
         ns_lock_key(&document_ns(account))
     }
@@ -332,12 +370,10 @@ impl M3State {
     /// `delegate`: serializes its fresh-prefix top-down / next-form /
     /// authorization reads against concurrent same-namespace delegations AND
     /// its id-freshness read against concurrent same-id delegations — the id
-    /// race is CROSS-namespace (same `new_id`, different `new_prefix`), so
-    /// only a single global key serializes it. Held DEFENSIVELY by
+    /// race is CROSS-namespace (same `new_id`, different `new_prefix`), which
+    /// no per-namespace key can serialize. Held DEFENSIVELY by
     /// `create_new_document` (its ω read is stale-safe — ω of an *existing*
-    /// account is stable, §6/§8). M5's cross-owner VERSION does NOT need it:
-    /// it pre-reads the stable ω(d_src). Redundant under M2 v1's global
-    /// applier lock.
+    /// account is stable, §6/§8). Redundant under M2 v1's global applier lock.
     pub fn principals_lock_key() -> LockKey {
         LockKey::new(Space::Principals, &[])
     }
@@ -368,7 +404,7 @@ impl M3State {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }
         let a = self.next_in(&content_ns(home)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a.tumbler().clone() }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
@@ -378,7 +414,7 @@ impl M3State {
             return Err(MintError::HomeNotRegistered); // L1a
         }
         let a = self.next_in(&link_ns(home)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a.tumbler().clone() }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
@@ -390,7 +426,7 @@ impl M3State {
             return Err(MintError::SourceNotRegistered);
         }
         let a = self.next_in(&version_ns(source)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a.tumbler().clone() }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
@@ -401,7 +437,7 @@ impl M3State {
             return Err(MintError::NotAnAccount);
         }
         let a = self.next_in(&document_ns(account)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a.tumbler().clone() }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
 }
 
@@ -433,7 +469,7 @@ impl M3State {
     /// is permanent (B0/P1).
     pub fn is_allocated(&self, a: &Address) -> bool {
         match a.level() {
-            Level::Node => self.nodes.contains(a.tumbler()),
+            Level::Node => self.nodes.contains(a),
             // The general decompose-and-compare over ALL non-node levels
             // (incl. Element): a content/link element [d.0.s.n] has parent
             // b_C(d)/b_L(d) at the SAME zeros, so g = 1 and the key is its
@@ -443,14 +479,12 @@ impl M3State {
     }
 
     /// `Some(level)` iff `a` is a registered *entity* (zeros ≤ 2); `None` for
-    /// an element (content/link are not entities — use
-    /// [`M3State::is_allocated`]) or an unregistered address. [ASN-0047 E]
+    /// an element or an unregistered address. An entity is an allocated
+    /// address below the element tier: content and link elements ARE allocated
+    /// but are not in E, so ask [`M3State::is_allocated`] about those.
+    /// [ASN-0047 E]
     pub fn entity_level(&self, a: &Address) -> Option<Level> {
-        match a.level() {
-            Level::Node => self.nodes.contains(a.tumbler()).then_some(Level::Node),
-            Level::Account | Level::Document => self.in_chain_range(a).then_some(a.level()),
-            Level::Element => None,
-        }
+        (a.level() != Level::Element && self.is_allocated(a)).then_some(a.level())
     }
 
     /// `entity_level(d) == Some(Document)` — the edit/home precondition seam
@@ -459,14 +493,17 @@ impl M3State {
         self.entity_level(d) == Some(Level::Document)
     }
 
-    /// ω(a): the effective owner — longest-prefix match over Π (§5; ASN-0042
-    /// O2/O3/O5). A pure prefix query — valid even when `a` is not (yet)
-    /// allocated. The account-tier floor (O1a) makes it O(depth) point
-    /// lookups, never O(#allocated). For the authorization question itself,
-    /// ask [`M3State::is_effective_owner`]; this one is for callers that need
-    /// the owning principal as a value.
-    pub fn effective_owner(&self, a: &Address) -> Option<Principal> {
-        principal_tier_prefixes(a).find_map(|p| self.principals.get(&p).cloned())
+    /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
+    /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
+    /// when `a` is not (yet) allocated. The account-tier floor (O1a) makes it
+    /// O(depth) point lookups, never O(#allocated). For WHETHER a given id
+    /// owns `a` — the authorization question — ask
+    /// [`M3State::is_effective_owner`], which settles it without naming the
+    /// owner.
+    pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
+        principal_tier_prefixes(a)
+            .find_map(|p| self.principals.get(&p))
+            .map(|p| p.id)
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An
@@ -487,20 +524,18 @@ impl M3State {
             .is_some_and(|p| p.id == id)
     }
 
-    /// Resolve a principal by its opaque id. O(|Π|) scan over
-    /// `principals.values()` — Π is account/node-tier only (O1a), hence small
-    /// per node. SINGLE-VALUED because `delegate` enforces id-freshness
-    /// (DuplicateId), so at most one principal carries any id (§5/§6).
-    pub fn principal_by_id(&self, id: PrincipalId) -> Option<Principal> {
-        self.principals.values().find(|p| p.id == id).cloned()
-    }
-
     /// `pfx(id)` — the projection the id-centric ops (`fork`, `delegate`) and
     /// the M5→M3 cross-owner-VERSION seam need, since `principals` is keyed by
-    /// PREFIX, not id (NOT a point lookup — the §5 scan). Value-stable across
-    /// snapshots: prefixes are immutable (O13) and principals persist (O12).
+    /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan). Π is
+    /// account/node-tier only (O1a), hence small per node. SINGLE-VALUED
+    /// because `delegate` enforces id-freshness (`DuplicateId`), so at most one
+    /// principal carries any id (§5/§6). Value-stable across snapshots:
+    /// prefixes are immutable (O13) and principals persist (O12).
     pub fn principal_prefix(&self, id: PrincipalId) -> Option<Address> {
-        self.principal_by_id(id).map(|p| p.prefix)
+        self.principals
+            .values()
+            .find(|p| p.id == id)
+            .map(|p| p.prefix.clone())
     }
 
     /// Peek the next delegable account-tier prefix under `parent` — the exact
@@ -516,12 +551,16 @@ impl M3State {
     /// in-closure gate — two racing peeks of the same value leave exactly one
     /// winner.
     pub fn next_account_prefix(&self, parent: &Address) -> Option<Address> {
-        let g = match self.entity_level(parent)? {
-            Level::Node => 2,
-            Level::Account => 1,
-            _ => return None,
+        if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
+            return None;
+        }
+        // The target is account-tier by definition, so the chain-family rule
+        // picks the node ⇒ `(parent, 2)` account chain or the account ⇒
+        // `(parent, 1)` sub-account chain (Conflicts §8).
+        let key = NsKey {
+            parent: parent.tumbler().clone(),
+            g: generator(zeros(parent.tumbler()), ACCOUNT_ZEROS),
         };
-        let key = NsKey { parent: parent.tumbler().clone(), g };
         Some(
             self.next_in(&key)
                 .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
@@ -542,10 +581,10 @@ impl M3State {
     /// probe settles top-down — take the first key ≥ `p`; a registered
     /// principal sits strictly under `p` iff that key is a strict extension.
     /// If it is not, none is (the block is empty). No full scan.
-    pub(crate) fn has_principal_strictly_under(&self, p: &Tumbler) -> bool {
+    pub(crate) fn has_principal_strictly_under(&self, p: &Address) -> bool {
         self.principals
             .range(p.clone()..)
             .next()
-            .is_some_and(|(k, _)| is_prefix(p, k) && k != p)
+            .is_some_and(|(k, _)| M3State::prefix_contains(p, k) && k != p)
     }
 }

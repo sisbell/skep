@@ -43,7 +43,7 @@ impl Caller {
     pub fn is_owner(&self, m3: &M3State, a: &Address) -> bool {
         match self {
             Caller::System => true,
-            Caller::Principal(p) => m3.effective_owner(a).is_some_and(|o| o.id == *p),
+            Caller::Principal(p) => m3.effective_owner(a).is_some_and(|o| o == *p),
         }
     }
 }

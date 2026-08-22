@@ -17,7 +17,7 @@ use skep_kernel::{
 };
 use skep_namespace::{
     CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
-    Principal, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -63,7 +63,7 @@ fn a(comps: &[u32]) -> Address {
 }
 
 fn alloc(comps: &[u32]) -> M3Rec {
-    M3Rec::Allocate { addr: t(comps) }
+    M3Rec::Allocate { addr: a(comps) }
 }
 
 fn genesis_world() -> World {
@@ -125,16 +125,16 @@ fn genesis_seeds_bootstrap_node_and_principal() {
     let s = M3State::genesis();
     assert_eq!(s.entity_level(&a(&[1])), Some(Level::Node));
     assert!(s.is_allocated(&a(&[1])));
-    let p = s.principal_by_id(BOOTSTRAP_PRINCIPAL).expect("π₀ registered");
-    assert_eq!(p.id, BOOTSTRAP_PRINCIPAL);
-    assert_eq!(p.prefix, a(&[1]));
+    // π₀ resolves in both directions: its id names the root prefix, and the
+    // root address names it as ω.
     assert_eq!(s.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(a(&[1])));
+    assert_eq!(s.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
     // Empty frontiers: nothing else is allocated or registered yet.
     assert!(!s.is_allocated(&a(&[1, 0, 1])));
     assert_eq!(s.entity_level(&a(&[1, 0, 1])), None);
     // Unknown ids resolve to nothing (single-valued scan, §5).
-    assert!(s.principal_by_id(ID1).is_none());
     assert!(s.principal_prefix(ID1).is_none());
+    assert!(!s.is_effective_owner(ID1, &a(&[1])));
 }
 
 // ---- §A frontier mints ----
@@ -149,11 +149,9 @@ fn pure_mints_advance_the_documented_chains() {
     let (c1, rec) = m3.mint_content(&doc).expect("content mint");
     assert_eq!(c1, a(&[1, 0, 1, 0, 1, 0, 1, 1]));
     assert_eq!(c1.subspace(), Some(&Nat::from(1u32)));
-    // The mint hands back exactly the Allocate for the minted address.
-    let M3Rec::Allocate { addr } = rec else {
-        panic!("a mint returns M3Rec::Allocate");
-    };
-    assert_eq!(addr, *c1.tumbler());
+    // The mint hands back exactly the Allocate for the minted address —
+    // whole value, variant and payload alike.
+    assert_eq!(rec, M3Rec::Allocate { addr: c1.clone() });
     // Determinism (B2): a pure function of the frontier — same state, same
     // answer.
     assert_eq!(m3.mint_content(&doc).expect("repeat").0, c1);
@@ -321,23 +319,15 @@ fn containment_is_not_authorization() {
     // …so only ω (longest-prefix match) arbitrates: the delegate owns its
     // subtree, the node operator keeps the rest (O2/O3, the
     // ownership-divergence discipline).
-    assert_eq!(m3.effective_owner(&doc).expect("covered").id, ID1);
-    assert_eq!(m3.effective_owner(&acct).expect("covered").id, ID1);
-    assert_eq!(
-        m3.effective_owner(&a(&[1])).expect("covered").id,
-        BOOTSTRAP_PRINCIPAL
-    );
+    assert_eq!(m3.effective_owner(&doc), Some(ID1));
+    assert_eq!(m3.effective_owner(&acct), Some(ID1));
+    assert_eq!(m3.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
     // ω is a pure prefix query — valid even for not-yet-allocated addresses.
     assert_eq!(
-        m3.effective_owner(&a(&[1, 0, 2])).expect("covered").id,
-        BOOTSTRAP_PRINCIPAL
+        m3.effective_owner(&a(&[1, 0, 2])),
+        Some(BOOTSTRAP_PRINCIPAL)
     );
-    assert_eq!(
-        m3.effective_owner(&a(&[1, 0, 1, 0, 9, 0, 1, 5]))
-            .expect("covered")
-            .id,
-        ID1
-    );
+    assert_eq!(m3.effective_owner(&a(&[1, 0, 1, 0, 9, 0, 1, 5])), Some(ID1));
     // Uncovered (a foreign node's subtree): None.
     assert!(m3.effective_owner(&a(&[2])).is_none());
     assert!(m3.effective_owner(&a(&[2, 0, 1])).is_none());
@@ -390,7 +380,7 @@ fn delegate_mints_account_and_principal_atomically() {
     assert_eq!(m3.entity_level(&acct), Some(Level::Account));
     assert_eq!(m3.principal_prefix(ID1), Some(acct.clone()));
     // Effective ownership moved to the new principal (O7).
-    assert_eq!(m3.effective_owner(&acct).expect("covered").id, ID1);
+    assert_eq!(m3.effective_owner(&acct), Some(ID1));
     // The node's account chain peeks the next slot now.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
 
@@ -404,12 +394,9 @@ fn delegate_mints_account_and_principal_atomically() {
     assert_eq!(sub_acct, sub);
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    assert_eq!(m3.effective_owner(&sub_acct).expect("covered").id, ID2);
+    assert_eq!(m3.effective_owner(&sub_acct), Some(ID2));
     // ω still refines by longest match beside the sub-account.
-    assert_eq!(
-        m3.effective_owner(&a(&[1, 0, 1, 2])).expect("covered").id,
-        ID1
-    );
+    assert_eq!(m3.effective_owner(&a(&[1, 0, 1, 2])), Some(ID1));
 
     // next_account_prefix: None unless the parent is a REGISTERED node or
     // account.
@@ -484,7 +471,7 @@ fn delegate_rejection_order_is_pinned() {
     // A rejected delegation commits NEITHER half (clean typed rejection).
     let snap = k.snapshot();
     assert!(!snap.world().m3().is_allocated(&a(&[1, 0, 3])));
-    assert!(snap.world().m3().principal_by_id(ID2).is_none());
+    assert!(snap.world().m3().principal_prefix(ID2).is_none());
 
     // ParentNotRegistered (P8, Conflicts §5) — on a FRESH kernel π₀ is ω of
     // [1,0,1,1] and that chain's next-form is satisfied, so the unregistered
@@ -528,7 +515,7 @@ fn delegate_rejection_order_is_pinned() {
             .apply_ns(&alloc(&[1, 0, 1]))
             .apply_ns(&alloc(&[1, 0, 1, 1]))
             .apply_ns(&M3Rec::RegisterPrincipal {
-                prefix: t(&[1, 0, 1, 1]),
+                prefix: a(&[1, 0, 1, 1]),
                 id: ID2,
             }),
     };
@@ -641,10 +628,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     assert!(m3.is_allocated(&n));
     // A provisioned node stays bootstrap-owned via ω until an account is
     // delegated beneath it (Conflicts §7)…
-    assert_eq!(
-        m3.effective_owner(&n).expect("covered").id,
-        BOOTSTRAP_PRINCIPAL
-    );
+    assert_eq!(m3.effective_owner(&n), Some(BOOTSTRAP_PRINCIPAL));
     // …and delegation beneath it works through the ordinary gate.
     let peek = m3.next_account_prefix(&n).expect("peek under new node");
     assert_eq!(peek, a(&[1, 7, 0, 1]));
@@ -679,10 +663,10 @@ fn register_node_validates_and_admits_supplied_addresses() {
 fn journaled_types_survive_serde_round_trips() {
     // M3Rec — the journal delta — through M2's actual wire format (bincode).
     let recs = [
-        M3Rec::Allocate { addr: t(&[1, 0, 1]) },
-        M3Rec::RegisterNode { addr: t(&[1, 7]) },
+        M3Rec::Allocate { addr: a(&[1, 0, 1]) },
+        M3Rec::RegisterNode { addr: a(&[1, 7]) },
         M3Rec::RegisterPrincipal {
-            prefix: t(&[1, 0, 1]),
+            prefix: a(&[1, 0, 1]),
             id: ID1,
         },
     ];
@@ -691,6 +675,37 @@ fn journaled_types_survive_serde_round_trips() {
         let back: M3Rec = bincode::deserialize(&bytes).expect("deserialize M3Rec");
         assert_eq!(*rec, back); // whole value: variant AND payload
     }
+
+    // The Address payloads journal as bare, flat tumblers — the data model's
+    // form, not the in-memory type's. A shadow record carrying Tumblers
+    // encodes byte-identically, variant for variant.
+    #[derive(Serialize)]
+    enum TumblerRec {
+        Allocate { addr: Tumbler },
+        RegisterNode { addr: Tumbler },
+        RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
+    }
+    let shadows = [
+        TumblerRec::Allocate { addr: t(&[1, 0, 1]) },
+        TumblerRec::RegisterNode { addr: t(&[1, 7]) },
+        TumblerRec::RegisterPrincipal {
+            prefix: t(&[1, 0, 1]),
+            id: ID1,
+        },
+    ];
+    for (rec, shadow) in recs.iter().zip(&shadows) {
+        assert_eq!(
+            bincode::serialize(rec).expect("serialize M3Rec"),
+            bincode::serialize(shadow).expect("serialize the tumbler shadow"),
+        );
+    }
+
+    // A tumbler that is not T4-valid cannot arrive as a record: the payload
+    // re-validates on the way off the journal (M1's validating Deserialize),
+    // so the fold is never handed a malformed address.
+    let malformed = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[1, 0]) })
+        .expect("serialize the tumbler shadow");
+    assert!(bincode::deserialize::<M3Rec>(&malformed).is_err());
 
     // M3State — the checkpointed slice: every field is ordinary serde (none
     // skip-serialized; default rebuild_derived), so a round-tripped state
@@ -709,15 +724,13 @@ fn journaled_types_survive_serde_round_trips() {
     assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     assert!(back.is_registered_document(&doc));
     assert_eq!(back.entity_level(&acct), Some(Level::Account));
-    assert_eq!(back.principal_prefix(ID1), Some(acct.clone()));
-    assert_eq!(back.effective_owner(&doc).expect("covered").id, ID1);
     assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
-
-    // Principal (id + prefix) rides inside the slice; round-trip it directly.
-    let p = back.principal_by_id(BOOTSTRAP_PRINCIPAL).expect("π₀");
-    let bytes = bincode::serialize(&p).expect("serialize Principal");
-    let q: Principal = bincode::deserialize(&bytes).expect("deserialize Principal");
-    assert_eq!(q, p);
+    // The whole principal registry rides inside the slice — both its
+    // entries, both directions (id → prefix, address → ω).
+    assert_eq!(back.principal_prefix(ID1), Some(acct.clone()));
+    assert_eq!(back.effective_owner(&doc), Some(ID1));
+    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(a(&[1])));
+    assert_eq!(back.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
 }
 
 #[test]
@@ -748,7 +761,7 @@ fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
     assert_eq!(m3.principal_prefix(ID1), Some(acct.clone()));
     assert!(m3.is_registered_document(&doc));
     assert_eq!(m3.entity_level(&a(&[1, 7])), Some(Level::Node));
-    assert_eq!(m3.effective_owner(&doc).expect("covered").id, ID1);
+    assert_eq!(m3.effective_owner(&doc), Some(ID1));
     // The frontiers recovered too: the chains continue where they left off.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     let (d2, _) = m3.mint_document(&acct).expect("mint after recovery");

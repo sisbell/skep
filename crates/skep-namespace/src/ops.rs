@@ -9,11 +9,11 @@
 
 use std::sync::Arc;
 
-use skep_address::{is_prefix, parent, validate, zeros, Address, Level, Tumbler};
+use skep_address::{parent, validate, zeros, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
-use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
+use crate::state::{bootstrap_root, namespace_of, ns_lock_key, ACCOUNT_ZEROS};
 use crate::{HasM3, M3Rec, M3State, PrincipalId};
 
 /// M3's transact-driving op handle over M2 (§B): a thin wrapper holding the
@@ -109,7 +109,7 @@ where
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
         // only after it are parent()/namespace_of() total on new_prefix.
         let np = validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
-        if zeros(np.tumbler()) != 1 {
+        if zeros(np.tumbler()) != ACCOUNT_ZEROS {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
         // One NsKey serves the held lock, the next-form check, and the
@@ -135,7 +135,7 @@ where
             }
             // (iv) top-down: no principal strictly under new_prefix — the T5
             // single probe [non-monotone].
-            if base.has_principal_strictly_under(np.tumbler()) {
+            if base.has_principal_strictly_under(&np) {
                 return Err(DelegateError::NotTopDown);
             }
             // (v) freshness: unallocated (T4-validity was the pre-work lift)
@@ -145,7 +145,7 @@ where
             }
             // id-freshness: one id ↦ at most one principal — the id-axis
             // mirror of O1b [non-monotone, cross-namespace — §8].
-            if base.principal_by_id(new_id).is_some() {
+            if base.principal_prefix(new_id).is_some() {
                 return Err(DelegateError::DuplicateId);
             }
             // P8: the new account's parent is a registered entity [monotone
@@ -164,15 +164,10 @@ where
                 return Err(DelegateError::NotNextForm);
             }
             // Baptism + principal registration, one transaction (O17b).
-            stg.push(
-                M3Rec::Allocate {
-                    addr: np.tumbler().clone(),
-                }
-                .into(),
-            );
+            stg.push(M3Rec::Allocate { addr: np.clone() }.into());
             stg.push(
                 M3Rec::RegisterPrincipal {
-                    prefix: np.tumbler().clone(),
+                    prefix: np.clone(),
                     id: new_id,
                 }
                 .into(),
@@ -205,15 +200,10 @@ where
             if stg.base().m3().entity_level(&ad).is_some() {
                 return Err(NodeError::NotFresh);
             }
-            if !is_prefix(&bootstrap_root(), ad.tumbler()) {
+            if !M3State::prefix_contains(&bootstrap_root(), &ad) {
                 return Err(NodeError::NotDescendantOfBootstrap);
             }
-            stg.push(
-                M3Rec::RegisterNode {
-                    addr: ad.tumbler().clone(),
-                }
-                .into(),
-            );
+            stg.push(M3Rec::RegisterNode { addr: ad.clone() }.into());
             Ok(ad)
         })
     }

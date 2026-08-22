@@ -363,7 +363,7 @@ where
             return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
         }
         let (lock, branch) = match m3.effective_owner(d_src) {
-            Some(p) if p.id == principal => (M3State::version_lock_key(d_src), Branch::Owned),
+            Some(p) if p == principal => (M3State::version_lock_key(d_src), Branch::Owned),
             _ => {
                 // Cross-owner fork.
                 let pfx = m3

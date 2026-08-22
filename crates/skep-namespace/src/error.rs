@@ -8,9 +8,14 @@ use std::fmt;
 
 use skep_address::GateViolation;
 
-/// Frontier-mint rejection (§A). The structural preconditions are the only
-/// active gates (§4); `Gate` is the M1 inc-gate (B6/TA5a) routed defensively —
-/// it fires only on a corrupted frontier, never on a live path.
+/// Frontier-mint rejection (§A) — the ONE vocabulary all four mints share, so
+/// M5 and M7 lift a mint refusal through a single `From`. Each mint can
+/// produce exactly one of the structural variants:
+/// `mint_content`/`mint_link` ⇒ `HomeNotRegistered`, `mint_version` ⇒
+/// `SourceNotRegistered`, `mint_document` ⇒ `NotAnAccount`. Those
+/// preconditions are the only active gates (§4); `Gate` is the M1 inc-gate
+/// (B6/TA5a) routed defensively — it fires only on a corrupted frontier, never
+/// on a live path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
     /// `mint_content`/`mint_link`: home is not a registered Document (P6/C2/L1a).
@@ -59,7 +64,10 @@ pub enum CreateDocumentError {
     /// Caller is not the effective owner ω of the target (O5) — authorization
     /// is by ω (longest match), never bare prefix containment.
     NotOwner,
-    /// The op's mint failed structurally.
+    /// The op's mint failed structurally. Both ops mint through
+    /// `mint_document`, so only two [`MintError`] leaves are reachable here —
+    /// `NotAnAccount` and the defensive `Gate`. A caller matching on this owes
+    /// no arm for `HomeNotRegistered` or `SourceNotRegistered`.
     Mint(MintError),
 }
 

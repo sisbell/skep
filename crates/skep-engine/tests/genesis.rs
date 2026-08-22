@@ -30,8 +30,7 @@ fn genesis_seeds_each_store_per_its_design() {
 
     // M3: node [1] registered, owned by the bootstrap principal.
     assert_eq!(w.m3().entity_level(&node1()), Some(Level::Node));
-    let owner = w.m3().effective_owner(&node1()).expect("the bootstrap node has an owner");
-    assert_eq!(owner.id, BOOTSTRAP_PRINCIPAL);
+    assert_eq!(w.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
 
     // M4: the permascroll starts empty.
     assert!(w.content().is_empty());

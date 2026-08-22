@@ -159,31 +159,31 @@ const P1: Caller = Caller::Principal(PrincipalId(1));
 /// M2's byte-identical-genesis contract.
 fn genesis() -> World {
     let m3 = M3State::genesis()
-        .apply_ns(&M3Rec::Allocate { addr: t(&[1, 0, 1]) })
+        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
         .apply_ns(&M3Rec::RegisterPrincipal {
-            prefix: t(&[1, 0, 1]),
+            prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_ns(&M3Rec::Allocate { addr: t(&[1, 0, 2]) })
+        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
         .apply_ns(&M3Rec::RegisterPrincipal {
-            prefix: t(&[1, 0, 2]),
+            prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 1]),
+            addr: a(&[1, 0, 1, 1]),
         })
         .apply_ns(&M3Rec::RegisterPrincipal {
-            prefix: t(&[1, 0, 1, 1]),
+            prefix: a(&[1, 0, 1, 1]),
             id: PrincipalId(3),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 0, 1]),
+            addr: a(&[1, 0, 1, 0, 1]),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 0, 2]),
+            addr: a(&[1, 0, 1, 0, 2]),
         })
         .apply_ns(&M3Rec::Allocate {
-            addr: t(&[1, 0, 1, 1, 0, 1]),
+            addr: a(&[1, 0, 1, 1, 0, 1]),
         });
     World {
         m3,

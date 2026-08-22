@@ -202,6 +202,12 @@ fn push_frame(buf: &mut Vec<u8>, payload: &[u8]) -> io::Result<()> {
 /// (§2). The parenthesisation is load-bearing at the ceiling:
 /// `first_seq + (n - 1)` computes no intermediate above the last coordinate
 /// the range legitimately holds.
+///
+/// The assertion below guards the FRAME BUILDER's own boundary, which
+/// [`JournalWriter::commit_txn`] reaches and the test tier calls directly.
+/// [`Journal::commit_txn`] asserts the same rule at its own entry, for a
+/// reason of its own: there it is what makes the two durability arms answer a
+/// violation alike.
 fn encode_txn(first_seq: u64, record_bytes: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     let n = record_bytes.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
@@ -769,12 +775,28 @@ impl Journal {
     /// frame-cap refusal deliberately stays: writer and reader sit on opposite
     /// sides of a trust boundary, and the writer's guard is what entitles
     /// recovery to treat a larger claimed `len` as corrupt.
+    ///
+    /// PRECONDITION — `records` is non-empty. A zero-step op never reaches the
+    /// journal: [`crate::Kernel::transact`] returns at the zero-step before a
+    /// coordinate is minted, and `NonZeroU64` carries the rest. The assertion
+    /// below is a second check of that one rule at a second boundary, owed for
+    /// the reason [`push_frame`]'s frame-cap guard is owed beside this method's
+    /// own size limit: what this method promises is that its two arms answer
+    /// alike, and without it a violation panics through [`encode_txn`] on the
+    /// durable arm and INSTALLS a transaction with no records on the in-memory
+    /// one — a disagreement in the one element whose purpose is that the arms
+    /// cannot disagree.
     pub(crate) fn commit_txn<R: Serialize>(
         &mut self,
         first_seq: u64,
         records: Vec<R>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
+        assert!(
+            !records.is_empty(),
+            "zero-step ops never reach the journal: `transact` returns before \
+             minting a coordinate"
+        );
         let mut record_bytes: Vec<Vec<u8>> = Vec::new();
         let mut accounted = MARKER_FRAME_LEN;
         let mut over_budget = false;
@@ -909,6 +931,11 @@ pub(crate) struct ScanOutcome {
     /// re-supplied per question, where a caller could hand back a different
     /// one than the scan was run with.
     s_load: u64,
+    /// The boundary this scan COLLECTED to, as [`scan`] was called with it —
+    /// `None` for the whole scanned region. Carried here so a fold can be held
+    /// to it ([`ScanOutcome::covers`]): records above it were read and dropped,
+    /// so a fold past it is one this outcome cannot answer.
+    bound: Option<u64>,
     /// The last COMMITTED marker's `last_seq`, floored at `S_load` — §7's `W`
     /// (if no committed marker sits above the loaded checkpoint it is
     /// `S_load` itself and Pass 2 folds nothing). Never bounded: it is
@@ -976,6 +1003,15 @@ impl ScanOutcome {
             }
             _ => None,
         })
+    }
+
+    /// Whether a fold over `(s_load, bound]` can be answered from this scan:
+    /// whether `bound` is at or below the boundary this scan COLLECTED to.
+    /// Records above that boundary were read and dropped, so a fold past it
+    /// cannot restore them and would answer `Ok` with a world missing exactly
+    /// the range between (§7).
+    pub(crate) fn covers(&self, bound: u64) -> bool {
+        self.bound.is_none_or(|collected| bound <= collected)
     }
 
     /// Whether `at` is one of the committed transaction boundaries this scan
@@ -1164,6 +1200,7 @@ pub(crate) fn scan(
 ) -> Result<ScanOutcome, ScanFail> {
     let mut outcome = ScanOutcome {
         s_load,
+        bound,
         committed_head: s_load,
         committed_records: Vec::new(),
         committed_boundaries: Vec::new(),

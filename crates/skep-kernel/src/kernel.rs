@@ -414,7 +414,10 @@ impl<W: WorldState> Kernel<W> {
     /// SAFE(b)(iii)), not a phantom.
     ///
     /// Under [`Durability::InMemory`]: no journal to name, no recovery, and
-    /// the root is initialized directly from `genesis` (`S_load = 0`).
+    /// the root is initialized directly from `genesis` (`S_load = 0`);
+    /// [`WorldState::rebuild_derived`] is NOT run, so `genesis` is installed
+    /// exactly as given — which is why that value must already carry its own
+    /// derived hints ([`WorldState::rebuild_derived`]'s genesis obligation).
     ///
     /// DAMAGE MODEL — what recovery detects is FRAMES THAT FAIL THEIR CRC. A
     /// segment that is ABSENT leaves no run to classify and no gap to detect:
@@ -429,10 +432,11 @@ impl<W: WorldState> Kernel<W> {
     /// REFUSAL PRECEDENCE — the steps above are the order in which refusals
     /// speak: [`OpenError::InvalidConfig`] precedes the lock, the lock
     /// precedes any read of the journal, [`OpenError::BadCheckpoint`]
-    /// precedes [`OpenError::Corruption`], and EVERY route to `Corruption` —
-    /// the classified corrupt run, the exhausted `Seq` order, and the fold's
-    /// own verdict on an undecodable or repeated record — precedes the tail
-    /// truncation, which is why a halt never cuts anything.
+    /// precedes [`OpenError::Corruption`], and EVERY route to `Corruption`,
+    /// in the order they speak — an unenumerable frame stream, the classified
+    /// corrupt run, the exhausted `Seq` order, and the fold's own verdict on
+    /// an undecodable or repeated record — precedes the tail truncation, which
+    /// is why a halt never cuts anything.
     ///
     /// CALLER CONTRACT — `genesis` (= Σ₀) MUST be byte-identical on every
     /// `open()` of a given journal: recovery folds journaled DELTAS onto it,

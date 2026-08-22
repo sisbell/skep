@@ -197,16 +197,20 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// [`rebuild_derived`]: WorldState::rebuild_derived
     fn apply(&self, record: &Self::Record) -> Self;
 
-    /// Seed derived hints from authoritative state. Runs ONCE at load, BEFORE
-    /// replay, and NEVER on a live commit — so it cannot keep any hint current
-    /// by itself. It exists solely to reconstruct hints a checkpoint
-    /// skip-serialized (`#[serde(skip)]`). Default identity; override iff
-    /// hints are skipped.
+    /// Seed derived hints from authoritative state. Runs ONCE per journaled
+    /// load — on whichever base recovery selects, a retained checkpoint or
+    /// genesis — BEFORE replay, and NEVER on a live commit, so it cannot keep
+    /// any hint current by itself. It exists solely to reconstruct hints a
+    /// checkpoint skip-serialized (`#[serde(skip)]`). NOT run under
+    /// [`Durability::InMemory`], which does not load: that mode installs the
+    /// caller's `genesis` value as the root exactly as given. Default
+    /// identity; override iff hints are skipped.
     ///
     /// CONSISTENCY OBLIGATION (§7, seam contract 2): an override MUST seed
     /// exactly the hint state that folding every record with `Seq ≤ S` through
-    /// [`apply`] would produce (`S` = the loaded checkpoint's seq). Recovery
-    /// runs `rebuild_derived` (seeding `Seq ≤ S`) THEN replays `Seq > S`
+    /// [`apply`] would produce (`S` = the seq of the base selected — a
+    /// retained checkpoint's, or `0` for genesis). Recovery runs
+    /// `rebuild_derived` (seeding `Seq ≤ S`) THEN replays `Seq > S`
     /// through `apply`; if the seed disagrees with the `apply`-fold it stands
     /// in for, the recovered hint diverges from the live-maintained one and
     /// reads go wrong. M2 cannot check this.
@@ -220,6 +224,14 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// genesis-based one by exactly that field, silently. A world that skips
     /// nothing needs no override at all, which is why the default is identity.
     /// M2 cannot check this either.
+    ///
+    /// GENESIS OBLIGATION — the `genesis` handed to [`Kernel::open`] MUST
+    /// arrive with its derived hints already consistent with its own
+    /// authoritative state, because [`Durability::InMemory`] installs it
+    /// unseeded while a journaled `open()` seeds it through this method. A
+    /// world that relies on that seeding is right in one mode and wrong in the
+    /// other, silently, and both modes answer the same coordinate — `Seq(0)` —
+    /// with different hints. M2 cannot check this.
     ///
     /// [`apply`]: WorldState::apply
     fn rebuild_derived(self) -> Self {

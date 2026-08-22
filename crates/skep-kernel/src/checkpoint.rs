@@ -22,6 +22,13 @@ const MAGIC: [u8; 4] = *b"SKC1";
 const HEADER_LEN: usize = 24;
 
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
+///
+/// A slice of these must be ascending by `seq`, as [`list`] produces it: every
+/// operation over one reads a position in the slice as an age. [`retain`]
+/// deletes from the FRONT as the oldest, [`crate::replay::select_base`] walks
+/// from the BACK as the newest and reads the front as the oldest base still
+/// derivable ([`crate::replay::Unreachable`]'s floor). An unordered slice makes
+/// all three wrong, and one of them deletes files.
 pub(crate) struct CheckpointMeta {
     pub seq: u64,
     path: PathBuf,

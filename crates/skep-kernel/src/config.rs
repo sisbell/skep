@@ -84,6 +84,13 @@ pub enum Durability {
     /// size refusal a journaled deployment would meet. What this mode has no
     /// path to at all is [`crate::TxnError::Durability`], which is a
     /// barrier's failure and there is no barrier.
+    ///
+    /// This mode does not LOAD, so [`crate::WorldState::rebuild_derived`] does
+    /// not run: the caller's `genesis` value becomes the root exactly as given,
+    /// where a journaled `open()` seeds whichever base it selects through that
+    /// method. A world whose hints rely on the seeding is therefore right
+    /// under [`Durability::Fsync`] and wrong here — which is what that method's
+    /// genesis obligation asks the caller to rule out.
     InMemory,
 }
 

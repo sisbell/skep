@@ -48,7 +48,9 @@ impl<W> Base<W> {
     /// `bound` is the boundary this base will be folded to, when the caller has
     /// one: the scan then collects only what a fold to it can read. Recovery
     /// passes `None`, since its own bound is the committed head the scan is
-    /// about to derive.
+    /// about to derive. A LOWER bound than the fold's leaves the records
+    /// between them uncollected, which no filter downstream can restore —
+    /// [`fold_to`] refuses that pairing rather than answering a short world.
     pub(crate) fn scan(
         &self,
         segs: &[SegmentMeta],
@@ -81,6 +83,13 @@ pub(crate) struct Unreachable {
 ///
 /// `genesis` is borrowed and copied only on the branch that uses it, so the
 /// common case — a checkpoint that loads — costs no copy of a world at all.
+///
+/// `checkpoints` must be ASCENDING by seq, as [`crate::checkpoint::list`]
+/// produces it: this walks it from the back as newest-first and reads its front
+/// as the oldest base still derivable, so an out-of-order slice picks a base
+/// that is not the newest and names a floor that is not the oldest. `segs`
+/// must be ascending by `firstSeq` for [`journal::reaches_genesis`]'s own
+/// reason.
 pub(crate) fn select_base<W: WorldState>(
     checkpoints: &[CheckpointMeta],
     segs: &[SegmentMeta],
@@ -137,11 +146,15 @@ pub(crate) struct FoldFail {
 /// outlive the fold. That is what lets a caller refuse on this fold's verdict
 /// before it acts on any of them.
 ///
-/// `scan` must be THIS base's own ([`Base::scan`]). A scan judged against
-/// another base makes the `(base.s_load, bound]` filter meaningless and this
-/// answers `Ok` with a world missing records; a [`ScanOutcome`]'s own base is
-/// private to [`crate::journal`], so nothing here can check it — [`Base::scan`]
-/// is what makes it true by construction.
+/// `scan` must be THIS base's own ([`Base::scan`]), and must have been run
+/// with a collection bound at or above this one. A scan judged against another
+/// base makes the `(base.s_load, bound]` filter meaningless and this answers
+/// `Ok` with a world missing records; a [`ScanOutcome`]'s own base is private
+/// to [`crate::journal`], so nothing here can check it — [`Base::scan`] is what
+/// makes it true by construction. The bound IS checkable, and is: a fold past
+/// what the scan collected to reads records that were never collected, which
+/// the filter cannot restore, so it is refused as the caller's bug it is
+/// rather than answered short.
 ///
 /// `Err` is a committed, CRC-intact record that fails to decode as
 /// `W::Record` — corrupt committed data the derived state needs — or one the
@@ -155,6 +168,11 @@ pub(crate) fn fold_to<W: WorldState>(
     scan: &ScanOutcome,
     bound: u64,
 ) -> Result<W, FoldFail> {
+    assert!(
+        scan.covers(bound),
+        "fold to {bound} against a scan that did not collect that far: the \
+         records between them were never collected (Base::scan)"
+    );
     let mut journaled: Vec<&CommittedRecord> = scan.committed_records.iter().collect();
     journaled.sort_by_key(|entry| entry.seq);
     let mut world = base.world;

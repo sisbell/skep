@@ -103,6 +103,17 @@ pub(crate) struct LogRecord {
     pub bytes: Vec<u8>,
 }
 
+/// One committed record as the fold consumes it: the coordinate it was
+/// committed at, and the serialized `W::Record` bytes there — a [`LogRecord`]
+/// minus its `txn`, which the group that closed it has already established.
+/// Named for the only state in which one is ever read: a dead group releases
+/// its records unread, so every one that reaches
+/// [`ScanOutcome::committed_records`] came through [`PendingTxn::commits`].
+pub(crate) struct CommittedRecord {
+    pub(crate) seq: u64,
+    pub(crate) bytes: Vec<u8>,
+}
+
 /// Per-txn commit marker — the terminal frame of a transaction. In v1 a
 /// committed marker (intact, durable, `records_checksum`-valid) *is* the
 /// commit ack (§1). `records_checksum` is CRC32C over the concatenated payload
@@ -230,8 +241,8 @@ const MARKER_FRAME_LEN: u64 = frame_len(24);
 /// What one framed payload occupies in a segment: the header [`push_frame`]
 /// writes, plus the payload it wraps. The outer of the two levels every
 /// figure here is built from.
-const fn frame_len(payload_bytes: u64) -> u64 {
-    (FRAME_HEADER_LEN as u64).saturating_add(payload_bytes)
+const fn frame_len(payload_len: u64) -> u64 {
+    (FRAME_HEADER_LEN as u64).saturating_add(payload_len)
 }
 
 /// The frame PAYLOAD one already-encoded record occupies: its own bytes plus
@@ -239,8 +250,8 @@ const fn frame_len(payload_bytes: u64) -> u64 {
 /// inner level — and the figure [`push_frame`] judges against
 /// [`MAX_FRAME_LEN`], so [`Journal::commit_txn`]'s size gate and that guard
 /// compare one named quantity rather than two spellings of it.
-const fn record_payload_len(record_bytes: usize) -> u64 {
-    RECORD_PAYLOAD_OVERHEAD.saturating_add(record_bytes as u64)
+const fn record_payload_len(record_len: usize) -> u64 {
+    RECORD_PAYLOAD_OVERHEAD.saturating_add(record_len as u64)
 }
 
 /// What one already-encoded record occupies in the journal: both levels
@@ -253,8 +264,8 @@ const fn record_payload_len(record_bytes: usize) -> u64 {
 /// [`PendingTxn`] reaches the same figure by the other route —
 /// [`frame_len`] over what it holds — and the accounting test pins the two
 /// equal.
-const fn record_frame_len(record_bytes: usize) -> u64 {
-    frame_len(record_payload_len(record_bytes))
+const fn record_frame_len(record_len: usize) -> u64 {
+    frame_len(record_payload_len(record_len))
 }
 
 /// The exact byte length [`encode_txn`] emits for these already-encoded
@@ -712,8 +723,8 @@ pub(crate) enum Journal {
 }
 
 impl Journal {
-    /// Commit one whole transaction: serialize its records, charging each
-    /// against the two size refusals no durability mode may skip, then commit
+    /// Commit one whole transaction: serialize its records, judging each
+    /// against the two size limits no durability mode may skip, then commit
     /// through whichever journal this is.
     ///
     /// The encode and the size judgment happen HERE, above this enum's own
@@ -728,7 +739,7 @@ impl Journal {
     /// an install where the durable journal installs, after a barrier it has
     /// no need of.
     ///
-    /// The two refusals are charged AS THE LOOP GOES, and a record past the
+    /// The two limits are judged AS THE LOOP GOES, and a record past the
     /// budget is dropped rather than kept, which is what makes enforcing
     /// [`MAX_TXN_BYTES`] cost [`MAX_TXN_BYTES`]: a caller who stages a hundred
     /// records each just under the frame cap would otherwise have every one of
@@ -891,10 +902,9 @@ pub(crate) struct ScanOutcome {
     /// (if no committed marker sits above the loaded checkpoint it is
     /// `S_load` itself and Pass 2 folds nothing).
     pub committed_head: u64,
-    /// `(seq, serialized W::Record bytes)` of every record belonging to a
-    /// committed transaction, unordered (the caller sorts by `Seq` and filters
-    /// to `(S_load, W]`).
-    pub committed_records: Vec<(u64, Vec<u8>)>,
+    /// Every record belonging to a committed transaction, unordered (the
+    /// caller sorts by `Seq` and filters to `(S_load, W]`).
+    pub committed_records: Vec<CommittedRecord>,
     /// Every committed marker's `last_seq`, in scan order — the transaction
     /// boundaries of the scanned region, which [`ScanOutcome::require_boundary`]
     /// answers from.
@@ -1009,9 +1019,9 @@ struct PendingTxn {
     /// rather than trusting it, which is what holds a scan's group memory to
     /// one transaction's worth against a journal this writer did not write.
     oversize: bool,
-    /// `(seq, serialized W::Record bytes)`, in arrival order. Released the
-    /// moment the group is known dead, since nothing downstream can want it.
-    records: Vec<(u64, Vec<u8>)>,
+    /// The group's records, in arrival order. Released the moment the group is
+    /// known dead, since nothing downstream can want it.
+    records: Vec<CommittedRecord>,
 }
 
 impl PendingTxn {
@@ -1042,7 +1052,10 @@ impl PendingTxn {
         self.accounted = self.accounted.saturating_add(frame_len(payload.len() as u64));
         self.oversize |= self.accounted > MAX_TXN_BYTES;
         if self.ordered && !self.oversize {
-            self.records.push((record.seq, record.bytes));
+            self.records.push(CommittedRecord {
+                seq: record.seq,
+                bytes: record.bytes,
+            });
         } else {
             // Dead: this group can never commit, so its records are released
             // as soon as that is known. The checksum and `last_seq` keep
@@ -1303,7 +1316,7 @@ mod tests {
     }
 
     fn committed_seqs(out: &ScanOutcome) -> Vec<u64> {
-        let mut s: Vec<u64> = out.committed_records.iter().map(|r| r.0).collect();
+        let mut s: Vec<u64> = out.committed_records.iter().map(|r| r.seq).collect();
         s.sort_unstable();
         s
     }
@@ -1408,7 +1421,8 @@ mod tests {
 
     #[test]
     fn commit_txn_refuses_what_no_mode_may_accept() {
-        // The two size refusals, charged as the commit encodes each record.
+        // Each record is charged against the two size limits as the commit
+        // encodes it.
         // `Vec<u8>` encodes as an 8-byte length prefix plus its bytes, so a
         // body of `n` occupies `n + prefix` of a frame payload.
         let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
@@ -1475,7 +1489,7 @@ mod tests {
 
     #[test]
     fn the_in_memory_journal_refuses_what_the_durable_one_refuses() {
-        // The encode and the two size refusals belong to `Journal::commit_txn`
+        // The encode and the two size judgments belong to `Journal::commit_txn`
         // and run above its own mode branch, so the mode that journals nothing
         // still serializes every record and still refuses what only the frames
         // could reject. The frame cap once lived in the frame builder alone —

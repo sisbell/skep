@@ -10,7 +10,7 @@
 //! bound and its own error vocabulary.
 
 use crate::checkpoint::CheckpointMeta;
-use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
+use crate::journal::{self, CommittedRecord, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
@@ -130,11 +130,12 @@ pub(crate) fn fold_to<W: WorldState>(
     scan: &ScanOutcome,
     bound: u64,
 ) -> Result<W, u64> {
-    let mut records: Vec<&(u64, Vec<u8>)> = scan.committed_records.iter().collect();
-    records.sort_by_key(|entry| entry.0);
+    let mut journaled: Vec<&CommittedRecord> = scan.committed_records.iter().collect();
+    journaled.sort_by_key(|entry| entry.seq);
     let mut world = base.world;
     let mut prev: Option<u64> = None;
-    for &(seq, ref bytes) in records {
+    for entry in journaled {
+        let seq = entry.seq;
         if seq <= base.s_load || seq > bound {
             continue;
         }
@@ -142,7 +143,7 @@ pub(crate) fn fold_to<W: WorldState>(
             return Err(seq);
         }
         prev = Some(seq);
-        let record: W::Record = journal::decode_record(bytes).map_err(|_| seq)?;
+        let record: W::Record = journal::decode_record(&entry.bytes).map_err(|_| seq)?;
         world = world.apply(&record);
     }
     Ok(world)

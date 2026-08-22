@@ -36,7 +36,7 @@ struct TestWorld {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum TestRec {
-    Push(u64),
+    Append(u64),
     Blob(Vec<u8>),
     /// Stages and folds like any record and then panics when the commit
     /// region serializes it — the one way a test can unwind INSIDE that
@@ -92,7 +92,7 @@ impl WorldState for TestWorld {
         match r {
             // Non-idempotent on purpose: double-application is visible, so
             // recovery equality proves exactly-once replay (§6/§7).
-            TestRec::Push(x) => {
+            TestRec::Append(x) => {
                 next.items.push_back(*x);
                 next.sum += *x;
             }
@@ -192,7 +192,7 @@ fn cfg_in_memory() -> KernelConfig {
 /// inside a closure and commits nothing.
 fn commit(k: &Kernel<TestWorld>, x: u64) -> Seq {
     k.transact(&[], |stg| {
-        stg.push(TestRec::Push(x));
+        stg.push(TestRec::Append(x));
         Ok::<(), ()>(())
     })
     .unwrap()
@@ -257,9 +257,9 @@ fn transact_commits_and_returns_last_seq() {
     // observable coordinate (§2); interior seqs are M2-internal.
     let (_, seq) = k
         .transact(&[], |stg| {
-            stg.push(TestRec::Push(1));
-            stg.push(TestRec::Push(2));
-            stg.push(TestRec::Push(3));
+            stg.push(TestRec::Append(1));
+            stg.push(TestRec::Append(2));
+            stg.push(TestRec::Append(3));
             Ok::<(), ()>(())
         })
         .unwrap();
@@ -267,8 +267,8 @@ fn transact_commits_and_returns_last_seq() {
     assert_eq!(k.current_seq(), Seq(3));
     let (_, seq) = k
         .transact(&[], |stg| {
-            stg.push(TestRec::Push(4));
-            stg.push(TestRec::Push(5));
+            stg.push(TestRec::Append(4));
+            stg.push(TestRec::Append(5));
             Ok::<(), ()>(())
         })
         .unwrap();
@@ -288,10 +288,10 @@ fn a_composites_intermediates_are_invisible_to_external_readers() {
     commit(&k, 1);
     let pinned = k.snapshot();
     k.transact(&[], |stg| {
-        stg.push(TestRec::Push(2));
+        stg.push(TestRec::Append(2));
         assert_eq!(items(&k), vec![1], "a reader observed Σᵢ, not Σ");
         assert_eq!(k.current_seq(), Seq(1));
-        stg.push(TestRec::Push(3));
+        stg.push(TestRec::Append(3));
         assert_eq!(items(&k), vec![1], "a reader observed Σᵢ, not Σ");
         assert_eq!(stg.working().items.len(), 3); // the closure DOES see them
         Ok::<(), ()>(())
@@ -324,9 +324,9 @@ fn a_nested_transact_is_answered_as_the_callers_bug_it_is() {
     commit(&k, 1);
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = k.transact::<(), ()>(&[], |stg| {
-            stg.push(TestRec::Push(2));
+            stg.push(TestRec::Append(2));
             let _ = k.transact::<(), ()>(&[], |inner| {
-                inner.push(TestRec::Push(3));
+                inner.push(TestRec::Append(3));
                 Ok(())
             });
             Ok(())
@@ -353,9 +353,9 @@ fn the_reentrancy_refusal_is_scoped_to_the_one_kernel_holding_the_lock() {
     let b = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     let (_, seq) = a
         .transact(&[], |stg| {
-            stg.push(TestRec::Push(1));
+            stg.push(TestRec::Append(1));
             b.transact(&[], |inner| {
-                inner.push(TestRec::Push(2));
+                inner.push(TestRec::Append(2));
                 Ok::<(), ()>(())
             })
         })
@@ -375,7 +375,7 @@ fn the_closure_may_read_and_checkpoint_the_kernel_it_is_committing_to() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     commit(&k, 10);
     k.transact(&[], |stg| {
-        stg.push(TestRec::Push(20));
+        stg.push(TestRec::Append(20));
         assert_eq!(k.current_seq(), Seq(1));
         assert_eq!(world_items(k.snapshot().world()), vec![10]);
         // A bounded read derives from the journal, which holds Σ and nothing
@@ -416,7 +416,7 @@ fn rejected_leaves_state_untouched() {
     // f → Err is a clean typed rejection: nothing committed, no dangling
     // state — even when records were pushed before the Err (§3).
     let out: Result<((), Seq), TxnError<&str>> = k.transact(&[], |stg| {
-        stg.push(TestRec::Push(99));
+        stg.push(TestRec::Append(99));
         Err("precondition failed")
     });
     assert!(matches!(out, Err(TxnError::Rejected("precondition failed"))));
@@ -434,11 +434,11 @@ fn staging_working_folds_pushes_and_base_stays() {
         assert_eq!(stg.base().items.len(), 1);
         assert_eq!(stg.working().items.len(), 1); // == base before the first push
         // The multi-atom frontier pattern (§3/§4, W2 at M2's granularity):
-        // each atom reads the slot the prior atoms left on working(), never
-        // the unchanging base().
+        // each atom reads the frontier the prior atoms left on working(),
+        // never the unchanging base().
         for _ in 0..3 {
-            let slot = stg.working().items.len() as u64;
-            stg.push(TestRec::Push(slot * 100));
+            let frontier = stg.working().items.len() as u64;
+            stg.push(TestRec::Append(frontier * 100));
         }
         assert_eq!(
             stg.working().items.iter().copied().collect::<Vec<_>>(),
@@ -579,7 +579,7 @@ fn transact_accepts_the_seam_keys_and_returns_a_copyable_seq() {
     let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     let (_, seq) = k
         .transact(&[LockKey::new(Space::Namespace, b"home")], |stg| {
-            stg.push(TestRec::Push(1));
+            stg.push(TestRec::Append(1));
             Ok::<(), ()>(())
         })
         .unwrap();
@@ -1594,7 +1594,7 @@ fn panic_in_closure_leaves_kernel_usable_and_gap_free() {
     // gap-free (§3).
     let unwound = catch_unwind(AssertUnwindSafe(|| {
         let _ = k.transact::<(), ()>(&[], |stg| {
-            stg.push(TestRec::Push(1));
+            stg.push(TestRec::Append(1));
             panic!("boom");
         });
     }));
@@ -1620,7 +1620,7 @@ fn concurrent_writers_serialize_into_one_gap_free_order() {
                 for i in 0..25u64 {
                     let (_, seq) = k
                         .transact(&[], |stg| {
-                            stg.push(TestRec::Push(t * 1000 + i));
+                            stg.push(TestRec::Append(t * 1000 + i));
                             Ok::<(), ()>(())
                         })
                         .unwrap();

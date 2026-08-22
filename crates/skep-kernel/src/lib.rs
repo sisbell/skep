@@ -5,7 +5,7 @@
 //! committed as one); committed state is served as consistent snapshots;
 //! writers are serialized — while M2 knows nothing about what any change
 //! *means*. It is a WAL + atomic-install + keyed-serialization + snapshot
-//! engine, dependency-inverted: M2 defines the fold ([`WorldState::apply`]),
+//! kernel, dependency-inverted: M2 defines the fold ([`WorldState::apply`]),
 //! the engine implements it, and M2 only calls down through that trait.
 //!
 //! Spec traceability: doc-comments cite the labels they realize — ASN-0134's

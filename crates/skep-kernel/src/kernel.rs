@@ -109,7 +109,7 @@ impl<W: WorldState> Staging<W> {
 
     /// Σᵢ — base folded with the records pushed so far. Frontier/allocation
     /// math MUST read here (via the store's `HasX` accessor), so each atom of
-    /// a multi-atom run mints at the slot the prior atoms left — reading the
+    /// a multi-atom run mints at the frontier the prior atoms left — reading the
     /// unchanging `base()` would recompute one address m times and collide
     /// (§3/§4, W2).
     pub fn working(&self) -> &W {
@@ -578,7 +578,7 @@ impl<W: WorldState> Kernel<W> {
     /// budget, [`crate::MAX_TXN_BYTES`], is [`TxnError::OverBudget`]: the
     /// same no-op with a different remedy — no
     /// record is at fault, the staging is, and the caller splits the
-    /// transaction where fixing a value cannot help. Both size refusals are
+    /// transaction where fixing a value cannot help. Both size limits are
     /// judged ABOVE the durability-mode branch, so an in-memory kernel
     /// refuses exactly what a journaled one refuses — a store that passes an
     /// in-memory test does not meet a size refusal only in production.
@@ -727,7 +727,7 @@ impl<W: WorldState> Kernel<W> {
         };
 
         // The commit region: one call into the journal, which serializes the
-        // records, judges the size refusals no mode may skip, and commits
+        // records, judges the size limits no mode may skip, and commits
         // (§1: append records → marker → ONE fsync → install). Run under
         // catch_unwind so the §3 guard can repair a mid-commit unwind — the
         // encode is where a record's own `Serialize` can panic, so it must
@@ -1059,9 +1059,9 @@ mod tests {
         }
     }
 
-    /// Run one size-refusal test under BOTH durability modes: the refusals
-    /// are judged above the journal's mode branch, and the parity — not
-    /// either mode alone — is what these tests pin (F3).
+    /// Run one size-refusal test under BOTH durability modes: the limits are
+    /// judged above the journal's mode branch, and the parity — not either
+    /// mode alone — is what these tests pin (F3).
     fn in_each_mode(f: impl Fn(Kernel<Vec<Vec<u8>>>, &str)) {
         let dir = tempfile::tempdir().unwrap();
         f(

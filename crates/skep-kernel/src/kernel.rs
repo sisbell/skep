@@ -472,10 +472,16 @@ impl<W: WorldState> Kernel<W> {
         // those at or below S_load are already embodied in the base.
         let scan = base.scan(&segs).map_err(|fail| match fail {
             ScanFail::Io(e) => OpenError::Io(e),
-            ScanFail::Unbounded { at } => OpenError::Corruption { at: Seq(at) },
+            ScanFail::Unbounded { at } => OpenError::Corruption {
+                at: Seq(at),
+                cause: None,
+            },
         })?;
         if let Some(at) = scan.fatal_run_to_head() {
-            return Err(OpenError::Corruption { at: Seq(at) });
+            return Err(OpenError::Corruption {
+                at: Seq(at),
+                cause: None,
+            });
         }
 
         // The coordinate this session would commit at. A journal whose head
@@ -485,11 +491,16 @@ impl<W: WorldState> Kernel<W> {
         let committed_head = scan.committed_head;
         let next_seq = committed_head.checked_add(1).ok_or(OpenError::Corruption {
             at: Seq(committed_head),
+            cause: None,
         })?;
 
         // Pass 2: fold exactly (S_load, W], in Seq order (§6/§7).
-        let world = replay::fold_to(base, &scan, committed_head)
-            .map_err(|seq| OpenError::Corruption { at: Seq(seq) })?;
+        let world = replay::fold_to(base, &scan, committed_head).map_err(|fail| {
+            OpenError::Corruption {
+                at: Seq(fail.at),
+                cause: fail.cause,
+            }
+        })?;
 
         // Tail truncation: after every refusal, and before any write is
         // served (§7). The fold serves none, so the §7 obligation is kept
@@ -738,14 +749,14 @@ impl<W: WorldState> Kernel<W> {
         // A transaction's serialized bytes live inside that call twice for
         // the length of the region — once as records, once as the frames they
         // become — and all of it under the applier lock, so it is also the
-        // length of time every other writer waits. The journal is what bounds
-        // both, refusing above its own mode branch: the frame cap per record
-        // and `MAX_TXN_BYTES` per transaction, identically in both durability
-        // modes.
+        // length of time every other writer waits. The staging is MOVED in, so
+        // it is that pair and not a third copy: each record is released as the
+        // journal encodes it. The journal is what bounds both, refusing above
+        // its own mode branch: the frame cap per record and `MAX_TXN_BYTES` per
+        // transaction, identically in both durability modes.
         let commit_out: std::thread::Result<Result<u64, CommitFail>> = {
             let state = &mut *state;
             let root = &self.root;
-            let records = &records;
             catch_unwind(AssertUnwindSafe(move || {
                 state.journal.commit_txn(first, records, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
@@ -990,14 +1001,20 @@ impl<W: WorldState> Kernel<W> {
         }
         let scan = base.scan(&segs).map_err(|fail| match fail {
             ScanFail::Io(e) => HistoryError::Io(e),
-            ScanFail::Unbounded { at } => HistoryError::Corruption { at: Seq(at) },
+            ScanFail::Unbounded { at } => HistoryError::Corruption {
+                at: Seq(at),
+                cause: None,
+            },
         })?;
         // Any at-rest corrupt run not wholly embodied in the base is a halt,
         // even beyond `at`. (A racing live append never produces a Landed run:
         // it can tear only the file's suffix, after the last committed marker,
         // which reaches EOF.)
         if let Some(run_at) = scan.fatal_run_anywhere() {
-            return Err(HistoryError::Corruption { at: Seq(run_at) });
+            return Err(HistoryError::Corruption {
+                at: Seq(run_at),
+                cause: None,
+            });
         }
         if let Err(nearest) = scan.require_boundary(at.0) {
             return Err(HistoryError::NotABoundary {
@@ -1005,7 +1022,10 @@ impl<W: WorldState> Kernel<W> {
             });
         }
         // Recovery's fold, bounded at `at` (§6/§7).
-        replay::fold_to(base, &scan, at.0).map_err(|seq| HistoryError::Corruption { at: Seq(seq) })
+        replay::fold_to(base, &scan, at.0).map_err(|fail| HistoryError::Corruption {
+            at: Seq(fail.at),
+            cause: fail.cause,
+        })
     }
 
     /// Shutdown/checkpoint hook. Under per-commit `Fsync` every commit
@@ -1257,7 +1277,7 @@ mod tests {
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a repeated Seq is not something to fold twice");
         assert!(
-            matches!(err, OpenError::Corruption { at: Seq(1) }),
+            matches!(err, OpenError::Corruption { at: Seq(1), .. }),
             "got {err:?}"
         );
         // A halt cuts nothing: the fold's refusal precedes the tail
@@ -1268,6 +1288,62 @@ mod tests {
             before,
             "a halted open truncated the journal"
         );
+        // A repeat carries no account: the journal is malformed rather than
+        // unreadable, so the coordinate is the whole of what there is to say.
+        assert!(std::error::Error::source(&err).is_none());
+    }
+
+    /// A world whose records are a four-variant enum — the narrow reader in
+    /// the skew below.
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct NarrowWorld(Vec<u8>);
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    enum Narrow {
+        A,
+        B,
+        C,
+        D,
+    }
+
+    impl WorldState for NarrowWorld {
+        type Record = Narrow;
+        fn apply(&self, _: &Narrow) -> Self {
+            self.clone()
+        }
+    }
+
+    #[test]
+    fn an_undecodable_record_carries_the_serializers_own_account() {
+        // A committed, CRC-intact record that does not decode as this
+        // `W::Record`: bad media, or a binary rolled back over a record
+        // format. The coordinate cannot tell those apart and the serializer's
+        // account can, so it travels — this is the one of the four
+        // `Corruption` conditions that has an account at all (§7).
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            // Variant index 5, written where `Narrow` has four.
+            writer
+                .commit_txn(1, vec![journal::encode_record(&5u32).unwrap()], || {})
+                .expect("fixture commit");
+        }
+        let err = Kernel::<NarrowWorld>::open(
+            cfg(dir.path(), BurnedSeqPolicy::Rollback),
+            NarrowWorld(Vec::new()),
+        )
+        .expect_err("an undecodable committed record is not something to fold");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(1), .. }),
+            "got {err:?}"
+        );
+        let cause = std::error::Error::source(&err)
+            .expect("the account is the only thing that separates a skew from rot")
+            .to_string();
+        assert!(cause.contains("variant index"), "got {cause}");
+        // …and it reaches an operator reading the error, not only one walking
+        // the chain.
+        assert!(err.to_string().contains("variant index"), "got {err}");
     }
 
     #[test]
@@ -1306,7 +1382,7 @@ mod tests {
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a stream that cannot be enumerated is not one to recover from");
         assert!(
-            matches!(err, OpenError::Corruption { at: Seq(0) }),
+            matches!(err, OpenError::Corruption { at: Seq(0), .. }),
             "got {err:?}"
         );
         // A halt cuts nothing — and here there is not even an outcome a
@@ -1317,6 +1393,7 @@ mod tests {
             "a halted open truncated the journal"
         );
     }
+
 
     #[test]
     fn a_head_at_the_seq_ceiling_refuses_to_open() {
@@ -1346,7 +1423,7 @@ mod tests {
         let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
             .expect_err("a head with no successor coordinate is unaccountable");
         assert!(
-            matches!(err, OpenError::Corruption { at: Seq(u64::MAX) }),
+            matches!(err, OpenError::Corruption { at: Seq(u64::MAX), .. }),
             "got {err:?}"
         );
         // A halt cuts nothing: the exhausted order is judged before the tail

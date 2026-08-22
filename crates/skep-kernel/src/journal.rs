@@ -89,7 +89,7 @@ const RESYNC_BUDGET_PASSES: u64 = 8;
 /// journal region and recovered for free with the single `Seq` high-water
 /// (§1/§7). Seqs travel this layer as raw `u64`; typing the identity is what
 /// keeps a frame's `seq` and its `txn` from being interchanged.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Txn(pub u64);
 
 /// One journaled authoritative delta (§1). `bytes` is the serialized
@@ -746,7 +746,10 @@ impl Journal {
     /// them materialized — under the applier lock, so with every other writer
     /// in the process waiting — before the sum that refuses them was taken.
     /// Held bytes are therefore bounded by the budget and the transient peak
-    /// by one further frame.
+    /// by one further frame. The records are CONSUMED into their bytes, one
+    /// per iteration, so that pair is the whole of what a commit holds and
+    /// not a pair beside the unserialized staging: each record is released as
+    /// this loop encodes it.
     ///
     /// Two refusals, and their order is the caller's remedy in each case: a
     /// record whose frame payload would exceed [`MAX_FRAME_LEN`] — the refusal
@@ -761,7 +764,7 @@ impl Journal {
     pub(crate) fn commit_txn<R: Serialize>(
         &mut self,
         first_seq: u64,
-        records: &[R],
+        records: Vec<R>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
         let mut record_bytes: Vec<Vec<u8>> = Vec::new();
@@ -770,7 +773,7 @@ impl Journal {
         for record in records {
             // The closure is the unsizing coercion site: the bare constructor
             // as a function value does not coerce `bincode`'s boxed error.
-            let bytes = encode_record(record).map_err(|e| CommitFail::Unencodable(e))?;
+            let bytes = encode_record(&record).map_err(|e| CommitFail::Unencodable(e))?;
             if record_payload_len(bytes.len()) > MAX_FRAME_LEN as u64 {
                 return Err(CommitFail::Unencodable(
                     "record's serialized form exceeds the journal's frame cap".into(),
@@ -1434,9 +1437,8 @@ mod tests {
         // caller fixing a value is not first told to split.
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = journal.commit_txn(1, &over_frame, || installs += 1);
+        let out = journal.commit_txn(1, over_frame, || installs += 1);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
-        drop(over_frame);
 
         // At the budget exactly: commits — the refusal begins one past the
         // budget, not at it.
@@ -1446,16 +1448,14 @@ mod tests {
             txn_encoded_len(&[encode_record(&at_budget[0]).unwrap()]),
             MAX_TXN_BYTES
         );
-        assert!(journal.commit_txn(1, &at_budget, || installs += 1).is_ok());
-        drop(at_budget);
+        assert!(journal.commit_txn(1, at_budget, || installs += 1).is_ok());
 
         // One byte past: OverBudget, carrying the size.
         let past_budget = vec![vec![0u8; body + 1]];
-        match journal.commit_txn(1, &past_budget, || installs += 1) {
+        match journal.commit_txn(1, past_budget, || installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }
-        drop(past_budget);
 
         // …and a staging FAR past the budget still reports the whole accounted
         // size. The charge runs on past the crossing precisely so the figure a
@@ -1469,7 +1469,7 @@ mod tests {
             txn_encoded_len(&encoded)
         };
         assert!(expected > MAX_TXN_BYTES + record_frame_len(8 + prefix));
-        match journal.commit_txn(1, &far_over, || installs += 1) {
+        match journal.commit_txn(1, far_over, || installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, expected),
             other => panic!("expected the whole staging accounted, got {other:?}"),
         }
@@ -1503,23 +1503,21 @@ mod tests {
 
         // The encode: a record the serializer refuses, in the mode that would
         // otherwise never encode anything.
-        let out = memory.commit_txn(1, &[RefusesSerialization], || installed = true);
+        let out = memory.commit_txn(1, vec![RefusesSerialization], || installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
 
         // The frame cap, which is a property of frames this arm never builds.
         let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
         let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
-        let out = memory.commit_txn(1, &over_frame, || installed = true);
+        let out = memory.commit_txn(1, over_frame, || installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
-        drop(over_frame);
 
         // The transaction budget, likewise.
         let half = (MAX_TXN_BYTES / 2) as usize;
         let over_budget = vec![vec![0u8; half], vec![0u8; half]];
-        let out = memory.commit_txn(1, &over_budget, || installed = true);
+        let out = memory.commit_txn(1, over_budget, || installed = true);
         assert!(matches!(out, Err(CommitFail::OverBudget { .. })), "got {out:?}");
-        drop(over_budget);
 
         assert!(!installed, "a refused transaction installs nothing");
 
@@ -1527,7 +1525,7 @@ mod tests {
         // three refusals exist to hold: one judgment, one place, both modes.
         let dir = tempdir().unwrap();
         let mut segments = Journal::Segments(JournalWriter::open_active(dir.path(), 1).unwrap());
-        let out = segments.commit_txn(1, &[RefusesSerialization], || installed = true);
+        let out = segments.commit_txn(1, vec![RefusesSerialization], || installed = true);
         assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
         assert!(!installed, "a refused transaction installs nothing");
     }

@@ -34,7 +34,7 @@ struct TestWorld {
     rebuilds: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum TestRec {
     Append(u64),
     Blob(Vec<u8>),
@@ -48,7 +48,7 @@ enum TestRec {
     FailsToSerialize(RefusesSerialization),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct PanicsOnSerialize;
 
 impl Serialize for PanicsOnSerialize {
@@ -69,7 +69,7 @@ impl<'de> Deserialize<'de> for PanicsOnSerialize {
 /// transaction that never becomes frames — the [`TxnError::Unencodable`] arm,
 /// which shares the no-op discipline of §1's barrier failure and differs from
 /// it in exactly one thing: no retry can succeed.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct RefusesSerialization;
 
 impl Serialize for RefusesSerialization {
@@ -151,14 +151,25 @@ impl Serialize for FragileWorld {
     }
 }
 
-impl WorldState for FragileWorld {
-    /// `true` breaks the world's serializer; the record itself always encodes.
-    type Record = bool;
+/// What a record does to [`FragileWorld`]'s serializer. The record itself
+/// always encodes either way; which one a call stages is the whole of what
+/// the checkpoint tests turn on, so it is said at the call rather than
+/// carried there as a `bool` a reader has to look up.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum Fragility {
+    /// Leaves the world encodable.
+    Sound,
+    /// Breaks the world's serializer, permanently.
+    Break,
+}
 
-    fn apply(&self, break_it: &bool) -> Self {
+impl WorldState for FragileWorld {
+    type Record = Fragility;
+
+    fn apply(&self, record: &Fragility) -> Self {
         FragileWorld {
             commits: self.commits + 1,
-            broken: self.broken || *break_it,
+            broken: self.broken || matches!(record, Fragility::Break),
         }
     }
 }
@@ -691,7 +702,7 @@ fn corruption_in_replayed_range_halts_with_marker_landing_payload() {
 
     let err = Kernel::open(cfg_fsync(dir.path()), genesis()).err().unwrap();
     assert!(
-        matches!(err, OpenError::Corruption { at: Seq(3) }),
+        matches!(err, OpenError::Corruption { at: Seq(3), .. }),
         "got {err:?}"
     );
     // A halt cuts nothing: the classification precedes the tail truncation, so
@@ -828,7 +839,7 @@ fn world_at_answers_the_base_boundary_without_consulting_the_journal() {
     // the base, so a fold that must cross it could answer from a hole (§7).
     flip_byte(&seg, spans[6].0 + FRAME_HEADER_LEN + 1);
     match k.world_at(Seq(4)) {
-        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(5)),
+        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(5)),
         other => panic!("expected Corruption, got {other:?}"),
     }
     assert_eq!(world_items(&k.world_at(Seq(3)).unwrap()), vec![10, 20, 30]);
@@ -853,7 +864,7 @@ fn world_at_halts_on_at_rest_damage_before_judging_the_boundary() {
     // the boundary set, and the resync lands on T3's record (inferred max 2).
     flip_byte(&seg, spans[3].0 + FRAME_HEADER_LEN + 1);
     match k.world_at(Seq(2)) {
-        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(3)),
+        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(3)),
         other => panic!("expected Corruption before the boundary judgment, got {other:?}"),
     }
 }
@@ -883,7 +894,7 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
     let seg = seg_file(dir.path(), 1);
     flip_byte(&seg, FRAME_HEADER_LEN + 1); // T1's record: sync is lost here
     match k.world_at(Seq(2)) {
-        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(0)),
+        Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(0)),
         other => panic!("expected Corruption at the base, got {other:?}"),
     }
 }
@@ -1073,7 +1084,7 @@ fn checkpoint_surfaces_the_serializers_account_of_an_unencodable_world() {
     let dir = tempdir().unwrap();
     let k = Kernel::open(cfg_fsync(dir.path()), FragileWorld::default()).unwrap();
     k.transact::<_, ()>(&[], |stg| {
-        stg.push(true);
+        stg.push(Fragility::Break);
         Ok(())
     })
     .unwrap();
@@ -1089,7 +1100,7 @@ fn checkpoint_surfaces_the_serializers_account_of_an_unencodable_world() {
     assert!(!dir.path().join("checkpoint.tmp").exists());
     // A failed checkpoint is not a poison: the write path still works.
     k.transact::<_, ()>(&[], |stg| {
-        stg.push(false);
+        stg.push(Fragility::Sound);
         Ok(())
     })
     .unwrap();
@@ -1141,14 +1152,14 @@ fn an_auto_triggered_checkpoint_failure_never_fails_the_committed_txn() {
     cfg.checkpoint = CheckpointPolicy::EveryN(1);
     let k = Kernel::open(cfg, FragileWorld::default()).unwrap();
     k.transact::<_, ()>(&[], |stg| {
-        stg.push(false);
+        stg.push(Fragility::Sound);
         Ok(())
     })
     .unwrap();
     assert!(ckpt_file(dir.path(), 1).exists(), "the auto-trigger is live");
     let (_, seq) = k
         .transact::<_, ()>(&[], |stg| {
-            stg.push(true);
+            stg.push(Fragility::Break);
             Ok(())
         })
         .expect("the commit is durable and installed; its checkpoint's failure is not its own");

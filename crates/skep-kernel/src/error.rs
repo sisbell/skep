@@ -45,6 +45,16 @@ pub enum OpenError {
         /// repeated record, that record's own `Seq`; for an exhausted order,
         /// the committed head itself.
         at: Seq,
+        /// The account of what could not be read, for the one condition that
+        /// has one: a committed record that does not decode as `W::Record`,
+        /// where the serializer's own refusal is what separates a
+        /// writer/reader skew — a binary rolled back over a record format —
+        /// from bit-rot, two conditions this variant otherwise reports
+        /// alike and an operator must not treat alike. The other three carry
+        /// `None`: a corrupt run's own bytes are unreadable, an unenumerable
+        /// stream is a work-budget verdict, and an exhausted order is
+        /// arithmetic.
+        cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
 
@@ -56,9 +66,13 @@ impl fmt::Display for OpenError {
             OpenError::BadCheckpoint => {
                 write!(f, "no retained checkpoint loads and genesis is unreachable")
             }
-            OpenError::Corruption { at } => write!(
+            OpenError::Corruption { at, cause: None } => write!(
                 f,
                 "durable committed data cannot be read; coordinate naming the damage: {at}"
+            ),
+            OpenError::Corruption { at, cause: Some(e) } => write!(
+                f,
+                "durable committed data cannot be read; coordinate naming the damage: {at}: {e}"
             ),
         }
     }
@@ -71,9 +85,8 @@ impl std::error::Error for OpenError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenError::Io(e) => Some(e),
-            OpenError::InvalidConfig(_)
-            | OpenError::BadCheckpoint
-            | OpenError::Corruption { .. } => None,
+            OpenError::Corruption { cause, .. } => cause.as_deref().map(|e| e as _),
+            OpenError::InvalidConfig(_) | OpenError::BadCheckpoint => None,
         }
     }
 }
@@ -184,14 +197,16 @@ pub enum HistoryError {
     /// (a concurrent checkpoint's segment reclamation can remove a file
     /// between listing and reading); a retry re-selects a base.
     Io(io::Error),
-    /// Corrupt data at rest in the scanned region — the same conditions, and
-    /// the same coordinate, that [`OpenError::Corruption`] carries, with the
-    /// same halt-never-drop verdict (§7). The exhausted `Seq` order is the one
-    /// route not available here: only a mint site reaches it, and this call
-    /// mints nothing.
+    /// Corrupt data at rest in the scanned region — the same conditions, the
+    /// same coordinate and the same account, that [`OpenError::Corruption`]
+    /// carries, with the same halt-never-drop verdict (§7). The exhausted
+    /// `Seq` order is the one route not available here: only a mint site
+    /// reaches it, and this call mints nothing.
     Corruption {
         /// See [`OpenError::Corruption`].
         at: Seq,
+        /// See [`OpenError::Corruption`].
+        cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     },
 }
 
@@ -215,9 +230,13 @@ impl fmt::Display for HistoryError {
                 write!(f, "in-memory kernel: no journal to derive history from")
             }
             HistoryError::Io(e) => write!(f, "history read I/O failure: {e}"),
-            HistoryError::Corruption { at } => write!(
+            HistoryError::Corruption { at, cause: None } => write!(
                 f,
                 "journal corrupt at rest; coordinate naming the damage: {at}"
+            ),
+            HistoryError::Corruption { at, cause: Some(e) } => write!(
+                f,
+                "journal corrupt at rest; coordinate naming the damage: {at}: {e}"
             ),
         }
     }
@@ -228,11 +247,11 @@ impl std::error::Error for HistoryError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             HistoryError::Io(e) => Some(e),
+            HistoryError::Corruption { cause, .. } => cause.as_deref().map(|e| e as _),
             HistoryError::BeyondHead { .. }
             | HistoryError::NotABoundary { .. }
             | HistoryError::Reclaimed { .. }
-            | HistoryError::Unjournaled
-            | HistoryError::Corruption { .. } => None,
+            | HistoryError::Unjournaled => None,
         }
     }
 }

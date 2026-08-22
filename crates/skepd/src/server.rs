@@ -908,7 +908,7 @@ fn history_error_reply(e: HistoryError) -> Reply {
             m.insert("detail".into(), Value::String(err.to_string()));
             (500, "history_io")
         }
-        HistoryError::Corruption { at } => {
+        HistoryError::Corruption { at, .. } => {
             m.insert(
                 "detail".into(),
                 Value::String(format!("journal corrupt at rest; next intact frame at {}", at.0)),

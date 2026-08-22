@@ -101,6 +101,24 @@ pub(crate) fn select_base<W: WorldState>(
     })
 }
 
+/// Why a fold refused: the coordinate naming the damage, and — where there
+/// was one — the account of what could not be read there.
+///
+/// The two conditions differ in whether an account exists at all. A record
+/// that does not decode has the serializer's own refusal, and that refusal is
+/// what separates a writer/reader skew (roll the binary forward) from bit-rot
+/// (restore the media) — two conditions [`journal::decode_record`] answers
+/// alike and an operator must not. A `Seq` the committed set presents twice
+/// has none: the journal is malformed rather than unreadable, and the
+/// coordinate is the whole of what there is to say.
+pub(crate) struct FoldFail {
+    /// The record's own, readable coordinate — unlike a corrupt run's (see
+    /// [`ScanOutcome::fatal_run_anywhere`]).
+    pub at: u64,
+    /// The decode's own account, for the condition that has one.
+    pub cause: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+}
+
 /// Fold the scanned region's committed records onto `base`, in `Seq` order,
 /// over exactly `(base.s_load, bound]` — each record exactly once, since
 /// [`WorldState::apply`] is not required to be idempotent, and with no
@@ -116,11 +134,9 @@ pub(crate) fn select_base<W: WorldState>(
 /// private to [`crate::journal`], so nothing here can check it — [`Base::scan`]
 /// is what makes it true by construction.
 ///
-/// `Err` carries the `Seq` of a committed, CRC-intact record that fails to
-/// decode as `W::Record` — corrupt committed data the derived state needs —
-/// or one the committed set presents TWICE. That `Seq` is the record's own,
-/// readable one, unlike a corrupt run's (see
-/// [`ScanOutcome::fatal_run_anywhere`]).
+/// `Err` is a committed, CRC-intact record that fails to decode as
+/// `W::Record` — corrupt committed data the derived state needs — or one the
+/// committed set presents TWICE; [`FoldFail`] carries which.
 /// Halt, never drop, and never twice (§7): the sequencer mints each `Seq`
 /// once, so a repeat is a journal this kernel did not write, and folding a
 /// coordinate twice through a fold that need not be idempotent is exactly
@@ -129,7 +145,7 @@ pub(crate) fn fold_to<W: WorldState>(
     base: Base<W>,
     scan: &ScanOutcome,
     bound: u64,
-) -> Result<W, u64> {
+) -> Result<W, FoldFail> {
     let mut journaled: Vec<&CommittedRecord> = scan.committed_records.iter().collect();
     journaled.sort_by_key(|entry| entry.seq);
     let mut world = base.world;
@@ -140,10 +156,16 @@ pub(crate) fn fold_to<W: WorldState>(
             continue;
         }
         if prev == Some(seq) {
-            return Err(seq);
+            return Err(FoldFail {
+                at: seq,
+                cause: None,
+            });
         }
         prev = Some(seq);
-        let record: W::Record = journal::decode_record(&entry.bytes).map_err(|_| seq)?;
+        let record: W::Record = journal::decode_record(&entry.bytes).map_err(|e| FoldFail {
+            at: seq,
+            cause: Some(Box::new(e)),
+        })?;
         world = world.apply(&record);
     }
     Ok(world)

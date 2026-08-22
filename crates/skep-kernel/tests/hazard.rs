@@ -261,6 +261,32 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
     );
 }
 
+/// What is done to the one retained checkpoint below: the two ways a base
+/// can stop being loadable, damaged and absent.
+#[derive(Clone, Copy)]
+enum SoleDamage {
+    FlipMidBody,
+    Delete,
+}
+
+impl SoleDamage {
+    /// The case directory's suffix.
+    fn slug(self) -> &'static str {
+        match self {
+            SoleDamage::FlipMidBody => "flip",
+            SoleDamage::Delete => "del",
+        }
+    }
+
+    /// What a panic reports this case as.
+    fn label(self) -> &'static str {
+        match self {
+            SoleDamage::FlipMidBody => "sole checkpoint flipped mid-body",
+            SoleDamage::Delete => "sole checkpoint deleted",
+        }
+    }
+}
+
 /// Scenario C (iv), the loud half: reclamation has dropped the
 /// genesis-reaching segments (blob commits force rotation; a checkpoint
 /// with retain=1 reclaims the closed prefix), so when the SOLE retained
@@ -314,18 +340,16 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
     let cp_name = checkpoints[0].file_name().expect("name").to_owned();
     let cp_len = fs::metadata(&checkpoints[0]).expect("checkpoint").len();
 
-    for (label, mutate) in [
-        ("sole checkpoint flipped mid-body", true),
-        ("sole checkpoint deleted", false),
-    ] {
-        let case = tmp.path().join(format!("c2-{}", if mutate { "flip" } else { "del" }));
+    for damage in [SoleDamage::FlipMidBody, SoleDamage::Delete] {
+        let case = tmp.path().join(format!("c2-{}", damage.slug()));
         copy_dir(&dir, &case);
-        if mutate {
-            flip_byte(&case.join(&cp_name), mid_body(cp_len));
-        } else {
-            fs::remove_file(case.join(&cp_name)).expect("delete sole checkpoint");
+        match damage {
+            SoleDamage::FlipMidBody => flip_byte(&case.join(&cp_name), mid_body(cp_len)),
+            SoleDamage::Delete => {
+                fs::remove_file(case.join(&cp_name)).expect("delete sole checkpoint")
+            }
         }
-        let ctx = format!("C-exhausted: {label}");
+        let ctx = format!("C-exhausted: {}", damage.label());
         match timed_open_result(&case, &ctx) {
             Err(EngineError::Open(OpenError::BadCheckpoint)) => {}
             Err(other) => panic!(

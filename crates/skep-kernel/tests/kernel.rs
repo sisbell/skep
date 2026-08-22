@@ -1527,14 +1527,14 @@ fn world_at_answers_the_same_world_under_a_live_appender() {
     commit(&k, 20); // boundary Seq(2), below everything the writer adds
     let writing = AtomicBool::new(true);
     std::thread::scope(|s| {
-        let kw = &k;
-        let flag = &writing;
+        let k = &k;
+        let writing = &writing;
         s.spawn(move || {
             // Fat records, so the appends straddle rotations.
             for _ in 0..20 {
-                commit_blob(kw);
+                commit_blob(k);
             }
-            flag.store(false, Ordering::Release);
+            writing.store(false, Ordering::Release);
         });
         let mut reads = 0u32;
         while writing.load(Ordering::Acquire) || reads < 20 {
@@ -1568,13 +1568,13 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     let seg = seg_file(dir.path(), 1);
     let spans = frame_spans(&seg);
     assert_eq!(spans.len(), 4); // T1 rec/marker, T2 rec/marker
-    let full = fs::metadata(&seg).unwrap().len();
+    let full_len = fs::metadata(&seg).unwrap().len();
 
     // A record frame that landed while its marker had not: intact, its txn
     // uncommitted, so it is never folded into an answer.
     let buf = fs::read(&seg).unwrap();
-    let (off, len) = (spans[2].0 as usize, spans[2].1 as usize);
-    append_bytes(&seg, &buf[off..off + len]);
+    let (offset, len) = (spans[2].0 as usize, spans[2].1 as usize);
+    append_bytes(&seg, &buf[offset..offset + len]);
     assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 
     // A frame torn mid-write: a header claiming a payload that never landed.
@@ -1587,7 +1587,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     assert_eq!(world_items(&k.world_at(Seq(1)).unwrap()), vec![10]);
 
     // A bounded read writes nothing: the suffix it ignored is still there.
-    assert!(fs::metadata(&seg).unwrap().len() > full);
+    assert!(fs::metadata(&seg).unwrap().len() > full_len);
 }
 
 // ---- checkpoint trigger discipline (§6) ----

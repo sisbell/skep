@@ -121,10 +121,10 @@ pub const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
 /// `Engine::open` under a generous deadline; a hang panics as a wedge
 /// finding rather than hanging the suite.
 pub fn timed_open_result(dir: &Path, ctx: &str) -> Result<Engine, EngineError> {
-    let d = dir.to_path_buf();
+    let dir = dir.to_path_buf();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(Engine::open(cfg_manual(&d), GenesisConfig::standard()));
+        let _ = tx.send(Engine::open(cfg_manual(&dir), GenesisConfig::standard()));
     });
     match rx.recv_timeout(OPEN_TIMEOUT) {
         Ok(r) => r,
@@ -144,10 +144,10 @@ pub fn timed_open(dir: &Path, ctx: &str) -> Engine {
 /// Copy every regular file of `src` into a fresh `dst` (fixture → case).
 pub fn copy_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("case dir");
-    for e in fs::read_dir(src).expect("fixture dir lists") {
-        let e = e.expect("dir entry");
-        if e.file_type().expect("file type").is_file() {
-            fs::copy(e.path(), dst.join(e.file_name())).expect("copy fixture file");
+    for entry in fs::read_dir(src).expect("fixture dir lists") {
+        let entry = entry.expect("dir entry");
+        if entry.file_type().expect("file type").is_file() {
+            fs::copy(entry.path(), dst.join(entry.file_name())).expect("copy fixture file");
         }
     }
 }

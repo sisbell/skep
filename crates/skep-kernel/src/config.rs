@@ -245,11 +245,11 @@ mod tests {
             bad.validate().unwrap_err(),
             "retain_checkpoints must be >= 1"
         );
-        let mem = KernelConfig {
+        let in_memory = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
-        assert!(mem.validate().is_ok());
+        assert!(in_memory.validate().is_ok());
     }
 
     #[test]
@@ -275,12 +275,12 @@ mod tests {
         );
         // The trigger has no journal to ride on, so the rule binds both modes
         // — and it is the trigger's rule that speaks, not the retention one.
-        let fsync = KernelConfig {
+        let journaled = KernelConfig {
             durability: fsync_mode(BurnedSeqPolicy::Rollback),
             checkpoint: CheckpointPolicy::EveryN(0),
         };
         assert_eq!(
-            fsync.validate().unwrap_err(),
+            journaled.validate().unwrap_err(),
             "CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger"
         );
 

@@ -998,11 +998,11 @@ impl<W: WorldState> Kernel<W> {
         // checkpoint cannot stand in for an earlier boundary.
         let checkpoints = checkpoint::list(dir)?;
         let segs = journal::list_segments(dir)?;
-        let base = replay::select_base(&checkpoints, &segs, Some(at.0), &self.genesis).map_err(|u| {
-            HistoryError::Reclaimed {
-                floor: u.floor.map(Seq),
-            }
-        })?;
+        let base = replay::select_base(&checkpoints, &segs, Some(at.0), &self.genesis).map_err(
+            |fail| HistoryError::Reclaimed {
+                floor: fail.floor.map(Seq),
+            },
+        )?;
         // A boundary that IS the base is answered wholly from that base:
         // checkpoint seqs are committed boundaries (a checkpoint serializes an
         // installed root) and 0 is genesis, so there is nothing to fold, and
@@ -1062,9 +1062,9 @@ mod tests {
     // so the impl on a foreign type is fine inside the crate's test cfg.
     impl WorldState for Vec<u64> {
         type Record = u64;
-        fn apply(&self, r: &u64) -> Self {
+        fn apply(&self, record: &u64) -> Self {
             let mut v = self.clone();
-            v.push(*r); // non-idempotent, as the design's replay argument assumes
+            v.push(*record); // non-idempotent, as the design's replay argument assumes
             v
         }
     }
@@ -1084,9 +1084,9 @@ mod tests {
     // fixed 8-byte records cannot reach the frame cap or the budget.
     impl WorldState for Vec<Vec<u8>> {
         type Record = Vec<u8>;
-        fn apply(&self, r: &Vec<u8>) -> Self {
+        fn apply(&self, record: &Vec<u8>) -> Self {
             let mut v = self.clone();
-            v.push(r.clone());
+            v.push(record.clone());
             v
         }
     }

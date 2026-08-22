@@ -208,11 +208,12 @@ fn c_checkpoint_damage_falls_back_and_never_serves_a_corrupt_base() {
 
     // (i) one flipped byte: magic, seq field, crc field, body_len field,
     // mid-body, last byte.
-    for off in [0, 5, 13, 20, mid_body(newest_len), newest_len - 1] {
+    for offset in [0, 5, 13, 20, mid_body(newest_len), newest_len - 1] {
         let name = newest_name.clone();
-        run(format!("newest checkpoint byte {off} flipped"), &move |case| {
-            flip_byte(&case.join(&name), off)
-        });
+        run(
+            format!("newest checkpoint byte {offset} flipped"),
+            &move |case| flip_byte(&case.join(&name), offset),
+        );
     }
     // (ii) truncations: empty, mid-header, header-only, mid-body, last-byte.
     for cut in [0, 10, CHECKPOINT_HEADER_LEN, mid_body(newest_len), newest_len - 1] {
@@ -329,11 +330,11 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
     );
     let checkpoints: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("fixture dir")
-        .filter_map(|e| {
-            let e = e.expect("entry");
-            let name = e.file_name().into_string().ok()?;
+        .filter_map(|entry| {
+            let entry = entry.expect("entry");
+            let name = entry.file_name().into_string().ok()?;
             name.strip_prefix("checkpoint.")?.parse::<u64>().ok()?;
-            Some(e.path())
+            Some(entry.path())
         })
         .collect();
     assert_eq!(checkpoints.len(), 1, "retain=1 keeps exactly one checkpoint");
@@ -566,8 +567,8 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
             .collect();
         offsets.sort_unstable();
         offsets.dedup();
-        for &off in &offsets {
-            flip_byte(&seg_file(&case, 1), off);
+        for &offset in &offsets {
+            flip_byte(&seg_file(&case, 1), offset);
         }
         let first_flip = offsets[0];
         let ctx = format!(

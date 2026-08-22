@@ -1205,8 +1205,8 @@ pub(crate) fn scan(
                     // one fact taken once — before the payload is consumed by
                     // the indexing below, and stated once for all three arms.
                     let end = payload.end;
-                    let frame = &buf[payload];
-                    match bincode::deserialize::<FramePayload>(frame) {
+                    let payload = &buf[payload];
+                    match bincode::deserialize::<FramePayload>(payload) {
                         Ok(FramePayload::Record(record)) => {
                             if run_open {
                                 outcome.runs.push(RunEnd::landed_on_record(record.seq));
@@ -1216,7 +1216,7 @@ pub(crate) fn scan(
                                 .take()
                                 .filter(|group| group.txn == record.txn)
                                 .unwrap_or_else(|| PendingTxn::open(record.txn));
-                            group.push(record, frame);
+                            group.push(record, payload);
                             pending = Some(group);
                         }
                         Ok(FramePayload::Marker(marker)) => {
@@ -1432,12 +1432,12 @@ mod tests {
         // the encoder exactly — pinned at extreme field values, so a codec
         // change toward value-dependent widths breaks here, not the two
         // limits this accounting feeds.
-        for records in [
+        for record_bytes in [
             vec![vec![5u8; 3]],
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
         ] {
-            let expected = txn_encoded_len(&records);
-            let buf = encode_txn(u64::MAX - 3, records).unwrap();
+            let expected = txn_encoded_len(&record_bytes);
+            let buf = encode_txn(u64::MAX - 3, record_bytes).unwrap();
             assert_eq!(buf.len() as u64, expected);
         }
         // The per-record half: what push_frame judges is the wrapped payload,
@@ -1712,10 +1712,13 @@ mod tests {
         // One byte past: refused, however its checksum lands — and the records
         // are released where the group is known dead, which is the memory this
         // bound exists for.
-        let over = group_of(&buf);
-        assert_eq!(over.accounted, MAX_TXN_BYTES + 1);
-        assert!(!over.commits(&closed_by(&over)));
-        assert!(over.records.is_empty(), "a dead group holds no records");
+        let over_budget = group_of(&buf);
+        assert_eq!(over_budget.accounted, MAX_TXN_BYTES + 1);
+        assert!(!over_budget.commits(&closed_by(&over_budget)));
+        assert!(
+            over_budget.records.is_empty(),
+            "a dead group holds no records"
+        );
     }
 
     #[test]
@@ -1755,29 +1758,29 @@ mod tests {
         // here rather than left to whatever the derives happen to produce.
         let buf = encode_txn(2, vec![vec![9u8, 8, 7]]).unwrap();
 
-        let mut expect_record = Vec::new();
-        expect_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
-        expect_record.extend_from_slice(&2u64.to_le_bytes()); // seq
-        expect_record.extend_from_slice(&2u64.to_le_bytes()); // txn == the first seq
-        expect_record.extend_from_slice(&3u64.to_le_bytes()); // bytes.len()
-        expect_record.extend_from_slice(&[9, 8, 7]);
+        let mut expected_record = Vec::new();
+        expected_record.extend_from_slice(&0u32.to_le_bytes()); // FramePayload::Record
+        expected_record.extend_from_slice(&2u64.to_le_bytes()); // seq
+        expected_record.extend_from_slice(&2u64.to_le_bytes()); // txn == the first seq
+        expected_record.extend_from_slice(&3u64.to_le_bytes()); // bytes.len()
+        expected_record.extend_from_slice(&[9, 8, 7]);
         let Parsed::Intact { payload } = parse_frame(&buf, 0) else {
             panic!("intact record frame expected")
         };
         let end = payload.end; // where the marker frame begins
-        assert_eq!(&buf[payload], expect_record.as_slice());
+        assert_eq!(&buf[payload], expected_record.as_slice());
 
-        let mut expect_marker = Vec::new();
-        expect_marker.extend_from_slice(&1u32.to_le_bytes()); // FramePayload::Marker
-        expect_marker.extend_from_slice(&2u64.to_le_bytes()); // txn
-        expect_marker.extend_from_slice(&2u64.to_le_bytes()); // last_seq
+        let mut expected_marker = Vec::new();
+        expected_marker.extend_from_slice(&1u32.to_le_bytes()); // FramePayload::Marker
+        expected_marker.extend_from_slice(&2u64.to_le_bytes()); // txn
+        expected_marker.extend_from_slice(&2u64.to_le_bytes()); // last_seq
         // records_checksum: over the record frames' payloads, in Seq order.
-        expect_marker
-            .extend_from_slice(&crc32c::crc32c_append(0, &expect_record).to_le_bytes());
+        expected_marker
+            .extend_from_slice(&crc32c::crc32c_append(0, &expected_record).to_le_bytes());
         let Parsed::Intact { payload } = parse_frame(&buf, end) else {
             panic!("intact marker frame expected")
         };
-        assert_eq!(&buf[payload], expect_marker.as_slice());
+        assert_eq!(&buf[payload], expected_marker.as_slice());
     }
 
     #[test]

@@ -23,11 +23,15 @@ use crate::replay;
 use crate::{LockKey, Seq, WorldState};
 
 /// One installed committed state: the root's identity IS the version
-/// coordinate (§Core data model). M2-internal; reached only through
-/// [`Snapshot`].
-pub(crate) struct Committed<W> {
-    pub(crate) seq: Seq,
-    pub(crate) world: W,
+/// coordinate (§Core data model). Reached only through [`Snapshot`], and
+/// private to this module, where the three sites that mint one each pair a
+/// coordinate with the world that embodies it — a world at a coordinate it
+/// does not embody folds records it already holds, and since
+/// [`WorldState::apply`] need not be idempotent, that is silent double
+/// application answered `Ok`.
+struct Committed<W> {
+    seq: Seq,
+    world: W,
 }
 
 /// A pinned, consistent view of one committed state (MIC clauses 4 & 6;
@@ -257,43 +261,63 @@ fn applier_token() -> u64 {
     TOKEN.with(|token| *token)
 }
 
-/// The applier lock together with the token of the thread holding it, which is
-/// what lets [`Applier::acquire`] answer a nested acquisition as the
-/// precondition failure it is rather than as the deadlock it would otherwise
-/// be. The owner is cleared BEFORE the lock is released (a value's own
-/// `Drop::drop` runs before its fields drop), so no thread observes a stale
-/// owner while another holds the lock.
+/// The applier lock and the token of the thread holding it, kept as ONE value
+/// because they must agree: the token is what lets [`ApplierLock::acquire`]
+/// answer a nested acquisition as the precondition failure it is rather than
+/// as the deadlock it would otherwise be. Held together so no write path can
+/// reach the state without passing the door that refuses.
 ///
 /// `Relaxed` suffices throughout: the only value ever compared is the reading
 /// thread's OWN token, which no other thread stores, and a thread's own store
 /// precedes its own load in program order. Other threads' stores are invisible
 /// to the comparison because they can only be `0` or a token belonging to
 /// somebody else.
-struct Applier<'k> {
-    owner: &'k AtomicU64,
-    state: MutexGuard<'k, ApplierState>,
+struct ApplierLock {
+    state: Mutex<ApplierState>,
+    /// The token of the thread currently inside the locked region, or `0` for
+    /// none. Scoped per kernel, not per thread: one thread transacting on two
+    /// DISTINCT kernels is honest input and must not be refused.
+    owner: AtomicU64,
 }
 
-impl<'k> Applier<'k> {
+impl ApplierLock {
+    fn new(state: ApplierState) -> ApplierLock {
+        ApplierLock {
+            state: Mutex::new(state),
+            owner: AtomicU64::new(0),
+        }
+    }
+
     /// Take the applier lock, refusing a nested acquisition by the thread
     /// that already holds it (§3). That is a caller's bug — the closure of a
     /// [`Kernel::transact`] in progress calling `transact` on the same kernel
     /// — and it is answered as one, with a panic naming the broken
     /// obligation, rather than as the permanent wedge a non-reentrant lock
     /// would otherwise give: a wedge no operator can act on and no supervisor
-    /// can tell from a slow fsync. Every acquisition of this lock goes
-    /// through here, so no write path can take it without the refusal.
-    fn acquire(owner: &'k AtomicU64, lock: &'k Mutex<ApplierState>) -> Applier<'k> {
+    /// can tell from a slow fsync. The lock is reachable only through here, so
+    /// no write path can take it without the refusal.
+    fn acquire(&self) -> Applier<'_> {
         let me = applier_token();
         assert!(
-            owner.load(Ordering::Relaxed) != me,
+            self.owner.load(Ordering::Relaxed) != me,
             "transact is not reentrant: the closure called `transact` on this kernel, \
              which holds the applier lock for the whole of `f` (§3)"
         );
-        let state = lock.lock();
-        owner.store(me, Ordering::Relaxed);
-        Applier { owner, state }
+        let state = self.state.lock();
+        self.owner.store(me, Ordering::Relaxed);
+        Applier {
+            owner: &self.owner,
+            state,
+        }
     }
+}
+
+/// The held applier lock. The owner is cleared BEFORE the lock is released (a
+/// value's own `Drop::drop` runs before its fields drop), so no thread
+/// observes a stale owner while another holds the lock.
+struct Applier<'k> {
+    owner: &'k AtomicU64,
+    state: MutexGuard<'k, ApplierState>,
 }
 
 impl Drop for Applier<'_> {
@@ -321,12 +345,7 @@ impl DerefMut for Applier<'_> {
 /// `transact`/`snapshot` signatures are invariant across realizations.
 pub struct Kernel<W: WorldState> {
     root: ArcSwap<Committed<W>>,
-    applier: Mutex<ApplierState>,
-    /// The token of the thread currently inside `transact`'s applier-locked
-    /// region, or `0` for none. Scoped per kernel, not per thread: one thread
-    /// transacting on two DISTINCT kernels is honest input and must not be
-    /// refused.
-    applier_owner: AtomicU64,
+    applier: ApplierLock,
     /// §6: serializes `checkpoint()` against itself (caller calls and the
     /// on-commit auto-trigger); distinct from the applier lock so persisting
     /// and reclaiming never block writers.
@@ -512,12 +531,11 @@ impl<W: WorldState> Kernel<W> {
         let seq = Sequencer::recovered(root.seq, cfg.durability.burned_seq_policy());
         Kernel {
             root: ArcSwap::from_pointee(root),
-            applier: Mutex::new(ApplierState {
+            applier: ApplierLock::new(ApplierState {
                 seq,
                 journal,
                 cadence,
             }),
-            applier_owner: AtomicU64::new(0),
             checkpoint_mutex: Mutex::new(()),
             poisoned: AtomicBool::new(false),
             cfg,
@@ -651,7 +669,7 @@ impl<W: WorldState> Kernel<W> {
         f: impl FnOnce(&mut Staging<W>) -> Result<T, E>,
     ) -> Result<(T, Seq), TxnError<E>> {
         let _ = keys; // §4: subsumed by the single applier's global lock in v1.
-        let mut applier = Applier::acquire(&self.applier_owner, &self.applier);
+        let mut applier = self.applier.acquire();
         if self.poisoned.load(Ordering::Acquire) {
             return Err(TxnError::Poisoned);
         }
@@ -1340,7 +1358,7 @@ mod tests {
             checkpoint: CheckpointPolicy::Manual,
         };
         let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
-        k.applier.lock().seq.high_water = u64::MAX;
+        k.applier.state.lock().seq.high_water = u64::MAX;
         let out = k.transact::<_, ()>(&[], |stg| {
             stg.push(10);
             Ok(())

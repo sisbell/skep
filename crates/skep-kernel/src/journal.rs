@@ -773,16 +773,39 @@ impl Journal {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RunEnd {
     /// The resync landed on an intact frame. `at` = that next-intact
-    /// coordinate — a record landing contributes its `seq`, a marker landing
-    /// `last_seq + 1`, since markers carry no `Seq` of their own.
-    /// `inferred_max` = the greatest `Seq` the run itself can hold, one below
-    /// the coordinate it landed on. The run's own seqs are unreadable, so
-    /// these two are all that is known of it (§7).
+    /// coordinate; `inferred_max` = the greatest `Seq` the run itself can
+    /// hold. The run's own seqs are unreadable, so these two are all that is
+    /// known of it (§7). What each landing contributes is
+    /// [`RunEnd::landed_on_record`] and [`RunEnd::landed_on_marker`], which
+    /// are the only way one of these is built.
     Landed { inferred_max: u64, at: u64 },
     /// The run reached end-of-journal with no next intact frame: classes as
     /// the un-acked / torn tail (`> W`), sound because the last committed
     /// marker is itself intact and so precedes any EOF-reaching run (§7).
     Eof,
+}
+
+impl RunEnd {
+    /// The resync landed on an intact RECORD: the run ends one below that
+    /// record's own coordinate, and is reported at it (§7).
+    fn landed_on_record(seq: u64) -> RunEnd {
+        RunEnd::Landed {
+            inferred_max: seq.saturating_sub(1),
+            at: seq,
+        }
+    }
+
+    /// …on an intact MARKER, which carries no `Seq` of its own, so the
+    /// coordinate it contributes is one past its `last_seq`. At the ceiling
+    /// there is no such coordinate and the run is reported at the ceiling
+    /// itself — never wrapped to `0`, which would report a run above the base
+    /// as one below it (§7).
+    fn landed_on_marker(last_seq: u64) -> RunEnd {
+        RunEnd::Landed {
+            inferred_max: last_seq,
+            at: last_seq.saturating_add(1),
+        }
+    }
 }
 
 /// Why a scan could not produce an outcome (§7). Both answers are the
@@ -1101,10 +1124,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                     match bincode::deserialize::<FramePayload>(frame) {
                         Ok(FramePayload::Record(record)) => {
                             if run_open {
-                                outcome.runs.push(RunEnd::Landed {
-                                    inferred_max: record.seq.saturating_sub(1),
-                                    at: record.seq,
-                                });
+                                outcome.runs.push(RunEnd::landed_on_record(record.seq));
                                 run_open = false;
                             }
                             let mut group = pending
@@ -1116,15 +1136,7 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                         }
                         Ok(FramePayload::Marker(marker)) => {
                             if run_open {
-                                outcome.runs.push(RunEnd::Landed {
-                                    inferred_max: marker.last_seq,
-                                    // A marker carries no `Seq` of its own, so
-                                    // the coordinate it contributes is one past
-                                    // its own. At the ceiling there is no such
-                                    // coordinate, and the run is reported at the
-                                    // ceiling itself.
-                                    at: marker.last_seq.saturating_add(1),
-                                });
+                                outcome.runs.push(RunEnd::landed_on_marker(marker.last_seq));
                                 run_open = false;
                             }
                             if let Some(group) = pending.take_if(|group| group.txn == marker.txn) {

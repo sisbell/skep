@@ -27,40 +27,13 @@ pub struct KernelConfig {
 }
 
 impl KernelConfig {
-    /// The rules this configuration must satisfy, in field order: the
-    /// interface's `N ≥ 1` retention rule (§Public interface), then the
-    /// auto-trigger's own `n ≥ 1`. A violation is surfaced rather than
-    /// silently clamped: `N = 0` asks for a journal with no base to recover
-    /// from, and a threshold of `0` asks for a checkpoint after every zero
-    /// commits — each a caller's mistake and not a mode this kernel offers.
-    /// Clamping the second would be the worse charity of the two: `0` reads
-    /// as "disabled" in most configurations, and the nearest meaning here is
-    /// [`CheckpointPolicy::Manual`]'s opposite — a whole checkpoint on the
-    /// committing thread at every commit, whose failure
-    /// [`crate::Kernel::transact`] discards. `Err` names the rule broken,
-    /// which is the whole of what a caller can act on.
-    ///
-    /// [`CheckpointPolicy::Interval`] is deliberately NOT refused at
-    /// [`Duration::ZERO`]: an always-elapsed window is a coherent reading of a
-    /// zero interval, it is what that variant documents, and it is what the
-    /// suite pins.
+    /// The rules this configuration must satisfy, asked of each knob in field
+    /// order — [`Durability::validate`], then [`CheckpointPolicy::validate`].
+    /// Each rule lives with the knob it constrains; `Err` names the rule
+    /// broken, which is the whole of what a caller can act on.
     pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if let Durability::Fsync {
-            retain_checkpoints: 0,
-            ..
-        } = self.durability
-        {
-            return Err("retain_checkpoints must be >= 1");
-        }
-        match self.checkpoint {
-            CheckpointPolicy::EveryN(0) => {
-                Err("CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger")
-            }
-            CheckpointPolicy::JournalBytes(0) => Err(
-                "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger",
-            ),
-            _ => Ok(()),
-        }
+        self.durability.validate()?;
+        self.checkpoint.validate()
     }
 }
 
@@ -115,6 +88,24 @@ pub enum Durability {
 }
 
 impl Durability {
+    /// The rule this mode must satisfy: the interface's `N ≥ 1` retention
+    /// rule (§Public interface). A violation is surfaced rather than silently
+    /// clamped — `N = 0` asks for a journal with no base to recover from,
+    /// which is a caller's mistake and not a mode this kernel offers.
+    ///
+    /// Spelled out variant by variant, so a mode added here has to say
+    /// whether it carries a rule: a wildcard would compile and silently admit
+    /// the next journaled mode with no fallback base.
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        match self {
+            Durability::Fsync {
+                retain_checkpoints: 0,
+                ..
+            } => Err("retain_checkpoints must be >= 1"),
+            Durability::Fsync { .. } | Durability::InMemory => Ok(()),
+        }
+    }
+
     /// What becomes of the `Seq`s a failed transaction burned: rolled back
     /// (keeping the order gap-free) or left advanced (relaxing it to
     /// monotone-only) — §1/§3. The in-memory mode has no burned-`Seq` policy
@@ -173,6 +164,39 @@ pub enum CheckpointPolicy {
     JournalBytes(u64),
     /// No auto-trigger — the caller drives `checkpoint()` from its own loop.
     Manual,
+}
+
+impl CheckpointPolicy {
+    /// The rule this policy must satisfy: `n ≥ 1` on either threshold. A
+    /// violation is surfaced rather than silently clamped — a threshold of
+    /// `0` asks for a checkpoint after every zero commits, a caller's mistake
+    /// and not a mode this kernel offers. Clamping would be the worse charity:
+    /// `0` reads as "disabled" in most configurations, and the nearest meaning
+    /// here is [`CheckpointPolicy::Manual`]'s opposite — a whole checkpoint on
+    /// the committing thread at every commit, whose failure
+    /// [`crate::Kernel::transact`] discards.
+    ///
+    /// [`CheckpointPolicy::Interval`] is deliberately NOT refused at
+    /// [`Duration::ZERO`]: an always-elapsed window is a coherent reading of a
+    /// zero interval, it is what that variant documents, and it is what the
+    /// suite pins.
+    ///
+    /// Spelled out variant by variant, for the reason
+    /// [`Durability::validate`]'s is.
+    pub(crate) fn validate(self) -> Result<(), &'static str> {
+        match self {
+            CheckpointPolicy::EveryN(0) => {
+                Err("CheckpointPolicy::EveryN requires n >= 1; Manual disables the auto-trigger")
+            }
+            CheckpointPolicy::JournalBytes(0) => Err(
+                "CheckpointPolicy::JournalBytes requires n >= 1; Manual disables the auto-trigger",
+            ),
+            CheckpointPolicy::EveryN(_)
+            | CheckpointPolicy::JournalBytes(_)
+            | CheckpointPolicy::Interval(_)
+            | CheckpointPolicy::Manual => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]

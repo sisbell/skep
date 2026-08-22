@@ -253,12 +253,12 @@ fn applier_token() -> u64 {
     TOKEN.with(|token| *token)
 }
 
-/// The applier lock together with the token of the thread holding it — the one
-/// fact [`Kernel::transact`] needs to answer a nested call as the precondition
-/// failure it is, rather than as the deadlock it would otherwise be. The owner
-/// is cleared BEFORE the lock is released (a value's own `Drop::drop` runs
-/// before its fields drop), so no thread observes a stale owner while another
-/// holds the lock.
+/// The applier lock together with the token of the thread holding it, which is
+/// what lets [`Applier::acquire`] answer a nested acquisition as the
+/// precondition failure it is rather than as the deadlock it would otherwise
+/// be. The owner is cleared BEFORE the lock is released (a value's own
+/// `Drop::drop` runs before its fields drop), so no thread observes a stale
+/// owner while another holds the lock.
 ///
 /// `Relaxed` suffices throughout: the only value ever compared is the reading
 /// thread's OWN token, which no other thread stores, and a thread's own store
@@ -271,7 +271,21 @@ struct Applier<'k> {
 }
 
 impl<'k> Applier<'k> {
-    fn acquire(owner: &'k AtomicU64, lock: &'k Mutex<ApplierState>, me: u64) -> Applier<'k> {
+    /// Take the applier lock, refusing a nested acquisition by the thread
+    /// that already holds it (§3). That is a caller's bug — the closure of a
+    /// [`Kernel::transact`] in progress calling `transact` on the same kernel
+    /// — and it is answered as one, with a panic naming the broken
+    /// obligation, rather than as the permanent wedge a non-reentrant lock
+    /// would otherwise give: a wedge no operator can act on and no supervisor
+    /// can tell from a slow fsync. Every acquisition of this lock goes
+    /// through here, so no write path can take it without the refusal.
+    fn acquire(owner: &'k AtomicU64, lock: &'k Mutex<ApplierState>) -> Applier<'k> {
+        let me = applier_token();
+        assert!(
+            owner.load(Ordering::Relaxed) != me,
+            "transact is not reentrant: the closure called `transact` on this kernel, \
+             which holds the applier lock for the whole of `f` (§3)"
+        );
         let state = lock.lock();
         owner.store(me, Ordering::Relaxed);
         Applier { owner, state }
@@ -440,7 +454,9 @@ impl<W: WorldState> Kernel<W> {
         // Tail truncation: after every refusal, and before any write is
         // served (§7). The fold serves none, so the §7 obligation is kept
         // while an `open()` that refuses leaves the journal exactly as it
-        // found it — which is what an operator images after a halt.
+        // found it — which is what an operator images after a halt. It is
+        // also before the appender is opened over that segment, whose length
+        // this cut settles and which the appender reads once.
         journal::truncate_tail(dir, &scan)?;
 
         let writer = JournalWriter::open_active(dir, next_seq)?;
@@ -520,8 +536,8 @@ impl<W: WorldState> Kernel<W> {
     /// unlike it, one that re-invoking with the same records cannot fix. A
     /// transaction whose records all encode but whose whole encoded form —
     /// frames, marker and headers — exceeds the journal's per-transaction
-    /// budget (`MAX_TXN_BYTES`, one frame's worth: 64 MiB) is
-    /// [`TxnError::OverBudget`]: the same no-op with a different remedy — no
+    /// budget, [`crate::MAX_TXN_BYTES`], is [`TxnError::OverBudget`]: the
+    /// same no-op with a different remedy — no
     /// record is at fault, the staging is, and the caller splits the
     /// transaction where fixing a value cannot help. Both size refusals are
     /// judged ABOVE the durability-mode branch, so an in-memory kernel
@@ -559,10 +575,10 @@ impl<W: WorldState> Kernel<W> {
     /// transaction in flight. A composite composes neighbors' PURE math
     /// inside ONE closure (§3; seam contract 3).
     ///
-    /// TRANSACTION BUDGET — one transaction's encoded form is capped at the
-    /// journal's `MAX_TXN_BYTES` (one frame's worth, 64 MiB), and a
-    /// transaction past it is REFUSED with [`TxnError::OverBudget`], in both
-    /// durability modes, before the journal is touched. The cap bounds three
+    /// TRANSACTION BUDGET — one transaction's encoded form is capped at
+    /// [`crate::MAX_TXN_BYTES`], and a transaction past it is REFUSED with
+    /// [`TxnError::OverBudget`], in both durability modes, before the journal
+    /// is touched. The cap bounds three
     /// costs that scale with a transaction's size, the first two transient
     /// and the third durable: the whole transaction is serialized under the
     /// applier lock, so every other writer in the process waits behind it;
@@ -616,13 +632,7 @@ impl<W: WorldState> Kernel<W> {
         f: impl FnOnce(&mut Staging<W>) -> Result<T, E>,
     ) -> Result<(T, Seq), TxnError<E>> {
         let _ = keys; // §4: subsumed by the single applier's global lock in v1.
-        let me = applier_token();
-        assert!(
-            self.applier_owner.load(Ordering::Relaxed) != me,
-            "transact is not reentrant: the closure called `transact` on this kernel, \
-             which holds the applier lock for the whole of `f` (§3)"
-        );
-        let mut applier = Applier::acquire(&self.applier_owner, &self.applier, me);
+        let mut applier = Applier::acquire(&self.applier_owner, &self.applier);
         if self.poisoned.load(Ordering::Acquire) {
             return Err(TxnError::Poisoned);
         }
@@ -665,33 +675,28 @@ impl<W: WorldState> Kernel<W> {
             world: working,
         };
 
-        // The commit region: serialize, then commit through the journal (§1:
-        // append records → marker → ONE fsync → install). Run under
-        // catch_unwind so the §3 guard can repair a mid-commit unwind; it
-        // fires only on unwind — the error returns below carry the journal's
-        // own verdict on what its failure left behind.
+        // The commit region: one call into the journal, which serializes the
+        // records, judges the size refusals no mode may skip, and commits
+        // (§1: append records → marker → ONE fsync → install). Run under
+        // catch_unwind so the §3 guard can repair a mid-commit unwind — the
+        // encode is where a record's own `Serialize` can panic, so it must
+        // sit inside the guard; the guard fires only on unwind, and the error
+        // returns below carry the journal's own verdict on what its failure
+        // left behind.
         //
-        // A transaction's serialized bytes live here twice for the length of
-        // the region — once as records, once as the frames they become — and
-        // all of it under the applier lock, so it is also the length of time
-        // every other writer waits. `check_txn_size`, sitting ABOVE the
-        // journal's mode branch, is what bounds both: the frame cap per
-        // record and MAX_TXN_BYTES per transaction, refused identically in
-        // both durability modes.
+        // A transaction's serialized bytes live inside that call twice for
+        // the length of the region — once as records, once as the frames they
+        // become — and all of it under the applier lock, so it is also the
+        // length of time every other writer waits. The journal is what bounds
+        // both, refusing above its own mode branch: the frame cap per record
+        // and `MAX_TXN_BYTES` per transaction, identically in both durability
+        // modes.
         let commit_out: std::thread::Result<Result<u64, CommitFail>> = {
             let state = &mut *state;
             let root = &self.root;
             let records = &records;
             catch_unwind(AssertUnwindSafe(move || {
-                let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
-                for record in records.iter() {
-                    record_bytes
-                        .push(journal::encode_record(record).map_err(CommitFail::Unencodable)?);
-                }
-                // The mode-independent size refusals, above the
-                // InMemory/Segments split — both modes refuse identically.
-                journal::check_txn_size(&record_bytes)?;
-                state.journal.commit_txn(first, record_bytes, move || {
+                state.journal.commit_txn(first, records, move || {
                     // Atomic install AFTER durability (A0/A4; durable-before-
                     // visible §1): external readers see none-or-all.
                     root.store(Arc::new(committed));

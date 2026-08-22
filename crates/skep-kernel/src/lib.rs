@@ -103,6 +103,7 @@ mod replay;
 
 pub use config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 pub use error::{CheckpointError, HistoryError, OpenError, TxnError};
+pub use journal::MAX_TXN_BYTES;
 pub use kernel::{Kernel, Snapshot, Staging};
 
 use std::fmt;

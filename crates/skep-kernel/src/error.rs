@@ -270,13 +270,13 @@ pub enum TxnError<E> {
     Unencodable(io::Error),
     /// The staged records all encode, and their whole encoded form — record
     /// frames, commit marker and headers — exceeds the journal's
-    /// per-transaction budget (`MAX_TXN_BYTES`: one frame's worth, 64 MiB).
-    /// Refused in BOTH durability modes, above the journal's mode branch,
-    /// before anything is appended or installed: a true no-op like
-    /// [`Durability`]. Unlike [`Unencodable`] the refusal is a property of
-    /// the STAGING, not of any one record — the serializer refused nothing —
-    /// so the remedy is to SPLIT the transaction, where fixing a value cannot
-    /// help and re-invoking unsplit fails the same way forever.
+    /// per-transaction budget, [`crate::MAX_TXN_BYTES`]. Refused in BOTH
+    /// durability modes, above the journal's mode branch, before anything is
+    /// appended or installed: a true no-op like [`Durability`]. Unlike
+    /// [`Unencodable`] the refusal is a property of the STAGING, not of any
+    /// one record — the serializer refused nothing — so the remedy is to
+    /// SPLIT the transaction, where fixing a value cannot help and
+    /// re-invoking unsplit fails the same way forever.
     ///
     /// The budget is what keeps recovery's memory floor replica-independent:
     /// a transaction never spans a journal segment and recovery reads a
@@ -287,7 +287,8 @@ pub enum TxnError<E> {
     /// [`Unencodable`]: TxnError::Unencodable
     OverBudget {
         /// The transaction's accounted encoded size — what the journal would
-        /// have had to hold, and what the caller's split must get under.
+        /// have had to hold, and what the caller's split must get under
+        /// [`crate::MAX_TXN_BYTES`].
         bytes: u64,
     },
     /// The kernel was halted by an UNRECOVERABLE failure (§1/§3): a

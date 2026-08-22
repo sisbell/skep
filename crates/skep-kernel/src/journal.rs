@@ -30,21 +30,27 @@ pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// Sanity bound on a single frame (open build decision: max frame size). The
 /// writer enforces it, so recovery may treat a larger claimed `len` as corrupt.
 pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
-/// The most bytes one TRANSACTION may occupy in the journal — record frames,
-/// commit marker and headers together, [`txn_encoded_len`]'s accounting.
-/// Equal to [`MAX_FRAME_LEN`] as a RELATIONSHIP, not a free knob: a
-/// transaction is at most one frame's worth, so a segment — which rotates
-/// only at a transaction boundary — is at most [`SEGMENT_ROTATE_BYTES`] plus
-/// one frame, and recovery, which reads a segment WHOLE, has a memory floor
-/// that is bounded and IDENTICAL ON EVERY REPLICA. Untie the two and the
-/// second clause fails where it hurts: a transaction never spans a segment,
-/// so one oversized transaction permanently raises the floor of every later
-/// `open()` and every `world_at` above that base — a store that opens on the
-/// machine that wrote it and not on the replica.
+/// The most bytes one TRANSACTION may occupy in the journal — its record
+/// frames, commit marker and headers together. A transaction past it is
+/// REFUSED with [`crate::TxnError::OverBudget`], in both durability modes,
+/// before anything is appended or installed, so this is the figure a caller
+/// splitting an over-budget transaction must get under.
 ///
-/// Enforced by [`check_txn_size`] from [`crate::Kernel::transact`], ABOVE the
-/// [`Journal`] mode branch, so both durability modes refuse identically.
-pub(crate) const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
+/// Equal to the journal's maximum FRAME size as a RELATIONSHIP, not a free
+/// knob: a transaction is at most one frame's worth, so a segment — which
+/// rotates only at a transaction boundary — is at most one rotation
+/// threshold plus one frame, and recovery, which reads a segment WHOLE, has
+/// a memory floor that is bounded and IDENTICAL ON EVERY REPLICA. Untie the
+/// two and the second clause fails where it hurts: a transaction never spans
+/// a segment, so one oversized transaction permanently raises the floor of
+/// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
+/// above that base — a store that opens on the machine that wrote it and not
+/// on the replica.
+///
+/// Inside this module: the accounting is `txn_encoded_len`'s and the refusal
+/// is `check_txn_size`'s, enforced from `Journal::commit_txn` above that
+/// enum's mode branch, and the frame size it is tied to is `MAX_FRAME_LEN`.
+pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// Rotation threshold (open build decision), tested BEFORE a transaction is
 /// appended and only at a txn boundary — so a closed segment holds this many
 /// bytes plus one whole transaction, and a caller bounding memory or file size
@@ -223,20 +229,20 @@ pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
 }
 
 /// The two size refusals NO durability mode may skip, judged in one pass over
-/// the already-encoded records BEFORE the [`Journal`] mode branch: a record
-/// whose frame payload would exceed [`MAX_FRAME_LEN`] — the refusal
-/// [`push_frame`] would give it, [`CommitFail::Unencodable`], a property of
-/// that record — then a transaction whose whole encoded form exceeds
-/// [`MAX_TXN_BYTES`] — [`CommitFail::OverBudget`], a property of the staging:
-/// every record is fine, the caller staged too much at once. The record's own
-/// refusal precedes the transaction's, so a caller fixing a value is not
-/// first told to split.
+/// the already-encoded records by [`Journal::commit_txn`], above its mode
+/// branch: a record whose frame payload would exceed [`MAX_FRAME_LEN`] — the
+/// refusal [`push_frame`] would give it, [`CommitFail::Unencodable`], a
+/// property of that record — then a transaction whose whole encoded form
+/// exceeds [`MAX_TXN_BYTES`] — [`CommitFail::OverBudget`], a property of the
+/// staging: every record is fine, the caller staged too much at once. The
+/// record's own refusal precedes the transaction's, so a caller fixing a
+/// value is not first told to split.
 ///
 /// This is the ONE spelling of the transaction accounting. [`push_frame`]'s
 /// own frame-cap refusal deliberately stays: writer and reader sit on
 /// opposite sides of a trust boundary, and the writer's guard is what
 /// entitles recovery to treat a larger claimed `len` as corrupt.
-pub(crate) fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
+fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
     for bytes in record_bytes {
         if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
             return Err(CommitFail::Unencodable(io::Error::new(
@@ -310,9 +316,15 @@ fn find_magic(buf: &[u8], from: usize) -> Option<usize> {
 /// A journal segment file, named by its `firstSeq` (§1). Every operation over
 /// a slice of these reads a neighbour's name as this segment's bound, so the
 /// slice must be ascending by `first_seq` as [`list_segments`] produces it.
+///
+/// Both fields are read only by the operations here that own segment names —
+/// [`inferred_last_seq`], [`reaches_genesis`], [`reclaim_below`] and
+/// [`scan`] — because a `firstSeq` read outside them is a coverage inference
+/// made away from the naming rule it rests on, and [`reclaim_below`] deletes
+/// files on that inference. A slice of these travels; the names inside do not.
 pub(crate) struct SegmentMeta {
-    pub first_seq: u64,
-    pub path: PathBuf,
+    first_seq: u64,
+    path: PathBuf,
 }
 
 /// The one file name a segment beginning at `first_seq` has:
@@ -509,6 +521,15 @@ pub(crate) struct JournalWriter {
 impl JournalWriter {
     /// Reopen the last existing segment for append, or create `seg-<next_seq>`
     /// (first init / fully-reclaimed-to-checkpoint journal).
+    ///
+    /// CALLER OBLIGATION — this reads the active segment's length ONCE, and
+    /// every pre-transaction mark, rotation test and repair truncation
+    /// afterwards is relative to that figure. So any truncation of that
+    /// segment must already be durable when this is called: recovery's tail
+    /// cut runs first (§7), and an appender opened before it holds a length
+    /// above the real data, so the next failed barrier truncates back to a
+    /// mark above it and cuts committed frames. Appends still land at the end
+    /// of file, which is what makes the mistake silent.
     pub(crate) fn open_active(dir: &Path, next_seq: u64) -> io::Result<Self> {
         let segs = list_segments(dir)?;
         match segs.last() {
@@ -663,23 +684,38 @@ pub(crate) enum Journal {
 }
 
 impl Journal {
-    /// [`JournalWriter::commit_txn`]; the in-memory journal appends no bytes
-    /// and cannot fail, and installs where the durable one installs — after
-    /// a barrier it has no need of. The mode-independent size refusals
-    /// ([`check_txn_size`]) have already run in `transact`, ABOVE this
-    /// branch, so the two arms differ only in what only a file can refuse.
-    pub(crate) fn commit_txn(
+    /// Commit one whole transaction: serialize its records, judge the two
+    /// size refusals no durability mode may skip ([`check_txn_size`]), then
+    /// commit through whichever journal this is.
+    ///
+    /// The encode and the size judgment happen HERE, above this enum's own
+    /// mode branch, which is what makes them mode-independent by construction
+    /// rather than by a caller's discipline: an in-memory kernel serializes
+    /// every record a journaled one serializes and refuses exactly what a
+    /// journaled one refuses of the records themselves, so a store that
+    /// passes an in-memory test does not meet a size refusal only in
+    /// production. The two arms below therefore differ only in what only a
+    /// file can refuse — [`JournalWriter::commit_txn`] for the durable one,
+    /// and for the in-memory one no bytes appended, no failure available, and
+    /// an install where the durable journal installs, after a barrier it has
+    /// no need of.
+    pub(crate) fn commit_txn<R: Serialize>(
         &mut self,
         first_seq: u64,
-        records: Vec<Vec<u8>>,
+        records: &[R],
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
+        let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
+        for record in records {
+            record_bytes.push(encode_record(record).map_err(CommitFail::Unencodable)?);
+        }
+        check_txn_size(&record_bytes)?;
         match self {
             Journal::InMemory => {
                 install();
                 Ok(0)
             }
-            Journal::Segments(writer) => writer.commit_txn(first_seq, records, install),
+            Journal::Segments(writer) => writer.commit_txn(first_seq, record_bytes, install),
         }
     }
 
@@ -1220,6 +1256,60 @@ mod tests {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }
+    }
+
+    /// A record whose serializer refuses — the cheapest way to reach the
+    /// encode step, which no size of value can exercise.
+    struct RefusesSerialization;
+
+    impl Serialize for RefusesSerialization {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("record refused to serialize"))
+        }
+    }
+
+    #[test]
+    fn the_in_memory_journal_refuses_what_the_durable_one_refuses() {
+        // The encode and the two size refusals belong to `Journal::commit_txn`
+        // and run above its own mode branch, so the mode that journals nothing
+        // still serializes every record and still refuses what only the frames
+        // could reject. The frame cap once lived in the frame builder alone —
+        // which this arm never reaches — and a store whose values could exceed
+        // it passed every in-memory test and met the refusal in production;
+        // owning the check above the branch is what keeps that closed by
+        // construction rather than by whatever the caller remembers to do
+        // first.
+        let mut installed = false;
+        let mut memory = Journal::InMemory;
+
+        // The encode: a record the serializer refuses, in the mode that would
+        // otherwise never encode anything.
+        let out = memory.commit_txn(1, &[RefusesSerialization], || installed = true);
+        assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
+
+        // The frame cap, which is a property of frames this arm never builds.
+        let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
+        let over_frame = vec![vec![0u8; cap_bytes + 1 - 8]]; // −8: the len prefix
+        let out = memory.commit_txn(1, &over_frame, || installed = true);
+        assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
+        drop(over_frame);
+
+        // The transaction budget, likewise.
+        let half = (MAX_TXN_BYTES / 2) as usize;
+        let over_budget = vec![vec![0u8; half], vec![0u8; half]];
+        let out = memory.commit_txn(1, &over_budget, || installed = true);
+        assert!(matches!(out, Err(CommitFail::OverBudget { .. })), "got {out:?}");
+        drop(over_budget);
+
+        assert!(!installed, "a refused transaction installs nothing");
+
+        // …and the durable arm answers the same, which is the parity these
+        // three refusals exist to hold: one judgment, one place, both modes.
+        let dir = tempdir().unwrap();
+        let mut segments = Journal::Segments(JournalWriter::open_active(dir.path(), 1).unwrap());
+        let out = segments.commit_txn(1, &[RefusesSerialization], || installed = true);
+        assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
+        assert!(!installed, "a refused transaction installs nothing");
     }
 
     #[test]

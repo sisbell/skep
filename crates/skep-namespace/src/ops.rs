@@ -12,8 +12,8 @@ use std::sync::Arc;
 use skep_address::{is_prefix, parent, validate, zeros, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
-use crate::error::{DelegateError, NodeError, OpError};
-use crate::state::{bootstrap_root, namespace, ns_lock_key};
+use crate::error::{CreateDocumentError, DelegateError, NodeError};
+use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
 use crate::{HasM3, M3Rec, M3State, PrincipalId};
 
 /// M3's transact-driving op handle over M2 (§B): a thin wrapper holding the
@@ -25,10 +25,8 @@ pub struct Namespace<W: WorldState> {
 }
 
 impl<W: WorldState> Namespace<W> {
-    /// Wrap the engine's kernel. (Construction is not itself an
-    /// interface-listed item, but the declared handle — which "holds
-    /// `Arc<Kernel<W>>`" — is unusable without one; this is the minimal
-    /// constructor, nothing more.)
+    /// Wrap the engine's kernel — the handle holds nothing else, so this is
+    /// the whole of its construction.
     pub fn new(kernel: Arc<Kernel<W>>) -> Namespace<W> {
         Namespace { kernel }
     }
@@ -41,13 +39,14 @@ where
     /// Baptize a fresh empty document under `account` [ASN-0103; §7].
     ///
     /// Authorization is by EFFECTIVE owner ω, never bare containment (O5 —
-    /// the ownership-divergence trap): `OpError::NotOwner` if ω(`account`)
-    /// is absent or names another principal. The ω read is evaluated first,
-    /// in-closure against `stg.base().m3()`; it is stale-safe (ω of an
-    /// *existing* account is stable — §6/§8), so the held
+    /// the ownership-divergence trap): `CreateDocumentError::NotOwner` if
+    /// ω(`account`) is absent or names another principal. The ω read is
+    /// evaluated first, in-closure against `stg.base().m3()`; it is
+    /// stale-safe (ω of an *existing* account is stable — §6/§8), so the held
     /// [`M3State::principals_lock_key`] is defensive, not load-bearing. With
-    /// auth passed, the structural mint gate surfaces as `OpError::Mint`
-    /// (`NotAnAccount` covers unregistered and non-account alike — P8).
+    /// auth passed, the structural mint gate surfaces as
+    /// `CreateDocumentError::Mint` (`NotAnAccount` covers unregistered and
+    /// non-account alike — P8).
     ///
     /// Registers d only — no M5 arrangement write (lazy — Conflicts §3). No
     /// idempotency key (identity is the address; a retried lost-ack yields a
@@ -58,21 +57,20 @@ where
         &self,
         caller: PrincipalId,
         account: &Address,
-    ) -> Result<(Address, Seq), TxnError<OpError>> {
+    ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
         let keys = [
             M3State::document_lock_key(account),
             M3State::principals_lock_key(),
         ];
         self.kernel.transact(&keys, |stg| {
-            match stg.base().m3().effective_owner(account) {
-                Some(p) if p.id == caller => {}
-                _ => return Err(OpError::NotOwner),
+            if !stg.base().m3().is_effective_owner(caller, account) {
+                return Err(CreateDocumentError::NotOwner);
             }
             let (addr, rec) = stg
                 .working()
                 .m3()
                 .mint_document(account)
-                .map_err(OpError::Mint)?;
+                .map_err(CreateDocumentError::Mint)?;
             stg.push(rec.into());
             Ok(addr)
         })
@@ -87,7 +85,7 @@ where
     ///
     /// Pure pre-work runs first: the validate-lift (`NotValid`) and the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
-    /// alone does not make `namespace()`/lock-key construction safe (a
+    /// alone does not make `namespace_of`/lock-key construction safe (a
     /// 1-component node prefix is T4-valid but parentless — §6). Both
     /// pre-work failures reject via `TxnError::Rejected` with NO transaction
     /// opened. Every race-prone condition is then evaluated inside the
@@ -109,14 +107,15 @@ where
         new_id: PrincipalId,
     ) -> Result<(Address, Seq), TxnError<DelegateError>> {
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
-        // only after it are parent()/namespace() total on new_prefix.
+        // only after it are parent()/namespace_of() total on new_prefix.
         let np = validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
         if zeros(np.tumbler()) != 1 {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
         // One NsKey serves the held lock, the next-form check, and the
         // staged Allocate — the same key by construction (§1/§6).
-        let ns = namespace(np.tumbler());
+        let ns = namespace_of(&np)
+            .expect("zeros == 1 (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         let keys = [ns_lock_key(&ns), M3State::principals_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             let base = stg.base().m3();
@@ -126,12 +125,12 @@ where
                 .ok_or(DelegateError::DelegatorUnknown)?;
             // (i) ancestry: dp ≺ new_prefix, strict [monotone — pfx
             // immutable, O13].
-            if !is_prefix(dp.tumbler(), np.tumbler()) || dp.tumbler() == np.tumbler() {
+            if !M3State::prefix_contains(&dp, &np) || dp == np {
                 return Err(DelegateError::NotAncestor);
             }
             // (ii) authorization: the delegator is ω(new_prefix)
             // [non-monotone → in-closure].
-            if !matches!(base.effective_owner(&np), Some(p) if p.id == delegator) {
+            if !base.is_effective_owner(delegator, &np) {
                 return Err(DelegateError::NotAuthorized);
             }
             // (iv) top-down: no principal strictly under new_prefix — the T5
@@ -157,9 +156,10 @@ where
                 return Err(DelegateError::ParentNotRegistered);
             }
             // next-form (O17c) — MANDATORY under the counter representation
-            // (§6); a gate violation is a namespace that cannot produce a
-            // next address at all.
-            let next = base.next_in(&ns).map_err(|_| DelegateError::NotNextForm)?;
+            // (§6).
+            let next = base
+                .next_in(&ns)
+                .expect("P8 above ⇒ the anchor is a registered node or account ⇒ TA5a holds for g ≤ 2");
             if next != np {
                 return Err(DelegateError::NotNextForm);
             }
@@ -189,13 +189,19 @@ where
     /// surface typed rather than silently coalesce, §7/§8), and bootstrap
     /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). Returns the node
     /// address and its commit `Seq`.
+    ///
+    /// The first two guards are pure pre-work — validity and level are
+    /// decidable from the address alone — so a malformed input rejects via
+    /// `TxnError::Rejected` with NO transaction opened; only the two
+    /// state-reading guards run under the held lock.
     pub fn register_node(&self, addr: Tumbler) -> Result<(Address, Seq), TxnError<NodeError>> {
+        // Pre-work (§7): the state-free half of the guard order.
+        let ad = validate(addr).map_err(|_| TxnError::Rejected(NodeError::NotValid))?;
+        if ad.level() != Level::Node {
+            return Err(TxnError::Rejected(NodeError::NotNode));
+        }
         let keys = [M3State::node_lock_key()];
         self.kernel.transact(&keys, move |stg| {
-            let ad = validate(addr).map_err(|_| NodeError::NotValid)?;
-            if ad.level() != Level::Node {
-                return Err(NodeError::NotNode);
-            }
             if stg.base().m3().entity_level(&ad).is_some() {
                 return Err(NodeError::NotFresh);
             }
@@ -216,20 +222,21 @@ where
     /// ONLY; §7]: a fresh document in the caller's OWN account. Resolves
     /// `pfx(caller)` off a snapshot — value-stable, since prefixes are
     /// immutable (O13) — so `fork` opens no transaction of its own; an
-    /// unknown id returns `Err(TxnError::Rejected(OpError::NotOwner))`
-    /// directly, opening NO transaction. Then reduces to
+    /// unknown id returns
+    /// `Err(TxnError::Rejected(CreateDocumentError::NotOwner))` directly,
+    /// opening NO transaction. Then reduces to
     /// [`Namespace::create_new_document`]`(caller, pfx(caller))`, whose
     /// ω-auth passes by construction (SelfOwnershipAtPrefix), and returns
     /// its `(Address, Seq)`.
     ///
     /// A node-tier caller is rejected with the typed
-    /// `OpError::Mint(MintError::NotAnAccount)` — the node-tier O10 case is
-    /// DROPPED, not relocated to `delegate` (Conflicts §6). M5 wires the
-    /// shared content separately (mechanism/policy split).
-    pub fn fork(&self, caller: PrincipalId) -> Result<(Address, Seq), TxnError<OpError>> {
+    /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
+    /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6). M5
+    /// wires the shared content separately (mechanism/policy split).
+    pub fn fork(&self, caller: PrincipalId) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
         let snap = self.kernel.snapshot();
         let Some(pfx) = snap.world().m3().principal_prefix(caller) else {
-            return Err(TxnError::Rejected(OpError::NotOwner));
+            return Err(TxnError::Rejected(CreateDocumentError::NotOwner));
         };
         self.create_new_document(caller, &pfx)
     }

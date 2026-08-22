@@ -14,7 +14,7 @@ use skep_arrangement::{CopyError, DeleteError, InsertError, RearrangeError, Seat
 use skep_content::ContentError;
 use skep_discovery::QueryError;
 use skep_links::{AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError};
-use skep_namespace::{DelegateError, MintError, NodeError, OpError};
+use skep_namespace::{CreateDocumentError, DelegateError, MintError, NodeError};
 use skep_retrieval::{CompareError, DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 
 use crate::op::OpKind;
@@ -55,11 +55,11 @@ impl Lower for MintError {
     }
 }
 
-impl Lower for OpError {
+impl Lower for CreateDocumentError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         match self {
-            OpError::NotOwner => (RejectCode::NotOwner, None),
-            OpError::Mint(m) => m.lower(),
+            CreateDocumentError::NotOwner => (RejectCode::NotOwner, None),
+            CreateDocumentError::Mint(m) => m.lower(),
         }
     }
 }
@@ -405,7 +405,7 @@ mod tests {
     /// §5 nested-error rule: wrappers recurse into the leaf's own impl.
     #[test]
     fn wrappers_recurse() {
-        let (c, s) = OpError::Mint(MintError::NotAnAccount).lower();
+        let (c, s) = CreateDocumentError::Mint(MintError::NotAnAccount).lower();
         assert_eq!(c, RejectCode::NotAnAccount);
         assert!(s.is_none());
         let (c, _) = InsertError::Mint(MintError::HomeNotRegistered).lower();

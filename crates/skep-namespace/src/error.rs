@@ -1,6 +1,7 @@
-//! The typed rejections of M3's public surface (§Public interface). Variant
-//! declaration order is the interface's, verbatim; `delegate`'s *rejection*
-//! order is pinned separately (§6) and documented at [`DelegateError`].
+//! The typed rejections of M3's public surface (§Public interface). Where an
+//! op pins the order its guards run in, the variants are declared in that
+//! order — [`DelegateError`] (§6) and [`NodeError`] (§7) both do, so the
+//! declaration reads as the contract.
 
 use std::error::Error;
 use std::fmt;
@@ -50,32 +51,33 @@ impl Error for MintError {
     }
 }
 
-/// `create_new_document`/`fork` rejection (§B). "Not an account" and "not
+/// Document-baptism rejection, shared by the two ops that create a document
+/// — `create_new_document` and `fork` (§B). "Not an account" and "not
 /// registered" BOTH surface via `Mint(MintError::NotAnAccount)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpError {
+pub enum CreateDocumentError {
     /// Caller is not the effective owner ω of the target (O5) — authorization
-    /// is by ω (longest match), never bare containment (`owns`).
+    /// is by ω (longest match), never bare prefix containment.
     NotOwner,
     /// The op's mint failed structurally.
     Mint(MintError),
 }
 
-impl fmt::Display for OpError {
+impl fmt::Display for CreateDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            OpError::NotOwner => f.write_str(
+            CreateDocumentError::NotOwner => f.write_str(
                 "caller is not the effective owner (ω) of the target (O5; ω arbitrates, never bare containment)",
             ),
-            OpError::Mint(e) => write!(f, "op mint failed: {e}"),
+            CreateDocumentError::Mint(e) => write!(f, "document mint failed: {e}"),
         }
     }
 }
 
-impl Error for OpError {
+impl Error for CreateDocumentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            OpError::Mint(e) => Some(e),
+            CreateDocumentError::Mint(e) => Some(e),
             _ => None,
         }
     }
@@ -84,65 +86,64 @@ impl Error for OpError {
 /// `delegate` rejection — the O15 five-condition gate with (iii) NARROWED to
 /// `zeros == 1` (§6 / Conflicts §7), PLUS id-freshness PLUS P8 PLUS next-form.
 ///
-/// Rejection order is PINNED (§6), and it is NOT this declaration order:
-/// `NotValid` → `NotAccountTier` (pure pre-work — both `Rejected` with NO
-/// transaction opened) → `DelegatorUnknown` → `NotAncestor` → `NotAuthorized`
-/// → `NotTopDown` → `NotFresh` → `DuplicateId` → `ParentNotRegistered` →
-/// `NotNextForm`. A multiply-defective input earns the FIRST applicable
+/// The variants are declared in `delegate`'s PINNED rejection order (§6):
+/// `NotValid` and `NotAccountTier` are pure pre-work — both `Rejected` with
+/// NO transaction opened — and the rest are the in-closure gate, in the order
+/// it evaluates them. A multiply-defective input earns the FIRST applicable
 /// rejection; conformance tests and M10's error handling may rely on this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelegateError {
+    /// O15(v) validity: `new_prefix` is not T4-valid.
+    NotValid,
+    /// O15(iii), narrowed `≤1 → ==1` and hoisted to pre-work: `new_prefix` is
+    /// node-tier (zeros = 0) or document-tier (zeros ≥ 2), not account-tier.
+    NotAccountTier,
     /// The delegator id names no principal (§5 scan).
     DelegatorUnknown,
-    /// `new_id` is already carried by a principal — id-injectivity, the
-    /// id-axis mirror of O1b (§6).
-    DuplicateId,
     /// O15(i): the delegator's prefix is not a strict ancestor of `new_prefix`.
     NotAncestor,
     /// O15(ii): the delegator is not the effective owner ω of `new_prefix`.
     NotAuthorized,
-    /// O15(iii), narrowed `≤1 → ==1` and hoisted to pre-work: `new_prefix` is
-    /// node-tier (zeros = 0) or document-tier (zeros ≥ 2), not account-tier.
-    NotAccountTier,
     /// O15(iv): a principal already sits strictly under `new_prefix`.
     NotTopDown,
     /// O15(v) freshness: `new_prefix` is already allocated.
     NotFresh,
+    /// `new_id` is already carried by a principal — id-injectivity, the
+    /// id-axis mirror of O1b (§6).
+    DuplicateId,
+    /// P8: the parent of `new_prefix` is not a registered entity (Conflicts §5).
+    ParentNotRegistered,
     /// O17c: `new_prefix` is not the namespace's next address — obtain the
     /// exact value from `next_account_prefix` instead of guess-and-retry.
     NotNextForm,
-    /// O15(v) validity: `new_prefix` is not T4-valid.
-    NotValid,
-    /// P8: the parent of `new_prefix` is not a registered entity (Conflicts §5).
-    ParentNotRegistered,
 }
 
 impl fmt::Display for DelegateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            DelegateError::DelegatorUnknown => "delegate: delegator id names no principal",
-            DelegateError::DuplicateId => {
-                "delegate: new_id is already carried by a principal (id-injectivity)"
+            DelegateError::NotValid => "delegate: new_prefix is not T4-valid (O15 v)",
+            DelegateError::NotAccountTier => {
+                "delegate: new_prefix is not account-tier — zeros must be exactly 1 (O15 iii, narrowed)"
             }
+            DelegateError::DelegatorUnknown => "delegate: delegator id names no principal",
             DelegateError::NotAncestor => {
                 "delegate: delegator's prefix is not a strict ancestor of new_prefix (O15 i)"
             }
             DelegateError::NotAuthorized => {
                 "delegate: delegator is not the effective owner ω of new_prefix (O15 ii)"
             }
-            DelegateError::NotAccountTier => {
-                "delegate: new_prefix is not account-tier — zeros must be exactly 1 (O15 iii, narrowed)"
-            }
             DelegateError::NotTopDown => {
                 "delegate: a principal already sits strictly under new_prefix (O15 iv)"
             }
             DelegateError::NotFresh => "delegate: new_prefix is already allocated (O15 v)",
-            DelegateError::NotNextForm => {
-                "delegate: new_prefix is not the namespace's next address (O17c; peek next_account_prefix)"
+            DelegateError::DuplicateId => {
+                "delegate: new_id is already carried by a principal (id-injectivity)"
             }
-            DelegateError::NotValid => "delegate: new_prefix is not T4-valid (O15 v)",
             DelegateError::ParentNotRegistered => {
                 "delegate: the parent of new_prefix is not a registered entity (P8)"
+            }
+            DelegateError::NotNextForm => {
+                "delegate: new_prefix is not the namespace's next address (O17c; peek next_account_prefix)"
             }
         })
     }
@@ -150,8 +151,10 @@ impl fmt::Display for DelegateError {
 
 impl Error for DelegateError {}
 
-/// `register_node` rejection (ASN-0047 NodeBaptism; §7). Guards run in this
-/// declaration order — the interface's caller contract lists them identically.
+/// `register_node` rejection (ASN-0047 NodeBaptism; §7). The variants are
+/// declared in the order the guards run: `NotValid` and `NotNode` are pure
+/// pre-work — `Rejected` with NO transaction opened — and the two registry
+/// reads follow, under the held node key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeError {
     /// The supplied address is not T4-valid.

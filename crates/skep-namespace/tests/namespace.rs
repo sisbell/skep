@@ -16,8 +16,8 @@ use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
 };
 use skep_namespace::{
-    DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, OpError, Principal,
-    PrincipalId, BOOTSTRAP_PRINCIPAL,
+    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
+    Principal, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -97,14 +97,6 @@ fn rejected<T: std::fmt::Debug, E: std::fmt::Debug>(r: Result<T, TxnError<E>>) -
     match r {
         Err(TxnError::Rejected(e)) => e,
         other => panic!("expected TxnError::Rejected, got {other:?}"),
-    }
-}
-
-/// Unwrap a pure mint's rejection (M3Rec carries no Debug, so no unwrap_err).
-fn mint_err(r: Result<(Address, M3Rec), MintError>) -> MintError {
-    match r {
-        Err(e) => e,
-        Ok((addr, _)) => panic!("expected a mint rejection, minted {addr:?}"),
     }
 }
 
@@ -218,18 +210,18 @@ fn mint_preconditions_reject_structurally() {
     let ghost_acct = a(&[1, 0, 9]); // account-level, never registered
 
     // P6/C2/L1a: content/link home must be a REGISTERED Document.
-    assert_eq!(mint_err(m3.mint_content(&ghost_doc)), MintError::HomeNotRegistered);
-    assert_eq!(mint_err(m3.mint_link(&ghost_doc)), MintError::HomeNotRegistered);
-    assert_eq!(mint_err(m3.mint_content(&acct)), MintError::HomeNotRegistered);
+    assert_eq!(m3.mint_content(&ghost_doc).unwrap_err(), MintError::HomeNotRegistered);
+    assert_eq!(m3.mint_link(&ghost_doc).unwrap_err(), MintError::HomeNotRegistered);
+    assert_eq!(m3.mint_content(&acct).unwrap_err(), MintError::HomeNotRegistered);
     // V-WF: version source must be a registered Document — covers an
     // unregistered address AND a registered non-document alike.
-    assert_eq!(mint_err(m3.mint_version(&ghost_doc)), MintError::SourceNotRegistered);
-    assert_eq!(mint_err(m3.mint_version(&acct)), MintError::SourceNotRegistered);
+    assert_eq!(m3.mint_version(&ghost_doc).unwrap_err(), MintError::SourceNotRegistered);
+    assert_eq!(m3.mint_version(&acct).unwrap_err(), MintError::SourceNotRegistered);
     // P8/CND.pre: document target must be a registered Account — covers
     // unregistered AND non-account (document, node) alike.
-    assert_eq!(mint_err(m3.mint_document(&ghost_acct)), MintError::NotAnAccount);
-    assert_eq!(mint_err(m3.mint_document(&doc)), MintError::NotAnAccount);
-    assert_eq!(mint_err(m3.mint_document(&a(&[1]))), MintError::NotAnAccount);
+    assert_eq!(m3.mint_document(&ghost_acct).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(m3.mint_document(&doc).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(m3.mint_document(&a(&[1])).unwrap_err(), MintError::NotAnAccount);
 }
 
 // ---- §C queries: membership ----
@@ -313,7 +305,7 @@ fn lock_keys_distinguish_every_chain_and_registry() {
 // ---- §C queries: ownership ----
 
 #[test]
-fn owns_is_containment_effective_owner_is_authorization() {
+fn containment_is_not_authorization() {
     let (k, _ns, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
@@ -321,11 +313,11 @@ fn owns_is_containment_effective_owner_is_authorization() {
     // O1: bare containment is true for SEVERAL principals at once — the
     // node operator's prefix contains the delegated account and its
     // documents…
-    assert!(M3State::owns(&a(&[1]), &acct));
-    assert!(M3State::owns(&a(&[1]), &doc));
-    assert!(M3State::owns(&acct, &doc));
-    assert!(M3State::owns(&acct, &acct)); // ≼ admits equality
-    assert!(!M3State::owns(&acct, &a(&[1])));
+    assert!(M3State::prefix_contains(&a(&[1]), &acct));
+    assert!(M3State::prefix_contains(&a(&[1]), &doc));
+    assert!(M3State::prefix_contains(&acct, &doc));
+    assert!(M3State::prefix_contains(&acct, &acct)); // ≼ admits equality
+    assert!(!M3State::prefix_contains(&acct, &a(&[1])));
     // …so only ω (longest-prefix match) arbitrates: the delegate owns its
     // subtree, the node operator keeps the rest (O2/O3, the
     // ownership-divergence discipline).
@@ -349,6 +341,20 @@ fn owns_is_containment_effective_owner_is_authorization() {
     // Uncovered (a foreign node's subtree): None.
     assert!(m3.effective_owner(&a(&[2])).is_none());
     assert!(m3.effective_owner(&a(&[2, 0, 1])).is_none());
+
+    // The authorization predicate agrees with ω everywhere, and is where the
+    // divergence bites: π₀ CONTAINS the account but is not its ω, so
+    // containment says yes exactly where authorization says no.
+    assert!(m3.is_effective_owner(ID1, &doc));
+    assert!(m3.is_effective_owner(ID1, &acct));
+    assert!(M3State::prefix_contains(&a(&[1]), &acct));
+    assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &acct));
+    assert!(m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[1])));
+    // An unknown id owns nothing; an uncovered address has no owner at all,
+    // and absent-ω is not-owner rather than a pass.
+    assert!(!m3.is_effective_owner(PrincipalId(99), &doc));
+    assert!(!m3.is_effective_owner(ID1, &a(&[2, 0, 1])));
+    assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[2, 0, 1])));
 }
 
 // ---- §B delegate ----
@@ -432,7 +438,7 @@ fn delegate_rejection_order_is_pinned() {
     );
     // …then NotAccountTier (hoisted (iii)): a bare node prefix is T4-VALID
     // but parentless — the hoist must reject it typed, before any
-    // namespace()/lock-key construction (no panic), and a document-tier
+    // namespace_of/lock-key construction (no panic), and a document-tier
     // prefix is equally out (zeros == 1, narrowed from O15's ≤ 1).
     assert_eq!(
         rejected(ns.delegate(unknown, t(&[2]), ID1)),
@@ -552,17 +558,17 @@ fn create_new_document_authorizes_by_omega() {
     assert!(s2 > s1);
     assert!(k.snapshot().world().m3().is_registered_document(&d1));
 
-    // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account
-    // (owns = true), yet ω names ID1 — bare containment must not authorize.
-    assert!(M3State::owns(&a(&[1]), &acct));
+    // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account,
+    // yet ω names ID1 — bare containment must not authorize.
+    assert!(M3State::prefix_contains(&a(&[1]), &acct));
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct)),
-        OpError::NotOwner
+        CreateDocumentError::NotOwner
     );
     // An unknown caller is the effective owner of nothing.
     assert_eq!(
         rejected(ns.create_new_document(PrincipalId(99), &acct)),
-        OpError::NotOwner
+        CreateDocumentError::NotOwner
     );
     // ω-auth is evaluated FIRST (§7): a non-owner of an unregistered
     // account gets NotOwner, while the owner (π₀ covers all unregistered
@@ -570,15 +576,15 @@ fn create_new_document_authorizes_by_omega() {
     // covers unregistered and node-tier targets alike.
     assert_eq!(
         rejected(ns.create_new_document(ID1, &a(&[1, 0, 2]))),
-        OpError::NotOwner
+        CreateDocumentError::NotOwner
     );
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1, 0, 2]))),
-        OpError::Mint(MintError::NotAnAccount)
+        CreateDocumentError::Mint(MintError::NotAnAccount)
     );
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1]))),
-        OpError::Mint(MintError::NotAnAccount)
+        CreateDocumentError::Mint(MintError::NotAnAccount)
     );
 }
 
@@ -596,21 +602,24 @@ fn fork_mints_in_the_callers_own_account() {
     // pfx(caller)) — a fresh self-owned document one tier below the prefix.
     let (d1, _) = ns.fork(ID1).expect("fork");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
-    assert!(M3State::owns(&acct, &d1));
+    assert!(M3State::prefix_contains(&acct, &d1));
     let snap = k.snapshot();
     assert!(snap.world().m3().is_registered_document(&d1));
-    assert_eq!(snap.world().m3().effective_owner(&d1).expect("covered").id, ID1);
+    assert!(snap.world().m3().is_effective_owner(ID1, &d1));
     // Shares the (account, 2) chain with create_new_document.
     let (d2, _) = ns.create_new_document(ID1, &acct).expect("create");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
-    assert_eq!(rejected(ns.fork(PrincipalId(99))), OpError::NotOwner);
+    assert_eq!(
+        rejected(ns.fork(PrincipalId(99))),
+        CreateDocumentError::NotOwner
+    );
     // Node-tier caller (π₀ at [1]): the node-tier O10 case is DROPPED —
     // typed Mint(NotAnAccount), never a silent skip (Conflicts §6).
     assert_eq!(
         rejected(ns.fork(BOOTSTRAP_PRINCIPAL)),
-        OpError::Mint(MintError::NotAnAccount)
+        CreateDocumentError::Mint(MintError::NotAnAccount)
     );
 }
 
@@ -642,7 +651,10 @@ fn register_node_validates_and_admits_supplied_addresses() {
     ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
         .expect("delegate under the new node");
 
-    // Rejections, in the documented guard order:
+    // Rejections, in the documented guard order. The first two are pure
+    // pre-work (validity and level read the address alone), the last two
+    // read the registry under the held key.
+    let quiet = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
     assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
     // NotNode — account-level input; checked before lineage ([2,0,1] is
@@ -657,6 +669,8 @@ fn register_node_validates_and_admits_supplied_addresses() {
         rejected(ns.register_node(t(&[2]))),
         NodeError::NotDescendantOfBootstrap
     );
+    // A rejected admission commits nothing, whichever guard refused it.
+    assert_eq!(k.current_seq(), quiet);
 }
 
 // ---- serde / recovery ----
@@ -675,20 +689,7 @@ fn journaled_types_survive_serde_round_trips() {
     for rec in &recs {
         let bytes = bincode::serialize(rec).expect("serialize M3Rec");
         let back: M3Rec = bincode::deserialize(&bytes).expect("deserialize M3Rec");
-        match (rec, &back) {
-            (M3Rec::Allocate { addr: x }, M3Rec::Allocate { addr: y }) => assert_eq!(x, y),
-            (M3Rec::RegisterNode { addr: x }, M3Rec::RegisterNode { addr: y }) => {
-                assert_eq!(x, y)
-            }
-            (
-                M3Rec::RegisterPrincipal { prefix: x, id: i },
-                M3Rec::RegisterPrincipal { prefix: y, id: j },
-            ) => {
-                assert_eq!(x, y);
-                assert_eq!(i, j);
-            }
-            _ => panic!("variant changed across the round trip"),
-        }
+        assert_eq!(*rec, back); // whole value: variant AND payload
     }
 
     // M3State — the checkpointed slice: every field is ordinary serde (none
@@ -716,8 +717,7 @@ fn journaled_types_survive_serde_round_trips() {
     let p = back.principal_by_id(BOOTSTRAP_PRINCIPAL).expect("π₀");
     let bytes = bincode::serialize(&p).expect("serialize Principal");
     let q: Principal = bincode::deserialize(&bytes).expect("deserialize Principal");
-    assert_eq!(q.id, p.id);
-    assert_eq!(q.prefix, p.prefix);
+    assert_eq!(q, p);
 }
 
 #[test]

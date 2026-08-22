@@ -28,7 +28,7 @@ pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 
 /// A registered principal: opaque id plus ownership prefix — T4-valid,
 /// `zeros ≤ 1` (account/node tier only, O1a).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Principal {
     pub id: PrincipalId,
     pub prefix: Address,
@@ -52,10 +52,10 @@ pub struct NsKey {
 /// [`M3State::apply_ns`]. One `Allocate` variant suffices for every minted
 /// address (entity, content, link) because the frontier map is uniform; the
 /// level distinction is recovered at *query* time from `zeros`.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum M3Rec {
-    /// A mint: advance `frontiers[namespace(addr)]` (§1). The `(parent, g)` of
-    /// an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
+    /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
+    /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
     /// held — frontier key and lock key are the same key.
     Allocate { addr: Tumbler },
     /// External node admission (ASN-0047 NodeBaptism; §7).
@@ -119,35 +119,24 @@ pub(crate) fn bootstrap_root() -> Tumbler {
     Tumbler::new([Nat::from(1u32)]).expect("a one-component sequence is nonempty")
 }
 
-/// Recover `(parent, g, ordinal)` from a T4-valid address of ≥ 2 COMPONENTS —
-/// pure M1. The ≥ 2 bound is a caller obligation both call paths discharge:
-/// every MINT extends a registered parent (`#addr ≥ #parent + 1 ≥ 2`), and
-/// `delegate` calls only AFTER its hoisted tier check (iii) —
-/// `zeros(new_prefix) == 1` forces the `N·0·U` parse, hence ≥ 3 components
-/// (§6). A bare 1-component node (e.g. `[7]`) is T4-valid but PARENTLESS —
-/// M1's `parent` returns `None` exactly there — so the validate-lift alone
-/// does NOT establish the bound, and such an address must never reach here.
-/// `parent` takes `&Address`, so the bare `Tumbler` is `validate`-lifted first
-/// (total — the caller passes a T4-valid tumbler); `zeros` and `ordinal` take
-/// `&Tumbler`, so they read projections.
-fn decompose(addr: &Tumbler) -> (Tumbler, u8, Nat) {
-    let ad = validate(addr.clone()).expect("T4-valid by caller contract");
-    let par = parent(&ad)
-        .expect("≥ 2 components by caller contract — mints extend a parent; delegate tier-checks first");
-    let g = if zeros(addr) == zeros(par.tumbler()) { 1 } else { 2 };
-    (par.tumbler().clone(), g, ordinal(addr).clone())
-}
-
-/// The [`NsKey`] a minted address advances under — its namespace. Pure M1 via
-/// [`decompose`], inheriting its ≥ 2-component caller obligation. `delegate`
-/// uses it for BOTH the next-form check and the held namespace `LockKey`, so
-/// the checked key, the locked key, and the key the staged `Allocate` advances
-/// are one and the same key — and it calls this only after the validate-lift
-/// AND the hoisted (iii) tier check (the lift alone is INSUFFICIENT: a
-/// 1-component node is T4-valid but parentless — §6).
-pub(crate) fn namespace(addr: &Tumbler) -> NsKey {
-    let (p, g, _) = decompose(addr);
-    NsKey { parent: p, g }
+/// THE namespace derivation: the [`NsKey`] `a` sits in — chain anchor
+/// `parent(a)`, generator `g = 1` when `a` extends its parent's field (equal
+/// `zeros`) and `g = 2` when it opens the next one. Pure M1, and total:
+/// `None` EXACTLY for a parentless 1-component node (e.g. `[7]`), which is
+/// T4-valid yet anchors no chain — M1's `parent` returns `None` there, and
+/// that is the one input for which no namespace exists.
+///
+/// Every reader of a frontier key routes through here — `delegate` for BOTH
+/// its next-form check and its held namespace `LockKey`, membership for its
+/// chain range probe, the fold for its frontier advance — so the checked key,
+/// the locked key, and the key a staged `Allocate` advances are one and the
+/// same key by construction (§1/§2/§6). Callers that hold a ≥ 2-component
+/// address by their own gate discharge the `None` case with an `expect` that
+/// names that gate.
+pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
+    let par = parent(a)?;
+    let g = if zeros(a.tumbler()) == zeros(par.tumbler()) { 1 } else { 2 };
+    Some(NsKey { parent: par.tumbler().clone(), g })
 }
 
 // The four namespace helpers — the ONE code path each mint and each
@@ -253,8 +242,10 @@ impl M3State {
         let mut s = self.clone();
         match r {
             M3Rec::Allocate { addr } => {
-                let (p, g, n) = decompose(addr);
-                let key = NsKey { parent: p, g };
+                let ad = validate(addr.clone()).expect("a minted address is T4-valid");
+                let key = namespace_of(&ad)
+                    .expect("≥ 2 components — every mint extends a registered parent");
+                let n = ordinal(addr).clone();
                 // Contiguity fail-stop (the frontier mirror of the shape
                 // expects): every record M3's own paths stage mints exactly
                 // c_{m+1}, so at fold time the ordinal is frontier + 1 — a
@@ -426,12 +417,8 @@ impl M3State {
     /// unique-parse), so `a ∈ {c₁..cₘ}` iff `1 ≤ ordinal(a) ≤ m` — genuine
     /// chain membership with NO false positives, not an approximation.
     fn in_chain_range(&self, a: &Address) -> bool {
-        let Some(p) = parent(a) else {
-            return false; // None only for a 1-component node (handled by callers' Node arm)
-        };
-        let key = NsKey {
-            parent: p.tumbler().clone(),
-            g: if zeros(a.tumbler()) == zeros(p.tumbler()) { 1 } else { 2 },
+        let Some(key) = namespace_of(a) else {
+            return false; // parentless only for a 1-component node — the callers' Node arm
         };
         let m = self.frontiers.get(&key).cloned().unwrap_or_else(Nat::zero);
         let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
@@ -475,14 +462,29 @@ impl M3State {
     /// ω(a): the effective owner — longest-prefix match over Π (§5; ASN-0042
     /// O2/O3/O5). A pure prefix query — valid even when `a` is not (yet)
     /// allocated. The account-tier floor (O1a) makes it O(depth) point
-    /// lookups, never O(#allocated). Authorization must use THIS, never bare
-    /// [`M3State::owns`] (the ownership-divergence trap): a node operator's
-    /// prefix contains every delegated account, so `owns` is true for several
-    /// principals at once — only ω (longest match) arbitrates; O2 exclusivity
-    /// is a theorem given prefix-injectivity, which delegation's freshness
-    /// gate enforces.
+    /// lookups, never O(#allocated). For the authorization question itself,
+    /// ask [`M3State::is_effective_owner`]; this one is for callers that need
+    /// the owning principal as a value.
     pub fn effective_owner(&self, a: &Address) -> Option<Principal> {
         principal_tier_prefixes(a).find_map(|p| self.principals.get(&p).cloned())
+    }
+
+    /// THE authorization predicate: is `id` the effective owner ω of `a`? An
+    /// absent ω is not-owner, never a pass (§5; ASN-0042 O5).
+    ///
+    /// Every ω-gated op asks this rather than reassembling it from
+    /// [`M3State::effective_owner`], and NEVER
+    /// [`M3State::prefix_contains`] — the ownership-divergence trap: a node
+    /// operator's prefix contains every delegated account, so containment is
+    /// true for several principals at once, and only the longest match
+    /// arbitrates. O2 exclusivity is then a theorem given prefix-injectivity,
+    /// which delegation's freshness gate enforces; id-injectivity
+    /// (`DuplicateId`) makes the id comparison equivalent to comparing the
+    /// principals themselves.
+    pub fn is_effective_owner(&self, id: PrincipalId, a: &Address) -> bool {
+        principal_tier_prefixes(a)
+            .find_map(|p| self.principals.get(&p))
+            .is_some_and(|p| p.id == id)
     }
 
     /// Resolve a principal by its opaque id. O(|Π|) scan over
@@ -509,11 +511,10 @@ impl M3State {
     /// ASN-0042 licenses — Conflicts §8). Both yield zeros = 1. Pure frontier
     /// read off any snapshot; `None` unless `parent` is a REGISTERED node or
     /// account (the one monotone gate a peek can answer honestly — E is
-    /// append-only, so a `Some` answer never regresses). After that pre-gate
-    /// the TA5a gate CANNOT trip on any reachable input, so a gate-caused
-    /// `None` is DEFENSIVE-ONLY (corrupted frontier state). The returned
-    /// prefix still faces `delegate`'s full in-closure gate — two racing peeks
-    /// of the same value leave exactly one winner.
+    /// append-only, so a `Some` answer never regresses), which leaves `None`
+    /// exactly one meaning. The returned prefix still faces `delegate`'s full
+    /// in-closure gate — two racing peeks of the same value leave exactly one
+    /// winner.
     pub fn next_account_prefix(&self, parent: &Address) -> Option<Address> {
         let g = match self.entity_level(parent)? {
             Level::Node => 2,
@@ -521,16 +522,18 @@ impl M3State {
             _ => return None,
         };
         let key = NsKey { parent: parent.tumbler().clone(), g };
-        self.next_in(&key).ok()
+        Some(
+            self.next_in(&key)
+                .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
+        )
     }
 
     /// Containment test (O1): `prefix ≼ a` — pure, total, decidable from the
-    /// two addresses alone, coordination-free. NEVER an authorization check:
-    /// several principals' prefixes contain the same address (a node
-    /// operator's prefix contains every delegated account); authorization
-    /// resolves the ONE effective owner via [`M3State::effective_owner`]
-    /// (ω, longest match) — §5.
-    pub fn owns(prefix: &Address, a: &Address) -> bool {
+    /// two addresses alone, consulting no registry state and needing no
+    /// coordination. It answers where an address SITS, not who may write it:
+    /// authorization is [`M3State::is_effective_owner`] (ω, longest match),
+    /// because several principals' prefixes contain the same address — §5.
+    pub fn prefix_contains(prefix: &Address, a: &Address) -> bool {
         is_prefix(prefix.tumbler(), a.tumbler())
     }
 

@@ -9,8 +9,8 @@
 //! load-bearing in both directions (ASN-0042 exclusive delegation, O2/O3/O8
 //! — the deliberate fix of green's `tumbleraccounteq`): a parent account
 //! does not own a sub-delegated account's documents, and a sub-account does
-//! not own its parent's. Never bare prefix containment (`M3State::owns`,
-//! the documented ownership-divergence trap).
+//! not own its parent's. Never bare prefix containment
+//! (`M3State::prefix_contains`, the documented ownership-divergence trap).
 
 use skep_address::Address;
 use skep_namespace::{M3State, PrincipalId};

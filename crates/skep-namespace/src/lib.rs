@@ -22,8 +22,9 @@
 //!   [`Namespace::register_node`] \[ASN-0047 NodeBaptism\], and
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
-//!   entity membership (exact chain membership, §2), the ω effective-owner
-//!   resolver \[ASN-0042 O1–O9\], id→prefix resolution, and the next-form
+//!   entity membership (exact chain membership, §2), the ω authorization
+//!   predicate [`M3State::is_effective_owner`] and the resolver it reads
+//!   through \[ASN-0042 O1–O9\], id→prefix resolution, and the next-form
 //!   peek [`M3State::next_account_prefix`].
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
@@ -64,7 +65,7 @@ mod error;
 mod ops;
 mod state;
 
-pub use error::{DelegateError, MintError, NodeError, OpError};
+pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
 pub use state::{M3Rec, M3State, Principal, PrincipalId, BOOTSTRAP_PRINCIPAL};
 

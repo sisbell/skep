@@ -15,12 +15,30 @@ use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
 /// `Seq ≤ s_load`, already seeded through [`WorldState::rebuild_derived`].
+///
+/// The two travel together and neither is settable from outside this module,
+/// so [`select_base`] is the only site that can mint one. That is what makes
+/// the pairing an invariant rather than a habit: a world at a coordinate it
+/// does not embody folds records it already holds, and since
+/// [`WorldState::apply`] need not be idempotent, that is silent double
+/// application answered `Ok`.
 pub(crate) struct Base<W> {
-    pub s_load: u64,
-    pub world: W,
+    s_load: u64,
+    world: W,
 }
 
 impl<W> Base<W> {
+    /// The coordinate this base embodies — §7's `S_load`.
+    pub(crate) fn s_load(&self) -> u64 {
+        self.s_load
+    }
+
+    /// The base itself, for a boundary that IS the base and so has nothing
+    /// above it to fold.
+    pub(crate) fn into_world(self) -> W {
+        self.world
+    }
+
     /// Scan the journal above THIS base (§7). The base a scan is judged
     /// against is the base it will be folded onto, by construction: this takes
     /// no `S_load` a caller could have got from somewhere else, and a scan run

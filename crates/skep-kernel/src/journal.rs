@@ -217,55 +217,37 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
 /// What [`encode_txn`] wraps around one record's own bytes inside its frame
 /// payload: the [`FramePayload`] variant tag (4), `seq` (8), `txn` (8) and
 /// the byte-vector's length prefix (8) — bincode's fixed-width encoding,
-/// value-independent. A constant so [`check_txn_size`] can judge a record
-/// without building its frame; the accounting test pins it to the encoder's
-/// own output, so a codec change breaks the gate rather than silently
-/// loosening either limit it feeds.
+/// value-independent. A constant so [`Journal::commit_txn`] can charge a
+/// record without building its frame; the accounting test pins it to the
+/// encoder's own output, so a codec change breaks the gate rather than
+/// silently loosening either limit it feeds.
 pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// The marker frame's whole encoded size: header (12) plus the tagged
 /// [`Marker`] payload — tag (4), `txn` (8), `last_seq` (8),
 /// `records_checksum` (4). Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
 const MARKER_FRAME_LEN: u64 = FRAME_HEADER_LEN as u64 + 24;
 
-/// The exact byte length [`encode_txn`] emits for these already-encoded
-/// records: each record frame (header + wrapped payload) plus the terminal
-/// marker frame. Saturating, so a sum no allocator could hold refuses as
-/// over-budget rather than wrapping back under the budget.
-pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
-    record_bytes.iter().fold(MARKER_FRAME_LEN, |total, bytes| {
-        total
-            .saturating_add(FRAME_HEADER_LEN as u64 + RECORD_PAYLOAD_OVERHEAD)
-            .saturating_add(bytes.len() as u64)
-    })
+/// What one already-encoded record occupies in the journal: its frame header
+/// plus the payload [`encode_txn`] wraps around it. The ONE spelling of a
+/// record's cost on the WRITE side, so the running charge in
+/// [`Journal::commit_txn`] and the reservation [`encode_txn`] takes from
+/// [`txn_encoded_len`] cannot disagree about what is being built.
+///
+/// A reader has the framed payload rather than the record's own bytes, so
+/// [`PendingTxn`] reaches the same figure by the other route — header plus
+/// framed payload — and the accounting test pins the two equal.
+const fn record_frame_len(payload_bytes: usize) -> u64 {
+    (FRAME_HEADER_LEN as u64 + RECORD_PAYLOAD_OVERHEAD).saturating_add(payload_bytes as u64)
 }
 
-/// The two size refusals NO durability mode may skip, judged in one pass over
-/// the already-encoded records by [`Journal::commit_txn`], above its mode
-/// branch: a record whose frame payload would exceed [`MAX_FRAME_LEN`] — the
-/// refusal [`push_frame`] would give it, [`CommitFail::Unencodable`], a
-/// property of that record — then a transaction whose whole encoded form
-/// exceeds [`MAX_TXN_BYTES`] — [`CommitFail::OverBudget`], a property of the
-/// staging: every record is fine, the caller staged too much at once. The
-/// record's own refusal precedes the transaction's, so a caller fixing a
-/// value is not first told to split.
-///
-/// This is the ONE spelling of the transaction accounting. [`push_frame`]'s
-/// own frame-cap refusal deliberately stays: writer and reader sit on
-/// opposite sides of a trust boundary, and the writer's guard is what
-/// entitles recovery to treat a larger claimed `len` as corrupt.
-fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
-    for bytes in record_bytes {
-        if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
-            return Err(CommitFail::Unencodable(
-                "record's serialized form exceeds the journal's frame cap".into(),
-            ));
-        }
-    }
-    let bytes = txn_encoded_len(record_bytes);
-    if bytes > MAX_TXN_BYTES {
-        return Err(CommitFail::OverBudget { bytes });
-    }
-    Ok(())
+/// The exact byte length [`encode_txn`] emits for these already-encoded
+/// records: each record frame ([`record_frame_len`]) plus the terminal marker
+/// frame. Saturating, so a sum no allocator could hold refuses as over-budget
+/// rather than wrapping back under the budget.
+pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
+    record_bytes.iter().fold(MARKER_FRAME_LEN, |total, bytes| {
+        total.saturating_add(record_frame_len(bytes.len()))
+    })
 }
 
 #[derive(Debug)]
@@ -698,9 +680,9 @@ pub(crate) enum Journal {
 }
 
 impl Journal {
-    /// Commit one whole transaction: serialize its records, judge the two
-    /// size refusals no durability mode may skip ([`check_txn_size`]), then
-    /// commit through whichever journal this is.
+    /// Commit one whole transaction: serialize its records, charging each
+    /// against the two size refusals no durability mode may skip, then commit
+    /// through whichever journal this is.
     ///
     /// The encode and the size judgment happen HERE, above this enum's own
     /// mode branch, which is what makes them mode-independent by construction
@@ -713,19 +695,57 @@ impl Journal {
     /// and for the in-memory one no bytes appended, no failure available, and
     /// an install where the durable journal installs, after a barrier it has
     /// no need of.
+    ///
+    /// The two refusals are charged AS THE LOOP GOES, and a record past the
+    /// budget is dropped rather than kept, which is what makes enforcing
+    /// [`MAX_TXN_BYTES`] cost [`MAX_TXN_BYTES`]: a caller who stages a hundred
+    /// records each just under the frame cap would otherwise have every one of
+    /// them materialized — under the applier lock, so with every other writer
+    /// in the process waiting — before the sum that refuses them was taken.
+    /// Held bytes are therefore bounded by the budget and the transient peak
+    /// by one further frame.
+    ///
+    /// Two refusals, and their order is the caller's remedy in each case: a
+    /// record whose frame payload would exceed [`MAX_FRAME_LEN`] — the refusal
+    /// [`push_frame`] would give it, [`CommitFail::Unencodable`], a property of
+    /// that record — precedes a whole encoded form past [`MAX_TXN_BYTES`] —
+    /// [`CommitFail::OverBudget`], a property of the staging, where every
+    /// record is fine and the caller staged too much at once. So a caller
+    /// fixing a value is not first told to split. [`push_frame`]'s own
+    /// frame-cap refusal deliberately stays: writer and reader sit on opposite
+    /// sides of a trust boundary, and the writer's guard is what entitles
+    /// recovery to treat a larger claimed `len` as corrupt.
     pub(crate) fn commit_txn<R: Serialize>(
         &mut self,
         first_seq: u64,
         records: &[R],
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
-        let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
+        let mut record_bytes: Vec<Vec<u8>> = Vec::new();
+        let mut accounted = MARKER_FRAME_LEN;
+        let mut over_budget = false;
         for record in records {
             // The closure is the unsizing coercion site: the bare constructor
             // as a function value does not coerce `bincode`'s boxed error.
-            record_bytes.push(encode_record(record).map_err(|e| CommitFail::Unencodable(e))?);
+            let bytes = encode_record(record).map_err(|e| CommitFail::Unencodable(e))?;
+            if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
+                return Err(CommitFail::Unencodable(
+                    "record's serialized form exceeds the journal's frame cap".into(),
+                ));
+            }
+            accounted = accounted.saturating_add(record_frame_len(bytes.len()));
+            // Past the budget this transaction cannot commit, so only its SIZE
+            // is still wanted: the loop runs on to finish the accounting the
+            // refusal reports and to keep judging each record's own frame cap
+            // first, and the bytes are dropped rather than held.
+            over_budget |= accounted > MAX_TXN_BYTES;
+            if !over_budget {
+                record_bytes.push(bytes);
+            }
         }
-        check_txn_size(&record_bytes)?;
+        if over_budget {
+            return Err(CommitFail::OverBudget { bytes: accounted });
+        }
         match self {
             Journal::InMemory => {
                 install();
@@ -897,9 +917,15 @@ impl ScanOutcome {
 /// A scan holds one of these at a time. That is the writer's own shape:
 /// [`encode_txn`] emits a transaction's records contiguously and closes them
 /// with its marker, so a group left open by an intervening transaction's
-/// record can never be closed by a later marker — and holding one group is
-/// what bounds a scan's own memory to a transaction rather than to the whole
-/// scanned region.
+/// record can never be closed by a later marker.
+///
+/// One group at a time is not by itself a memory bound, because a journal is
+/// not obliged to have been written by this writer: frames spread over every
+/// segment of a store, all carrying one `txn`, are one group. So the size of
+/// the group is bounded HERE, by the same [`MAX_TXN_BYTES`] the write path
+/// refuses at ([`Self::oversize`]) — one segment's bytes plus one
+/// transaction's worth, which is the memory floor
+/// [`crate::Kernel::open`] promises on every replica.
 struct PendingTxn {
     txn: Txn,
     /// CRC32C over the record-frame payloads in ARRIVAL order — which is `Seq`
@@ -913,7 +939,20 @@ struct PendingTxn {
     /// have a non-idempotent [`crate::WorldState::apply`] fold one coordinate
     /// twice, so such a transaction never commits however its checksum lands.
     ordered: bool,
-    /// `(seq, serialized W::Record bytes)`, in arrival order.
+    /// What this group's frames would occupy in the journal, accounted to the
+    /// same figure [`txn_encoded_len`] gives the write side: seeded with the
+    /// marker frame that will close the group, then charged one frame header
+    /// plus one framed payload per record — which is [`record_frame_len`]
+    /// reached from the bytes a reader actually holds.
+    accounted: u64,
+    /// Set once [`Self::accounted`] passes [`MAX_TXN_BYTES`]. A group past the
+    /// budget is one no writer here can emit — [`Journal::commit_txn`] refuses
+    /// it before a byte is appended — so the READER enforces the same bound
+    /// rather than trusting it, which is what holds a scan's group memory to
+    /// one transaction's worth against a journal this writer did not write.
+    oversize: bool,
+    /// `(seq, serialized W::Record bytes)`, in arrival order. Released the
+    /// moment the group is known dead, since nothing downstream can want it.
     records: Vec<(u64, Vec<u8>)>,
 }
 
@@ -924,24 +963,42 @@ impl PendingTxn {
             checksum: 0,
             last_seq: None,
             ordered: true,
+            // The write side's own seed, so an honest transaction AT the
+            // budget accounts to exactly the budget and is admitted.
+            accounted: MARKER_FRAME_LEN,
+            oversize: false,
             records: Vec::new(),
         }
     }
 
     /// Take one record frame of this transaction: `payload` is the frame
-    /// payload exactly as framed, which is what `records_checksum` covers.
+    /// payload exactly as framed, which is what `records_checksum` covers —
+    /// and what [`record_frame_len`] charges, since a framed payload is the
+    /// record's own bytes plus [`RECORD_PAYLOAD_OVERHEAD`].
     fn push(&mut self, record: LogRecord, payload: &[u8]) {
         if self.last_seq.is_some_and(|prev| record.seq <= prev) {
             self.ordered = false;
         }
         self.last_seq = Some(record.seq);
         self.checksum = crc32c::crc32c_append(self.checksum, payload);
-        self.records.push((record.seq, record.bytes));
+        self.accounted = self
+            .accounted
+            .saturating_add(FRAME_HEADER_LEN as u64 + payload.len() as u64);
+        self.oversize |= self.accounted > MAX_TXN_BYTES;
+        if self.ordered && !self.oversize {
+            self.records.push((record.seq, record.bytes));
+        } else {
+            // Dead: this group can never commit, so its records are released
+            // as soon as that is known. The checksum and `last_seq` keep
+            // advancing, so the refusal stays the one `commits` states.
+            self.records = Vec::new();
+        }
     }
 
     /// Whether `marker` commits this group: intact + durable (it is on the
     /// disk we read) + `records_checksum`-valid over a `Seq`-ascending group
-    /// that the marker's own `last_seq` closes (§1).
+    /// that the marker's own `last_seq` closes and that fits the journal's
+    /// per-transaction budget (§1).
     ///
     /// The `last_seq` conjunct is the one the checksum cannot supply: the
     /// checksum ties the RECORDS to the marker, while `last_seq` is a separate
@@ -951,8 +1008,15 @@ impl PendingTxn {
     /// committed records above the claim while the sequencer restarts over
     /// their coordinates, which the next recovery then meets as one `Seq`
     /// presented twice.
+    ///
+    /// The budget conjunct is the reader's half of a bound the write path
+    /// already keeps: accepting a group past [`MAX_TXN_BYTES`] would fold a
+    /// transaction this kernel could not have committed, and would let a
+    /// journal spread one `txn` over a whole store's segments while the scan
+    /// held every record of it.
     fn commits(&self, marker: &Marker) -> bool {
         self.ordered
+            && !self.oversize
             && self.last_seq == Some(marker.last_seq)
             && self.checksum == marker.records_checksum
     }
@@ -1267,30 +1331,79 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(payload.len() as u64, 3 + RECORD_PAYLOAD_OVERHEAD);
+
+        // …and the READER charges a framed payload to the same figure, which
+        // is what lets it enforce the write path's budget without a second
+        // accounting: a transaction the writer emits AT the budget accounts to
+        // the budget on the way back in, so recovery cannot refuse a
+        // transaction this kernel acked.
+        let mut group = PendingTxn::open(Txn(u64::MAX));
+        group.push(
+            LogRecord {
+                seq: u64::MAX,
+                txn: Txn(u64::MAX),
+                bytes: vec![1, 2, 3],
+            },
+            &payload,
+        );
+        assert_eq!(group.accounted, txn_encoded_len(&[vec![1, 2, 3]]));
     }
 
     #[test]
-    fn check_txn_size_refuses_what_no_mode_may_accept() {
+    fn commit_txn_refuses_what_no_mode_may_accept() {
+        // The two size refusals, charged as the commit encodes each record.
+        // `Vec<u8>` encodes as an 8-byte length prefix plus its bytes, so a
+        // body of `n` occupies `n + prefix` of a frame payload.
+        let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
+        let mut journal = Journal::InMemory;
+        let mut installs = 0u32;
+
         // A record one past the frame cap's payload edge is the RECORD's own
         // fault — Unencodable, not OverBudget, though the sum is over too: a
         // caller fixing a value is not first told to split.
         let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
-        let over_frame = vec![vec![0u8; cap_bytes + 1]];
-        assert!(matches!(
-            check_txn_size(&over_frame),
-            Err(CommitFail::Unencodable(_))
-        ));
-        // At the budget exactly: passes — the refusal begins one past the
-        // budget, not at it. One byte past: OverBudget, carrying the size.
-        let at_budget = vec![vec![0u8; (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize]];
-        assert_eq!(txn_encoded_len(&at_budget), MAX_TXN_BYTES);
-        assert!(check_txn_size(&at_budget).is_ok());
-        let mut past_budget = at_budget;
-        past_budget[0].push(0);
-        match check_txn_size(&past_budget) {
+        let over_frame = vec![vec![0u8; cap_bytes + 1 - prefix]];
+        let out = journal.commit_txn(1, &over_frame, || installs += 1);
+        assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
+        drop(over_frame);
+
+        // At the budget exactly: commits — the refusal begins one past the
+        // budget, not at it.
+        let body = (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize - prefix;
+        let at_budget = vec![vec![0u8; body]];
+        assert_eq!(
+            txn_encoded_len(&[encode_record(&at_budget[0]).unwrap()]),
+            MAX_TXN_BYTES
+        );
+        assert!(journal.commit_txn(1, &at_budget, || installs += 1).is_ok());
+        drop(at_budget);
+
+        // One byte past: OverBudget, carrying the size.
+        let past_budget = vec![vec![0u8; body + 1]];
+        match journal.commit_txn(1, &past_budget, || installs += 1) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }
+        drop(past_budget);
+
+        // …and a staging FAR past the budget still reports the whole accounted
+        // size. The charge runs on past the crossing precisely so the figure a
+        // caller's split must get under is the one they staged, where a charge
+        // that stopped where it refused would name a number they already met.
+        let half = (MAX_TXN_BYTES / 2) as usize;
+        let far_over = vec![vec![0u8; half], vec![0u8; half], vec![0u8; 8]];
+        let expected = {
+            let encoded: Vec<Vec<u8>> =
+                far_over.iter().map(|r| encode_record(r).unwrap()).collect();
+            txn_encoded_len(&encoded)
+        };
+        assert!(expected > MAX_TXN_BYTES + record_frame_len(8 + prefix));
+        match journal.commit_txn(1, &far_over, || installs += 1) {
+            Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, expected),
+            other => panic!("expected the whole staging accounted, got {other:?}"),
+        }
+
+        assert_eq!(installs, 1, "only the at-budget transaction installs");
     }
 
     /// A record whose serializer refuses — the cheapest way to reach the
@@ -1418,6 +1531,56 @@ mod tests {
         assert_eq!(out.committed_head, 4, "a short marker must not commit");
         assert!(out.committed_records.is_empty());
         assert!(out.committed_boundaries.is_empty());
+    }
+
+    #[test]
+    fn a_group_past_the_transaction_budget_never_commits() {
+        // The reader's half of the write path's own bound: `commit_txn`
+        // refuses a staging past MAX_TXN_BYTES before a byte is appended, so a
+        // group past it is one no writer here emits — and accepting it would
+        // let a journal spread one `txn` over a whole store while the scan
+        // held every record of it.
+        //
+        // The charge must reproduce the write side's term for term, which is
+        // what the two cases below check from either side of the edge: four
+        // record frames plus the marker frame land EXACTLY on the budget.
+        const N: u64 = 4;
+        let payload_len =
+            ((MAX_TXN_BYTES - MARKER_FRAME_LEN) / N - FRAME_HEADER_LEN as u64) as usize;
+        let buf = vec![7u8; payload_len + 1];
+        let group_of = |last: &[u8]| {
+            let mut group = PendingTxn::open(Txn(1));
+            for seq in 1..=N {
+                let payload = if seq == N { last } else { &buf[..payload_len] };
+                let record = LogRecord {
+                    seq,
+                    txn: Txn(1),
+                    bytes: Vec::new(),
+                };
+                group.push(record, payload);
+            }
+            group
+        };
+        let closed_by = |group: &PendingTxn| Marker {
+            txn: Txn(1),
+            last_seq: N,
+            records_checksum: group.checksum,
+        };
+
+        // At the budget: a transaction this writer can emit, so it commits —
+        // the refusal begins one byte past the budget, not at it.
+        let at_budget = group_of(&buf[..payload_len]);
+        assert_eq!(at_budget.accounted, MAX_TXN_BYTES);
+        assert!(at_budget.commits(&closed_by(&at_budget)));
+        assert_eq!(at_budget.records.len() as u64, N);
+
+        // One byte past: refused, however its checksum lands — and the records
+        // are released where the group is known dead, which is the memory this
+        // bound exists for.
+        let over = group_of(&buf);
+        assert_eq!(over.accounted, MAX_TXN_BYTES + 1);
+        assert!(!over.commits(&closed_by(&over)));
+        assert!(over.records.is_empty(), "a dead group holds no records");
     }
 
     #[test]

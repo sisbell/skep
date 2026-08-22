@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fs::{self, File};
 use std::io;
+use std::num::NonZeroU64;
 use std::ops::{Deref, DerefMut};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -211,10 +212,13 @@ impl Sequencer {
     /// committed predecessor is not an option, so there is nothing this order
     /// can answer with, and what to do about that is the kernel's to decide.
     ///
-    /// `n ≥ 1`, which is the caller's to hold and the journal's encoder to
-    /// assert: a zero-record transaction reaches neither.
-    fn mint(&mut self, n: u64) -> Option<(u64, u64)> {
-        let last = self.high_water.checked_add(n)?;
+    /// `n ≥ 1` is carried by the TYPE, which is what makes `high_water + 1`
+    /// below sound without a second site agreeing to it: a `checked_add` that
+    /// succeeded with `n ≥ 1` leaves the high-water strictly below `last`, so
+    /// the increment is in range. A zero-record transaction cannot be spelled
+    /// here, which is the whole of the precondition.
+    fn mint(&mut self, n: NonZeroU64) -> Option<(u64, u64)> {
+        let last = self.high_water.checked_add(n.get())?;
         let first = self.high_water + 1; // n ≥ 1, so this is at most `last`
         self.high_water = last;
         Some((first, last))
@@ -665,14 +669,17 @@ impl<W: WorldState> Kernel<W> {
             Err(e) => return Err(TxnError::Rejected(e)),
             Ok(value) => value,
         };
-        if stg.records.is_empty() {
-            return Ok((value, base_seq)); // zero-step (A1); V1 = the base index read.
-        }
         let Staging {
             base: _,
             working,
             records,
         } = stg;
+        // Zero-step (A1: read-only / idem-hit / nullify-hit): nothing staged,
+        // so no coordinate is drawn — and the non-emptiness the sequencer
+        // needs is that same fact, spelled once and carried to it by the type.
+        let Some(n) = NonZeroU64::new(records.len() as u64) else {
+            return Ok((value, base_seq)); // V1 = the base index read.
+        };
 
         // Linearization (§2): the range is drawn under the applier lock, so the
         // order is gap-free (under Rollback) and a composite's records are
@@ -680,7 +687,6 @@ impl<W: WorldState> Kernel<W> {
         // cannot commit it and cannot renumber it over a committed
         // predecessor, which leaves halting as the only sound answer.
         let state = &mut *applier;
-        let n = records.len() as u64;
         let Some((first, last)) = state.seq.mint(n) else {
             self.poisoned.store(true, Ordering::Release);
             return Err(TxnError::Poisoned);
@@ -949,8 +955,8 @@ impl<W: WorldState> Kernel<W> {
         // installed root) and 0 is genesis, so there is nothing to fold, and
         // consulting the journal could only refuse a question the base already
         // answers — the corruption sweep below is what it would refuse with.
-        if at.0 == base.s_load {
-            return Ok(base.world);
+        if at.0 == base.s_load() {
+            return Ok(base.into_world());
         }
         let scan = base.scan(&segs).map_err(|fail| match fail {
             ScanFail::Io(e) => HistoryError::Io(e),

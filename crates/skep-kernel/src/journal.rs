@@ -755,9 +755,12 @@ impl Journal {
         }
     }
 
-    /// [`JournalWriter::repair_after_unwind`]. The in-memory journal holds
-    /// nothing durable, so every unwind through it is a pre-install unwind
-    /// with nothing to repair.
+    /// [`JournalWriter::repair_after_unwind`]. The in-memory arm answers
+    /// [`UnwindRepair::Clean`] for every unwind, because the only thing it
+    /// does past the size refusals is call `install`, and a world's destructor
+    /// does not unwind ([`crate::WorldState`]'s drop obligation) — the durable
+    /// arm tracks [`InFlight::Barriered`] because it has a barrier to be
+    /// after, and this arm has none.
     pub(crate) fn repair_after_unwind(&mut self) -> UnwindRepair {
         match self {
             Journal::InMemory => UnwindRepair::Clean,
@@ -1180,13 +1183,16 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
     Ok(outcome)
 }
 
-/// The tail-truncation step (§7), run between Pass 1 and Pass 2 — only on a
-/// clean classification (never on the Corruption/BadCheckpoint halt paths):
-/// durably remove everything after the last committed marker — cut its
-/// segment at the marker's frame end, delete every wholly-later segment,
-/// fsync file and directory — BEFORE any write is served. This is what makes
-/// cross-session `Txn` uniqueness and file-order == `Seq`-order true at the
-/// next recovery (§1/§7). Idempotent; a failure fails `open()` with `Io`.
+/// The tail-truncation step (§7), run AFTER every refusal and BEFORE any
+/// write is served: durably remove everything after the last committed marker
+/// — cut its segment at the marker's frame end, delete every wholly-later
+/// segment, fsync file and directory. Every halt precedes it — the corrupt-run
+/// classification, an unenumerable frame stream, an exhausted `Seq` order, the
+/// fold's own verdict on an undecodable or repeated record, and an exhausted
+/// checkpoint chain — which is what leaves the store an operator images after
+/// a halt exactly as it was found (§7). This is what makes cross-session `Txn`
+/// uniqueness and file-order == `Seq`-order true at the next recovery (§1/§7).
+/// Idempotent; a failure fails `open()` with `Io`.
 ///
 /// The files are the scan's own [`TailCut`], so this cuts exactly what was
 /// scanned and nothing else.

@@ -42,9 +42,8 @@ impl<W> Base<W> {
     /// Scan the journal above THIS base (§7). The base a scan is judged
     /// against is the base it will be folded onto, by construction: this takes
     /// no `S_load` a caller could have got from somewhere else, and a scan run
-    /// against a lower base than the fold believes would skip closed segments
-    /// the fold then counts as folded — a world missing records, answered
-    /// `Ok`.
+    /// against a HIGHER base than this one would skip closed segments whose
+    /// records the fold still wants — a world missing records, answered `Ok`.
     pub(crate) fn scan(&self, segs: &[SegmentMeta]) -> Result<ScanOutcome, ScanFail> {
         journal::scan(segs, self.s_load)
     }
@@ -110,6 +109,12 @@ pub(crate) fn select_base<W: WorldState>(
 /// The scan is BORROWED, so its other answers — the tail cut among them —
 /// outlive the fold. That is what lets a caller refuse on this fold's verdict
 /// before it acts on any of them.
+///
+/// `scan` must be THIS base's own ([`Base::scan`]). A scan judged against
+/// another base makes the `(base.s_load, bound]` filter meaningless and this
+/// answers `Ok` with a world missing records; a [`ScanOutcome`]'s own base is
+/// private to [`crate::journal`], so nothing here can check it — [`Base::scan`]
+/// is what makes it true by construction.
 ///
 /// `Err` carries the `Seq` of a committed, CRC-intact record that fails to
 /// decode as `W::Record` — corrupt committed data the derived state needs —

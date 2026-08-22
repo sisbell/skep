@@ -58,7 +58,7 @@ impl fmt::Display for OpenError {
             }
             OpenError::Corruption { at } => write!(
                 f,
-                "durable committed data corrupt in the replayed range; next intact frame at seq {at}"
+                "durable committed data cannot be read; coordinate naming the damage: {at}"
             ),
         }
     }
@@ -217,7 +217,7 @@ impl fmt::Display for HistoryError {
             HistoryError::Io(e) => write!(f, "history read I/O failure: {e}"),
             HistoryError::Corruption { at } => write!(
                 f,
-                "journal corrupt at rest in the scanned region; next intact frame at seq {at}"
+                "journal corrupt at rest; coordinate naming the damage: {at}"
             ),
         }
     }

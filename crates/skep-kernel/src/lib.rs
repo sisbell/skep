@@ -124,9 +124,28 @@ use serde::Serialize;
 /// requirement of this path, and a slice that moves to an eagerly-copied
 /// collection makes every transaction in the system — read-only ones included
 /// — `O(|world|)` under a global lock, which M2 has no way to report.
+///
+/// DROP OBLIGATION — `W`'s destructor MUST NOT unwind. M2 drops the previous
+/// root inside the atomic install, so a panicking `Drop` unwinds from a point
+/// the in-memory journal reports as a pre-install unwind — which would roll
+/// the `Seq` order back below a root that is already installed, and
+/// [`Kernel::current_seq`] would regress, which its own contract says it never
+/// does. M2 cannot check this.
 pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
     /// The engine's central record enum — the union of every store's own
     /// record type. Opaque to M2: journaled as bytes, folded via [`apply`].
+    ///
+    /// ROUND-TRIP OBLIGATION — a record is journaled as bytes and replayed by
+    /// decoding those bytes, so [`apply`] must have the same effect on the
+    /// decoded record as on the one that was staged: this type's serde must
+    /// round-trip everything [`apply`] reads. A `#[serde(skip)]`ped field, a
+    /// `#[serde(default)]` whose default differs from what was written, or a
+    /// `Serialize` that normalizes, each make replay fold a DIFFERENT record
+    /// than the live commit folded — so the recovered world differs from the
+    /// acknowledged one by exactly that difference, silently, and
+    /// [`Kernel::world_at`] answers a world [`Kernel::snapshot`] never held.
+    /// Nothing a record carries that [`apply`] does not read need survive the
+    /// round trip. M2 cannot check this.
     ///
     /// [`apply`]: WorldState::apply
     type Record: Serialize + DeserializeOwned + Send + Sync + 'static;
@@ -137,9 +156,13 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// deltas AND maintains every derived hint incrementally; a hint NOT
     /// folded here is stale after every live write and after replay
     /// ([`rebuild_derived`] runs only at load). Deterministic so replay
-    /// reproduces committed state exactly; NOT required to be idempotent —
-    /// recovery applies each committed record exactly once (the checkpoint
+    /// reproduces committed state exactly — together with [`Record`]'s
+    /// round-trip obligation, which is what makes the record replay hands
+    /// this method the record that was staged. NOT required to be idempotent
+    /// — recovery applies each committed record exactly once (the checkpoint
     /// embodies `Seq ≤ S_load`, replay covers `S_load < Seq ≤ W`; §6/§7).
+    ///
+    /// [`Record`]: WorldState::Record
     ///
     /// [`rebuild_derived`]: WorldState::rebuild_derived
     fn apply(&self, record: &Self::Record) -> Self;

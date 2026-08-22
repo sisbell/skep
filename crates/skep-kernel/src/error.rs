@@ -179,14 +179,13 @@ pub enum HistoryError {
     /// (a concurrent checkpoint's segment reclamation can remove a file
     /// between listing and reading); a retry re-selects a base.
     Io(io::Error),
-    /// Corrupt data at rest in the scanned region (a corrupt run not wholly
-    /// embodied in the loaded base, a segment whose frame stream could not be
-    /// enumerated in bounded work, or a committed record that fails to
-    /// decode) — the same halt-never-drop verdict recovery gives (§7). `at`
-    /// is the next-intact coordinate / the base's own coordinate / the
-    /// undecodable record's seq, in that order.
+    /// Corrupt data at rest in the scanned region — the same conditions, and
+    /// the same coordinate, that [`OpenError::Corruption`] carries, with the
+    /// same halt-never-drop verdict (§7). The exhausted `Seq` order is the one
+    /// route not available here: only a mint site reaches it, and this call
+    /// mints nothing.
     Corruption {
-        /// See above.
+        /// See [`OpenError::Corruption`].
         at: Seq,
     },
 }

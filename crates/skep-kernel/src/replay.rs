@@ -9,10 +9,8 @@
 //! exactly-once fold are stated once, here, and each caller supplies its
 //! bound and its own error vocabulary.
 
-use std::io;
-
 use crate::checkpoint::CheckpointMeta;
-use crate::journal::{self, ScanOutcome, SegmentMeta};
+use crate::journal::{self, ScanFail, ScanOutcome, SegmentMeta};
 use crate::WorldState;
 
 /// A base to fold onto: the world embodying every record with
@@ -29,7 +27,7 @@ impl<W> Base<W> {
     /// against a lower base than the fold believes would skip closed segments
     /// the fold then counts as folded — a world missing records, answered
     /// `Ok`.
-    pub(crate) fn scan(&self, segs: &[SegmentMeta]) -> io::Result<ScanOutcome> {
+    pub(crate) fn scan(&self, segs: &[SegmentMeta]) -> Result<ScanOutcome, ScanFail> {
         journal::scan(segs, self.s_load)
     }
 }

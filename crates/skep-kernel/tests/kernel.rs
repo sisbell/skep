@@ -4,12 +4,16 @@
 //! `apply` that also maintains a derived hint, and a `#[serde(skip)]` hint
 //! reseeded by `rebuild_derived`.
 
-use std::fs::{self, OpenOptions};
+#[path = "common/mutilate.rs"]
+mod mutilate;
+
+use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use mutilate::{append_bytes, ckpt_file, flip_byte, seg_file, truncate_file};
 use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
@@ -209,14 +213,6 @@ fn items(k: &Kernel<TestWorld>) -> Vec<u64> {
 /// tier reads the format as bytes rather than through the crate's own parser.
 const FRAME_HEADER_LEN: u64 = 12;
 
-fn seg_file(dir: &Path, first_seq: u64) -> PathBuf {
-    dir.join(format!("seg-{first_seq}.wal"))
-}
-
-fn ckpt_file(dir: &Path, seq: u64) -> PathBuf {
-    dir.join(format!("checkpoint.{seq}"))
-}
-
 fn checkpoint_count(dir: &Path) -> usize {
     fs::read_dir(dir)
         .unwrap()
@@ -242,23 +238,6 @@ fn frame_spans(path: &Path) -> Vec<(u64, u64)> {
         pos += header + len;
     }
     spans
-}
-
-fn flip_byte(path: &Path, off: u64) {
-    let mut data = fs::read(path).unwrap();
-    data[off as usize] ^= 0xFF;
-    fs::write(path, data).unwrap();
-}
-
-fn truncate_file(path: &Path, len: u64) {
-    let f = OpenOptions::new().write(true).open(path).unwrap();
-    f.set_len(len).unwrap();
-}
-
-fn append_bytes(path: &Path, bytes: &[u8]) {
-    use std::io::Write as _;
-    let mut f = OpenOptions::new().append(true).open(path).unwrap();
-    f.write_all(bytes).unwrap();
 }
 
 fn segment_count(dir: &Path) -> usize {
@@ -867,6 +846,36 @@ fn world_at_halts_on_at_rest_damage_before_judging_the_boundary() {
     match k.world_at(Seq(2)) {
         Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(3)),
         other => panic!("expected Corruption before the boundary judgment, got {other:?}"),
+    }
+}
+
+#[test]
+fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
+    // A record whose own bytes plant frame headers, with the frame carrying
+    // them broken: every planted header is then a resync candidate, and the
+    // scan gives up rather than spending work quadratic in a size the record's
+    // author chose. Nothing is derived, so there is no boundary set and no
+    // committed head to answer from — a halt at the base's own coordinate (§7).
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    let mut evil = Vec::new();
+    while evil.len() < 256 * 1024 {
+        evil.extend_from_slice(b"SKJ1");
+        evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
+        evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
+        evil.extend_from_slice(&[0u8; 4]);
+    }
+    k.transact::<_, ()>(&[], |stg| {
+        stg.push(TestRec::Blob(evil));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(commit(&k, 20), Seq(2));
+    let seg = seg_file(dir.path(), 1);
+    flip_byte(&seg, FRAME_HEADER_LEN + 1); // T1's record: sync is lost here
+    match k.world_at(Seq(2)) {
+        Err(HistoryError::Corruption { at }) => assert_eq!(at, Seq(0)),
+        other => panic!("expected Corruption at the base, got {other:?}"),
     }
 }
 

@@ -64,7 +64,7 @@ fn a_torn_journal_tail_recovers_to_the_exact_boundary() {
     for (i, &prefix_len) in prefix_lens.iter().enumerate() {
         let case = cases.join(format!("a-{prefix_len}"));
         copy_dir(&fixture.dir, &case);
-        truncate_file(&seg1(&case), prefix_len);
+        truncate_file(&seg_file(&case, 1), prefix_len);
         let ctx = format!("A: torn tail, prefix {prefix_len} of {full_len}");
         // Deep history probes on a sample; head + dump equality on every one.
         let depth = if i % 25 == 0 { Depth::Full } else { Depth::Head };
@@ -124,8 +124,8 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
             for &junk_len in junk_lens {
                 let case = cases.join(format!("b-app-{cut}-{}-{junk_len}", pattern.name()));
                 copy_dir(&fixture.dir, &case);
-                truncate_file(&seg1(&case), cut);
-                append_bytes(&seg1(&case), &pattern.bytes(junk_len as usize));
+                truncate_file(&seg_file(&case, 1), cut);
+                append_bytes(&seg_file(&case, 1), &pattern.bytes(junk_len as usize));
                 let ctx = format!(
                     "B: cut {cut} of {full_len} + {} junk ×{junk_len} appended \
                      (seed base 0x5EED_0000+{cut_index})",
@@ -138,7 +138,7 @@ fn b_garbage_tail_classifies_as_eof_not_as_records() {
             if cut < full_len {
                 let case = cases.join(format!("b-ovr-{cut}-{}", pattern.name()));
                 copy_dir(&fixture.dir, &case);
-                overwrite_range(&seg1(&case), cut, &pattern.bytes((full_len - cut) as usize));
+                overwrite_range(&seg_file(&case, 1), cut, &pattern.bytes((full_len - cut) as usize));
                 let ctx = format!(
                     "B: in-place {} overwrite of [{cut}, {full_len}) \
                      (seed base 0x5EED_0000+{cut_index})",
@@ -298,7 +298,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
         engine.kernel().checkpoint().expect("blob checkpoint");
     }
     assert!(
-        !seg1(&dir).exists(),
+        !seg_file(&dir, 1).exists(),
         "fixture precondition: the checkpoint's reclamation must drop seg-1 (genesis unreachable)"
     );
     let checkpoints: Vec<PathBuf> = fs::read_dir(&dir)
@@ -543,7 +543,7 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
         offsets.sort_unstable();
         offsets.dedup();
         for &off in &offsets {
-            flip_byte(&seg1(&case), off);
+            flip_byte(&seg_file(&case, 1), off);
         }
         let first_flip = offsets[0];
         let ctx = format!(

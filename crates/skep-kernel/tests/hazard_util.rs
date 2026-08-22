@@ -17,7 +17,12 @@
 
 #![allow(dead_code)]
 
-use std::fs::{self, OpenOptions};
+#[path = "common/mutilate.rs"]
+mod mutilate;
+
+pub use mutilate::*;
+
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
@@ -136,14 +141,6 @@ pub fn timed_open(dir: &Path, ctx: &str) -> Engine {
 
 // ── file mutilation ──
 
-pub fn seg1(dir: &Path) -> PathBuf {
-    dir.join("seg-1.wal")
-}
-
-pub fn ckpt_file(dir: &Path, seq: u64) -> PathBuf {
-    dir.join(format!("checkpoint.{seq}"))
-}
-
 /// Copy every regular file of `src` into a fresh `dst` (fixture → case).
 pub fn copy_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("case dir");
@@ -155,18 +152,6 @@ pub fn copy_dir(src: &Path, dst: &Path) {
     }
 }
 
-pub fn truncate_file(path: &Path, len: u64) {
-    let f = OpenOptions::new().write(true).open(path).expect("open for truncate");
-    f.set_len(len).expect("truncate");
-}
-
-pub fn flip_byte(path: &Path, off: u64) {
-    let mut data = fs::read(path).expect("read for flip");
-    let i = off as usize;
-    data[i] ^= 0xFF;
-    fs::write(path, data).expect("write flipped");
-}
-
 /// Overwrite `[from, from+junk.len())` in place, clamped to the file end.
 pub fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {
     let mut data = fs::read(path).expect("read for overwrite");
@@ -174,12 +159,6 @@ pub fn overwrite_range(path: &Path, from: u64, junk: &[u8]) {
     let end = (start + junk.len()).min(data.len());
     data[start..end].copy_from_slice(&junk[..end - start]);
     fs::write(path, data).expect("write overwritten");
-}
-
-pub fn append_bytes(path: &Path, junk: &[u8]) {
-    use std::io::Write as _;
-    let mut f = OpenOptions::new().append(true).open(path).expect("open for append");
-    f.write_all(junk).expect("append junk");
 }
 
 // ── deterministic junk / RNG (seeds ride in the panic contexts) ──
@@ -269,7 +248,7 @@ impl Fixture {
         let engine = Engine::open(cfg_manual(dir), genesis.clone()).expect("fixture open");
         let genesis_dump =
             dump(&engine.world_at(Seq(0)).expect("genesis boundary answers"), &genesis);
-        let seg = seg1(dir);
+        let seg = seg_file(dir, 1);
         let mut boundaries: Vec<BoundaryOracle> = Vec::new();
 
         let capture = |engine: &Engine, boundaries: &mut Vec<BoundaryOracle>| {

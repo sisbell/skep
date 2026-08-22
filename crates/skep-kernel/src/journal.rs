@@ -46,10 +46,6 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// every later [`crate::Kernel::open`] and every [`crate::Kernel::world_at`]
 /// above that base — a store that opens on the machine that wrote it and not
 /// on the replica.
-///
-/// Inside this module: the accounting is `txn_encoded_len`'s and the refusal
-/// is `check_txn_size`'s, enforced from `Journal::commit_txn` above that
-/// enum's mode branch, and the frame size it is tied to is `MAX_FRAME_LEN`.
 pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 /// Rotation threshold (open build decision), tested BEFORE a transaction is
 /// appended and only at a txn boundary — so a closed segment holds this many
@@ -744,13 +740,32 @@ pub(crate) enum RunEnd {
     /// the un-acked / torn tail (`> W`), sound because the last committed
     /// marker is itself intact and so precedes any EOF-reaching run (§7).
     Eof,
+}
+
+/// Why a scan could not produce an outcome (§7). Both answers are the
+/// caller's to phrase in its own error vocabulary; neither leaves a partial
+/// [`ScanOutcome`] for anyone to draw a verdict from.
+#[derive(Debug)]
+pub(crate) enum ScanFail {
+    /// A segment could not be read.
+    Io(io::Error),
     /// Resynchronization exceeded [`RESYNC_BUDGET_PASSES`]: the frame stream
-    /// could not be enumerated in bounded work, so everything the outcome
-    /// carries is a PREFIX of what the segment holds — a committed head that
-    /// may be short, records that may be missing, a boundary set that may not
-    /// be the journal's. Fatal at any height, since the damage lies somewhere
-    /// above the base and the scan could not reach past it to say where (§7).
-    Unbounded,
+    /// could not be enumerated in bounded work, so nothing derived from it
+    /// would be more than a PREFIX of what the segment holds — a committed
+    /// head that may be short, records that may be missing, a boundary set
+    /// that may not be the journal's. Fatal at any height, which is why the
+    /// scan refuses rather than answering with a qualification.
+    Unbounded {
+        /// The base's own coordinate: the damage lies somewhere above it, and
+        /// the scan could not reach past it to say where.
+        at: u64,
+    },
+}
+
+impl From<io::Error> for ScanFail {
+    fn from(e: io::Error) -> Self {
+        ScanFail::Io(e)
+    }
 }
 
 /// Where the un-acked / torn tail begins: the segment file to cut, the offset
@@ -764,15 +779,10 @@ pub(crate) struct TailCut {
 }
 
 /// Pass-1 result (§7): the committed head (§7's `W`), the committed records,
-/// the corrupt runs, and where the tail to truncate begins.
-///
-/// Everything here is meaningful only while [`ScanOutcome::fatal_run_to_head`]
-/// / [`ScanOutcome::fatal_run_anywhere`] answers `None`. A scan that exhausts
-/// its resynchronization budget stops where it stands, so a committed head may
-/// be short, records may be missing and the boundary set may not be the
-/// journal's — the run it pushes is what says so, and it is fatal at any
-/// height ([`RunEnd::Unbounded`]). Ask one of those two first; nothing below
-/// carries the qualification on its own.
+/// the corrupt runs, and where the tail to truncate begins. A scan that could
+/// not enumerate the frame stream produces none of this — it answers
+/// [`ScanFail`] — so every field here describes the whole scanned region and
+/// carries no qualification.
 pub(crate) struct ScanOutcome {
     /// The base this scan ran against — §7's `S_load`. Every judgment it
     /// answers is relative to that base, so it is carried here rather than
@@ -831,13 +841,8 @@ impl ScanOutcome {
     /// base — where classifying by `at` would spuriously halt. An
     /// [`RunEnd::Eof`] run is never fatal: it is the un-acked / torn tail,
     /// which the last committed marker precedes.
-    ///
-    /// A [`RunEnd::Unbounded`] run is fatal whatever the bound, and reported
-    /// at the base's own coordinate: the scan could not enumerate the stream,
-    /// so no coordinate localizes the damage and no ceiling can exclude it.
     fn fatal_run(&self, bound: Option<u64>) -> Option<u64> {
         self.runs.iter().find_map(|run| match *run {
-            RunEnd::Unbounded => Some(self.s_load),
             RunEnd::Landed { inferred_max, at }
                 if inferred_max > self.s_load && bound.is_none_or(|b| inferred_max <= b) =>
             {
@@ -956,9 +961,10 @@ impl PendingTxn {
 ///
 /// Work: the sequential walk is one pass per scanned segment, and
 /// resynchronization is capped at [`RESYNC_BUDGET_PASSES`] more. A segment
-/// that exhausts that budget answers [`RunEnd::Unbounded`] and stops there,
-/// so a payload that plants frame headers costs a bounded scan and a halt
-/// rather than an unbounded one.
+/// that exhausts that budget refuses the scan outright
+/// ([`ScanFail::Unbounded`]) rather than answering with a prefix, so a payload
+/// that plants frame headers costs a bounded scan and a halt rather than an
+/// unbounded one.
 ///
 /// `segs` must be ASCENDING by `firstSeq`, as [`list_segments`] produces it.
 /// The skip test, the tail resolution and [`inferred_last_seq`] all read a
@@ -969,7 +975,7 @@ impl PendingTxn {
 /// Reached through [`crate::replay::Base::scan`], which supplies `s_load` from
 /// the base it selected. A scan and the fold that consumes it must agree on
 /// their base, and that is the one route where they cannot disagree.
-pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome> {
+pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, ScanFail> {
     let mut out = ScanOutcome {
         s_load,
         committed_head: s_load,
@@ -1055,12 +1061,10 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> io::Result<ScanOutcome>
                 Parsed::Bad { crc_bytes } => {
                     spent += crc_bytes;
                     if spent > budget {
-                        // Everything derived so far is a prefix, so no verdict
-                        // is drawn from it and no truncation is aimed with it:
-                        // `tail` stays `None`, and both classifiers answer
-                        // fatal on the run this pushes.
-                        out.runs.push(RunEnd::Unbounded);
-                        return Ok(out);
+                        // Everything derived so far is a prefix, so none of it
+                        // travels: no verdict can be drawn from it and no
+                        // truncation aimed with it.
+                        return Err(ScanFail::Unbounded { at: s_load });
                     }
                     run_open = true;
                     pos = match find_magic(&buf, pos + 1) {
@@ -1638,15 +1642,15 @@ mod tests {
         let spans = frame_spans(&segs[0].path);
         flip_byte(&segs[0].path, spans[0].0 + FRAME_HEADER_LEN + 1);
 
-        let out = scan(&segs, 0).unwrap();
-        assert_eq!(out.runs.last(), Some(&RunEnd::Unbounded));
-        // Both classifiers refuse: what the scan derived is a prefix, so no
-        // world may be folded from it at any height.
-        assert_eq!(out.fatal_run_to_head(), Some(0), "recovery must halt");
-        assert_eq!(out.fatal_run_anywhere(), Some(0), "a bounded replay must halt");
-        // …and nothing aims a truncation at a region the scan never finished
-        // judging.
-        assert!(out.tail.is_none(), "an abandoned scan resolves no cut");
+        // The scan refuses, at the base's own coordinate. That refusal is the
+        // whole of what there is to check here: what such a scan derived is a
+        // prefix, so it produces no outcome at all — there is no committed
+        // head to read short, and no cut for a truncation to be aimed with.
+        let fail = scan(&segs, 0).err();
+        assert!(
+            matches!(fail, Some(ScanFail::Unbounded { at: 0 })),
+            "got {fail:?}"
+        );
     }
 
     #[test]

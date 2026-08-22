@@ -17,7 +17,7 @@ use parking_lot::{Mutex, MutexGuard};
 use crate::checkpoint;
 use crate::config::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 use crate::error::{CheckpointError, HistoryError, OpenError, TxnError};
-use crate::journal::{self, CommitFail, Journal, JournalWriter, UnwindRepair};
+use crate::journal::{self, CommitFail, Journal, JournalWriter, ScanFail, UnwindRepair};
 use crate::replay;
 use crate::{LockKey, Seq, WorldState};
 
@@ -326,6 +326,13 @@ pub struct Kernel<W: WorldState> {
     /// §6: serializes `checkpoint()` against itself (caller calls and the
     /// on-commit auto-trigger); distinct from the applier lock so persisting
     /// and reclaiming never block writers.
+    ///
+    /// LOCK ORDER — this is taken while the applier lock is held (from inside
+    /// a [`Kernel::transact`] closure, which that precondition permits) or
+    /// with no lock held at all, and NEVER the reverse: [`Kernel::checkpoint`]
+    /// must acquire no applier lock, or a closure-invoked checkpoint deadlocks
+    /// against a concurrent writer — silently, and indistinguishably from a
+    /// slow fsync.
     checkpoint_mutex: Mutex<()>,
     poisoned: AtomicBool,
     cfg: KernelConfig,
@@ -430,10 +437,15 @@ impl<W: WorldState> Kernel<W> {
         let base = replay::select_base(&checkpoints, &segs, None, genesis)
             .map_err(|_| OpenError::BadCheckpoint)?;
 
-        // Pass 1: derive W and classify the corrupt runs (§7). Runs beyond W
-        // and EOF runs are the un-acked/torn tail, physically discarded
-        // below; runs at or below S_load are already embodied in the base.
-        let scan = base.scan(&segs)?;
+        // Pass 1: derive W and classify the corrupt runs (§7). A scan that
+        // could not enumerate the frame stream produces no outcome at all and
+        // halts here. Of the runs it does report, those beyond W and the EOF
+        // ones are the un-acked/torn tail, physically discarded below, and
+        // those at or below S_load are already embodied in the base.
+        let scan = base.scan(&segs).map_err(|fail| match fail {
+            ScanFail::Io(e) => OpenError::Io(e),
+            ScanFail::Unbounded { at } => OpenError::Corruption { at: Seq(at) },
+        })?;
         if let Some(at) = scan.fatal_run_to_head() {
             return Err(OpenError::Corruption { at: Seq(at) });
         }
@@ -552,7 +564,10 @@ impl<W: WorldState> Kernel<W> {
     /// order in which they speak: the reentrancy panic first, being a caller's
     /// bug and answered before the applier lock is even taken; then
     /// [`TxnError::Poisoned`], before `f` runs; then `f`'s own
-    /// [`TxnError::Rejected`]; then the zero-step `Ok`; and inside the commit
+    /// [`TxnError::Rejected`]; then the zero-step `Ok`; then
+    /// [`TxnError::Poisoned`] again where the `Seq` order has no room left for
+    /// this transaction, which is judged before the journal is consulted and
+    /// poisons on the way out; and inside the commit
     /// region [`TxnError::Unencodable`] before [`TxnError::OverBudget`]
     /// before [`TxnError::Durability`]: the encode and the size accounting
     /// precede the first file operation, a refusal that belongs to the
@@ -792,8 +807,12 @@ impl<W: WorldState> Kernel<W> {
     /// (segment-granular space reclamation, never a correctness mechanism —
     /// recovery's `Seq > S_load` filter handles straddler leftovers; §6).
     /// Non-blocking to writers (grabs a lock-free `Snapshot`, never the
-    /// applier lock) and serialized against itself by the dedicated
-    /// checkpoint mutex. Cadence counters live in `transact`'s applier-locked
+    /// applier lock — which is a rule, not an economy: a closure inside
+    /// [`Kernel::transact`] may call this while holding that lock, so
+    /// reaching for it here would deadlock against a concurrent writer) and
+    /// serialized against itself by the dedicated checkpoint mutex, whose
+    /// lock order states the same rule from the other side. Cadence counters
+    /// live in `transact`'s applier-locked
     /// state — a caller-invoked `checkpoint()` does NOT reset them (§6).
     /// Returns the checkpointed seq. [`CheckpointError::Poisoned`] — a prior
     /// failure halted the kernel — outranks every other answer, the
@@ -919,7 +938,10 @@ impl<W: WorldState> Kernel<W> {
         if at.0 == base.s_load {
             return Ok(base.world);
         }
-        let scan = base.scan(&segs)?;
+        let scan = base.scan(&segs).map_err(|fail| match fail {
+            ScanFail::Io(e) => HistoryError::Io(e),
+            ScanFail::Unbounded { at } => HistoryError::Corruption { at: Seq(at) },
+        })?;
         // Any at-rest corrupt run not wholly embodied in the base is a halt,
         // even beyond `at`. (A racing live append never produces a Landed run:
         // it can tear only the file's suffix, after the last committed marker,
@@ -1194,6 +1216,54 @@ mod tests {
         assert_eq!(
             fs::read(&seg).unwrap(),
             before,
+            "a halted open truncated the journal"
+        );
+    }
+
+    #[test]
+    fn a_journal_whose_frame_stream_cannot_be_enumerated_refuses_to_open() {
+        // A record whose own bytes plant frame headers, and a lost sync
+        // before it: the scan cannot enumerate the stream inside its
+        // resynchronization budget, so it produces no outcome at all. There
+        // is nothing partial for recovery to fold from and no coordinate that
+        // localizes the damage, so the halt is reported at the base's own
+        // coordinate — genesis here (§7).
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
+            let mut evil = Vec::new();
+            while evil.len() < 256 * 1024 {
+                evil.extend_from_slice(b"SKJ1");
+                evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
+                evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
+                evil.extend_from_slice(&[0u8; 4]);
+            }
+            writer
+                .commit_txn(1, vec![evil], || {})
+                .expect("fixture commit");
+            writer
+                .commit_txn(2, vec![journal::encode_record(&20u64).unwrap()], || {})
+                .expect("fixture commit");
+        }
+        // Break the frame carrying those bytes, so the scan resynchronizes
+        // into them: every planted header is then a candidate whose CRC must
+        // be computed.
+        let seg = journal::segment_path(dir.path(), 1);
+        let mut data = fs::read(&seg).unwrap();
+        data[journal::FRAME_HEADER_LEN + 1] ^= 0xFF;
+        fs::write(&seg, &data).unwrap();
+
+        let err = Kernel::<Vec<u64>>::open(cfg(dir.path(), BurnedSeqPolicy::Rollback), Vec::new())
+            .expect_err("a stream that cannot be enumerated is not one to recover from");
+        assert!(
+            matches!(err, OpenError::Corruption { at: Seq(0) }),
+            "got {err:?}"
+        );
+        // A halt cuts nothing — and here there is not even an outcome a
+        // truncation could be aimed with.
+        assert_eq!(
+            fs::read(&seg).unwrap(),
+            data,
             "a halted open truncated the journal"
         );
     }

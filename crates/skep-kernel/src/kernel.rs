@@ -1535,6 +1535,30 @@ mod tests {
     }
 
     #[test]
+    fn a_poisoned_in_memory_kernel_refuses_a_checkpoint_rather_than_answering_the_no_op() {
+        // §6: `Poisoned` outranks every other answer, "the in-memory no-op
+        // included". Its sibling pins what poison MEANS and stays under
+        // `Fsync` on purpose, so this precedence rides on no other test.
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let k = Kernel::<Vec<u64>>::open(cfg, Vec::new()).unwrap();
+        k.transact::<_, ()>(&[], |stg| {
+            stg.push(10);
+            Ok(())
+        })
+        .unwrap();
+        // A healthy in-memory kernel DOES answer the no-op, which is what
+        // makes the refusal below a precedence rather than a constant.
+        assert_eq!(k.checkpoint().unwrap(), Seq(1));
+
+        k.poisoned.store(true, Ordering::Release);
+        let out = k.checkpoint();
+        assert!(matches!(out, Err(CheckpointError::Poisoned)), "got {out:?}");
+    }
+
+    #[test]
     fn concurrent_checkpoints_each_leave_a_loadable_base() {
         // §6: the API permits concurrent calls — an explicit caller call
         // racing the on-commit auto-trigger, or two callers — and the

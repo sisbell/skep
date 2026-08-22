@@ -1477,6 +1477,26 @@ mod tests {
         assert_eq!(installs, 1, "only the at-budget transaction installs");
     }
 
+    #[test]
+    fn a_record_past_the_frame_cap_is_unencodable_after_the_budget_is_crossed() {
+        // The record's own refusal precedes the staging's AT EVERY POSITION,
+        // not only at the first: the loop keeps judging each record's frame
+        // cap past the crossing, so a caller fixing a value is never first
+        // told to split — and then handed the same refusal on the split half.
+        let prefix = encode_record(&Vec::<u8>::new()).unwrap().len();
+        let cap_bytes = (MAX_FRAME_LEN as u64 - RECORD_PAYLOAD_OVERHEAD) as usize;
+        // The largest record the frame cap admits already puts the transaction
+        // over the budget on its own — so the crossing happens at record one…
+        let at_cap = vec![0u8; cap_bytes - prefix];
+        // …and record two, one byte larger, still cannot be framed.
+        let past_cap = vec![0u8; cap_bytes + 1 - prefix];
+        let mut journal = Journal::InMemory;
+        let mut installed = false;
+        let out = journal.commit_txn(1, vec![at_cap, past_cap], || installed = true);
+        assert!(matches!(out, Err(CommitFail::Unencodable(_))), "got {out:?}");
+        assert!(!installed, "a refused transaction installs nothing");
+    }
+
     /// A record whose serializer refuses — the cheapest way to reach the
     /// encode step, which no size of value can exercise.
     struct RefusesSerialization;

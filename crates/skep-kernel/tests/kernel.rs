@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointError, CheckpointPolicy, Durability, HistoryError, Kernel,
     KernelConfig, LockKey, OpenError, Seq, Snapshot, Space, Staging, TxnError, WorldState,
+    MAX_TXN_BYTES,
 };
 use tempfile::tempdir;
 
@@ -438,6 +439,37 @@ fn rejected_leaves_state_untouched() {
 }
 
 #[test]
+fn splitting_beneath_the_published_budget_commits() {
+    // `OverBudget`'s remedy is a size decision the caller makes, and
+    // `MAX_TXN_BYTES` is the figure M2 publishes for it. Everything that pins
+    // the two together reaches the constant by its crate-private path; from
+    // out here the export could vanish and the suite would not notice.
+    let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
+    let piece = (MAX_TXN_BYTES / 2) as usize;
+    let out = k.transact::<(), ()>(&[], |stg| {
+        stg.push(TestRec::Blob(vec![0u8; piece]));
+        stg.push(TestRec::Blob(vec![0u8; piece]));
+        Ok(())
+    });
+    let bytes = match out {
+        Err(TxnError::OverBudget { bytes }) => bytes,
+        other => panic!("expected OverBudget, got {other:?}"),
+    };
+    assert!(bytes > MAX_TXN_BYTES, "the report is the accounted size");
+    // The remedy, followed literally: each split's records fall beneath the
+    // published figure, and each commits.
+    for i in 0..2u64 {
+        let (_, seq) = k
+            .transact::<(), ()>(&[], |stg| {
+                stg.push(TestRec::Blob(vec![0u8; piece]));
+                Ok(())
+            })
+            .expect("a split beneath the published budget commits");
+        assert_eq!(seq, Seq(i + 1));
+    }
+}
+
+#[test]
 fn staging_working_folds_pushes_and_base_stays() {
     let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();
     commit(&k, 5);
@@ -741,6 +773,36 @@ fn corruption_below_s_load_is_harmless_including_the_boundary_frame() {
 }
 
 #[test]
+fn an_unreadable_segment_fails_the_open_as_io_not_as_corruption() {
+    // `Corruption` says the durable data itself is bad and an operator must
+    // intervene; `Io` says this process could not read it. A segment the
+    // process cannot READ is the second — and it must never be read AROUND,
+    // which answers `Ok` with a world missing every record it held.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1 past the threshold; the fifth rotates
+    }
+    drop(k);
+    assert_eq!(segment_count(dir.path()), 2, "the fixture must rotate");
+
+    // Unreadable, deterministically and without depending on privileges: a
+    // directory bearing a segment's name. `list_segments` parses names and not
+    // file types, which the `journal_path` caller contract already says. The
+    // CLOSED segment, so a scan that read around it would answer `Ok` with a
+    // world missing its four records rather than failing at the cut.
+    let seg1 = seg_file(dir.path(), 1);
+    fs::remove_file(&seg1).unwrap();
+    fs::create_dir(&seg1).unwrap();
+
+    let err = Kernel::open(cfg_fsync(dir.path()), genesis())
+        .expect_err("an unreadable segment is not something to recover around");
+    assert!(matches!(err, OpenError::Io(_)), "got {err:?}");
+    // The cause travels, and it is the environment's — not the media's.
+    assert!(std::error::Error::source(&err).is_some());
+}
+
+#[test]
 fn post_commit_rot_of_the_final_txn_demotes_w_silently() {
     // The documented §7 blind spot, asserted as specified: rot in the LAST
     // committed txn's record leaves its marker intact but checksum-failing,
@@ -897,6 +959,40 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
         Err(HistoryError::Corruption { at, .. }) => assert_eq!(at, Seq(0)),
         other => panic!("expected Corruption at the base, got {other:?}"),
     }
+}
+
+#[test]
+fn world_at_reports_an_unreadable_segment_rather_than_reading_around_it() {
+    // The read path's half of the same claim, and the sharper one: a scan that
+    // skipped the segment would answer from what is left — here, by reporting
+    // a boundary `transact` really returned as one that never existed. `Io` is
+    // what the doc promises, and it promises it as TRANSIENT: a retry
+    // re-derives from the file as it then stands.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    commit(&k, 10);
+    assert_eq!(commit(&k, 20), Seq(2)); // a boundary in the segment that breaks
+    for _ in 0..5 {
+        commit_blob(&k); // four fill seg-1 past the threshold; the fifth rotates
+    }
+    assert_eq!(segment_count(dir.path()), 2, "the fixture must rotate");
+
+    // seg-1 is closed, so the live appender is elsewhere; stash it rather than
+    // destroy it, so the retry half is checkable. `seg-1.stashed` fails the
+    // segment name parse and is invisible to recovery.
+    let seg1 = seg_file(dir.path(), 1);
+    let stash = dir.path().join("seg-1.stashed");
+    fs::rename(&seg1, &stash).unwrap();
+    fs::create_dir(&seg1).unwrap();
+    match k.world_at(Seq(2)) {
+        Err(HistoryError::Io(_)) => {}
+        other => panic!("expected a transient Io, got {other:?}"),
+    }
+
+    // …and the retry re-derives from the file as it now stands.
+    fs::remove_dir(&seg1).unwrap();
+    fs::rename(&stash, &seg1).unwrap();
+    assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 }
 
 #[test]
@@ -1212,6 +1308,42 @@ fn reclamation_floor_is_the_oldest_retained_checkpoint() {
     assert_eq!(items(&k).len(), 8);
     assert_eq!(k.snapshot().world().sum, 8 * BLOB as u64);
     assert_eq!(k.current_seq(), Seq(8));
+}
+
+#[test]
+fn recovery_skips_only_the_segments_the_base_already_embodies() {
+    // §7's skip, which no other test reaches: every multi-segment fixture in
+    // the suite recovers from genesis, and every checkpoint fixture has one
+    // segment. A skip that is one segment too greedy loses the records in
+    // (S_load, that segment's last] and answers `Ok` with a short world.
+    let dir = tempdir().unwrap();
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap(); // retain 2
+    assert_eq!(commit_blob(&k), Seq(1)); // seg-1
+    assert_eq!(k.checkpoint().unwrap(), Seq(1)); // holds the reclamation floor at 1
+    for _ in 0..3 {
+        commit_blob(&k); // Seqs 2..=4, filling seg-1 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(5)); // rotates into seg-5
+    assert_eq!(commit_blob(&k), Seq(6));
+    assert_eq!(k.checkpoint().unwrap(), Seq(6)); // S_load on reopen; S_old is still 1
+    for _ in 0..2 {
+        commit_blob(&k); // Seqs 7..=8, filling seg-5 past the threshold
+    }
+    assert_eq!(commit_blob(&k), Seq(9)); // rotates into seg-9
+    drop(k);
+    assert_eq!(segment_count(dir.path()), 3, "the fixture must rotate twice");
+    assert!(
+        seg_file(dir.path(), 1).exists(),
+        "…and keep the segment below the base"
+    );
+
+    let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
+    // seg-1's inferred lastSeq is 4 ≤ 6, so it is skipped unopened; seg-5
+    // STRADDLES the base (it covers 5..=8) and must be scanned for 7 and 8;
+    // seg-9 is active and is always scanned.
+    assert_eq!(k.current_seq(), Seq(9));
+    assert_eq!(items(&k).len(), 9);
+    assert_eq!(k.snapshot().world().sum, 9 * BLOB as u64);
 }
 
 #[test]

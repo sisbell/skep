@@ -124,6 +124,10 @@ pub(crate) enum FramePayload {
     Marker(Marker),
 }
 
+/// A decode refusal as the `io::Error` it is: bytes read off a disk that do
+/// not hold what their format says, which is exactly what
+/// [`io::ErrorKind::InvalidData`] names. Only the read side wraps — an encode
+/// touches no file, so its refusal travels as the serializer's own error.
 fn invalid_data(e: bincode::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, e)
 }
@@ -134,9 +138,10 @@ fn invalid_data(e: bincode::Error) -> io::Error {
 /// decode are one agreement: a change to either that the other does not match
 /// turns every healthy journal into one that cannot be replayed. M2 never
 /// inspects a record, so the serializer's own account is the whole of what
-/// identifies a refusal, and it travels.
-pub(crate) fn encode_record<R: Serialize>(record: &R) -> io::Result<Vec<u8>> {
-    bincode::serialize(record).map_err(invalid_data)
+/// identifies a refusal, and it travels unwrapped: the encode precedes every
+/// file operation, so nothing it can answer with is a disk's failure.
+pub(crate) fn encode_record<R: Serialize>(record: &R) -> Result<Vec<u8>, bincode::Error> {
+    bincode::serialize(record)
 }
 
 /// Read back what [`encode_record`] wrote. `Err` is a committed, CRC-intact
@@ -182,7 +187,11 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
     let n = records.len() as u64;
     assert!(n > 0, "zero-step ops never reach the journal");
     let txn = Txn(first_seq);
-    let mut buf = Vec::new();
+    // The exact figure, not a guess: [`txn_encoded_len`] is what this function
+    // emits, pinned to it by the accounting test. Reserving it is what holds
+    // the commit region to the two copies of a transaction's bytes its own
+    // contract budgets for — a doubling `Vec` transiently holds a third.
+    let mut buf = Vec::with_capacity(txn_encoded_len(&records) as usize);
     let mut checksum = 0u32;
     for (i, bytes) in records.into_iter().enumerate() {
         let payload = bincode::serialize(&FramePayload::Record(LogRecord {
@@ -247,10 +256,9 @@ pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
 fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
     for bytes in record_bytes {
         if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
-            return Err(CommitFail::Unencodable(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "record's serialized form exceeds the journal's frame cap",
-            )));
+            return Err(CommitFail::Unencodable(
+                "record's serialized form exceeds the journal's frame cap".into(),
+            ));
         }
     }
     let bytes = txn_encoded_len(record_bytes);
@@ -263,7 +271,9 @@ fn check_txn_size(record_bytes: &[Vec<u8>]) -> Result<(), CommitFail> {
 #[derive(Debug)]
 enum Parsed {
     /// The frame at `pos` is intact: its own `crc` validates over `len`+payload.
-    Intact { payload: Range<usize>, end: usize },
+    /// The frame ends where its payload does, at `payload.end` — one fact, so
+    /// the two cannot disagree and mis-delimit the frame that follows.
+    Intact { payload: Range<usize> },
     /// Not a trustworthy frame start (bad magic, oversize/overrunning `len`,
     /// or CRC mismatch) — resynchronize via the magic word (§1/§7).
     ///
@@ -301,7 +311,6 @@ fn parse_frame(buf: &[u8], pos: usize) -> Parsed {
     }
     Parsed::Intact {
         payload: pos + FRAME_HEADER_LEN..end,
-        end,
     }
 }
 
@@ -461,8 +470,10 @@ pub(crate) enum CommitFail {
     /// [`MAX_FRAME_LEN`]. Nothing reached the file, so this is a no-op like
     /// [`CommitFail::Clean`]; what differs is the remedy: the refusal is a
     /// property of the records, so the record must be fixed — the same
-    /// records fail the same way forever.
-    Unencodable(io::Error),
+    /// records fail the same way forever. Both halves are judged before the
+    /// first file operation, so the cause travels as the error it is rather
+    /// than as an `io::Error` a caller would read a disk into.
+    Unencodable(Box<dyn std::error::Error + Send + Sync + 'static>),
     /// The transaction's whole encoded form — record frames, marker and
     /// headers, [`txn_encoded_len`]'s accounting — exceeds [`MAX_TXN_BYTES`].
     /// Nothing reached the file, so this is a no-op like
@@ -589,7 +600,8 @@ impl JournalWriter {
         records: Vec<Vec<u8>>,
         install: impl FnOnce(),
     ) -> Result<u64, CommitFail> {
-        let buf = encode_txn(first_seq, records).map_err(CommitFail::Unencodable)?;
+        let buf =
+            encode_txn(first_seq, records).map_err(|e| CommitFail::Unencodable(Box::new(e)))?;
         self.maybe_rotate(first_seq).map_err(CommitFail::Clean)?;
         let mark = self.len;
         self.in_flight = InFlight::Appending { mark };
@@ -709,7 +721,9 @@ impl Journal {
     ) -> Result<u64, CommitFail> {
         let mut record_bytes: Vec<Vec<u8>> = Vec::with_capacity(records.len());
         for record in records {
-            record_bytes.push(encode_record(record).map_err(CommitFail::Unencodable)?);
+            // The closure is the unsizing coercion site: the bare constructor
+            // as a function value does not coerce `bincode`'s boxed error.
+            record_bytes.push(encode_record(record).map_err(|e| CommitFail::Unencodable(e))?);
         }
         check_txn_size(&record_bytes)?;
         match self {
@@ -1011,8 +1025,13 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
         let mut pos = 0usize;
         while pos < buf.len() {
             match parse_frame(&buf, pos) {
-                Parsed::Intact { payload, end } => {
-                    match bincode::deserialize::<FramePayload>(&buf[payload.clone()]) {
+                Parsed::Intact { payload } => {
+                    // The frame ends where its payload does, so the advance is
+                    // one fact taken once — before the payload is consumed by
+                    // the indexing below, and stated once for all three arms.
+                    let end = payload.end;
+                    let frame = &buf[payload];
+                    match bincode::deserialize::<FramePayload>(frame) {
                         Ok(FramePayload::Record(record)) => {
                             if run_open {
                                 out.runs.push(RunEnd::Landed {
@@ -1025,9 +1044,8 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                                 .take()
                                 .filter(|group| group.txn == record.txn)
                                 .unwrap_or_else(|| PendingTxn::open(record.txn));
-                            group.push(record, &buf[payload]);
+                            group.push(record, frame);
                             pending = Some(group);
-                            pos = end;
                         }
                         Ok(FramePayload::Marker(marker)) => {
                             if run_open {
@@ -1053,16 +1071,13 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
                                 // either beyond W (tail, truncated) or explained
                                 // by a corrupt run the caller classifies (§7).
                             }
-                            pos = end;
                         }
                         // Intact by CRC but undecodable: writer/reader skew.
                         // Treat as a corrupt frame — it participates in run
                         // classification rather than being silently dropped.
-                        Err(_) => {
-                            run_open = true;
-                            pos = end;
-                        }
+                        Err(_) => run_open = true,
                     }
+                    pos = end;
                 }
                 Parsed::Bad { crc_bytes } => {
                     spent += crc_bytes;
@@ -1150,9 +1165,9 @@ mod tests {
         let mut pos = 0;
         while pos < buf.len() {
             match parse_frame(&buf, pos) {
-                Parsed::Intact { end, .. } => {
-                    v.push((pos, end - pos));
-                    pos = end;
+                Parsed::Intact { payload } => {
+                    v.push((pos, payload.end - pos));
+                    pos = payload.end;
                 }
                 Parsed::Bad { .. } => panic!("clean journal expected"),
             }
@@ -1187,9 +1202,11 @@ mod tests {
         let mut buf = Vec::new();
         push_frame(&mut buf, &payload).unwrap();
         match parse_frame(&buf, 0) {
-            Parsed::Intact { payload: p, end } => {
+            Parsed::Intact { payload: p } => {
+                // The frame's end IS its payload's end, and the whole frame is
+                // the header plus that payload.
+                assert_eq!(p.end, buf.len());
                 assert_eq!(&buf[p], payload.as_slice());
-                assert_eq!(end, buf.len());
             }
             Parsed::Bad { .. } => panic!("intact frame expected"),
         }
@@ -1439,9 +1456,10 @@ mod tests {
         expect_record.extend_from_slice(&2u64.to_le_bytes()); // txn == the first seq
         expect_record.extend_from_slice(&3u64.to_le_bytes()); // bytes.len()
         expect_record.extend_from_slice(&[9, 8, 7]);
-        let Parsed::Intact { payload, end } = parse_frame(&buf, 0) else {
+        let Parsed::Intact { payload } = parse_frame(&buf, 0) else {
             panic!("intact record frame expected")
         };
+        let end = payload.end; // where the marker frame begins
         assert_eq!(&buf[payload], expect_record.as_slice());
 
         let mut expect_marker = Vec::new();
@@ -1451,7 +1469,7 @@ mod tests {
         // records_checksum: over the record frames' payloads, in Seq order.
         expect_marker
             .extend_from_slice(&crc32c::crc32c_append(0, &expect_record).to_le_bytes());
-        let Parsed::Intact { payload, .. } = parse_frame(&buf, end) else {
+        let Parsed::Intact { payload } = parse_frame(&buf, end) else {
             panic!("intact marker frame expected")
         };
         assert_eq!(&buf[payload], expect_marker.as_slice());
@@ -1728,7 +1746,7 @@ mod tests {
         let mut pos = 0;
         loop {
             match parse_frame(&buf, pos) {
-                Parsed::Intact { end, .. } => pos = end,
+                Parsed::Intact { payload } => pos = payload.end,
                 Parsed::Bad { .. } => return pos as u64,
             }
         }

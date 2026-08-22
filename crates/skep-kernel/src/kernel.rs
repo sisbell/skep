@@ -354,7 +354,7 @@ impl<W: WorldState> fmt::Debug for Kernel<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Kernel")
             .field("seq", &self.current_seq())
-            .field("poisoned", &self.poisoned.load(Ordering::Relaxed))
+            .field("poisoned", &self.is_poisoned())
             .field("cfg", &self.cfg)
             .finish_non_exhaustive()
     }
@@ -799,6 +799,20 @@ impl<W: WorldState> Kernel<W> {
     /// including when poisoned.
     pub fn current_seq(&self) -> Seq {
         self.root.load().seq
+    }
+
+    /// Whether an unrecoverable failure has halted this kernel's write paths
+    /// (§1/§3) — the state [`TxnError::Poisoned`] and
+    /// [`CheckpointError::Poisoned`] report. Lock-free and infallible, like
+    /// the other reads, so a supervisor can ask without taking the applier
+    /// lock, cloning `W`, or writing a checkpoint file.
+    ///
+    /// NOT a gate: a kernel healthy at this call may poison before the next
+    /// write, so the authoritative answer is the refusal [`Kernel::transact`]
+    /// returns. Poison is terminal in the other direction, so a `true` here is
+    /// actionable without a race.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Acquire)
     }
 
     /// Persist a checkpoint embodying all records with `Seq ≤ s`, keep the
@@ -1326,7 +1340,7 @@ mod tests {
             Ok(())
         });
         assert!(matches!(out, Err(TxnError::Poisoned)), "got {out:?}");
-        assert!(k.poisoned.load(Ordering::Acquire));
+        assert!(k.is_poisoned());
         assert_eq!(k.snapshot().world().as_slice(), &[] as &[u64]);
     }
 
@@ -1377,7 +1391,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
+        // A healthy kernel says so, which is what makes the answer below a
+        // report of the flag the three refusals are built from rather than a
+        // constant.
+        assert!(!k.is_poisoned());
         k.poisoned.store(true, Ordering::Release);
+        assert!(k.is_poisoned());
 
         // Writes halt — and `f` never runs: the refusal precedes it.
         let ran = std::cell::Cell::new(false);

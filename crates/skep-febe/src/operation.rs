@@ -597,8 +597,8 @@ where
             // Nothing committed, and the request itself is what M2 could not
             // journal — so re-sending it is futile and the client is told so
             // (Malformed ⇒ Permanent, §5), with the encoder's own account.
-            TxnError::Unencodable(io) => Rejection::classified(op, RejectCode::Malformed, None)
-                .with_detail(io.to_string()),
+            TxnError::Unencodable(cause) => Rejection::classified(op, RejectCode::Malformed, None)
+                .with_detail(cause.to_string()),
             // Nothing committed; every record encodes, the transaction as a
             // whole is past M2's per-transaction budget — Permanent, and the
             // remedy travels: split the request rather than resend it.
@@ -922,7 +922,7 @@ mod tests {
         assert!(rej.detail.as_deref().is_some_and(|d| d.contains("disk gone")));
         let rej = op.map_txn::<InsertError>(
             OpKind::Insert,
-            TxnError::Unencodable(std::io::Error::other("record too large")),
+            TxnError::Unencodable("record too large".into()),
         );
         assert_eq!(rej.code, RejectCode::Malformed);
         assert_eq!(

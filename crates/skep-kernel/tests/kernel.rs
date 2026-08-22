@@ -500,6 +500,15 @@ fn the_kernel_and_its_handles_carry_the_traits_callers_build_on() {
     debuggable::<Snapshot<TestWorld>>();
     debuggable::<Staging<TestWorld>>();
 
+    // The empty coordinate a consumer derives `Default` around: genesis, the
+    // boundary before anything is committed — the value, not the trait, is
+    // the promise, so it is the value that is pinned.
+    assert_eq!(Seq::default(), Seq(0));
+    // A configuration compares, so a consumer can hold one and detect a
+    // change; every knob it carries already does.
+    assert_eq!(cfg_in_memory(), cfg_in_memory());
+    assert_ne!(cfg_in_memory(), cfg_fsync(std::path::Path::new("/tmp/x")));
+
     // The rendering names the coordinate, never the world (`TestWorld` is
     // large and is not required to be `Debug` at all).
     let k = Kernel::open(cfg_in_memory(), genesis()).unwrap();

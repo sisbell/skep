@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 /// Kernel configuration, passed to [`crate::Kernel::open`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KernelConfig {
     /// Per-commit [`Durability::Fsync`] (the canonical durable-before-visible
     /// barrier, carrying the journal it writes to) or [`Durability::InMemory`]

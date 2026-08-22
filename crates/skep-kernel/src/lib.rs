@@ -186,7 +186,11 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
 /// observable coordinate is the terminal `last_seq` returned by
 /// [`Kernel::transact`], never an interior `Seq`. No caller derives `idx(σ)`
 /// from it.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+///
+/// `Seq::default()` is `Seq(0)` — the genesis boundary, the coordinate before
+/// anything is committed: what [`Kernel::open`] installs under
+/// [`Durability::InMemory`], and what [`Kernel::world_at`] answers at.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Seq(pub u64);
 
 impl fmt::Display for Seq {

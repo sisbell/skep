@@ -65,10 +65,15 @@ impl fmt::Display for OpenError {
 }
 
 impl std::error::Error for OpenError {
+    /// Spelled out variant by variant, so a condition added here has to say
+    /// whether it carries a cause: a wildcard would compile and silently drop
+    /// the next variant's out of every chain a caller walks.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenError::Io(e) => Some(e),
-            _ => None,
+            OpenError::InvalidConfig(_)
+            | OpenError::BadCheckpoint
+            | OpenError::Corruption { .. } => None,
         }
     }
 }
@@ -219,10 +224,15 @@ impl fmt::Display for HistoryError {
 }
 
 impl std::error::Error for HistoryError {
+    /// Spelled out variant by variant, for the reason [`OpenError`]'s is.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             HistoryError::Io(e) => Some(e),
-            _ => None,
+            HistoryError::BeyondHead { .. }
+            | HistoryError::NotABoundary { .. }
+            | HistoryError::Reclaimed { .. }
+            | HistoryError::Unjournaled
+            | HistoryError::Corruption { .. } => None,
         }
     }
 }
@@ -258,8 +268,13 @@ pub enum TxnError<E> {
     /// so this is a true no-op like [`Durability`] — but the refusal is a
     /// property of the RECORDS, so the remedy is to fix the record, where
     /// re-invoking unchanged fails the same way however healthy the disk.
-    /// The serializer's own account travels, since M2 never inspects
-    /// `W::Record`.
+    ///
+    /// Carries the refusal's own account — the serializer's, since M2 never
+    /// inspects `W::Record`, or the frame cap's. Nothing here is an I/O
+    /// failure: the encode and the size judgment both precede the first file
+    /// operation, and this variant arises on a kernel that has no file at all
+    /// ([`crate::Durability::InMemory`]), which is why the cause travels as
+    /// the error it is rather than as a disk's.
     ///
     /// Both halves arise in BOTH durability modes: the encode runs before
     /// the journal is consulted, and the frame-cap half is judged there too
@@ -267,7 +282,7 @@ pub enum TxnError<E> {
     /// kernel refuses exactly what a journaled one refuses.
     ///
     /// [`Durability`]: TxnError::Durability
-    Unencodable(io::Error),
+    Unencodable(Box<dyn std::error::Error + Send + Sync + 'static>),
     /// The staged records all encode, and their whole encoded form — record
     /// frames, commit marker and headers — exceeds the journal's
     /// per-transaction budget, [`crate::MAX_TXN_BYTES`]. Refused in BOTH
@@ -325,10 +340,16 @@ impl<E: fmt::Display> fmt::Display for TxnError<E> {
 }
 
 impl<E: fmt::Debug + fmt::Display> std::error::Error for TxnError<E> {
+    /// Spelled out variant by variant, for the reason [`OpenError`]'s is.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            TxnError::Durability(e) | TxnError::Unencodable(e) => Some(e),
-            _ => None,
+            TxnError::Durability(e) => Some(e),
+            TxnError::Unencodable(e) => Some(&**e),
+            // A caller's own rejection cannot travel as a source: this impl is
+            // bounded on `Display + Debug` rather than `Error`, which is what
+            // keeps `TxnError<()>` an error for the many callers whose
+            // rejection type is not one.
+            TxnError::Rejected(_) | TxnError::OverBudget { .. } | TxnError::Poisoned => None,
         }
     }
 }

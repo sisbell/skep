@@ -1,7 +1,11 @@
 //! The served client (wire v6): `GET /` answers the embedded board —
 //! `text/html`, the same CORS posture as every other response — in builds
-//! with the `client` feature (default on); without it the route does not
-//! exist and `/` is the ordinary 404.
+//! with the `client` feature (DEFAULT-OFF since 2026-08-22 — the acting
+//! client must be opted into, so a hosted image that opts out of nothing
+//! is still correct; see the feature's note in Cargo.toml); without it
+//! the route does not exist and `/` is the ordinary 404. Both arms are
+//! asserted: the workspace gate runs the default shape, and a
+//! `--all-features` pass covers the serving one.
 
 mod common;
 

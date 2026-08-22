@@ -254,14 +254,15 @@ pub enum TxnError<E> {
     Durability(io::Error),
     /// The staged records could not be turned into journal frames at all — a
     /// record whose serializer refuses, or one whose serialized form exceeds
-    /// the journal's frame size. Nothing was appended and nothing installed,
+    /// the journal's frame cap. Nothing was appended and nothing installed,
     /// so this is a true no-op like [`Durability`] — but the refusal is a
-    /// property of the RECORDS, so re-invoking with the same records fails
-    /// the same way, however healthy the disk. The serializer's own account
-    /// travels, since M2 never inspects `W::Record`.
+    /// property of the RECORDS, so the remedy is to fix the record, where
+    /// re-invoking unchanged fails the same way however healthy the disk.
+    /// The serializer's own account travels, since M2 never inspects
+    /// `W::Record`.
     ///
     /// Both halves arise in BOTH durability modes: the encode runs before
-    /// the journal is consulted, and the frame-size half is judged there too
+    /// the journal is consulted, and the frame-cap half is judged there too
     /// — against the frames the journaled mode would build — so an in-memory
     /// kernel refuses exactly what a journaled one refuses.
     ///
@@ -279,7 +280,7 @@ pub enum TxnError<E> {
     ///
     /// The budget is what keeps recovery's memory floor replica-independent:
     /// a transaction never spans a journal segment and recovery reads a
-    /// segment whole, so an uncapped transaction would permanently raise the
+    /// segment whole, so an unbounded transaction would permanently raise the
     /// cost of every later `open()` of the store it committed to.
     ///
     /// [`Durability`]: TxnError::Durability

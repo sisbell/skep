@@ -543,7 +543,7 @@ impl<W: WorldState> Kernel<W> {
     /// is the read path, §5).
     ///
     /// Staged records that cannot be journaled — a serializer that refuses,
-    /// or a record past the journal's frame size — are
+    /// or a record past the journal's frame cap — are
     /// [`TxnError::Unencodable`]: a no-op like [`TxnError::Durability`], and
     /// unlike it, one that re-invoking with the same records cannot fix. A
     /// transaction whose records all encode but whose whole encoded form —
@@ -590,18 +590,18 @@ impl<W: WorldState> Kernel<W> {
     /// transaction in flight. A composite composes neighbors' PURE math
     /// inside ONE closure (§3; seam contract 3).
     ///
-    /// TRANSACTION BUDGET — one transaction's encoded form is capped at
+    /// TRANSACTION BUDGET — one transaction's encoded form is bounded by
     /// [`crate::MAX_TXN_BYTES`], and a transaction past it is REFUSED with
     /// [`TxnError::OverBudget`], in both durability modes, before the journal
-    /// is touched. The cap bounds three
+    /// is touched. The budget bounds three
     /// costs that scale with a transaction's size, the first two transient
     /// and the third durable: the whole transaction is serialized under the
     /// applier lock, so every other writer in the process waits behind it;
     /// its serialized bytes live twice for the length of the commit region,
     /// once as records and once as the frames they become; and — because a
     /// transaction never spans a segment — the segment holding it is at
-    /// least that large, and recovery reads a segment WHOLE, so the cap is
-    /// what keeps the memory floor of every later `open()` and every
+    /// least that large, and recovery reads a segment WHOLE, so the budget
+    /// is what keeps the memory floor of every later `open()` and every
     /// [`Kernel::world_at`] bounded, and identical on every replica. A
     /// composite too large for the budget is split by the caller; atomicity
     /// of the split is then the caller's, as it already is for every
@@ -746,14 +746,14 @@ impl<W: WorldState> Kernel<W> {
             }
             // Nothing ever became frames, so the journal is where this txn
             // found it — the same no-op, burning the same Seqs, and a
-            // different answer to "retry?" (§1/§3).
+            // different remedy: fix the record (§1/§3).
             Ok(Err(CommitFail::Unencodable(e))) => {
                 state.seq.roll_back_to(base_seq);
                 Err(TxnError::Unencodable(e))
             }
-            // The same no-op with the third answer to "retry?": no record
-            // refused, the staging as a whole is past the transaction budget,
-            // and only splitting it changes that (§1/§3).
+            // The same no-op with the third remedy: no record refused, the
+            // staging as a whole is past the transaction budget, and only
+            // splitting it changes that (§1/§3).
             Ok(Err(CommitFail::OverBudget { bytes })) => {
                 state.seq.roll_back_to(base_seq);
                 Err(TxnError::OverBudget { bytes })
@@ -1028,15 +1028,15 @@ mod tests {
     #[test]
     fn a_txn_at_the_budget_commits_and_one_past_is_refused_in_both_modes() {
         // The budget is judged above the mode branch (F1): a transaction at
-        // MAX_TXN_BYTES commits — the refusal is the boundary, not a fence
-        // one short of it — and one byte past is OverBudget in BOTH modes,
-        // with identical accounting.
+        // MAX_TXN_BYTES commits — the refusal begins one past the budget, not
+        // at it — and one byte past is OverBudget in BOTH modes, with
+        // identical accounting.
         let overhead = journal::txn_encoded_len(&[
             journal::encode_record(&Vec::<u8>::new()).unwrap(),
             journal::encode_record(&Vec::<u8>::new()).unwrap(),
         ]);
         // A record's encoded length grows byte-for-byte with its body, so
-        // these two bodies land the accounted total exactly on the cap.
+        // these two bodies land the accounted total exactly on the budget.
         let body = journal::MAX_TXN_BYTES - overhead;
         let (l1, l2) = ((body / 2) as usize, (body - body / 2) as usize);
         in_each_mode(|k, mode| {
@@ -1133,9 +1133,9 @@ mod tests {
 
     #[test]
     fn the_budget_does_not_bite_a_txn_of_many_small_records() {
-        // The cap exists for pathological stagings; a composite of a thousand
-        // small records is the honest shape §3 recommends and stays far under
-        // it, in both modes.
+        // The budget exists for pathological stagings; a composite of a
+        // thousand small records is the honest shape §3 recommends and stays
+        // far under it, in both modes.
         in_each_mode(|k, mode| {
             let (_, seq) = k
                 .transact::<_, ()>(&[], |stg| {
@@ -1331,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn retain_checkpoints_zero_is_rejected() {
+    fn retain_checkpoints_zero_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let bad_cfg = KernelConfig {
             durability: Durability::Fsync {

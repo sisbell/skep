@@ -27,8 +27,10 @@ use serde::{Deserialize, Serialize};
 const MAGIC: [u8; 4] = *b"SKJ1";
 /// Frame header: magic (4) + len (4) + crc (4).
 pub(crate) const FRAME_HEADER_LEN: usize = 12;
-/// Sanity bound on a single frame (open build decision: max frame size). The
-/// writer enforces it, so recovery may treat a larger claimed `len` as corrupt.
+/// Sanity bound on a single frame — the journal's FRAME CAP (open build
+/// decision: max frame size), which is what every mention of the frame cap
+/// here names. The writer enforces it, so recovery may treat a larger claimed
+/// `len` as corrupt.
 pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// The most bytes one TRANSACTION may occupy in the journal — its record
 /// frames, commit marker and headers together. A transaction past it is
@@ -36,7 +38,7 @@ pub(crate) const MAX_FRAME_LEN: u32 = 64 * 1024 * 1024;
 /// before anything is appended or installed, so this is the figure a caller
 /// splitting an over-budget transaction must get under.
 ///
-/// Equal to the journal's maximum FRAME size as a RELATIONSHIP, not a free
+/// Equal to the journal's FRAME CAP as a RELATIONSHIP, not a free
 /// knob: a transaction is at most one frame's worth, so a segment — which
 /// rotates only at a transaction boundary — is at most one rotation
 /// threshold plus one frame, and recovery, which reads a segment WHOLE, has
@@ -58,7 +60,10 @@ pub const MAX_TXN_BYTES: u64 = MAX_FRAME_LEN as u64;
 const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// Resynchronization budget, as a multiple of a segment's own size: how many
 /// bytes of CRC a scan will spend on rejected frame candidates before it gives
-/// up on enumerating that segment's frame stream (§7).
+/// up on enumerating that segment's frame stream (§7). A WORK allowance on
+/// the read path — the one budget here that is not the write path's
+/// [`MAX_TXN_BYTES`], which is why the frame cap is named in full wherever it
+/// appears below.
 ///
 /// The sequential walk needs no budget — an intact frame's CRC covers exactly
 /// the bytes it advances over, so the walk sums to one pass — and this bounds
@@ -72,11 +77,11 @@ const SEGMENT_ROTATE_BYTES: u64 = 1024 * 1024;
 /// segment, plus one candidate in flight, so the worst crafted 64 MiB segment
 /// spends 512 MiB of CRC — a twentieth of a second at hardware rates. Honest
 /// journals spend almost none of it, because a candidate must clear the magic
-/// word AND a length inside the cap before its CRC is computed at all: the
-/// sync word occurs by chance about once per 2^32 bytes, and a randomly
-/// damaged length field lands inside the cap about once in 64, so tripping
-/// eight segment-sized candidates by accident is a ~10^-15 event. Crafted
-/// content trips it after a few dozen.
+/// word AND a length inside the frame cap before its CRC is computed at all:
+/// the sync word occurs by chance about once per 2^32 bytes, and a randomly
+/// damaged length field lands inside the frame cap about once in 64, so
+/// tripping eight segment-sized candidates by accident is a ~10^-15 event.
+/// Crafted content trips it after a few dozen.
 const RESYNC_BUDGET_PASSES: u64 = 8;
 
 /// A transaction's identity: its FIRST `Seq` (§1) — a distinguished `Seq`,
@@ -205,7 +210,8 @@ fn encode_txn(first_seq: u64, records: Vec<Vec<u8>>) -> io::Result<Vec<u8>> {
 /// the byte-vector's length prefix (8) — bincode's fixed-width encoding,
 /// value-independent. A constant so [`check_txn_size`] can judge a record
 /// without building its frame; the accounting test pins it to the encoder's
-/// own output, so a codec change breaks the gate rather than the cap.
+/// own output, so a codec change breaks the gate rather than silently
+/// loosening either limit it feeds.
 pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// The marker frame's whole encoded size: header (12) plus the tagged
 /// [`Marker`] payload — tag (4), `txn` (8), `last_seq` (8),
@@ -215,7 +221,7 @@ const MARKER_FRAME_LEN: u64 = FRAME_HEADER_LEN as u64 + 24;
 /// The exact byte length [`encode_txn`] emits for these already-encoded
 /// records: each record frame (header + wrapped payload) plus the terminal
 /// marker frame. Saturating, so a sum no allocator could hold refuses as
-/// over-budget rather than wrapping back under the cap.
+/// over-budget rather than wrapping back under the budget.
 pub(crate) fn txn_encoded_len(record_bytes: &[Vec<u8>]) -> u64 {
     record_bytes.iter().fold(MARKER_FRAME_LEN, |total, bytes| {
         total
@@ -437,25 +443,25 @@ pub(crate) fn acquire_journal_lock(dir: &Path) -> io::Result<File> {
     Ok(f)
 }
 
-/// How a commit failed (§1). The distinction IS the caller's decision: a
-/// cleanly-failed transaction left nothing behind and may be re-invoked, an
-/// unencodable or over-budget one left nothing behind and re-invoking cannot
-/// change that (fix the record / split the transaction, respectively), and an
-/// unrepaired one may have left a durable un-acked marker that a successor
-/// would collide with on recovery.
+/// How a commit failed (§1). Three of these leave the journal where the
+/// transaction found it, so what separates them is the caller's REMEDY: a
+/// cleanly-failed transaction may be re-invoked, an unencodable one needs the
+/// record fixed, an over-budget one needs the transaction split. The fourth
+/// may have left a durable un-acked marker that a successor would collide
+/// with on recovery, and has no remedy but to halt.
 #[derive(Debug)]
 pub(crate) enum CommitFail {
     /// The active segment is durably back where this transaction found it: no
     /// frame of it survives — a CLEAN failure, a TRUE no-op (§1). Carries what
-    /// failed, which the caller may surface: the transaction is safe to
-    /// re-invoke.
+    /// failed, which the caller may surface; the remedy is to re-invoke, which
+    /// is safe precisely because no frame survives.
     Clean(io::Error),
     /// The transaction's records could not be turned into frames at all — a
     /// record that refuses to serialize, or a payload past
     /// [`MAX_FRAME_LEN`]. Nothing reached the file, so this is a no-op like
-    /// [`CommitFail::Clean`]; what differs is the answer to "retry?", since
-    /// the refusal is a property of the records and the same records fail the
-    /// same way forever.
+    /// [`CommitFail::Clean`]; what differs is the remedy: the refusal is a
+    /// property of the records, so the record must be fixed — the same
+    /// records fail the same way forever.
     Unencodable(io::Error),
     /// The transaction's whole encoded form — record frames, marker and
     /// headers, [`txn_encoded_len`]'s accounting — exceeds [`MAX_TXN_BYTES`].
@@ -960,7 +966,7 @@ impl PendingTxn {
 /// grows with the journal, and is what a caller bounds by checkpointing.
 ///
 /// Work: the sequential walk is one pass per scanned segment, and
-/// resynchronization is capped at [`RESYNC_BUDGET_PASSES`] more. A segment
+/// resynchronization is bounded at [`RESYNC_BUDGET_PASSES`] more. A segment
 /// that exhausts that budget refuses the scan outright
 /// ([`ScanFail::Unbounded`]) rather than answering with a prefix, so a payload
 /// that plants frame headers costs a bounded scan and a halt rather than an
@@ -1208,8 +1214,8 @@ mod tests {
         let e = push_frame(&mut buf, &over).expect_err("an oversize payload is refused");
         assert_eq!(e.kind(), io::ErrorKind::InvalidData);
         assert!(buf.is_empty(), "a refused frame appends nothing");
-        // And the cap itself is writable, so the refusal is the boundary and
-        // not a fence one short of it.
+        // And the frame cap itself is writable: the refusal begins one past
+        // it, not at it.
         push_frame(&mut buf, &over[..MAX_FRAME_LEN as usize]).unwrap();
         assert!(matches!(parse_frame(&buf, 0), Parsed::Intact { .. }));
     }
@@ -1218,7 +1224,8 @@ mod tests {
     fn txn_size_accounting_matches_the_encoder_to_the_byte() {
         // The accounting stands in for building the frames, so it must match
         // the encoder exactly — pinned at extreme field values, so a codec
-        // change toward value-dependent widths breaks here, not the cap.
+        // change toward value-dependent widths breaks here, not the two
+        // limits this accounting feeds.
         for records in [
             vec![vec![5u8; 3]],
             vec![rec(u64::MAX), vec![7u8; 300], Vec::new()],
@@ -1249,14 +1256,14 @@ mod tests {
             check_txn_size(&over_frame),
             Err(CommitFail::Unencodable(_))
         ));
-        // At the budget exactly: passes — the refusal is the boundary, not a
-        // fence one short of it. One byte past: OverBudget, carrying the size.
-        let at_cap = vec![vec![0u8; (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize]];
-        assert_eq!(txn_encoded_len(&at_cap), MAX_TXN_BYTES);
-        assert!(check_txn_size(&at_cap).is_ok());
-        let mut past_cap = at_cap;
-        past_cap[0].push(0);
-        match check_txn_size(&past_cap) {
+        // At the budget exactly: passes — the refusal begins one past the
+        // budget, not at it. One byte past: OverBudget, carrying the size.
+        let at_budget = vec![vec![0u8; (MAX_TXN_BYTES - txn_encoded_len(&[Vec::new()])) as usize]];
+        assert_eq!(txn_encoded_len(&at_budget), MAX_TXN_BYTES);
+        assert!(check_txn_size(&at_budget).is_ok());
+        let mut past_budget = at_budget;
+        past_budget[0].push(0);
+        match check_txn_size(&past_budget) {
             Err(CommitFail::OverBudget { bytes }) => assert_eq!(bytes, MAX_TXN_BYTES + 1),
             other => panic!("expected OverBudget, got {other:?}"),
         }

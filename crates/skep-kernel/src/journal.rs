@@ -225,19 +225,36 @@ pub(crate) const RECORD_PAYLOAD_OVERHEAD: u64 = 28;
 /// The marker frame's whole encoded size: header (12) plus the tagged
 /// [`Marker`] payload — tag (4), `txn` (8), `last_seq` (8),
 /// `records_checksum` (4). Pinned alongside [`RECORD_PAYLOAD_OVERHEAD`].
-const MARKER_FRAME_LEN: u64 = FRAME_HEADER_LEN as u64 + 24;
+const MARKER_FRAME_LEN: u64 = frame_len(24);
 
-/// What one already-encoded record occupies in the journal: its frame header
-/// plus the payload [`encode_txn`] wraps around it. The ONE spelling of a
-/// record's cost on the WRITE side, so the running charge in
-/// [`Journal::commit_txn`] and the reservation [`encode_txn`] takes from
-/// [`txn_encoded_len`] cannot disagree about what is being built.
+/// What one framed payload occupies in a segment: the header [`push_frame`]
+/// writes, plus the payload it wraps. The outer of the two levels every
+/// figure here is built from.
+const fn frame_len(payload_bytes: u64) -> u64 {
+    (FRAME_HEADER_LEN as u64).saturating_add(payload_bytes)
+}
+
+/// The frame PAYLOAD one already-encoded record occupies: its own bytes plus
+/// what [`encode_txn`] wraps around them ([`RECORD_PAYLOAD_OVERHEAD`]). The
+/// inner level — and the figure [`push_frame`] judges against
+/// [`MAX_FRAME_LEN`], so [`Journal::commit_txn`]'s size gate and that guard
+/// compare one named quantity rather than two spellings of it.
+const fn record_payload_len(record_bytes: usize) -> u64 {
+    RECORD_PAYLOAD_OVERHEAD.saturating_add(record_bytes as u64)
+}
+
+/// What one already-encoded record occupies in the journal: both levels
+/// together. The ONE spelling of a record's cost on the WRITE side, so the
+/// running charge in [`Journal::commit_txn`] and the reservation
+/// [`encode_txn`] takes from [`txn_encoded_len`] cannot disagree about what
+/// is being built.
 ///
 /// A reader has the framed payload rather than the record's own bytes, so
-/// [`PendingTxn`] reaches the same figure by the other route — header plus
-/// framed payload — and the accounting test pins the two equal.
-const fn record_frame_len(payload_bytes: usize) -> u64 {
-    (FRAME_HEADER_LEN as u64 + RECORD_PAYLOAD_OVERHEAD).saturating_add(payload_bytes as u64)
+/// [`PendingTxn`] reaches the same figure by the other route —
+/// [`frame_len`] over what it holds — and the accounting test pins the two
+/// equal.
+const fn record_frame_len(record_bytes: usize) -> u64 {
+    frame_len(record_payload_len(record_bytes))
 }
 
 /// The exact byte length [`encode_txn`] emits for these already-encoded
@@ -267,6 +284,21 @@ enum Parsed {
     Bad { crc_bytes: u64 },
 }
 
+/// Read back the frame [`push_frame`] wrote, at `pos`.
+///
+/// Stated as a pair with [`push_frame`], because the layout and the parse are
+/// one agreement: a change to either that the other does not match makes
+/// every frame of every healthy journal unreadable, which recovery meets as
+/// corruption rather than as the writer/reader skew it is.
+///
+/// Nothing is believed before it is checked, and the ORDER is what makes the
+/// checks mean anything: the header must be present, then carry the sync
+/// word, then claim a `len` inside [`MAX_FRAME_LEN`] that does not overrun
+/// the buffer — and only then is the CRC computed, over the `len` field AND
+/// the payload, so a corrupt length is detected here rather than silently
+/// mis-delimiting the frame that follows (§1). [`Parsed::Intact`] is
+/// therefore what every later stage may trust without re-checking, and
+/// [`Parsed::Bad`]'s `crc_bytes` says which of those doors refused.
 fn parse_frame(buf: &[u8], pos: usize) -> Parsed {
     // The rejections above the CRC cost nothing to reach, so they charge
     // nothing: a candidate is free until its claimed payload is read.
@@ -728,7 +760,7 @@ impl Journal {
             // The closure is the unsizing coercion site: the bare constructor
             // as a function value does not coerce `bincode`'s boxed error.
             let bytes = encode_record(record).map_err(|e| CommitFail::Unencodable(e))?;
-            if bytes.len() as u64 + RECORD_PAYLOAD_OVERHEAD > MAX_FRAME_LEN as u64 {
+            if record_payload_len(bytes.len()) > MAX_FRAME_LEN as u64 {
                 return Err(CommitFail::Unencodable(
                     "record's serialized form exceeds the journal's frame cap".into(),
                 ));
@@ -967,9 +999,9 @@ struct PendingTxn {
     ordered: bool,
     /// What this group's frames would occupy in the journal, accounted to the
     /// same figure [`txn_encoded_len`] gives the write side: seeded with the
-    /// marker frame that will close the group, then charged one frame header
-    /// plus one framed payload per record — which is [`record_frame_len`]
-    /// reached from the bytes a reader actually holds.
+    /// marker frame that will close the group, then charged [`frame_len`] per
+    /// record — which is [`record_frame_len`] reached from the framed payload
+    /// a reader actually holds rather than from the record's own bytes.
     accounted: u64,
     /// Set once [`Self::accounted`] passes [`MAX_TXN_BYTES`]. A group past the
     /// budget is one no writer here can emit — [`Journal::commit_txn`] refuses
@@ -999,17 +1031,15 @@ impl PendingTxn {
 
     /// Take one record frame of this transaction: `payload` is the frame
     /// payload exactly as framed, which is what `records_checksum` covers —
-    /// and what [`record_frame_len`] charges, since a framed payload is the
-    /// record's own bytes plus [`RECORD_PAYLOAD_OVERHEAD`].
+    /// and what [`frame_len`] charges, a framed payload being the inner level
+    /// [`record_payload_len`] gives the write side.
     fn push(&mut self, record: LogRecord, payload: &[u8]) {
         if self.last_seq.is_some_and(|prev| record.seq <= prev) {
             self.ordered = false;
         }
         self.last_seq = Some(record.seq);
         self.checksum = crc32c::crc32c_append(self.checksum, payload);
-        self.accounted = self
-            .accounted
-            .saturating_add(FRAME_HEADER_LEN as u64 + payload.len() as u64);
+        self.accounted = self.accounted.saturating_add(frame_len(payload.len() as u64));
         self.oversize |= self.accounted > MAX_TXN_BYTES;
         if self.ordered && !self.oversize {
             self.records.push((record.seq, record.bytes));
@@ -1094,9 +1124,18 @@ pub(crate) fn scan(segs: &[SegmentMeta], s_load: u64) -> Result<ScanOutcome, Sca
         runs: Vec::new(),
         tail: None,
     };
+    // The scanned-segment index and the BYTE offset just past the last
+    // committed marker's frame — where the tail begins. Resolved to a
+    // `TailCut` once at the end rather than at each committed marker, which
+    // would clone the discard list per commit.
     let mut cut: Option<(usize, u64)> = None;
+    // The first segment this scan did not skip: what the tail resolution
+    // below falls to when no committed marker is found anywhere.
     let mut first_scanned: Option<usize> = None;
     let mut pending: Option<PendingTxn> = None;
+    // A corrupt run has begun and its end is not yet known. The next intact
+    // frame closes it — `RunEnd::landed_on_record` or `landed_on_marker` —
+    // and end-of-journal closes it as `RunEnd::Eof`.
     let mut run_open = false;
     for (seg_index, seg) in segs.iter().enumerate() {
         if inferred_last_seq(segs, seg_index).is_some_and(|last| last <= s_load) {

@@ -119,6 +119,11 @@ impl<W: WorldState> Staging<W> {
     /// Fold `record` into `working` and append it to the txn's records. Stage
     /// your store's OWN record type lifted via `.into()` — never the central
     /// `Record` (composition contract).
+    ///
+    /// This is where [`WorldState::apply`] runs on the write path: once per
+    /// staged record, inside the [`Kernel::transact`] closure and therefore
+    /// on the applier lock's critical section — which is why a composite's
+    /// record count is a cost that method's TRANSACTION BUDGET accounts for.
     pub fn push(&mut self, record: W::Record) {
         self.working = self.working.apply(&record);
         self.records.push(record);
@@ -615,19 +620,26 @@ impl<W: WorldState> Kernel<W> {
     /// TRANSACTION BUDGET — one transaction's encoded form is bounded by
     /// [`crate::MAX_TXN_BYTES`], and a transaction past it is REFUSED with
     /// [`TxnError::OverBudget`], in both durability modes, before the journal
-    /// is touched. The budget bounds three
-    /// costs that scale with a transaction's size, the first two transient
-    /// and the third durable: the whole transaction is serialized under the
-    /// applier lock, so every other writer in the process waits behind it;
-    /// its serialized bytes live twice for the length of the commit region,
-    /// once as records and once as the frames they become; and — because a
-    /// transaction never spans a segment — the segment holding it is at
-    /// least that large, and recovery reads a segment WHOLE, so the budget
-    /// is what keeps the memory floor of every later `open()` and every
-    /// [`Kernel::world_at`] bounded, and identical on every replica. A
-    /// composite too large for the budget is split by the caller; atomicity
-    /// of the split is then the caller's, as it already is for every
-    /// multi-`transact` batch (ASN-0134 A5).
+    /// is touched. The budget bounds four costs, the first three transient
+    /// and the fourth durable. Three scale with a transaction's BYTES: the
+    /// whole transaction is serialized under the applier lock, so every other
+    /// writer in the process waits behind it; its serialized bytes live twice
+    /// for the length of the commit region, once as records and once as the
+    /// frames they become; and — because a transaction never spans a segment
+    /// — the segment holding it is at least that large, and recovery reads a
+    /// segment WHOLE, so the budget is what keeps the memory floor of every
+    /// later `open()` and every [`Kernel::world_at`] bounded, and identical
+    /// on every replica. The fourth scales with the record COUNT instead:
+    /// [`Staging::push`] folds each staged record through
+    /// [`WorldState::apply`], which builds a new world per record, and it
+    /// runs inside `f` and therefore on that same critical section — so a
+    /// composite of `m` records costs `m` folds of `W` there, over and above
+    /// the one clone every transaction pays. The budget bounds `m` only at
+    /// [`crate::MAX_TXN_BYTES`] over the 40 journal bytes a record occupies
+    /// at minimum — over a million and a half — so a caller batching small
+    /// records is choosing that figure rather than inheriting one from here. A composite too large for the budget is split by the caller;
+    /// atomicity of the split is then the caller's, as it already is for
+    /// every multi-`transact` batch (ASN-0134 A5).
     ///
     /// Under the v1 single applier the global lock subsumes `keys` (§4):
     /// callers still pass the keys they would need under the deferred per-key

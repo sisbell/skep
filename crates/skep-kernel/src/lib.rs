@@ -162,6 +162,14 @@ pub trait WorldState: Clone + Serialize + DeserializeOwned + Send + Sync + 'stat
     /// — recovery applies each committed record exactly once (the checkpoint
     /// embodies `Seq ≤ S_load`, replay covers `S_load < Seq ≤ W`; §6/§7).
     ///
+    /// WHERE IT RUNS — once per [`Staging::push`], inside the
+    /// [`Kernel::transact`] closure and therefore on the applier lock's
+    /// critical section, and once per replayed record at [`Kernel::open`] and
+    /// [`Kernel::world_at`]. So it must be cheap for the reason `Clone` must
+    /// be: a fold that copies the world builds one copy per record, and on
+    /// the commit path it does so with every other writer in the process
+    /// waiting.
+    ///
     /// [`Record`]: WorldState::Record
     ///
     /// [`rebuild_derived`]: WorldState::rebuild_derived

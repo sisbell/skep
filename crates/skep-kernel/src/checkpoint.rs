@@ -32,6 +32,10 @@ impl CheckpointMeta {
     /// checksum / name-header seq mismatch — the caller falls back to the
     /// next-older retained checkpoint, then genesis-while-reachable (§6/§7).
     ///
+    /// The header this splits at [`HEADER_LEN`] is the one [`fn@write`]
+    /// appends, field for field; see there for what a drifted half costs,
+    /// which is every retained base at once and no signal that it happened.
+    ///
     /// The name-versus-header cross-check compares two independent sources,
     /// which is what makes it a check rather than a tautology: the seq comes
     /// from the directory entry, the header from the bytes.
@@ -143,6 +147,14 @@ impl From<io::Error> for WriteFail {
 /// authoritative state need survive the round trip — a world may
 /// `#[serde(skip)]` its derived hints and reseed them through
 /// [`crate::WorldState::rebuild_derived`] at load (§6/§7).
+///
+/// Stated as a pair with [`CheckpointMeta::load`], which splits the header
+/// this builds at [`HEADER_LEN`], because the layout and the split are one
+/// agreement: a field appended here without that constant moving with it
+/// leaves `body_len` disagreeing with the body, and EVERY retained base is
+/// then unloadable — recovery falls silently to genesis where it is
+/// reachable, and refuses with `BadCheckpoint` where it is not. The layout
+/// test is what pins the two together.
 ///
 /// CALLER OBLIGATION — this builds through the FIXED `checkpoint.tmp` in
 /// `dir`, so calls against one directory must be serialized by the caller.

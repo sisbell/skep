@@ -7,8 +7,8 @@
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
 use skep_address::{
-    checked_inc, inc, is_prefix, ordinal, parent, shift, validate, zeros, Address, GateViolation,
-    Level, Nat, Tumbler,
+    checked_inc, inc, is_prefix, ordinal, parent, shift, validate, Address, GateViolation, Level,
+    Nat, Tumbler,
 };
 use skep_kernel::{LockKey, Space};
 
@@ -47,9 +47,9 @@ pub(crate) struct Principal {
 /// `parent` is a bare `Tumbler` rather than an `Address` because the content
 /// and link anchors are `inc(d, 2)` and `inc(b_C(d), 0)`, which M1 returns as
 /// tumblers: T4-validity is established once, at [`M3State::next_in`], rather
-/// than at each of the four anchor constructors.
+/// than at each of the anchor constructors.
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NsKey {
+pub(crate) struct NsKey {
     parent: Tumbler,
     g: u8, // 1 | 2
 }
@@ -62,7 +62,7 @@ pub struct NsKey {
 /// still journals as a bare, flat tumbler, exactly as the data model
 /// prescribes. One `Allocate` variant suffices for every minted address
 /// (entity, content, link) because the frontier map is uniform; the level
-/// distinction is recovered at *query* time from `zeros`.
+/// distinction is recovered at *query* time from the address's own level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum M3Rec {
     /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
@@ -132,18 +132,18 @@ pub(crate) fn bootstrap_root() -> Address {
     validate(root).expect("the bootstrap root [1] is T4-valid")
 }
 
-/// The `zeros` count of an account-tier prefix `N·0·U` (O1a): what `delegate`
-/// admits, what [`M3State::next_account_prefix`] peeks, and the floor of the
-/// ω candidate walk.
-pub(crate) const ACCOUNT_ZEROS: usize = 1;
-
-/// THE chain-family rule: the generator carrying an anchor at `anchor_zeros`
-/// to a child at `child_zeros` — `g = 1` extends the anchor's own field,
-/// `g = 2` opens the next one. Every `NsKey`'s `g` comes from here, and this
-/// is what keeps the document chain `(A, 2)` and the version chain `(d, 1)`
-/// on separate frontiers (ASN-0123 VD).
-fn generator(anchor_zeros: usize, child_zeros: usize) -> u8 {
-    if anchor_zeros == child_zeros {
+/// THE chain-family rule: the generator carrying an anchor at one tier to a
+/// child at another — `g = 1` extends the anchor's own field, `g = 2` opens
+/// the next one. Every `NsKey`'s `g` comes from here, and this is what keeps
+/// the document chain `(A, 2)` and the version chain `(d, 1)` on separate
+/// frontiers (ASN-0123 VD).
+///
+/// Both arguments are M1 [`Level`]s — the vocabulary the corpus states the
+/// tiers in, and the answer an [`Address`] already carries, so the rule that
+/// decides which frontier a mint lands on is never spelled in the encoding's
+/// numerals.
+fn generator(anchor: Level, child: Level) -> u8 {
+    if anchor == child {
         1
     } else {
         2
@@ -161,25 +161,32 @@ fn generator(anchor_zeros: usize, child_zeros: usize) -> u8 {
 /// for its chain range probe, the fold for its frontier advance — so the
 /// checked key, the locked key, and the key a staged `Allocate` advances are
 /// one and the same key by construction (§1/§2/§6). Anchor-side keys come from
-/// the `*_ns` family below; both sides take their `g` from [`generator`].
-/// Callers that hold a ≥ 2-component address by their own gate discharge the
-/// `None` case with an `expect` that names that gate.
+/// the `*_ns` family below — [`account_ns`] is the twin this derivation meets,
+/// since `delegate` checks next-form through here against the value
+/// [`M3State::next_account_prefix`] peeked through there; both sides take
+/// their `g` from [`generator`]. Callers that hold a ≥ 2-component address by
+/// their own gate discharge the `None` case with an `expect` that names that
+/// gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
-    let g = generator(zeros(par.tumbler()), zeros(a.tumbler()));
+    let g = generator(par.level(), a.level());
     Some(NsKey { parent: par.tumbler().clone(), g })
 }
 
-// The four namespace helpers — the ONE code path each mint and each
-// `*_lock_key` reuses (§1/§3). The subspace identifier is the element-field's
-// FIRST component (`s_C = 1`, `s_L = 2`), read via M1's `subspace()` — NOT the
-// `.0.` separator (the corpus-wide misread to guard against); `s_C ≠ s_L` is
-// what makes content and link address spaces disjoint by construction
-// (SD/L14, T7).
+// The namespace helpers — the ONE code path each mint, each `*_lock_key` and
+// the account peek reuse (§1/§3). The subspace identifier is the
+// element-field's FIRST component, and M1 names both numerals:
+// `content_subspace()` = 1, `link_subspace()` = 2. It is NEVER the `.0.`
+// separator (the corpus-wide misread to guard against); `s_C ≠ s_L` is what
+// makes content and link address spaces disjoint by construction (SD/L14,
+// T7). The two element-field constructors reach those bases by M1 arithmetic
+// rather than by naming a subspace: `inc(d, 2)` opens the element field at
+// `s_C`, and `inc(b_C(d), 0)` steps it on to `s_L`.
 //
-// Each family's `g` is `generator` evaluated at that family's FIXED tier pair
-// — content 3 → 3, link 3 → 3, version 2 → 2, document 1 → 2 — so the literals
-// below and the chain-family rule cannot drift apart unnoticed.
+// Each fixed family's `g` is `generator` evaluated at that family's FIXED tier
+// pair — content Element → Element, link Element → Element, version Document →
+// Document, document Account → Document — so the literals below and the
+// chain-family rule cannot drift apart unnoticed.
 fn content_ns(d: &Address) -> NsKey {
     NsKey { parent: inc(d.tumbler(), 2), g: 1 } // b_C(d) = inc(d, 2)
 }
@@ -191,6 +198,18 @@ fn version_ns(s: &Address) -> NsKey {
 }
 fn document_ns(a: &Address) -> NsKey {
     NsKey { parent: a.tumbler().clone(), g: 2 } // (account, 2)
+}
+
+/// `A_account(N)` and the sub-account family: the account chain under
+/// `parent` — `(N, 2)` under a node, `(A, 1)` under an account (the sixth
+/// family ASN-0042 licenses — Conflicts §8). The one family whose `g` is not
+/// fixed: the target is account-tier by definition, so the chain-family rule
+/// picks.
+fn account_ns(parent: &Address) -> NsKey {
+    NsKey {
+        parent: parent.tumbler().clone(),
+        g: generator(parent.level(), Level::Account),
+    }
 }
 
 // The three key domains M3 serializes on — namespace frontiers, THE principal
@@ -220,10 +239,10 @@ pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
     LockKey::new(Space::Namespace, &b)
 }
 
-/// `a`'s T4-valid, `zeros ≤ 1` prefixes, LONGEST FIRST (O1a) — the ω
-/// candidate walk (§5). FREE function — pure, consults no state. For each
+/// `a`'s T4-valid node- and account-tier prefixes, LONGEST FIRST (O1a) — the
+/// ω candidate walk (§5). FREE function — pure, consults no state. For each
 /// prefix length from `#a` down to 1, reconstruct the prefix and keep it iff
-/// T4-valid ∧ zeros ≤ [`ACCOUNT_ZEROS`]: `validate` drops the
+/// it is T4-valid and of a tier a principal may hold: `validate` drops the
 /// trailing-separator lengths (`N·0`, non-T4) and the tier filter caps the
 /// walk at the account field — leaving exactly the account-tier
 /// (`N·0·U[..j]`) then node-tier (`N[..i]`) prefixes. Every account-tier
@@ -234,7 +253,7 @@ fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Address> + '_ {
         let p = Tumbler::new(a.tumbler().iter().take(plen).cloned()).ok()?;
         validate(p)
             .ok()
-            .filter(|ad| zeros(ad.tumbler()) <= ACCOUNT_ZEROS)
+            .filter(|ad| matches!(ad.level(), Level::Node | Level::Account))
     })
 }
 
@@ -421,7 +440,7 @@ impl M3State {
     /// kept SEPARATE from the document chain (ASN-0123). [M5: owned
     /// CREATENEWVERSION]
     pub fn mint_version(&self, source: &Address) -> Result<(Address, M3Rec), MintError> {
-        if self.entity_level(source) != Some(Level::Document) {
+        if !self.is_registered_document(source) {
             // V-WF: registered Document (covers unregistered AND non-document).
             return Err(MintError::SourceNotRegistered);
         }
@@ -446,13 +465,15 @@ impl M3State {
 // ---------------------------------------------------------------------------
 
 impl M3State {
-    /// The §2 decompose-and-range check, shared by [`M3State::entity_level`]
-    /// and [`M3State::is_allocated`]. Membership-correctness invariant: for
-    /// T4-valid `a`, `a` is *exactly* `c_{ordinal(a)}` of its decomposed
-    /// `(parent, g)` namespace (ASN-0040 `S(p, d)` canonical form; T4b
-    /// unique-parse), so `a ∈ {c₁..cₘ}` iff `1 ≤ ordinal(a) ≤ m` — genuine
-    /// chain membership with NO false positives, not an approximation.
-    fn in_chain_range(&self, a: &Address) -> bool {
+    /// Is `a` a member of its own chain? The §2 decision behind
+    /// [`M3State::is_allocated`] (and so behind [`M3State::entity_level`]),
+    /// settled by decomposing and comparing against the frontier.
+    /// Membership-correctness invariant: for T4-valid `a`, `a` is *exactly*
+    /// `c_{ordinal(a)}` of its decomposed `(parent, g)` namespace (ASN-0040
+    /// `S(p, d)` canonical form; T4b unique-parse), so `a ∈ {c₁..cₘ}` iff
+    /// `1 ≤ ordinal(a) ≤ m` — genuine chain membership with NO false
+    /// positives, not an approximation.
+    fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
@@ -461,9 +482,12 @@ impl M3State {
         n >= &Nat::one() && n <= &m
     }
 
-    /// `true` iff `a` is minted in ANY namespace, content/link included (the
-    /// referential-integrity oracle M5's COPY depends on — §2). Ghost
-    /// principle (B3): reflects *minting*, never byte-presence — a
+    /// `true` iff `a` exists in the name space — minted on a frontier in ANY
+    /// namespace, content/link included, or, for a node, admitted by
+    /// `register_node` (node addresses are never minted here — ASN-0047
+    /// NodeBaptism originates them outside the docuverse). The
+    /// referential-integrity oracle M5's COPY depends on (§2). Ghost
+    /// principle (B3): reflects *allocation*, never byte-presence — a
     /// registered-empty document is a valid, addressable ghost; content
     /// existence is M4's separate axis. E is append-only, so a `true` answer
     /// is permanent (B0/P1).
@@ -472,9 +496,9 @@ impl M3State {
             Level::Node => self.nodes.contains(a),
             // The general decompose-and-compare over ALL non-node levels
             // (incl. Element): a content/link element [d.0.s.n] has parent
-            // b_C(d)/b_L(d) at the SAME zeros, so g = 1 and the key is its
+            // b_C(d)/b_L(d) at the SAME tier, so g = 1 and the key is its
             // TRUE content/link namespace.
-            Level::Account | Level::Document | Level::Element => self.in_chain_range(a),
+            Level::Account | Level::Document | Level::Element => self.is_chain_member(a),
         }
     }
 
@@ -554,15 +578,8 @@ impl M3State {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;
         }
-        // The target is account-tier by definition, so the chain-family rule
-        // picks the node ⇒ `(parent, 2)` account chain or the account ⇒
-        // `(parent, 1)` sub-account chain (Conflicts §8).
-        let key = NsKey {
-            parent: parent.tumbler().clone(),
-            g: generator(zeros(parent.tumbler()), ACCOUNT_ZEROS),
-        };
         Some(
-            self.next_in(&key)
+            self.next_in(&account_ns(parent))
                 .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
         )
     }

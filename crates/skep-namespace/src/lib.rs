@@ -7,6 +7,11 @@
 //! minting authority and the single arbiter of the entity/principal sets —
 //! it owns **identity, not content**.
 //!
+//! Two senses, kept apart throughout: the **name space** M3 owns (this
+//! module; the [`Namespace`] handle), and a **namespace** — ASN-0040's
+//! `(anchor, g)`: one chain, one frontier, one lock (the `Ns`-named
+//! internals, and every `*_lock_key` constructor below).
+//!
 //! Three surfaces (§Public interface):
 //!
 //! * **Frontier allocation** (§A) — pure, composable mints

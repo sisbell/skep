@@ -9,11 +9,11 @@
 
 use std::sync::Arc;
 
-use skep_address::{parent, validate, zeros, Address, Level, Tumbler};
+use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
-use crate::state::{bootstrap_root, namespace_of, ns_lock_key, ACCOUNT_ZEROS};
+use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
 use crate::{HasM3, M3Rec, M3State, PrincipalId};
 
 /// M3's transact-driving op handle over M2 (§B): a thin wrapper holding the
@@ -109,13 +109,13 @@ where
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
         // only after it are parent()/namespace_of() total on new_prefix.
         let np = validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
-        if zeros(np.tumbler()) != ACCOUNT_ZEROS {
+        if np.level() != Level::Account {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
         // One NsKey serves the held lock, the next-form check, and the
         // staged Allocate — the same key by construction (§1/§6).
         let ns = namespace_of(&np)
-            .expect("zeros == 1 (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
+            .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         let keys = [ns_lock_key(&ns), M3State::principals_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             let base = stg.base().m3();
@@ -151,7 +151,7 @@ where
             // P8: the new account's parent is a registered entity [monotone
             // — E append-only; grouped here to keep one evaluation site].
             let par =
-                parent(&np).expect("zeros == 1 (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
+                parent(&np).expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
             if base.entity_level(&par).is_none() {
                 return Err(DelegateError::ParentNotRegistered);
             }

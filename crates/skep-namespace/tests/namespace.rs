@@ -11,7 +11,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use skep_address::{validate, Address, Level, Nat, Tumbler};
+use skep_address::{
+    content_subspace, link_subspace, validate, Address, Level, Nat, Tumbler,
+};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
 };
@@ -148,7 +150,7 @@ fn pure_mints_advance_the_documented_chains() {
     // mint_content: namespace (b_C(d), 1), element field [s_C = 1, m+1] (§3).
     let (c1, rec) = m3.mint_content(&doc).expect("content mint");
     assert_eq!(c1, a(&[1, 0, 1, 0, 1, 0, 1, 1]));
-    assert_eq!(c1.subspace(), Some(&Nat::from(1u32)));
+    assert_eq!(c1.subspace(), Some(&content_subspace()));
     // The mint hands back exactly the Allocate for the minted address —
     // whole value, variant and payload alike.
     assert_eq!(rec, M3Rec::Allocate { addr: c1.clone() });
@@ -160,7 +162,7 @@ fn pure_mints_advance_the_documented_chains() {
     // spaces disjoint by construction (SD/L14, T7).
     let (l1, _) = m3.mint_link(&doc).expect("link mint");
     assert_eq!(l1, a(&[1, 0, 1, 0, 1, 0, 2, 1]));
-    assert_eq!(l1.subspace(), Some(&Nat::from(2u32)));
+    assert_eq!(l1.subspace(), Some(&link_subspace()));
 
     // mint_version: namespace (d, 1) — the version chain, SEPARATE from the
     // document chain (ASN-0123 VD).
@@ -204,20 +206,20 @@ fn mint_preconditions_reject_structurally() {
     let (k, _ns, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    let ghost_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
-    let ghost_acct = a(&[1, 0, 9]); // account-level, never registered
+    let unregistered_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
+    let unregistered_acct = a(&[1, 0, 9]); // account-level, never registered
 
     // P6/C2/L1a: content/link home must be a REGISTERED Document.
-    assert_eq!(m3.mint_content(&ghost_doc).unwrap_err(), MintError::HomeNotRegistered);
-    assert_eq!(m3.mint_link(&ghost_doc).unwrap_err(), MintError::HomeNotRegistered);
+    assert_eq!(m3.mint_content(&unregistered_doc).unwrap_err(), MintError::HomeNotRegistered);
+    assert_eq!(m3.mint_link(&unregistered_doc).unwrap_err(), MintError::HomeNotRegistered);
     assert_eq!(m3.mint_content(&acct).unwrap_err(), MintError::HomeNotRegistered);
     // V-WF: version source must be a registered Document — covers an
     // unregistered address AND a registered non-document alike.
-    assert_eq!(m3.mint_version(&ghost_doc).unwrap_err(), MintError::SourceNotRegistered);
+    assert_eq!(m3.mint_version(&unregistered_doc).unwrap_err(), MintError::SourceNotRegistered);
     assert_eq!(m3.mint_version(&acct).unwrap_err(), MintError::SourceNotRegistered);
     // P8/CND.pre: document target must be a registered Account — covers
     // unregistered AND non-account (document, node) alike.
-    assert_eq!(m3.mint_document(&ghost_acct).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(m3.mint_document(&unregistered_acct).unwrap_err(), MintError::NotAnAccount);
     assert_eq!(m3.mint_document(&doc).unwrap_err(), MintError::NotAnAccount);
     assert_eq!(m3.mint_document(&a(&[1])).unwrap_err(), MintError::NotAnAccount);
 }

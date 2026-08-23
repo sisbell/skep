@@ -196,8 +196,8 @@ where
     ///
     /// The depth guard is a resource refusal, not a shape one: this is the
     /// single path by which bytes a caller chose enter a permanent,
-    /// uncompressed registry, and the op takes no `caller`, so ω cannot gate
-    /// it here — the SIZE of an entry is what M3 can bound, and it does.
+    /// uncompressed node registry, and the op takes no `caller`, so ω cannot
+    /// gate it here — the SIZE of an entry is what M3 can bound, and it does.
     /// How MANY admissions a session may make is the daemon's.
     pub fn register_node(&self, addr: Tumbler) -> Result<(Address, Seq), TxnError<NodeError>> {
         // Pre-work (§7): the state-free half of the guard order.

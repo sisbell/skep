@@ -144,7 +144,8 @@ impl TryFrom<u8> for Generator {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "M3RecShadow")]
 pub enum M3Rec {
-    /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
+    /// A mint's COMMIT HALF: advance `frontiers[namespace_of(addr)]` (§1) —
+    /// this record is the only thing that moves a frontier. The `(parent, g)`
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
     /// held — frontier key and lock key are the same key.
     Allocate { addr: Address },
@@ -169,9 +170,10 @@ pub enum M3Rec {
 ///
 /// A per-record door carries per-record facts and no others. The standing
 /// property `RegisterPrincipal` would want — id-injectivity across Π — is not
-/// one: it is a claim about the registry the record is about to enter, which
-/// no decoder holding a single frame can settle. That invariant has one
-/// owner, `delegate`'s `DuplicateId` gate, and this door does not share it.
+/// one: it is a claim about the principal registry the record is about to
+/// enter, which no decoder holding a single frame can settle. That invariant
+/// has one owner, `delegate`'s `DuplicateId` gate, and this door does not
+/// share it.
 #[derive(Deserialize)]
 enum M3RecShadow {
     Allocate { addr: Address },
@@ -222,20 +224,27 @@ impl TryFrom<M3RecShadow> for M3Rec {
 /// hashing the encoding.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct M3State {
-    /// THE registry, in B1+B2 compressed form. A namespace's entire realized
-    /// set `{c₁..cₘ}` IS the single count `m` — a gap is literally
-    /// unrepresentable (B1 free). Covers every chain: accounts, documents,
-    /// versions, content, links. Values are big-ints (B9 unbounded). A
-    /// `HashMap` because mint and membership are *point* lookups on one
-    /// namespace; namespaces are never iterated, so order is not paid for.
+    /// THE baptismal registry (ASN-0040 B), in B1+B2 compressed form. A
+    /// namespace's entire realized set `{c₁..cₘ}` IS the single count `m` — a
+    /// gap is literally unrepresentable (B1 free). Covers every chain:
+    /// accounts, documents, versions, content, links. Values are big-ints (B9
+    /// unbounded). A `HashMap` because mint and membership are *point* lookups
+    /// on one namespace; namespaces are never iterated, so order is not paid
+    /// for.
+    ///
+    /// Not the entity registry E (ASN-0047): E is this map's below-element
+    /// part TOGETHER WITH `nodes`, which is the pair
+    /// [`M3State::is_allocated`] dispatches over and
+    /// [`M3State::entity_level`] then filters by tier.
     frontiers: im::HashMap<NsKey, Nat>,
 
-    /// Node addresses (zeros = 0). Externally minted (ASN-0047 NodeBaptism —
-    /// provisioning mints node addresses OUTSIDE the docuverse), so possibly
-    /// non-contiguous → held explicitly, not frontier-encoded. M3 SUPPRESSES
-    /// ASN-0040's `baptize(node, 1)` child-node capability (Conflicts §7):
-    /// internal minting never yields a zeros = 0 address; ongoing admission is
-    /// `register_node`, never baptism. Seeded `{[1]}`.
+    /// The node registry. Node addresses (zeros = 0), externally minted
+    /// (ASN-0047 NodeBaptism — provisioning mints node addresses OUTSIDE the
+    /// docuverse), so possibly non-contiguous → held explicitly, not
+    /// frontier-encoded. M3 SUPPRESSES ASN-0040's `baptize(node, 1)`
+    /// child-node capability (Conflicts §7): internal minting never yields a
+    /// zeros = 0 address; ongoing admission is `register_node`, never
+    /// ASN-0040 baptism. Seeded `{[1]}`.
     nodes: im::OrdSet<Address>,
 
     /// Principal registry Π: ownership prefix ↦ opaque id. The prefix is the
@@ -275,7 +284,7 @@ pub struct M3State {
 /// The cap on a registered node address's component count, enforced by
 /// [`crate::Namespace::register_node`] ([`crate::NodeError::TooDeep`]; §7).
 ///
-/// `nodes` is the ONE registry the frontier cannot compress: a namespace's
+/// `nodes` is the one registry M3 cannot keep in frontier form: a namespace's
 /// realized set is a single count, but node addresses originate outside the
 /// docuverse (ASN-0047 NodeBaptism) and may be non-contiguous, so each is
 /// stored WHOLE, permanently (B0 — there is no deletion), and re-serialized
@@ -465,8 +474,8 @@ impl M3State {
     /// deliberate rather than missing. Id-injectivity — one id ↦ at most one
     /// principal — is a PRODUCER invariant, owned by `delegate`'s
     /// `DuplicateId` gate alone; the fold neither re-checks nor re-establishes
-    /// it, and could not, since the property is about the whole registry and a
-    /// fold arm sees one record. What rests on it is
+    /// it, and could not, since the property is about the whole principal
+    /// registry and a fold arm sees one record. What rests on it is
     /// [`M3State::principal_prefix`]'s single-valuedness, and through it
     /// `fork`'s account and M5's cross-owner VERSION target: a
     /// `RegisterPrincipal` from any producer but `delegate` would seat a
@@ -553,10 +562,11 @@ impl M3State {
 
     /// Content-chain `LockKey`: `(b_C(home), 1)` (§1/§3). Pairs with
     /// [`M3State::mint_content`]`(home)` — take it for `transact`'s `keys`
-    /// BEFORE the closure, and the mint inside advances this same key. Never a
-    /// coarser `(home_doc, g)` key: the three g = 1 chains under one document
-    /// — content `(b_C(d), 1)`, link `(b_L(d), 1)`, version `(d, 1)` — get
-    /// three DISTINCT locks (B7/B8).
+    /// BEFORE the closure; the mint inside READS this key's frontier, and the
+    /// [`M3Rec`] you stage ADVANCES it. Never a coarser `(home_doc, g)` key:
+    /// the three g = 1 chains under one document — content `(b_C(d), 1)`,
+    /// link `(b_L(d), 1)`, version `(d, 1)` — get three DISTINCT locks
+    /// (B7/B8).
     ///
     /// Total on every [`Address`], and the caller's one obligation is to pass
     /// the SAME `home` the paired mint receives. A `home` below the document
@@ -568,9 +578,10 @@ impl M3State {
     }
 
     /// Link-chain `LockKey`: `(b_L(home), 1)` (§1/§3). Pairs with
-    /// [`M3State::mint_link`]`(home)` — take it BEFORE the closure, and the
-    /// mint inside advances this same key. Same obligation and same latitude
-    /// as [`M3State::content_lock_key`]: pass the mint's own `home`, and a
+    /// [`M3State::mint_link`]`(home)` — take it BEFORE the closure; the mint
+    /// inside READS this key's frontier, and the [`M3Rec`] you stage ADVANCES
+    /// it. Same obligation and same latitude as
+    /// [`M3State::content_lock_key`]: pass the mint's own `home`, and a
     /// wrong-tier one costs only the key's own T4-validity, which nothing
     /// reads.
     pub fn link_lock_key(home: &Address) -> LockKey {
@@ -579,15 +590,17 @@ impl M3State {
 
     /// Version-chain `LockKey`: `(source, 1)` — SEPARATE from the document
     /// chain below (ASN-0123 VD). Pairs with
-    /// [`M3State::mint_version`]`(source)` — take it BEFORE the closure, and
-    /// the mint inside advances this same key.
+    /// [`M3State::mint_version`]`(source)` — take it BEFORE the closure; the
+    /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
+    /// ADVANCES it.
     pub fn version_lock_key(source: &Address) -> LockKey {
         ns_lock_key(&version_ns(source))
     }
 
     /// Document-chain `LockKey`: `(account, 2)`. Pairs with
-    /// [`M3State::mint_document`]`(account)` — take it BEFORE the closure, and
-    /// the mint inside advances this same key.
+    /// [`M3State::mint_document`]`(account)` — take it BEFORE the closure; the
+    /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
+    /// ADVANCES it.
     pub fn document_lock_key(account: &Address) -> LockKey {
         ns_lock_key(&document_ns(account))
     }
@@ -595,9 +608,10 @@ impl M3State {
     /// Account-chain `LockKey`: `(parent, 2)` under a node, `(parent, 1)`
     /// under an account — the one family whose `g` the chain-family rule
     /// picks (Conflicts §8). Pairs with [`M3State::mint_account`]`(parent)`
-    /// — take it BEFORE the closure, and the mint inside advances this same
-    /// key. `pub(crate)` for the reason the mint is: `delegate` is the only
-    /// caller and lives in this crate.
+    /// — take it BEFORE the closure; the mint inside READS this key's
+    /// frontier, and the [`M3Rec`] you stage ADVANCES it. `pub(crate)` for
+    /// the reason the mint is: `delegate` is the only caller and lives in
+    /// this crate.
     pub(crate) fn account_lock_key(parent: &Address) -> LockKey {
         ns_lock_key(&account_ns(parent))
     }
@@ -1032,7 +1046,7 @@ mod tests {
     /// REUSE an address. Checked at two ordinals per chain, because every
     /// member of a chain must derive the same key or the frontier forks.
     #[test]
-    fn each_chains_minted_addresses_derive_the_key_their_mint_advances() {
+    fn each_chains_minted_addresses_advance_the_key_their_mint_read() {
         let node = a(&[1]);
         let acct = a(&[1, 0, 1]);
         let doc = a(&[1, 0, 1, 0, 1]);
@@ -1082,7 +1096,7 @@ mod tests {
             }
         }
         // The key constructors are that same encoding, so a caller's key
-        // and the frontier its mint advances are one value — the account
+        // and the frontier its mint reads are one value — the account
         // chain included, whose lock `delegate` takes and whose frontier
         // `mint_account` reads.
         assert_eq!(

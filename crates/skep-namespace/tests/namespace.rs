@@ -180,7 +180,7 @@ fn the_slice_prints_its_three_registries_and_their_contents() {
 // ---- §A frontier mints ----
 
 #[test]
-fn pure_mints_advance_the_documented_chains() {
+fn pure_mints_answer_the_next_address_on_each_documented_chain() {
     let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
@@ -488,7 +488,7 @@ fn membership_is_exact_chain_membership() {
 // ---- §A lock keys ----
 
 #[test]
-fn lock_keys_distinguish_every_chain_and_registry() {
+fn lock_keys_distinguish_every_chain_and_key_domain() {
     let acct = a(&[1, 0, 1]);
     let doc = a(&[1, 0, 1, 0, 1]);
     // The three g=1 chains under ONE document — content (b_C(d),1), link
@@ -664,14 +664,14 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
 }
 
 #[test]
-fn the_registry_answers_one_prefix_per_principal_in_both_directions() {
-    // §5: a principal's prefix is the registry's KEY and is filed nowhere
-    // else, so the prefix it is seated at — what ω arbitrates by — and the
-    // prefix it is reported at — what `principal_prefix` answers, and what
-    // `fork` then creates a document under — are one value. id → prefix → ω →
-    // id is therefore the identity on Π. A registry that filed the prefix
-    // twice could disagree with itself, and would fail OPEN: a document
-    // minted under the wrong account.
+fn the_principal_registry_answers_one_prefix_per_principal_in_both_directions() {
+    // §5: a principal's prefix is the principal registry's KEY and is filed
+    // nowhere else, so the prefix it is seated at — what ω arbitrates by —
+    // and the prefix it is reported at — what `principal_prefix` answers, and
+    // what `fork` then creates a document under — are one value.
+    // id → prefix → ω → id is therefore the identity on Π. A registry that
+    // filed the prefix twice could disagree with itself, and would fail OPEN:
+    // a document minted under the wrong account.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
@@ -740,7 +740,7 @@ fn omega_cost_does_not_follow_the_probes_depth() {
 // ---- §B delegate ----
 
 #[test]
-fn delegate_mints_account_and_principal_atomically() {
+fn delegate_mints_the_account_and_registers_its_principal_atomically() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
@@ -1087,8 +1087,8 @@ fn register_node_validates_and_admits_supplied_addresses() {
         rejected(ns.register_node(t(&[1, 7, 0, 1]))),
         NodeError::NotNode
     );
-    // TooDeep — `nodes` is the ONE registry the frontier cannot compress, so
-    // an entry's SIZE is refused rather than stored. The probe is otherwise
+    // TooDeep — `nodes` is the one registry M3 cannot keep in frontier form,
+    // so an entry's SIZE is refused rather than stored. The probe is otherwise
     // impeccable — node-level, fresh, bootstrap-descended — so depth is the
     // only guard that can be refusing it.
     let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
@@ -1304,7 +1304,7 @@ fn journaled_types_survive_serde_round_trips() {
 }
 
 #[test]
-fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
+fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
     // M3 rides M2 (§8): its slice is restored verbatim from the loaded
     // checkpoint, then advanced by replaying post-checkpoint M3Recs (default
     // rebuild_derived — nothing to re-seed).

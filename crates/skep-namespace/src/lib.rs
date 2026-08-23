@@ -20,7 +20,10 @@
 //!   M5/M7 composites, each returning the minted address plus the one
 //!   [`M3Rec`] the caller stages, with the matching `*_lock_key`
 //!   constructor for M2 `transact`'s `keys` \[ASN-0040 B1/B2/B6–B10,
-//!   ASN-0123 VD\].
+//!   ASN-0123 VD\]. The sixth chain family, the account chain, is minted
+//!   internally by [`Namespace::delegate`] — the only op that allocates
+//!   one — and its next value is published as the peek
+//!   [`M3State::next_account_prefix`].
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
 //!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],

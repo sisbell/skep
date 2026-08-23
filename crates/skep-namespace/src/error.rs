@@ -69,8 +69,14 @@ impl Error for MintError {
 /// the order by reducing to `create_new_document`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateDocumentError {
-    /// Caller is not the effective owner ω of the target (O5) — authorization
-    /// is by ω (longest match), never bare prefix containment.
+    /// Refused for want of effective ownership ω (O5) — authorization is by
+    /// ω (longest match), never bare prefix containment. The two producers
+    /// refuse for two different reasons and the message says which: from
+    /// `create_new_document`, ω(`account`) is absent or names another
+    /// principal; from `fork`, which has no target address, the caller's id
+    /// names no principal at all, so it is the effective owner of nothing —
+    /// and the remedy there is an account, not another principal's
+    /// permission.
     NotOwner,
     /// The op's mint failed structurally. Both ops mint through
     /// `mint_document`, so only two [`MintError`] leaves are reachable here —
@@ -83,7 +89,7 @@ impl fmt::Display for CreateDocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CreateDocumentError::NotOwner => f.write_str(
-                "caller is not the effective owner (ω) of the target (O5; ω arbitrates, never bare containment)",
+                "caller is not the effective owner (ω) of the target account, or — from fork, which has no target — its id names no principal at all (O5; ω arbitrates, never bare containment)",
             ),
             CreateDocumentError::Mint(e) => write!(f, "document mint failed: {e}"),
         }

@@ -26,16 +26,6 @@ pub struct PrincipalId(pub u64);
 /// any later principal from re-claiming id 0 (§7).
 pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 
-/// A registered principal: opaque id plus ownership prefix — T4-valid,
-/// `zeros ≤ 1` (account/node tier only, O1a). The registry's value type: the
-/// public surface answers in [`PrincipalId`] and [`Address`], so nothing
-/// outside M3 destructures one.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Principal {
-    pub id: PrincipalId,
-    pub prefix: Address,
-}
-
 /// A namespace — ASN-0040's `(p, d)`: chain anchor `parent` + generator
 /// [`Generator`]. THE frontier-map key, and (through the injective
 /// [`ns_lock_key`] encoding) the lock key — one key type, one code path, so
@@ -248,20 +238,34 @@ pub struct M3State {
     /// `register_node`, never baptism. Seeded `{[1]}`.
     nodes: im::OrdSet<Address>,
 
-    /// Principal registry Π, keyed by ownership prefix. Small (node/account
-    /// tier only, O1a). Append-only with immutable prefixes (O12/O13),
-    /// prefix-injective (O1b, by (v)) AND id-injective (`delegate`'s
-    /// DuplicateId gate, §6) — both the by-prefix key and the by-id scan are
-    /// single-valued. The two hold by different means: prefix-injectivity is
-    /// structural, carried by the map's own key, while id-injectivity is a
-    /// PRODUCER invariant, established at that one gate and never
-    /// re-established by [`M3State::apply_m3`].
-    /// The ONLY authoritative ownership state — the delegation
-    /// forest is recomputable (NestingByDelegation) and never stored. An
-    /// `OrdMap` because the top-down check needs a descendant *range* probe
-    /// (§6 (iv)) and ordering leaves the ω range-walk upgrade open — a
-    /// change [`M3State::owner_of`] absorbs for both ω projections at once.
-    principals: im::OrdMap<Address, Principal>,
+    /// Principal registry Π: ownership prefix ↦ opaque id. The prefix is the
+    /// KEY and is filed nowhere else, so a principal cannot be seated at one
+    /// prefix and claim another — [`M3State::effective_owner`] arbitrates by
+    /// the key and [`M3State::principal_prefix`] answers with it, and the two
+    /// read one value. Small (node/account tier only, O1a). Append-only with
+    /// immutable prefixes (O12/O13).
+    ///
+    /// Three standing properties, and they hold by three different means:
+    ///
+    /// * prefix-injectivity (O1b, by (v)) is STRUCTURAL, carried by the map's
+    ///   own key;
+    /// * id-injectivity (`delegate`'s `DuplicateId` gate, §6) is a PRODUCER
+    ///   invariant, established at that one gate and never re-established by
+    ///   [`M3State::apply_m3`] — it is what makes the by-id scan
+    ///   single-valued;
+    /// * the account-tier floor (O1a) is a PRODUCER invariant too, owned by
+    ///   genesis and by `delegate`'s hoisted `NotAccountTier` gate. Only
+    ///   [`M3State::effective_owner`] re-checks it, because ω is the one
+    ///   reader whose answer to a below-tier entry would be a PASS; see the
+    ///   tier filter there.
+    ///
+    /// The ONLY authoritative ownership state — the delegation forest is
+    /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
+    /// because the top-down check needs a descendant *range* probe (§6 (iv))
+    /// and ordering leaves the ω range-walk upgrade open — a change
+    /// [`M3State::effective_owner`] absorbs for the authorization predicate
+    /// at the same time, since that predicate is stated in terms of it.
+    principals: im::OrdMap<Address, PrincipalId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -319,17 +323,17 @@ fn generator(anchor: Level, child: Level) -> Generator {
 /// T4-valid yet anchors no chain — M1's `parent` returns `None` there, and
 /// that is the one input for which no namespace exists.
 ///
-/// Every child-side reader of a frontier key routes through here — `delegate`
-/// for BOTH its next-form check and its held namespace `LockKey`, membership
-/// for its chain range probe, the fold for its frontier advance — so the
-/// checked key, the locked key, and the key a staged `Allocate` advances are
-/// one and the same key by construction (§1/§2/§6). Anchor-side keys come from
-/// the `*_ns` family below — [`account_ns`] is the twin this derivation meets,
-/// since `delegate` checks next-form through here against the value
-/// [`M3State::next_account_prefix`] peeked through there; both sides take
-/// their `g` from [`generator`]. Callers that hold a ≥ 2-component address by
-/// their own gate discharge the `None` case with an `expect` that names that
-/// gate.
+/// Every child-side reader of a frontier key routes through here —
+/// `delegate` for its held namespace `LockKey`, membership for its chain
+/// range probe, the fold for its frontier advance — so the locked key and the
+/// key a staged `Allocate` advances are one and the same key by construction
+/// (§1/§2/§6). Anchor-side keys come from the `*_ns` family below, one per
+/// mint, and [`account_ns`] is the twin this derivation meets: `delegate`
+/// locks the key derived here while [`M3State::mint_account`] reads and its
+/// `Allocate` advances the key derived there. Both sides take their `g` from
+/// [`generator`] at the same tier pair, which is what makes them one key.
+/// Callers that hold a ≥ 2-component address by their own gate discharge the
+/// `None` case with an `expect` that names that gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
     let g = generator(par.level(), a.level());
@@ -428,19 +432,16 @@ pub fn prefix_contains(prefix: &Address, a: &Address) -> bool {
 
 impl M3State {
     /// Σ₀ + O14: `nodes = {[1]}`, `frontiers = {}`,
-    /// `Π = { [1] → Principal{BOOTSTRAP_PRINCIPAL, [1]} }`. `pub` — the engine
-    /// seeds `Kernel::open(cfg, genesis-World)` with it; "load empty journal"
-    /// and "fresh genesis" are the same code path (§7). Deterministic, per
-    /// M2's byte-identical-genesis caller contract.
+    /// `Π = { [1] → BOOTSTRAP_PRINCIPAL }`. `pub` — the engine seeds
+    /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
+    /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
+    /// byte-identical-genesis caller contract.
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
         M3State {
             frontiers: im::HashMap::new(),
             nodes: im::OrdSet::unit(root.clone()),
-            principals: im::OrdMap::unit(
-                root.clone(),
-                Principal { id: BOOTSTRAP_PRINCIPAL, prefix: root },
-            ),
+            principals: im::OrdMap::unit(root, BOOTSTRAP_PRINCIPAL),
         }
     }
 
@@ -492,10 +493,7 @@ impl M3State {
                 s.nodes.insert(addr.clone());
             }
             M3Rec::RegisterPrincipal { prefix, id } => {
-                s.principals.insert(
-                    prefix.clone(),
-                    Principal { id: *id, prefix: prefix.clone() },
-                );
+                s.principals.insert(prefix.clone(), *id);
             }
         }
         s
@@ -517,14 +515,15 @@ impl M3State {
     ///
     /// PRECONDITION — `key.parent` is T4-valid, and under
     /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
-    /// `k = 2` only below that tier). Six sites reach here, and each
-    /// discharges it by a gate that has already run: [`namespace_of`] takes
-    /// its anchor from M1's `parent`, an [`Address`] by type; [`version_ns`],
-    /// [`document_ns`] and [`account_ns`] clone theirs from an [`Address`];
-    /// and [`content_ns`]/[`link_ns`] are reached only through the mints,
-    /// whose `is_registered_document` gate makes `home` a Document, so
-    /// `inc(home, 2)` lands inside T4. Off a checkpoint the anchor arrives
-    /// through [`NsKeyShadow`], which discharges it where no caller can.
+    /// `k = 2` only below that tier). The five mints are the only callers,
+    /// one per chain family, and each discharges it by a gate that has
+    /// already run: [`version_ns`] and [`document_ns`] clone their anchor
+    /// from an [`Address`], as does [`account_ns`] behind
+    /// [`M3State::mint_account`]'s registered-entity gate; and
+    /// [`content_ns`]/[`link_ns`] sit behind `is_registered_document`, which
+    /// makes `home` a Document, so `inc(home, 2)` lands inside T4. Off a
+    /// checkpoint the anchor arrives through [`NsKeyShadow`], which
+    /// discharges it where no caller can.
     ///
     /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] do NOT
     /// discharge it: handed an element they build an anchor outside T4. That
@@ -616,7 +615,10 @@ impl M3State {
 }
 
 // ---------------------------------------------------------------------------
-// §A The four pure mints (folded into M5/M7 composites; M2 contract 3).
+// §A The five pure mints — one per chain family, so every address M3
+// originates is minted here. Four are public and fold into M5/M7 composites
+// (M2 contract 3); the fifth, `mint_account`, is `pub(crate)` because
+// `delegate` is its only caller and lives in this crate.
 //
 // Each is a query: it reads WORKING state, checks one structural
 // precondition, and hands back the next address on its chain together with
@@ -685,6 +687,30 @@ impl M3State {
         let a = self.next_in(&document_ns(account)).map_err(MintError::Gate)?;
         Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
+
+    /// Next account identity under `parent`: namespace `(parent, 2)` under a
+    /// node, `(parent, 1)` under an account — the sixth family (Conflicts §8),
+    /// whose `g` the chain-family rule picks. [`crate::Namespace::delegate`]
+    ///
+    /// `None`, never a [`MintError`], unless `parent` is a REGISTERED node or
+    /// account: `delegate` is the only caller, it is in this crate, and it
+    /// already has a typed rejection for that one refusal — a fifth
+    /// `MintError` leaf would put a permanently dead arm in M5's, M7's and
+    /// M10's vocabularies for a mint none of them can reach.
+    ///
+    /// The caller stages the returned [`M3Rec`] under the chain's key;
+    /// `delegate` derives that key CHILD-side from the supplied prefix, and
+    /// the two agree by construction — both take their `g` from [`generator`]
+    /// at the same `(parent.level(), Account)` pair.
+    pub(crate) fn mint_account(&self, parent: &Address) -> Option<(Address, M3Rec)> {
+        if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
+            return None;
+        }
+        let a = self
+            .next_in(&account_ns(parent))
+            .expect("a registered node/account anchor with g ≤ 2 passes TA5a");
+        Some((a.clone(), M3Rec::Allocate { addr: a }))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -745,10 +771,11 @@ impl M3State {
         self.entity_level(d) == Some(Level::Document)
     }
 
-    /// ω's resolution step: the longest-prefix match over Π (§5). THE one
-    /// walk — [`M3State::effective_owner`] projects the id off it,
-    /// [`M3State::is_effective_owner`] compares against it, and the
-    /// `principals` range-walk upgrade lands here once.
+    /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
+    /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
+    /// when `a` is not (yet) allocated. THE one walk: the authorization
+    /// predicate [`M3State::is_effective_owner`] is stated in terms of it, and
+    /// the `principals` range-walk upgrade lands here once, serving both.
     ///
     /// The walk is over Π, keeping the longest covering prefix — the reference
     /// form the design names — and NEVER over `a`'s own reconstructed
@@ -761,33 +788,33 @@ impl M3State {
     /// the held global [`M3State::principals_lock_key`]. Here the work is
     /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation: to enlarge it
     /// an attacker must first commit durable, ω-gated, next-form-gated
-    /// delegations, one journal record per principal.
+    /// delegations, one journal record per principal. So a deep probe costs no
+    /// more than a shallow one, and neither costs O(#allocated).
     ///
     /// The tier filter is O1a, and it is a refusal rather than an
-    /// optimisation: a principal seated below the account tier — unreachable
-    /// through `delegate`, representable in a corrupted checkpoint — must not
-    /// resolve as ω. No tie is possible: two prefixes of one address have
-    /// different lengths, and Π is prefix-injective.
-    fn owner_of(&self, a: &Address) -> Option<&Principal> {
+    /// optimisation. O1a is a producer invariant (genesis plus `delegate`'s
+    /// hoisted `NotAccountTier` gate), so a below-tier entry is unreachable
+    /// through the ops and representable only in a corrupted checkpoint — and
+    /// ω is the one reader whose answer to such an entry would be a PASS,
+    /// which is why ω is the one reader that refuses it. The other two readers
+    /// of Π need no filter: [`M3State::has_principal_strictly_under`] already
+    /// answers a rejection when it sees one, and [`M3State::principal_prefix`]
+    /// returns the registry's verbatim answer, which every mint that could
+    /// receive such a prefix then refuses on its own tier gate. No tie is
+    /// possible here: two prefixes of one address have different lengths, and
+    /// Π is prefix-injective.
+    ///
+    /// For WHETHER a given id owns `a` — the authorization question — ask
+    /// [`M3State::is_effective_owner`], which settles it without naming the
+    /// owner.
+    pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
         self.principals
             .iter()
             .filter(|(p, _)| {
                 matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
             })
             .max_by_key(|(p, _)| p.tumbler().len())
-            .map(|(_, principal)| principal)
-    }
-
-    /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
-    /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
-    /// when `a` is not (yet) allocated. The account-tier floor (O1a) keeps Π
-    /// small per node, and [`M3State::owner_of`] sizes the walk by Π rather
-    /// than by `a`, so a deep probe costs no more than a shallow one and
-    /// neither costs O(#allocated). For WHETHER a given id owns `a` — the
-    /// authorization question — ask [`M3State::is_effective_owner`], which
-    /// settles it without naming the owner.
-    pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
-        self.owner_of(a).map(|p| p.id)
+            .map(|(_, id)| *id)
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An
@@ -803,42 +830,43 @@ impl M3State {
     /// (`DuplicateId`) makes the id comparison equivalent to comparing the
     /// principals themselves.
     pub fn is_effective_owner(&self, id: PrincipalId, a: &Address) -> bool {
-        self.owner_of(a).is_some_and(|p| p.id == id)
+        self.effective_owner(a) == Some(id)
     }
 
     /// `pfx(id)` — the projection the id-centric ops (`fork`, `delegate`) and
     /// the M5→M3 cross-owner-VERSION seam need, since `principals` is keyed by
-    /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan). Π is
-    /// account/node-tier only (O1a), hence small per node. SINGLE-VALUED
-    /// because `delegate` enforces id-freshness (`DuplicateId`), so at most one
-    /// principal carries any id (§5/§6). Value-stable across snapshots:
-    /// prefixes are immutable (O13) and principals persist (O12) — so a
-    /// caller that needs the prefix as a value says `.cloned()`, and one that
-    /// only probes or forwards it pays nothing.
+    /// PREFIX, not id: an O(|Π|) scan, not a point lookup (the §5 scan). The
+    /// answer is the registry's own key, so the prefix a principal is seated
+    /// at and the prefix it is reported at are one value. Π is account/node-
+    /// tier only (O1a), hence small per node. SINGLE-VALUED because `delegate`
+    /// enforces id-freshness (`DuplicateId`), so at most one principal carries
+    /// any id (§5/§6). Value-stable across snapshots: prefixes are immutable
+    /// (O13) and principals persist (O12) — so a caller that needs the prefix
+    /// as a value says `.cloned()`, and one that only probes or forwards it
+    /// pays nothing.
     pub fn principal_prefix(&self, id: PrincipalId) -> Option<&Address> {
-        self.principals.values().find(|p| p.id == id).map(|p| &p.prefix)
+        self.principals
+            .iter()
+            .find(|(_, pid)| **pid == id)
+            .map(|(prefix, _)| prefix)
     }
 
     /// Peek the next delegable account-tier prefix under `parent` — the exact
     /// value `delegate` will demand as next-form (O17c), so a caller obtains a
-    /// valid `new_prefix` instead of guess-and-retry on `NotNextForm`. `g`
-    /// follows `parent`'s level: a node ⇒ the `(parent, 2)` account chain; an
-    /// account ⇒ the `(parent, 1)` sub-account chain (the sixth chain family
-    /// ASN-0042 licenses — Conflicts §8). Both yield zeros = 1. Pure frontier
-    /// read off any snapshot; `None` unless `parent` is a REGISTERED node or
-    /// account (the one monotone gate a peek can answer honestly — E is
-    /// append-only, so a `Some` answer never regresses), which leaves `None`
-    /// exactly one meaning. The returned prefix still faces `delegate`'s full
-    /// in-closure gate — two racing peeks of the same value leave exactly one
-    /// winner.
+    /// valid `new_prefix` instead of guess-and-retry on `NotNextForm`. It is
+    /// [`M3State::mint_account`] without the record, so the value a caller
+    /// peeks and the value the gate compares come off one chain by one code
+    /// path. `g` follows `parent`'s level: a node ⇒ the `(parent, 2)` account
+    /// chain; an account ⇒ the `(parent, 1)` sub-account chain (the sixth
+    /// chain family ASN-0042 licenses — Conflicts §8). Both yield zeros = 1.
+    /// Pure frontier read off any snapshot; `None` unless `parent` is a
+    /// REGISTERED node or account (the one monotone gate a peek can answer
+    /// honestly — E is append-only, so a `Some` answer never regresses), which
+    /// leaves `None` exactly one meaning. The returned prefix still faces
+    /// `delegate`'s full in-closure gate — two racing peeks of the same value
+    /// leave exactly one winner.
     pub fn next_account_prefix(&self, parent: &Address) -> Option<Address> {
-        if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
-            return None;
-        }
-        Some(
-            self.next_in(&account_ns(parent))
-                .expect("a registered node/account anchor with g ≤ 2 passes TA5a"),
-        )
+        self.mint_account(parent).map(|(addr, _)| addr)
     }
 
     /// §6 (iv), concretely: because `principals` is an `OrdMap` under tumbler

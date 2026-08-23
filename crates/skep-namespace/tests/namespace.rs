@@ -664,6 +664,51 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
 }
 
 #[test]
+fn the_registry_answers_one_prefix_per_principal_in_both_directions() {
+    // §5: a principal's prefix is the registry's KEY and is filed nowhere
+    // else, so the prefix it is seated at — what ω arbitrates by — and the
+    // prefix it is reported at — what `principal_prefix` answers, and what
+    // `fork` then creates a document under — are one value. id → prefix → ω →
+    // id is therefore the identity on Π. A registry that filed the prefix
+    // twice could disagree with itself, and would fail OPEN: a document
+    // minted under the wrong account.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("account under the bootstrap node");
+    ns.delegate(ID1, t(&[1, 0, 1, 1]), ID2)
+        .expect("sub-account under ID1's account");
+    ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), PrincipalId(3))
+        .expect("a sibling account");
+    let m3 = k.snapshot().world().m3().clone();
+
+    let seated = [
+        (BOOTSTRAP_PRINCIPAL, a(&[1])),
+        (ID1, a(&[1, 0, 1])),
+        (ID2, a(&[1, 0, 1, 1])),
+        (PrincipalId(3), a(&[1, 0, 2])),
+    ];
+    // The round trip holds on the live slice and, unchanged, on one restored
+    // from its checkpoint bytes — the door a disagreement between a seated
+    // and a reported prefix could otherwise arrive through.
+    let bytes = bincode::serialize(&m3).expect("serialize M3State");
+    let restored: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
+    for state in [&m3, &restored] {
+        for (id, prefix) in &seated {
+            assert_eq!(state.principal_prefix(*id), Some(prefix));
+            // …and ω at that very prefix names the principal back.
+            assert_eq!(state.effective_owner(prefix), Some(*id));
+            assert!(state.is_effective_owner(*id, prefix));
+        }
+        // An unknown id names no prefix, and no address answers it as ω.
+        assert!(state.principal_prefix(UNKNOWN_ID).is_none());
+        for (_, prefix) in &seated {
+            assert!(!state.is_effective_owner(UNKNOWN_ID, prefix));
+        }
+    }
+}
+
+#[test]
 fn omega_cost_does_not_follow_the_probes_depth() {
     // §5 cost discipline: ω's work is sized by Π, never by the address the
     // caller hands in. T4 constrains an address's zero pattern, NOT its

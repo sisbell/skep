@@ -77,6 +77,14 @@ where
     /// the principal in ONE transaction (a two-phase baptize-then-register
     /// could half-fail).
     ///
+    /// This is the sole allocator of the account chain: the last two gates
+    /// are one call to [`M3State::mint_account`], which refuses an
+    /// unregistered parent and otherwise returns the chain's next address
+    /// beside the `Allocate` that advances it, so the value next-form
+    /// compares and the record the closure stages are the allocator's own.
+    /// Callers peek that same value through
+    /// [`M3State::next_account_prefix`].
+    ///
     /// Pure pre-work runs first: the validate-lift (`NotValid`) and the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
     /// alone does not make `namespace_of`/lock-key construction safe (a
@@ -107,8 +115,11 @@ where
         if new_prefix.level() != Level::Account {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
-        // One NsKey serves the held lock, the next-form check, and the
-        // staged Allocate — the same key by construction (§1/§6).
+        // The held lock's NsKey, derived CHILD-side from the supplied prefix.
+        // The mint inside answers the next-form check and hands back the
+        // Allocate, off the key IT derives anchor-side — and the two are one
+        // key by construction, since both sides take their `g` from the
+        // chain-family rule at the same tier pair (§1/§6).
         let ns = namespace_of(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         let keys = [ns_lock_key(&ns), M3State::principals_lock_key()];
@@ -145,23 +156,22 @@ where
             if base.principal_prefix(new_id).is_some() {
                 return Err(DelegateError::DuplicateId);
             }
-            // P8: the new account's parent is a registered entity [monotone
-            // — E append-only; grouped here to keep one evaluation site].
+            // P8 + next-form (O17c) from ONE answer: the account mint refuses
+            // an unregistered parent [monotone — E append-only] and otherwise
+            // returns the frontier's next address together with the record
+            // that advances it, so the value the gate compares and the record
+            // the closure stages cannot come apart. Next-form is MANDATORY
+            // under the counter representation (§6).
             let par = parent(&new_prefix)
                 .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
-            if base.entity_level(&par).is_none() {
+            let Some((next, alloc)) = stg.working().m3().mint_account(&par) else {
                 return Err(DelegateError::ParentNotRegistered);
-            }
-            // next-form (O17c) — MANDATORY under the counter representation
-            // (§6).
-            let next = base.next_in(&ns).expect(
-                "account tier (hoisted tier check) ⇒ the anchor is node- or account-level ⇒ next_in's precondition holds",
-            );
+            };
             if next != new_prefix {
                 return Err(DelegateError::NotNextForm);
             }
             // Baptism + principal registration, one transaction (O17b).
-            stg.push(M3Rec::Allocate { addr: new_prefix.clone() }.into());
+            stg.push(alloc.into());
             stg.push(
                 M3Rec::RegisterPrincipal {
                     prefix: new_prefix.clone(),

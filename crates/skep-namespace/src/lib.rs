@@ -75,7 +75,9 @@ mod state;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
-pub use state::{prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
+pub use state::{
+    prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS,
+};
 
 /// The engine's **read accessor** for M3's slice (Engine Composition
 /// Contract; §Public interface): the engine implements this for its

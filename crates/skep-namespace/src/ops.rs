@@ -12,7 +12,7 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
 use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
-use crate::{prefix_contains, HasM3, M3Rec, M3State, PrincipalId};
+use crate::{prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS};
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure mints and queries live on [`M3State`] (reached
@@ -173,21 +173,31 @@ where
     /// Admit an externally-originated node [ASN-0047 NodeBaptism; §7]: the
     /// ADDRESS is chosen by provisioning, not minted here — the one
     /// validate-not-mint path (Conflicts §1). Guards, in order: T4-validity
-    /// (`NotValid`), node level (`NotNode`), freshness (`NotFresh` — the
+    /// (`NotValid`), node level (`NotNode`), depth
+    /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — the
     /// held coarse [`M3State::node_lock_key`] makes a concurrent duplicate
     /// surface typed rather than silently coalesce, §7/§8), and bootstrap
     /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). Returns the node
     /// address and its commit `Seq`.
     ///
-    /// The first two guards are pure pre-work — validity and level are
-    /// decidable from the address alone — so a malformed input rejects via
-    /// `TxnError::Rejected` with NO transaction opened; only the two
-    /// state-reading guards run under the held lock.
+    /// The first three guards are pure pre-work — validity, level and depth
+    /// are decidable from the address alone — so a malformed or oversized
+    /// input rejects via `TxnError::Rejected` with NO transaction opened;
+    /// only the two state-reading guards run under the held lock.
+    ///
+    /// The depth guard is a resource refusal, not a shape one: this is the
+    /// single path by which bytes a caller chose enter a permanent,
+    /// uncompressed registry, and the op takes no `caller`, so ω cannot gate
+    /// it here — the SIZE of an entry is what M3 can bound, and it does.
+    /// How MANY admissions a session may make is the daemon's.
     pub fn register_node(&self, addr: Tumbler) -> Result<(Address, Seq), TxnError<NodeError>> {
         // Pre-work (§7): the state-free half of the guard order.
         let ad = validate(addr).map_err(|_| TxnError::Rejected(NodeError::NotValid))?;
         if ad.level() != Level::Node {
             return Err(TxnError::Rejected(NodeError::NotNode));
+        }
+        if ad.tumbler().len() > MAX_NODE_COMPONENTS {
+            return Err(TxnError::Rejected(NodeError::TooDeep));
         }
         let keys = [M3State::node_lock_key()];
         self.kernel.transact(&keys, move |stg| {

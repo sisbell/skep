@@ -178,6 +178,11 @@ pub enum NodeError {
     NotValid,
     /// The supplied address is not node-level (zeros ≠ 0).
     NotNode,
+    /// The supplied address has more than
+    /// [`MAX_NODE_COMPONENTS`](crate::MAX_NODE_COMPONENTS) components — a
+    /// node address names a provisioning path, whose depth is bounded by the
+    /// provisioning hierarchy and not by the request (§7).
+    TooDeep,
     /// The node is already registered — surfaced (rather than silently
     /// coalescing) under the held coarse node-registry key (§7/§8).
     NotFresh,
@@ -190,6 +195,9 @@ impl fmt::Display for NodeError {
         f.write_str(match self {
             NodeError::NotValid => "register_node: addr is not T4-valid",
             NodeError::NotNode => "register_node: addr is not node-level",
+            NodeError::TooDeep => {
+                "register_node: addr has more components than the node registry admits"
+            }
             NodeError::NotFresh => "register_node: node is already registered",
             NodeError::NotDescendantOfBootstrap => {
                 "register_node: addr is not a descendant of the bootstrap node [1]"

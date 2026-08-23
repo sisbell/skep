@@ -1273,6 +1273,7 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::NotNextForm => "not_next_form",
         RejectCode::NotValid => "not_valid",
         RejectCode::NotNode => "not_node",
+        RejectCode::TooDeep => "too_deep",
         RejectCode::NotDescendantOfBootstrap => "not_descendant_of_bootstrap",
         RejectCode::NotFresh => "not_fresh",
         RejectCode::BadPosition => "bad_position",

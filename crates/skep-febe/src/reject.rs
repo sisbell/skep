@@ -87,6 +87,7 @@ pub enum RejectCode {
     NotNextForm,
     NotValid,
     NotNode,
+    TooDeep,
     NotDescendantOfBootstrap,
     NotFresh,
     // ── M5 arrangement ──

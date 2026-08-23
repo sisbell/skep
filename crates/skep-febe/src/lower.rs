@@ -87,6 +87,7 @@ impl Lower for NodeError {
         let code = match self {
             NodeError::NotValid => RejectCode::NotValid,
             NodeError::NotNode => RejectCode::NotNode,
+            NodeError::TooDeep => RejectCode::TooDeep,
             NodeError::NotFresh => RejectCode::NotFresh,
             NodeError::NotDescendantOfBootstrap => RejectCode::NotDescendantOfBootstrap,
         };

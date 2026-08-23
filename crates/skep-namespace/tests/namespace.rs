@@ -20,7 +20,7 @@ use skep_kernel::{
 };
 use skep_namespace::{
     prefix_contains, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError,
-    Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS,
 };
 use tempfile::tempdir;
 
@@ -574,11 +574,19 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
         (a(&[1, 0, 1, 1, 1]), PrincipalId(3)),
         (a(&[1, 0, 2]), PrincipalId(4)),
     ];
+    // Independent oracle: reconstruct x's OWN node/account-tier prefixes,
+    // longest first, and take the first that names a principal. That is the
+    // other derivation of ω — deliberately not the implementation's, which
+    // walks Π and keeps the longest cover — so the two can only agree by
+    // both being right.
     let oracle = |x: &Address| -> Option<PrincipalId> {
-        pi.iter()
-            .filter(|(p, _)| prefix_contains(p, x))
-            .max_by_key(|(p, _)| p.tumbler().len())
-            .map(|(_, id)| *id)
+        (1..=x.tumbler().len()).rev().find_map(|plen| {
+            let p = validate(Tumbler::new(x.tumbler().iter().take(plen).cloned()).ok()?).ok()?;
+            if !matches!(p.level(), Level::Node | Level::Account) {
+                return None;
+            }
+            pi.iter().find(|(q, _)| *q == p).map(|(_, id)| *id)
+        })
     };
     let m3 = seeded.m3;
 
@@ -621,6 +629,35 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
             );
         }
     }
+}
+
+#[test]
+fn omega_cost_does_not_follow_the_probes_depth() {
+    // §5 cost discipline: ω's work is sized by Π, never by the address the
+    // caller hands in. T4 constrains an address's zero pattern, NOT its
+    // component count, so a ~100 KB dotted-decimal request can carry a
+    // 50_000-component account-tier probe — and every prefix of it past the
+    // separator is itself account-tier, so a per-candidate prefix walk has no
+    // short-circuit and rebuilds ~1.25e9 components for this one call, while
+    // `create_new_document` and `delegate` hold the global principals key
+    // across exactly this read. Answering here in the same time as a
+    // three-component probe is the refusal. Corpus seed for the fuzzing tier.
+    let (k, _acct, _doc) = with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
+    let snap = k.snapshot();
+    let m3 = snap.world().m3();
+
+    let mut deep = vec![1u32, 0];
+    deep.extend(std::iter::repeat_n(1u32, 49_998));
+    let deep = a(&deep);
+    assert_eq!(deep.level(), Level::Account); // every prefix past [1,0] is a candidate
+    assert_eq!(m3.effective_owner(&deep), Some(ID1));
+    assert!(m3.is_effective_owner(ID1, &deep));
+    assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &deep));
+
+    // Equally deep, under no principal at all: None, at the same cost.
+    let mut foreign = vec![2u32, 0];
+    foreign.extend(std::iter::repeat_n(1u32, 49_998));
+    assert!(m3.effective_owner(&a(&foreign)).is_none());
 }
 
 // ---- §B delegate ----
@@ -959,9 +996,9 @@ fn register_node_validates_and_admits_supplied_addresses() {
     ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
         .expect("delegate under the new node");
 
-    // Rejections, in the documented guard order. The first two are pure
-    // pre-work (validity and level read the address alone), the last two
-    // read the registry under the held key.
+    // Rejections, in the documented guard order. The first three are pure
+    // pre-work (validity, level and depth read the address alone), the last
+    // two read the registry under the held key.
     let quiet = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
     assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
@@ -974,6 +1011,18 @@ fn register_node_validates_and_admits_supplied_addresses() {
         rejected(ns.register_node(t(&[1, 7, 0, 1]))),
         NodeError::NotNode
     );
+    // TooDeep — `nodes` is the ONE registry the frontier cannot compress, so
+    // an entry's SIZE is refused rather than stored. The probe is otherwise
+    // impeccable — node-level, fresh, bootstrap-descended — so depth is the
+    // only guard that can be refusing it.
+    let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    assert_eq!(a(&too_deep).level(), Level::Node);
+    assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
+    // NotNode precedes TooDeep: an equally over-long ACCOUNT-tier address is
+    // refused for its tier, since depth bounds the node registry alone.
+    let mut deep_acct = vec![1u32, 0];
+    deep_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
+    assert_eq!(rejected(ns.register_node(t(&deep_acct))), NodeError::NotNode);
     // NotFresh — duplicates surface typed, never a silent coalesce; the
     // seeded [1] and the just-registered [1,7] alike.
     assert_eq!(rejected(ns.register_node(t(&[1]))), NodeError::NotFresh);
@@ -985,6 +1034,19 @@ fn register_node_validates_and_admits_supplied_addresses() {
     );
     // A rejected admission commits nothing, whichever guard refused it.
     assert_eq!(k.current_seq(), quiet);
+
+    // The cap is exactly where it says it is: one component shorter than the
+    // refusal above is admitted, so `TooDeep` bounds the registry rather than
+    // narrowing what provisioning may name.
+    let at_cap: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS).collect();
+    assert_eq!(
+        ns.register_node(t(&at_cap)).expect("at the cap").0,
+        a(&at_cap)
+    );
+    assert_eq!(
+        k.snapshot().world().m3().entity_level(&a(&at_cap)),
+        Some(Level::Node)
+    );
 
     // NotFresh precedes NotDescendantOfBootstrap: [2] is registered AND off
     // the bootstrap lineage — a state `register_node` itself cannot reach,
@@ -1002,15 +1064,17 @@ fn register_node_validates_and_admits_supplied_addresses() {
 #[test]
 fn pre_work_rejections_open_no_transaction() {
     // §6/§7: `delegate`'s NotValid/NotAccountTier, `register_node`'s
-    // NotValid/NotNode and `fork`'s unknown id are decided from the argument
-    // alone and reject with NO transaction opened. M2 answers a nested
-    // `transact` with a panic naming the broken obligation and permits
+    // NotValid/NotNode/TooDeep and `fork`'s unknown id are decided from the
+    // argument alone and reject with NO transaction opened. M2 answers a
+    // nested `transact` with a panic naming the broken obligation and permits
     // `snapshot()` inside a closure (kernel §3), so calling them from inside
     // a transaction is what separates "rejected before opening one" from
     // "rejected inside one" — `current_seq` cannot, since a rejected closure
-    // draws no Seq either.
+    // draws no Seq either. `TooDeep` is here for the reason it exists: an
+    // oversized admission must cost nothing, not a lock and a transaction.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
+    let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
     k.transact::<_, ()>(&[], |_stg| {
         assert_eq!(
             rejected(ns.delegate(ID1, t(&[1, 0]), ID2)),
@@ -1022,6 +1086,7 @@ fn pre_work_rejections_open_no_transaction() {
         );
         assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
         assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
+        assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
         assert_eq!(
             rejected(ns.fork(PrincipalId(99))),
             CreateDocumentError::NotOwner
@@ -1105,6 +1170,36 @@ fn journaled_types_survive_serde_round_trips() {
     let malformed = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[1, 0]) })
         .expect("serialize the tumbler shadow");
     assert!(bincode::deserialize::<M3Rec>(&malformed).is_err());
+
+    // Nor can a PARENTLESS Allocate. [7] is T4-valid, so M1's door passes it
+    // — and `apply_ns` derives its namespace from the parent, which a
+    // one-component node has none of, so folding one would panic the applier
+    // at every replay from then on. M3's own door is what refuses it, before
+    // the record is ever a value.
+    for parentless in [t(&[7]), t(&[1])] {
+        let frame = bincode::serialize(&TumblerRec::Allocate { addr: parentless })
+            .expect("serialize the tumbler shadow");
+        assert!(
+            bincode::deserialize::<M3Rec>(&frame).is_err(),
+            "a parentless Allocate decoded into a record"
+        );
+    }
+    // The refusal is exactly the parentless case, not a length rule: the
+    // shortest address that DOES extend a parent still decodes.
+    let shortest = bincode::serialize(&TumblerRec::Allocate { addr: t(&[1, 1]) })
+        .expect("serialize the tumbler shadow");
+    assert_eq!(
+        bincode::deserialize::<M3Rec>(&shortest).expect("a two-component Allocate decodes"),
+        M3Rec::Allocate { addr: a(&[1, 1]) }
+    );
+    // …and RegisterNode is untouched by it: a one-component node is exactly
+    // what that variant carries.
+    let node = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[7]) })
+        .expect("serialize the tumbler shadow");
+    assert_eq!(
+        bincode::deserialize::<M3Rec>(&node).expect("a bare node registers"),
+        M3Rec::RegisterNode { addr: a(&[7]) }
+    );
 
     // M3State — the checkpointed slice: every field is ordinary serde (none
     // skip-serialized; default rebuild_derived), so a round-tripped state

@@ -7,8 +7,8 @@
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{
-    checked_inc, inc, is_prefix, ordinal, parent, shift, validate, Address, GateViolation, Level,
-    Nat, Tumbler,
+    checked_inc, inc, is_prefix, is_t4_valid, ordinal, parent, shift, validate, Address,
+    GateViolation, Level, Nat, Tumbler,
 };
 use skep_kernel::{LockKey, Space};
 
@@ -46,12 +46,47 @@ pub(crate) struct Principal {
 ///
 /// `parent` is a bare `Tumbler` rather than an `Address` because the content
 /// and link anchors are `inc(d, 2)` and `inc(b_C(d), 0)`, which M1 returns as
-/// tumblers: T4-validity is established once, at [`M3State::next_in`], rather
-/// than at each of the anchor constructors.
+/// tumblers — so the anchor constructors carry no `validate` of their own and
+/// [`M3State::next_in`] re-lifts the anchor at the one place it needs an
+/// [`Address`].
+///
+/// That the anchor is T4-valid is nonetheless a standing fact, and it has two
+/// sources rather than one: in process, M1's arithmetic yields it (`inc` on a
+/// T4-valid address at `g ≤ 2` cannot break the zero pattern), which is what
+/// makes `next_in`'s `expect` sound; off a checkpoint, [`NsKeyShadow`]
+/// re-establishes it, because bytes M3 did not write carry no such argument.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "NsKeyShadow")]
 pub(crate) struct NsKey {
     parent: Tumbler,
     g: Generator,
+}
+
+/// The at-rest shadow of [`NsKey`] — same fields, same order, so the
+/// checkpoint encoding is the struct's own — and the ONE door a frontier key
+/// re-enters memory through.
+///
+/// The invariant it re-establishes is the one [`M3State::next_in`]'s
+/// `validate(key.parent).expect(..)` rests on: a namespace anchor is
+/// T4-valid. Every key M3 builds satisfies it by construction, but a
+/// checkpoint is bytes, and `Tumbler` admits any nonempty component sequence
+/// — `[1, 0]` decodes and is not T4-valid. Loaded keys are inert only while
+/// nothing dereferences one, and that is a property of today's readers, not
+/// of the type. One T4 scan per key at load, no allocation.
+#[derive(Deserialize)]
+struct NsKeyShadow {
+    parent: Tumbler,
+    g: Generator,
+}
+
+impl TryFrom<NsKeyShadow> for NsKey {
+    type Error = &'static str;
+    fn try_from(k: NsKeyShadow) -> Result<NsKey, &'static str> {
+        if !is_t4_valid(&k.parent) {
+            return Err("a namespace anchor is T4-valid (ASN-0040 (p, d))");
+        }
+        Ok(NsKey { parent: k.parent, g: k.g })
+    }
 }
 
 /// The chain generator — ASN-0040's `d`: [`Generator::SameField`] extends the
@@ -108,7 +143,12 @@ impl TryFrom<u8> for Generator {
 /// prescribes. One `Allocate` variant suffices for every minted address
 /// (entity, content, link) because the frontier map is uniform; the level
 /// distinction is recovered at *query* time from the address's own level.
+///
+/// Off the journal a record arrives through [`RecShadow`], which re-checks
+/// the one standing fact T4-validity does not carry: an `Allocate` address
+/// extends a parent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RecShadow")]
 pub enum M3Rec {
     /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
@@ -118,6 +158,41 @@ pub enum M3Rec {
     RegisterNode { addr: Address },
     /// Delegation's principal half (§6).
     RegisterPrincipal { prefix: Address, id: PrincipalId },
+}
+
+/// The at-rest shadow of [`M3Rec`] — same variants in the same order, same
+/// fields in the same order, so the journal and checkpoint encoding is the
+/// enum's own — and the ONE door a record re-enters memory through.
+///
+/// It carries the standing fact [`M3State::apply_ns`]'s `namespace_of`
+/// `expect` rests on, and which the [`Address`] type does NOT: a minted
+/// address extends a parent. `[7]` is T4-valid, so M1's door passes it, and a
+/// parentless `Allocate` reaching the fold would panic the applier — at
+/// replay too, on every subsequent open. For a T4-valid address
+/// `parent(a).is_some()` ⟺ `#a ≥ 2` (M1's `parent` is `None` only for a
+/// single-component node), so the check is one length compare, and it turns a
+/// permanent applier panic into M2's ordinary decode failure.
+#[derive(Deserialize)]
+enum RecShadow {
+    Allocate { addr: Address },
+    RegisterNode { addr: Address },
+    RegisterPrincipal { prefix: Address, id: PrincipalId },
+}
+
+impl TryFrom<RecShadow> for M3Rec {
+    type Error = &'static str;
+    fn try_from(r: RecShadow) -> Result<M3Rec, &'static str> {
+        match r {
+            RecShadow::Allocate { addr } if addr.tumbler().len() < 2 => {
+                Err("an Allocate address extends a parent (≥ 2 components)")
+            }
+            RecShadow::Allocate { addr } => Ok(M3Rec::Allocate { addr }),
+            RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
+            RecShadow::RegisterPrincipal { prefix, id } => {
+                Ok(M3Rec::RegisterPrincipal { prefix, id })
+            }
+        }
+    }
 }
 
 /// M3's slice of the engine's `WorldState`, reached via [`crate::HasM3::m3`].
@@ -178,6 +253,26 @@ pub struct M3State {
 // ---------------------------------------------------------------------------
 // Pure structural helpers (the house style for pure helpers: free functions).
 // ---------------------------------------------------------------------------
+
+/// The cap on a registered node address's component count, enforced by
+/// [`crate::Namespace::register_node`] ([`crate::NodeError::TooDeep`]; §7).
+///
+/// `nodes` is the ONE registry the frontier cannot compress: a namespace's
+/// realized set is a single count, but node addresses originate outside the
+/// docuverse (ASN-0047 NodeBaptism) and may be non-contiguous, so each is
+/// stored WHOLE, permanently (B0 — there is no deletion), and re-serialized
+/// into every checkpoint thereafter, at roughly 32 bytes per component
+/// resident (`Vec<Nat>`, each component owning its own heap magnitude); and
+/// because the set is ordered, a deep entry lengthens every later `nodes`
+/// probe. So each component costs ~2 bytes to supply and is a permanent,
+/// replicated charge — the asymmetry a bound exists to close.
+///
+/// The budget: a node address is a pure path through the node field naming a
+/// provisioning authority under the bootstrap node, so its depth is the
+/// nesting of the provisioning hierarchy — one component per level of
+/// region/site/rack/host and the like. 32 leaves an order of magnitude over
+/// any physical such hierarchy while capping one entry near a kilobyte.
+pub const MAX_NODE_COMPONENTS: usize = 32;
 
 /// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds
 /// from and `register_node`'s lineage check probes against.
@@ -278,40 +373,30 @@ fn account_ns(parent: &Address) -> NsKey {
 // stores' key spaces too and not merely against M3's own.
 
 /// The injective, space-tagged `NsKey → LockKey` encoding (§1): tag byte,
-/// 4-byte BE component count, each component length-delimited (4-byte BE
+/// 8-byte BE component count, each component length-delimited (8-byte BE
 /// length + minimal BE magnitude bytes), then `g`. Injectivity is what
 /// guarantees distinct namespaces map to distinct locks; both the
 /// `*_lock_key` constructors and the frontier advance route through the SAME
 /// `*_ns` helper and THIS encoding, so the held lock key and the staged
 /// frontier key are the same bytes by one code path.
+///
+/// The two length fields are the width of the counts they carry —
+/// `Tumbler::len` and a magnitude's byte length are both `usize`, and both
+/// are written whole. A narrower field would make injectivity conditional on
+/// no tumbler and no component exceeding it, and neither bound is one M3
+/// imposes or could test: M1 leaves component count and magnitude alike
+/// unbounded (T0). Injectivity is the property this key exists for, so it is
+/// stated without a proviso.
 pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
     let mut b = Vec::new();
-    b.extend((k.parent.len() as u32).to_be_bytes());
+    b.extend((k.parent.len() as u64).to_be_bytes());
     for comp in &k.parent {
         let c = comp.to_bytes_be();
-        b.extend((c.len() as u32).to_be_bytes());
+        b.extend((c.len() as u64).to_be_bytes());
         b.extend(c);
     }
     b.push(u8::from(k.g));
     LockKey::new(Space::Namespace, &b)
-}
-
-/// `a`'s T4-valid node- and account-tier prefixes, LONGEST FIRST (O1a) — the
-/// ω candidate walk (§5). FREE function — pure, consults no state. For each
-/// prefix length from `#a` down to 1, reconstruct the prefix and keep it iff
-/// it is T4-valid and of a tier a principal may hold: `validate` drops the
-/// trailing-separator lengths (`N·0`, non-T4) and the tier filter caps the
-/// walk at the account field — leaving exactly the account-tier
-/// (`N·0·U[..j]`) then node-tier (`N[..i]`) prefixes. Every account-tier
-/// prefix is strictly longer than every node-tier one, so descending length is
-/// globally longest-first; ≤ `#a` (= depth) candidates, never O(#allocated).
-fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Address> + '_ {
-    (1..=a.tumbler().len()).rev().filter_map(move |plen| {
-        let p = Tumbler::new(a.tumbler().iter().take(plen).cloned()).ok()?;
-        validate(p)
-            .ok()
-            .filter(|ad| matches!(ad.level(), Level::Node | Level::Account))
-    })
 }
 
 /// Containment test (O1): `prefix ≼ a` — pure, total, decidable from the two
@@ -350,11 +435,14 @@ impl M3State {
     /// here at the seam the engine wires): total — deterministic,
     /// side-effect-free, panic-free — over every record whose `Allocate`
     /// address has a parent, which every mint's does, since a mint extends a
-    /// REGISTERED parent. T4-validity is not a precondition to state: the
-    /// [`Address`] payloads carry it, in memory and off the journal alike, so
-    /// no shape check is owed here. An `Allocate` that regresses or jumps a
-    /// frontier (ordinal ≠ count + 1) is outside the domain and fail-stops on
-    /// the contiguity `debug_assert` — corruption, not a live error path.
+    /// REGISTERED parent. Neither shape precondition is owed to the journal:
+    /// the [`Address`] payloads carry T4-validity, and [`RecShadow`] carries
+    /// the parent, so a record that arrives from disk or a peer is refused at
+    /// decode rather than folded into a panic. What the fold still trusts is
+    /// an IN-PROCESS producer, which builds the variant directly. An
+    /// `Allocate` that regresses or jumps a frontier (ordinal ≠ count + 1) is
+    /// outside the domain and fail-stops on the contiguity `debug_assert` —
+    /// corruption, not a live error path.
     pub fn apply_ns(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
@@ -588,17 +676,43 @@ impl M3State {
     /// walk — [`M3State::effective_owner`] projects the id off it,
     /// [`M3State::is_effective_owner`] compares against it, and the
     /// `principals` range-walk upgrade lands here once.
+    ///
+    /// The walk is over Π, keeping the longest covering prefix — the reference
+    /// form the design names — and NEVER over `a`'s own reconstructed
+    /// prefixes. That is a cost decision, and it is load-bearing: `a` arrives
+    /// from a caller, and T4 bounds its zero pattern but not its DEPTH, so a
+    /// per-candidate walk would do work quadratic in a length the caller
+    /// chooses (an account-tier `[1, 0, 1, 1, …]` has an admissible candidate
+    /// at every length, and rebuilding each one clones its components), while
+    /// `create_new_document` and `delegate` both evaluate ω in-closure under
+    /// the held global [`M3State::principals_lock_key`]. Here the work is
+    /// `Σ_{p ∈ Π} |p|` component comparisons and no allocation: to enlarge it
+    /// an attacker must first commit durable, ω-gated, next-form-gated
+    /// delegations, one journal record per principal.
+    ///
+    /// The tier filter is O1a, and it is a refusal rather than an
+    /// optimisation: a principal seated below the account tier — unreachable
+    /// through `delegate`, representable in a corrupted checkpoint — must not
+    /// resolve as ω. No tie is possible: two prefixes of one address have
+    /// different lengths, and Π is prefix-injective.
     fn owner_of(&self, a: &Address) -> Option<&Principal> {
-        principal_tier_prefixes(a).find_map(|p| self.principals.get(&p))
+        self.principals
+            .iter()
+            .filter(|(p, _)| {
+                matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
+            })
+            .max_by_key(|(p, _)| p.tumbler().len())
+            .map(|(_, principal)| principal)
     }
 
     /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
     /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
-    /// when `a` is not (yet) allocated. The account-tier floor (O1a) makes it
-    /// O(depth) point lookups, never O(#allocated). For WHETHER a given id
-    /// owns `a` — the authorization question — ask
-    /// [`M3State::is_effective_owner`], which settles it without naming the
-    /// owner.
+    /// when `a` is not (yet) allocated. The account-tier floor (O1a) keeps Π
+    /// small per node, and [`M3State::owner_of`] sizes the walk by Π rather
+    /// than by `a`, so a deep probe costs no more than a shallow one and
+    /// neither costs O(#allocated). For WHETHER a given id owns `a` — the
+    /// authorization question — ask [`M3State::is_effective_owner`], which
+    /// settles it without naming the owner.
     pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
         self.owner_of(a).map(|p| p.id)
     }
@@ -671,9 +785,52 @@ impl M3State {
 mod tests {
     use super::*;
 
+    fn tum(comps: &[u32]) -> Tumbler {
+        Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
+    }
+
     fn ad(comps: &[u32]) -> Address {
-        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
-            .expect("T4-valid")
+        validate(tum(comps)).expect("T4-valid")
+    }
+
+    /// §1: a frontier key re-enters memory through its own door. `next_in`
+    /// re-`validate`s a loaded key's anchor with an `expect`, and `Tumbler`
+    /// admits any nonempty component sequence — `[1, 0]` decodes and is not
+    /// T4-valid — so without the door a checkpoint could seat a key that is
+    /// a panic waiting for the first reader to dereference it. Refused while
+    /// it is still bytes, at no cost to the encoding.
+    #[test]
+    fn a_frontier_key_re_enters_through_its_t4_door() {
+        #[derive(Serialize)]
+        struct RawKey {
+            parent: Tumbler,
+            g: u8,
+        }
+
+        let good = NsKey { parent: tum(&[1, 0, 1]), g: Generator::NextField };
+        let bytes = bincode::serialize(&good).expect("serialize the key");
+        assert_eq!(
+            bincode::deserialize::<NsKey>(&bytes).expect("a well-formed key round-trips"),
+            good
+        );
+        // The door changes nothing at rest: the key's bytes are still the
+        // struct's own, anchor tumbler then generator numeral.
+        assert_eq!(
+            bytes,
+            bincode::serialize(&RawKey { parent: tum(&[1, 0, 1]), g: 2 })
+                .expect("serialize the raw shape"),
+        );
+
+        // Anchors no `*_ns` constructor could have produced: a trailing
+        // separator and a doubled one, both nonempty tumblers, neither T4.
+        for bogus in [vec![1u32, 0], vec![1, 0, 0, 1]] {
+            let frame = bincode::serialize(&RawKey { parent: tum(&bogus), g: 1 })
+                .expect("serialize the raw shape");
+            assert!(
+                bincode::deserialize::<NsKey>(&frame).is_err(),
+                "{bogus:?} decoded as a namespace anchor"
+            );
+        }
     }
 
     /// The generator IS ASN-0040's `d ∈ {1, 2}`: it is the numeral wherever

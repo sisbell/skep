@@ -540,7 +540,7 @@ Registration/residence: `home_not_registered`, `doc_not_registered`,
 Namespace/authority: `not_owner`, `not_an_account`, `gate`,
 `delegator_unknown`, `duplicate_id`, `not_ancestor`, `not_authorized`,
 `not_account_tier`, `not_top_down`, `not_next_form`, `not_valid`,
-`not_node`, `not_descendant_of_bootstrap`, `not_fresh`.
+`not_node`, `too_deep`, `not_descendant_of_bootstrap`, `not_fresh`.
 
 Arrangement: `bad_position`, `empty_content`, `content`, `empty_source`,
 `bad_span`, `dangling_source`, `empty_result`, `not_arranged`,
@@ -585,7 +585,9 @@ principal `new_id` as its owner, atomically. Obtain `new_prefix` from
 ```
 
 **`register_node`** — admit a provisioned node address (bootstrap
-provisioning; the address is supplied, not minted). → `ack_addr`.
+provisioning; the address is supplied, not minted). A node address names a
+provisioning path, so it is capped at 32 components — deeper is `too_deep`.
+→ `ack_addr`.
 
 <!-- wire: request register_node -->
 ```json

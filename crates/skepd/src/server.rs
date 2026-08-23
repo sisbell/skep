@@ -951,8 +951,8 @@ impl Stores<World> for HistStores {
         &self.kernel
     }
 
-    fn namespace(&self) -> Namespace<World> {
-        Namespace::new(Arc::clone(&self.kernel))
+    fn namespace(&self) -> Namespace<'_, World> {
+        Namespace::new(&self.kernel)
     }
 
     fn vstream(&self) -> Vstream<'_, World> {

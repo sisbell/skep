@@ -430,7 +430,7 @@ where
             // and the read path is principal-free by construction.
             Op::PrincipalPrefix { id } => {
                 let snap = self.stores.kernel().snapshot();
-                let addr = snap.world().m3().principal_prefix(id);
+                let addr = snap.world().m3().principal_prefix(id).cloned();
                 Ok(Response::MaybeAddr { addr, as_of: snap.seq() })
             }
             // ── raw link reads (→ M7, §2): no driver handle — straight off
@@ -829,8 +829,8 @@ mod tests {
         fn kernel(&self) -> &Kernel<World> {
             &self.kernel
         }
-        fn namespace(&self) -> Namespace<World> {
-            Namespace::new(Arc::clone(&self.kernel))
+        fn namespace(&self) -> Namespace<'_, World> {
+            Namespace::new(&self.kernel)
         }
         fn vstream(&self) -> Vstream<'_, World> {
             Vstream::new(&self.kernel)

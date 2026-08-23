@@ -10,8 +10,8 @@ description = "M3 — the authoritative permanent name space: single minting aut
 # The design's mandated shapes (§Core data model): persistent `im` collections
 # for the three authoritative slices (cheap structurally-shared snapshots; the
 # serde feature because all three fields are ordinary Serialize/Deserialize —
-# none is #[serde(skip)]); num-traits because Nat::zero()/one()/is_zero() are
-# trait fns the frontier math keeps in scope (§1/§2).
+# none is #[serde(skip)]); num-traits because Nat::zero()/is_zero() are trait
+# fns the frontier math keeps in scope (§1/§2).
 im.workspace = true
 num-traits.workspace = true
 serde.workspace = true

@@ -4,7 +4,7 @@
 //! sub-allocators (§3), the admission gates (§4), and the principal registry
 //! with the ω resolver (§5).
 
-use num_traits::{One, Zero};
+use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{
     checked_inc, inc, is_prefix, ordinal, parent, shift, validate, Address, GateViolation, Level,
@@ -30,14 +30,14 @@ pub const BOOTSTRAP_PRINCIPAL: PrincipalId = PrincipalId(0);
 /// `zeros ≤ 1` (account/node tier only, O1a). The registry's value type: the
 /// public surface answers in [`PrincipalId`] and [`Address`], so nothing
 /// outside M3 destructures one.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Principal {
     pub id: PrincipalId,
     pub prefix: Address,
 }
 
 /// A namespace — ASN-0040's `(p, d)`: chain anchor `parent` + generator
-/// `g ∈ {1, 2}`. THE frontier-map key, and (through the injective
+/// [`Generator`]. THE frontier-map key, and (through the injective
 /// [`ns_lock_key`] encoding) the lock key — one key type, one code path, so
 /// the two can never drift (§1). Keying by `(parent, g)` keeps the document
 /// chain `(A, 2)` and the version chain `(d, 1)` on SEPARATE frontiers by
@@ -48,10 +48,55 @@ pub(crate) struct Principal {
 /// and link anchors are `inc(d, 2)` and `inc(b_C(d), 0)`, which M1 returns as
 /// tumblers: T4-validity is established once, at [`M3State::next_in`], rather
 /// than at each of the anchor constructors.
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) struct NsKey {
     parent: Tumbler,
-    g: u8, // 1 | 2
+    g: Generator,
+}
+
+/// The chain generator — ASN-0040's `d`: [`Generator::SameField`] extends the
+/// anchor's own field, [`Generator::NextField`] opens the next one. An enum
+/// because `g ∈ {1, 2}` exhausts it: no third generator is representable, in
+/// memory or off a checkpoint, so [`M3State::next_in`] can only hand M1's
+/// `checked_inc` a `k` its TA5a gate admits by shape (`k ≥ 3` is refused
+/// there, and is what M1 asks a minting producer never to derive from input).
+/// What survives is the one refusal a precondition owns rather than the type:
+/// `NextField` off an Element anchor, which every mint's registered-entity
+/// gate already excludes. Encodes as its numeral, so the checkpointed
+/// frontier key and [`ns_lock_key`]'s trailing byte read the same either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(into = "u8", try_from = "u8")]
+pub(crate) enum Generator {
+    SameField,
+    NextField,
+}
+
+impl Generator {
+    /// M1's `inc` argument (`g`) — which field of the anchor the chain
+    /// advances.
+    fn k(self) -> usize {
+        match self {
+            Generator::SameField => 1,
+            Generator::NextField => 2,
+        }
+    }
+}
+
+impl From<Generator> for u8 {
+    fn from(g: Generator) -> u8 {
+        g.k() as u8
+    }
+}
+
+impl TryFrom<u8> for Generator {
+    type Error = &'static str;
+    fn try_from(b: u8) -> Result<Generator, &'static str> {
+        match b {
+            1 => Ok(Generator::SameField),
+            2 => Ok(Generator::NextField),
+            _ => Err("a namespace generator is 1 or 2 (ASN-0040 (p, d))"),
+        }
+    }
 }
 
 /// M3's journal deltas — lifted to `W::Record` via the engine's `From<M3Rec>`
@@ -92,7 +137,15 @@ pub enum M3Rec {
 /// `address → owner` ω-cache, and any `id → prefix` reverse index are *hints*
 /// — recomputable from `principals` alone — and are deliberately NOT stored
 /// (Open build decisions: defaults taken).
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// The `Serialize` impl targets bincode-class formats, M2's checkpoint
+/// encoding: `frontiers` is keyed by a struct, which formats requiring string
+/// keys (JSON among them) refuse. Nor are the bytes stable across processes —
+/// `im::HashMap` iterates in an order the process's hash seed picks — so a
+/// caller wanting a byte-comparable rendering canonicalizes it (the engine's
+/// observation surface transcodes for exactly this reason) rather than
+/// hashing the encoding.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct M3State {
     /// THE registry, in B1+B2 compressed form. A namespace's entire realized
     /// set `{c₁..cₘ}` IS the single count `m` — a gap is literally
@@ -117,7 +170,8 @@ pub struct M3State {
     /// single-valued. The ONLY authoritative ownership state — the delegation
     /// forest is recomputable (NestingByDelegation) and never stored. An
     /// `OrdMap` because the top-down check needs a descendant *range* probe
-    /// (§6 (iv)) and ordering leaves the ω range-walk upgrade open.
+    /// (§6 (iv)) and ordering leaves the ω range-walk upgrade open — a
+    /// change [`M3State::owner_of`] absorbs for both ω projections at once.
     principals: im::OrdMap<Address, Principal>,
 }
 
@@ -133,20 +187,20 @@ pub(crate) fn bootstrap_root() -> Address {
 }
 
 /// THE chain-family rule: the generator carrying an anchor at one tier to a
-/// child at another — `g = 1` extends the anchor's own field, `g = 2` opens
-/// the next one. Every `NsKey`'s `g` comes from here, and this is what keeps
-/// the document chain `(A, 2)` and the version chain `(d, 1)` on separate
-/// frontiers (ASN-0123 VD).
+/// child at another — same tier extends the anchor's own field, a lower tier
+/// opens the next one. Every `NsKey`'s `g` comes from here, and this is what
+/// keeps the document chain `(A, 2)` and the version chain `(d, 1)` on
+/// separate frontiers (ASN-0123 VD).
 ///
 /// Both arguments are M1 [`Level`]s — the vocabulary the corpus states the
 /// tiers in, and the answer an [`Address`] already carries, so the rule that
 /// decides which frontier a mint lands on is never spelled in the encoding's
 /// numerals.
-fn generator(anchor: Level, child: Level) -> u8 {
+fn generator(anchor: Level, child: Level) -> Generator {
     if anchor == child {
-        1
+        Generator::SameField
     } else {
-        2
+        Generator::NextField
     }
 }
 
@@ -183,21 +237,24 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // rather than by naming a subspace: `inc(d, 2)` opens the element field at
 // `s_C`, and `inc(b_C(d), 0)` steps it on to `s_L`.
 //
-// Each fixed family's `g` is `generator` evaluated at that family's FIXED tier
-// pair — content Element → Element, link Element → Element, version Document →
-// Document, document Account → Document — so the literals below and the
+// Each fixed family's `g` is what `generator` yields at that family's FIXED
+// tier pair, noted beside each constructor, so the variants below and the
 // chain-family rule cannot drift apart unnoticed.
 fn content_ns(d: &Address) -> NsKey {
-    NsKey { parent: inc(d.tumbler(), 2), g: 1 } // b_C(d) = inc(d, 2)
+    // b_C(d) = inc(d, 2); Element → Element.
+    NsKey { parent: inc(d.tumbler(), 2), g: Generator::SameField }
 }
 fn link_ns(d: &Address) -> NsKey {
-    NsKey { parent: inc(&inc(d.tumbler(), 2), 0), g: 1 } // b_L(d) = inc(b_C(d), 0)
+    // b_L(d) = inc(b_C(d), 0); Element → Element.
+    NsKey { parent: inc(&inc(d.tumbler(), 2), 0), g: Generator::SameField }
 }
 fn version_ns(s: &Address) -> NsKey {
-    NsKey { parent: s.tumbler().clone(), g: 1 } // (source, 1) — ASN-0123 separate chain
+    // (source, 1) — Document → Document, the ASN-0123 separate chain.
+    NsKey { parent: s.tumbler().clone(), g: Generator::SameField }
 }
 fn document_ns(a: &Address) -> NsKey {
-    NsKey { parent: a.tumbler().clone(), g: 2 } // (account, 2)
+    // (account, 2) — Account → Document.
+    NsKey { parent: a.tumbler().clone(), g: Generator::NextField }
 }
 
 /// `A_account(N)` and the sub-account family: the account chain under
@@ -235,7 +292,7 @@ pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
         b.extend((c.len() as u32).to_be_bytes());
         b.extend(c);
     }
-    b.push(k.g);
+    b.push(u8::from(k.g));
     LockKey::new(Space::Namespace, &b)
 }
 
@@ -255,6 +312,15 @@ fn principal_tier_prefixes(a: &Address) -> impl Iterator<Item = Address> + '_ {
             .ok()
             .filter(|ad| matches!(ad.level(), Level::Node | Level::Account))
     })
+}
+
+/// Containment test (O1): `prefix ≼ a` — pure, total, decidable from the two
+/// addresses alone, consulting no registry state and needing no coordination.
+/// It answers where an address SITS, not who may write it: authorization is
+/// [`M3State::is_effective_owner`] (ω, longest match), because several
+/// principals' prefixes contain the same address — §5.
+pub fn prefix_contains(prefix: &Address, a: &Address) -> bool {
+    is_prefix(prefix.tumbler(), a.tumbler())
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +403,7 @@ impl M3State {
         let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
         let anchor =
             validate(key.parent.clone()).expect("namespace parents are T4-valid by construction");
-        let c1 = checked_inc(&anchor, key.g as usize)?; // c1 = inc(parent, g), trailing ordinal 1
+        let c1 = checked_inc(&anchor, key.g.k())?; // c1 = inc(parent, g), trailing ordinal 1
         Ok(if m.is_zero() {
             c1 // first emission
         } else {
@@ -477,9 +543,10 @@ impl M3State {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
-        let m = self.frontiers.get(&key).cloned().unwrap_or_else(Nat::zero);
         let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
-        n >= &Nat::one() && n <= &m
+        // An absent frontier is m = 0, which no positive ordinal is ≤, so the
+        // missing key needs no branch of its own.
+        !n.is_zero() && self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
     /// `true` iff `a` exists in the name space — minted on a frontier in ANY
@@ -517,6 +584,14 @@ impl M3State {
         self.entity_level(d) == Some(Level::Document)
     }
 
+    /// ω's resolution step: the longest-prefix match over Π (§5). THE one
+    /// walk — [`M3State::effective_owner`] projects the id off it,
+    /// [`M3State::is_effective_owner`] compares against it, and the
+    /// `principals` range-walk upgrade lands here once.
+    fn owner_of(&self, a: &Address) -> Option<&Principal> {
+        principal_tier_prefixes(a).find_map(|p| self.principals.get(&p))
+    }
+
     /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
     /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
     /// when `a` is not (yet) allocated. The account-tier floor (O1a) makes it
@@ -525,9 +600,7 @@ impl M3State {
     /// [`M3State::is_effective_owner`], which settles it without naming the
     /// owner.
     pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
-        principal_tier_prefixes(a)
-            .find_map(|p| self.principals.get(&p))
-            .map(|p| p.id)
+        self.owner_of(a).map(|p| p.id)
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An
@@ -543,9 +616,7 @@ impl M3State {
     /// (`DuplicateId`) makes the id comparison equivalent to comparing the
     /// principals themselves.
     pub fn is_effective_owner(&self, id: PrincipalId, a: &Address) -> bool {
-        principal_tier_prefixes(a)
-            .find_map(|p| self.principals.get(&p))
-            .is_some_and(|p| p.id == id)
+        self.owner_of(a).is_some_and(|p| p.id == id)
     }
 
     /// `pfx(id)` — the projection the id-centric ops (`fork`, `delegate`) and
@@ -554,12 +625,11 @@ impl M3State {
     /// account/node-tier only (O1a), hence small per node. SINGLE-VALUED
     /// because `delegate` enforces id-freshness (`DuplicateId`), so at most one
     /// principal carries any id (§5/§6). Value-stable across snapshots:
-    /// prefixes are immutable (O13) and principals persist (O12).
-    pub fn principal_prefix(&self, id: PrincipalId) -> Option<Address> {
-        self.principals
-            .values()
-            .find(|p| p.id == id)
-            .map(|p| p.prefix.clone())
+    /// prefixes are immutable (O13) and principals persist (O12) — so a
+    /// caller that needs the prefix as a value says `.cloned()`, and one that
+    /// only probes or forwards it pays nothing.
+    pub fn principal_prefix(&self, id: PrincipalId) -> Option<&Address> {
+        self.principals.values().find(|p| p.id == id).map(|p| &p.prefix)
     }
 
     /// Peek the next delegable account-tier prefix under `parent` — the exact
@@ -584,15 +654,6 @@ impl M3State {
         )
     }
 
-    /// Containment test (O1): `prefix ≼ a` — pure, total, decidable from the
-    /// two addresses alone, consulting no registry state and needing no
-    /// coordination. It answers where an address SITS, not who may write it:
-    /// authorization is [`M3State::is_effective_owner`] (ω, longest match),
-    /// because several principals' prefixes contain the same address — §5.
-    pub fn prefix_contains(prefix: &Address, a: &Address) -> bool {
-        is_prefix(prefix.tumbler(), a.tumbler())
-    }
-
     /// §6 (iv), concretely: because `principals` is an `OrdMap` under tumbler
     /// order and the extensions of `p` form a contiguous block (T5), a SINGLE
     /// probe settles top-down — take the first key ≥ `p`; a registered
@@ -602,6 +663,78 @@ impl M3State {
         self.principals
             .range(p.clone()..)
             .next()
-            .is_some_and(|(k, _)| M3State::prefix_contains(p, k) && k != p)
+            .is_some_and(|(k, _)| prefix_contains(p, k) && k != p)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The generator IS ASN-0040's `d ∈ {1, 2}`: it is the numeral wherever
+    /// bytes are written — the checkpointed frontier key and `ns_lock_key`'s
+    /// trailing byte — and no third value survives the way back in, so the
+    /// `k` `next_in` hands M1 is one its TA5a gate admits by shape.
+    #[test]
+    fn generator_is_its_numeral_and_admits_no_third_value() {
+        for (g, n) in [(Generator::SameField, 1u8), (Generator::NextField, 2u8)] {
+            assert_eq!(u8::from(g), n);
+            assert_eq!(g.k(), n as usize);
+            assert_eq!(Generator::try_from(n), Ok(g));
+            assert_eq!(
+                bincode::serialize(&g).expect("serialize the generator"),
+                bincode::serialize(&n).expect("serialize the numeral"),
+            );
+        }
+        for bogus in [0u8, 3, 7, 255] {
+            assert!(Generator::try_from(bogus).is_err());
+            assert!(bincode::deserialize::<Generator>(&[bogus]).is_err());
+        }
+    }
+
+    /// The chain-family rule at the tier pairs the `*_ns` family is built at:
+    /// an anchor and child at the SAME tier extend the anchor's own field, a
+    /// child one tier down opens the next one. This is what puts the document
+    /// chain `(A, 2)` and the version chain `(d, 1)` on separate frontiers
+    /// (ASN-0123 VD), so the two keys anchored at one account differ.
+    #[test]
+    fn the_chain_family_rule_separates_document_from_version() {
+        assert_eq!(
+            generator(Level::Element, Level::Element),
+            Generator::SameField
+        );
+        assert_eq!(
+            generator(Level::Document, Level::Document),
+            Generator::SameField
+        );
+        assert_eq!(
+            generator(Level::Account, Level::Document),
+            Generator::NextField
+        );
+        assert_eq!(generator(Level::Node, Level::Account), Generator::NextField);
+        assert_eq!(
+            generator(Level::Account, Level::Account),
+            Generator::SameField
+        );
+
+        // The fixed families carry what the rule yields, and the two chains
+        // anchored at one account are distinct keys.
+        let acct = validate(Tumbler::new([1u32, 0, 1].map(Nat::from)).expect("nonempty"))
+            .expect("T4-valid account");
+        assert_eq!(version_ns(&acct).g, Generator::SameField);
+        assert_eq!(document_ns(&acct).g, Generator::NextField);
+        assert_ne!(version_ns(&acct), document_ns(&acct));
+        assert_eq!(account_ns(&acct).g, Generator::SameField);
+
+        let doc = validate(Tumbler::new([1u32, 0, 1, 0, 1].map(Nat::from)).expect("nonempty"))
+            .expect("T4-valid document");
+        assert_eq!(content_ns(&doc).g, Generator::SameField);
+        assert_eq!(link_ns(&doc).g, Generator::SameField);
+        // The child-side derivation agrees with the anchor-side one: the
+        // account peeked under a node sits in the very key `account_ns`
+        // builds there.
+        let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty")).expect("T4-valid");
+        assert_eq!(account_ns(&node).g, Generator::NextField);
+        assert_eq!(namespace_of(&acct), Some(account_ns(&node)));
     }
 }

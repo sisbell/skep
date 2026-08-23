@@ -82,7 +82,7 @@ use skep_namespace::Namespace;
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
-/// crates already publish them — `Namespace::new(Arc<Kernel<W>>)`,
+/// crates already publish them — `Namespace::new(&Kernel<W>)`,
 /// `Vstream::new(&Kernel<W>)`, and `LinkStore::new(&Kernel<W>)` (the as-built
 /// `LinkStore::new` takes no registry argument: it clones the genesis-sealed
 /// `Arc<TypeRegistry>` off a snapshot itself, a benign simplification of the
@@ -94,8 +94,8 @@ use skep_namespace::Namespace;
 pub trait Stores<W: WorldState>: Send + Sync {
     /// M2 — reads/snapshots/`current_seq`/the latent composite `transact`.
     fn kernel(&self) -> &Kernel<W>;
-    /// M3 driver — owns an `Arc<Kernel<W>>` clone (no borrow).
-    fn namespace(&self) -> Namespace<W>;
+    /// M3 driver — borrows the held kernel for the call.
+    fn namespace(&self) -> Namespace<'_, W>;
     /// M5 driver — borrows the held kernel for the call.
     fn vstream(&self) -> Vstream<'_, W>;
     /// M7 driver — borrows the kernel; holds the genesis-immutable registry.

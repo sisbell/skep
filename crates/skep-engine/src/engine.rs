@@ -128,9 +128,9 @@ impl Engine {
         &self.genesis
     }
 
-    /// M3's driver (holds an `Arc<Kernel>` clone, per M3's constructor).
-    pub fn namespace(&self) -> Namespace<World> {
-        Namespace::new(Arc::clone(&self.kernel))
+    /// M3's driver (borrows the kernel for the call).
+    pub fn namespace(&self) -> Namespace<'_, World> {
+        Namespace::new(&self.kernel)
     }
 
     /// M5's driver (borrows the kernel for the call).
@@ -203,8 +203,8 @@ impl Stores<World> for EngineStores {
         &self.kernel
     }
 
-    fn namespace(&self) -> Namespace<World> {
-        Namespace::new(Arc::clone(&self.kernel))
+    fn namespace(&self) -> Namespace<'_, World> {
+        Namespace::new(&self.kernel)
     }
 
     fn vstream(&self) -> Vstream<'_, World> {

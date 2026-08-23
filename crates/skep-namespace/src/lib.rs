@@ -28,9 +28,12 @@
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
 //!   entity membership (exact chain membership, §2), the ω authorization
-//!   predicate [`M3State::is_effective_owner`] and the resolver it reads
-//!   through \[ASN-0042 O1–O9\], id→prefix resolution, and the next-form
-//!   peek [`M3State::next_account_prefix`].
+//!   predicate [`M3State::is_effective_owner`] beside the owner it names
+//!   ([`M3State::effective_owner`]) \[ASN-0042 O1–O9\], id→prefix
+//!   resolution, and the next-form peek
+//!   [`M3State::next_account_prefix`] — plus the registry-free containment
+//!   test [`prefix_contains`], which answers where an address SITS and
+//!   never who may write it.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (B\*, O\*, P\*, T\*, V\*, and §§ of the M3 design), so a
@@ -72,7 +75,7 @@ mod state;
 
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
-pub use state::{M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
+pub use state::{prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 /// The engine's **read accessor** for M3's slice (Engine Composition
 /// Contract; §Public interface): the engine implements this for its

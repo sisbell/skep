@@ -368,6 +368,7 @@ where
                 // Cross-owner fork.
                 let pfx = m3
                     .principal_prefix(principal)
+                    .cloned()
                     .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
                 if zeros(pfx.tumbler()) != 1 {
                     return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));

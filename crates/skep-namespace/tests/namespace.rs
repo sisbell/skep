@@ -18,8 +18,8 @@ use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
 };
 use skep_namespace::{
-    CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError,
-    PrincipalId, BOOTSTRAP_PRINCIPAL,
+    prefix_contains, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError,
+    Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL,
 };
 use tempfile::tempdir;
 
@@ -106,17 +106,19 @@ const ID1: PrincipalId = PrincipalId(1);
 const ID2: PrincipalId = PrincipalId(2);
 
 /// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then
-/// `create_new_document` under it (⇒ doc `[1,0,1,0,1]`).
-fn with_account_and_doc() -> (Arc<Kernel<World>>, Namespace<World>, Address, Address) {
+/// `create_new_document` under it (⇒ doc `[1,0,1,0,1]`). The handle borrows
+/// the kernel, so it stays inside; a test that needs one builds it off the
+/// returned kernel.
+fn with_account_and_doc() -> (Arc<Kernel<World>>, Address, Address) {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
     let (acct, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("bootstrap delegates the first account");
     let (doc, _) = ns
         .create_new_document(ID1, &acct)
         .expect("the delegate creates a document");
-    (k, ns, acct, doc)
+    (k, acct, doc)
 }
 
 // ---- §D genesis ----
@@ -129,7 +131,7 @@ fn genesis_seeds_bootstrap_node_and_principal() {
     assert!(s.is_allocated(&a(&[1])));
     // π₀ resolves in both directions: its id names the root prefix, and the
     // root address names it as ω.
-    assert_eq!(s.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(a(&[1])));
+    assert_eq!(s.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])));
     assert_eq!(s.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
     // Empty frontiers: nothing else is allocated or registered yet.
     assert!(!s.is_allocated(&a(&[1, 0, 1])));
@@ -139,11 +141,26 @@ fn genesis_seeds_bootstrap_node_and_principal() {
     assert!(!s.is_effective_owner(ID1, &a(&[1])));
 }
 
+#[test]
+fn the_slice_reports_itself() {
+    // The slice a world embeds is reportable, so a test failure or a `dbg!`
+    // in any engine can print it — the impl has to live here, since no
+    // downstream crate may add it.
+    let dump = format!("{:?}", M3State::genesis());
+    for field in ["frontiers", "nodes", "principals"] {
+        assert!(dump.contains(field), "the dump omits {field}: {dump}");
+    }
+    // The contents ride along, not just the field names: the bootstrap
+    // principal's id and its root prefix.
+    assert!(dump.contains("PrincipalId(0)"), "{dump}");
+    assert_eq!(format!("{:?}", M3State::genesis()), dump); // deterministic
+}
+
 // ---- §A frontier mints ----
 
 #[test]
 fn pure_mints_advance_the_documented_chains() {
-    let (k, _ns, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -182,7 +199,7 @@ fn successive_mints_in_one_composite_read_working_state() {
     // The M5-shaped composite (§A / M2 contract 3): lock key taken BEFORE
     // the closure, mints read working() so each sees the prior mint, staged
     // records lifted via .into().
-    let (k, _ns, _acct, doc) = with_account_and_doc();
+    let (k, _acct, doc) = with_account_and_doc();
     let keys = [M3State::content_lock_key(&doc)];
     let ((c1, c2), seq) = k
         .transact::<_, MintError>(&keys, |stg| {
@@ -203,7 +220,7 @@ fn successive_mints_in_one_composite_read_working_state() {
 
 #[test]
 fn mint_preconditions_reject_structurally() {
-    let (k, _ns, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     let unregistered_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
@@ -224,11 +241,29 @@ fn mint_preconditions_reject_structurally() {
     assert_eq!(m3.mint_document(&a(&[1])).unwrap_err(), MintError::NotAnAccount);
 }
 
+#[test]
+fn a_mint_refusal_lifts_into_the_document_rejection() {
+    // The shared mint vocabulary lifts by the standard conversion, so a mint
+    // composes with `?` inside an op that creates a document — the same lift
+    // M5 and M7 provide into their own op errors.
+    fn create(m3: &M3State, account: &Address) -> Result<Address, CreateDocumentError> {
+        Ok(m3.mint_document(account)?.0)
+    }
+    let (k, acct, doc) = with_account_and_doc();
+    let snap = k.snapshot();
+    let m3 = snap.world().m3();
+    assert_eq!(create(m3, &acct), Ok(a(&[1, 0, 1, 0, 2])));
+    assert_eq!(
+        create(m3, &doc),
+        Err(CreateDocumentError::Mint(MintError::NotAnAccount))
+    );
+}
+
 // ---- §C queries: membership ----
 
 #[test]
 fn membership_is_exact_chain_membership() {
-    let (k, _ns, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -306,18 +341,18 @@ fn lock_keys_distinguish_every_chain_and_registry() {
 
 #[test]
 fn containment_is_not_authorization() {
-    let (k, _ns, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
     // O1: bare containment is true for SEVERAL principals at once — the
     // node operator's prefix contains the delegated account and its
     // documents…
-    assert!(M3State::prefix_contains(&a(&[1]), &acct));
-    assert!(M3State::prefix_contains(&a(&[1]), &doc));
-    assert!(M3State::prefix_contains(&acct, &doc));
-    assert!(M3State::prefix_contains(&acct, &acct)); // ≼ admits equality
-    assert!(!M3State::prefix_contains(&acct, &a(&[1])));
+    assert!(prefix_contains(&a(&[1]), &acct));
+    assert!(prefix_contains(&a(&[1]), &doc));
+    assert!(prefix_contains(&acct, &doc));
+    assert!(prefix_contains(&acct, &acct)); // ≼ admits equality
+    assert!(!prefix_contains(&acct, &a(&[1])));
     // …so only ω (longest-prefix match) arbitrates: the delegate owns its
     // subtree, the node operator keeps the rest (O2/O3, the
     // ownership-divergence discipline).
@@ -339,7 +374,7 @@ fn containment_is_not_authorization() {
     // containment says yes exactly where authorization says no.
     assert!(m3.is_effective_owner(ID1, &doc));
     assert!(m3.is_effective_owner(ID1, &acct));
-    assert!(M3State::prefix_contains(&a(&[1]), &acct));
+    assert!(prefix_contains(&a(&[1]), &acct));
     assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &acct));
     assert!(m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[1])));
     // An unknown id owns nothing; an uncovered address has no owner at all,
@@ -354,7 +389,7 @@ fn containment_is_not_authorization() {
 #[test]
 fn delegate_mints_account_and_principal_atomically() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
 
     // The peek names the exact next-form value delegate demands (O17c) —
     // no guess-and-retry.
@@ -380,7 +415,7 @@ fn delegate_mints_account_and_principal_atomically() {
     let m3 = snap.world().m3();
     assert!(m3.is_allocated(&acct));
     assert_eq!(m3.entity_level(&acct), Some(Level::Account));
-    assert_eq!(m3.principal_prefix(ID1), Some(acct.clone()));
+    assert_eq!(m3.principal_prefix(ID1), Some(&acct));
     // Effective ownership moved to the new principal (O7).
     assert_eq!(m3.effective_owner(&acct), Some(ID1));
     // The node's account chain peeks the next slot now.
@@ -415,7 +450,7 @@ fn delegate_mints_account_and_principal_atomically() {
 #[test]
 fn delegate_rejection_order_is_pinned() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
     let unknown = PrincipalId(99);
 
     // Pre-work rejections (§6, no transaction opened) win over every
@@ -480,7 +515,7 @@ fn delegate_rejection_order_is_pinned() {
     // parent is the only failing gate; with [1,0,1,2] it also precedes
     // NotNextForm.
     let k2 = mem_kernel(genesis_world());
-    let ns2 = Namespace::new(Arc::clone(&k2));
+    let ns2 = Namespace::new(&k2);
     assert_eq!(
         rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), ID2)),
         DelegateError::ParentNotRegistered
@@ -503,7 +538,7 @@ fn delegate_rejection_order_is_pinned() {
         m3: M3State::genesis().apply_ns(&alloc(&[1, 0, 1])),
     };
     let k3 = mem_kernel(seeded);
-    let ns3 = Namespace::new(Arc::clone(&k3));
+    let ns3 = Namespace::new(&k3);
     // (v) freshness: [1,0,1] is allocated (ω = π₀, so (ii) passes).
     assert_eq!(
         rejected(ns3.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID2)),
@@ -522,7 +557,7 @@ fn delegate_rejection_order_is_pinned() {
             }),
     };
     let k4 = mem_kernel(seeded);
-    let ns4 = Namespace::new(Arc::clone(&k4));
+    let ns4 = Namespace::new(&k4);
     assert_eq!(
         rejected(ns4.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), PrincipalId(7))),
         DelegateError::NotTopDown
@@ -534,7 +569,7 @@ fn delegate_rejection_order_is_pinned() {
 #[test]
 fn create_new_document_authorizes_by_omega() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
     let (acct, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("delegate");
@@ -549,7 +584,7 @@ fn create_new_document_authorizes_by_omega() {
 
     // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account,
     // yet ω names ID1 — bare containment must not authorize.
-    assert!(M3State::prefix_contains(&a(&[1]), &acct));
+    assert!(prefix_contains(&a(&[1]), &acct));
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct)),
         CreateDocumentError::NotOwner
@@ -582,7 +617,7 @@ fn create_new_document_authorizes_by_omega() {
 #[test]
 fn fork_mints_in_the_callers_own_account() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
     let (acct, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("delegate");
@@ -591,7 +626,7 @@ fn fork_mints_in_the_callers_own_account() {
     // pfx(caller)) — a fresh self-owned document one tier below the prefix.
     let (d1, _) = ns.fork(ID1).expect("fork");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
-    assert!(M3State::prefix_contains(&acct, &d1));
+    assert!(prefix_contains(&acct, &d1));
     let snap = k.snapshot();
     assert!(snap.world().m3().is_registered_document(&d1));
     assert!(snap.world().m3().is_effective_owner(ID1, &d1));
@@ -617,7 +652,7 @@ fn fork_mints_in_the_callers_own_account() {
 #[test]
 fn register_node_validates_and_admits_supplied_addresses() {
     let k = mem_kernel(genesis_world());
-    let ns = Namespace::new(Arc::clone(&k));
+    let ns = Namespace::new(&k);
 
     // Ordinary admission (ASN-0047): the address is SUPPLIED, validated,
     // registered.
@@ -712,7 +747,7 @@ fn journaled_types_survive_serde_round_trips() {
     // M3State — the checkpointed slice: every field is ordinary serde (none
     // skip-serialized; default rebuild_derived), so a round-tripped state
     // answers identically.
-    let (k, _ns, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = with_account_and_doc();
     let keys = [M3State::content_lock_key(&doc)];
     k.transact::<_, MintError>(&keys, |stg| {
         let (_, r) = stg.working().m3().mint_content(&doc)?;
@@ -729,9 +764,9 @@ fn journaled_types_survive_serde_round_trips() {
     assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     // The whole principal registry rides inside the slice — both its
     // entries, both directions (id → prefix, address → ω).
-    assert_eq!(back.principal_prefix(ID1), Some(acct.clone()));
+    assert_eq!(back.principal_prefix(ID1), Some(&acct));
     assert_eq!(back.effective_owner(&doc), Some(ID1));
-    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(a(&[1])));
+    assert_eq!(back.principal_prefix(BOOTSTRAP_PRINCIPAL), Some(&a(&[1])));
     assert_eq!(back.effective_owner(&a(&[1])), Some(BOOTSTRAP_PRINCIPAL));
 }
 
@@ -745,7 +780,7 @@ fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
     let doc;
     {
         let k = Arc::new(Kernel::open(cfg_fsync(dir.path()), genesis_world()).expect("open"));
-        let ns = Namespace::new(Arc::clone(&k));
+        let ns = Namespace::new(&k);
         let (acc, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
             .expect("delegate");
@@ -760,7 +795,7 @@ fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
     let k2 = Kernel::open(cfg_fsync(dir.path()), genesis_world()).expect("reopen");
     let snap = k2.snapshot();
     let m3 = snap.world().m3();
-    assert_eq!(m3.principal_prefix(ID1), Some(acct.clone()));
+    assert_eq!(m3.principal_prefix(ID1), Some(&acct));
     assert!(m3.is_registered_document(&doc));
     assert_eq!(m3.entity_level(&a(&[1, 7])), Some(Level::Node));
     assert_eq!(m3.effective_owner(&doc), Some(ID1));

@@ -7,32 +7,30 @@
 //! (the linearization coordinate) — only after commit
 //! (commit-before-acknowledge).
 
-use std::sync::Arc;
-
 use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
 use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
-use crate::{HasM3, M3Rec, M3State, PrincipalId};
+use crate::{prefix_contains, HasM3, M3Rec, M3State, PrincipalId};
 
-/// M3's transact-driving op handle over M2 (§B): a thin wrapper holding the
-/// shared kernel. The pure mints and queries live on [`M3State`] (reached
+/// M3's transact-driving op handle over M2 (§B): a thin borrow of the
+/// engine's kernel. The pure mints and queries live on [`M3State`] (reached
 /// through [`HasM3`]); this type owns only the four entity operations M10
 /// dispatches.
-pub struct Namespace<W: WorldState> {
-    kernel: Arc<Kernel<W>>,
+pub struct Namespace<'k, W: WorldState> {
+    kernel: &'k Kernel<W>,
 }
 
-impl<W: WorldState> Namespace<W> {
-    /// Wrap the engine's kernel — the handle holds nothing else, so this is
+impl<'k, W: WorldState> Namespace<'k, W> {
+    /// Borrow the engine's kernel — the handle holds nothing else, so this is
     /// the whole of its construction.
-    pub fn new(kernel: Arc<Kernel<W>>) -> Namespace<W> {
+    pub fn new(kernel: &'k Kernel<W>) -> Namespace<'k, W> {
         Namespace { kernel }
     }
 }
 
-impl<W: WorldState + HasM3> Namespace<W>
+impl<W: WorldState + HasM3> Namespace<'_, W>
 where
     W::Record: From<M3Rec>,
 {
@@ -66,11 +64,7 @@ where
             if !stg.base().m3().is_effective_owner(caller, account) {
                 return Err(CreateDocumentError::NotOwner);
             }
-            let (addr, rec) = stg
-                .working()
-                .m3()
-                .mint_document(account)
-                .map_err(CreateDocumentError::Mint)?;
+            let (addr, rec) = stg.working().m3().mint_document(account)?;
             stg.push(rec.into());
             Ok(addr)
         })
@@ -125,7 +119,7 @@ where
                 .ok_or(DelegateError::DelegatorUnknown)?;
             // (i) ancestry: dp ≺ new_prefix, strict [monotone — pfx
             // immutable, O13].
-            if !M3State::prefix_contains(&dp, &np) || dp == np {
+            if !prefix_contains(dp, &np) || *dp == np {
                 return Err(DelegateError::NotAncestor);
             }
             // (ii) authorization: the delegator is ω(new_prefix)
@@ -200,7 +194,7 @@ where
             if stg.base().m3().entity_level(&ad).is_some() {
                 return Err(NodeError::NotFresh);
             }
-            if !M3State::prefix_contains(&bootstrap_root(), &ad) {
+            if !prefix_contains(&bootstrap_root(), &ad) {
                 return Err(NodeError::NotDescendantOfBootstrap);
             }
             stg.push(M3Rec::RegisterNode { addr: ad.clone() }.into());
@@ -228,6 +222,6 @@ where
         let Some(pfx) = snap.world().m3().principal_prefix(caller) else {
             return Err(TxnError::Rejected(CreateDocumentError::NotOwner));
         };
-        self.create_new_document(caller, &pfx)
+        self.create_new_document(caller, pfx)
     }
 }

@@ -82,6 +82,15 @@ impl fmt::Display for CreateDocumentError {
     }
 }
 
+/// The standard lift of the shared mint vocabulary — the same conversion M5
+/// and M7 provide into their own op errors, so a mint composes with `?`
+/// wherever a document is being created.
+impl From<MintError> for CreateDocumentError {
+    fn from(e: MintError) -> CreateDocumentError {
+        CreateDocumentError::Mint(e)
+    }
+}
+
 impl Error for CreateDocumentError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {

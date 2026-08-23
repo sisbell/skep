@@ -1,7 +1,8 @@
 //! The typed rejections of M3's public surface (§Public interface). Where an
 //! op pins the order its guards run in, the variants are declared in that
-//! order — [`DelegateError`] (§6) and [`NodeError`] (§7) both do, so the
-//! declaration reads as the contract.
+//! order — [`CreateDocumentError`] (§7), [`DelegateError`] (§6) and
+//! [`NodeError`] (§7) all do, so the declaration reads as the contract and a
+//! multiply-defective input earns the FIRST applicable rejection.
 
 use std::error::Error;
 use std::fmt;
@@ -59,6 +60,13 @@ impl Error for MintError {
 /// Document-baptism rejection, shared by the two ops that create a document
 /// — `create_new_document` and `fork` (§B). "Not an account" and "not
 /// registered" BOTH surface via `Mint(MintError::NotAnAccount)`.
+///
+/// The variants are declared in the PINNED order both ops evaluate them:
+/// `NotOwner` before `Mint`. ω is read first and the mint's structural gate
+/// only after, so a caller who is not the effective owner of the target
+/// learns nothing about whether the target exists — the same probe returns
+/// `NotOwner` to a stranger and `Mint(NotAnAccount)` to ω. `fork` inherits
+/// the order by reducing to `create_new_document`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateDocumentError {
     /// Caller is not the effective owner ω of the target (O5) — authorization

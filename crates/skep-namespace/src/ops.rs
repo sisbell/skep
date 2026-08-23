@@ -154,9 +154,9 @@ where
             }
             // next-form (O17c) — MANDATORY under the counter representation
             // (§6).
-            let next = base
-                .next_in(&ns)
-                .expect("P8 above ⇒ the anchor is a registered node or account ⇒ TA5a holds for g ≤ 2");
+            let next = base.next_in(&ns).expect(
+                "account tier (hoisted tier check) ⇒ the anchor is node- or account-level ⇒ next_in's precondition holds",
+            );
             if next != new_prefix {
                 return Err(DelegateError::NotNextForm);
             }

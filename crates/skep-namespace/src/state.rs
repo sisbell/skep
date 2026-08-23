@@ -50,11 +50,15 @@ pub(crate) struct Principal {
 /// [`M3State::next_in`] re-lifts the anchor at the one place it needs an
 /// [`Address`].
 ///
-/// That the anchor is T4-valid is nonetheless a standing fact, and it has two
-/// sources rather than one: in process, M1's arithmetic yields it (`inc` on a
-/// T4-valid address at `g ≤ 2` cannot break the zero pattern), which is what
-/// makes `next_in`'s `expect` sound; off a checkpoint, [`NsKeyShadow`]
-/// re-establishes it, because bytes M3 did not write carry no such argument.
+/// What this type owes, and owes on EVERY `(Tumbler, Generator)` pair it can
+/// be built from, is that [`ns_lock_key`] is injective — distinct namespaces,
+/// distinct locks. That holds for any nonempty anchor whatever its shape, so
+/// it is stated without a proviso and needs none.
+///
+/// A T4-valid anchor is NOT this type's invariant. It is a precondition of
+/// [`M3State::next_in`], discharged there by the caller's own gate and stated
+/// beside the `validate` that consumes it — which is why a key may exist that
+/// no `next_in` path can reach, and why that costs nothing.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "NsKeyShadow")]
 pub(crate) struct NsKey {
@@ -66,13 +70,13 @@ pub(crate) struct NsKey {
 /// checkpoint encoding is the struct's own — and the ONE door a frontier key
 /// re-enters memory through.
 ///
-/// The invariant it re-establishes is the one [`M3State::next_in`]'s
-/// `validate(key.parent).expect(..)` rests on: a namespace anchor is
-/// T4-valid. Every key M3 builds satisfies it by construction, but a
-/// checkpoint is bytes, and `Tumbler` admits any nonempty component sequence
-/// — `[1, 0]` decodes and is not T4-valid. Loaded keys are inert only while
-/// nothing dereferences one, and that is a property of today's readers, not
-/// of the type. One T4 scan per key at load, no allocation.
+/// It discharges [`M3State::next_in`]'s anchor precondition for the keys that
+/// arrive with no caller to discharge it. In process, a `next_in` caller
+/// establishes T4-validity through its own gate before it calls; a checkpoint
+/// is bytes, and `Tumbler` admits any nonempty component sequence — `[1, 0]`
+/// decodes and is not T4-valid — so a loaded key would otherwise be a panic
+/// waiting for the first reader to dereference it. One T4 scan per key at
+/// load, no allocation.
 #[derive(Deserialize)]
 struct NsKeyShadow {
     parent: Tumbler,
@@ -172,6 +176,12 @@ pub enum M3Rec {
 /// `parent(a).is_some()` ⟺ `#a ≥ 2` (M1's `parent` is `None` only for a
 /// single-component node), so the check is one length compare, and it turns a
 /// permanent applier panic into M2's ordinary decode failure.
+///
+/// A per-record door carries per-record facts and no others. The standing
+/// property `RegisterPrincipal` would want — id-injectivity across Π — is not
+/// one: it is a claim about the registry the record is about to enter, which
+/// no decoder holding a single frame can settle. That invariant has one
+/// owner, `delegate`'s `DuplicateId` gate, and this door does not share it.
 #[derive(Deserialize)]
 enum M3RecShadow {
     Allocate { addr: Address },
@@ -242,7 +252,11 @@ pub struct M3State {
     /// tier only, O1a). Append-only with immutable prefixes (O12/O13),
     /// prefix-injective (O1b, by (v)) AND id-injective (`delegate`'s
     /// DuplicateId gate, §6) — both the by-prefix key and the by-id scan are
-    /// single-valued. The ONLY authoritative ownership state — the delegation
+    /// single-valued. The two hold by different means: prefix-injectivity is
+    /// structural, carried by the map's own key, while id-injectivity is a
+    /// PRODUCER invariant, established at that one gate and never
+    /// re-established by [`M3State::apply_m3`].
+    /// The ONLY authoritative ownership state — the delegation
     /// forest is recomputable (NestingByDelegation) and never stored. An
     /// `OrdMap` because the top-down check needs a descendant *range* probe
     /// (§6 (iv)) and ordering leaves the ω range-walk upgrade open — a
@@ -443,6 +457,19 @@ impl M3State {
     /// `Allocate` that regresses or jumps a frontier (ordinal ≠ count + 1) is
     /// outside the domain and fail-stops on the contiguity `debug_assert` —
     /// corruption, not a live error path.
+    ///
+    /// `RegisterPrincipal` is the one arm with no gate of its own, and that is
+    /// deliberate rather than missing. Id-injectivity — one id ↦ at most one
+    /// principal — is a PRODUCER invariant, owned by `delegate`'s
+    /// `DuplicateId` gate alone; the fold neither re-checks nor re-establishes
+    /// it, and could not, since the property is about the whole registry and a
+    /// fold arm sees one record. What rests on it is
+    /// [`M3State::principal_prefix`]'s single-valuedness, and through it
+    /// `fork`'s account and M5's cross-owner VERSION target: a
+    /// `RegisterPrincipal` from any producer but `delegate` would seat a
+    /// second principal on a live id and make all three arbitrary. `delegate`
+    /// is that sole producer, and M2's journal is the boundary that keeps it
+    /// so.
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
@@ -487,10 +514,27 @@ impl M3State {
     /// M1's `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every first
     /// emission through it is the defensive guard (it can only fire on a
     /// corrupted frontier).
+    ///
+    /// PRECONDITION — `key.parent` is T4-valid, and under
+    /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
+    /// `k = 2` only below that tier). Six sites reach here, and each
+    /// discharges it by a gate that has already run: [`namespace_of`] takes
+    /// its anchor from M1's `parent`, an [`Address`] by type; [`version_ns`],
+    /// [`document_ns`] and [`account_ns`] clone theirs from an [`Address`];
+    /// and [`content_ns`]/[`link_ns`] are reached only through the mints,
+    /// whose `is_registered_document` gate makes `home` a Document, so
+    /// `inc(home, 2)` lands inside T4. Off a checkpoint the anchor arrives
+    /// through [`NsKeyShadow`], which discharges it where no caller can.
+    ///
+    /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] do NOT
+    /// discharge it: handed an element they build an anchor outside T4. That
+    /// costs nothing, because a lock key is never dereferenced — what those
+    /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     pub(crate) fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
         let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
-        let anchor =
-            validate(key.parent.clone()).expect("namespace parents are T4-valid by construction");
+        let anchor = validate(key.parent.clone()).expect(
+            "next_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
+        );
         let c1 = checked_inc(&anchor, key.g.inc_k())?; // c1 = inc(parent, g), trailing ordinal 1
         Ok(if m.is_zero() {
             c1 // first emission
@@ -512,13 +556,22 @@ impl M3State {
     /// coarser `(home_doc, g)` key: the three g = 1 chains under one document
     /// — content `(b_C(d), 1)`, link `(b_L(d), 1)`, version `(d, 1)` — get
     /// three DISTINCT locks (B7/B8).
+    ///
+    /// Total on every [`Address`], and the caller's one obligation is to pass
+    /// the SAME `home` the paired mint receives. A `home` below the document
+    /// tier yields a key whose anchor is outside T4 — harmless, since a lock
+    /// key is only ever compared, and the paired mint refuses that `home`
+    /// `HomeNotRegistered` a moment later.
     pub fn content_lock_key(home: &Address) -> LockKey {
         ns_lock_key(&content_ns(home))
     }
 
     /// Link-chain `LockKey`: `(b_L(home), 1)` (§1/§3). Pairs with
     /// [`M3State::mint_link`]`(home)` — take it BEFORE the closure, and the
-    /// mint inside advances this same key.
+    /// mint inside advances this same key. Same obligation and same latitude
+    /// as [`M3State::content_lock_key`]: pass the mint's own `home`, and a
+    /// wrong-tier one costs only the key's own T4-validity, which nothing
+    /// reads.
     pub fn link_lock_key(home: &Address) -> LockKey {
         ns_lock_key(&link_ns(home))
     }
@@ -564,6 +617,21 @@ impl M3State {
 
 // ---------------------------------------------------------------------------
 // §A The four pure mints (folded into M5/M7 composites; M2 contract 3).
+//
+// Each is a query: it reads WORKING state, checks one structural
+// precondition, and hands back the next address on its chain together with
+// the single `M3Rec` that realizes it. Advancing the frontier is the
+// CALLER's half — hold the paired `*_lock_key` across the transaction and
+// stage the returned record in it — and it is an obligation nothing here can
+// enforce, because the record is delivered inside a tuple the caller has
+// already destructured.
+//
+// The cost of dropping it is stated rather than guarded: a mint whose record
+// is never staged leaves the frontier where it stood, so the next mint on
+// that chain hands out the SAME address, and the fold's contiguity check
+// cannot see it — the second `Allocate` is legitimately `m + 1`. So "an
+// address is never reused" is M3's to keep GIVEN the caller's half; unmet,
+// nothing in the system says so.
 // ---------------------------------------------------------------------------
 
 impl M3State {
@@ -581,7 +649,8 @@ impl M3State {
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
-    /// field `[s_L, m+1]` (§3). [M7: MAKELINK]
+    /// field `[s_L, m+1]` (§3). [M7: MAKELINK] The caller holds
+    /// [`M3State::link_lock_key`]`(home)` and stages the returned [`M3Rec`].
     pub fn mint_link(&self, home: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(home) {
             return Err(MintError::HomeNotRegistered); // L1a
@@ -592,7 +661,9 @@ impl M3State {
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
     /// kept SEPARATE from the document chain (ASN-0123). [M5: owned
-    /// CREATENEWVERSION]
+    /// CREATENEWVERSION] The caller holds
+    /// [`M3State::version_lock_key`]`(source)` and stages the returned
+    /// [`M3Rec`].
     pub fn mint_version(&self, source: &Address) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(source) {
             // V-WF: registered Document (covers unregistered AND non-document).
@@ -603,7 +674,9 @@ impl M3State {
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
-    /// [CREATENEWDOCUMENT; cross-owner VERSION; fork]
+    /// [CREATENEWDOCUMENT; cross-owner VERSION; fork] The caller holds
+    /// [`M3State::document_lock_key`]`(account)` and stages the returned
+    /// [`M3Rec`].
     pub fn mint_document(&self, account: &Address) -> Result<(Address, M3Rec), MintError> {
         if self.entity_level(account) != Some(Level::Account) {
             // P8/CND.pre (covers unregistered AND non-account).
@@ -773,6 +846,17 @@ impl M3State {
     /// probe settles top-down — take the first key ≥ `p`; a registered
     /// principal sits strictly under `p` iff that key is a strict extension.
     /// If it is not, none is (the block is empty). No full scan.
+    ///
+    /// PRECONDITION — `p ∉ Π`. The block of keys ≥ `p` opens with `p` itself
+    /// when `p` is a principal, so the probe would answer `false` while a
+    /// principal genuinely sits beneath it. `delegate` is the only caller and
+    /// discharges this by the two gates PINNED ahead of (iv): if `p ∈ Π` then
+    /// ω(`p`) is `p`'s own principal, so every strict-ancestor delegator is
+    /// already refused `NotAuthorized` at (ii), and `p`'s own principal is
+    /// already refused `NotAncestor` at (i). Reordering (i) or (ii) behind
+    /// (iv) would not fail loudly — it would let delegation seat a principal
+    /// ABOVE an existing one, which is the nesting invariant (iv) exists to
+    /// hold.
     pub(crate) fn has_principal_strictly_under(&self, p: &Address) -> bool {
         self.principals
             .range(p.clone()..)
@@ -1017,5 +1101,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// What a key owes is injectivity, and it owes it on every anchor — a
+    /// lock key is compared, never dereferenced. `content_ns`/`link_ns` on an
+    /// element build `e ++ [0, 1]` and `e ++ [0, 2]`, four separators apiece
+    /// and so outside T4, which is exactly the shape `next_in`'s precondition
+    /// excludes and no mint can reach: both go through
+    /// `is_registered_document`, which admits only a Document. The keys are
+    /// still deterministic and still distinct, which is the whole of what
+    /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] promise.
+    #[test]
+    fn a_lock_key_is_injective_even_on_an_anchor_no_mint_could_reach() {
+        let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        assert_eq!(element.level(), Level::Element);
+
+        let (content, link) = (content_ns(&element), link_ns(&element));
+        assert!(!is_t4_valid(&content.parent), "the anchor is outside T4");
+        assert!(!is_t4_valid(&link.parent), "the anchor is outside T4");
+
+        // Deterministic, and the two subspaces stay apart — the properties
+        // the public constructors exist to provide.
+        assert_eq!(
+            M3State::content_lock_key(&element),
+            M3State::content_lock_key(&element)
+        );
+        assert_ne!(
+            M3State::content_lock_key(&element),
+            M3State::link_lock_key(&element)
+        );
+        // …and neither collides with the key of the document that homes it.
+        let doc = a(&[1, 0, 1, 0, 1]);
+        assert_ne!(
+            M3State::content_lock_key(&element),
+            M3State::content_lock_key(&doc)
+        );
     }
 }

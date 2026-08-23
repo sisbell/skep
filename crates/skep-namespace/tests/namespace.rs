@@ -288,6 +288,35 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
 }
 
 #[test]
+fn a_mint_whose_record_is_never_staged_re_hands_its_address() {
+    // §A: advancing the frontier is the CALLER's half of every mint, and
+    // nothing in M3 can enforce it — the record is delivered inside a tuple
+    // the caller has already destructured. This is that obligation made
+    // executable rather than left as prose: drop the record and the very next
+    // mint on the chain returns the SAME address, with no error and no query
+    // saying so. The fold's contiguity check cannot see it either, since the
+    // second Allocate would be a legitimate m + 1.
+    let (k, _acct, doc) = kernel_with_account_and_doc();
+    let key = M3State::content_lock_key(&doc);
+
+    // A composite that mints and commits without staging: it commits, and it
+    // moves nothing.
+    let (dropped, _) = k
+        .transact::<_, MintError>(std::slice::from_ref(&key), |stg| {
+            Ok(stg.working().m3().mint_content(&doc)?.0)
+        })
+        .expect("the transaction commits");
+    assert_eq!(dropped, a(&[1, 0, 1, 0, 1, 0, 1, 1]));
+    assert!(!k.snapshot().world().m3().is_allocated(&dropped));
+
+    // …so the chain hands the address out a second time — the reuse the
+    // caller's half exists to prevent, and which M3 alone cannot.
+    let staged = commit_mint(&k, key, |m3| m3.mint_content(&doc));
+    assert_eq!(staged, dropped);
+    assert!(k.snapshot().world().m3().is_allocated(&staged));
+}
+
+#[test]
 fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     // B1/B2 as laws, not examples: over a mechanical round-robin across the
     // four chains, every minted address is distinct and allocated, the next

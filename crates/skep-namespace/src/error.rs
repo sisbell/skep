@@ -9,14 +9,19 @@ use std::fmt;
 
 use skep_address::GateViolation;
 
-/// Frontier-mint rejection (§A) — the ONE vocabulary all four mints share, so
-/// M5 and M7 lift a mint refusal through a single `From`. Each mint can
-/// produce exactly one of the structural variants:
+/// Frontier-mint rejection (§A) — the ONE vocabulary all four PUBLIC mints
+/// share, so M5 and M7 lift a mint refusal through a single `From`. Each mint
+/// can produce exactly one of the structural variants:
 /// `mint_content`/`mint_link` ⇒ `HomeNotRegistered`, `mint_version` ⇒
 /// `SourceNotRegistered`, `mint_document` ⇒ `NotAnAccount`. Those
 /// preconditions are the only active gates (§4); `Gate` is the M1 inc-gate
 /// (B6/TA5a) routed defensively — it fires only on a corrupted frontier, never
 /// on a live path.
+///
+/// The fifth mint, the account chain's, is crate-private and answers `Option`
+/// rather than adding a leaf here: `delegate` is its only caller and already
+/// has a typed rejection for its one refusal, so a fifth variant would be a
+/// permanently dead arm in M5's, M7's and M10's vocabularies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MintError {
     /// `mint_content`/`mint_link`: home is not a registered Document (P6/C2/L1a).

@@ -324,16 +324,13 @@ fn generator(anchor: Level, child: Level) -> Generator {
 /// that is the one input for which no namespace exists.
 ///
 /// Every child-side reader of a frontier key routes through here —
-/// `delegate` for its held namespace `LockKey`, membership for its chain
-/// range probe, the fold for its frontier advance — so the locked key and the
-/// key a staged `Allocate` advances are one and the same key by construction
-/// (§1/§2/§6). Anchor-side keys come from the `*_ns` family below, one per
-/// mint, and [`account_ns`] is the twin this derivation meets: `delegate`
-/// locks the key derived here while [`M3State::mint_account`] reads and its
-/// `Allocate` advances the key derived there. Both sides take their `g` from
-/// [`generator`] at the same tier pair, which is what makes them one key.
-/// Callers that hold a ≥ 2-component address by their own gate discharge the
-/// `None` case with an `expect` that names that gate.
+/// membership for its chain range probe, the fold for its frontier advance —
+/// so the key a staged `Allocate` advances is the key its mint read, by
+/// construction (§1/§2). Anchor-side keys come from the `*_ns` family below,
+/// one per chain, and both sides take their `g` from [`generator`] at the
+/// same tier pair, which is what makes them one key. Callers that hold a
+/// ≥ 2-component address by their own gate discharge the `None` case with an
+/// `expect` that names that gate.
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
     let g = generator(par.level(), a.level());
@@ -353,13 +350,18 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // Each fixed family's `g` is what `generator` yields at that family's FIXED
 // tier pair, noted beside each constructor, so the variants below and the
 // chain-family rule cannot drift apart unnoticed.
+/// `b_C(d) = inc(d, 2)` — the content sub-allocator's anchor, named because
+/// [`link_ns`] is defined off it: `b_L(d) = inc(b_C(d), 0)` (§3).
+fn content_base(home: &Address) -> Tumbler {
+    inc(home.tumbler(), 2)
+}
 fn content_ns(home: &Address) -> NsKey {
-    // b_C(d) = inc(d, 2); Element → Element.
-    NsKey { parent: inc(home.tumbler(), 2), g: Generator::SameField }
+    // b_C(d); Element → Element.
+    NsKey { parent: content_base(home), g: Generator::SameField }
 }
 fn link_ns(home: &Address) -> NsKey {
     // b_L(d) = inc(b_C(d), 0); Element → Element.
-    NsKey { parent: inc(&inc(home.tumbler(), 2), 0), g: Generator::SameField }
+    NsKey { parent: inc(&content_base(home), 0), g: Generator::SameField }
 }
 fn version_ns(source: &Address) -> NsKey {
     // (source, 1) — Document → Document, the ASN-0123 separate chain.
@@ -516,7 +518,7 @@ impl M3State {
     /// PRECONDITION — `key.parent` is T4-valid, and under
     /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
     /// `k = 2` only below that tier). The five mints are the only callers,
-    /// one per chain family, and each discharges it by a gate that has
+    /// one per chain, and each discharges it by a gate that has
     /// already run: [`version_ns`] and [`document_ns`] clone their anchor
     /// from an [`Address`], as does [`account_ns`] behind
     /// [`M3State::mint_account`]'s registered-entity gate; and
@@ -590,6 +592,16 @@ impl M3State {
         ns_lock_key(&document_ns(account))
     }
 
+    /// Account-chain `LockKey`: `(parent, 2)` under a node, `(parent, 1)`
+    /// under an account — the one family whose `g` the chain-family rule
+    /// picks (Conflicts §8). Pairs with [`M3State::mint_account`]`(parent)`
+    /// — take it BEFORE the closure, and the mint inside advances this same
+    /// key. `pub(crate)` for the reason the mint is: `delegate` is the only
+    /// caller and lives in this crate.
+    pub(crate) fn account_lock_key(parent: &Address) -> LockKey {
+        ns_lock_key(&account_ns(parent))
+    }
+
     /// THE single global principal-registry key (NOT per-subtree — §8 / Open
     /// build decisions "Serialization granularity"). LOAD-BEARING in
     /// `delegate`: serializes its fresh-prefix top-down / next-form /
@@ -615,7 +627,10 @@ impl M3State {
 }
 
 // ---------------------------------------------------------------------------
-// §A The five pure mints — one per chain family, so every address M3
+// §A The five pure mints — one per chain, covering the corpus's six
+// families, since `mint_account` serves both account-tier families
+// (`A_account(N)` under a node and the sub-account `(A, 1)` under an
+// account, whose `g` the chain-family rule picks). So every address M3
 // originates is minted here. Four are public and fold into M5/M7 composites
 // (M2 contract 3); the fifth, `mint_account`, is `pub(crate)` because
 // `delegate` is its only caller and lives in this crate.
@@ -698,10 +713,8 @@ impl M3State {
     /// `MintError` leaf would put a permanently dead arm in M5's, M7's and
     /// M10's vocabularies for a mint none of them can reach.
     ///
-    /// The caller stages the returned [`M3Rec`] under the chain's key;
-    /// `delegate` derives that key CHILD-side from the supplied prefix, and
-    /// the two agree by construction — both take their `g` from [`generator`]
-    /// at the same `(parent.level(), Account)` pair.
+    /// The caller holds [`M3State::account_lock_key`]`(parent)` and stages
+    /// the returned [`M3Rec`].
     pub(crate) fn mint_account(&self, parent: &Address) -> Option<(Address, M3Rec)> {
         if !matches!(self.entity_level(parent)?, Level::Node | Level::Account) {
             return None;
@@ -1068,8 +1081,10 @@ mod tests {
                 );
             }
         }
-        // The public constructors are that same encoding, so a caller's key
-        // and the frontier its mint advances are one value.
+        // The key constructors are that same encoding, so a caller's key
+        // and the frontier its mint advances are one value — the account
+        // chain included, whose lock `delegate` takes and whose frontier
+        // `mint_account` reads.
         assert_eq!(
             M3State::content_lock_key(&doc),
             ns_lock_key(&content_ns(&doc))
@@ -1082,6 +1097,14 @@ mod tests {
         assert_eq!(
             M3State::document_lock_key(&acct),
             ns_lock_key(&document_ns(&acct))
+        );
+        assert_eq!(
+            M3State::account_lock_key(&node),
+            ns_lock_key(&account_ns(&node))
+        );
+        assert_eq!(
+            M3State::account_lock_key(&acct),
+            ns_lock_key(&account_ns(&acct))
         );
     }
 

@@ -11,7 +11,7 @@ use skep_address::{parent, validate, Address, Level, Tumbler};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
-use crate::state::{bootstrap_root, namespace_of, ns_lock_key};
+use crate::state::bootstrap_root;
 use crate::{prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS};
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -87,7 +87,7 @@ where
     ///
     /// Pure pre-work runs first: the validate-lift (`NotValid`) and the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
-    /// alone does not make `namespace_of`/lock-key construction safe (a
+    /// alone does not make `parent()`/lock-key construction safe (a
     /// 1-component node prefix is T4-valid but parentless — §6). Both
     /// pre-work failures reject via `TxnError::Rejected` with NO transaction
     /// opened. Every race-prone condition is then evaluated inside the
@@ -96,12 +96,9 @@ where
     /// (same `new_id`, different `new_prefix`), which only the single global
     /// [`M3State::principals_lock_key`] serializes (§8).
     ///
-    /// Rejection order is PINNED (§6): `NotValid` → `NotAccountTier` →
-    /// `DelegatorUnknown` → `NotAncestor` → `NotAuthorized` → `NotTopDown`
-    /// → `NotFresh` → `DuplicateId` → `ParentNotRegistered` →
-    /// `NotNextForm`; a multiply-defective input earns the FIRST applicable
-    /// rejection. Obtain the required next-form `new_prefix` from
-    /// [`M3State::next_account_prefix`] instead of guess-and-retry.
+    /// Rejection order is PINNED (§6) and is [`DelegateError`]'s declaration
+    /// order, which states it. Obtain the required next-form `new_prefix`
+    /// from [`M3State::next_account_prefix`] instead of guess-and-retry.
     pub fn delegate(
         &self,
         delegator: PrincipalId,
@@ -109,20 +106,21 @@ where
         new_id: PrincipalId,
     ) -> Result<(Address, Seq), TxnError<DelegateError>> {
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
-        // only after it are parent()/namespace_of() total on new_prefix.
+        // only after it is parent() total on new_prefix.
         let new_prefix =
             validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
         if new_prefix.level() != Level::Account {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
-        // The held lock's NsKey, derived CHILD-side from the supplied prefix.
-        // The mint inside answers the next-form check and hands back the
-        // Allocate, off the key IT derives anchor-side — and the two are one
-        // key by construction, since both sides take their `g` from the
-        // chain-family rule at the same tier pair (§1/§6).
-        let ns = namespace_of(&new_prefix)
+        // The chain's anchor, and with it the ONE key this op names: the lock
+        // taken here and the frontier `mint_account` reads inside are the same
+        // `account_ns(par)` (§1/§6).
+        let par = parent(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
-        let keys = [ns_lock_key(&ns), M3State::principals_lock_key()];
+        let keys = [
+            M3State::account_lock_key(&par),
+            M3State::principals_lock_key(),
+        ];
         self.kernel.transact(&keys, move |stg| {
             let base = stg.base().m3();
             // Delegator resolution: an unknown id rejects here, and (i) needs
@@ -162,8 +160,6 @@ where
             // that advances it, so the value the gate compares and the record
             // the closure stages cannot come apart. Next-form is MANDATORY
             // under the counter representation (§6).
-            let par = parent(&new_prefix)
-                .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
             let Some((next, alloc)) = stg.working().m3().mint_account(&par) else {
                 return Err(DelegateError::ParentNotRegistered);
             };

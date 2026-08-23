@@ -8,12 +8,9 @@
 //! `apply` dispatching into `M3State::apply_m3`.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use skep_address::{
-    content_subspace, link_subspace, validate, Address, Level, Nat, Tumbler,
-};
+use skep_address::{content_subspace, link_subspace, validate, Address, Level, Nat, Tumbler};
 use skep_kernel::{
     BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, TxnError,
     WorldState,
@@ -75,12 +72,12 @@ fn genesis_world() -> World {
     }
 }
 
-fn mem_kernel(genesis: World) -> Arc<Kernel<World>> {
+fn mem_kernel(genesis: World) -> Kernel<World> {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };
-    Arc::new(Kernel::open(cfg, genesis).expect("in-memory open"))
+    Kernel::open(cfg, genesis).expect("in-memory open")
 }
 
 fn fsync_config(dir: &Path) -> KernelConfig {
@@ -130,7 +127,7 @@ const UNKNOWN_ID: PrincipalId = PrincipalId(99);
 /// `create_new_document` under it (⇒ doc `[1,0,1,0,1]`). The handle borrows
 /// the kernel, so it stays inside; a test that needs one builds it off the
 /// returned kernel.
-fn kernel_with_account_and_doc() -> (Arc<Kernel<World>>, Address, Address) {
+fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let (acct, _) = ns
@@ -249,7 +246,9 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     let (k, acct, doc) = kernel_with_account_and_doc();
 
     // Version chain (d, 1) — ASN-0123's separate chain.
-    let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| m3.mint_version(&doc));
+    let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
+        m3.mint_version(&doc)
+    });
     assert_eq!(v1, a(&[1, 0, 1, 0, 1, 1]));
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_allocated(&v1));
@@ -257,7 +256,9 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     assert!(m3.is_registered_document(&v1));
     assert_eq!(m3.entity_level(&v1), Some(Level::Document));
     // The frontier advanced, so the chain does not re-mint v1.
-    let v2 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| m3.mint_version(&doc));
+    let v2 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
+        m3.mint_version(&doc)
+    });
     assert_eq!(v2, a(&[1, 0, 1, 0, 1, 2]));
     assert!(k.snapshot().world().m3().is_allocated(&v2));
 
@@ -272,9 +273,13 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
 
     // A version is a usable home in its own right: it carries content and
     // versions of its own, on chains anchored at IT.
-    let c = commit_mint(&k, M3State::content_lock_key(&v1), |m3| m3.mint_content(&v1));
+    let c = commit_mint(&k, M3State::content_lock_key(&v1), |m3| {
+        m3.mint_content(&v1)
+    });
     assert_eq!(c, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
-    let vv = commit_mint(&k, M3State::version_lock_key(&v1), |m3| m3.mint_version(&v1));
+    let vv = commit_mint(&k, M3State::version_lock_key(&v1), |m3| {
+        m3.mint_version(&v1)
+    });
     assert_eq!(vv, a(&[1, 0, 1, 0, 1, 1, 1]));
     let m3 = k.snapshot().world().m3().clone();
     assert!(m3.is_allocated(&c) && m3.is_allocated(&vv));
@@ -322,7 +327,7 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     // four chains, every minted address is distinct and allocated, the next
     // mint on each chain is still fresh, and the whole schedule is
     // deterministic.
-    fn run() -> (Arc<Kernel<World>>, Vec<Address>, Address, Address) {
+    fn run() -> (Kernel<World>, Vec<Address>, Address, Address) {
         let (k, acct, doc) = kernel_with_account_and_doc();
         let keys = [
             M3State::content_lock_key(&doc),
@@ -363,7 +368,10 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     // Every one of them is allocated.
     let m3 = k.snapshot().world().m3().clone();
     for addr in &minted {
-        assert!(m3.is_allocated(addr), "{addr:?} was minted but is not allocated");
+        assert!(
+            m3.is_allocated(addr),
+            "{addr:?} was minted but is not allocated"
+        );
     }
     // Gap-free and monotone per chain: the next mint on each chain is an
     // address the schedule has not already handed out, and is not yet
@@ -374,7 +382,10 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
         ("version", m3.mint_version(&doc).expect("peek").0),
         ("document", m3.mint_document(&acct).expect("peek").0),
     ] {
-        assert!(!minted.contains(&next), "{chain}: the next mint repeats {next:?}");
+        assert!(
+            !minted.contains(&next),
+            "{chain}: the next mint repeats {next:?}"
+        );
         assert!(
             !m3.is_allocated(&next),
             "{chain}: the next mint is already allocated"
@@ -394,18 +405,39 @@ fn mint_preconditions_reject_structurally() {
     let unregistered_acct = a(&[1, 0, 9]); // account-level, never registered
 
     // P6/C2/L1a: content/link home must be a REGISTERED Document.
-    assert_eq!(m3.mint_content(&unregistered_doc).unwrap_err(), MintError::HomeNotRegistered);
-    assert_eq!(m3.mint_link(&unregistered_doc).unwrap_err(), MintError::HomeNotRegistered);
-    assert_eq!(m3.mint_content(&acct).unwrap_err(), MintError::HomeNotRegistered);
+    assert_eq!(
+        m3.mint_content(&unregistered_doc).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    assert_eq!(
+        m3.mint_link(&unregistered_doc).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    assert_eq!(
+        m3.mint_content(&acct).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
     // V-WF: version source must be a registered Document — covers an
     // unregistered address AND a registered non-document alike.
-    assert_eq!(m3.mint_version(&unregistered_doc).unwrap_err(), MintError::SourceNotRegistered);
-    assert_eq!(m3.mint_version(&acct).unwrap_err(), MintError::SourceNotRegistered);
+    assert_eq!(
+        m3.mint_version(&unregistered_doc).unwrap_err(),
+        MintError::SourceNotRegistered
+    );
+    assert_eq!(
+        m3.mint_version(&acct).unwrap_err(),
+        MintError::SourceNotRegistered
+    );
     // P8/CND.pre: document target must be a registered Account — covers
     // unregistered AND non-account (document, node) alike.
-    assert_eq!(m3.mint_document(&unregistered_acct).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(
+        m3.mint_document(&unregistered_acct).unwrap_err(),
+        MintError::NotAnAccount
+    );
     assert_eq!(m3.mint_document(&doc).unwrap_err(), MintError::NotAnAccount);
-    assert_eq!(m3.mint_document(&a(&[1])).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(
+        m3.mint_document(&a(&[1])).unwrap_err(),
+        MintError::NotAnAccount
+    );
 }
 
 #[test]
@@ -1035,10 +1067,7 @@ fn fork_mints_in_the_callers_own_account() {
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
-    assert_eq!(
-        rejected(ns.fork(UNKNOWN_ID)),
-        CreateDocumentError::NotOwner
-    );
+    assert_eq!(rejected(ns.fork(UNKNOWN_ID)), CreateDocumentError::NotOwner);
     // Node-tier caller (π₀ at [1]): the node-tier O10 case is DROPPED —
     // typed Mint(NotAnAccount), never a silent skip (Conflicts §6).
     assert_eq!(
@@ -1080,7 +1109,10 @@ fn register_node_validates_and_admits_supplied_addresses() {
     assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
     // NotNode — account-level input; checked before lineage ([2,0,1] is
     // also not bootstrap-descended).
-    assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
+    assert_eq!(
+        rejected(ns.register_node(t(&[2, 0, 1]))),
+        NodeError::NotNode
+    );
     // NotNode precedes NotFresh: [1,7,0,1] is account-level AND registered
     // (the delegation above allocated it).
     assert_eq!(
@@ -1098,7 +1130,10 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // refused for its tier, since depth bounds the node registry alone.
     let mut deep_acct = vec![1u32, 0];
     deep_acct.extend(std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1));
-    assert_eq!(rejected(ns.register_node(t(&deep_acct))), NodeError::NotNode);
+    assert_eq!(
+        rejected(ns.register_node(t(&deep_acct))),
+        NodeError::NotNode
+    );
     // NotFresh — duplicates surface typed, never a silent coalesce; the
     // seeded [1] and the just-registered [1,7] alike.
     assert_eq!(rejected(ns.register_node(t(&[1]))), NodeError::NotFresh);
@@ -1161,12 +1196,12 @@ fn pre_work_rejections_open_no_transaction() {
             DelegateError::NotAccountTier
         );
         assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
-        assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
-        assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
         assert_eq!(
-            rejected(ns.fork(UNKNOWN_ID)),
-            CreateDocumentError::NotOwner
+            rejected(ns.register_node(t(&[2, 0, 1]))),
+            NodeError::NotNode
         );
+        assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
+        assert_eq!(rejected(ns.fork(UNKNOWN_ID)), CreateDocumentError::NotOwner);
         Ok(())
     })
     .expect("the outer transaction is a zero-step commit");
@@ -1203,7 +1238,9 @@ fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
 fn journaled_types_survive_serde_round_trips() {
     // M3Rec — the journal delta — through M2's actual wire format (bincode).
     let recs = [
-        M3Rec::Allocate { addr: a(&[1, 0, 1]) },
+        M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+        },
         M3Rec::RegisterNode { addr: a(&[1, 7]) },
         M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
@@ -1226,7 +1263,9 @@ fn journaled_types_survive_serde_round_trips() {
         RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
     }
     let shadows = [
-        TumblerRec::Allocate { addr: t(&[1, 0, 1]) },
+        TumblerRec::Allocate {
+            addr: t(&[1, 0, 1]),
+        },
         TumblerRec::RegisterNode { addr: t(&[1, 7]) },
         TumblerRec::RegisterPrincipal {
             prefix: t(&[1, 0, 1]),
@@ -1291,6 +1330,10 @@ fn journaled_types_survive_serde_round_trips() {
     let state = k.snapshot().world().m3().clone();
     let bytes = bincode::serialize(&state).expect("serialize M3State");
     let back: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
+    // Whole-value: the decoded slice IS the encoded one, entry for entry
+    // across all three registries — which the per-question probes below then
+    // name, so a failure says which claim broke.
+    assert_eq!(back, state);
     assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     assert!(back.is_registered_document(&doc));
     assert_eq!(back.entity_level(&acct), Some(Level::Account));
@@ -1311,8 +1354,9 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
     let dir = tempdir().expect("tempdir");
     let acct;
     let doc;
+    let before;
     {
-        let k = Arc::new(Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open"));
+        let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
         let ns = Namespace::new(&k);
         let (acc, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
@@ -1324,10 +1368,16 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
         let (d, _) = ns.create_new_document(ID1, &acct).expect("create");
         doc = d;
         ns.register_node(t(&[1, 7])).expect("register node");
+        before = k.snapshot().world().m3().clone();
     }
     let k2 = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
     let snap = k2.snapshot();
     let m3 = snap.world().m3();
+    // What recovery claims, whole: the restored slice IS the pre-crash slice
+    // — checkpoint-loaded registries plus post-checkpoint replay landing
+    // exactly where the live one stood. The named answers below say which
+    // parts of that a reader cares about.
+    assert_eq!(m3, &before);
     assert_eq!(m3.principal_prefix(ID1), Some(&acct));
     assert!(m3.is_registered_document(&doc));
     assert_eq!(m3.entity_level(&a(&[1, 7])), Some(Level::Node));

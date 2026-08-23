@@ -236,7 +236,10 @@ where
     /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
     /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6). M5
     /// wires the shared content separately (mechanism/policy split).
-    pub fn fork(&self, caller: PrincipalId) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
+    pub fn fork(
+        &self,
+        caller: PrincipalId,
+    ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
         let snap = self.kernel.snapshot();
         let Some(pfx) = snap.world().m3().principal_prefix(caller) else {
             return Err(TxnError::Rejected(CreateDocumentError::NotOwner));

@@ -18,7 +18,14 @@ use crate::error::MintError;
 /// id-injectivity ([`crate::DelegateError::DuplicateId`]) ⇒ one id ↦ one
 /// principal, which keeps [`M3State::principal_prefix`] and the ω-auth gate
 /// single-valued (§6).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+///
+/// The order is the underlying numeral's and carries no ownership meaning —
+/// ownership is decided by prefix length, never by id (§5). It is here
+/// because an id is a map key and a sort key: the `id → prefix` reverse index
+/// [`M3State`] names as a recomputable hint wants a `BTreeMap`, whose
+/// iteration order is deterministic where a hashed one's is the process's
+/// hash seed, and no downstream crate can add the impl.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct PrincipalId(pub u64);
 
 /// π₀'s fixed id (genesis Σ₀, O14); the ω-auth gate keys on it, so M10 binds
@@ -79,7 +86,10 @@ impl TryFrom<NsKeyShadow> for NsKey {
         if !is_t4_valid(&shadow.parent) {
             return Err("a namespace anchor is T4-valid (ASN-0040 (p, d))");
         }
-        Ok(NsKey { parent: shadow.parent, g: shadow.g })
+        Ok(NsKey {
+            parent: shadow.parent,
+            g: shadow.g,
+        })
     }
 }
 
@@ -102,18 +112,22 @@ pub(crate) enum Generator {
 
 impl Generator {
     /// The `k` this generator denotes in M1's `inc(t, k)` — which field of the
-    /// anchor the chain advances.
+    /// anchor the chain advances. A widening of the numeral, so it cannot
+    /// disagree with what a checkpoint or a lock key carries.
     fn inc_k(self) -> usize {
-        match self {
-            Generator::SameField => 1,
-            Generator::NextField => 2,
-        }
+        usize::from(u8::from(self))
     }
 }
 
 impl From<Generator> for u8 {
+    /// The generator's numeral — ASN-0040's `d`, and the byte itself: what a
+    /// checkpointed frontier key carries and what [`ns_lock_key`] pushes.
+    /// [`Generator::try_from`] is its inverse.
     fn from(g: Generator) -> u8 {
-        g.inc_k() as u8
+        match g {
+            Generator::SameField => 1,
+            Generator::NextField => 2,
+        }
     }
 }
 
@@ -141,6 +155,12 @@ impl TryFrom<u8> for Generator {
 /// Off the journal a record arrives through [`M3RecShadow`], which re-checks
 /// the one standing fact T4-validity does not carry: an `Allocate` address
 /// extends a parent.
+///
+/// A variant added HERE must be added to [`M3RecShadow`] too: `Serialize` is
+/// derived from this enum and `Deserialize` runs through the shadow, so a
+/// shadow missing the variant yields records that journal and then never
+/// decode — a recovery failure that survives restart, from an edit that looked
+/// local.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "M3RecShadow")]
 pub enum M3Rec {
@@ -222,7 +242,16 @@ impl TryFrom<M3RecShadow> for M3Rec {
 /// caller wanting a byte-comparable rendering canonicalizes it (the engine's
 /// observation surface transcodes for exactly this reason) rather than
 /// hashing the encoding.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Equality is structural, and it is the meaning of the type: two slices are
+/// equal iff their three registries hold the same entries, whatever order a
+/// process's hash seed iterates them in. So a slice recovered from a
+/// checkpoint is comparable to the one it was taken from — the whole claim
+/// recovery makes — without going through a rendering. There is no
+/// [`Default`]: [`M3State::genesis`] is not an empty value (it seeds `[1]`
+/// into `nodes` and Π), and an empty one would be a world with no bootstrap
+/// principal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M3State {
     /// THE baptismal registry (ASN-0040 B), in B1+B2 compressed form. A
     /// namespace's entire realized set `{c₁..cₘ}` IS the single count `m` — a
@@ -343,7 +372,10 @@ fn generator(anchor: Level, child: Level) -> Generator {
 pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     let par = parent(a)?;
     let g = generator(par.level(), a.level());
-    Some(NsKey { parent: par.tumbler().clone(), g })
+    Some(NsKey {
+        parent: par.tumbler().clone(),
+        g,
+    })
 }
 
 // The namespace helpers — the ONE code path each mint, each `*_lock_key` and
@@ -366,19 +398,31 @@ fn content_base(home: &Address) -> Tumbler {
 }
 fn content_ns(home: &Address) -> NsKey {
     // b_C(d); Element → Element.
-    NsKey { parent: content_base(home), g: Generator::SameField }
+    NsKey {
+        parent: content_base(home),
+        g: Generator::SameField,
+    }
 }
 fn link_ns(home: &Address) -> NsKey {
     // b_L(d) = inc(b_C(d), 0); Element → Element.
-    NsKey { parent: inc(&content_base(home), 0), g: Generator::SameField }
+    NsKey {
+        parent: inc(&content_base(home), 0),
+        g: Generator::SameField,
+    }
 }
 fn version_ns(source: &Address) -> NsKey {
     // (source, 1) — Document → Document, the ASN-0123 separate chain.
-    NsKey { parent: source.tumbler().clone(), g: Generator::SameField }
+    NsKey {
+        parent: source.tumbler().clone(),
+        g: Generator::SameField,
+    }
 }
 fn document_ns(account: &Address) -> NsKey {
     // (account, 2) — Account → Document.
-    NsKey { parent: account.tumbler().clone(), g: Generator::NextField }
+    NsKey {
+        parent: account.tumbler().clone(),
+        g: Generator::NextField,
+    }
 }
 
 /// `A_account(N)` and the sub-account family: the account chain under
@@ -484,6 +528,7 @@ impl M3State {
     /// so.
     pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
+        // Adding a variant? `M3RecShadow` needs it as well — see `M3Rec`.
         match r {
             M3Rec::Allocate { addr } => {
                 let key = namespace_of(addr)
@@ -713,7 +758,9 @@ impl M3State {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
         }
-        let a = self.next_in(&document_ns(account)).map_err(MintError::Gate)?;
+        let a = self
+            .next_in(&document_ns(account))
+            .map_err(MintError::Gate)?;
         Ok((a.clone(), M3Rec::Allocate { addr: a }))
     }
 
@@ -757,9 +804,9 @@ impl M3State {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
-        let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
         // An absent frontier is m = 0, which no positive ordinal is ≤, so the
         // missing key needs no branch of its own.
+        let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
         !n.is_zero() && self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
@@ -946,7 +993,10 @@ mod tests {
             g: u8,
         }
 
-        let good = NsKey { parent: t(&[1, 0, 1]), g: Generator::NextField };
+        let good = NsKey {
+            parent: t(&[1, 0, 1]),
+            g: Generator::NextField,
+        };
         let bytes = bincode::serialize(&good).expect("serialize the key");
         assert_eq!(
             bincode::deserialize::<NsKey>(&bytes).expect("a well-formed key round-trips"),
@@ -956,15 +1006,21 @@ mod tests {
         // struct's own, anchor tumbler then generator numeral.
         assert_eq!(
             bytes,
-            bincode::serialize(&RawKey { parent: t(&[1, 0, 1]), g: 2 })
-                .expect("serialize the raw shape"),
+            bincode::serialize(&RawKey {
+                parent: t(&[1, 0, 1]),
+                g: 2
+            })
+            .expect("serialize the raw shape"),
         );
 
         // Anchors no `*_ns` constructor could have produced: a trailing
         // separator and a doubled one, both nonempty tumblers, neither T4.
         for bogus in [vec![1u32, 0], vec![1, 0, 0, 1]] {
-            let frame = bincode::serialize(&RawKey { parent: t(&bogus), g: 1 })
-                .expect("serialize the raw shape");
+            let frame = bincode::serialize(&RawKey {
+                parent: t(&bogus),
+                g: 1,
+            })
+            .expect("serialize the raw shape");
             assert!(
                 bincode::deserialize::<NsKey>(&frame).is_err(),
                 "{bogus:?} decoded as a namespace anchor"
@@ -1149,7 +1205,10 @@ mod tests {
         let mut keys = Vec::new();
         for parent in &parents {
             for g in [Generator::SameField, Generator::NextField] {
-                let key = NsKey { parent: parent.clone(), g };
+                let key = NsKey {
+                    parent: parent.clone(),
+                    g,
+                };
                 let encoded = ns_lock_key(&key);
                 // Functional: the same key encodes to the same bytes every
                 // time.

@@ -5,7 +5,7 @@
 //! trip, and that each part of the interface does its ordinary job. The toy
 //! `World`/`Rec` pair is the minimal engine assembly the composition
 //! contract prescribes: `HasM3` read accessor, `From<M3Rec>` record lift,
-//! `apply` dispatching into `M3State::apply_ns`.
+//! `apply` dispatching into `M3State::apply_m3`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ impl WorldState for World {
     type Record = Rec;
     fn apply(&self, r: &Rec) -> World {
         World {
-            m3: self.m3.apply_ns(&r.0),
+            m3: self.m3.apply_m3(&r.0),
         }
     }
 }
@@ -83,7 +83,7 @@ fn mem_kernel(genesis: World) -> Arc<Kernel<World>> {
     Arc::new(Kernel::open(cfg, genesis).expect("in-memory open"))
 }
 
-fn cfg_fsync(dir: &Path) -> KernelConfig {
+fn fsync_config(dir: &Path) -> KernelConfig {
     KernelConfig {
         durability: Durability::Fsync {
             journal_path: dir.to_path_buf(),
@@ -122,12 +122,15 @@ fn commit_mint(
 
 const ID1: PrincipalId = PrincipalId(1);
 const ID2: PrincipalId = PrincipalId(2);
+/// An id no principal in any fixture carries — the caller every op must
+/// refuse, and the ω no address resolves to.
+const UNKNOWN_ID: PrincipalId = PrincipalId(99);
 
 /// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then
 /// `create_new_document` under it (⇒ doc `[1,0,1,0,1]`). The handle borrows
 /// the kernel, so it stays inside; a test that needs one builds it off the
 /// returned kernel.
-fn with_account_and_doc() -> (Arc<Kernel<World>>, Address, Address) {
+fn kernel_with_account_and_doc() -> (Arc<Kernel<World>>, Address, Address) {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let (acct, _) = ns
@@ -160,7 +163,7 @@ fn genesis_seeds_bootstrap_node_and_principal() {
 }
 
 #[test]
-fn the_slice_reports_itself() {
+fn the_slice_prints_its_three_registries_and_their_contents() {
     // The slice a world embeds is reportable, so a test failure or a `dbg!`
     // in any engine can print it — the impl has to live here, since no
     // downstream crate may add it.
@@ -178,7 +181,7 @@ fn the_slice_reports_itself() {
 
 #[test]
 fn pure_mints_advance_the_documented_chains() {
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -217,7 +220,7 @@ fn successive_mints_in_one_composite_read_working_state() {
     // The M5-shaped composite (§A / M2 contract 3): lock key taken BEFORE
     // the closure, mints read working() so each sees the prior mint, staged
     // records lifted via .into().
-    let (k, _acct, doc) = with_account_and_doc();
+    let (k, _acct, doc) = kernel_with_account_and_doc();
     let keys = [M3State::content_lock_key(&doc)];
     let ((c1, c2), seq) = k
         .transact::<_, MintError>(&keys, |stg| {
@@ -243,7 +246,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     // it and the NEXT mint on that chain differs from it. A divergence
     // between the two derivations would re-hand a live address — the one
     // fatal error — without any mint or query saying so.
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
 
     // Version chain (d, 1) — ASN-0123's separate chain.
     let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| m3.mint_version(&doc));
@@ -291,7 +294,7 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     // mint on each chain is still fresh, and the whole schedule is
     // deterministic.
     fn run() -> (Arc<Kernel<World>>, Vec<Address>, Address, Address) {
-        let (k, acct, doc) = with_account_and_doc();
+        let (k, acct, doc) = kernel_with_account_and_doc();
         let keys = [
             M3State::content_lock_key(&doc),
             M3State::link_lock_key(&doc),
@@ -355,7 +358,7 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
 
 #[test]
 fn mint_preconditions_reject_structurally() {
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     let unregistered_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
@@ -384,7 +387,7 @@ fn a_mint_refusal_lifts_into_the_document_rejection() {
     fn create(m3: &M3State, account: &Address) -> Result<Address, CreateDocumentError> {
         Ok(m3.mint_document(account)?.0)
     }
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     assert_eq!(create(m3, &acct), Ok(a(&[1, 0, 1, 0, 2])));
@@ -398,7 +401,7 @@ fn a_mint_refusal_lifts_into_the_document_rejection() {
 
 #[test]
 fn membership_is_exact_chain_membership() {
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -494,7 +497,7 @@ fn lock_keys_distinguish_every_chain_and_registry() {
 
 #[test]
 fn containment_is_not_authorization() {
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -532,7 +535,7 @@ fn containment_is_not_authorization() {
     assert!(m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[1])));
     // An unknown id owns nothing; an uncovered address has no owner at all,
     // and absent-ω is not-owner rather than a pass.
-    assert!(!m3.is_effective_owner(PrincipalId(99), &doc));
+    assert!(!m3.is_effective_owner(UNKNOWN_ID, &doc));
     assert!(!m3.is_effective_owner(ID1, &a(&[2, 0, 1])));
     assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[2, 0, 1])));
 }
@@ -546,23 +549,23 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     // decides it and a candidate walk that truncates at depth is caught.
     let seeded = World {
         m3: M3State::genesis()
-            .apply_ns(&alloc(&[1, 0, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1]),
                 id: ID1,
             })
-            .apply_ns(&alloc(&[1, 0, 1, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1, 1]),
                 id: ID2,
             })
-            .apply_ns(&alloc(&[1, 0, 1, 1, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1, 1, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1, 1, 1]),
                 id: PrincipalId(3),
             })
-            .apply_ns(&alloc(&[1, 0, 2]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 2]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 2]),
                 id: PrincipalId(4),
             }),
@@ -618,7 +621,7 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     );
 
     let mut ids: Vec<PrincipalId> = pi.iter().map(|(_, id)| *id).collect();
-    ids.push(PrincipalId(99)); // an id no principal carries
+    ids.push(UNKNOWN_ID);
     for x in &probes {
         assert_eq!(m3.effective_owner(x), oracle(x), "ω disagrees at {x:?}");
         for id in &ids {
@@ -642,7 +645,7 @@ fn omega_cost_does_not_follow_the_probes_depth() {
     // `create_new_document` and `delegate` hold the global principals key
     // across exactly this read. Answering here in the same time as a
     // three-component probe is the refusal. Corpus seed for the fuzzing tier.
-    let (k, _acct, _doc) = with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
+    let (k, _acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
     let snap = k.snapshot();
     let m3 = snap.world().m3();
 
@@ -727,13 +730,12 @@ fn delegate_mints_account_and_principal_atomically() {
 fn delegate_rejection_order_is_pinned() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
-    let unknown = PrincipalId(99);
 
     // Pre-work rejections (§6, no transaction opened) win over every
     // in-closure condition — here the delegator is ALSO unknown:
     // NotValid (validate-lift; [1,0] has a trailing zero)…
     assert_eq!(
-        rejected(ns.delegate(unknown, t(&[1, 0]), ID1)),
+        rejected(ns.delegate(UNKNOWN_ID, t(&[1, 0]), ID1)),
         DelegateError::NotValid
     );
     // …then NotAccountTier (hoisted (iii)): a bare node prefix is T4-VALID
@@ -741,7 +743,7 @@ fn delegate_rejection_order_is_pinned() {
     // namespace_of/lock-key construction (no panic), and a document-tier
     // prefix is equally out (zeros == 1, narrowed from O15's ≤ 1).
     assert_eq!(
-        rejected(ns.delegate(unknown, t(&[2]), ID1)),
+        rejected(ns.delegate(UNKNOWN_ID, t(&[2]), ID1)),
         DelegateError::NotAccountTier
     );
     assert_eq!(
@@ -750,7 +752,7 @@ fn delegate_rejection_order_is_pinned() {
     );
     // DelegatorUnknown: the first in-closure gate.
     assert_eq!(
-        rejected(ns.delegate(unknown, t(&[1, 0, 1]), ID1)),
+        rejected(ns.delegate(UNKNOWN_ID, t(&[1, 0, 1]), ID1)),
         DelegateError::DelegatorUnknown
     );
 
@@ -775,28 +777,28 @@ fn delegate_rejection_order_is_pinned() {
     // §6 (iv) single probe answers false when it is.)
     let seeded = World {
         m3: M3State::genesis()
-            .apply_ns(&alloc(&[1, 0, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1]),
                 id: ID1,
             })
-            .apply_ns(&alloc(&[1, 0, 1, 1]))
-            .apply_ns(&alloc(&[1, 0, 1, 1, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1, 1]))
+            .apply_m3(&alloc(&[1, 0, 1, 1, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1, 1, 1]),
                 id: ID2,
             }),
     };
-    let k5 = mem_kernel(seeded);
-    let ns5 = Namespace::new(&k5);
+    let flanked_k = mem_kernel(seeded);
+    let flanked_ns = Namespace::new(&flanked_k);
     assert_eq!(
-        rejected(ns5.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        rejected(flanked_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), PrincipalId(7))),
         DelegateError::NotAuthorized
     );
     // …while ω itself reaches (iv) — so delegation can never seat a
     // principal ABOVE an existing one (top-down nesting, O15 iv).
     assert_eq!(
-        rejected(ns5.delegate(ID1, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        rejected(flanked_ns.delegate(ID1, t(&[1, 0, 1, 1]), PrincipalId(7))),
         DelegateError::NotTopDown
     );
     // DuplicateId: a reused id rejects even though [1,0,3] is fresh AND not
@@ -820,45 +822,45 @@ fn delegate_rejection_order_is_pinned() {
     // [1,0,1,1] and that chain's next-form is satisfied, so the unregistered
     // parent is the only failing gate; with [1,0,1,2] it also precedes
     // NotNextForm.
-    let k2 = mem_kernel(genesis_world());
-    let ns2 = Namespace::new(&k2);
+    let fresh_k = mem_kernel(genesis_world());
+    let fresh_ns = Namespace::new(&fresh_k);
     assert_eq!(
-        rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), ID2)),
+        rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), ID2)),
         DelegateError::ParentNotRegistered
     );
     assert_eq!(
-        rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 2]), ID2)),
+        rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 2]), ID2)),
         DelegateError::ParentNotRegistered
     );
     // id-freshness guards the bootstrap id too: no later principal may
     // re-claim id 0 (§7).
     assert_eq!(
-        rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
+        rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::DuplicateId
     );
     // DuplicateId precedes ParentNotRegistered: the id is taken AND [1,0,1]
     // — the parent of [1,0,1,1] — was never registered.
     assert_eq!(
-        rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), BOOTSTRAP_PRINCIPAL)),
+        rejected(fresh_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::DuplicateId
     );
 
     // NotFresh and NotTopDown need an allocated-but-principal-less account;
     // the fold admits exactly the record shapes delegate itself stages
-    // (apply_ns totality domain), so seed one directly.
+    // (apply_m3 totality domain), so seed one directly.
     let seeded = World {
-        m3: M3State::genesis().apply_ns(&alloc(&[1, 0, 1])),
+        m3: M3State::genesis().apply_m3(&alloc(&[1, 0, 1])),
     };
-    let k3 = mem_kernel(seeded);
-    let ns3 = Namespace::new(&k3);
+    let allocated_k = mem_kernel(seeded);
+    let allocated_ns = Namespace::new(&allocated_k);
     // (v) freshness: [1,0,1] is allocated (ω = π₀, so (ii) passes).
     assert_eq!(
-        rejected(ns3.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID2)),
+        rejected(allocated_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID2)),
         DelegateError::NotFresh
     );
     // NotFresh precedes DuplicateId: [1,0,1] is allocated AND id 0 is taken.
     assert_eq!(
-        rejected(ns3.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
+        rejected(allocated_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::NotFresh
     );
     // (iv) top-down: with a principal strictly under [1,0,1] the same call
@@ -866,17 +868,17 @@ fn delegate_rejection_order_is_pinned() {
     // both).
     let seeded = World {
         m3: M3State::genesis()
-            .apply_ns(&alloc(&[1, 0, 1]))
-            .apply_ns(&alloc(&[1, 0, 1, 1]))
-            .apply_ns(&M3Rec::RegisterPrincipal {
+            .apply_m3(&alloc(&[1, 0, 1]))
+            .apply_m3(&alloc(&[1, 0, 1, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 1, 1]),
                 id: ID2,
             }),
     };
-    let k4 = mem_kernel(seeded);
-    let ns4 = Namespace::new(&k4);
+    let nested_k = mem_kernel(seeded);
+    let nested_ns = Namespace::new(&nested_k);
     assert_eq!(
-        rejected(ns4.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), PrincipalId(7))),
+        rejected(nested_ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), PrincipalId(7))),
         DelegateError::NotTopDown
     );
 }
@@ -901,7 +903,7 @@ fn create_new_document_authorizes_by_omega() {
 
     // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account,
     // yet ω names ID1 — bare containment must not authorize.
-    let quiet = k.current_seq();
+    let before = k.current_seq();
     assert!(prefix_contains(&a(&[1]), &acct));
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct)),
@@ -909,7 +911,7 @@ fn create_new_document_authorizes_by_omega() {
     );
     // An unknown caller is the effective owner of nothing.
     assert_eq!(
-        rejected(ns.create_new_document(PrincipalId(99), &acct)),
+        rejected(ns.create_new_document(UNKNOWN_ID, &acct)),
         CreateDocumentError::NotOwner
     );
     // ω-auth is evaluated FIRST (§7): a non-owner of an unregistered
@@ -931,7 +933,7 @@ fn create_new_document_authorizes_by_omega() {
     // A refused creation baptizes nothing: no commit, and the account's
     // document chain still stands where d1 and d2 left it — the next
     // creation takes ordinal 3, so no refusal spent a slot.
-    assert_eq!(k.current_seq(), quiet);
+    assert_eq!(k.current_seq(), before);
     let (d3, _) = ns.create_new_document(ID1, &acct).expect("create 3");
     assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
 }
@@ -960,7 +962,7 @@ fn fork_mints_in_the_callers_own_account() {
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
     assert_eq!(
-        rejected(ns.fork(PrincipalId(99))),
+        rejected(ns.fork(UNKNOWN_ID)),
         CreateDocumentError::NotOwner
     );
     // Node-tier caller (π₀ at [1]): the node-tier O10 case is DROPPED —
@@ -999,7 +1001,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // Rejections, in the documented guard order. The first three are pure
     // pre-work (validity, level and depth read the address alone), the last
     // two read the registry under the held key.
-    let quiet = k.current_seq();
+    let before = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
     assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
     // NotNode — account-level input; checked before lineage ([2,0,1] is
@@ -1033,7 +1035,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
         NodeError::NotDescendantOfBootstrap
     );
     // A rejected admission commits nothing, whichever guard refused it.
-    assert_eq!(k.current_seq(), quiet);
+    assert_eq!(k.current_seq(), before);
 
     // The cap is exactly where it says it is: one component shorter than the
     // refusal above is admitted, so `TooDeep` bounds the registry rather than
@@ -1052,7 +1054,7 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // the bootstrap lineage — a state `register_node` itself cannot reach,
     // so seed it through the fold.
     let seeded = World {
-        m3: M3State::genesis().apply_ns(&M3Rec::RegisterNode { addr: a(&[2]) }),
+        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&[2]) }),
     };
     let k2 = mem_kernel(seeded);
     assert_eq!(
@@ -1088,7 +1090,7 @@ fn pre_work_rejections_open_no_transaction() {
         assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
         assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
         assert_eq!(
-            rejected(ns.fork(PrincipalId(99))),
+            rejected(ns.fork(UNKNOWN_ID)),
             CreateDocumentError::NotOwner
         );
         Ok(())
@@ -1098,7 +1100,7 @@ fn pre_work_rejections_open_no_transaction() {
 
 // ---- the fold's totality domain ----
 
-/// Outside `apply_ns`'s totality domain (§Core data model): the count
+/// Outside `apply_m3`'s totality domain (§Core data model): the count
 /// representation cannot hold a gap, so a jumped ordinal would make
 /// [1,0,1]..[1,0,4] phantom entities (B1/B3). The guard is a `debug_assert`,
 /// so this states the fail-stop only where debug assertions are compiled in.
@@ -1106,7 +1108,7 @@ fn pre_work_rejections_open_no_transaction() {
 #[cfg(debug_assertions)]
 #[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
 fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
-    let _ = M3State::genesis().apply_ns(&alloc(&[1, 0, 5]));
+    let _ = M3State::genesis().apply_m3(&alloc(&[1, 0, 5]));
 }
 
 /// The same guard in the other direction: a re-staged Allocate would
@@ -1116,9 +1118,9 @@ fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
 #[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
 fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
     let s = M3State::genesis()
-        .apply_ns(&alloc(&[1, 0, 1]))
-        .apply_ns(&alloc(&[1, 0, 2]));
-    let _ = s.apply_ns(&alloc(&[1, 0, 1]));
+        .apply_m3(&alloc(&[1, 0, 1]))
+        .apply_m3(&alloc(&[1, 0, 2]));
+    let _ = s.apply_m3(&alloc(&[1, 0, 1]));
 }
 
 // ---- serde / recovery ----
@@ -1172,7 +1174,7 @@ fn journaled_types_survive_serde_round_trips() {
     assert!(bincode::deserialize::<M3Rec>(&malformed).is_err());
 
     // Nor can a PARENTLESS Allocate. [7] is T4-valid, so M1's door passes it
-    // — and `apply_ns` derives its namespace from the parent, which a
+    // — and `apply_m3` derives its namespace from the parent, which a
     // one-component node has none of, so folding one would panic the applier
     // at every replay from then on. M3's own door is what refuses it, before
     // the record is ever a value.
@@ -1194,17 +1196,17 @@ fn journaled_types_survive_serde_round_trips() {
     );
     // …and RegisterNode is untouched by it: a one-component node is exactly
     // what that variant carries.
-    let node = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[7]) })
+    let bare_node_frame = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[7]) })
         .expect("serialize the tumbler shadow");
     assert_eq!(
-        bincode::deserialize::<M3Rec>(&node).expect("a bare node registers"),
+        bincode::deserialize::<M3Rec>(&bare_node_frame).expect("a bare node registers"),
         M3Rec::RegisterNode { addr: a(&[7]) }
     );
 
     // M3State — the checkpointed slice: every field is ordinary serde (none
     // skip-serialized; default rebuild_derived), so a round-tripped state
     // answers identically.
-    let (k, acct, doc) = with_account_and_doc();
+    let (k, acct, doc) = kernel_with_account_and_doc();
     let keys = [M3State::content_lock_key(&doc)];
     k.transact::<_, MintError>(&keys, |stg| {
         let (_, r) = stg.working().m3().mint_content(&doc)?;
@@ -1236,7 +1238,7 @@ fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
     let acct;
     let doc;
     {
-        let k = Arc::new(Kernel::open(cfg_fsync(dir.path()), genesis_world()).expect("open"));
+        let k = Arc::new(Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open"));
         let ns = Namespace::new(&k);
         let (acc, _) = ns
             .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
@@ -1249,7 +1251,7 @@ fn durable_kernel_recovers_the_registry_by_checkpoint_and_replay() {
         doc = d;
         ns.register_node(t(&[1, 7])).expect("register node");
     }
-    let k2 = Kernel::open(cfg_fsync(dir.path()), genesis_world()).expect("reopen");
+    let k2 = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
     let snap = k2.snapshot();
     let m3 = snap.world().m3();
     assert_eq!(m3.principal_prefix(ID1), Some(&acct));

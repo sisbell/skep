@@ -80,20 +80,20 @@ pub(crate) fn vp(subspace: u32, ordinal: u32) -> VPos {
 /// doc1, doc2), account `[1,0,2]` → principal 2.
 pub(crate) fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
-        .apply_ns(&M3Rec::RegisterPrincipal {
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
-        .apply_ns(&M3Rec::RegisterPrincipal {
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
+        .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
-        .apply_ns(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
         })
-        .apply_ns(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
         })
 }

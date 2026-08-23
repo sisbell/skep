@@ -1,5 +1,5 @@
 //! §Core data model, §1–§5 — M3's `WorldState` slice ([`M3State`]), its
-//! journal deltas ([`M3Rec`]) and fold ([`M3State::apply_ns`]); the frontier
+//! journal deltas ([`M3Rec`]) and fold ([`M3State::apply_m3`]); the frontier
 //! allocator (§1, the heart), entity membership (§2), the content/link
 //! sub-allocators (§3), the admission gates (§4), and the principal registry
 //! with the ω resolver (§5).
@@ -81,11 +81,11 @@ struct NsKeyShadow {
 
 impl TryFrom<NsKeyShadow> for NsKey {
     type Error = &'static str;
-    fn try_from(k: NsKeyShadow) -> Result<NsKey, &'static str> {
-        if !is_t4_valid(&k.parent) {
+    fn try_from(shadow: NsKeyShadow) -> Result<NsKey, &'static str> {
+        if !is_t4_valid(&shadow.parent) {
             return Err("a namespace anchor is T4-valid (ASN-0040 (p, d))");
         }
-        Ok(NsKey { parent: k.parent, g: k.g })
+        Ok(NsKey { parent: shadow.parent, g: shadow.g })
     }
 }
 
@@ -107,9 +107,9 @@ pub(crate) enum Generator {
 }
 
 impl Generator {
-    /// M1's `inc` argument (`g`) — which field of the anchor the chain
-    /// advances.
-    fn k(self) -> usize {
+    /// The `k` this generator denotes in M1's `inc(t, k)` — which field of the
+    /// anchor the chain advances.
+    fn inc_k(self) -> usize {
         match self {
             Generator::SameField => 1,
             Generator::NextField => 2,
@@ -119,14 +119,14 @@ impl Generator {
 
 impl From<Generator> for u8 {
     fn from(g: Generator) -> u8 {
-        g.k() as u8
+        g.inc_k() as u8
     }
 }
 
 impl TryFrom<u8> for Generator {
     type Error = &'static str;
-    fn try_from(b: u8) -> Result<Generator, &'static str> {
-        match b {
+    fn try_from(numeral: u8) -> Result<Generator, &'static str> {
+        match numeral {
             1 => Ok(Generator::SameField),
             2 => Ok(Generator::NextField),
             _ => Err("a namespace generator is 1 or 2 (ASN-0040 (p, d))"),
@@ -136,7 +136,7 @@ impl TryFrom<u8> for Generator {
 
 /// M3's journal deltas — lifted to `W::Record` via the engine's `From<M3Rec>`
 /// impl (the write-side mirror of [`crate::HasM3`]) and folded by
-/// [`M3State::apply_ns`]. Every payload is an [`Address`], so T4-validity is
+/// [`M3State::apply_m3`]. Every payload is an [`Address`], so T4-validity is
 /// carried by the value: checked once where the record is built, and re-checked
 /// on the way back off the journal by M1's validating `Deserialize`. A record
 /// still journals as a bare, flat tumbler, exactly as the data model
@@ -144,11 +144,11 @@ impl TryFrom<u8> for Generator {
 /// (entity, content, link) because the frontier map is uniform; the level
 /// distinction is recovered at *query* time from the address's own level.
 ///
-/// Off the journal a record arrives through [`RecShadow`], which re-checks
+/// Off the journal a record arrives through [`M3RecShadow`], which re-checks
 /// the one standing fact T4-validity does not carry: an `Allocate` address
 /// extends a parent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RecShadow")]
+#[serde(try_from = "M3RecShadow")]
 pub enum M3Rec {
     /// A mint: advance `frontiers[namespace_of(addr)]` (§1). The `(parent, g)`
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
@@ -164,7 +164,7 @@ pub enum M3Rec {
 /// fields in the same order, so the journal and checkpoint encoding is the
 /// enum's own — and the ONE door a record re-enters memory through.
 ///
-/// It carries the standing fact [`M3State::apply_ns`]'s `namespace_of`
+/// It carries the standing fact [`M3State::apply_m3`]'s `namespace_of`
 /// `expect` rests on, and which the [`Address`] type does NOT: a minted
 /// address extends a parent. `[7]` is T4-valid, so M1's door passes it, and a
 /// parentless `Allocate` reaching the fold would panic the applier — at
@@ -173,22 +173,22 @@ pub enum M3Rec {
 /// single-component node), so the check is one length compare, and it turns a
 /// permanent applier panic into M2's ordinary decode failure.
 #[derive(Deserialize)]
-enum RecShadow {
+enum M3RecShadow {
     Allocate { addr: Address },
     RegisterNode { addr: Address },
     RegisterPrincipal { prefix: Address, id: PrincipalId },
 }
 
-impl TryFrom<RecShadow> for M3Rec {
+impl TryFrom<M3RecShadow> for M3Rec {
     type Error = &'static str;
-    fn try_from(r: RecShadow) -> Result<M3Rec, &'static str> {
-        match r {
-            RecShadow::Allocate { addr } if addr.tumbler().len() < 2 => {
+    fn try_from(shadow: M3RecShadow) -> Result<M3Rec, &'static str> {
+        match shadow {
+            M3RecShadow::Allocate { addr } if addr.tumbler().len() < 2 => {
                 Err("an Allocate address extends a parent (≥ 2 components)")
             }
-            RecShadow::Allocate { addr } => Ok(M3Rec::Allocate { addr }),
-            RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
-            RecShadow::RegisterPrincipal { prefix, id } => {
+            M3RecShadow::Allocate { addr } => Ok(M3Rec::Allocate { addr }),
+            M3RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
+            M3RecShadow::RegisterPrincipal { prefix, id } => {
                 Ok(M3Rec::RegisterPrincipal { prefix, id })
             }
         }
@@ -200,7 +200,7 @@ impl TryFrom<RecShadow> for M3Rec {
 /// version — free MVCC snapshots for readers and free historical ω_Σ.
 ///
 /// **The journal is the sole authority** (M2); these three structures are the
-/// *recovered working representation*, folded by [`M3State::apply_ns`]. All
+/// *recovered working representation*, folded by [`M3State::apply_m3`]. All
 /// three are ordinary `Serialize`/`Deserialize` fields — **none** is
 /// `#[serde(skip)]` — so they are restored verbatim from the loaded checkpoint
 /// and then advanced by replaying the post-checkpoint `M3Rec`s. They are
@@ -335,21 +335,21 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
 // Each fixed family's `g` is what `generator` yields at that family's FIXED
 // tier pair, noted beside each constructor, so the variants below and the
 // chain-family rule cannot drift apart unnoticed.
-fn content_ns(d: &Address) -> NsKey {
+fn content_ns(home: &Address) -> NsKey {
     // b_C(d) = inc(d, 2); Element → Element.
-    NsKey { parent: inc(d.tumbler(), 2), g: Generator::SameField }
+    NsKey { parent: inc(home.tumbler(), 2), g: Generator::SameField }
 }
-fn link_ns(d: &Address) -> NsKey {
+fn link_ns(home: &Address) -> NsKey {
     // b_L(d) = inc(b_C(d), 0); Element → Element.
-    NsKey { parent: inc(&inc(d.tumbler(), 2), 0), g: Generator::SameField }
+    NsKey { parent: inc(&inc(home.tumbler(), 2), 0), g: Generator::SameField }
 }
-fn version_ns(s: &Address) -> NsKey {
+fn version_ns(source: &Address) -> NsKey {
     // (source, 1) — Document → Document, the ASN-0123 separate chain.
-    NsKey { parent: s.tumbler().clone(), g: Generator::SameField }
+    NsKey { parent: source.tumbler().clone(), g: Generator::SameField }
 }
-fn document_ns(a: &Address) -> NsKey {
+fn document_ns(account: &Address) -> NsKey {
     // (account, 2) — Account → Document.
-    NsKey { parent: a.tumbler().clone(), g: Generator::NextField }
+    NsKey { parent: account.tumbler().clone(), g: Generator::NextField }
 }
 
 /// `A_account(N)` and the sub-account family: the account chain under
@@ -387,16 +387,16 @@ fn account_ns(parent: &Address) -> NsKey {
 /// imposes or could test: M1 leaves component count and magnitude alike
 /// unbounded (T0). Injectivity is the property this key exists for, so it is
 /// stated without a proviso.
-pub(crate) fn ns_lock_key(k: &NsKey) -> LockKey {
-    let mut b = Vec::new();
-    b.extend((k.parent.len() as u64).to_be_bytes());
-    for comp in &k.parent {
-        let c = comp.to_bytes_be();
-        b.extend((c.len() as u64).to_be_bytes());
-        b.extend(c);
+pub(crate) fn ns_lock_key(key: &NsKey) -> LockKey {
+    let mut bytes = Vec::new();
+    bytes.extend((key.parent.len() as u64).to_be_bytes());
+    for comp in &key.parent {
+        let magnitude = comp.to_bytes_be();
+        bytes.extend((magnitude.len() as u64).to_be_bytes());
+        bytes.extend(magnitude);
     }
-    b.push(u8::from(k.g));
-    LockKey::new(Space::Namespace, &b)
+    bytes.push(u8::from(key.g));
+    LockKey::new(Space::Namespace, &bytes)
 }
 
 /// Containment test (O1): `prefix ≼ a` — pure, total, decidable from the two
@@ -430,20 +430,20 @@ impl M3State {
         }
     }
 
-    /// M3's fold — `pub`: the engine crate wires `World::apply`'s `Record::Ns`
+    /// M3's fold — `pub`: the engine crate wires `World::apply`'s `Record::M3`
     /// dispatch to this. TOTALITY DOMAIN (M2's total-apply obligation, stated
     /// here at the seam the engine wires): total — deterministic,
     /// side-effect-free, panic-free — over every record whose `Allocate`
     /// address has a parent, which every mint's does, since a mint extends a
     /// REGISTERED parent. Neither shape precondition is owed to the journal:
-    /// the [`Address`] payloads carry T4-validity, and [`RecShadow`] carries
+    /// the [`Address`] payloads carry T4-validity, and [`M3RecShadow`] carries
     /// the parent, so a record that arrives from disk or a peer is refused at
     /// decode rather than folded into a panic. What the fold still trusts is
     /// an IN-PROCESS producer, which builds the variant directly. An
     /// `Allocate` that regresses or jumps a frontier (ordinal ≠ count + 1) is
     /// outside the domain and fail-stops on the contiguity `debug_assert` —
     /// corruption, not a live error path.
-    pub fn apply_ns(&self, r: &M3Rec) -> M3State {
+    pub fn apply_m3(&self, r: &M3Rec) -> M3State {
         let mut s = self.clone();
         match r {
             M3Rec::Allocate { addr } => {
@@ -491,7 +491,7 @@ impl M3State {
         let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
         let anchor =
             validate(key.parent.clone()).expect("namespace parents are T4-valid by construction");
-        let c1 = checked_inc(&anchor, key.g.k())?; // c1 = inc(parent, g), trailing ordinal 1
+        let c1 = checked_inc(&anchor, key.g.inc_k())?; // c1 = inc(parent, g), trailing ordinal 1
         Ok(if m.is_zero() {
             c1 // first emission
         } else {
@@ -777,7 +777,7 @@ impl M3State {
         self.principals
             .range(p.clone()..)
             .next()
-            .is_some_and(|(k, _)| prefix_contains(p, k) && k != p)
+            .is_some_and(|(first, _)| prefix_contains(p, first) && first != p)
     }
 }
 
@@ -785,12 +785,12 @@ impl M3State {
 mod tests {
     use super::*;
 
-    fn tum(comps: &[u32]) -> Tumbler {
+    fn t(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
     }
 
-    fn ad(comps: &[u32]) -> Address {
-        validate(tum(comps)).expect("T4-valid")
+    fn a(comps: &[u32]) -> Address {
+        validate(t(comps)).expect("T4-valid")
     }
 
     /// §1: a frontier key re-enters memory through its own door. `next_in`
@@ -807,7 +807,7 @@ mod tests {
             g: u8,
         }
 
-        let good = NsKey { parent: tum(&[1, 0, 1]), g: Generator::NextField };
+        let good = NsKey { parent: t(&[1, 0, 1]), g: Generator::NextField };
         let bytes = bincode::serialize(&good).expect("serialize the key");
         assert_eq!(
             bincode::deserialize::<NsKey>(&bytes).expect("a well-formed key round-trips"),
@@ -817,14 +817,14 @@ mod tests {
         // struct's own, anchor tumbler then generator numeral.
         assert_eq!(
             bytes,
-            bincode::serialize(&RawKey { parent: tum(&[1, 0, 1]), g: 2 })
+            bincode::serialize(&RawKey { parent: t(&[1, 0, 1]), g: 2 })
                 .expect("serialize the raw shape"),
         );
 
         // Anchors no `*_ns` constructor could have produced: a trailing
         // separator and a doubled one, both nonempty tumblers, neither T4.
         for bogus in [vec![1u32, 0], vec![1, 0, 0, 1]] {
-            let frame = bincode::serialize(&RawKey { parent: tum(&bogus), g: 1 })
+            let frame = bincode::serialize(&RawKey { parent: t(&bogus), g: 1 })
                 .expect("serialize the raw shape");
             assert!(
                 bincode::deserialize::<NsKey>(&frame).is_err(),
@@ -841,7 +841,7 @@ mod tests {
     fn generator_is_its_numeral_and_admits_no_third_value() {
         for (g, n) in [(Generator::SameField, 1u8), (Generator::NextField, 2u8)] {
             assert_eq!(u8::from(g), n);
-            assert_eq!(g.k(), n as usize);
+            assert_eq!(g.inc_k(), n as usize);
             assert_eq!(Generator::try_from(n), Ok(g));
             assert_eq!(
                 bincode::serialize(&g).expect("serialize the generator"),
@@ -901,58 +901,58 @@ mod tests {
     }
 
     /// §1/§8: for every chain family, the key derived from a MINTED address
-    /// (the child side, which `apply_ns` uses to advance the frontier) is
+    /// (the child side, which `apply_m3` uses to advance the frontier) is
     /// byte-identical to the key its caller locks and its mint reads (the
     /// anchor side). A divergence would under-serialize a namespace and
     /// REUSE an address. Checked at two ordinals per chain, because every
     /// member of a chain must derive the same key or the frontier forks.
     #[test]
     fn each_chains_minted_addresses_derive_the_key_their_mint_advances() {
-        let node = ad(&[1]);
-        let acct = ad(&[1, 0, 1]);
-        let doc = ad(&[1, 0, 1, 0, 1]);
+        let node = a(&[1]);
+        let acct = a(&[1, 0, 1]);
+        let doc = a(&[1, 0, 1, 0, 1]);
         for (family, anchor_key, members) in [
             (
                 "content",
                 content_ns(&doc),
-                [ad(&[1, 0, 1, 0, 1, 0, 1, 1]), ad(&[1, 0, 1, 0, 1, 0, 1, 2])],
+                [a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 2])],
             ),
             (
                 "link",
                 link_ns(&doc),
-                [ad(&[1, 0, 1, 0, 1, 0, 2, 1]), ad(&[1, 0, 1, 0, 1, 0, 2, 2])],
+                [a(&[1, 0, 1, 0, 1, 0, 2, 1]), a(&[1, 0, 1, 0, 1, 0, 2, 2])],
             ),
             (
                 "version",
                 version_ns(&doc),
-                [ad(&[1, 0, 1, 0, 1, 1]), ad(&[1, 0, 1, 0, 1, 2])],
+                [a(&[1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 2])],
             ),
             (
                 "document",
                 document_ns(&acct),
-                [ad(&[1, 0, 1, 0, 1]), ad(&[1, 0, 1, 0, 2])],
+                [a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2])],
             ),
             (
                 "account under a node",
                 account_ns(&node),
-                [ad(&[1, 0, 1]), ad(&[1, 0, 2])],
+                [a(&[1, 0, 1]), a(&[1, 0, 2])],
             ),
             (
                 "sub-account under an account",
                 account_ns(&acct),
-                [ad(&[1, 0, 1, 1]), ad(&[1, 0, 1, 2])],
+                [a(&[1, 0, 1, 1]), a(&[1, 0, 1, 2])],
             ),
         ] {
-            for m in &members {
-                let child_key = namespace_of(m).expect("minted addresses have a parent");
+            for member in &members {
+                let child_key = namespace_of(member).expect("minted addresses have a parent");
                 assert_eq!(
                     child_key, anchor_key,
-                    "{family}: the fold's key for {m:?} is not the mint's key"
+                    "{family}: the fold's key for {member:?} is not the mint's key"
                 );
                 assert_eq!(
                     ns_lock_key(&child_key),
                     ns_lock_key(&anchor_key),
-                    "{family}: lock bytes differ from frontier bytes for {m:?}"
+                    "{family}: lock bytes differ from frontier bytes for {member:?}"
                 );
             }
         }
@@ -1000,12 +1000,12 @@ mod tests {
         let mut keys = Vec::new();
         for parent in &parents {
             for g in [Generator::SameField, Generator::NextField] {
-                let k = NsKey { parent: parent.clone(), g };
-                let encoded = ns_lock_key(&k);
+                let key = NsKey { parent: parent.clone(), g };
+                let encoded = ns_lock_key(&key);
                 // Functional: the same key encodes to the same bytes every
                 // time.
-                assert_eq!(ns_lock_key(&k), encoded);
-                keys.push((k, encoded));
+                assert_eq!(ns_lock_key(&key), encoded);
+                keys.push((key, encoded));
             }
         }
         for i in 0..keys.len() {

@@ -721,7 +721,7 @@ mod tests {
 
     #[derive(Clone, Serialize, Deserialize)]
     enum Record {
-        Ns(M3Rec),
+        M3(M3Rec),
         Content(ContentWrite),
         M5(M5Rec),
         Links(LinkRec),
@@ -731,7 +731,7 @@ mod tests {
         type Record = Record;
         fn apply(&self, r: &Record) -> World {
             match r {
-                Record::Ns(x) => World { m3: self.m3.apply_ns(x), ..self.clone() },
+                Record::M3(x) => World { m3: self.m3.apply_m3(x), ..self.clone() },
                 Record::Content(x) => World { content: self.content.apply_write(x), ..self.clone() },
                 Record::M5(x) => World { m5: self.m5.apply_m5(x), ..self.clone() },
                 Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
@@ -765,7 +765,7 @@ mod tests {
     }
     impl From<M3Rec> for Record {
         fn from(r: M3Rec) -> Record {
-            Record::Ns(r)
+            Record::M3(r)
         }
     }
     impl From<ContentWrite> for Record {

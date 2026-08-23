@@ -82,7 +82,7 @@ impl WorldState for World {
     fn apply(&self, r: &Rec) -> World {
         match r {
             Rec::M3(x) => World {
-                m3: self.m3.apply_ns(x),
+                m3: self.m3.apply_m3(x),
                 ..self.clone()
             },
             Rec::Content(x) => World {
@@ -209,20 +209,20 @@ fn err_of<T, E>(r: Result<T, E>) -> E {
 /// 1 (owns doc1, doc2), account [1,0,2] → principal 2.
 fn genesis() -> World {
     let m3 = M3State::genesis()
-        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
-        .apply_ns(&M3Rec::RegisterPrincipal {
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_ns(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
-        .apply_ns(&M3Rec::RegisterPrincipal {
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
+        .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
-        .apply_ns(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
         })
-        .apply_ns(&M3Rec::Allocate {
+        .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
         });
     World {

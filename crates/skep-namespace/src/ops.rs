@@ -102,39 +102,42 @@ where
     ) -> Result<(Address, Seq), TxnError<DelegateError>> {
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
         // only after it are parent()/namespace_of() total on new_prefix.
-        let np = validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
-        if np.level() != Level::Account {
+        let new_prefix =
+            validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
+        if new_prefix.level() != Level::Account {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
         }
         // One NsKey serves the held lock, the next-form check, and the
         // staged Allocate — the same key by construction (§1/§6).
-        let ns = namespace_of(&np)
+        let ns = namespace_of(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         let keys = [ns_lock_key(&ns), M3State::principals_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             let base = stg.base().m3();
-            // Delegator resolution — (i)/(ii) need dp (the §5 scan).
-            let dp = base
+            // Delegator resolution: an unknown id rejects here, and (i) needs
+            // the prefix itself, which Π answers by id only through the §5
+            // scan.
+            let delegator_prefix = base
                 .principal_prefix(delegator)
                 .ok_or(DelegateError::DelegatorUnknown)?;
-            // (i) ancestry: dp ≺ new_prefix, strict [monotone — pfx
-            // immutable, O13].
-            if !prefix_contains(dp, &np) || *dp == np {
+            // (i) ancestry: the delegator's prefix ≺ new_prefix, strict
+            // [monotone — pfx immutable, O13].
+            if !prefix_contains(delegator_prefix, &new_prefix) || *delegator_prefix == new_prefix {
                 return Err(DelegateError::NotAncestor);
             }
             // (ii) authorization: the delegator is ω(new_prefix)
             // [non-monotone → in-closure].
-            if !base.is_effective_owner(delegator, &np) {
+            if !base.is_effective_owner(delegator, &new_prefix) {
                 return Err(DelegateError::NotAuthorized);
             }
             // (iv) top-down: no principal strictly under new_prefix — the T5
             // single probe [non-monotone].
-            if base.has_principal_strictly_under(&np) {
+            if base.has_principal_strictly_under(&new_prefix) {
                 return Err(DelegateError::NotTopDown);
             }
             // (v) freshness: unallocated (T4-validity was the pre-work lift)
             // [non-monotone].
-            if base.is_allocated(&np) {
+            if base.is_allocated(&new_prefix) {
                 return Err(DelegateError::NotFresh);
             }
             // id-freshness: one id ↦ at most one principal — the id-axis
@@ -144,8 +147,8 @@ where
             }
             // P8: the new account's parent is a registered entity [monotone
             // — E append-only; grouped here to keep one evaluation site].
-            let par =
-                parent(&np).expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
+            let par = parent(&new_prefix)
+                .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
             if base.entity_level(&par).is_none() {
                 return Err(DelegateError::ParentNotRegistered);
             }
@@ -154,19 +157,19 @@ where
             let next = base
                 .next_in(&ns)
                 .expect("P8 above ⇒ the anchor is a registered node or account ⇒ TA5a holds for g ≤ 2");
-            if next != np {
+            if next != new_prefix {
                 return Err(DelegateError::NotNextForm);
             }
             // Baptism + principal registration, one transaction (O17b).
-            stg.push(M3Rec::Allocate { addr: np.clone() }.into());
+            stg.push(M3Rec::Allocate { addr: new_prefix.clone() }.into());
             stg.push(
                 M3Rec::RegisterPrincipal {
-                    prefix: np.clone(),
+                    prefix: new_prefix.clone(),
                     id: new_id,
                 }
                 .into(),
             );
-            Ok(np)
+            Ok(new_prefix)
         })
     }
 
@@ -192,23 +195,23 @@ where
     /// How MANY admissions a session may make is the daemon's.
     pub fn register_node(&self, addr: Tumbler) -> Result<(Address, Seq), TxnError<NodeError>> {
         // Pre-work (§7): the state-free half of the guard order.
-        let ad = validate(addr).map_err(|_| TxnError::Rejected(NodeError::NotValid))?;
-        if ad.level() != Level::Node {
+        let addr = validate(addr).map_err(|_| TxnError::Rejected(NodeError::NotValid))?;
+        if addr.level() != Level::Node {
             return Err(TxnError::Rejected(NodeError::NotNode));
         }
-        if ad.tumbler().len() > MAX_NODE_COMPONENTS {
+        if addr.tumbler().len() > MAX_NODE_COMPONENTS {
             return Err(TxnError::Rejected(NodeError::TooDeep));
         }
         let keys = [M3State::node_lock_key()];
         self.kernel.transact(&keys, move |stg| {
-            if stg.base().m3().entity_level(&ad).is_some() {
+            if stg.base().m3().entity_level(&addr).is_some() {
                 return Err(NodeError::NotFresh);
             }
-            if !prefix_contains(&bootstrap_root(), &ad) {
+            if !prefix_contains(&bootstrap_root(), &addr) {
                 return Err(NodeError::NotDescendantOfBootstrap);
             }
-            stg.push(M3Rec::RegisterNode { addr: ad.clone() }.into());
-            Ok(ad)
+            stg.push(M3Rec::RegisterNode { addr: addr.clone() }.into());
+            Ok(addr)
         })
     }
 

@@ -62,7 +62,7 @@
 //! `World`/`Record`: the engine implements [`HasM3`] for its
 //! `W: WorldState` (the read accessor), lifts M3's deltas via
 //! `impl From<M3Rec> for W::Record` (the write-side mirror), and dispatches
-//! its `Record::Ns` variant into the fold [`M3State::apply_ns`]. M3's slice
+//! its `Record::M3` variant into the fold [`M3State::apply_m3`]. M3's slice
 //! is fully serialized — nothing skip-serialized — so it takes M2's default
 //! `rebuild_derived`: restored verbatim from the loaded checkpoint, then
 //! advanced by replaying the post-checkpoint records.

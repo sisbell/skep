@@ -50,7 +50,7 @@
 //! no edge to M1. So each store builds its own keys in these spaces through
 //! [`LockKey::new`] — M3's `skep-namespace` constructors (`content_lock_key`,
 //! `link_lock_key`, `version_lock_key`, `document_lock_key`,
-//! `principals_lock_key`, `node_lock_key`) are the ones every other store's
+//! `principals_lock_key`, `nodes_lock_key`) are the ones every other store's
 //! writes go through.
 //!
 //! ## Example
@@ -319,9 +319,9 @@ pub enum Space {
     /// which serializes delegation's id-freshness read; that race is
     /// CROSS-namespace, so it cannot ride on a namespace key.
     Principals = 0x03,
-    /// THE node registry — M3's `node_lock_key`, which keeps a concurrent
-    /// duplicate `RegisterNode` a typed rejection rather than a silent
-    /// coalesce.
+    /// THE node registry — M3's single global `nodes_lock_key`, which keeps a
+    /// concurrent duplicate `RegisterNode` a typed rejection rather than a
+    /// silent coalesce.
     Nodes = 0x04,
 }
 

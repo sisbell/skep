@@ -344,7 +344,7 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
         ];
         let mut minted = Vec::new();
         for _round in 0..5 {
-            let four = k
+            let round_mints = k
                 .transact::<_, MintError>(&keys, |stg| {
                     let (c, rc) = stg.working().m3().mint_content(&doc)?;
                     stg.push(rc.into());
@@ -358,7 +358,7 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
                 })
                 .expect("the round commits")
                 .0;
-            minted.extend(four);
+            minted.extend(round_mints);
         }
         (k, minted, acct, doc)
     }
@@ -540,7 +540,7 @@ fn lock_keys_distinguish_every_chain_and_key_domain() {
         M3State::version_lock_key(&doc),
         M3State::document_lock_key(&acct),
         M3State::principals_lock_key(),
-        M3State::node_lock_key(),
+        M3State::nodes_lock_key(),
     ];
     for i in 0..keys.len() {
         for j in (i + 1)..keys.len() {
@@ -812,7 +812,7 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
 }
 
 #[test]
-fn delegate_refuses_a_wire_deep_prefix_at_bounded_cost() {
+fn delegate_refuses_a_wire_deep_prefix_structurally() {
     // §6: `delegate` takes an UNVALIDATED `Tumbler` straight off the wire, and
     // T4 bounds an address's zero pattern, not its component count — so ~100 KB
     // of dotted decimal is a 50_000-component account-tier prefix that reaches
@@ -1271,18 +1271,18 @@ fn register_node_validates_and_admits_supplied_addresses() {
 
     // Ordinary admission (ASN-0047): the address is SUPPLIED, validated,
     // registered.
-    let (n, seq) = ns.register_node(t(&[1, 7])).expect("register");
-    assert_eq!(n, a(&[1, 7]));
+    let (node, seq) = ns.register_node(t(&[1, 7])).expect("register");
+    assert_eq!(node, a(&[1, 7]));
     assert_eq!(k.current_seq(), seq);
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    assert_eq!(m3.entity_level(&n), Some(Level::Node));
-    assert!(m3.is_allocated(&n));
+    assert_eq!(m3.entity_level(&node), Some(Level::Node));
+    assert!(m3.is_allocated(&node));
     // A provisioned node stays bootstrap-owned via ω until an account is
     // delegated beneath it (Conflicts §7)…
-    assert_eq!(m3.effective_owner(&n), Some(BOOTSTRAP_PRINCIPAL));
+    assert_eq!(m3.effective_owner(&node), Some(BOOTSTRAP_PRINCIPAL));
     // …and delegation beneath it works through the ordinary gate.
-    let peek = m3.next_account_prefix(&n).expect("peek under new node");
+    let peek = m3.next_account_prefix(&node).expect("peek under new node");
     assert_eq!(peek, a(&[1, 7, 0, 1]));
     ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
         .expect("delegate under the new node");
@@ -1306,7 +1306,8 @@ fn register_node_validates_and_admits_supplied_addresses() {
         NodeError::NotNode
     );
     // TooDeep — `nodes` is the one registry M3 cannot keep in frontier form,
-    // so an entry's SIZE is refused rather than stored. The probe is otherwise
+    // so an entry's component COUNT is refused rather than stored (magnitude
+    // is M1-unbounded — see `MAX_NODE_COMPONENTS`). The probe is otherwise
     // impeccable — node-level, fresh, bootstrap-descended — so depth is the
     // only guard that can be refusing it.
     let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();

@@ -10,7 +10,9 @@
 //! Two senses, kept apart throughout: the **name space** M3 owns (this
 //! module; the [`Namespace`] handle), and a **namespace** — ASN-0040's
 //! `(anchor, g)`: one chain, one frontier, one lock (the `Ns`-named
-//! internals, and every `*_lock_key` constructor below).
+//! internals and the five **chain** `*_lock_key` constructors; the two
+//! registry keys — [`M3State::principals_lock_key`] and
+//! [`M3State::nodes_lock_key`] — name registries, not namespaces).
 //!
 //! Three surfaces (§Public interface):
 //!

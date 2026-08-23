@@ -404,9 +404,9 @@ pub(crate) fn namespace_of(a: &Address) -> Option<NsKey> {
     })
 }
 
-// The namespace helpers — the ONE code path each mint, each `*_lock_key` and
-// the account peek reuse (§1/§3). The subspace identifier is the
-// element-field's FIRST component, and M1 names both numerals:
+// The namespace helpers — the ONE code path each mint, each chain
+// `*_lock_key` and the account peek reuse (§1/§3). The subspace identifier is
+// the element-field's FIRST component, and M1 names both numerals:
 // `content_subspace()` = 1, `link_subspace()` = 2. It is NEVER the `.0.`
 // separator (the corpus-wide misread to guard against); `s_C ≠ s_L` is what
 // makes content and link address spaces disjoint by construction (SD/L14,
@@ -703,13 +703,16 @@ impl M3State {
         LockKey::new(Space::Principals, &[])
     }
 
-    /// Coarse node-registry key — held by `register_node` so a concurrent
-    /// duplicate `RegisterNode` surfaces `NotFresh` instead of silently
-    /// coalescing. Node admission needs NO lock for SAFETY (idempotent
-    /// `OrdSet` insert, monotone freshness); this only preserves the typed
-    /// rejection under per-key concurrency. Redundant under v1's global lock,
-    /// exactly like [`M3State::principals_lock_key`].
-    pub fn node_lock_key() -> LockKey {
+    /// THE single global node-registry key — one key for the whole registry,
+    /// argument-free like [`M3State::principals_lock_key`] and plural for the
+    /// same reason: two `register_node` calls for DIFFERENT nodes contend on
+    /// it. Held by `register_node` so a concurrent duplicate `RegisterNode`
+    /// surfaces `NotFresh` instead of silently coalescing. Node admission
+    /// needs NO lock for SAFETY (idempotent `OrdSet` insert, monotone
+    /// freshness); this only preserves the typed rejection under per-key
+    /// concurrency. Redundant under v1's global lock, exactly like
+    /// [`M3State::principals_lock_key`].
+    pub fn nodes_lock_key() -> LockKey {
         LockKey::new(Space::Nodes, &[])
     }
 }
@@ -1353,7 +1356,7 @@ mod tests {
     /// change in M1 reddens this suite instead of panicking the applier at
     /// every replay from then on.
     #[test]
-    fn the_allocate_door_and_the_folds_expect_are_one_fact() {
+    fn the_allocate_door_admits_exactly_what_the_fold_can_key() {
         for comps in [
             vec![1u32],
             vec![7],

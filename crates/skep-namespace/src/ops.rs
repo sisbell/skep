@@ -114,11 +114,11 @@ where
         }
         // The chain's anchor, and with it the ONE key this op names: the lock
         // taken here and the frontier `mint_account` reads inside are the same
-        // `account_ns(par)` (§1/§6).
-        let par = parent(&new_prefix)
+        // `account_ns(parent)` (§1/§6).
+        let parent = parent(&new_prefix)
             .expect("account tier (hoisted tier check) ⇒ N·0·U ⇒ ≥ 3 components");
         let keys = [
-            M3State::account_lock_key(&par),
+            M3State::account_lock_key(&parent),
             M3State::principals_lock_key(),
         ];
         self.kernel.transact(&keys, move |stg| {
@@ -160,7 +160,7 @@ where
             // that advances it, so the value the gate compares and the record
             // the closure stages cannot come apart. Next-form is MANDATORY
             // under the counter representation (§6).
-            let Some((next, alloc)) = stg.working().m3().mint_account(&par) else {
+            let Some((next, alloc)) = stg.working().m3().mint_account(&parent) else {
                 return Err(DelegateError::ParentNotRegistered);
             };
             if next != new_prefix {
@@ -184,7 +184,7 @@ where
     /// validate-not-mint path (Conflicts §1). Guards, in order: T4-validity
     /// (`NotValid`), node level (`NotNode`), depth
     /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — the
-    /// held coarse [`M3State::node_lock_key`] makes a concurrent duplicate
+    /// held coarse [`M3State::nodes_lock_key`] makes a concurrent duplicate
     /// surface typed rather than silently coalesce, §7/§8), and bootstrap
     /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). Returns the node
     /// address and its commit `Seq`.
@@ -210,7 +210,7 @@ where
         if addr.tumbler().len() > MAX_NODE_COMPONENTS {
             return Err(TxnError::Rejected(NodeError::TooDeep));
         }
-        let keys = [M3State::node_lock_key()];
+        let keys = [M3State::nodes_lock_key()];
         self.kernel.transact(&keys, move |stg| {
             if stg.base().m3().entity_level(&addr).is_some() {
                 return Err(NodeError::NotFresh);

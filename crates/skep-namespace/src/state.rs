@@ -671,6 +671,11 @@ impl M3State {
 mod tests {
     use super::*;
 
+    fn ad(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
     /// The generator IS ASN-0040's `d ∈ {1, 2}`: it is the numeral wherever
     /// bytes are written — the checkpointed frontier key and `ns_lock_key`'s
     /// trailing byte — and no third value survives the way back in, so the
@@ -736,5 +741,124 @@ mod tests {
         let node = validate(Tumbler::new([Nat::from(1u32)]).expect("nonempty")).expect("T4-valid");
         assert_eq!(account_ns(&node).g, Generator::NextField);
         assert_eq!(namespace_of(&acct), Some(account_ns(&node)));
+    }
+
+    /// §1/§8: for every chain family, the key derived from a MINTED address
+    /// (the child side, which `apply_ns` uses to advance the frontier) is
+    /// byte-identical to the key its caller locks and its mint reads (the
+    /// anchor side). A divergence would under-serialize a namespace and
+    /// REUSE an address. Checked at two ordinals per chain, because every
+    /// member of a chain must derive the same key or the frontier forks.
+    #[test]
+    fn each_chains_minted_addresses_derive_the_key_their_mint_advances() {
+        let node = ad(&[1]);
+        let acct = ad(&[1, 0, 1]);
+        let doc = ad(&[1, 0, 1, 0, 1]);
+        for (family, anchor_key, members) in [
+            (
+                "content",
+                content_ns(&doc),
+                [ad(&[1, 0, 1, 0, 1, 0, 1, 1]), ad(&[1, 0, 1, 0, 1, 0, 1, 2])],
+            ),
+            (
+                "link",
+                link_ns(&doc),
+                [ad(&[1, 0, 1, 0, 1, 0, 2, 1]), ad(&[1, 0, 1, 0, 1, 0, 2, 2])],
+            ),
+            (
+                "version",
+                version_ns(&doc),
+                [ad(&[1, 0, 1, 0, 1, 1]), ad(&[1, 0, 1, 0, 1, 2])],
+            ),
+            (
+                "document",
+                document_ns(&acct),
+                [ad(&[1, 0, 1, 0, 1]), ad(&[1, 0, 1, 0, 2])],
+            ),
+            (
+                "account under a node",
+                account_ns(&node),
+                [ad(&[1, 0, 1]), ad(&[1, 0, 2])],
+            ),
+            (
+                "sub-account under an account",
+                account_ns(&acct),
+                [ad(&[1, 0, 1, 1]), ad(&[1, 0, 1, 2])],
+            ),
+        ] {
+            for m in &members {
+                let child_key = namespace_of(m).expect("minted addresses have a parent");
+                assert_eq!(
+                    child_key, anchor_key,
+                    "{family}: the fold's key for {m:?} is not the mint's key"
+                );
+                assert_eq!(
+                    ns_lock_key(&child_key),
+                    ns_lock_key(&anchor_key),
+                    "{family}: lock bytes differ from frontier bytes for {m:?}"
+                );
+            }
+        }
+        // The public constructors are that same encoding, so a caller's key
+        // and the frontier its mint advances are one value.
+        assert_eq!(
+            M3State::content_lock_key(&doc),
+            ns_lock_key(&content_ns(&doc))
+        );
+        assert_eq!(M3State::link_lock_key(&doc), ns_lock_key(&link_ns(&doc)));
+        assert_eq!(
+            M3State::version_lock_key(&doc),
+            ns_lock_key(&version_ns(&doc))
+        );
+        assert_eq!(
+            M3State::document_lock_key(&acct),
+            ns_lock_key(&document_ns(&acct))
+        );
+    }
+
+    /// The `NsKey → LockKey` map is INJECTIVE (§1) — distinct namespaces,
+    /// distinct locks — and functional. Over a family crossed with both
+    /// generators, including the pair that makes the per-component length
+    /// delimiter load-bearing: without it `[1, 256]` and `[257, 0]` encode
+    /// alike.
+    #[test]
+    fn the_lock_key_encoding_is_injective_over_a_generated_family() {
+        let parents: Vec<Tumbler> = [
+            vec![1u32],
+            vec![1, 1],
+            vec![2],
+            vec![1, 2],
+            vec![1, 256],
+            vec![257, 0],
+            vec![1, 0, 1],
+            vec![1, 0, 1, 1],
+            vec![1, 0, 1, 0, 1],
+            vec![1, 0, 1, 0, 1, 0, 1],
+            vec![1, 0, 1, 0, 1, 0, 2],
+            vec![1, 0, 1, 0, 1, 0, 1, 1],
+        ]
+        .into_iter()
+        .map(|c| Tumbler::new(c.into_iter().map(Nat::from)).expect("nonempty"))
+        .collect();
+        let mut keys = Vec::new();
+        for parent in &parents {
+            for g in [Generator::SameField, Generator::NextField] {
+                let k = NsKey { parent: parent.clone(), g };
+                let encoded = ns_lock_key(&k);
+                // Functional: the same key encodes to the same bytes every
+                // time.
+                assert_eq!(ns_lock_key(&k), encoded);
+                keys.push((k, encoded));
+            }
+        }
+        for i in 0..keys.len() {
+            for j in (i + 1)..keys.len() {
+                assert_ne!(
+                    keys[i].1, keys[j].1,
+                    "distinct namespaces share a lock: {:?} and {:?}",
+                    keys[i].0, keys[j].0
+                );
+            }
+        }
     }
 }

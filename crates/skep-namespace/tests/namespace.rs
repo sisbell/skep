@@ -15,7 +15,8 @@ use skep_address::{
     content_subspace, link_subspace, validate, Address, Level, Nat, Tumbler,
 };
 use skep_kernel::{
-    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, TxnError, WorldState,
+    BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, LockKey, TxnError,
+    WorldState,
 };
 use skep_namespace::{
     prefix_contains, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError,
@@ -100,6 +101,23 @@ fn rejected<T: std::fmt::Debug, E: std::fmt::Debug>(r: Result<T, TxnError<E>>) -
         Err(TxnError::Rejected(e)) => e,
         other => panic!("expected TxnError::Rejected, got {other:?}"),
     }
+}
+
+/// Mint under the matching lock key, stage the returned record, commit — the
+/// M5/M7-shaped composite in one line, so a test can say what a chain does
+/// once its records actually reach the fold.
+fn commit_mint(
+    k: &Kernel<World>,
+    key: LockKey,
+    mint: impl FnOnce(&M3State) -> Result<(Address, M3Rec), MintError>,
+) -> Address {
+    k.transact::<_, MintError>(&[key], |stg| {
+        let (addr, rec) = mint(stg.working().m3())?;
+        stg.push(rec.into());
+        Ok(addr)
+    })
+    .expect("the mint commits")
+    .0
 }
 
 const ID1: PrincipalId = PrincipalId(1);
@@ -219,6 +237,123 @@ fn successive_mints_in_one_composite_read_working_state() {
 }
 
 #[test]
+fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
+    // §1/§2: the key a mint READS and the key its staged Allocate ADVANCES
+    // are one key, so a minted address is allocated once the fold has seen
+    // it and the NEXT mint on that chain differs from it. A divergence
+    // between the two derivations would re-hand a live address — the one
+    // fatal error — without any mint or query saying so.
+    let (k, acct, doc) = with_account_and_doc();
+
+    // Version chain (d, 1) — ASN-0123's separate chain.
+    let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| m3.mint_version(&doc));
+    assert_eq!(v1, a(&[1, 0, 1, 0, 1, 1]));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_allocated(&v1));
+    // A version IS a registered Document — the M5 CREATENEWVERSION seam.
+    assert!(m3.is_registered_document(&v1));
+    assert_eq!(m3.entity_level(&v1), Some(Level::Document));
+    // The frontier advanced, so the chain does not re-mint v1.
+    let v2 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| m3.mint_version(&doc));
+    assert_eq!(v2, a(&[1, 0, 1, 0, 1, 2]));
+    assert!(k.snapshot().world().m3().is_allocated(&v2));
+
+    // Link chain (b_L(d), 1) — allocated, and NEVER an entity.
+    let l1 = commit_mint(&k, M3State::link_lock_key(&doc), |m3| m3.mint_link(&doc));
+    let l2 = commit_mint(&k, M3State::link_lock_key(&doc), |m3| m3.mint_link(&doc));
+    assert_eq!(l1, a(&[1, 0, 1, 0, 1, 0, 2, 1]));
+    assert_eq!(l2, a(&[1, 0, 1, 0, 1, 0, 2, 2]));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_allocated(&l1) && m3.is_allocated(&l2));
+    assert_eq!(m3.entity_level(&l1), None);
+
+    // A version is a usable home in its own right: it carries content and
+    // versions of its own, on chains anchored at IT.
+    let c = commit_mint(&k, M3State::content_lock_key(&v1), |m3| m3.mint_content(&v1));
+    assert_eq!(c, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
+    let vv = commit_mint(&k, M3State::version_lock_key(&v1), |m3| m3.mint_version(&v1));
+    assert_eq!(vv, a(&[1, 0, 1, 0, 1, 1, 1]));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_allocated(&c) && m3.is_allocated(&vv));
+
+    // Through all of it the document chain (A, 2) stood still — the ASN-0123
+    // separation, now checked across real folds rather than one snapshot.
+    assert_eq!(
+        m3.mint_document(&acct).expect("document mint").0,
+        a(&[1, 0, 1, 0, 2])
+    );
+}
+
+#[test]
+fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
+    // B1/B2 as laws, not examples: over a mechanical round-robin across the
+    // four chains, every minted address is distinct and allocated, the next
+    // mint on each chain is still fresh, and the whole schedule is
+    // deterministic.
+    fn run() -> (Arc<Kernel<World>>, Vec<Address>, Address, Address) {
+        let (k, acct, doc) = with_account_and_doc();
+        let keys = [
+            M3State::content_lock_key(&doc),
+            M3State::link_lock_key(&doc),
+            M3State::version_lock_key(&doc),
+            M3State::document_lock_key(&acct),
+        ];
+        let mut minted = Vec::new();
+        for _round in 0..5 {
+            let four = k
+                .transact::<_, MintError>(&keys, |stg| {
+                    let (c, rc) = stg.working().m3().mint_content(&doc)?;
+                    stg.push(rc.into());
+                    let (l, rl) = stg.working().m3().mint_link(&doc)?;
+                    stg.push(rl.into());
+                    let (v, rv) = stg.working().m3().mint_version(&doc)?;
+                    stg.push(rv.into());
+                    let (d, rd) = stg.working().m3().mint_document(&acct)?;
+                    stg.push(rd.into());
+                    Ok(vec![c, l, v, d])
+                })
+                .expect("the round commits")
+                .0;
+            minted.extend(four);
+        }
+        (k, minted, acct, doc)
+    }
+
+    let (k, minted, acct, doc) = run();
+    // Never reused: 20 mints, 20 distinct addresses (across chains as well
+    // as within one).
+    let distinct: std::collections::BTreeSet<&Address> = minted.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        minted.len(),
+        "an address was minted twice: {minted:?}"
+    );
+    // Every one of them is allocated.
+    let m3 = k.snapshot().world().m3().clone();
+    for addr in &minted {
+        assert!(m3.is_allocated(addr), "{addr:?} was minted but is not allocated");
+    }
+    // Gap-free and monotone per chain: the next mint on each chain is an
+    // address the schedule has not already handed out, and is not yet
+    // allocated.
+    for (chain, next) in [
+        ("content", m3.mint_content(&doc).expect("peek").0),
+        ("link", m3.mint_link(&doc).expect("peek").0),
+        ("version", m3.mint_version(&doc).expect("peek").0),
+        ("document", m3.mint_document(&acct).expect("peek").0),
+    ] {
+        assert!(!minted.contains(&next), "{chain}: the next mint repeats {next:?}");
+        assert!(
+            !m3.is_allocated(&next),
+            "{chain}: the next mint is already allocated"
+        );
+    }
+    // Determinism (B2): the same schedule from genesis yields the same list.
+    let (_k2, again, _, _) = run();
+    assert_eq!(minted, again);
+}
+
+#[test]
 fn mint_preconditions_reject_structurally() {
     let (k, acct, doc) = with_account_and_doc();
     let snap = k.snapshot();
@@ -298,6 +433,24 @@ fn membership_is_exact_chain_membership() {
     assert!(!m3.is_registered_document(&c1));
     // Its sibling one past the frontier is not allocated.
     assert!(!m3.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 2])));
+
+    // No FALSE positives (§2): the near-misses of an allocated content
+    // element all decompose to a DIFFERENT namespace, so none is a member —
+    // membership is genuine chain membership, not an approximation of it.
+    for near in [
+        a(&[1, 0, 1, 0, 1, 0, 1]),       // b_C(d) — the chain's own anchor
+        a(&[1, 0, 1, 0, 1, 0, 2]),       // b_L(d) — the link anchor
+        a(&[1, 0, 1, 0, 1, 0, 2, 1]),    // the same ordinal in the link subspace
+        a(&[1, 0, 1, 0, 1, 0, 1, 1, 1]), // one component deeper than c1
+        a(&[1, 0, 1, 0, 2, 0, 1, 1]),    // the same ordinal under a sibling doc
+        a(&[1, 0, 1, 0, 1, 1]),          // the version chain's first slot
+    ] {
+        assert!(
+            !m3.is_allocated(&near),
+            "{near:?} is not allocated but reads as a member"
+        );
+    }
+    assert!(m3.is_allocated(&c1)); // …while the real member still is
 }
 
 // ---- §A lock keys ----
@@ -382,6 +535,92 @@ fn containment_is_not_authorization() {
     assert!(!m3.is_effective_owner(PrincipalId(99), &doc));
     assert!(!m3.is_effective_owner(ID1, &a(&[2, 0, 1])));
     assert!(!m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, &a(&[2, 0, 1])));
+}
+
+#[test]
+fn omega_is_the_longest_covering_prefix_at_every_depth() {
+    // §5 / O2/O3: ω is the LONGEST principal prefix, and is_effective_owner
+    // agrees with it everywhere. Checked against an independent oracle — the
+    // linear scan keeping the longest match, which the design names as the
+    // reference — over a GENERATED family of probes, so no chosen point
+    // decides it and a candidate walk that truncates at depth is caught.
+    let seeded = World {
+        m3: M3State::genesis()
+            .apply_ns(&alloc(&[1, 0, 1]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1]),
+                id: ID1,
+            })
+            .apply_ns(&alloc(&[1, 0, 1, 1]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1, 1]),
+                id: ID2,
+            })
+            .apply_ns(&alloc(&[1, 0, 1, 1, 1]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1, 1, 1]),
+                id: PrincipalId(3),
+            })
+            .apply_ns(&alloc(&[1, 0, 2]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 2]),
+                id: PrincipalId(4),
+            }),
+    };
+    let pi = [
+        (a(&[1]), BOOTSTRAP_PRINCIPAL),
+        (a(&[1, 0, 1]), ID1),
+        (a(&[1, 0, 1, 1]), ID2),
+        (a(&[1, 0, 1, 1, 1]), PrincipalId(3)),
+        (a(&[1, 0, 2]), PrincipalId(4)),
+    ];
+    let oracle = |x: &Address| -> Option<PrincipalId> {
+        pi.iter()
+            .filter(|(p, _)| prefix_contains(p, x))
+            .max_by_key(|(p, _)| p.tumbler().len())
+            .map(|(_, id)| *id)
+    };
+    let m3 = seeded.m3;
+
+    // The family: every prefix of a deep address, each of those with its
+    // last component bumped (an uncovered sibling), and a foreign node's
+    // subtree.
+    let deep = [1u32, 0, 1, 1, 1, 0, 1, 0, 1, 1];
+    let mut probes = vec![
+        a(&[2]),
+        a(&[2, 0, 1]),
+        a(&[1, 0, 3]),
+        a(&[1, 0, 1, 2, 0, 1]),
+    ];
+    for len in 1..=deep.len() {
+        if let Ok(p) = validate(t(&deep[..len])) {
+            probes.push(p);
+        }
+        let mut bumped = deep[..len].to_vec();
+        if let Some(last) = bumped.last_mut() {
+            *last += 1;
+        }
+        if let Ok(p) = validate(t(&bumped)) {
+            probes.push(p);
+        }
+    }
+    assert!(
+        probes.len() > 12,
+        "the generated family is the point of this test"
+    );
+
+    let mut ids: Vec<PrincipalId> = pi.iter().map(|(_, id)| *id).collect();
+    ids.push(PrincipalId(99)); // an id no principal carries
+    for x in &probes {
+        assert_eq!(m3.effective_owner(x), oracle(x), "ω disagrees at {x:?}");
+        for id in &ids {
+            assert_eq!(
+                m3.is_effective_owner(*id, x),
+                oracle(x) == Some(*id),
+                "is_effective_owner({id:?}, {x:?}) disagrees with ω"
+            );
+        }
+    }
 }
 
 // ---- §B delegate ----
@@ -493,6 +732,36 @@ fn delegate_rejection_order_is_pinned() {
         rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), ID2)),
         DelegateError::NotAuthorized
     );
+    // (ii) precedes (iv): with ID1 above [1,0,1,1] and ID2 strictly under
+    // it, a non-ω delegator earns NotAuthorized though top-down also
+    // fails… ([1,0,1,1] is deliberately NOT itself a principal, since the
+    // §6 (iv) single probe answers false when it is.)
+    let seeded = World {
+        m3: M3State::genesis()
+            .apply_ns(&alloc(&[1, 0, 1]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1]),
+                id: ID1,
+            })
+            .apply_ns(&alloc(&[1, 0, 1, 1]))
+            .apply_ns(&alloc(&[1, 0, 1, 1, 1]))
+            .apply_ns(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1, 1, 1]),
+                id: ID2,
+            }),
+    };
+    let k5 = mem_kernel(seeded);
+    let ns5 = Namespace::new(&k5);
+    assert_eq!(
+        rejected(ns5.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        DelegateError::NotAuthorized
+    );
+    // …while ω itself reaches (iv) — so delegation can never seat a
+    // principal ABOVE an existing one (top-down nesting, O15 iv).
+    assert_eq!(
+        rejected(ns5.delegate(ID1, t(&[1, 0, 1, 1]), PrincipalId(7))),
+        DelegateError::NotTopDown
+    );
     // DuplicateId: a reused id rejects even though [1,0,3] is fresh AND not
     // next-form — DuplicateId precedes NotNextForm.
     assert_eq!(
@@ -530,6 +799,12 @@ fn delegate_rejection_order_is_pinned() {
         rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::DuplicateId
     );
+    // DuplicateId precedes ParentNotRegistered: the id is taken AND [1,0,1]
+    // — the parent of [1,0,1,1] — was never registered.
+    assert_eq!(
+        rejected(ns2.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 1]), BOOTSTRAP_PRINCIPAL)),
+        DelegateError::DuplicateId
+    );
 
     // NotFresh and NotTopDown need an allocated-but-principal-less account;
     // the fold admits exactly the record shapes delegate itself stages
@@ -542,6 +817,11 @@ fn delegate_rejection_order_is_pinned() {
     // (v) freshness: [1,0,1] is allocated (ω = π₀, so (ii) passes).
     assert_eq!(
         rejected(ns3.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID2)),
+        DelegateError::NotFresh
+    );
+    // NotFresh precedes DuplicateId: [1,0,1] is allocated AND id 0 is taken.
+    assert_eq!(
+        rejected(ns3.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), BOOTSTRAP_PRINCIPAL)),
         DelegateError::NotFresh
     );
     // (iv) top-down: with a principal strictly under [1,0,1] the same call
@@ -584,6 +864,7 @@ fn create_new_document_authorizes_by_omega() {
 
     // The ownership-divergence trap (O5): π₀'s prefix CONTAINS the account,
     // yet ω names ID1 — bare containment must not authorize.
+    let quiet = k.current_seq();
     assert!(prefix_contains(&a(&[1]), &acct));
     assert_eq!(
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct)),
@@ -610,6 +891,12 @@ fn create_new_document_authorizes_by_omega() {
         rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1]))),
         CreateDocumentError::Mint(MintError::NotAnAccount)
     );
+    // A refused creation baptizes nothing: no commit, and the account's
+    // document chain still stands where d1 and d2 left it — the next
+    // creation takes ordinal 3, so no refusal spent a slot.
+    assert_eq!(k.current_seq(), quiet);
+    let (d3, _) = ns.create_new_document(ID1, &acct).expect("create 3");
+    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
 }
 
 // ---- §B fork ----
@@ -681,6 +968,12 @@ fn register_node_validates_and_admits_supplied_addresses() {
     // NotNode — account-level input; checked before lineage ([2,0,1] is
     // also not bootstrap-descended).
     assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
+    // NotNode precedes NotFresh: [1,7,0,1] is account-level AND registered
+    // (the delegation above allocated it).
+    assert_eq!(
+        rejected(ns.register_node(t(&[1, 7, 0, 1]))),
+        NodeError::NotNode
+    );
     // NotFresh — duplicates surface typed, never a silent coalesce; the
     // seeded [1] and the just-registered [1,7] alike.
     assert_eq!(rejected(ns.register_node(t(&[1]))), NodeError::NotFresh);
@@ -692,6 +985,75 @@ fn register_node_validates_and_admits_supplied_addresses() {
     );
     // A rejected admission commits nothing, whichever guard refused it.
     assert_eq!(k.current_seq(), quiet);
+
+    // NotFresh precedes NotDescendantOfBootstrap: [2] is registered AND off
+    // the bootstrap lineage — a state `register_node` itself cannot reach,
+    // so seed it through the fold.
+    let seeded = World {
+        m3: M3State::genesis().apply_ns(&M3Rec::RegisterNode { addr: a(&[2]) }),
+    };
+    let k2 = mem_kernel(seeded);
+    assert_eq!(
+        rejected(Namespace::new(&k2).register_node(t(&[2]))),
+        NodeError::NotFresh
+    );
+}
+
+#[test]
+fn pre_work_rejections_open_no_transaction() {
+    // §6/§7: `delegate`'s NotValid/NotAccountTier, `register_node`'s
+    // NotValid/NotNode and `fork`'s unknown id are decided from the argument
+    // alone and reject with NO transaction opened. M2 answers a nested
+    // `transact` with a panic naming the broken obligation and permits
+    // `snapshot()` inside a closure (kernel §3), so calling them from inside
+    // a transaction is what separates "rejected before opening one" from
+    // "rejected inside one" — `current_seq` cannot, since a rejected closure
+    // draws no Seq either.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    k.transact::<_, ()>(&[], |_stg| {
+        assert_eq!(
+            rejected(ns.delegate(ID1, t(&[1, 0]), ID2)),
+            DelegateError::NotValid
+        );
+        assert_eq!(
+            rejected(ns.delegate(ID1, t(&[2]), ID2)),
+            DelegateError::NotAccountTier
+        );
+        assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
+        assert_eq!(rejected(ns.register_node(t(&[2, 0, 1]))), NodeError::NotNode);
+        assert_eq!(
+            rejected(ns.fork(PrincipalId(99))),
+            CreateDocumentError::NotOwner
+        );
+        Ok(())
+    })
+    .expect("the outer transaction is a zero-step commit");
+}
+
+// ---- the fold's totality domain ----
+
+/// Outside `apply_ns`'s totality domain (§Core data model): the count
+/// representation cannot hold a gap, so a jumped ordinal would make
+/// [1,0,1]..[1,0,4] phantom entities (B1/B3). The guard is a `debug_assert`,
+/// so this states the fail-stop only where debug assertions are compiled in.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
+fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
+    let _ = M3State::genesis().apply_ns(&alloc(&[1, 0, 5]));
+}
+
+/// The same guard in the other direction: a re-staged Allocate would
+/// silently regress the frontier and re-hand an address already minted.
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
+fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
+    let s = M3State::genesis()
+        .apply_ns(&alloc(&[1, 0, 1]))
+        .apply_ns(&alloc(&[1, 0, 2]));
+    let _ = s.apply_ns(&alloc(&[1, 0, 1]));
 }
 
 // ---- serde / recovery ----

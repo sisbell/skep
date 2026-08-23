@@ -67,13 +67,28 @@ pub(crate) struct NsKey {
 /// checkpoint encoding is the struct's own — and the ONE door a frontier key
 /// re-enters memory through.
 ///
-/// It discharges [`M3State::next_in`]'s anchor precondition for the keys that
-/// arrive with no caller to discharge it. In process, a `next_in` caller
+/// It re-establishes the T4 HALF of [`M3State::next_in`]'s anchor
+/// precondition — the half a decoder holding one key can settle — for keys
+/// that arrive with no caller to establish it. In process, a `next_in` caller
 /// establishes T4-validity through its own gate before it calls; a checkpoint
 /// is bytes, and `Tumbler` admits any nonempty component sequence — `[1, 0]`
 /// decodes and is not T4-valid — so a loaded key would otherwise be a panic
 /// waiting for the first reader to dereference it. One T4 scan per key at
 /// load, no allocation.
+///
+/// The other half — [`Generator::NextField`] paired with an Element-level
+/// anchor — is not this door's, and needs no door: it is a property of the
+/// PAIR, which a per-key check could settle but need not, because it fails
+/// soft. `checked_inc` refuses `k = 2` at that tier, so `next_in` answers
+/// `GateViolation` and the mint surfaces [`MintError::Gate`]; there is no
+/// panic to prevent.
+///
+/// No key read out of `frontiers` reaches `next_in` today — all five mints
+/// build a fresh key from a `*_ns` constructor, and loaded keys are only ever
+/// hashed for lookup. So this door is defence for the first frontier-
+/// enumerating or re-keying reader to appear, and that reader is why it is
+/// here: M3 publishes no enumeration API, which is why the engine's
+/// observation surface reads this slice through its serde bytes instead.
 #[derive(Deserialize)]
 struct NsKeyShadow {
     parent: Tumbler,
@@ -310,24 +325,35 @@ pub struct M3State {
 // Pure structural helpers (the house style for pure helpers: free functions).
 // ---------------------------------------------------------------------------
 
-/// The cap on a registered node address's component count, enforced by
+/// The cap on a registered node address's component COUNT, enforced by
 /// [`crate::Namespace::register_node`] ([`crate::NodeError::TooDeep`]; §7).
 ///
 /// `nodes` is the one registry M3 cannot keep in frontier form: a namespace's
 /// realized set is a single count, but node addresses originate outside the
 /// docuverse (ASN-0047 NodeBaptism) and may be non-contiguous, so each is
 /// stored WHOLE, permanently (B0 — there is no deletion), and re-serialized
-/// into every checkpoint thereafter, at roughly 32 bytes per component
-/// resident (`Vec<Nat>`, each component owning its own heap magnitude); and
-/// because the set is ordered, a deep entry lengthens every later `nodes`
-/// probe. So each component costs ~2 bytes to supply and is a permanent,
-/// replicated charge — the asymmetry a bound exists to close.
+/// into every checkpoint thereafter; and because the set is ordered, a deep
+/// or large-magnitude entry lengthens every later `nodes` probe.
 ///
-/// The budget: a node address is a pure path through the node field naming a
-/// provisioning authority under the bootstrap node, so its depth is the
-/// nesting of the provisioning hierarchy — one component per level of
-/// region/site/rack/host and the like. 32 leaves an order of magnitude over
-/// any physical such hierarchy while capping one entry near a kilobyte.
+/// What the cap closes is the per-component FIXED overhead: each component
+/// occupies a `Vec<Nat>` slot plus its own heap magnitude allocation — ~32
+/// bytes resident — against ~2 bytes of dotted decimal to supply, so a small
+/// component is a ~16× permanent, replicated charge. 32 leaves an order of
+/// magnitude over any physical provisioning hierarchy (one component per
+/// level of region/site/rack/host and the like) while capping that overhead
+/// near a kilobyte per entry.
+///
+/// What it does NOT close is component MAGNITUDE, which M1 leaves unbounded
+/// (T0(b)): `[1, 2^100000]` is two components and megabytes of entry. That is
+/// permanent and replicated like any entry, but it is not an amplification —
+/// a K-byte magnitude costs ~2.4K bytes to supply, so wire bytes exceed
+/// resident bytes. It is worth knowing that `register_node` is the ONLY door
+/// by which a caller's chosen component VALUES enter the permanent name space
+/// at all: every other address M3 mints is a registered parent extended by
+/// separators, the subspace identifiers 1/2, and frontier ordinals bounded by
+/// the mint count — so every address under a node inherits that node's
+/// magnitudes. A magnitude bound, if a deployment wants one, belongs where
+/// the codec parses a tumbler, not here.
 pub const MAX_NODE_COMPONENTS: usize = 32;
 
 /// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds
@@ -579,7 +605,10 @@ impl M3State {
     /// [`content_ns`]/[`link_ns`] sit behind `is_registered_document`, which
     /// makes `home` a Document, so `inc(home, 2)` lands inside T4. Off a
     /// checkpoint the anchor arrives through [`NsKeyShadow`], which
-    /// discharges it where no caller can.
+    /// re-establishes its T4 half where no caller can; the
+    /// [`Generator::NextField`]/Element half is a pairing that no per-key door
+    /// settles and none need, since it fails as a `GateViolation` here rather
+    /// than a panic.
     ///
     /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] do NOT
     /// discharge it: handed an element they build an anchor outside T4. That
@@ -1313,6 +1342,44 @@ mod tests {
                 state.has_principal_strictly_under(&p),
                 expected,
                 "{shape}: the top-down probe disagrees"
+            );
+        }
+    }
+
+    /// The [`M3RecShadow`] door tests `#a ≥ 2`; [`M3State::apply_m3`]'s
+    /// `expect` needs `parent(a).is_some()`. Two spellings of one fact, sound
+    /// only while M1's `parent` is `None` at exactly one component — a
+    /// property M3 asserts in prose and cannot enforce. Pinned here so a
+    /// change in M1 reddens this suite instead of panicking the applier at
+    /// every replay from then on.
+    #[test]
+    fn the_allocate_door_and_the_folds_expect_are_one_fact() {
+        for comps in [
+            vec![1u32],
+            vec![7],
+            vec![1, 1],
+            vec![1, 7],
+            vec![2, 3],
+            vec![1, 0, 1],
+            vec![1, 0, 1, 1],
+            vec![1, 0, 1, 0, 1],
+            vec![1, 0, 1, 0, 1, 1],
+            vec![1, 0, 1, 0, 1, 0, 1],
+            vec![1, 0, 1, 0, 1, 0, 2],
+            vec![1, 0, 1, 0, 1, 0, 1, 1],
+            vec![1, 0, 1, 0, 1, 0, 2, 9],
+        ] {
+            let addr = a(&comps);
+            let door_admits = addr.tumbler().len() >= 2;
+            assert_eq!(
+                parent(&addr).is_some(),
+                door_admits,
+                "{comps:?}: the door's length test and M1's `parent` disagree"
+            );
+            assert_eq!(
+                namespace_of(&addr).is_some(),
+                door_admits,
+                "{comps:?}: the fold's key derivation disagrees with the door"
             );
         }
     }

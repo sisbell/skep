@@ -812,6 +812,58 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
 }
 
 #[test]
+fn delegate_refuses_a_wire_deep_prefix_at_bounded_cost() {
+    // §6: `delegate` takes an UNVALIDATED `Tumbler` straight off the wire, and
+    // T4 bounds an address's zero pattern, not its component count — so ~100 KB
+    // of dotted decimal is a 50_000-component account-tier prefix that reaches
+    // every gate in the ten-step chain under the held account-chain and global
+    // principals keys. `parent`, `account_lock_key`'s encoding,
+    // `has_principal_strictly_under`'s range probe, `is_allocated`'s
+    // decomposition and `mint_account`'s frontier read all take it whole. It
+    // must refuse structurally, without reaching an `expect`. No assertion pins
+    // a constant — a wall-clock bound is a flake; the depth is chosen so a
+    // regression to superlinear work stops the suite instead of reddening a
+    // line. Corpus seed for the fuzzing tier.
+    let (k, acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
+    let ns = Namespace::new(&k);
+    let before = k.current_seq();
+
+    // Inside the caller's OWN subtree, so (i) and (ii) pass and the deep value
+    // reaches every remaining gate: the parent 49_999 components up is not a
+    // registered account.
+    let mut deep = vec![1u32, 0, 1];
+    deep.extend(std::iter::repeat_n(1u32, 49_997));
+    assert_eq!(
+        rejected(ns.delegate(ID1, t(&deep), ID2)),
+        DelegateError::ParentNotRegistered
+    );
+
+    // Outside it, the containment fence refuses first — a stranger's deep probe
+    // never reaches the registry reads at all.
+    let mut foreign = vec![1u32, 0, 2];
+    foreign.extend(std::iter::repeat_n(1u32, 49_997));
+    assert_eq!(
+        rejected(ns.delegate(ID1, t(&foreign), ID2)),
+        DelegateError::NotAncestor
+    );
+
+    // A node-tier prefix of the same length is pure pre-work: refused with NO
+    // transaction opened, so depth never reaches a lock.
+    let node_deep: Vec<u32> = std::iter::repeat_n(1u32, 50_000).collect();
+    assert_eq!(
+        rejected(ns.delegate(ID1, t(&node_deep), ID2)),
+        DelegateError::NotAccountTier
+    );
+
+    // Nothing committed, and the account's own chain stands where it stood.
+    assert_eq!(k.current_seq(), before);
+    assert_eq!(
+        k.snapshot().world().m3().next_account_prefix(&acct),
+        Some(a(&[1, 0, 1, 1]))
+    );
+}
+
+#[test]
 fn omega_refuses_a_principal_seated_below_the_account_tier() {
     // §5 / O1a: Π is node/account tier only, and ω is the ONE reader that
     // refuses a below-tier entry — because ω is the one reader whose answer to

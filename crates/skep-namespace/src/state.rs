@@ -1261,4 +1261,59 @@ mod tests {
             M3State::content_lock_key(&doc)
         );
     }
+
+    /// §6 (iv): the single probe answers "does a registered principal sit
+    /// STRICTLY under `p`?" — checked over the shape family one probe can
+    /// meet, because only ONE key is ever examined, so a wrong range bound or
+    /// a dropped containment test still answers correctly at a chosen point.
+    /// Π holds only the seats each row names, plus genesis's `[1]`, which is
+    /// an ANCESTOR of `p` in every row and sorts before it — so no row's
+    /// answer may come from it.
+    ///
+    /// The last two rows are the PRECONDITION `p ∉ Π` made executable: once
+    /// `p` is itself a principal the block of keys ≥ `p` opens with `p`, so
+    /// the probe answers false whether or not a principal sits beneath. That
+    /// is why [`crate::Namespace::delegate`] PINS (i) and (ii) ahead of (iv),
+    /// and a probe made correct for `p ∈ Π` makes the last row wrong and that
+    /// pinning revisable — one edit, both consequences.
+    #[test]
+    fn the_top_down_probe_sees_strict_descendants_and_nothing_else() {
+        let p = a(&[1, 0, 1]);
+        for (shape, seats, expected) in [
+            ("an empty subtree", vec![], false),
+            ("a strict child", vec![vec![1, 0, 1, 1]], true),
+            (
+                "a deep strict descendant only",
+                vec![vec![1, 0, 1, 1, 1]],
+                true,
+            ),
+            (
+                "a successor that is no descendant",
+                vec![vec![1, 0, 2]],
+                false,
+            ),
+            ("p itself, with nothing beneath", vec![vec![1, 0, 1]], false),
+            (
+                "p itself, with a child beneath — the precondition's blind spot",
+                vec![vec![1, 0, 1], vec![1, 0, 1, 1]],
+                false,
+            ),
+        ] {
+            let state =
+                seats
+                    .iter()
+                    .enumerate()
+                    .fold(M3State::genesis(), |state, (nth, prefix)| {
+                        state.apply_m3(&M3Rec::RegisterPrincipal {
+                            prefix: a(prefix),
+                            id: PrincipalId(nth as u64 + 1),
+                        })
+                    });
+            assert_eq!(
+                state.has_principal_strictly_under(&p),
+                expected,
+                "{shape}: the top-down probe disagrees"
+            );
+        }
+    }
 }

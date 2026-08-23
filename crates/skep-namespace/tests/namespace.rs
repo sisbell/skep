@@ -161,17 +161,24 @@ fn genesis_seeds_bootstrap_node_and_principal() {
 
 #[test]
 fn the_slice_prints_its_three_registries_and_their_contents() {
-    // The slice a world embeds is reportable, so a test failure or a `dbg!`
-    // in any engine can print it — the impl has to live here, since no
-    // downstream crate may add it.
-    let dump = format!("{:?}", M3State::genesis());
+    // The slice a world embeds is reportable, so a test failure or a `dbg!` in
+    // any engine can print it — the impl has to live here, since no downstream
+    // crate may add it. Rendered from a POPULATED slice, so all three
+    // registries have contents to print and not just names.
+    let (k, _acct, _doc) = kernel_with_account_and_doc();
+    let snap = k.snapshot();
+    let dump = format!("{:?}", snap.world().m3());
     for field in ["frontiers", "nodes", "principals"] {
         assert!(dump.contains(field), "the dump omits {field}: {dump}");
     }
-    // The contents ride along, not just the field names: the bootstrap
-    // principal's id and its root prefix.
+    // The contents ride along: the bootstrap principal and the delegate.
     assert!(dump.contains("PrincipalId(0)"), "{dump}");
-    assert_eq!(format!("{:?}", M3State::genesis()), dump); // deterministic
+    assert!(dump.contains("PrincipalId(1)"), "{dump}");
+    // NOT: comparing two rendered dumps. `im::HashMap` takes a fresh
+    // `RandomState` per construction, so two slices holding the same frontiers
+    // may print them in different orders — a dump is not an equality oracle.
+    // `M3State`'s own `PartialEq` is the one that compares by entries, and it
+    // is what `journaled_types_survive_serde_round_trips` asserts on.
 }
 
 // ---- §A frontier mints ----
@@ -629,6 +636,24 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
             .apply_m3(&M3Rec::RegisterPrincipal {
                 prefix: a(&[1, 0, 2]),
                 id: PrincipalId(4),
+            })
+            // [1,0,3] stays allocated and principal-less, so the probe at it
+            // keeps its meaning: an uncovered sibling resolving to π₀.
+            .apply_m3(&alloc(&[1, 0, 3]))
+            // An INVERTED pair: the shallower principal carries the HIGHER id,
+            // so "longest prefix" and "highest id" disagree here and nowhere
+            // else in the suite. Ids are opaque and assigned by M10 — nothing
+            // makes them monotone in depth, and ω must not read them as
+            // ordering.
+            .apply_m3(&alloc(&[1, 0, 4]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 4]),
+                id: PrincipalId(50),
+            })
+            .apply_m3(&alloc(&[1, 0, 4, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 4, 1]),
+                id: PrincipalId(5),
             }),
     };
     let pi = [
@@ -637,6 +662,8 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
         (a(&[1, 0, 1, 1]), ID2),
         (a(&[1, 0, 1, 1, 1]), PrincipalId(3)),
         (a(&[1, 0, 2]), PrincipalId(4)),
+        (a(&[1, 0, 4]), PrincipalId(50)),
+        (a(&[1, 0, 4, 1]), PrincipalId(5)),
     ];
     // Independent oracle: reconstruct x's OWN node/account-tier prefixes,
     // longest first, and take the first that names a principal. That is the
@@ -663,6 +690,12 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
         a(&[2, 0, 1]),
         a(&[1, 0, 3]),
         a(&[1, 0, 1, 2, 0, 1]),
+        // The inverted pair, and what sits under and beside it: at [1,0,4,1]
+        // and below, ω is the DEEPER seat (id 5) and not the higher id (50).
+        a(&[1, 0, 4]),
+        a(&[1, 0, 4, 1]),
+        a(&[1, 0, 4, 1, 1]),
+        a(&[1, 0, 4, 2]),
     ];
     for len in 1..=deep.len() {
         if let Ok(p) = validate(t(&deep[..len])) {
@@ -741,7 +774,7 @@ fn the_principal_registry_answers_one_prefix_per_principal_in_both_directions() 
 }
 
 #[test]
-fn omega_cost_does_not_follow_the_probes_depth() {
+fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
     // §5 cost discipline: ω's work is sized by Π, never by the address the
     // caller hands in. T4 constrains an address's zero pattern, NOT its
     // component count, so a ~100 KB dotted-decimal request can carry a
@@ -751,6 +784,9 @@ fn omega_cost_does_not_follow_the_probes_depth() {
     // `create_new_document` and `delegate` hold the global principals key
     // across exactly this read. Answering here in the same time as a
     // three-component probe is the refusal. Corpus seed for the fuzzing tier.
+    // No assertion pins the constant, because a wall-clock bound is a flake;
+    // the depth is chosen so a regression to the per-candidate walk stops the
+    // suite instead of reddening a line.
     let (k, _acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
     let snap = k.snapshot();
     let m3 = snap.world().m3();
@@ -767,6 +803,59 @@ fn omega_cost_does_not_follow_the_probes_depth() {
     let mut foreign = vec![2u32, 0];
     foreign.extend(std::iter::repeat_n(1u32, 49_998));
     assert!(m3.effective_owner(&a(&foreign)).is_none());
+
+    // Mid-depth, same registry, same answer — a walk that truncates anywhere
+    // between three components and fifty thousand has no threshold to hide at.
+    let mid = a(&[1, 0, 1, 1, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(m3.effective_owner(&mid), Some(ID1));
+    assert!(m3.is_effective_owner(ID1, &mid));
+}
+
+#[test]
+fn omega_refuses_a_principal_seated_below_the_account_tier() {
+    // §5 / O1a: Π is node/account tier only, and ω is the ONE reader that
+    // refuses a below-tier entry — because ω is the one reader whose answer to
+    // one would be a PASS. The seat is unreachable through `delegate` (its
+    // hoisted NotAccountTier gate) and representable in a corrupted checkpoint
+    // (`M3State` decodes by bare derive), so the fold is how a test reaches it.
+    let doc = a(&[1, 0, 1, 0, 1]);
+    let seeded = World {
+        m3: M3State::genesis()
+            .apply_m3(&alloc(&[1, 0, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1]),
+                id: ID1,
+            })
+            .apply_m3(&alloc(&[1, 0, 1, 0, 1]))
+            // A DOCUMENT-tier seat — below O1a's floor.
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: doc.clone(),
+                id: ID2,
+            }),
+    };
+    let k = mem_kernel(seeded);
+    let snap = k.snapshot();
+    let m3 = snap.world().m3();
+
+    // ω skips it and keeps the longest ADMISSIBLE cover — the account above —
+    // so a below-tier seat shadows no one, at the document or beneath it.
+    assert_eq!(m3.effective_owner(&doc), Some(ID1));
+    assert!(!m3.is_effective_owner(ID2, &doc));
+    let elem = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
+    assert_eq!(m3.effective_owner(&elem), Some(ID1));
+    assert!(!m3.is_effective_owner(ID2, &elem));
+
+    // The other two readers of Π answer VERBATIM, as their docs say — the
+    // registry still reports the seat…
+    assert_eq!(m3.principal_prefix(ID2), Some(&doc));
+    // …and the ω-gated op is what refuses it. Without the filter this call
+    // passes authorization and refuses structurally instead — the right
+    // outcome for the wrong reason, and the wrong one for M5, which asks ω
+    // about elements.
+    assert_eq!(
+        rejected(Namespace::new(&k).create_new_document(ID2, &doc)),
+        CreateDocumentError::NotOwner
+    );
 }
 
 // ---- §B delegate ----
@@ -830,6 +919,51 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
         .m3()
         .next_account_prefix(&doc)
         .is_none());
+}
+
+#[test]
+fn a_stale_peek_loses_and_never_re_seats_a_live_prefix() {
+    // §6 / O17c: `next_account_prefix` is a peek, NOT a reservation — "two
+    // racing peeks of the same value leave exactly one winner". The loser's
+    // retry is refused by (i) or (ii), which is exactly what discharges
+    // `has_principal_strictly_under`'s `p ∉ Π` precondition: once `p` IS a
+    // principal the (iv) probe answers false, so the two gates PINNED ahead of
+    // it are the ones doing the work here. (The probe's own contract, that
+    // blind spot included, is pinned in `state.rs`'s unit tests; what this
+    // test holds is the workflow and the state it leaves.)
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let peek = k
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&a(&[1]))
+        .expect("node peek");
+    // Two callers hold the same peeked value; the first delegation wins.
+    ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
+        .expect("the first delegation of a peeked prefix wins");
+    let before = k.current_seq();
+
+    // The ancestor's stale retry: ω moved to ID1 (O7), so (ii) refuses — NOT
+    // (iv), which sees `p` itself as the first key ≥ p and answers false.
+    assert_eq!(
+        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID2)),
+        DelegateError::NotAuthorized
+    );
+    // The seated principal's own retry: (i) refuses — a prefix is not a
+    // STRICT ancestor of itself.
+    assert_eq!(
+        rejected(ns.delegate(ID1, peek.tumbler().clone(), ID2)),
+        DelegateError::NotAncestor
+    );
+
+    // Neither retry moved anything: one seat, one id, one commit.
+    assert_eq!(k.current_seq(), before);
+    let m3 = k.snapshot().world().m3().clone();
+    assert_eq!(m3.effective_owner(&peek), Some(ID1));
+    assert!(m3.principal_prefix(ID2).is_none());
+    // …and the chain moved on, so a fresh peek names a different prefix.
+    assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
 }
 
 #[test]

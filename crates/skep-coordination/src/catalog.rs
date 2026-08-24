@@ -86,10 +86,10 @@ impl TypeCatalog {
         let mut shipped_endsets: Vec<Endset> = Vec::with_capacity(5);
 
         for t in SHIPPED {
-            let e = enc(std::slice::from_ref(addr_of(t)));
+            let e = enc([addr_of(t)]);
             let class = coverage_class(&e);
             // Coverage-equality against the registry's own reserved endset —
-            // the drift check (byte-identical in fact, both enc(&[addr]),
+            // the drift check (byte-identical in fact, both enc of one addr,
             // but only coverage-equality is required: M7 identifies a type
             // by coverage, I0).
             if class != coverage_class(registry.reserved(t)) {

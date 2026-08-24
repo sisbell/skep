@@ -73,8 +73,6 @@ pub use registry::{
 pub use state::{LinkRec, LinkState};
 pub use store::{LinkStore, SlotArg};
 
-use skep_address::Nat;
-
 /// The engine's **read accessor** for M7's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world
 /// (`W: WorldState + HasLinks`), and M7 — built before `W` exists — codes
@@ -86,25 +84,17 @@ pub trait HasLinks {
     fn links(&self) -> &LinkState;
 }
 
-// Subspace convention (ASN-0093/ASN-0047): s_C = 1 (content), s_L = 2 (link);
-// slots are 1-based FROM = 1, TO = 2, TYPE = 3. Following the workspace
-// precedent (M4/M5 define the axiom-pinned numerals crate-locally — the built
-// skep-kernel carries no subspace constants), these live here as
-// crate-private values; value-equality across the system holds because every
-// producer derives them from the one ASN-0047 convention.
+// The 1-based standard slot numerals (ASN-0043 L6: slot index is a
+// primitive). M7 owns them — it is the store whose `Link` is a positional
+// sequence — so they are named here and read by everyone who indexes a slot,
+// M8's region and descriptor queries included. The subspace numerals `s_C`
+// and `s_L` are M1's, named there as `content_subspace`/`link_subspace`.
 
-/// `s_C` = 1 — the content-subspace numeral.
-pub(crate) fn s_c() -> Nat {
-    Nat::from(1u32)
-}
+/// FROM = 1 — the slot holding `e₁` ([`Link::from_slot`]).
+pub const FROM: usize = 1;
 
-/// `s_L` = 2 — the link-subspace numeral.
-pub(crate) fn s_l() -> Nat {
-    Nat::from(2u32)
-}
+/// TO = 2 — the slot holding `e₂` ([`Link::to_slot`]).
+pub const TO: usize = 2;
 
-/// FROM = 1 (1-based standard slot).
-pub(crate) const FROM: usize = 1;
-
-/// TO = 2 (1-based standard slot).
-pub(crate) const TO: usize = 2;
+/// TYPE = 3 — the slot holding `e₃` ([`Link::type_slot`]).
+pub const TYPE: usize = 3;

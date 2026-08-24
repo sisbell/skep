@@ -11,7 +11,7 @@ use common::*;
 use skep_address::Span;
 use skep_links::{
     coverage_class, enc, CoverageClass, Endset, Link, LinkState, Registration, RegistryError,
-    ReservedAddrs, Shape, TypeDecl,
+    ReservedAddrs, Shape, TypeDecl, FROM, TO, TYPE,
 };
 
 fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
@@ -27,15 +27,45 @@ fn link_enforces_only_the_arity_floor_with_one_based_slots() {
     let l = Link::new([enc(&[ca(1)]), Endset::empty(), enc(&[ra(10)])])
         .expect("arity 3 is admitted, empty slots included");
     assert_eq!(l.arity(), 3);
-    // slot(i) is 1-based: None iff i < 1 ∨ i > arity.
+    // slot(i) is 1-based, and the published numerals name exactly the three
+    // positional accessors: None iff i < 1 ∨ i > arity.
     assert!(l.slot(0).is_none());
     assert!(l.slot(4).is_none());
-    assert_eq!(l.slot(1), Some(l.from_slot()));
-    assert_eq!(l.slot(2), Some(l.to_slot()));
-    assert_eq!(l.slot(3), Some(l.type_slot()));
+    assert_eq!(l.slot(FROM), Some(l.from_slot()));
+    assert_eq!(l.slot(TO), Some(l.to_slot()));
+    assert_eq!(l.slot(TYPE), Some(l.type_slot()));
     // Arity > 3 is admitted by the TYPE (L3 capacity)...
     let wide = Link::new(vec![Endset::empty(); 4]).expect("capacity admits arity 4");
     assert_eq!(wide.arity(), 4);
+}
+
+#[test]
+fn triple_is_the_creation_shape_and_needs_no_arity_discharge() {
+    // The store's one creation shape, infallible: same value the general
+    // constructor yields, with no Option for a caller to discharge.
+    let (f, g, ty) = (enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)]));
+    let t = Link::triple(f.clone(), g.clone(), ty.clone());
+    assert_eq!(t.arity(), 3);
+    assert_eq!(Link::new([f, g, ty]), Some(t.clone()));
+    assert_eq!(t.from_slot(), &enc(&[ca(1)]));
+    assert_eq!(t.to_slot(), &enc(&[ca(2)]));
+    assert_eq!(t.type_slot(), &enc(&[ra(10)]));
+    // Empty slots are the type's business only at the arity floor: triple
+    // admits ⟨⟩ anywhere, and e₃ ≠ ∅ stays a write-boundary check.
+    assert!(Link::triple(Endset::empty(), Endset::empty(), Endset::empty())
+        .type_slot()
+        .is_empty());
+}
+
+#[test]
+fn enc_reads_addresses_from_any_shape_of_argument() {
+    // A slice, an owned Vec's borrow and a one-address array name the same
+    // encoding — the single-address call needs no slice dance.
+    let one = [ca(1)];
+    let owned = vec![ca(1)];
+    assert_eq!(enc(&one), enc([&ca(1)]));
+    assert_eq!(enc(&owned), enc([&ca(1)]));
+    assert_eq!(enc(one.as_slice()), enc([&ca(1)]));
 }
 
 #[test]

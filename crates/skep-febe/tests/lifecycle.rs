@@ -226,7 +226,7 @@ fn link_lifecycle() {
 
     // Descriptor family (address-keyed, home-projected, total).
     let home_q = || FourSet {
-        home: SlotSpec::Spans(enc(&[d.clone()])),
+        home: SlotSpec::Spans(enc([&d])),
         from: SlotSpec::Any,
         to: SlotSpec::Any,
         ty: SlotSpec::Any,

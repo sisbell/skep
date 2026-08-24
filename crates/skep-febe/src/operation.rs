@@ -362,8 +362,7 @@ where
                     SlotArg::Addrs(a) => enc(a),
                     SlotArg::Resolve(v) => endset_from_vspecs(m5, v)?,
                 };
-                let link = Link::new([from, to, ty])
-                    .ok_or_else(|| reject1(kind, RejectCode::IllFormedSpec))?;
+                let link = Link::triple(from, to, ty);
                 let (succ, claim, at) = self
                     .stores
                     .linkstore()

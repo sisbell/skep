@@ -115,9 +115,19 @@ pub struct Link {
 }
 
 impl Link {
-    /// `None ⇔ arity < 3` — the type floor only. `e₃ ≠ ∅` (L3) is a
-    /// WRITE-boundary check (`emit_core`'s gate / MAKELINK's ML6), not the
-    /// type's (Conflicts §3).
+    /// The standard triple `[e₁, e₂, e₃]` — the one shape every creation op
+    /// realizes (the arity-3 store, §Core data model). Infallible, so a write
+    /// path states the shape instead of discharging an arity `Option` that
+    /// cannot be `None`; [`Link::new`] covers the general L3 capacity case.
+    pub fn triple(from: Endset, to: Endset, ty: Endset) -> Link {
+        Link {
+            slots: [from, to, ty].into_iter().collect(),
+        }
+    }
+
+    /// The general L3-capacity constructor: `None ⇔ arity < 3` — the type
+    /// floor only. `e₃ ≠ ∅` (L3) is a WRITE-boundary check (`emit_core`'s
+    /// gate / MAKELINK's ML6), not the type's (Conflicts §3).
     pub fn new(slots: impl IntoIterator<Item = Endset>) -> Option<Link> {
         let slots: Vector<Endset> = slots.into_iter().collect();
         if slots.len() < 3 {
@@ -161,9 +171,10 @@ impl Link {
 /// Canonical address-set encoding (AD): one unit-depth span per address —
 /// `{subtree_of(x) : x ∈ X}` — exactly what the managed surface
 /// (Emit_K/Nullify/assert_sup/claims) emits, with `enc(X).addrs() = X`.
-/// Single-`&Address` callers pass `slice::from_ref(addr)`.
-pub fn enc(addrs: &[Address]) -> Endset {
-    Endset::from_spans(addrs.iter().map(|a| subtree_of(a.tumbler())))
+/// Takes anything that yields addresses by reference, so a slice, a `Vec` and
+/// a one-address array `[addr]` all read the same at the call.
+pub fn enc<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Endset {
+    Endset::from_spans(addrs.into_iter().map(|a| subtree_of(a.tumbler())))
 }
 
 /// Type / I0 identity of an endset — coverage equality, NEVER decomposition

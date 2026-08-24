@@ -4,8 +4,6 @@
 //! distinct from M7's own `succs`/`chain`/`tip`/`current` walks, which stay
 //! M7's. Contextual discovery (EL11a) is out of scope and composed above M8.
 
-use std::slice;
-
 use skep_address::{document_of, validate, Address};
 use skep_arrangement::HasM5;
 use skep_kernel::{Snapshot, WorldState};
@@ -47,7 +45,7 @@ where
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
     let hits = l
-        .match_links(&[(slot, enc(slice::from_ref(key)))], v) // claims naming `key` at `slot`
+        .match_links(&[(slot, enc([key]))], v) // claims naming `key` at `slot`
         .intersection(l.type_slice(sup, v)); // restrict to supersession claims (Ŝ^Σ = S^Σ)
     hits.iter()
         .map(|c| {

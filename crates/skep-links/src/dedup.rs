@@ -66,8 +66,6 @@ fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
 
 #[cfg(test)]
 mod tests {
-    use std::slice;
-
     use skep_address::{validate, Address, Nat, Tumbler};
 
     use super::*;
@@ -78,8 +76,12 @@ mod tests {
             .expect("T4-valid")
     }
 
-    fn link(from: &[Address], to: &[Address], ty: &[Address]) -> Link {
-        Link::new([enc(from), enc(to), enc(ty)]).expect("arity 3")
+    fn link<'a>(
+        from: impl IntoIterator<Item = &'a Address>,
+        to: impl IntoIterator<Item = &'a Address>,
+        ty: impl IntoIterator<Item = &'a Address>,
+    ) -> Link {
+        Link::triple(enc(from), enc(to), enc(ty))
     }
 
     #[test]
@@ -90,20 +92,20 @@ mod tests {
         // Span ORDER is decomposition, never identity: two structurally
         // distinct values of one coverage are one I0 class, and — because
         // the lock is derived from the key — one M2 section.
-        let ab = link(slice::from_ref(&a), &[a.clone(), b.clone()], slice::from_ref(&ty));
-        let ba = link(slice::from_ref(&a), &[b.clone(), a.clone()], slice::from_ref(&ty));
+        let ab = link([&a], [&a, &b], [&ty]);
+        let ba = link([&a], [&b, &a], [&ty]);
         assert_ne!(ab, ba);
         assert_eq!(DedupKey::of(&ab), DedupKey::of(&ba));
         assert_eq!(DedupKey::of(&ab).lock_key(), DedupKey::of(&ba).lock_key());
 
         // A distinct class contends with neither.
-        let other = link(slice::from_ref(&b), &[a.clone(), b.clone()], slice::from_ref(&ty));
+        let other = link([&b], [&a, &b], [&ty]);
         assert_ne!(DedupKey::of(&ab), DedupKey::of(&other));
         assert_ne!(DedupKey::of(&ab).lock_key(), DedupKey::of(&other).lock_key());
 
         // The three slots are distinguishable positions of the key, not a
         // bag: swapping F and G is a different section.
-        let swapped = link(&[a.clone(), b.clone()], slice::from_ref(&a), slice::from_ref(&ty));
+        let swapped = link([&a, &b], [&a], [&ty]);
         assert_ne!(DedupKey::of(&ab).lock_key(), DedupKey::of(&swapped).lock_key());
     }
 }

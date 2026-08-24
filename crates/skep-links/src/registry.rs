@@ -3,14 +3,11 @@
 //! ([`TypeRegistry::build`]) and never mutated (P1/P2 of ASN-0126, R1/R2 of
 //! ASN-0128 — no mutator exists).
 
-use std::slice;
-
 use im::OrdSet;
 use serde::{Deserialize, Serialize};
-use skep_address::{Address, Level};
+use skep_address::{content_subspace, link_subspace, Address, Level};
 
 use crate::endset::{coverage_class, enc, is_address_denoting, CoverageClass, Endset};
-use crate::{s_c, s_l};
 
 /// A registered type's tuple shape (ASN-0126 P3): span-count conformance is
 /// `|F| = 1` always, `|G|` per shape — Unary 0, Binary 1, Multi finite.
@@ -218,12 +215,12 @@ impl TypeRegistry {
             let ss = addr
                 .subspace()
                 .expect("an Element-level address carries a subspace (T7)");
-            if *ss == s_c() || *ss == s_l() {
+            if *ss == content_subspace() || *ss == link_subspace() {
                 return Err(RegistryError::ReservedSubspaceClash);
             }
         }
 
-        let key_of = |a: &Address| enc(slice::from_ref(a));
+        let key_of = |a: &Address| enc([a]);
         let retired = key_of(&reserved.retired);
         let supersedes = key_of(&reserved.supersedes);
         let retraction = key_of(&reserved.retraction);

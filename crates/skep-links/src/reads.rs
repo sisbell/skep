@@ -4,8 +4,6 @@
 //! for M8 (`stab` / `match_links` / `type_slice`). All `&self` over any M2
 //! `Snapshot`; nothing here writes.
 
-use std::slice;
-
 use im::OrdSet;
 use skep_address::{
     classify_spans, document_of, is_prefix, ordinal, validate, Address, Span, SpanRel, SpanSet,
@@ -117,10 +115,10 @@ impl LinkState {
     /// never filters — ASN-0128).
     pub fn observe(&self, ty: &Endset, from_pat: &[Tumbler], to_pat: &[Tumbler], v: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
-        let slice = self.type_slice_class(&class, coerce(v));
+        let slice = self.type_slice_class(&class, v);
         let mut out = Vec::new();
         for t in slice.iter() {
-            let link = self.links.get(t).expect("type_class keys are resident links");
+            let link = self.link_at(t);
             let f_ok = from_pat.iter().all(|p| link.from_slot().denotes(p));
             let g_ok = to_pat.iter().all(|p| link.to_slot().denotes(p));
             if f_ok && g_ok {
@@ -140,11 +138,9 @@ impl LinkState {
     /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
     pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
-        self.type_slice_class(&class, View::Active).iter().any(|addr| {
-            self.links
-                .get(addr)
-                .is_some_and(|l| l.from_slot().denotes(t))
-        })
+        self.type_slice_class(&class, View::Active)
+            .iter()
+            .any(|addr| self.link_at(addr).from_slot().denotes(t))
     }
 
     /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
@@ -155,10 +151,10 @@ impl LinkState {
     pub fn members(&self, ty: &Endset, v: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = v == View::Default && class != *self.shipped_class(ShippedType::Retired);
-        let slice = self.type_slice_class(&class, coerce(v));
+        let slice = self.type_slice_class(&class, v);
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
-            let link = self.links.get(t).expect("type_class keys are resident links");
+            let link = self.link_at(t);
             for m in link.from_slot().addrs() {
                 set.insert(m.clone());
             }
@@ -175,10 +171,10 @@ impl LinkState {
     pub fn targets_of(&self, ty: &Endset, x: &Address, v: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = v == View::Default && class != *self.shipped_class(ShippedType::Retired);
-        let slice = self.type_slice_class(&class, coerce(v));
+        let slice = self.type_slice_class(&class, v);
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
-            let link = self.links.get(t).expect("type_class keys are resident links");
+            let link = self.link_at(t);
             if link.from_slot().denotes(x.tumbler()) {
                 for g in link.to_slot().addrs() {
                     set.insert(g.clone());
@@ -211,11 +207,9 @@ impl LinkState {
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         let rc = self.shipped_class(ShippedType::Retired);
-        self.type_slice_class(rc, View::Active).iter().any(|t| {
-            self.links
-                .get(t)
-                .is_some_and(|l| l.from_slot().addrs().any(|root| is_prefix(root, probe)))
-        })
+        self.type_slice_class(rc, View::Active)
+            .iter()
+            .any(|t| self.link_at(t).from_slot().addrs().any(|root| is_prefix(root, probe)))
     }
 
     /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
@@ -224,7 +218,7 @@ impl LinkState {
     /// (build-enforced, §B); any other `ty` yields the empty vec (the
     /// service-scope guard on arbitrary arguments).
     pub fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
+        if !self.serves_walk(ty) {
             return Vec::new();
         }
         self.succs_operative(x.tumbler()).iter().map(lift).collect()
@@ -235,7 +229,7 @@ impl LinkState {
     /// cycle (revisit) — the finite link set is the termination bound. Empty
     /// for a non-`Supersedes` `ty` (v1 serving scope, as `succs`).
     pub fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
+        if !self.serves_walk(ty) {
             return Vec::new();
         }
         let (path, _) = self.walk_sup(x.tumbler());
@@ -254,7 +248,7 @@ impl LinkState {
     /// `Indeterminate` (⊥) at a branch or cycle — and for a non-`Supersedes`
     /// `ty` (v1 serving scope: no positive head claim is fabricated).
     pub fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
+        if !self.serves_walk(ty) {
             return Tip::Indeterminate;
         }
         match self.walk_sup(x.tumbler()).1 {
@@ -269,11 +263,11 @@ impl LinkState {
     /// authoritative, collecting each survivor's F.addrs().
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
-        let pre = self.stab(TO, &enc(slice::from_ref(target)), View::Audit);
+        let pre = self.stab(TO, &enc([target]), View::Audit);
         let slice = self.type_slice_class(&class, View::Active);
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in pre.iter().filter(|t| slice.contains(*t)) {
-            let link = self.links.get(t).expect("stab keys are resident links");
+            let link = self.link_at(t);
             if link.to_slot().denotes(target.tumbler()) {
                 for f in link.from_slot().addrs() {
                     set.insert(f.clone());
@@ -388,7 +382,7 @@ impl LinkState {
                 continue; // not a sink
             }
             let member = lift(v);
-            let hits = self.match_links(&[(TO, enc(slice::from_ref(&member)))], View::Active);
+            let hits = self.match_links(&[(TO, enc([&member]))], View::Active);
             let claims: Vec<Address> = hits
                 .iter()
                 .filter(|t| sup_slice.contains(*t))
@@ -463,7 +457,7 @@ impl LinkState {
     /// `L_K` (Audit) / `A_K` (Active) — the typed slice as raw index keys.
     /// `v ∈ {Audit, Active}` only (`Default` coerced).
     pub fn type_slice(&self, ty: &Endset, v: View) -> OrdSet<Tumbler> {
-        self.type_slice_class(&coverage_class(ty), coerce(v))
+        self.type_slice_class(&coverage_class(ty), v)
     }
 
     // ───────────────────────── internal helpers ─────────────────────────
@@ -471,12 +465,26 @@ impl LinkState {
     /// The typed slice by class: audit from the hint; active = audit ∖
     /// nullified, derived at query time (the indexes are append-only —
     /// Active/audit indexing open decision, default taken).
+    ///
+    /// Takes `v` RAW and coerces here — the one place a slice read turns
+    /// `Default` into `Active`, so a caller that also honors `Default`
+    /// result-side (`members`/`targets_of`) reads its own `v` for that and
+    /// hands this the same value unaltered.
     pub(crate) fn type_slice_class(&self, class: &CoverageClass, v: View) -> OrdSet<Tumbler> {
         let base = self.hints.type_class.get(class).cloned().unwrap_or_default();
         match coerce(v) {
             View::Active => base.iter().filter(|t| !self.nullified(t)).cloned().collect(),
             _ => base,
         }
+    }
+
+    /// The v1 walk-serving scope (§5): the walk family serves the shipped
+    /// `Supersedes` class and no other. The one statement of the rule
+    /// `succs`/`chain`/`tip` apply, and the read-side half of the build-time
+    /// fence `RegistryError::UnservedWalk` holds up — both lift together when
+    /// the parameterized multi-BH2 path lands.
+    fn serves_walk(&self, ty: &Endset) -> bool {
+        coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }
 
     /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to
@@ -520,14 +528,14 @@ impl LinkState {
     /// `target_of` by class (shared with `targets_keyed`, whose registry walk
     /// has classes, not endsets).
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
-        let pre = self.stab(FROM, &enc(slice::from_ref(source)), View::Audit);
+        let pre = self.stab(FROM, &enc([source]), View::Audit);
         let slice = self.type_slice_class(class, View::Active);
         let mut survivor: Option<Tumbler> = None;
         for t in pre.iter() {
             if !slice.contains(t) {
                 continue;
             }
-            let link = self.links.get(t).expect("stab keys are resident links");
+            let link = self.link_at(t);
             if link.from_slot().addrs().any(|f| f == source.tumbler()) {
                 if survivor.is_some() {
                     return None; // several active type-ty matches ⇒ ⊥
@@ -536,7 +544,6 @@ impl LinkState {
             }
         }
         let t = survivor?;
-        let link = self.links.get(&t).expect("survivor is resident");
-        single_denoted(link.to_slot()).map(lift)
+        single_denoted(self.link_at(&t).to_slot()).map(lift)
     }
 }

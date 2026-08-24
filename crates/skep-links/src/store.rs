@@ -13,11 +13,10 @@
 //! `nullify` additionally requires owning the TARGET link (self-retraction
 //! only in v1).
 
-use std::slice;
 use std::sync::Arc;
 
-use skep_address::Address;
-use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, SeatError, VSpec};
+use skep_address::{content_subspace, Address};
+use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
@@ -29,7 +28,7 @@ use crate::error::{
 };
 use crate::registry::{Shape, ShippedType, TypeRegistry};
 use crate::state::LinkRec;
-use crate::{s_c, HasLinks};
+use crate::HasLinks;
 
 /// The transact-driving handle: `&'k Kernel<W>` plus a construction-time
 /// `Arc<TypeRegistry>` cache of the genesis-immutable registry (§C) — the
@@ -87,13 +86,15 @@ where
 
 /// Admission DISCIPLINE selector — never the value (effect-identity: the gate
 /// adds preconditions only and never alters `value`, ASN-0126 π).
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Gate {
     /// MAKELINK / editlink successor: `e₃ ≠ ∅` only.
     Open,
     /// Emit_K / assert_sup / editlink claim: registered ∧ shape-conformant ∧
     /// K ≁ R; idem⊤ ⇒ active-view dedup check.
     Managed,
-    /// Nullify: the genesis-fixed `[R]` Binary discipline, idem⊤.
+    /// Nullify: the Managed discipline with the `[R]` class ADMITTED rather
+    /// than refused — the one clause that separates the two.
     Retraction,
 }
 
@@ -161,14 +162,16 @@ impl From<EmitCoreError> for EmitError {
 }
 
 impl From<EmitCoreError> for NullifyError {
-    // Retraction: gate variants defensive (the [R] type is genesis-fixed
-    // Binary; P-tgt is checked in nullify itself).
+    // Retraction: the shared discipline's verdicts are all dead here — the
+    // `[R]` class is genesis-registered (never NotRegistered) and Binary
+    // against a tuple nullify builds at |F| = |G| = 1 (never ShapeViolation),
+    // and K ≁ R refuses `[R]` under Managed alone. P-tgt is nullify's own.
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::HomeNotRegistered => NullifyError::HomeNotRegistered,
             EmitCoreError::NotOwner(a) => NullifyError::NotOwner(a),
             EmitCoreError::Mint(m) => NullifyError::Mint(m),
-            _ => unreachable!("[R] type is genesis-fixed Binary; P-tgt checked in nullify"),
+            _ => unreachable!("[R] is genesis-registered Binary and admitted under Retraction"),
         }
     }
 }
@@ -321,8 +324,8 @@ where
 {
     // STORE-INVARIANT BACKSTOP (§2): every caller builds arity 3
     // (MAKELINK/Emit_K/assert_sup/claim; editlink pre-checks), so this never
-    // trips — but it guarantees type_class / the 3-slot spanfilade /
-    // ASN-0086's |Σ.L| = 3 hold locally.
+    // trips — but it guarantees type_class, the FROM/TO/TYPE slots the
+    // discovery primitives index, and ASN-0086's |Σ.L| = 3 hold locally.
     assert_eq!(value.arity(), 3, "emit_core: the store holds only arity-3 links");
     if !stg.working().m3().is_registered_document(home) {
         return Err(EmitCoreError::HomeNotRegistered);
@@ -336,15 +339,22 @@ where
                 return Err(EmitCoreError::EmptyType); // L3 at the write boundary
             }
         }
-        Gate::Managed => {
+        // ONE discipline, derived from the value's own class: registered,
+        // shape-conformant per the REGISTERED shape, idem⊤ ⇒ active-view
+        // dedup. `[R]` reaches it as an ordinary registered class — the
+        // genesis registration supplies Binary and idem⊤, so nullify's
+        // discipline is read from the registry rather than restated here,
+        // and the two can never disagree.
+        Gate::Managed | Gate::Retraction => {
             let links = stg.working().links();
             // Total: the type slot is level-uniform by upstream validation
-            // (emit's ty is address-denoting; the claim's type is reserved).
+            // (emit's ty is address-denoting; the claim's and the retraction
+            // emitter's types are the genesis-fixed reserved endsets).
             let k = coverage_class(value.type_slot());
             let Some(reg) = links.registry.registration(&k) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
             };
-            if k == *links.shipped_class(ShippedType::Retraction) {
+            if gate == Gate::Managed && k == *links.shipped_class(ShippedType::Retraction) {
                 return Err(EmitCoreError::RetractionClass); // K ≁ R
             }
             if !sh_conf(reg.shape, value.from_slot().len(), value.to_slot().len()) {
@@ -354,20 +364,6 @@ where
                 if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
                     return Ok(incumbent); // zero-step: stage NOTHING
                 }
-            }
-        }
-        Gate::Retraction => {
-            let links = stg.working().links();
-            let reg = links
-                .registry
-                .registration(links.shipped_class(ShippedType::Retraction))
-                .expect("the [R] registration is genesis-fixed (defensive)");
-            assert_eq!(reg.shape, Shape::Binary, "the [R] shape is genesis-fixed Binary (defensive)");
-            if !sh_conf(Shape::Binary, value.from_slot().len(), value.to_slot().len()) {
-                return Err(EmitCoreError::ShapeViolation); // |F| = |G| = 1
-            }
-            if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
-                return Ok(incumbent); // idem⊤ zero-step
             }
         }
     }
@@ -383,6 +379,40 @@ where
         .into(),
     );
     Ok(addr)
+}
+
+/// wf for one MAKELINK `Resolve` spec: a registered source, and a depth-2
+/// content V-position with ordinal displacement — `#start = 2 ∧ start₁ = s_C
+/// ∧ #width = 2 ∧ width₁ = 0`, the deliberate depth-2 narrowing of ASN-0120's
+/// `#u_j ≥ 2` (Conflicts §12).
+///
+/// The V-position's subspace is the start's FIRST component, NOT M1's
+/// `Address::subspace()` (which needs zeros = 3 and would reject every depth-2
+/// spec). Every component read is fallible, so a spec of any shape answers
+/// rather than faulting, and the length tests state the depth this narrowing
+/// wants rather than guarding the reads.
+fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
+    m3.is_registered_document(&spec.source)
+        && spec.span.start().len() == 2
+        && spec.span.start().get(1) == Some(&content_subspace())
+        && spec.span.width().len() == 2
+        && spec.span.width().get(1).is_some_and(|w| w.bits() == 0)
+}
+
+/// One MAKELINK slot's endset, read off the txn base. `Resolve`: ρ as content
+/// I-extents — readable, level-uniform spans (ML1 coverage-exactness by
+/// construction: the runs trace exactly allocated content, cross-origin runs
+/// arrive un-coalesced). `Addrs`: the canonical name encoding, deposited
+/// unresolved.
+fn slot_endset(m5: &M5State, slot: &SlotArg) -> Endset {
+    match slot {
+        SlotArg::Resolve(specs) => Endset::from_spans(
+            specs
+                .iter()
+                .flat_map(|sp| m5.resolve(&sp.source, &sp.span).into_iter().map(|r| r.iextent())),
+        ),
+        SlotArg::Addrs(addrs) => enc(addrs),
+    }
 }
 
 impl<'k, W> LinkStore<'k, W>
@@ -404,15 +434,8 @@ where
     /// byte-identical — M3's contract). NO shape gate, NO idem dedup
     /// (distinct links always — ML0), NO provenance.
     ///
-    /// wf is CONCRETE component tests on each `Resolve` spec (registered
-    /// source; `#start = 2 ∧ start₁ = s_C ∧ #width = 2 ∧ width₁ = 0`) — the
-    /// V-position's subspace is the start's FIRST component, NOT M1's
-    /// `Address::subspace()` (which needs zeros = 3 and would reject every
-    /// depth-2 spec); every component read is fallible, so a spec of any
-    /// shape answers rather than faulting, and the length tests state the
-    /// depth this narrowing wants rather than guarding the reads. A
-    /// deliberate depth-2 narrowing of ASN-0120's `#u_j ≥ 2` (Conflicts
-    /// §12). `Addrs` slots get no wf step: T4 validity is the whole
+    /// Every `Resolve` spec is wf-checked ([`is_wf_content_spec`]) before any
+    /// slot is built. `Addrs` slots get no wf step: T4 validity is the whole
     /// precondition, already carried by the `Address` type.
     pub fn makelink(
         &self,
@@ -429,42 +452,20 @@ where
                     // P0 then ω on home, hoisted so both win over every
                     // spec/type verdict.
                     home_gate(base.m3(), caller, &[home])?;
-                    for spec in
-                        from.specs().iter().chain(to.specs().iter()).chain(ty.specs().iter())
-                    {
-                        let wf = base.m3().is_registered_document(&spec.source)
-                            && spec.span.start().len() == 2
-                            && spec.span.start().get(1) == Some(&s_c())
-                            && spec.span.width().len() == 2
-                            && spec.span.width().get(1).is_some_and(|w| w.bits() == 0);
-                        if !wf {
-                            return Err(MakeLinkError::IllFormedSpec);
-                        }
+                    let specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
+                    if !specs.into_iter().all(|s| is_wf_content_spec(base.m3(), s)) {
+                        return Err(MakeLinkError::IllFormedSpec);
                     }
-                    // Resolve: ρ as content I-extents — readable,
-                    // level-uniform spans (ML1 coverage-exactness by
-                    // construction: the runs trace exactly allocated content,
-                    // cross-origin runs arrive un-coalesced). Addrs: the
-                    // canonical name encoding, deposited unresolved.
-                    let build = |slot: &SlotArg| -> Endset {
-                        match slot {
-                            SlotArg::Resolve(specs) => {
-                                Endset::from_spans(specs.iter().flat_map(|sp| {
-                                    base.m5()
-                                        .resolve(&sp.source, &sp.span)
-                                        .into_iter()
-                                        .map(|r| r.iextent())
-                                }))
-                            }
-                            SlotArg::Addrs(addrs) => enc(addrs),
-                        }
-                    };
-                    (build(&from), build(&to), build(&ty))
+                    (
+                        slot_endset(base.m5(), &from),
+                        slot_endset(base.m5(), &to),
+                        slot_endset(base.m5(), &ty),
+                    )
                 };
                 if e3.is_empty() {
                     return Err(MakeLinkError::EmptyTypeResolution); // ML6, as-given
                 }
-                let value = Link::new([e1, e2, e3]).expect("the standard triple has arity 3");
+                let value = Link::triple(e1, e2, e3);
                 let addr = emit_core(stg, caller, home, value, Gate::Open)?;
                 let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
                 stg.push(seat.into());
@@ -509,8 +510,7 @@ where
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
         let idem = self.registry.registration(&k).is_some_and(|r| r.idem);
-        let value = Link::new([enc(slice::from_ref(from)), enc(to), ty.clone()])
-            .expect("the managed triple has arity 3");
+        let value = Link::triple(enc([from]), enc(to), ty.clone());
         let mut keys: Vec<LockKey> = Vec::with_capacity(2);
         if idem {
             keys.push(DedupKey::of(&value).lock_key());
@@ -547,12 +547,7 @@ where
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
         let rty = self.registry.reserved(ShippedType::Retraction).clone();
-        let value = Link::new([
-            enc(slice::from_ref(home)),
-            enc(slice::from_ref(target)),
-            rty,
-        ])
-        .expect("the retraction triple has arity 3");
+        let value = Link::triple(enc([home]), enc([target]), rty);
         let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
             {
@@ -587,8 +582,7 @@ where
         new: &Address,
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
         let sup = self.registry.reserved(ShippedType::Supersedes).clone();
-        let value = Link::new([enc(slice::from_ref(old)), enc(slice::from_ref(new)), sup])
-            .expect("the claim triple has arity 3");
+        let value = Link::triple(enc([old]), enc([new]), sup);
         let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
             {
@@ -613,7 +607,7 @@ where
     /// inlining two `emit_core` calls (the public `assert_sup` CANNOT be
     /// called: M2 is non-reentrant). Allocates the fresh successor (value
     /// supplied — M10 builds it via M5 `resolve` + `Run::iextent` +
-    /// `Endset::from_spans`/`enc` + `Link::new`, off any prior snapshot —
+    /// `Endset::from_spans`/`enc` + `Link::triple`, off any prior snapshot —
     /// ML8/EL0), then asserts it supersedes `original`. Successor born
     /// UNSEATED; both writes commit atomically (EL7); `original` untouched
     /// (L12).
@@ -681,12 +675,7 @@ where
                 }
             }
             let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?;
-            let claim_value = Link::new([
-                enc(slice::from_ref(original)),
-                enc(slice::from_ref(&succ)),
-                sup.clone(),
-            ])
-            .expect("the claim triple has arity 3");
+            let claim_value = Link::triple(enc([original]), enc([&succ]), sup.clone());
             let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?;
             Ok((succ, claim))
         })?;

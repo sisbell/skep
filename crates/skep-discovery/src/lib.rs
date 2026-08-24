@@ -76,12 +76,6 @@ pub use pointwise::{discoverable_from_on, project_on};
 pub use region::{count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on};
 pub use survival::delete_orphans_on;
 pub use types::{Cursor, FourSet, OrphanReport, QueryError, SlotSpec, SupClaim, Window};
-
-/// FROM = 1 — the 1-based standard slot (M7's convention).
-pub const FROM: usize = 1;
-
-/// TO = 2 — the 1-based standard slot (M7's convention).
-pub const TO: usize = 2;
-
-/// TYPE = 3 — the 1-based standard slot (M7's convention).
-pub const TYPE: usize = 3;
+// The 1-based standard slot numerals every query here indexes by, re-exported
+// from the store that owns them so M8 and M7 index one set of values.
+pub use skep_links::{FROM, TO, TYPE};

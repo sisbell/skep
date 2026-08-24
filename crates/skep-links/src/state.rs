@@ -7,12 +7,13 @@ use std::sync::Arc;
 
 use im::{HashMap, OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
-use skep_address::{document_of, elem_addr, validate, Address, ElemPos, Nat, Tumbler};
+use skep_address::{
+    document_of, elem_addr, link_subspace, validate, Address, ElemPos, Nat, Tumbler,
+};
 
 use crate::dedup::DedupKey;
 use crate::endset::{coverage_class, CoverageClass, Link};
 use crate::registry::{RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry};
-use crate::s_l;
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction emitter, supersession claim, editlink successor, pdef/pd_stable
@@ -27,24 +28,12 @@ pub enum LinkRec {
 /// BH2 forward edges `old → {(new, claim)}` — `[K_sup]` only in v1 (§5).
 type SupEdges = OrdSet<(Tumbler, Tumbler)>;
 
-/// v1 UNIT PLACEHOLDER for the per-slot spanfilade index — carries no state;
-/// the bootstrap `stab` brute-scans `links` and never reads it. The deferred
-/// interval/segment index replaces this type wholesale behind the same field
-/// (Open build decisions: spanfilade structure).
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct SlotIndex;
-
 /// The recomputable hints — pure functions of `links` (+ `registry`),
 /// maintained incrementally by [`LinkState::apply_link`] and re-seeded by
 /// [`LinkState::rebuild_derived`]. The journal (via M2) is truth; lose any
 /// hint and replay rebuilds it, never wrong.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Hints {
-    /// Per standard slot: covered-extent → link addrs (overlap). v1: unit
-    /// placeholders — `stab` scans `links` directly (§6). Never read in the
-    /// bootstrap, kept so the deferred index swaps in behind the same field.
-    #[allow(dead_code)]
-    pub(crate) spanfilade: [SlotIndex; 3],
     /// Typed slices `L_K` (Observe / type-match, L8) — audit; active is
     /// derived at query time as `audit ∖ nullified`.
     pub(crate) type_class: HashMap<CoverageClass, OrdSet<Tumbler>>,
@@ -173,6 +162,18 @@ impl LinkState {
         self.hints.nullified.contains(t)
     }
 
+    /// The link an INDEX KEY names. Every key in `type_class`/`dedup`/
+    /// `sup_fwd`, and every key `stab` returns, is a key of `links` —
+    /// [`fold_hints`] only ever indexes the address it is inserting — so
+    /// absence is corruption rather than a miss, and fail-stops here instead
+    /// of reading downstream as an empty answer. `readlink` is the fallible
+    /// form, for an address a caller supplies.
+    pub(crate) fn link_at(&self, t: &Tumbler) -> &Link {
+        self.links
+            .get(t)
+            .expect("an index key names a resident link: the fold indexes only what it inserts")
+    }
+
     /// The address `mint_link(home)` would mint next —
     /// `home · 0 · s_L · (1 + home_count[home])`, assembled off M7's own
     /// homed count and equal to M3's frontier by construction
@@ -188,7 +189,7 @@ impl LinkState {
             .unwrap_or(0);
         elem_addr(ElemPos {
             doc: home.clone(),
-            subspace: s_l(),
+            subspace: link_subspace(),
             ordinal: Nat::from(ordinal),
         })
         .expect("P0 discharged: home is a Document; s_L ≥ 1; ordinal ≥ 1 (§4)")
@@ -225,9 +226,6 @@ impl LinkState {
 pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, value: &Link) -> Hints {
     let mut out = h.clone();
     let k = coverage_class(value.type_slot());
-
-    // spanfilade: a no-op in the v1 bootstrap (unit placeholder; `stab`
-    // brute-scans `links`).
 
     // type_class — L_K slices (L8).
     let mut slice = out.type_class.get(&k).cloned().unwrap_or_default();

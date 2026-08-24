@@ -290,8 +290,8 @@ fn editlink_composite_dc_guard_and_currency() {
         let ls = snap.world().links();
         assert_eq!(ls.readlink(&s1).as_ref(), Some(&succ_value)); // supplied value verbatim
         let claim = ls.readlink(&c1).expect("claim resident");
-        assert_eq!(claim.from_slot(), &enc(&[orig.clone()])); // F = old
-        assert_eq!(claim.to_slot(), &enc(&[s1.clone()])); // G = new (fresh successor)
+        assert_eq!(claim.from_slot(), &enc([&orig])); // F = old
+        assert_eq!(claim.to_slot(), &enc([&s1])); // G = new (fresh successor)
         assert_eq!(claim.type_slot(), &sup);
         assert_eq!(ls.chain(&sup, &orig), vec![orig.clone(), s1.clone()]);
         // Successor born UNSEATED.
@@ -322,7 +322,7 @@ fn editlink_composite_dc_guard_and_currency() {
     // A [K_sup]-typed successor is admitted iff schema-conforming (DC): both
     // endpoints resident, distinct, unit-depth single-addr F/G.
     let (z, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
-    let conforming = Link::new([enc(&[orig.clone()]), enc(&[z.clone()]), sup.clone()]).expect("arity 3");
+    let conforming = Link::new([enc([&orig]), enc([&z]), sup.clone()]).expect("arity 3");
     s.editlink(P1, &orig, conforming, &doc1(), &doc1())
         .expect("schema-conforming claim-typed successor");
     {
@@ -362,7 +362,7 @@ fn editlink_composite_dc_guard_and_currency() {
         s.editlink(P1, &orig, retraction_typed, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
     ));
-    let self_sup = Link::new([enc(&[orig.clone()]), enc(&[orig.clone()]), sup.clone()]).expect("arity 3");
+    let self_sup = Link::new([enc([&orig]), enc([&orig]), sup.clone()]).expect("arity 3");
     assert!(matches!(
         s.editlink(P1, &orig, self_sup, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::DcViolation))
@@ -521,7 +521,7 @@ fn makelink_addrs_form_records_names_verbatim() {
         let snap = k.snapshot();
         let ls = snap.world().links();
         let link = ls.readlink(&l1).expect("resident");
-        assert_eq!(link.type_slot(), &enc(&[name.clone()]));
+        assert_eq!(link.type_slot(), &enc([&name]));
         assert_eq!(link.to_slot(), &Endset::empty());
     }
 
@@ -539,9 +539,9 @@ fn makelink_addrs_form_records_names_verbatim() {
     {
         let snap = k.snapshot();
         let ls = snap.world().links();
-        assert_eq!(ls.readlink(&l2).expect("resident").to_slot(), &enc(&[l1.clone()]));
+        assert_eq!(ls.readlink(&l2).expect("resident").to_slot(), &enc([&l1]));
         // Shared-identity typing: both links sit in the name's type slice.
-        let slice = ls.type_slice(&enc(&[name.clone()]), View::Active);
+        let slice = ls.type_slice(&enc([&name]), View::Active);
         assert!(slice.contains(l1.tumbler()) && slice.contains(l2.tumbler()));
     }
 

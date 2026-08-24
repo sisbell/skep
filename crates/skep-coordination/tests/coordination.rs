@@ -213,7 +213,7 @@ fn type_check_gamma_and_catalog_guards() {
     // targets_keyed is in the vocabulary iff some cataloged class attaches
     // BH3 (V-atom): a no-BH3 catalog rejects it.
     let no_bh3: Vec<TypeDecl> = decls().into_iter().filter(|d| d.key != bh3_ty()).collect();
-    let reg2 = Arc::new(TypeRegistry::build(&reserved(), &no_bh3).expect("valid config"));
+    let reg2 = Arc::new(TypeRegistry::build(&config_with(no_bh3.clone())).expect("valid config"));
     let c2 = try_coord(&k, reg2, reserved(), no_bh3).expect("projects");
     assert!(matches!(
         c2.type_check(vec![], Term::Atom(Atom::TargetsKeyed(at(lit_addr(&ca(1)))))),

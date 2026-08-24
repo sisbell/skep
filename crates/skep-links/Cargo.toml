@@ -12,9 +12,9 @@ description = "M7 — Link & Relation Store: the authoritative append-only store
 # feature because the authoritative slice (links + genesis type config) rides
 # M2 checkpoints.
 im.workspace = true
-# serde's `rc` feature: the genesis type config (`reserved`/`decls`) is
-# Arc-wrapped so the clone-and-modify fold bumps a refcount instead of copying
-# the declaration vector on every record (§Core data model).
+# serde's `rc` feature: the genesis `TypeConfig` is Arc-wrapped so the
+# clone-and-modify fold bumps a refcount instead of copying the declaration
+# vector on every record (§Core data model).
 serde = { workspace = true, features = ["rc"] }
 # M1 — tumbler/address/span algebra; M7 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }

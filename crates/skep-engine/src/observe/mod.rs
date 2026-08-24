@@ -207,7 +207,7 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
     for (label, t) in shipped {
         classes.push((key(label), class_canon(links, links.reserved_type(t))));
     }
-    for (i, d) in cfg.decls.iter().enumerate() {
+    for (i, d) in cfg.types.decls.iter().enumerate() {
         classes.push((Canon::Str(format!("app.{i}")), class_canon(links, &d.key)));
     }
     entries.push((key("types"), Canon::Map(classes)));

@@ -70,8 +70,8 @@ pub use error::{
 };
 pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
 pub use registry::{
-    Behavior, Registration, RegistryError, ReservedAddrs, Shape, ShippedType, TypeDecl,
-    TypeRegistry,
+    Behavior, Registration, RegistryError, ReservedAddrs, Shape, ShippedType, TypeConfig,
+    TypeDecl, TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
 pub use writes::{LinkWriter, SlotArg};

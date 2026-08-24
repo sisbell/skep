@@ -14,10 +14,10 @@
 //! computation lives in a store. Three obligations are the engine's alone:
 //!
 //! * **Genesis** ([`GenesisConfig`], [`World::genesis`], [`Engine::open`]) —
-//!   the initial world, with the one `(reserved, decls)` configuration held
-//!   in ONE place and fed to both registry consumers: M7's genesis-sealed
-//!   `LinkState` and the engine-built `Arc<TypeRegistry>` that M9 (and any
-//!   other assembly-time consumer) projects.
+//!   the initial world, with the one [`TypeConfig`] held in ONE place and fed
+//!   to both registry consumers: M7's genesis-sealed `LinkState` and the
+//!   engine-built `Arc<TypeRegistry>` that M9 (and any other assembly-time
+//!   consumer) projects.
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated and pinned in one place.
 //! * **The observation surface** ([`observe`], behind the `observe` feature)
@@ -42,4 +42,4 @@ pub use world::{Record, World};
 // can drive `Engine::open`/`coordinator()` without spelling every store crate.
 pub use skep_coordination::CatalogError;
 pub use skep_kernel::{HistoryError, KernelConfig, OpenError};
-pub use skep_links::{RegistryError, ReservedAddrs, TypeDecl};
+pub use skep_links::{RegistryError, ReservedAddrs, TypeConfig, TypeDecl};

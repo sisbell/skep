@@ -702,7 +702,7 @@ mod tests {
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
-    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs};
+    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, TypeConfig};
     use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
     use super::*;
@@ -798,16 +798,16 @@ mod tests {
             m3: M3State::genesis(),
             content: ContentStore::default(),
             m5: M5State::genesis(),
-            links: LinkState::genesis(
-                ReservedAddrs {
+            links: LinkState::genesis(TypeConfig {
+                reserved: ReservedAddrs {
                     pred_def: ra(1),
                     pred_stable: ra(2),
                     retired: ra(3),
                     supersedes: ra(4),
                     retraction: ra(5),
                 },
-                vec![],
-            )
+                decls: vec![],
+            })
             .expect("test genesis type config is valid"),
         }
     }

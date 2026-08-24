@@ -18,6 +18,7 @@ use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, S
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, ReservedAddrs,
+    TypeConfig,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
@@ -132,6 +133,11 @@ pub fn reserved() -> ReservedAddrs {
     }
 }
 
+/// The fixture type configuration — the five reserved addresses, no app decls.
+pub fn config() -> TypeConfig {
+    TypeConfig { reserved: reserved(), decls: vec![] }
+}
+
 /// The shipped Supersedes class as an address-denoting type endset.
 pub fn supersedes_ty() -> Endset {
     enc(&[ra(4)])
@@ -164,7 +170,7 @@ pub fn genesis_world() -> World {
         m3: M3State::genesis(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(reserved(), vec![]).expect("test genesis type config is valid"),
+        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
     }
 }
 

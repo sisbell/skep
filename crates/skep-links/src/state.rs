@@ -13,12 +13,10 @@ use skep_address::{
 
 use crate::dedup::DedupKey;
 use crate::endset::{coverage_class, single_denoted, CoverageClass, Link};
-use crate::registry::{
-    Registration, RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry,
-};
+use crate::registry::{Registration, RegistryError, ShippedType, TypeConfig, TypeRegistry};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
-/// retraction emitter, supersession claim, editlink successor, pdef/pd_stable
+/// retraction tuple, supersession claim, editlink successor, pdef/pd_stable
 /// classifier — is a deposit of an immutable link at a fresh address. There
 /// is no update, no delete, no tombstone record (L12/R2/R3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,12 +108,10 @@ pub(crate) struct Hints {
 pub struct LinkState {
     /// ── AUTHORITATIVE ── append-only, immutable values.
     pub(crate) links: OrdMap<Tumbler, Link>,
-    /// ── AUTHORITATIVE ── genesis type config; `Arc` ⇒ O(1) per-fold clone
-    /// (serde `rc`).
-    pub(crate) reserved: Arc<ReservedAddrs>,
-    /// ── AUTHORITATIVE ── genesis type config; `Arc` ⇒ O(1) per-fold clone.
-    pub(crate) decls: Arc<Vec<TypeDecl>>,
-    /// ── RECOMPUTABLE ── lookup map; rebuilt from `reserved`+`decls`.
+    /// ── AUTHORITATIVE ── the genesis [`TypeConfig`]; `Arc` ⇒ O(1) per-fold
+    /// clone (serde `rc`).
+    pub(crate) config: Arc<TypeConfig>,
+    /// ── RECOMPUTABLE ── lookup map; rebuilt from `config`.
     #[serde(skip)]
     pub(crate) registry: Arc<TypeRegistry>,
     /// ── RECOMPUTABLE ── rebuilt from `links`+`registry`.
@@ -124,28 +120,24 @@ pub struct LinkState {
 }
 
 impl LinkState {
-    /// Validate `decls` against `reserved` (`TypeRegistry::build`), seal BOTH
-    /// as authoritative genesis config, start from `links = ∅`. The engine
-    /// builds the genesis slice here at assembly, propagating
-    /// [`RegistryError`]. (`TypeRegistry::build` is the same validation
-    /// standalone; this is the normal entry.)
-    pub fn genesis(
-        reserved: ReservedAddrs,
-        decls: Vec<TypeDecl>,
-    ) -> Result<LinkState, RegistryError> {
-        let registry = TypeRegistry::build(&reserved, &decls)?;
+    /// Validate the [`TypeConfig`] (`TypeRegistry::build`), seal it as
+    /// authoritative genesis state, start from `links = ∅`. The engine builds
+    /// the genesis slice here at assembly, propagating [`RegistryError`].
+    /// (`TypeRegistry::build` is the same validation standalone; this is the
+    /// normal entry.)
+    pub fn genesis(config: TypeConfig) -> Result<LinkState, RegistryError> {
+        let registry = TypeRegistry::build(&config)?;
         Ok(LinkState {
             links: OrdMap::new(),
-            reserved: Arc::new(reserved),
-            decls: Arc::new(decls),
+            config: Arc::new(config),
             registry: Arc::new(registry),
             hints: Hints::default(),
         })
     }
 
     /// The pure/total/deterministic M2 fold (§1): insert `addr ↦ value` into
-    /// `links` and fold EVERY hint incrementally, carrying the genesis config
-    /// (`reserved`/`decls`/`registry`) forward unchanged (Arc refcount bumps).
+    /// `links` and fold EVERY hint incrementally, carrying the genesis
+    /// `config` and its `registry` forward unchanged (Arc refcount bumps).
     /// Reads only `LinkState` + M1 arithmetic + the registry. Applied exactly
     /// once per committed record (M2 guarantees this — deliberately NOT coded
     /// idempotent).
@@ -181,15 +173,15 @@ impl LinkState {
     }
 
     /// Runs once at load, BEFORE replay (M2's `rebuild_derived` slot): first
-    /// reconstructs `registry = TypeRegistry::build(reserved, decls)` from
-    /// the deserialized authoritative config (an `expect` — the inputs passed
-    /// validation at genesis, so the rebuild cannot fail), THEN recomputes
-    /// every hint from `links` + the rebuilt registry in one pass. Required
-    /// because both fields are `#[serde(skip)]` — M2's default identity would
-    /// leave them empty, and replay's `apply_link` folds need the registry to
-    /// recognize the `[R]`/`[K_sup]` classes.
+    /// reconstructs `registry = TypeRegistry::build(config)` from the
+    /// deserialized authoritative config (an `expect` — that configuration
+    /// passed validation at genesis, so the rebuild cannot fail), THEN
+    /// recomputes every hint from `links` + the rebuilt registry in one pass.
+    /// Required because both fields are `#[serde(skip)]` — M2's default
+    /// identity would leave them empty, and replay's `apply_link` folds need
+    /// the registry to recognize the `[R]`/`[K_sup]` classes.
     pub fn rebuild_derived(self) -> LinkState {
-        let registry = Arc::new(TypeRegistry::build(&self.reserved, &self.decls).expect(
+        let registry = Arc::new(TypeRegistry::build(&self.config).expect(
             "genesis type config re-validates: it passed TypeRegistry::build at genesis",
         ));
         let mut hints = Hints::default();
@@ -198,8 +190,7 @@ impl LinkState {
         }
         LinkState {
             links: self.links,
-            reserved: self.reserved,
-            decls: self.decls,
+            config: self.config,
             registry,
             hints,
         }

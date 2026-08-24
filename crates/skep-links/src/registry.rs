@@ -9,8 +9,11 @@ use skep_address::{content_subspace, link_subspace, Address, Level};
 
 use crate::endset::{coverage_class, enc, CoverageClass, Endset};
 
-/// A registered type's tuple shape (ASN-0126 P3): span-count conformance is
-/// `|F| = 1` always, `|G|` per shape — Unary 0, Binary 1, Multi finite.
+/// A registered type's tuple shape (ASN-0126 P3): conformance counts the
+/// stored decomposition's spans — one FROM span always, and per shape no TO
+/// span (Unary), exactly one (Binary), or any finite number (Multi). That
+/// count is P3's set-valued `|F|`/`|G|` on the duplicate-free endsets the
+/// managed surface builds ([`Endset::len`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Shape {
     Unary,
@@ -63,6 +66,24 @@ pub struct ReservedAddrs {
     pub supersedes: Address,
     /// `[R]` — the retraction class.
     pub retraction: Address,
+}
+
+/// The TYPE CONFIGURATION: the reserved type addresses the substrate ships
+/// and the types an app declares — [`TypeRegistry::build`]'s whole input, and
+/// the authoritative genesis state [`crate::LinkState`] seals, checkpoints and
+/// re-validates at load.
+///
+/// One declaration is a [`TypeDecl`], the configuration is this, the validated
+/// lookup is [`TypeRegistry`]. The three are one chain, and it is the middle
+/// link that every seam names: a caller builds one configuration, seals it
+/// once, and hands the same value to every registry consumer, so the halves
+/// cannot arrive matched at one door and mismatched at the next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeConfig {
+    /// The five M7↔M9 build-time constants.
+    pub reserved: ReservedAddrs,
+    /// App-declared types, validated once at [`TypeRegistry::build`].
+    pub decls: Vec<TypeDecl>,
 }
 
 /// [`TypeRegistry::build`] rejection. `UnservedWalk` and
@@ -144,8 +165,8 @@ pub enum ShippedType {
 /// class each shipped type belongs to is a fact this registry knows rather
 /// than one its callers re-derive. RECOMPUTABLE — keyed by the
 /// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint; the
-/// serializable build inputs (`reserved` + `decls`) are the authoritative
-/// state and `LinkState::rebuild_derived` reconstructs this before replay.
+/// serializable [`TypeConfig`] it was built from is the authoritative state
+/// and `LinkState::rebuild_derived` reconstructs this before replay.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     map: im::HashMap<CoverageClass, Registration>,
@@ -163,7 +184,8 @@ pub struct TypeRegistry {
 
 /// The empty registry — exists ONLY so serde can seed `LinkState`'s
 /// `#[serde(skip)] registry` field on deserialize; `rebuild_derived` replaces
-/// it from `reserved`+`decls` BEFORE replay, so it is never consulted live.
+/// it from the sealed [`TypeConfig`] BEFORE replay, so it is never consulted
+/// live.
 impl Default for TypeRegistry {
     fn default() -> TypeRegistry {
         let empty_class = coverage_class(&Endset::empty());
@@ -198,14 +220,12 @@ impl TypeRegistry {
     /// computation, keeping `coverage_class` on the safe `Addrs` path) →
     /// `ReservedClassClash` → `KeyCollision` → `BadBehavior` →
     /// `UnservedWalk` → `UnservedSecondFilter`.
-    /// Borrows both inputs: the shipped keys clone through [`enc`] and each
-    /// app registration clones out of the slice, so the caller keeps the
+    /// Borrows the configuration: the shipped keys clone through [`enc`] and
+    /// each app registration clones out of `decls`, so the caller keeps the
     /// config it is about to seal — `rebuild_derived` re-validates straight
-    /// off the `Arc`s it already holds, copying no declaration vector.
-    pub fn build(
-        reserved: &ReservedAddrs,
-        decls: &[TypeDecl],
-    ) -> Result<TypeRegistry, RegistryError> {
+    /// off the `Arc` it already holds, copying no declaration vector.
+    pub fn build(config: &TypeConfig) -> Result<TypeRegistry, RegistryError> {
+        let reserved = &config.reserved;
         // Reserved-isolation: element-level with subspace ∉ {s_C, s_L}, so a
         // content type class (in s_C) or a link address (in s_L) can never
         // coverage-equal a reserved class (Conflicts §1).
@@ -281,7 +301,7 @@ impl TypeRegistry {
             map.insert(class.clone(), reg);
         }
 
-        for decl in decls {
+        for decl in &config.decls {
             if decl.key.is_empty() {
                 return Err(RegistryError::EmptyKey);
             }
@@ -398,16 +418,16 @@ mod tests {
 
     #[test]
     fn the_class_a_shipped_type_reports_is_the_class_of_the_endset_it_reports() {
-        let registry = TypeRegistry::build(
-            &ReservedAddrs {
+        let registry = TypeRegistry::build(&TypeConfig {
+            reserved: ReservedAddrs {
                 pred_def: ra(1),
                 pred_stable: ra(2),
                 retired: ra(3),
                 supersedes: ra(4),
                 retraction: ra(5),
             },
-            &[],
-        )
+            decls: Vec::new(),
+        })
         .expect("the reserved addresses are element-level outside {s_C, s_L}");
         for ty in [
             ShippedType::Retired,

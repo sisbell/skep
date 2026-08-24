@@ -15,7 +15,8 @@ use common::*;
 use skep_address::Span;
 use skep_links::{
     coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration,
-    RegistryError, ReservedAddrs, Shape, ShippedType, TypeDecl, TypeRegistry, FROM, TO, TYPE,
+    RegistryError, ReservedAddrs, Shape, ShippedType, TypeConfig, TypeDecl, TypeRegistry, FROM,
+    TO, TYPE,
 };
 
 fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
@@ -165,7 +166,7 @@ fn coverage_class_panics_on_an_off_contract_span() {
 
 #[test]
 fn registry_build_accepts_the_shipped_config_and_seeds_five_classes() {
-    let state = LinkState::genesis(reserved(), decls()).expect("valid config builds");
+    let state = LinkState::genesis(config()).expect("valid config builds");
     // The five shipped endsets read back through reserved_type.
     use skep_links::ShippedType as S;
     for (ty, addr) in [
@@ -186,7 +187,11 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         idem: false,
         behaviors: im::OrdSet::new(),
     };
-    let build = |reserved: ReservedAddrs, decls: Vec<TypeDecl>| LinkState::genesis(reserved, decls);
+    // Each rejection needs its own configuration, and two of them vary the
+    // reserved half against no decls, so the closure assembles both.
+    let build = |reserved: ReservedAddrs, decls: Vec<TypeDecl>| {
+        LinkState::genesis(TypeConfig { reserved, decls })
+    };
 
     // ReservedSubspaceClash: a reserved address inside the content subspace.
     let mut bad = reserved();
@@ -305,7 +310,7 @@ fn shipped_types_carry_their_pinned_registrations() {
     // agreement (PredDef = PredStable = Unary/⊤/{}) — an M9-negotiated
     // constant, never a local M7 edit. The endsets are read back elsewhere;
     // these are the registrations they are seeded under.
-    let reg = TypeRegistry::build(&reserved(), &decls()).expect("valid config builds");
+    let reg = TypeRegistry::build(&config()).expect("valid config builds");
     let unary_top = |behaviors| Registration {
         shape: Shape::Unary,
         idem: true,
@@ -381,7 +386,7 @@ fn registry_enforces_the_behavior_shape_table_exhaustively() {
                     Behavior::Age => Ok(()),
                 };
                 assert_eq!(
-                    LinkState::genesis(reserved(), vec![decl]).map(|_| ()),
+                    LinkState::genesis(config_with(vec![decl])).map(|_| ()),
                     want,
                     "{behavior:?} × {shape:?} × idem={idem}"
                 );
@@ -395,10 +400,10 @@ fn registry_rejects_two_reserved_types_sharing_one_address() {
     // The shipped seeding is collision-checked too: without it one reserved
     // registration would silently overwrite another, and a retired tuple
     // would come out walkable.
-    let mut clash = reserved();
-    clash.supersedes = clash.retired.clone();
+    let mut clash = config();
+    clash.reserved.supersedes = clash.reserved.retired.clone();
     assert!(matches!(
-        LinkState::genesis(clash, vec![]),
+        LinkState::genesis(clash),
         Err(RegistryError::KeyCollision)
     ));
 }
@@ -418,7 +423,7 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
         },
     };
     assert!(matches!(
-        LinkState::genesis(reserved(), vec![d]),
+        LinkState::genesis(config_with(vec![d])),
         Err(RegistryError::NonAddressDenotingKey)
     ));
 }
@@ -444,10 +449,10 @@ fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
         },
     };
     assert!(matches!(
-        LinkState::genesis(reserved(), vec![decl(skew)]),
+        LinkState::genesis(config_with(vec![decl(skew)])),
         Err(RegistryError::NonAddressDenotingKey)
     ));
-    assert!(LinkState::genesis(reserved(), vec![decl(enc(&[ra(20)]))]).is_ok());
+    assert!(LinkState::genesis(config_with(vec![decl(enc(&[ra(20)]))])).is_ok());
 }
 
 #[test]
@@ -599,6 +604,15 @@ fn endset_collects_from_a_span_pipeline_and_the_genesis_records_compare_by_value
         .find(|d| d.key == bh4_ty())
         .expect("the BH4 decl is in the fixture");
     assert_ne!(bh4.reg, decls()[0].reg);
+
+    // ...and so does the TypeConfig they make up, on BOTH halves — which is
+    // what lets a caller pass one value everywhere and lets the engine's
+    // drift check compare configurations rather than reconcile fields.
+    assert_eq!(config(), config());
+    let mut drifted = config();
+    drifted.reserved.retired = ra(99);
+    assert_ne!(drifted, config());
+    assert_ne!(config_with(vec![]), config());
 }
 
 #[test]

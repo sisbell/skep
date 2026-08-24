@@ -82,8 +82,9 @@ pub enum EmitError {
     /// of `ShapeViolation`: an `[R]`-typed emit with a non-conforming `|G|`
     /// satisfies both, and the fence speaks (design's K ≁ R before Sh-conf).
     RetractionClass,
-    /// Span counts violate the registered shape (P3 Sh-conf: `|F| = 1`;
-    /// Unary `|G| = 0`, Binary `|G| = 1`, Multi finite).
+    /// Span counts violate the registered shape (P3 Sh-conf): one FROM span
+    /// always, and no TO span under Unary, exactly one under Binary, any
+    /// finite number under Multi.
     ShapeViolation,
     /// `ty ~ [K_sup]` — supersession writes only through
     /// `assert_sup`/`editlink` (Conflicts §10). Pre-transact.
@@ -105,8 +106,9 @@ pub enum NullifyError {
     /// the v1 nullify target policy; owning the retraction's home does not
     /// license retracting someone else's link).
     NotOwner(Address),
-    /// P-tgt: `target` is neither a resident link nor this call's own fresh
-    /// emitter (sterilization made unreachable through the surface — DR).
+    /// P-tgt: `target` is neither a resident link nor the address this call's
+    /// own retraction tuple would occupy (`a_emit`) — sterilization made
+    /// unreachable through the surface (DR).
     BadTarget,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -271,7 +273,7 @@ impl fmt::Display for NullifyError {
                 "nullify: the caller is not the effective owner (ω) of the home or target link",
             ),
             NullifyError::BadTarget => f.write_str(
-                "nullify: target is neither a resident link nor this call's own fresh emitter (P-tgt)",
+                "nullify: target is neither a resident link nor the address this call's own retraction tuple would occupy (P-tgt)",
             ),
             NullifyError::Mint(e) => write!(f, "nullify: mint failed: {e}"),
         }

@@ -155,7 +155,7 @@ impl LinkState {
     pub fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let mut out = Vec::new();
-        for t in self.typed(&class, view) {
+        for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
             let f_ok = pat.from.iter().all(|p| link.from_slot().covers(p));
             let g_ok = pat.to.iter().all(|p| link.to_slot().covers(p));
@@ -181,7 +181,7 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
-        self.typed(&class, View::Active)
+        self.type_slice_class(&class, View::Active)
             .any(|addr| self.link_at(addr).from_slot().covers(t))
     }
 
@@ -199,7 +199,7 @@ impl LinkState {
         let class = coverage_class(ty);
         let subtract = self.subtracts_filtered(&class, view);
         let mut members: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.typed(&class, view) {
+        for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
             for m in link.from_slot().addrs() {
                 members.insert(m.clone());
@@ -226,7 +226,7 @@ impl LinkState {
         let class = coverage_class(ty);
         let subtract = self.subtracts_filtered(&class, view);
         let mut targets: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.typed(&class, view) {
+        for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
             if link.from_slot().covers(x.tumbler()) {
                 for g in link.to_slot().addrs() {
@@ -261,7 +261,7 @@ impl LinkState {
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         let retired = self.shipped_class(ShippedType::Retired);
-        self.typed(retired, View::Active)
+        self.type_slice_class(retired, View::Active)
             .any(|t| self.link_at(t).from_slot().addrs().any(|root| is_prefix(root, probe)))
     }
 
@@ -343,7 +343,7 @@ impl LinkState {
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
         let mut sources: OrdSet<Tumbler> = OrdSet::new();
-        for t in self.typed(&class, View::Active) {
+        for t in self.type_slice_class(&class, View::Active) {
             let link = self.link_at(t);
             if link.to_slot().covers(target.tumbler()) {
                 for f in link.from_slot().addrs() {
@@ -383,8 +383,9 @@ impl LinkState {
     }
 
     /// BH4 age (§7): `f_d^Σ − ordinal(a)` at `a`'s own home, for a resident
-    /// link, else `None` — a raw home-relative chain distance (ordinal time,
-    /// no clock), meaningful as staleness only for an idem⊥ BH4 type (under
+    /// link, else `None` — a raw distance back along the home's ALLOCATION
+    /// chain (`chain_d`, ordinal time, no clock — never BH2's supersession
+    /// chain), meaningful as staleness only for an idem⊥ BH4 type (under
     /// idem⊤ a renewal dedups to the incumbent and age never resets — which
     /// is exactly why R-C0 forces BH4 ⇒ idem⊥).
     pub fn age(&self, a: &Address) -> Option<u64> {
@@ -419,7 +420,7 @@ impl LinkState {
             return Err(NotBh4);
         }
         Ok(self
-            .typed(&class, View::Active)
+            .type_slice_class(&class, View::Active)
             .filter_map(|t| {
                 let a = lift(t);
                 match self.age(&a) {
@@ -556,7 +557,7 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Address> {
         let class = coverage_class(ty);
-        self.typed(&class, view).map(lift).collect()
+        self.type_slice_class(&class, view).map(lift).collect()
     }
 
     // ───────────────────────── internal helpers ─────────────────────────
@@ -576,7 +577,12 @@ impl LinkState {
     /// place a slice read turns `Default` into `Active`, so a caller that
     /// also honors `Default` result-side (`members`/`targets_of`) reads its
     /// own `view` for that and hands this the same value unaltered.
-    pub(crate) fn typed<'a>(
+    ///
+    /// The `_class` suffix is the module's: the same question as
+    /// [`LinkState::type_slice`], keyed by class rather than by endset. The
+    /// two differ in shape as well — this hands back a walk, that one
+    /// collects — so a caller wanting a set says so at its own site.
+    pub(crate) fn type_slice_class<'a>(
         &'a self,
         class: &CoverageClass,
         view: View,
@@ -640,7 +646,7 @@ impl LinkState {
     /// `dom(L)` prefix antichain (R0a) makes the two coincide, and would
     /// answer with every claim beneath a document- or account-level argument.
     pub(crate) fn out_claims(&self, x: &Tumbler) -> Vec<Address> {
-        self.typed(self.shipped_class(ShippedType::Supersedes), View::Active)
+        self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
             .filter(|claim| self.link_at(claim).to_slot().addrs().any(|g| g == x))
             .map(lift)
             .collect()
@@ -679,7 +685,7 @@ impl LinkState {
     /// walk it replaced.
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
         let mut survivor: Option<&Tumbler> = None;
-        for t in self.typed(class, View::Active) {
+        for t in self.type_slice_class(class, View::Active) {
             let link = self.link_at(t);
             if link.from_slot().addrs().any(|f| f == source.tumbler()) {
                 if survivor.is_some() {

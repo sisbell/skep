@@ -60,7 +60,12 @@ impl Endset {
         self.0.iter()
     }
 
-    /// `|Σ|` — the span count (the shape gate's `|F|`/`|G|`).
+    /// The number of spans in the stored SEQUENCE — what the managed
+    /// surface's [`Shape`](crate::Shape) gate counts. ASN-0126's `|F|` and
+    /// `|G|` are set cardinalities, and the two agree exactly on a
+    /// duplicate-free decomposition: every [`enc`]-built endset is one unless
+    /// the caller names an address twice, and every `iextent`-built one is by
+    /// M5's construction. A repeated span counts twice here and once there.
     pub fn len(&self) -> usize {
         self.0.len()
     }

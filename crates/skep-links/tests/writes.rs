@@ -341,7 +341,7 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
 }
 
 #[test]
-fn nullify_tombstones_its_target_and_accepts_its_own_fresh_emitter() {
+fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
     let k = kernel();
     let w = writer(&k);
     // P-tgt rejects a non-resident, non-self target.
@@ -362,7 +362,7 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_emitter() {
         let links = snap.world().links();
         assert!(links.is_nullified(&m1));
         assert!(!links.is_active(&m1));
-        assert!(links.is_active(&r1)); // the retraction emitter itself is active
+        assert!(links.is_active(&r1)); // the retraction tuple itself is active
         // Active slices exclude the nullified tuple; audit keeps it (R3).
         assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
         assert!(links.type_slice(&multi_ty(), View::Audit).contains(&m1));
@@ -370,23 +370,24 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_emitter() {
     // idem⊤: re-retracting the same target from the same home dedups.
     let (r2, _) = w.nullify(P1, &doc1(), &m1).expect("re-nullify dedups");
     assert_eq!(r2, r1);
-    // Born-nullified self-emit: the target may be the call's own would-be
-    // fresh emitter (P-tgt's second disjunct) — doc2's first link is la2(1).
-    let (e, _) = w.nullify(P1, &doc2(), &la2(1)).expect("self-emit retraction");
+    // Born-nullified self-target: the target may be the address this call's
+    // own retraction tuple would occupy (P-tgt's second disjunct) — doc2's
+    // first link is la2(1).
+    let (e, _) = w.nullify(P1, &doc2(), &la2(1)).expect("self-targeting retraction");
     assert_eq!(e, la2(1));
     {
         let snap = k.snapshot();
         assert!(snap.world().links().is_nullified(&la2(1)));
     }
-    // The predicted emitter tracks the home's own link count, so the second
+    // The predicted address tracks the home's own link count, so the second
     // disjunct names a moving address, not a fixed one: doc1 holds two links
     // (m1, r1 — the dedup hit staged nothing), so its next mint is exactly
-    // la(3); la(4) is neither resident nor the emitter.
+    // la(3); la(4) is neither resident nor `a_emit`.
     assert!(matches!(
         w.nullify(P1, &doc1(), &la(4)),
         Err(TxnError::Rejected(NullifyError::BadTarget))
     ));
-    let (e3, _) = w.nullify(P1, &doc1(), &la(3)).expect("self-emit on a used chain");
+    let (e3, _) = w.nullify(P1, &doc1(), &la(3)).expect("self-targeting on a used chain");
     assert_eq!(e3, la(3));
     let snap = k.snapshot();
     assert!(snap.world().links().is_nullified(&la(3)));
@@ -500,9 +501,9 @@ fn assert_sup_reports_a_non_resident_endpoint_before_irreflexivity() {
 #[test]
 fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
     // The [R] dedup key carries d_retr in its canonical from-fill, so the
-    // same target retracted from another home is a FRESH emitter — the exact
-    // opposite of assert_sup's home-excluded key, where a duplicate (old,
-    // new) from another home dedups to the first claim.
+    // same target retracted from another home is a FRESH retraction tuple —
+    // the exact opposite of assert_sup's home-excluded key, where a duplicate
+    // (old, new) from another home dedups to the first claim.
     let k = kernel();
     let w = writer(&k);
     let (m1, _) = w
@@ -510,7 +511,7 @@ fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
         .expect("target");
     let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract from doc1");
     let (r2, _) = w.nullify(P1, &doc2(), &m1).expect("retract from doc2");
-    assert_ne!(r1, r2, "a second home's retraction is its own emitter");
+    assert_ne!(r1, r2, "a second home's retraction is its own tuple");
     assert_eq!(r2, la2(1)); // doc2's own link chain
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -1466,7 +1467,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         orig.type_slice(&multi_ty(), View::Active),
         back.type_slice(&multi_ty(), View::Active)
     );
-    // The home-frontier hint, which age/stale and nullify's self-emitter
+    // The home-frontier hint, which age/stale and nullify's `a_emit`
     // prediction all stand on — and a live value, so the pair is not two
     // zeros agreeing.
     assert_ne!(orig.age(&a1), Some(0));

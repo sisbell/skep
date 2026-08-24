@@ -75,9 +75,9 @@ impl Engine {
     /// Recover-or-init (M2's `Kernel::open`) over the full genesis world.
     ///
     /// The one genesis configuration feeds BOTH registry consumers here
-    /// (the genesis seam): `World::genesis` seals `(reserved, decls)` into
-    /// M7's slice, and the engine builds its own `Arc<TypeRegistry>` from
-    /// the same inputs — M7's slice-internal registry `Arc` is crate-private
+    /// (the genesis seam): `World::genesis` seals the `TypeConfig` into M7's
+    /// slice, and the engine builds its own `Arc<TypeRegistry>` from that
+    /// same value — M7's slice-internal registry `Arc` is crate-private
     /// (as built), so the engine cannot share it and must rebuild; identical
     /// inputs through the one validate-once-or-fail `TypeRegistry::build`
     /// make the two equal, and M9's catalog projection re-checks that at
@@ -94,9 +94,8 @@ impl Engine {
     /// publicly enumerable from the slice; M9's catalog projection at
     /// [`Engine::coordinator`] covers the decl side.)
     pub fn open(cfg: KernelConfig, genesis: GenesisConfig) -> Result<Engine, EngineError> {
-        let registry = Arc::new(
-            TypeRegistry::build(&genesis.reserved, &genesis.decls).map_err(EngineError::Registry)?,
-        );
+        let registry =
+            Arc::new(TypeRegistry::build(&genesis.types).map_err(EngineError::Registry)?);
         let world = World::genesis(&genesis).map_err(EngineError::Registry)?;
         let kernel = Arc::new(Kernel::open(cfg, world).map_err(EngineError::Open)?);
         {
@@ -144,18 +143,19 @@ impl Engine {
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
-    /// shared kernel, the engine-built registry, the SAME `(reserved,
-    /// decls)` pair, and the two op-handle factories whose bodies discharge
+    /// shared kernel, the engine-built registry, the type configuration those
+    /// were built from, and the two op-handle factories whose bodies discharge
     /// M9's standing assembly obligation (constructing `Vstream`/`LinkWriter`
-    /// from `&Kernel<W>`). M9's catalog projection is validate-once-or-fail:
-    /// drift between the twice-passed pair and the registry fails HERE, at
-    /// assembly, never as a spurious type-check miss later.
+    /// from `&Kernel<W>`). M9 takes the configuration as its two halves and
+    /// its catalog projection is validate-once-or-fail: drift between the
+    /// configuration and the registry fails HERE, at assembly, never as a
+    /// spurious type-check miss later.
     pub fn coordinator(&self) -> Result<Coordinator<World>, CatalogError> {
         Coordinator::new(
             Arc::clone(&self.kernel),
             Arc::clone(&self.registry),
-            self.genesis.reserved.clone(),
-            self.genesis.decls.clone(),
+            self.genesis.types.reserved.clone(),
+            self.genesis.types.decls.clone(),
             Box::new(mk_vstream),
             Box::new(mk_link_store),
         )

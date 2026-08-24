@@ -1,21 +1,21 @@
 //! Genesis — the engine's first own obligation: construct the initial world,
-//! holding the one `(reserved, decls)` type configuration in ONE place so
-//! both registry consumers (M7's genesis-sealed `LinkState` and the
-//! engine-built `Arc<TypeRegistry>` M9 projects) are fed from the same
-//! validated inputs and can never drift.
+//! holding the one type configuration in ONE place so both registry consumers
+//! (M7's genesis-sealed `LinkState` and the engine-built `Arc<TypeRegistry>`
+//! M9 projects) are fed from the same validated inputs and can never drift.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::M5State;
 use skep_content::ContentStore;
-use skep_links::{LinkState, RegistryError, ReservedAddrs, TypeDecl};
+use skep_links::{LinkState, RegistryError, ReservedAddrs, TypeConfig};
 use skep_namespace::M3State;
 
 use crate::world::World;
 
-/// The ONE `(reserved, decls)` type configuration (the genesis seam): the
-/// five reserved type addresses — including the PredLayer registration
-/// agreement's `pdef`/`pd_stable`, whose `Unary/⊤/{}` registrations
-/// `TypeRegistry::build` seeds itself — plus the app-declared types.
+/// The engine's genesis input (the genesis seam), which is exactly M7's
+/// [`TypeConfig`]: the five reserved type addresses — including the PredLayer
+/// registration agreement's `pdef`/`pd_stable`, whose `Unary/⊤/{}`
+/// registrations `TypeRegistry::build` seeds itself — plus the app-declared
+/// types.
 ///
 /// Every consumer is fed from this one value: [`World::genesis`] seals it
 /// into M7's `LinkState`, [`crate::Engine::open`] builds the engine's own
@@ -29,10 +29,9 @@ use crate::world::World;
 /// is data precisely so the binary can hold it constant.
 #[derive(Clone)]
 pub struct GenesisConfig {
-    /// The five reserved type addresses (M7↔M9 build-time constants).
-    pub reserved: ReservedAddrs,
-    /// App-declared types, validated at genesis by `TypeRegistry::build`.
-    pub decls: Vec<TypeDecl>,
+    /// The type configuration, carried whole so no consumer is handed halves
+    /// that could arrive matched at one door and mismatched at the next.
+    pub types: TypeConfig,
 }
 
 /// A standard reserved type address: element-level `9.0.9.0.9.0.9.k` —
@@ -54,14 +53,16 @@ impl GenesisConfig {
     /// life of the format, never edited.
     pub fn standard() -> GenesisConfig {
         GenesisConfig {
-            reserved: ReservedAddrs {
-                pred_def: reserved_addr(1),
-                pred_stable: reserved_addr(2),
-                retired: reserved_addr(3),
-                supersedes: reserved_addr(4),
-                retraction: reserved_addr(5),
+            types: TypeConfig {
+                reserved: ReservedAddrs {
+                    pred_def: reserved_addr(1),
+                    pred_stable: reserved_addr(2),
+                    retired: reserved_addr(3),
+                    supersedes: reserved_addr(4),
+                    retraction: reserved_addr(5),
+                },
+                decls: Vec::new(),
             },
-            decls: Vec::new(),
         }
     }
 }
@@ -81,7 +82,7 @@ impl World {
             m3: M3State::genesis(),
             content: ContentStore::default(),
             m5: M5State::genesis(),
-            links: LinkState::genesis(cfg.reserved.clone(), cfg.decls.clone())?,
+            links: LinkState::genesis(cfg.types.clone())?,
         })
     }
 }

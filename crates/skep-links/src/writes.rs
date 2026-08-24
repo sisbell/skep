@@ -261,9 +261,14 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
 
 /// Sh-conf (P3): the value's SPAN COUNTS against the registered shape — never
 /// inferring shape from the tuple (a `(1,0)` tuple conforms under Unary AND
-/// Multi). All shapes require `|F| = 1`; Unary `|G| = 0`, Binary `|G| = 1`,
-/// Multi `|G|` finite. Reads `|F|` and `|G|` off the link itself, so the two
-/// counts cannot arrive in the wrong order.
+/// Multi). Every shape requires one FROM span; Unary admits no TO span, Binary
+/// exactly one, Multi any finite number. Reads both counts off the link
+/// itself, so they cannot arrive in the wrong order.
+///
+/// The counts are of the stored decomposition ([`Endset::len`]), which is
+/// ASN-0126's set-valued `|F|`/`|G|` on a duplicate-free endset — every endset
+/// this gate sees, since [`emit`](LinkWriter::emit) builds both slots through
+/// [`enc`] — and over-counts a repeated span.
 fn sh_conf(shape: Shape, value: &Link) -> bool {
     value.from_slot().len() == 1
         && match shape {
@@ -416,7 +421,7 @@ where
             let links = stg.working().links();
             // Total: the type slot is level-uniform by upstream validation
             // (emit's ty is address-denoting; the claim's and the retraction
-            // emitter's types are the genesis-fixed reserved endsets).
+            // tuple's types are the genesis-fixed reserved endsets).
             let class = coverage_class(value.type_slot());
             let Some(reg) = links.registration(&class) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
@@ -626,11 +631,12 @@ where
     /// with canonical from-fill `enc({home})` and unit-depth to-span
     /// `enc({target})`, idem⊤ (re-retracting the same target from the same
     /// home dedups). P-tgt is a REJECTING precondition against the txn base:
-    /// `target` is a resident link OR this call's own fresh emitter — the
-    /// address the slice reports `mint_link(home)` would mint next, an O(1)
-    /// read equal to that mint by construction (FrontierUnification,
-    /// Conflicts §7) — so sterilization is unreachable through this surface
-    /// (DR). Lock set `[dedup_key, link_lock_key(home)]`.
+    /// `target` is a resident link OR the address this call's own retraction
+    /// tuple would occupy (`a_emit`) — the address the slice reports
+    /// `mint_link(home)` would mint next, an O(1) read equal to that mint by
+    /// construction (FrontierUnification, Conflicts §7) — so sterilization is
+    /// unreachable through this surface (DR). Lock set `[dedup_key,
+    /// link_lock_key(home)]`.
     ///
     /// Ownership (as amended 2026-08-16): the caller must own `home` AND the
     /// TARGET link — ω applied to the link's own address, which resolves to
@@ -638,10 +644,10 @@ where
     /// broader moderation question (territorial retraction, viewer-side
     /// filtering) is an explicitly deferred scope decision (wire.md). Both
     /// checks precede P-tgt, so the auth verdict never depends on residence
-    /// timing. The self-emitter case passes by arithmetic: the fresh
-    /// emitter's account IS home's account.
+    /// timing. The self-target case passes by arithmetic: `a_emit`'s account
+    /// IS home's account.
     ///
-    /// POSTCONDITION, on a fresh emitter and on a dedup hit alike:
+    /// POSTCONDITION, on a fresh deposit and on a dedup hit alike:
     /// `is_nullified(target)` holds, and `target` is gone from every
     /// `View::Active` slice, every operative `succ_o` edge and every `stale`
     /// set — while `readlink` and the `Audit` view keep it (R3).

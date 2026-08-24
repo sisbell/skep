@@ -68,7 +68,7 @@ impl WorldState for World {
     /// slice at all — M3 and M4 are fully serialized (M2's default identity;
     /// their docs say so), M5's `rebuild_derived` is the identity (no
     /// skip-serialized hints in v1), and M7's reconstructs its registry from
-    /// its OWN serialized `(reserved, decls)` and its hints from its OWN
+    /// its OWN serialized `TypeConfig` and its hints from its OWN
     /// links map — so the order is future-proofing, pinned here and held to
     /// by the recovery-equivalence test.
     fn rebuild_derived(self) -> Self {

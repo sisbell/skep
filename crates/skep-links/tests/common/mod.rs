@@ -14,7 +14,7 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
     enc, Behavior, Caller, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs,
-    Shape, TypeDecl,
+    Shape, TypeConfig, TypeDecl,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -253,6 +253,20 @@ pub fn decls() -> Vec<TypeDecl> {
     ]
 }
 
+/// The fixture type configuration — the five reserved addresses plus the four
+/// app decls above. `config_with(decls)` names the cases that vary the decls
+/// against the same reserved addresses.
+pub fn config() -> TypeConfig {
+    config_with(decls())
+}
+
+pub fn config_with(decls: Vec<TypeDecl>) -> TypeConfig {
+    TypeConfig {
+        reserved: reserved(),
+        decls,
+    }
+}
+
 // ─────────────────────────────── world assembly ─────────────────────────────
 
 /// An M3 slice with a principal-owned account and two registered documents,
@@ -293,7 +307,7 @@ pub fn genesis_world() -> World {
         m3: seeded_m3(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(reserved(), decls()).expect("test genesis type config is valid"),
+        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
     }
 }
 

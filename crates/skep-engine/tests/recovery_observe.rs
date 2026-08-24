@@ -15,24 +15,23 @@ mod common;
 use common::*;
 use skep_content::Val;
 use skep_engine::observe::{dump, hints_faithful};
-use skep_engine::{Engine, GenesisConfig, ReservedAddrs, TypeDecl};
+use skep_engine::{Engine, GenesisConfig, TypeDecl};
 use skep_links::{enc, Behavior, Registration, Shape, SlotArg};
 use tempfile::tempdir;
 
 /// The standard reserved addresses plus one app-declared Binary idem⊤ type,
 /// so genesis decls (and their dump section) are non-trivial.
 fn rich_genesis() -> GenesisConfig {
-    let reserved: ReservedAddrs = GenesisConfig::standard().reserved;
-    let rel_key = enc(&[a(&[9, 0, 9, 0, 9, 0, 8, 1])]);
-    let decls = vec![TypeDecl {
-        key: rel_key,
+    let mut cfg = GenesisConfig::standard();
+    cfg.types.decls = vec![TypeDecl {
+        key: enc(&[a(&[9, 0, 9, 0, 9, 0, 8, 1])]),
         reg: Registration {
             shape: Shape::Binary,
             idem: true,
             behaviors: im::OrdSet::<Behavior>::new(),
         },
     }];
-    GenesisConfig { reserved, decls }
+    cfg
 }
 
 #[test]
@@ -80,7 +79,7 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
             .expect("makelink l2");
         engine.linkstore().assert_sup(OWNER, &doc, &l1, &l2).expect("assert_sup");
         engine.linkstore().nullify(OWNER, &doc, &l1).expect("nullify");
-        let rel = genesis.decls[0].key.clone();
+        let rel = genesis.types.decls[0].key.clone();
         engine
             .linkstore()
             .emit(OWNER, &doc, &rel, &start, std::slice::from_ref(&doc))

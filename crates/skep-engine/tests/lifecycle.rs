@@ -140,9 +140,8 @@ fn drifted_genesis_reopen_is_refused() {
     }
 
     // Valid on its own, but not the config this journal was sealed under.
-    let mut reserved = GenesisConfig::standard().reserved;
-    reserved.retired = a(&[9, 0, 9, 0, 9, 0, 9, 6]);
-    let drifted = GenesisConfig { reserved, decls: Vec::new() };
+    let mut drifted = GenesisConfig::standard();
+    drifted.types.reserved.retired = a(&[9, 0, 9, 0, 9, 0, 9, 6]);
 
     match Engine::open(fsync_cfg(dir.path()), drifted) {
         Err(EngineError::GenesisDrift(_)) => {}

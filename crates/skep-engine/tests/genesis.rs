@@ -1,5 +1,5 @@
 //! Genesis: the initial world seeds each store per its own design, and the
-//! one `(reserved, decls)` configuration feeds every registry consumer —
+//! one `TypeConfig` feeds every registry consumer —
 //! M7's genesis-sealed slice, the engine-built `Arc<TypeRegistry>`, and
 //! M9's validate-once-or-fail catalog projection — without drift.
 
@@ -10,7 +10,7 @@ use skep_address::Level;
 use skep_arrangement::HasM5;
 use skep_content::HasContent;
 use skep_engine::{Engine, EngineError, GenesisConfig};
-use skep_links::{coverage_class, HasLinks, RegistryError, ReservedAddrs, ShippedType, View};
+use skep_links::{coverage_class, HasLinks, RegistryError, ShippedType, View};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
 const SHIPPED: [ShippedType; 5] = [
@@ -90,9 +90,8 @@ fn coordinator_projects_the_one_registry() {
 fn invalid_genesis_is_refused() {
     // A reserved type address inside the content subspace (s_C = 1) violates
     // reserved-isolation.
-    let mut reserved: ReservedAddrs = GenesisConfig::standard().reserved;
-    reserved.retired = a(&[9, 0, 9, 0, 9, 0, 1, 1]);
-    let bad = GenesisConfig { reserved, decls: Vec::new() };
+    let mut bad = GenesisConfig::standard();
+    bad.types.reserved.retired = a(&[9, 0, 9, 0, 9, 0, 1, 1]);
     match Engine::open(mem_cfg(), bad) {
         Err(EngineError::Registry(RegistryError::ReservedSubspaceClash)) => {}
         Err(other) => panic!("expected ReservedSubspaceClash, got {other:?}"),

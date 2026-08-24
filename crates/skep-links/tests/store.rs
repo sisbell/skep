@@ -182,8 +182,22 @@ fn nullify_contract_active_view_and_born_nullified_self_emit() {
     // fresh emitter (P-tgt's second disjunct) — doc2's first link is la2(1).
     let (e, _) = s.nullify(P1, &doc2(), &la2(1)).expect("self-emit retraction");
     assert_eq!(e, la2(1));
+    {
+        let snap = k.snapshot();
+        assert!(snap.world().links().is_nullified(&la2(1)));
+    }
+    // The predicted emitter tracks the home's own link count, so the second
+    // disjunct names a moving address, not a fixed one: doc1 holds two links
+    // (m1, r1 — the dedup hit staged nothing), so its next mint is exactly
+    // la(3); la(4) is neither resident nor the emitter.
+    assert!(matches!(
+        s.nullify(P1, &doc1(), &la(4)),
+        Err(TxnError::Rejected(NullifyError::BadTarget))
+    ));
+    let (e3, _) = s.nullify(P1, &doc1(), &la(3)).expect("self-emit on a used chain");
+    assert_eq!(e3, la(3));
     let snap = k.snapshot();
-    assert!(snap.world().links().is_nullified(&la2(1)));
+    assert!(snap.world().links().is_nullified(&la(3)));
 }
 
 #[test]
@@ -814,8 +828,15 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     ));
     // Foreign d_a (claim home): the error names d_a.
     assert!(matches!(
-        s.editlink(p2, &x, succ, &sib_doc(), &doc1()),
+        s.editlink(p2, &x, succ.clone(), &sib_doc(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::NotOwner(d))) if d == doc1()
+    ));
+    // Across an op's several homes, EVERY registration is asked before ANY
+    // ownership: an unregistered second home outranks an unowned first, so
+    // the verdict does not depend on which home is named first.
+    assert!(matches!(
+        s.editlink(P1, &x, succ, &sib_doc(), &a(&[1, 0, 1, 0, 7])),
+        Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
     ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
     // System bypasses the gate (M9 ⟂ M10 — rule fires carry no principal).

@@ -228,14 +228,3 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
         CoverageClass::Extents(map)
     }
 }
-
-/// The idempotence identity `I0 = (cov(F), cov(G))` within a type class
-/// (ASN-0128 I0/I1) — the dedup hint key and, serialized, the dedup
-/// `LockKey`'s payload. Crate-internal: it never crosses a seam (the
-/// interface exposes only the opaque `LockKey` bytes).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct DedupKey {
-    pub(crate) ty: CoverageClass,
-    pub(crate) from: CoverageClass,
-    pub(crate) to: CoverageClass,
-}

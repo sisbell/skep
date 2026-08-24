@@ -7,10 +7,12 @@ use std::sync::Arc;
 
 use im::{HashMap, OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
-use skep_address::{document_of, validate, Address, Tumbler};
+use skep_address::{document_of, elem_addr, validate, Address, ElemPos, Nat, Tumbler};
 
-use crate::endset::{coverage_class, CoverageClass, DedupKey, Link};
+use crate::dedup::DedupKey;
+use crate::endset::{coverage_class, CoverageClass, Link};
 use crate::registry::{RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry};
+use crate::s_l;
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction emitter, supersession claim, editlink successor, pdef/pd_stable
@@ -164,22 +166,50 @@ impl LinkState {
         self.links.contains_key(t)
     }
 
-    /// `1 + home_count[home]` — the ordinal of the next link `mint_link(home)`
-    /// would mint, off M7's own homed count (FrontierUnification; Conflicts
-    /// §7 — no upward M3 read). `home_count` absent ⇒ 0 ⇒ ordinal 1, the
-    /// first emission itself.
-    pub(crate) fn next_home_ordinal(&self, home: &Address) -> u64 {
-        1 + self
+    /// Tombstoned: `t` is a retraction root. The one statement of the rule
+    /// every active view applies — active = audit ∖ this — monotone
+    /// (R3/R6a). The public form is `is_nullified`.
+    pub(crate) fn nullified(&self, t: &Tumbler) -> bool {
+        self.hints.nullified.contains(t)
+    }
+
+    /// The address `mint_link(home)` would mint next —
+    /// `home · 0 · s_L · (1 + home_count[home])`, assembled off M7's own
+    /// homed count and equal to M3's frontier by construction
+    /// (FrontierUnification; Conflicts §7 — no upward M3 read). An absent
+    /// `home_count` gives ordinal 1, the first emission itself. `home` is a
+    /// registered Document, which is what makes the assembly total (§4).
+    pub(crate) fn next_link_address(&self, home: &Address) -> Address {
+        let ordinal = 1 + self
             .hints
             .home_count
             .get(home.tumbler())
             .copied()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        elem_addr(ElemPos {
+            doc: home.clone(),
+            subspace: s_l(),
+            ordinal: Nat::from(ordinal),
+        })
+        .expect("P0 discharged: home is a Document; s_L ≥ 1; ordinal ≥ 1 (§4)")
+    }
+
+    /// The active-view dedup incumbent of an I0 class (§3 step 2): the audit
+    /// matches filtered by `∉ nullified`, T1-least first. Reading the ACTIVE
+    /// view (I2) is what gives resurrection — a nullified tuple is invisible
+    /// here, so re-emitting lands fresh.
+    pub(crate) fn active_incumbent(&self, key: &DedupKey) -> Option<Address> {
+        self.hints
+            .dedup
+            .get(key)?
+            .iter()
+            .find(|t| !self.nullified(t))
+            .map(|t| validate(t.clone()).expect("stored link keys are T4-valid by M3's mint"))
     }
 
     /// The coverage class of a shipped reserved type (guard/recognition key).
-    pub(crate) fn shipped_class(&self, t: ShippedType) -> CoverageClass {
-        coverage_class(self.registry.reserved(t))
+    pub(crate) fn shipped_class(&self, t: ShippedType) -> &CoverageClass {
+        self.registry.shipped_class(t)
     }
 }
 
@@ -189,8 +219,9 @@ impl LinkState {
 /// obligation).
 ///
 /// Class recognition and every write-path guard evaluate the SAME pure
-/// [`coverage_class`] — no second classifier exists anywhere in M7 (class
-/// coherence, §Core data model).
+/// [`coverage_class`] — the shipped classes this fold recognizes are that
+/// function's own verdicts, fixed once at [`TypeRegistry::build`]. No second
+/// classifier exists anywhere in M7 (class coherence, §Core data model).
 pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, value: &Link) -> Hints {
     let mut out = h.clone();
     let k = coverage_class(value.type_slot());
@@ -208,7 +239,7 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
     // several ⇒ all inserted; a non-unit-depth [R] to-span contributes no
     // root). Every v1 surface path yields exactly one root, but the fold
     // never invents behavior.
-    if k == coverage_class(registry.reserved(ShippedType::Retraction)) {
+    if k == *registry.shipped_class(ShippedType::Retraction) {
         for root in value.to_slot().addrs() {
             out.nullified.insert(root.clone());
         }
@@ -220,11 +251,7 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
     // registered idem⊤ app class — folds an in-memory key here (possibly with
     // Extents from/to): harmless, it never reaches a LockKey (Conflicts §1).
     if registry.registration(&k).is_some_and(|r| r.idem) {
-        let key = DedupKey {
-            ty: k.clone(),
-            from: coverage_class(value.from_slot()),
-            to: coverage_class(value.to_slot()),
-        };
+        let key = DedupKey::of(value);
         let mut set = out.dedup.get(&key).cloned().unwrap_or_default();
         set.insert(addr.clone());
         out.dedup.insert(key, set);
@@ -232,7 +259,7 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
 
     // sup_fwd — old → (new, claim) for a [K_sup]-classed tuple, both ends via
     // addrs() (§5).
-    if k == coverage_class(registry.reserved(ShippedType::Supersedes)) {
+    if k == *registry.shipped_class(ShippedType::Supersedes) {
         for old in value.from_slot().addrs() {
             let mut edges = out.sup_fwd.get(old).cloned().unwrap_or_default();
             for new in value.to_slot().addrs() {

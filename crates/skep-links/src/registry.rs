@@ -141,7 +141,11 @@ pub enum ShippedType {
 }
 
 /// The immutable lookup registry: coverage class → registration, plus the
-/// five genesis-fixed shipped type endsets. RECOMPUTABLE — keyed by the
+/// five genesis-fixed shipped types held BOTH ways — as the endset a caller
+/// names them by and as the [`CoverageClass`] every guard, fold and read
+/// recognizes them by. Both are fixed at [`TypeRegistry::build`], so the
+/// class each shipped type belongs to is a fact this registry knows rather
+/// than one its callers re-derive. RECOMPUTABLE — keyed by the
 /// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint; the
 /// serializable build inputs (`reserved` + `decls`) are the authoritative
 /// state and `LinkState::rebuild_derived` reconstructs this before replay.
@@ -153,6 +157,11 @@ pub struct TypeRegistry {
     retraction: Endset,
     pred_def: Endset,
     pred_stable: Endset,
+    retired_class: CoverageClass,
+    supersedes_class: CoverageClass,
+    retraction_class: CoverageClass,
+    pred_def_class: CoverageClass,
+    pred_stable_class: CoverageClass,
 }
 
 /// The empty registry — exists ONLY so serde can seed `LinkState`'s
@@ -160,6 +169,7 @@ pub struct TypeRegistry {
 /// it from `reserved`+`decls` BEFORE replay, so it is never consulted live.
 impl Default for TypeRegistry {
     fn default() -> TypeRegistry {
+        let empty_class = coverage_class(&Endset::empty());
         TypeRegistry {
             map: im::HashMap::new(),
             retired: Endset::empty(),
@@ -167,6 +177,11 @@ impl Default for TypeRegistry {
             retraction: Endset::empty(),
             pred_def: Endset::empty(),
             pred_stable: Endset::empty(),
+            retired_class: empty_class.clone(),
+            supersedes_class: empty_class.clone(),
+            retraction_class: empty_class.clone(),
+            pred_def_class: empty_class.clone(),
+            pred_stable_class: empty_class,
         }
     }
 }
@@ -215,15 +230,24 @@ impl TypeRegistry {
         let pred_def = key_of(&reserved.pred_def);
         let pred_stable = key_of(&reserved.pred_stable);
 
+        // Each shipped class is bound to its name where it is computed, so
+        // the class this registry hands out for a `ShippedType` is that
+        // type's own endset classified — never a positional coincidence.
+        let retired_class = coverage_class(&retired);
+        let supersedes_class = coverage_class(&supersedes);
+        let retraction_class = coverage_class(&retraction);
+        let pred_def_class = coverage_class(&pred_def);
+        let pred_stable_class = coverage_class(&pred_stable);
+
         let unary_top = |behaviors: OrdSet<Behavior>| Registration {
             shape: Shape::Unary,
             idem: true,
             behaviors,
         };
-        let shipped: [(&Endset, Registration); 5] = [
-            (&retired, unary_top(OrdSet::unit(Behavior::ReadFilter))),
+        let shipped: [(&CoverageClass, Registration); 5] = [
+            (&retired_class, unary_top(OrdSet::unit(Behavior::ReadFilter))),
             (
-                &supersedes,
+                &supersedes_class,
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
@@ -231,7 +255,7 @@ impl TypeRegistry {
                 },
             ),
             (
-                &retraction,
+                &retraction_class,
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
@@ -239,19 +263,18 @@ impl TypeRegistry {
                 },
             ),
             // The PredLayer registration agreement (M7↔M9 constant, §B).
-            (&pred_def, unary_top(OrdSet::new())),
-            (&pred_stable, unary_top(OrdSet::new())),
+            (&pred_def_class, unary_top(OrdSet::new())),
+            (&pred_stable_class, unary_top(OrdSet::new())),
         ];
 
         let mut map: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
         let mut shipped_classes: Vec<CoverageClass> = Vec::with_capacity(5);
-        for (key, reg) in shipped {
-            let class = coverage_class(key);
-            if map.contains_key(&class) {
+        for (class, reg) in shipped {
+            if map.contains_key(class) {
                 return Err(RegistryError::KeyCollision);
             }
             shipped_classes.push(class.clone());
-            map.insert(class, reg);
+            map.insert(class.clone(), reg);
         }
 
         for d in &decls {
@@ -292,6 +315,11 @@ impl TypeRegistry {
             retraction,
             pred_def,
             pred_stable,
+            retired_class,
+            supersedes_class,
+            retraction_class,
+            pred_def_class,
+            pred_stable_class,
         })
     }
 
@@ -310,6 +338,60 @@ impl TypeRegistry {
             ShippedType::Retraction => &self.retraction,
             ShippedType::PredDef => &self.pred_def,
             ShippedType::PredStable => &self.pred_stable,
+        }
+    }
+
+    /// The coverage class of a shipped type — the recognition key the write
+    /// gates, the hint fold and the read surface all compare against, fixed
+    /// at build alongside the endset it classifies.
+    pub(crate) fn shipped_class(&self, t: ShippedType) -> &CoverageClass {
+        match t {
+            ShippedType::Retired => &self.retired_class,
+            ShippedType::Supersedes => &self.supersedes_class,
+            ShippedType::Retraction => &self.retraction_class,
+            ShippedType::PredDef => &self.pred_def_class,
+            ShippedType::PredStable => &self.pred_stable_class,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::{validate, Nat, Tumbler};
+
+    use super::*;
+
+    fn ra(k: u32) -> Address {
+        validate(
+            Tumbler::new([9, 0, 9, 0, 9, 0, 9, k].iter().map(|&c| Nat::from(c)))
+                .expect("nonempty"),
+        )
+        .expect("T4-valid")
+    }
+
+    #[test]
+    fn the_class_a_shipped_type_reports_is_the_class_of_the_endset_it_reports() {
+        let registry = TypeRegistry::build(
+            ReservedAddrs {
+                pred_def: ra(1),
+                pred_stable: ra(2),
+                retired: ra(3),
+                supersedes: ra(4),
+                retraction: ra(5),
+            },
+            vec![],
+        )
+        .expect("the reserved addresses are element-level outside {s_C, s_L}");
+        for t in [
+            ShippedType::Retired,
+            ShippedType::Supersedes,
+            ShippedType::Retraction,
+            ShippedType::PredDef,
+            ShippedType::PredStable,
+        ] {
+            assert_eq!(*registry.shipped_class(t), coverage_class(registry.reserved(t)));
+            // ...and each is registered under exactly that class.
+            assert!(registry.registration(registry.shipped_class(t)).is_some());
         }
     }
 }

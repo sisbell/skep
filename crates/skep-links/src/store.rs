@@ -16,20 +16,20 @@
 use std::slice;
 use std::sync::Arc;
 
-use skep_address::{elem_addr, validate, Address, ElemPos, Nat};
+use skep_address::Address;
 use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, SeatError, VSpec};
-use skep_kernel::{Kernel, LockKey, Seq, Space, Staging, TxnError, WorldState};
+use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, MintError};
 
-use crate::endset::{
-    coverage_class, enc, is_address_denoting, single_denoted, CoverageClass, DedupKey, Endset, Link,
-};
+use crate::dedup::DedupKey;
+use crate::endset::{coverage_class, enc, is_address_denoting, single_denoted, Endset, Link};
 use crate::error::{
-    AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError, RetractStaleError,
+    AssertSupError, EditLinkError, EmitError, MakeLinkError, NotBh4, NullifyError,
+    RetractStaleError,
 };
-use crate::registry::{Behavior, Shape, ShippedType, TypeRegistry};
-use crate::state::{LinkRec, LinkState};
-use crate::{s_c, s_l, HasLinks};
+use crate::registry::{Shape, ShippedType, TypeRegistry};
+use crate::state::LinkRec;
+use crate::{s_c, HasLinks};
 
 /// The transact-driving handle: `&'k Kernel<W>` plus a construction-time
 /// `Arc<TypeRegistry>` cache of the genesis-immutable registry (§C) — the
@@ -227,54 +227,71 @@ fn sh_conf(shape: Shape, f: usize, g: usize) -> bool {
         }
 }
 
-/// The in-txn active-view dedup CHECK (§3 step 2): recompute the `DedupKey`
-/// from `value` (identical to the public op's, by construction), look up the
-/// audit matches, filter by `∉ nullified`, return the T1-least active
-/// incumbent. Reading the ACTIVE view (I2) is what gives resurrection: a
-/// nullified tuple is invisible here, so re-emitting lands fresh.
-fn dedup_hit(links: &LinkState, value: &Link) -> Option<Address> {
-    let key = DedupKey {
-        ty: coverage_class(value.type_slot()),
-        from: coverage_class(value.from_slot()),
-        to: coverage_class(value.to_slot()),
-    };
-    let matches = links.hints.dedup.get(&key)?;
-    matches
-        .iter()
-        .find(|t| !links.hints.nullified.contains(*t))
-        .map(|t| validate(t.clone()).expect("stored link keys are T4-valid by M3's mint"))
+/// The doorkeeper's verdict on a deposit's home documents, in the vocabulary
+/// every op translates from (the `From` impls below).
+enum HomeFault {
+    NotRegistered,
+    NotOwner(Address),
 }
 
-/// Serialize an idem⊤ `DedupKey` into M2's opaque `LockKey`: the
-/// `Space::CoverageClass` tag byte, then the three classes as
-/// length-prefixed minimal antichains. Same I0-class ⇒ same bytes ⇒ M2
-/// serializes the check-and-deposit (I1a/I4); different class ⇒ no
-/// contention. Partitioned BY CLASS, never by home (§3).
-fn dedup_lock_key(key: &DedupKey) -> LockKey {
-    fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
-        match class {
-            CoverageClass::Addrs(set) => {
-                buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
-                for t in set.iter() {
-                    buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
-                    for c in t {
-                        let comp = c.to_bytes_be();
-                        buf.extend_from_slice(&(comp.len() as u64).to_be_bytes());
-                        buf.extend_from_slice(&comp);
-                    }
-                }
-            }
-            CoverageClass::Extents(_) => unreachable!(
-                "no Extents class is ever serialized into a LockKey: every idem⊤ dedup key is \
-                 validated address-denoting before the lock is built (§Core data model)"
-            ),
+/// The two questions asked of every home a deposit writes into: registered
+/// (P0), then owned (ω, exact account match). ALL registrations are checked
+/// before ANY ownership, so an op depositing into two homes reports an
+/// unregistered second home ahead of an unowned first — the order `editlink`
+/// pins. The payload names the home that failed ownership; M10 threads it
+/// into the rejection's fault site.
+///
+/// This is the hoist that pins each op's error ORDER ahead of its own
+/// verdicts. The gate that actually admits a deposit is [`emit_core`], which
+/// asks the same two questions of every value that reaches the mint.
+fn home_gate(m3: &M3State, caller: Caller, homes: &[&Address]) -> Result<(), HomeFault> {
+    for &h in homes {
+        if !m3.is_registered_document(h) {
+            return Err(HomeFault::NotRegistered);
         }
     }
-    let mut bytes = Vec::new();
-    push_class(&mut bytes, &key.ty);
-    push_class(&mut bytes, &key.from);
-    push_class(&mut bytes, &key.to);
-    LockKey::new(Space::CoverageClass, &bytes)
+    for &h in homes {
+        if !caller.is_owner(m3, h) {
+            return Err(HomeFault::NotOwner(h.clone()));
+        }
+    }
+    Ok(())
+}
+
+impl From<HomeFault> for MakeLinkError {
+    fn from(e: HomeFault) -> Self {
+        match e {
+            HomeFault::NotRegistered => MakeLinkError::HomeNotRegistered,
+            HomeFault::NotOwner(a) => MakeLinkError::NotOwner(a),
+        }
+    }
+}
+
+impl From<HomeFault> for NullifyError {
+    fn from(e: HomeFault) -> Self {
+        match e {
+            HomeFault::NotRegistered => NullifyError::HomeNotRegistered,
+            HomeFault::NotOwner(a) => NullifyError::NotOwner(a),
+        }
+    }
+}
+
+impl From<HomeFault> for AssertSupError {
+    fn from(e: HomeFault) -> Self {
+        match e {
+            HomeFault::NotRegistered => AssertSupError::HomeNotRegistered,
+            HomeFault::NotOwner(a) => AssertSupError::NotOwner(a),
+        }
+    }
+}
+
+impl From<HomeFault> for EditLinkError {
+    fn from(e: HomeFault) -> Self {
+        match e {
+            HomeFault::NotRegistered => EditLinkError::HomeNotRegistered,
+            HomeFault::NotOwner(a) => EditLinkError::NotOwner(a),
+        }
+    }
 }
 
 /// The single choke point both write surfaces share (§2), run INSIDE one
@@ -327,30 +344,29 @@ where
             let Some(reg) = links.registry.registration(&k) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
             };
-            if k == links.shipped_class(ShippedType::Retraction) {
+            if k == *links.shipped_class(ShippedType::Retraction) {
                 return Err(EmitCoreError::RetractionClass); // K ≁ R
             }
             if !sh_conf(reg.shape, value.from_slot().len(), value.to_slot().len()) {
                 return Err(EmitCoreError::ShapeViolation); // (ii)
             }
             if reg.idem {
-                if let Some(incumbent) = dedup_hit(links, &value) {
+                if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
                     return Ok(incumbent); // zero-step: stage NOTHING
                 }
             }
         }
         Gate::Retraction => {
             let links = stg.working().links();
-            let rclass = links.shipped_class(ShippedType::Retraction);
             let reg = links
                 .registry
-                .registration(&rclass)
+                .registration(links.shipped_class(ShippedType::Retraction))
                 .expect("the [R] registration is genesis-fixed (defensive)");
             assert_eq!(reg.shape, Shape::Binary, "the [R] shape is genesis-fixed Binary (defensive)");
             if !sh_conf(Shape::Binary, value.from_slot().len(), value.to_slot().len()) {
                 return Err(EmitCoreError::ShapeViolation); // |F| = |G| = 1
             }
-            if let Some(incumbent) = dedup_hit(links, &value) {
+            if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
                 return Ok(incumbent); // idem⊤ zero-step
             }
         }
@@ -410,14 +426,9 @@ where
             .transact(&[M3State::link_lock_key(home)], |stg| {
                 let (e1, e2, e3) = {
                     let base = stg.base();
-                    if !base.m3().is_registered_document(home) {
-                        return Err(MakeLinkError::HomeNotRegistered);
-                    }
-                    // ω on home (as amended 2026-08-16), hoisted so
-                    // NotOwner wins over every spec/type verdict.
-                    if !caller.is_owner(base.m3(), home) {
-                        return Err(MakeLinkError::NotOwner(home.clone()));
-                    }
+                    // P0 then ω on home, hoisted so both win over every
+                    // spec/type verdict.
+                    home_gate(base.m3(), caller, &[home])?;
                     for spec in
                         from.specs().iter().chain(to.specs().iter()).chain(ty.specs().iter())
                     {
@@ -494,23 +505,18 @@ where
             return Err(TxnError::Rejected(EmitError::NonAddressDenotingType));
         }
         let k = coverage_class(ty);
-        if k == coverage_class(self.registry.reserved(ShippedType::Supersedes)) {
+        if k == *self.registry.shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
         let idem = self.registry.registration(&k).is_some_and(|r| r.idem);
+        let value = Link::new([enc(slice::from_ref(from)), enc(to), ty.clone()])
+            .expect("the managed triple has arity 3");
         let mut keys: Vec<LockKey> = Vec::with_capacity(2);
         if idem {
-            let dk = DedupKey {
-                ty: k,
-                from: coverage_class(&enc(slice::from_ref(from))),
-                to: coverage_class(&enc(to)),
-            };
-            keys.push(dedup_lock_key(&dk));
+            keys.push(DedupKey::of(&value).lock_key());
         }
         keys.push(M3State::link_lock_key(home));
         self.kernel.transact(&keys, |stg| {
-            let value = Link::new([enc(slice::from_ref(from)), enc(to), ty.clone()])
-                .expect("the managed triple has arity 3");
             let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
             Ok(addr)
         })
@@ -520,10 +526,9 @@ where
     /// with canonical from-fill `enc({home})` and unit-depth to-span
     /// `enc({target})`, idem⊤ (re-retracting the same target from the same
     /// home dedups). P-tgt is a REJECTING precondition against the txn base:
-    /// `target` is a resident link OR this call's own fresh emitter —
-    /// computed in O(1) off M7's own `home_count` as
-    /// `elem_addr(home · 0 · s_L · (1 + home_count[home]))`, equal to
-    /// `mint_link(home)`'s output by construction (FrontierUnification,
+    /// `target` is a resident link OR this call's own fresh emitter — the
+    /// address the slice reports `mint_link(home)` would mint next, an O(1)
+    /// read equal to that mint by construction (FrontierUnification,
     /// Conflicts §7) — so sterilization is unreachable through this surface
     /// (DR). Lock set `[dedup_key, link_lock_key(home)]`.
     ///
@@ -542,43 +547,26 @@ where
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
         let rty = self.registry.reserved(ShippedType::Retraction).clone();
-        let dk = DedupKey {
-            ty: coverage_class(&rty),
-            from: coverage_class(&enc(slice::from_ref(home))),
-            to: coverage_class(&enc(slice::from_ref(target))),
-        };
-        let keys = [dedup_lock_key(&dk), M3State::link_lock_key(home)];
+        let value = Link::new([
+            enc(slice::from_ref(home)),
+            enc(slice::from_ref(target)),
+            rty,
+        ])
+        .expect("the retraction triple has arity 3");
+        let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
-                if !base.m3().is_registered_document(home) {
-                    return Err(NullifyError::HomeNotRegistered); // P0
-                }
-                if !caller.is_owner(base.m3(), home) {
-                    return Err(NullifyError::NotOwner(home.clone()));
-                }
+                home_gate(base.m3(), caller, &[home])?; // P0 then ω on home
                 if !caller.is_owner(base.m3(), target) {
                     return Err(NullifyError::NotOwner(target.clone())); // v1 target policy
                 }
-                if !base.links().resident(target.tumbler()) {
-                    let next = base.links().next_home_ordinal(home);
-                    let self_emitter = elem_addr(ElemPos {
-                        doc: home.clone(),
-                        subspace: s_l(),
-                        ordinal: Nat::from(next),
-                    })
-                    .expect("P0 discharged: home is a Document; s_L ≥ 1; ordinal ≥ 1 (§4)");
-                    if *target != self_emitter {
-                        return Err(NullifyError::BadTarget); // P-tgt
-                    }
+                if !base.links().resident(target.tumbler())
+                    && *target != base.links().next_link_address(home)
+                {
+                    return Err(NullifyError::BadTarget); // P-tgt
                 }
             }
-            let value = Link::new([
-                enc(slice::from_ref(home)),
-                enc(slice::from_ref(target)),
-                rty.clone(),
-            ])
-            .expect("the retraction triple has arity 3");
             let addr = emit_core(stg, caller, home, value, Gate::Retraction)?;
             Ok(addr)
         })
@@ -599,23 +587,14 @@ where
         new: &Address,
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
         let sup = self.registry.reserved(ShippedType::Supersedes).clone();
-        let dk = DedupKey {
-            ty: coverage_class(&sup),
-            from: coverage_class(&enc(slice::from_ref(old))),
-            to: coverage_class(&enc(slice::from_ref(new))),
-        };
-        let keys = [dedup_lock_key(&dk), M3State::link_lock_key(home)];
+        let value = Link::new([enc(slice::from_ref(old)), enc(slice::from_ref(new)), sup])
+            .expect("the claim triple has arity 3");
+        let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
-                if !base.m3().is_registered_document(home) {
-                    return Err(AssertSupError::HomeNotRegistered); // P0
-                }
-                // ω on home (as amended 2026-08-16), before the endpoint
-                // verdicts.
-                if !caller.is_owner(base.m3(), home) {
-                    return Err(AssertSupError::NotOwner(home.clone()));
-                }
+                // P0 then ω on home, before the endpoint verdicts.
+                home_gate(base.m3(), caller, &[home])?;
                 if !base.links().resident(old.tumbler()) || !base.links().resident(new.tumbler()) {
                     return Err(AssertSupError::EndpointNotResident);
                 }
@@ -623,12 +602,6 @@ where
                     return Err(AssertSupError::SelfSupersession); // irreflexive
                 }
             }
-            let value = Link::new([
-                enc(slice::from_ref(old)),
-                enc(slice::from_ref(new)),
-                sup.clone(),
-            ])
-            .expect("the claim triple has arity 3");
             let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
             Ok(addr)
         })
@@ -668,24 +641,15 @@ where
             keys.push(k_a);
         }
         let sup = self.registry.reserved(ShippedType::Supersedes).clone();
-        let sup_class = coverage_class(&sup);
-        let r_class = coverage_class(self.registry.reserved(ShippedType::Retraction));
+        let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
+        let r_class = self.registry.shipped_class(ShippedType::Retraction);
         let ((succ, claim), seq) = self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
-                if !base.m3().is_registered_document(d_s) || !base.m3().is_registered_document(d_a)
-                {
-                    return Err(EditLinkError::HomeNotRegistered);
-                }
-                // ω on BOTH homes (as amended 2026-08-16): the successor
-                // deposits into d_s, the claim into d_a — each carries the
+                // P0 on both homes, then ω on both: the successor deposits
+                // into d_s, the claim into d_a — the rejection carries the
                 // home that failed.
-                if !caller.is_owner(base.m3(), d_s) {
-                    return Err(EditLinkError::NotOwner(d_s.clone()));
-                }
-                if !caller.is_owner(base.m3(), d_a) {
-                    return Err(EditLinkError::NotOwner(d_a.clone()));
-                }
+                home_gate(base.m3(), caller, &[d_s, d_a])?;
                 if !base.links().resident(original.tumbler()) {
                     return Err(EditLinkError::OriginalNotResident);
                 }
@@ -698,10 +662,10 @@ where
                 // DC guard — total: the type slot was just checked
                 // level-uniform.
                 let sc = coverage_class(successor.type_slot());
-                if sc == r_class {
+                if sc == *r_class {
                     return Err(EditLinkError::DcViolation);
                 }
-                if sc == sup_class {
+                if sc == *sup_class {
                     let schema_ok = match (
                         single_denoted(successor.from_slot()),
                         single_denoted(successor.to_slot()),
@@ -731,13 +695,14 @@ where
 
     /// BH4 batch tooling (§7): nullify every stale tuple of `ty` (age >
     /// `horizon` over the type-`ty` active slice), the stale set snapshotted
-    /// at entry. Served only where declared: a `ty` not registered with BH4
-    /// (Age) is rejected PRE-TRANSACT as
-    /// `TxnError::Rejected(RetractStaleError::NotBh4)` — no transaction
-    /// opened, the same channel as `emit`'s pre-transact rejections — so the
-    /// batch nullifier can never be aimed at an idem⊤ class (e.g.
-    /// mass-nullifying old `[K_sup]` claims); v1 ships no BH4 type, so every
-    /// call rejects until an app registers one. NOT atomic — a sequence of
+    /// at entry. Served only where declared, and the snapshot read that
+    /// builds the batch is what declares it: `stale`'s own `NotBh4` refusal
+    /// lifts into `TxnError::Rejected(RetractStaleError::NotBh4)` —
+    /// PRE-TRANSACT, no transaction opened, the same channel as `emit`'s
+    /// pre-transact rejections — so the batch nullifier can never be aimed
+    /// at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims); v1
+    /// ships no BH4 type, so every call rejects until an app registers one.
+    /// NOT atomic — a sequence of
     /// `nullify` transacts, each failure lifted through
     /// `RetractStaleError::Nullify`; on the first `TxnError` it returns
     /// `Err`, leaving earlier nullifies committed and durable (append-only,
@@ -751,19 +716,13 @@ where
         ty: &Endset,
         horizon: u64,
     ) -> Result<Vec<(Address, Seq)>, TxnError<RetractStaleError>> {
-        let bh4 = self
-            .registry
-            .registration(&coverage_class(ty))
-            .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
-        if !bh4 {
-            return Err(TxnError::Rejected(RetractStaleError::NotBh4)); // §7
-        }
         let stale: Vec<Address> = {
             let snap = self.kernel.snapshot();
             let world = snap.world();
-            world.links().stale(ty, horizon).expect(
-                "BH4 registration checked pre-transact against the same genesis-immutable registry",
-            )
+            world
+                .links()
+                .stale(ty, horizon)
+                .map_err(|NotBh4| TxnError::Rejected(RetractStaleError::NotBh4))? // §7
         };
         let mut out = Vec::with_capacity(stale.len());
         for target in &stale {

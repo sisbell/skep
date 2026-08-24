@@ -48,6 +48,7 @@
 
 #![forbid(unsafe_code)]
 
+mod dedup;
 mod endset;
 mod error;
 mod reads;

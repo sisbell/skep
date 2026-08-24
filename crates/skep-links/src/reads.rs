@@ -154,7 +154,7 @@ impl LinkState {
     /// Retired class).
     pub fn members(&self, ty: &Endset, v: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = v == View::Default && class != self.shipped_class(ShippedType::Retired);
+        let subtract = v == View::Default && class != *self.shipped_class(ShippedType::Retired);
         let slice = self.type_slice_class(&class, coerce(v));
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
@@ -174,7 +174,7 @@ impl LinkState {
     /// results (with the `J ≠ K'` exclusion, as `members`).
     pub fn targets_of(&self, ty: &Endset, x: &Address, v: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = v == View::Default && class != self.shipped_class(ShippedType::Retired);
+        let subtract = v == View::Default && class != *self.shipped_class(ShippedType::Retired);
         let slice = self.type_slice_class(&class, coerce(v));
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
@@ -193,13 +193,13 @@ impl LinkState {
 
     /// Tuple status by address: resident and not nullified.
     pub fn is_active(&self, a: &Address) -> bool {
-        self.resident(a.tumbler()) && !self.hints.nullified.contains(a.tumbler())
+        self.resident(a.tumbler()) && !self.nullified(a.tumbler())
     }
 
     /// Tuple status by address: a resident retraction root (the tombstone
     /// set; monotone — R3/R6a).
     pub fn is_nullified(&self, a: &Address) -> bool {
-        self.hints.nullified.contains(a.tumbler())
+        self.nullified(a.tumbler())
     }
 
     /// BH1 read-filter (§7): membership in the shipped `Retired` class's
@@ -211,7 +211,7 @@ impl LinkState {
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         let rc = self.shipped_class(ShippedType::Retired);
-        self.type_slice_class(&rc, View::Active).iter().any(|t| {
+        self.type_slice_class(rc, View::Active).iter().any(|t| {
             self.links
                 .get(t)
                 .is_some_and(|l| l.from_slot().addrs().any(|root| is_prefix(root, probe)))
@@ -224,7 +224,7 @@ impl LinkState {
     /// (build-enforced, §B); any other `ty` yields the empty vec (the
     /// service-scope guard on arbitrary arguments).
     pub fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
             return Vec::new();
         }
         self.succs_operative(x.tumbler()).iter().map(lift).collect()
@@ -235,7 +235,7 @@ impl LinkState {
     /// cycle (revisit) — the finite link set is the termination bound. Empty
     /// for a non-`Supersedes` `ty` (v1 serving scope, as `succs`).
     pub fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
-        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
             return Vec::new();
         }
         let (path, _) = self.walk_sup(x.tumbler());
@@ -254,7 +254,7 @@ impl LinkState {
     /// `Indeterminate` (⊥) at a branch or cycle — and for a non-`Supersedes`
     /// `ty` (v1 serving scope: no positive head claim is fabricated).
     pub fn tip(&self, ty: &Endset, x: &Address) -> Tip {
-        if coverage_class(ty) != self.shipped_class(ShippedType::Supersedes) {
+        if coverage_class(ty) != *self.shipped_class(ShippedType::Supersedes) {
             return Tip::Indeterminate;
         }
         match self.walk_sup(x.tumbler()).1 {
@@ -331,10 +331,10 @@ impl LinkState {
     /// BH4 stale set (§7): active type-`ty` tuples with `age > h`, served
     /// only where declared — `Err(NotBh4)` unless `ty` is REGISTERED with
     /// BH4 (Age). The typed rejection keeps `Ok(vec![])` a truthful
-    /// freshness claim (never conflated with "not a BH4 type") and is the
-    /// read half of the fence `retract_stale` enforces pre-transact, so the
-    /// batch nullifier can never be aimed at an idem⊤ class (e.g.
-    /// mass-nullifying old `[K_sup]` claims).
+    /// freshness claim (never conflated with "not a BH4 type") and IS the
+    /// fence: `retract_stale` builds its batch from this call, so a refusal
+    /// here is the batch's refusal, and the nullifier can never be aimed at
+    /// an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims).
     pub fn stale(&self, ty: &Endset, h: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
         let bh4 = self
@@ -378,7 +378,10 @@ impl LinkState {
                 }
             }
         }
-        let sup = self.registry.reserved(ShippedType::Supersedes).clone();
+        let sup_slice = self.type_slice_class(
+            self.shipped_class(ShippedType::Supersedes),
+            View::Active,
+        );
         let mut out = Vec::new();
         for v in reach.iter() {
             if !self.succs_operative(v).is_empty() {
@@ -386,7 +389,6 @@ impl LinkState {
             }
             let member = lift(v);
             let hits = self.match_links(&[(TO, enc(slice::from_ref(&member)))], View::Active);
-            let sup_slice = self.type_slice(&sup, View::Active);
             let claims: Vec<Address> = hits
                 .iter()
                 .filter(|t| sup_slice.contains(*t))
@@ -421,7 +423,7 @@ impl LinkState {
         let v = coerce(v);
         let mut out = OrdSet::new();
         for (addr, link) in self.links.iter() {
-            if v == View::Active && self.hints.nullified.contains(addr) {
+            if v == View::Active && self.nullified(addr) {
                 continue;
             }
             let Some(slot) = link.slot(i) else { continue };
@@ -443,7 +445,7 @@ impl LinkState {
             // No constraint: the whole view slice.
             let mut out = OrdSet::new();
             for (addr, _) in self.links.iter() {
-                if v == View::Active && self.hints.nullified.contains(addr) {
+                if v == View::Active && self.nullified(addr) {
                     continue;
                 }
                 out.insert(addr.clone());
@@ -472,11 +474,7 @@ impl LinkState {
     pub(crate) fn type_slice_class(&self, class: &CoverageClass, v: View) -> OrdSet<Tumbler> {
         let base = self.hints.type_class.get(class).cloned().unwrap_or_default();
         match coerce(v) {
-            View::Active => base
-                .iter()
-                .filter(|t| !self.hints.nullified.contains(*t))
-                .cloned()
-                .collect(),
+            View::Active => base.iter().filter(|t| !self.nullified(t)).cloned().collect(),
             _ => base,
         }
     }
@@ -488,7 +486,7 @@ impl LinkState {
             None => OrdSet::new(),
             Some(edges) => edges
                 .iter()
-                .filter(|(_, claim)| !self.hints.nullified.contains(claim))
+                .filter(|(_, claim)| !self.nullified(claim))
                 .map(|(new, _)| new.clone())
                 .collect(),
         }

@@ -66,12 +66,36 @@ pub(crate) struct Hints {
 /// M7's slice of the engine's `WorldState`, reached via
 /// [`crate::HasLinks::links`].
 ///
-/// The AUTHORITATIVE state is one map plus the genesis type config: `links`
-/// is append-only with immutable values (a `LinkRec::Deposit` only ever
-/// inserts at a fresh key), which makes Permanence (L12/R2), append-only
-/// audit (R3), retraction stability (R6a) and lock-free MVCC reads free.
-/// Identity is the key, never the value: the store is never content-addressed
-/// on the endset (NonInjectivity L11b).
+/// The AUTHORITATIVE state is one map plus the genesis type config. Identity
+/// is the key, never the value: the store is never content-addressed on the
+/// endset (NonInjectivity L11b).
+///
+/// Four INVARIANTS hold of `links`, each at a named gate:
+///
+/// * **Freshness** — every deposit lands at a key not already present, which
+///   is what makes the map append-only with immutable values and so makes
+///   Permanence (L12/R2), append-only audit (R3), retraction stability (R6a)
+///   and lock-free MVCC reads free. Gate: [`LinkState::apply_link`], the one
+///   insertion point, discharged by M3's `mint_link`.
+/// * **Arity exactly 3** — every stored value has three slots, so the
+///   FROM/TO/TYPE accessors and the discovery primitives' slot indexes are
+///   total (ASN-0086's `|Σ.L| = 3`); the [`Link`] type itself holds only the
+///   L3 capacity floor of ≥ 3. Gate: `emit_core`'s backstop, ahead of the
+///   mint.
+/// * **Every slot level-uniform** — so [`coverage_class`] is total on every
+///   stored slot, at deposit and at every replay. Gates: `emit`'s
+///   address-denoting check on `ty` and `enc` on the rest; `editlink`'s
+///   all-slot check on a caller-supplied successor; M5's `Run::iextent` by
+///   construction for a resolved slot.
+/// * **Every key T4-valid and element-level** — so `home(addr)` exists for
+///   the frontier fold and every index key lifts to an `Address`. Gate: the
+///   hint fold's two `expect`s, which fail-stop rather than fold a corrupt
+///   address.
+///
+/// The deserialization path constructs a `LinkState` without passing those
+/// gates: it establishes the L3 floor (through [`Link`]'s serde door) and
+/// fail-stops on a non-T4 key at the rebuild fold, and takes the other two on
+/// checkpoint integrity.
 ///
 /// `registry` and `hints` are `#[serde(skip)]` RECOMPUTABLE state: on
 /// deserialize serde seeds them with their `Default`s, placeholders
@@ -124,15 +148,30 @@ impl LinkState {
     /// once per committed record (M2 guarantees this — deliberately NOT coded
     /// idempotent).
     ///
-    /// Totality domain: `addr` is an M3-minted (T4-valid, element-level) link
-    /// address — every record M7's own paths stage. A hand-built garbage
-    /// `addr` is OUTSIDE the domain and fail-stops on the `expect`s —
-    /// corruption, not a live error path (the M3 fold's precedent).
+    /// Totality domain, all three clauses owed by M3's `mint_link` and held
+    /// by every record M7's own paths stage: `addr` is T4-valid, is
+    /// element-level, and is FRESH (`addr ∉ dom(links)`) — the mint allocates
+    /// on the home's link frontier and never re-issues, and M2 replays each
+    /// committed record exactly once. A hand-built `addr` is OUTSIDE the
+    /// domain and fail-stops — corruption, not a live error path (the M3
+    /// fold's precedent).
+    ///
+    /// The first two clauses fail-stop on the hint fold's `expect`s. Freshness
+    /// is asserted HERE because it is the one that would fail SILENTLY: the
+    /// insert would replace an immutable value, leaving its address in the
+    /// displaced value's type slice, double-counting the home frontier and
+    /// voiding Permanence — none of it observable at the fold that admitted
+    /// it.
     pub fn apply_link(&self, r: &LinkRec) -> LinkState {
         match r {
             LinkRec::Deposit { addr, value } => {
                 let mut next = self.clone();
-                next.links.insert(addr.clone(), value.clone());
+                let displaced = next.links.insert(addr.clone(), value.clone());
+                assert!(
+                    displaced.is_none(),
+                    "apply_link: a Deposit must land at a fresh address (M3's mint never \
+                     re-issues); replacing an immutable value voids Permanence (L12/R2)"
+                );
                 next.hints = fold_hints(&self.hints, &self.registry, addr, value);
                 next
             }

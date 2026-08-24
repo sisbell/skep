@@ -329,7 +329,12 @@ impl TypeRegistry {
         })
     }
 
-    /// Internal lookup: the registration of a coverage class, if registered.
+    /// The public class → registration lookup: `Some(reg)` for a registered
+    /// class, `None` for an unregistered one. `class` is a [`coverage_class`]
+    /// output — the only way to name one — so `None` means unregistered, never
+    /// malformed, and a caller holding an `Endset` classifies it first (M9
+    /// projects the shipped registrations this way; M7's own gates and reads
+    /// go through the same lookup).
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.map.get(class)
     }

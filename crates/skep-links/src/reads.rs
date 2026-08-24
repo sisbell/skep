@@ -145,6 +145,11 @@ impl LinkState {
     /// so ghost (unallocated) addresses and the non-T4 tumblers inside a
     /// non-unit span's coverage are honest probes. `Default → Active` (raw
     /// Observe never filters — ASN-0128).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let slice = self.type_slice_class(&class, view);
@@ -168,6 +173,11 @@ impl LinkState {
     /// F COVERS the probe, which ranges over all of carrier T (`observe`'s
     /// pattern domain). Never a `stab` overlap call (an ancestor pattern
     /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
         self.type_slice_class(&class, View::Active)
@@ -180,6 +190,11 @@ impl LinkState {
     /// `View::Default` = active ∖ filtered — result-side, lazily, honoring
     /// the `J ≠ K'` exclusion (no self-subtraction when `ty` IS the shipped
     /// Retired class).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = view == View::Default && class != *self.shipped_class(ShippedType::Retired);
@@ -203,6 +218,11 @@ impl LinkState {
     /// results (with the `J ≠ K'` exclusion, as `members`). The source
     /// argument is matched by COVERAGE here; [`LinkState::target_of`] and the
     /// walk family match a source vertex by DENOTATION instead.
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = view == View::Default && class != *self.shipped_class(ShippedType::Retired);
@@ -251,8 +271,13 @@ impl LinkState {
     /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
     /// filtered to claims ∉ nullified — deduplicated, Tumbler order. v1
     /// serves the walk family ONLY for the shipped `Supersedes` class
-    /// (build-enforced, §B); any other `ty` yields the empty vec (the
-    /// service-scope guard on arbitrary arguments).
+    /// (build-enforced, §B); any other REGISTERED `ty` yields the empty vec
+    /// (the service-scope guard).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn succs(&self, ty: &Endset, x: &Address) -> Vec<Address> {
         if !self.serves_walk(ty) {
             return Vec::new();
@@ -263,7 +288,13 @@ impl LinkState {
     /// BH2 chain: the bounded iterative walk over operative successors from
     /// `x` (inclusive), halting at sink (no successor), branch (≥ 2), or
     /// cycle (revisit) — the finite link set is the termination bound. Empty
-    /// for a non-`Supersedes` `ty` (v1 serving scope, as `succs`).
+    /// for a registered `ty` other than `Supersedes` (v1 serving scope, as
+    /// `succs`).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn chain(&self, ty: &Endset, x: &Address) -> Vec<Address> {
         if !self.serves_walk(ty) {
             return Vec::new();
@@ -274,15 +305,22 @@ impl LinkState {
 
     /// BH2 chain membership: `target ∈ chain(ty, addr)` — membership in the
     /// walk's result list, never a coverage test. Inherits `chain`'s halting
-    /// rule (branch/cycle truncate the path) and its v1 serving scope: a
-    /// non-`Supersedes` `ty` has an empty chain, so nothing is a member.
+    /// rule (branch/cycle truncate the path), its v1 serving scope — a
+    /// registered `ty` other than `Supersedes` has an empty chain, so nothing
+    /// is a member — and its `ty` precondition.
     pub fn is_in_chain(&self, ty: &Endset, addr: &Address, target: &Address) -> bool {
         self.chain(ty, addr).contains(target)
     }
 
     /// BH2 head: `Sink(head)` when the walk halts at a successor-free node;
-    /// `Indeterminate` (⊥) at a branch or cycle — and for a non-`Supersedes`
-    /// `ty` (v1 serving scope: no positive head claim is fabricated).
+    /// `Indeterminate` (⊥) at a branch or cycle — and for a registered `ty`
+    /// other than `Supersedes` (v1 serving scope: no positive head claim is
+    /// fabricated).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — the walk-scope test classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality) rather than reading as out-of-scope.
     pub fn tip(&self, ty: &Endset, x: &Address) -> Tip {
         if !self.serves_walk(ty) {
             return Tip::Indeterminate;
@@ -298,6 +336,11 @@ impl LinkState {
     /// matched by coverage rather than denotation) — `stab(TO, ·, Audit)`
     /// overlap prefilter ∩ the active typed slice, exact `covers` filter
     /// authoritative, collecting each survivor's F.addrs().
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
         let prefilter = self.stab(TO, &enc([target]), View::Audit);
@@ -319,6 +362,11 @@ impl LinkState {
     /// AM's source-vertex rule) with a single-address-denoting G; returns
     /// that single target. Restricting to the ACTIVE typed slice is what
     /// makes "exactly one active K-tuple" exact.
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn target_of(&self, ty: &Endset, source: &Address) -> Option<Address> {
         self.target_of_class(&coverage_class(ty), source)
     }
@@ -360,12 +408,19 @@ impl LinkState {
     }
 
     /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`,
-    /// served only where declared — `Err(NotBh4)` unless `ty` is REGISTERED
-    /// with BH4 (Age). The typed rejection keeps `Ok(vec![])` a truthful
-    /// freshness claim (never conflated with "not a BH4 type") and IS the
-    /// fence: `retract_stale` builds its batch from this call, so a refusal
-    /// here is the batch's refusal, and the nullifier can never be aimed at
-    /// an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims).
+    /// served only where declared — `Err(NotBh4)` unless the in-contract
+    /// `ty` is registered with BH4 (Age). The typed rejection keeps
+    /// `Ok(vec![])` a truthful freshness claim (never conflated with "not a
+    /// BH4 type") and IS the fence: `retract_stale` builds its batch from
+    /// this call, so a refusal here is the batch's refusal, and the nullifier
+    /// can never be aimed at an idem⊤ class (e.g. mass-nullifying old
+    /// `[K_sup]` claims).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it BEFORE the BH4
+    /// lookup, so a hand-built non-level-uniform `ty` panics naming that
+    /// precondition (§Core data model totality) rather than reaching the
+    /// typed refusal.
     pub fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
         let registered_bh4 = self
@@ -505,6 +560,11 @@ impl LinkState {
 
     /// `L_K` (Audit) / `A_K` (Active) — the typed slice as raw index keys.
     /// `view ∈ {Audit, Active}` only (`Default` reads as `Active`).
+    ///
+    /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
+    /// or `iextent`-built — [`coverage_class`] classifies it, so a
+    /// hand-built non-level-uniform `ty` panics naming that precondition
+    /// (§Core data model totality).
     pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Tumbler> {
         self.type_slice_class(&coverage_class(ty), view)
     }
@@ -532,6 +592,11 @@ impl LinkState {
     /// `succs`/`chain`/`tip` apply, and the read-side half of the build-time
     /// fence `RegistryError::UnservedWalk` holds up — both lift together when
     /// the parameterized multi-BH2 path lands.
+    ///
+    /// Also the walk family's ONE classification site, so their shared `ty`
+    /// precondition has one origin: [`coverage_class`] is total on the
+    /// address-denoting and `iextent`-built endsets those ops document, and
+    /// panics naming that precondition on anything else.
     fn serves_walk(&self, ty: &Endset) -> bool {
         coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }

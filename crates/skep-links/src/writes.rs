@@ -105,7 +105,11 @@ where
 /// adds preconditions only and never alters `value`, ASN-0126 π).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Gate {
-    /// MAKELINK / editlink successor: `e₃ ≠ ∅` only.
+    /// MAKELINK / editlink successor: `e₃ ≠ ∅` only — and the ONE statement
+    /// of it. Neither open-surface caller repeats the test; each states the
+    /// obligation in its contract and reads the verdict back through its own
+    /// `From<EmitCoreError>` (§2), so no deposited link can carry an empty
+    /// type slot however it arrived.
     Open,
     /// Emit_K / assert_sup / editlink claim: registered ∧ shape-conformant ∧
     /// K ≁ R; idem⊤ ⇒ active-view dedup check.
@@ -146,7 +150,8 @@ impl From<MintError> for EmitCoreError {
 // compile error at all five sites instead of a panic at one.
 
 impl From<EmitCoreError> for MakeLinkError {
-    // Open: only EmptyType/HomeNotRegistered/NotOwner/Mint reachable.
+    // Open: only EmptyType/HomeNotRegistered/NotOwner/Mint reachable, and
+    // EmptyType is ML6 arriving from the gate that owns it.
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::EmptyType => MakeLinkError::EmptyTypeResolution,
@@ -223,7 +228,8 @@ impl From<EmitCoreError> for AssertSupError {
 }
 
 impl From<EmitCoreError> for EditLinkError {
-    // successor (Open): EmptyType → IllFormedSuccessor; claim (Managed/K_sup).
+    // successor (Open): EmptyType → IllFormedSuccessor, the empty-type-slot
+    // cause arriving from the gate that owns it; claim (Managed/K_sup).
     fn from(e: EmitCoreError) -> Self {
         match e {
             EmitCoreError::EmptyType => EditLinkError::IllFormedSuccessor,
@@ -283,6 +289,14 @@ enum HomeFault {
 /// This is the hoist that pins each op's error ORDER ahead of its own
 /// verdicts. The gate that actually admits a deposit is [`emit_core`], which
 /// asks the same two questions of every value that reaches the mint.
+///
+/// The two ask them of DIFFERENT states — every caller here reads the txn
+/// BASE, `emit_core` reads the WORKING world — and cannot disagree: the only
+/// records a composite stages between them are M3 element allocations and
+/// link deposits, and neither changes a document's registration or its
+/// effective owner. `editlink` is where the gap is real (its second
+/// `emit_core` runs after the first has staged both), which is why the
+/// agreement is an argument rather than an observation.
 fn home_gate(m3: &M3State, caller: Caller, homes: &[&Address]) -> Result<(), HomeFault> {
     for &home in homes {
         if !m3.is_registered_document(home) {
@@ -348,6 +362,13 @@ impl From<HomeFault> for EditLinkError {
 /// behind it under the same discipline: a non-owner deposit is rejected on
 /// hit AND miss, and because every deposit passes THIS choke point, no
 /// caller can reach the mint ungated.
+///
+/// Both questions are asked of the WORKING world, where the per-op hoist
+/// asked them of the txn base. The two verdicts agree because the only
+/// records a composite stages in between are M3 element allocations and link
+/// deposits, neither of which touches document registration or ω — so the
+/// hoist pins the error order without the backstop being able to contradict
+/// it.
 fn emit_core<W>(
     stg: &mut Staging<W>,
     caller: Caller,
@@ -466,9 +487,11 @@ where
     /// linearizes at its commit, ASN-0134); a [`SlotArg::Addrs`] slot is
     /// `enc(addrs)`, the NAMES verbatim (L8: matching is by address,
     /// contents never examined; ghost names valid, L9) — require the type
-    /// endset non-empty AS GIVEN (ML6: an empty `Addrs` list and an empty
-    /// `Resolve` resolution both land in the one `⟨⟩` check), mint a fresh
-    /// home-scoped link, deposit the standard triple, then seat it in
+    /// endset non-empty AS GIVEN (ML6, so an empty `Addrs` list and an empty
+    /// `Resolve` resolution are one rejection; the check belongs to the
+    /// deposit gate every link passes, and its verdict arrives here as
+    /// `EmptyTypeResolution`), mint a fresh home-scoped link, deposit the
+    /// standard triple, then seat it in
     /// `home`'s link subspace (K.μ⁺_L, no R — J-LV). ONE M2 composite under
     /// `link_lock_key(home)` (the held lock and the advanced frontier are
     /// byte-identical — M3's contract). NO shape gate, NO idem dedup
@@ -519,13 +542,13 @@ where
                         slot_endset(base.m5(), &ty),
                     )
                 };
-                if e3.is_empty() {
-                    return Err(MakeLinkError::EmptyTypeResolution); // ML6, as-given
-                }
                 // The sole-writer fences. Total: a `Resolve` slot is
                 // level-uniform by M5's construction and an `Addrs` slot is
                 // address-denoting, which are the same two grounds under
                 // which the fold classifies this very value one step later.
+                // `⟨⟩` classifies as the empty `Addrs` antichain, which is
+                // neither shipped class, so ML6 stays the deposit gate's
+                // check and no input can satisfy both.
                 let e3_class = coverage_class(&e3);
                 if e3_class == *r_class {
                     return Err(MakeLinkError::RetractionClass); // K ≁ R
@@ -608,6 +631,19 @@ where
     /// checks precede P-tgt, so the auth verdict never depends on residence
     /// timing. The self-emitter case passes by arithmetic: the fresh
     /// emitter's account IS home's account.
+    ///
+    /// POSTCONDITION, on a fresh emitter and on a dedup hit alike:
+    /// `is_nullified(target)` holds, and `target` is gone from every
+    /// `View::Active` slice, every operative `succ_o` edge and every `stale`
+    /// set — while `readlink` and the `Audit` view keep it (R3).
+    ///
+    /// IRREVOCABLE. The tombstone set is monotone (R3/R6a) and the hint fold
+    /// re-derives it from the `[R]` link at every replay, whether or not that
+    /// link is itself nullified — so retracting a retraction restores
+    /// nothing. This is where the module's two suppression mechanisms part
+    /// company, and a caller chooses between them here: the BH1 `Retired`
+    /// filter reads the ACTIVE retired slice, so retiring is undoable by
+    /// nullifying the retirement; nullifying is not undoable by anything.
     pub fn nullify(
         &self,
         caller: Caller,
@@ -723,8 +759,12 @@ where
                 // aborts on a non-level-uniform span. Checking only the type
                 // slot would leave a caller-supplied F or G reaching that
                 // abort from inside the transact.
+                //
+                // `e₃ ≠ ∅` is NOT restated here: it is the deposit gate's
+                // check, and `⟨⟩` classifies as the empty `Addrs` antichain —
+                // neither shipped class — so it passes the DC guard untouched
+                // and comes back from the gate as `IllFormedSuccessor`.
                 let well_formed = successor.arity() == 3
-                    && !successor.type_slot().is_empty()
                     && (1..=successor.arity()).all(|i| {
                         successor
                             .slot(i)
@@ -778,6 +818,15 @@ where
     /// no rollback) — a re-run with the same `d_retr` is safe
     /// (already-nullified targets from this `d_retr` dedup; the recomputed
     /// stale set excludes them).
+    ///
+    /// COMPLETABLE ONLY BY AN OWNER OF EVERY STALE TUPLE. The batch comes
+    /// from `stale`, which reads the WHOLE active type-`ty` slice — across
+    /// homes and across accounts, `d_retr` scoping only where the retractions
+    /// land — while each constituent `nullify` demands ω on its target (v1
+    /// self-retraction). So a foreign-owned stale tuple halts the batch at
+    /// the same point on every re-run: safe, and not progressive past it.
+    /// Nullifying what one owns is the caller's business, done by aiming
+    /// `nullify` directly.
     pub fn retract_stale(
         &self,
         caller: Caller,

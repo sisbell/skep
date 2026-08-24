@@ -196,6 +196,36 @@ fn the_shape_gate_admits_exactly_the_registered_span_counts() {
 }
 
 #[test]
+fn emit_reports_the_retraction_fence_before_the_shape_gate() {
+    // The one input that satisfies two Managed-gate rejections at once, so it
+    // is the one that pins their precedence: `[R]` is registered Binary, so
+    // an emit into it with |G| = 2 is BOTH a K ≁ R violation and a shape
+    // violation. The fence speaks (design: K ≁ R before Sh-conf).
+    let k = kernel();
+    let w = writer(&k);
+    let retraction = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Retraction)
+        .clone();
+    assert!(matches!(
+        w.emit(P1, &doc1(), &retraction, &ca(1), &[ca(2), ca(3)]),
+        Err(TxnError::Rejected(EmitError::RetractionClass))
+    ));
+    // ...and each rejection is separately reachable, so the verdict above is
+    // a precedence and not the only answer either input can get.
+    assert!(matches!(
+        w.emit(P1, &doc1(), &retraction, &ca(1), &[ca(2)]),
+        Err(TxnError::Rejected(EmitError::RetractionClass))
+    ));
+    assert!(matches!(
+        w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2), ca(3)]),
+        Err(TxnError::Rejected(EmitError::ShapeViolation))
+    ));
+}
+
+#[test]
 fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
     // The home check is hoisted ahead of the dedup short-circuit (Conflicts
     // §8): the I0 key excludes home, so this second emit WOULD hit the

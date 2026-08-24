@@ -1,9 +1,21 @@
 //! The typed rejections of M7's write surface (§C/§D) and its staleness
 //! family (§7 — [`NotBh4`], [`RetractStaleError`]), plus FOLLOWLINK's ⊥
-//! marker [`Invalid`]. Variant declaration order is the design's, which is
-//! also each op's check order except where a documented hoist says otherwise
-//! (the home check is hoisted ahead of every gate/dedup short-circuit —
-//! Conflicts §8).
+//! marker [`Invalid`].
+//!
+//! Variant declaration order is each op's PRECEDENCE: where an input
+//! satisfies several rejections at once, the earlier-declared one speaks.
+//! Three hoists put a check ahead of its declared neighbours, and each is
+//! declared where it fires:
+//!
+//! * the home/ω pair runs ahead of every other in-transaction verdict — each
+//!   gate, each dedup short-circuit, and each op's own residence and
+//!   well-formedness checks — so an unregistered or unowned home is refused
+//!   on hit AND miss, whatever else the input violates (Conflicts §8);
+//! * [`EmitError::NonAddressDenotingType`] and
+//!   [`EmitError::SupersessionClass`] are pre-transact, so they outrank every
+//!   in-transaction verdict including the home/ω pair;
+//! * [`RetractStaleError::NotBh4`] is likewise pre-transact, ahead of the
+//!   constituent nullifies' own rejections.
 
 use std::error::Error;
 use std::fmt;
@@ -66,11 +78,13 @@ pub enum EmitError {
     NotOwner(Address),
     /// `ty`'s coverage class is not registered (Managed gate (i)).
     NotRegistered,
+    /// `ty ~ [R]` — retraction writes only through `nullify` (K ≁ R). Ahead
+    /// of `ShapeViolation`: an `[R]`-typed emit with a non-conforming `|G|`
+    /// satisfies both, and the fence speaks (design's K ≁ R before Sh-conf).
+    RetractionClass,
     /// Span counts violate the registered shape (P3 Sh-conf: `|F| = 1`;
     /// Unary `|G| = 0`, Binary `|G| = 1`, Multi finite).
     ShapeViolation,
-    /// `ty ~ [R]` — retraction writes only through `nullify` (K ≁ R).
-    RetractionClass,
     /// `ty ~ [K_sup]` — supersession writes only through
     /// `assert_sup`/`editlink` (Conflicts §10). Pre-transact.
     SupersessionClass,

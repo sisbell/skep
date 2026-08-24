@@ -48,6 +48,9 @@
 
 #![forbid(unsafe_code)]
 
+use skep_kernel::WorldState;
+use skep_namespace::HasM3;
+
 mod dedup;
 mod endset;
 mod error;
@@ -65,7 +68,7 @@ pub use error::{
     AssertSupError, EditLinkError, EmitError, Invalid, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
 };
-pub use reads::{CurrentMember, Tip, Tuple, View};
+pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
 pub use registry::{
     Behavior, Registration, RegistryError, ReservedAddrs, Shape, ShippedType, TypeDecl,
     TypeRegistry,
@@ -83,6 +86,14 @@ pub trait HasLinks {
     /// M7's slice of the world state.
     fn links(&self) -> &LinkState;
 }
+
+/// The world M7 deposits into: M2's fold contract, M7's own slice, and M3's —
+/// every write path reads the store to gate and calls the namespace to mint,
+/// so the three travel together and are named once here. MAKELINK adds
+/// `HasM5` on top, being the only op that seats. Blanket-implemented, so an
+/// engine that implements the accessors gets this for free.
+pub trait LinkWorld: WorldState + HasLinks + HasM3 {}
+impl<W: WorldState + HasLinks + HasM3> LinkWorld for W {}
 
 // The 1-based standard slot numerals (ASN-0043 L6: slot index is a
 // primitive). M7 owns them — it is the store whose `Link` is a positional

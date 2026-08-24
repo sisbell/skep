@@ -103,8 +103,11 @@ impl LinkState {
     /// builds the genesis slice here at assembly, propagating
     /// [`RegistryError`]. (`TypeRegistry::build` is the same validation
     /// standalone; this is the normal entry.)
-    pub fn genesis(reserved: ReservedAddrs, decls: Vec<TypeDecl>) -> Result<LinkState, RegistryError> {
-        let registry = TypeRegistry::build(reserved.clone(), decls.clone())?;
+    pub fn genesis(
+        reserved: ReservedAddrs,
+        decls: Vec<TypeDecl>,
+    ) -> Result<LinkState, RegistryError> {
+        let registry = TypeRegistry::build(&reserved, &decls)?;
         Ok(LinkState {
             links: OrdMap::new(),
             reserved: Arc::new(reserved),
@@ -145,10 +148,9 @@ impl LinkState {
     /// leave them empty, and replay's `apply_link` folds need the registry to
     /// recognize the `[R]`/`[K_sup]` classes.
     pub fn rebuild_derived(self) -> LinkState {
-        let registry = Arc::new(
-            TypeRegistry::build((*self.reserved).clone(), (*self.decls).clone())
-                .expect("genesis type config re-validates: it passed TypeRegistry::build at genesis"),
-        );
+        let registry = Arc::new(TypeRegistry::build(&self.reserved, &self.decls).expect(
+            "genesis type config re-validates: it passed TypeRegistry::build at genesis",
+        ));
         let mut hints = Hints::default();
         for (addr, value) in self.links.iter() {
             hints = fold_hints(&hints, &registry, addr, value);
@@ -236,14 +238,17 @@ impl LinkState {
 /// [`coverage_class`] — the shipped classes this fold recognizes are that
 /// function's own verdicts, fixed once at [`TypeRegistry::build`]. No second
 /// classifier exists anywhere in M7 (class coherence, §Core data model).
-pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, value: &Link) -> Hints {
+pub(crate) fn fold_hints(
+    h: &Hints,
+    registry: &TypeRegistry,
+    addr: &Tumbler,
+    value: &Link,
+) -> Hints {
     let mut out = h.clone();
     let k = coverage_class(value.type_slot());
 
     // type_slices — `L_K` per coverage class (L8).
-    let mut slice = out.type_slices.get(&k).cloned().unwrap_or_default();
-    slice.insert(addr.clone());
-    out.type_slices.insert(k.clone(), slice);
+    out.type_slices.entry(k.clone()).or_default().insert(addr.clone());
 
     // nullified — the replay-critical [R] fold, pinned off the surface
     // discipline (§1): insert EVERY denoted to-root (zero roots ⇒ no insert,
@@ -262,24 +267,23 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
     // registered idem⊤ app class — folds an in-memory key here (possibly with
     // Extents from/to): harmless, it never reaches a LockKey (Conflicts §1).
     if registry.registration(&k).is_some_and(|r| r.idem) {
-        let key = DedupKey::of(value);
-        let mut set = out.dedup.get(&key).cloned().unwrap_or_default();
-        set.insert(addr.clone());
-        out.dedup.insert(key, set);
+        out.dedup
+            .entry(DedupKey::of(value))
+            .or_default()
+            .insert(addr.clone());
     }
 
     // sup_fwd — one SupEdge out of each denoted old, for a [K_sup]-classed
     // tuple; both endpoints via addrs() (§5).
     if k == *registry.shipped_class(ShippedType::Supersedes) {
         for old in value.from_slot().addrs() {
-            let mut edges = out.sup_fwd.get(old).cloned().unwrap_or_default();
+            let edges = out.sup_fwd.entry(old.clone()).or_default();
             for new in value.to_slot().addrs() {
                 edges.insert(SupEdge {
                     new: new.clone(),
                     claim: addr.clone(),
                 });
             }
-            out.sup_fwd.insert(old.clone(), edges);
         }
     }
 
@@ -289,8 +293,7 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
         &validate(addr.clone()).expect("LinkRec addrs are M3-minted T4-valid link addresses"),
     )
     .expect("link addresses are element-level, so their home Document exists");
-    let n = out.home_frontier.get(home.tumbler()).copied().unwrap_or(0);
-    out.home_frontier.insert(home.tumbler().clone(), n + 1);
+    *out.home_frontier.entry(home.tumbler().clone()).or_insert(0) += 1;
 
     out
 }

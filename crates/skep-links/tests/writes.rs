@@ -13,7 +13,8 @@ use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Link, LinkWriter,
-    MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, SlotArg, Tip, View,
+    MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, ShippedType, SlotArg, Tip,
+    View,
 };
 
 fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
@@ -39,22 +40,44 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     assert_eq!(link.type_slot(), &rel_ty());
     // Emit_K does NOT seat (MAKELINK alone seats).
     assert_eq!(snap.world().m5().link_count(&doc1()), n(0));
-    // Observe: empty patterns are no constraint; exact ⊆-coverage match.
-    let all = ls.observe(&rel_ty(), &[], &[], View::Active);
+    // Observe: the empty pattern is no constraint; exact ⊆-coverage match.
+    let all = ls.observe(&rel_ty(), Pattern::default(), View::Active);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].addr, a1);
     assert_eq!(
         ls.observe(
             &rel_ty(),
-            &[ca(1).tumbler().clone()],
-            &[ca(2).tumbler().clone()],
+            Pattern {
+                from: &[ca(1).tumbler().clone()],
+                to: &[ca(2).tumbler().clone()],
+            },
             View::Active
         )
         .len(),
         1
     );
+    // The two sides are not interchangeable: an unmatched F-probe finds
+    // nothing, and ca(1) — which this tuple's F covers — also finds nothing
+    // as a G-probe.
     assert!(ls
-        .observe(&rel_ty(), &[ca(3).tumbler().clone()], &[], View::Active)
+        .observe(
+            &rel_ty(),
+            Pattern {
+                from: &[ca(3).tumbler().clone()],
+                to: &[],
+            },
+            View::Active
+        )
+        .is_empty());
+    assert!(ls
+        .observe(
+            &rel_ty(),
+            Pattern {
+                from: &[],
+                to: &[ca(1).tumbler().clone()],
+            },
+            View::Active
+        )
         .is_empty());
     // Default predicates D1/D2/D3.
     assert!(ls.is_k(&rel_ty(), ca(1).tumbler()));

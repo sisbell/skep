@@ -11,7 +11,7 @@ use skep_address::{Address, Nat};
 use skep_arrangement::{HasM5, M5Rec, VPos};
 use skep_content::{ContentWrite, HasContent, Val};
 use skep_kernel::{Seq, Snapshot, WorldState};
-use skep_links::{Caller, HasLinks, LinkRec, ShippedType, Tip, View};
+use skep_links::{Caller, HasLinks, LinkRec, Pattern, ShippedType, Tip, View};
 use skep_namespace::{HasM3, M3Rec};
 
 use crate::ast::{collect_ref_addrs, Term, VarId};
@@ -97,7 +97,11 @@ where
         for r in &refs {
             let ever = !w
                 .links()
-                .observe(&pdef, slice::from_ref(r.tumbler()), &[], View::Audit)
+                .observe(
+                    &pdef,
+                    Pattern { from: slice::from_ref(r.tumbler()), to: &[] },
+                    View::Audit,
+                )
                 .is_empty();
             if !ever {
                 return Err(RegisterError::ReferentNotEverRegistered(r.clone()));
@@ -151,7 +155,11 @@ where
         let ever = !snap
             .world()
             .links()
-            .observe(pdef, slice::from_ref(start.tumbler()), &[], View::Audit)
+            .observe(
+                pdef,
+                Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
+                View::Audit,
+            )
             .is_empty();
         if !ever {
             return Err(EvalError::NotEverRegistered);
@@ -206,8 +214,7 @@ where
             .links()
             .observe(
                 self.catalog.reserved(ShippedType::PredDef),
-                slice::from_ref(start.tumbler()),
-                &[],
+                Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
                 View::Audit,
             )
             .is_empty()
@@ -311,8 +318,7 @@ where
                 .links()
                 .observe(
                     self.catalog.reserved(ShippedType::PredDef),
-                    slice::from_ref(start.tumbler()),
-                    &[],
+                    Pattern { from: slice::from_ref(start.tumbler()), to: &[] },
                     View::Active,
                 )
                 .first()

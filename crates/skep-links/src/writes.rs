@@ -13,12 +13,13 @@
 //! `nullify` additionally requires owning the TARGET link (self-retraction
 //! only in v1).
 
+use std::fmt;
 use std::sync::Arc;
 
 use skep_address::{content_subspace, Address};
 use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
-use skep_namespace::{HasM3, M3Rec, M3State, MintError};
+use skep_namespace::{M3Rec, M3State, MintError};
 
 use crate::dedup::DedupKey;
 use crate::endset::{coverage_class, enc, is_address_denoting, single_denoted, Endset, Link};
@@ -28,7 +29,7 @@ use crate::error::{
 };
 use crate::registry::{Shape, ShippedType, TypeRegistry};
 use crate::state::LinkRec;
-use crate::HasLinks;
+use crate::{HasLinks, LinkWorld};
 
 /// M7's single writer of link values — the transact-driving handle: `&'k
 /// Kernel<W>` plus a construction-time `Arc<TypeRegistry>` cache of the
@@ -46,6 +47,16 @@ pub struct LinkWriter<'k, W: WorldState> {
     registry: Arc<TypeRegistry>,
 }
 
+/// The handle prints as itself: `Kernel` is deliberately opaque and the
+/// registry is genesis config, so neither is worth rendering — and asking for
+/// no `W: Debug` keeps this type from being the reason a consumer's own
+/// derive fails.
+impl<W: WorldState> fmt::Debug for LinkWriter<'_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkWriter").finish_non_exhaustive()
+    }
+}
+
 /// One MAKELINK endset argument (the 2026-08-16 address-denoting-endsets
 /// amendment; ASN-0043 L4/L8/L9/L13): content V-specs resolved against the
 /// txn base — the original form, semantics unchanged — or address NAMES
@@ -55,6 +66,7 @@ pub struct LinkWriter<'k, W: WorldState> {
 /// names are valid). Per-slot either/or — no mixing within a slot in v1 (a
 /// mixed need resolves first via the read surface and passes `Addrs`). Also
 /// M10's successor type slot: the one two-form enum serves both surfaces.
+#[derive(Debug, Clone)]
 pub enum SlotArg {
     /// Content V-specs, wf-checked and resolved to I-extents inside
     /// makelink's transact.
@@ -128,8 +140,10 @@ impl From<MintError> for EmitCoreError {
     }
 }
 
-// §2 error mapping — the `_ => unreachable!()` arms are the paths the design
-// proves cannot fire (each op's gate discipline makes them dead).
+// §2 error mapping. Every impl enumerates all seven variants: the dead ones
+// are the paths the design proves cannot fire under that op's gate
+// discipline, and naming them is what makes a new `EmitCoreError` variant a
+// compile error at all five sites instead of a panic at one.
 
 impl From<EmitCoreError> for MakeLinkError {
     // Open: only EmptyType/HomeNotRegistered/NotOwner/Mint reachable.
@@ -139,7 +153,11 @@ impl From<EmitCoreError> for MakeLinkError {
             EmitCoreError::HomeNotRegistered => MakeLinkError::HomeNotRegistered,
             EmitCoreError::NotOwner(a) => MakeLinkError::NotOwner(a),
             EmitCoreError::Mint(m) => MakeLinkError::Mint(m),
-            _ => unreachable!("Open gate raises no Managed/Retraction rejection"),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass => {
+                unreachable!("Open gate raises no Managed/Retraction rejection")
+            }
         }
     }
 }
@@ -176,7 +194,12 @@ impl From<EmitCoreError> for NullifyError {
             EmitCoreError::HomeNotRegistered => NullifyError::HomeNotRegistered,
             EmitCoreError::NotOwner(a) => NullifyError::NotOwner(a),
             EmitCoreError::Mint(m) => NullifyError::Mint(m),
-            _ => unreachable!("[R] is genesis-registered Binary and admitted under Retraction"),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass
+            | EmitCoreError::EmptyType => {
+                unreachable!("[R] is genesis-registered Binary and admitted under Retraction")
+            }
         }
     }
 }
@@ -189,7 +212,10 @@ impl From<EmitCoreError> for AssertSupError {
             EmitCoreError::HomeNotRegistered => AssertSupError::HomeNotRegistered,
             EmitCoreError::NotOwner(a) => AssertSupError::NotOwner(a),
             EmitCoreError::Mint(m) => AssertSupError::Mint(m),
-            _ => unreachable!(
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass
+            | EmitCoreError::EmptyType => unreachable!(
                 "K_sup registry-fixed Binary/idem⊤; endpoints/irreflexivity pre-checked in assert_sup"
             ),
         }
@@ -204,7 +230,11 @@ impl From<EmitCoreError> for EditLinkError {
             EmitCoreError::HomeNotRegistered => EditLinkError::HomeNotRegistered,
             EmitCoreError::NotOwner(a) => EditLinkError::NotOwner(a),
             EmitCoreError::Mint(m) => EditLinkError::Mint(m),
-            _ => unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed"),
+            EmitCoreError::NotRegistered
+            | EmitCoreError::ShapeViolation
+            | EmitCoreError::RetractionClass => {
+                unreachable!("editlink pre-checks DC/arity/residence; K_sup claim registry-fixed")
+            }
         }
     }
 }
@@ -222,15 +252,16 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
     }
 }
 
-/// Sh-conf (P3): SPAN COUNTS against the registered shape — never inferring
-/// shape from the tuple (a `(1,0)` tuple conforms under Unary AND Multi).
-/// All shapes require `|F| = 1`; Unary `|G| = 0`, Binary `|G| = 1`, Multi
-/// `|G|` finite.
-fn sh_conf(shape: Shape, f: usize, g: usize) -> bool {
-    f == 1
+/// Sh-conf (P3): the value's SPAN COUNTS against the registered shape — never
+/// inferring shape from the tuple (a `(1,0)` tuple conforms under Unary AND
+/// Multi). All shapes require `|F| = 1`; Unary `|G| = 0`, Binary `|G| = 1`,
+/// Multi `|G|` finite. Reads `|F|` and `|G|` off the link itself, so the two
+/// counts cannot arrive in the wrong order.
+fn sh_conf(shape: Shape, value: &Link) -> bool {
+    value.from_slot().len() == 1
         && match shape {
-            Shape::Unary => g == 0,
-            Shape::Binary => g == 1,
+            Shape::Unary => value.to_slot().is_empty(),
+            Shape::Binary => value.to_slot().len() == 1,
             Shape::Multi => true,
         }
 }
@@ -303,10 +334,11 @@ impl From<HomeFault> for EditLinkError {
 }
 
 /// The single choke point both write surfaces share (§2), run INSIDE one
-/// `transact`. Bounds are `HasLinks + HasM3` only — it has NO seat step (the
-/// seat is staged by MAKELINK itself, the lone `HasM5` caller, after this
-/// returns). Any dedup LOCK was acquired by the public op before the transact
-/// (§3 step 1); this does the hoisted home check and the in-txn dedup CHECK.
+/// `transact`. Bounds are [`crate::LinkWorld`] with no `HasM5`, so it has NO
+/// seat step — the seat is staged by MAKELINK itself, the lone `HasM5`
+/// caller, after this returns. Any dedup LOCK was acquired by the public op
+/// before the transact (§3 step 1); this does the hoisted home check and the
+/// in-txn dedup CHECK.
 ///
 /// The hoisted home check (Conflicts §8, a deliberate divergence from
 /// ASN-0128 I1's miss-only read) runs ahead of EVERY gate/dedup
@@ -324,7 +356,7 @@ fn emit_core<W>(
     gate: Gate,
 ) -> Result<Address, EmitCoreError>
 where
-    W: WorldState + HasLinks + HasM3,
+    W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
     // STORE-INVARIANT BACKSTOP (§2): every caller builds arity 3
@@ -362,7 +394,7 @@ where
             if gate == Gate::Managed && k == *links.shipped_class(ShippedType::Retraction) {
                 return Err(EmitCoreError::RetractionClass); // K ≁ R
             }
-            if !sh_conf(reg.shape, value.from_slot().len(), value.to_slot().len()) {
+            if !sh_conf(reg.shape, &value) {
                 return Err(EmitCoreError::ShapeViolation); // (ii)
             }
             if reg.idem {
@@ -411,18 +443,17 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// unresolved.
 fn slot_endset(m5: &M5State, slot: &SlotArg) -> Endset {
     match slot {
-        SlotArg::Resolve(specs) => Endset::from_spans(
-            specs
-                .iter()
-                .flat_map(|sp| m5.resolve(&sp.source, &sp.span).into_iter().map(|r| r.iextent())),
-        ),
+        SlotArg::Resolve(specs) => specs
+            .iter()
+            .flat_map(|sp| m5.resolve(&sp.source, &sp.span).into_iter().map(|r| r.iextent()))
+            .collect(),
         SlotArg::Addrs(addrs) => enc(addrs),
     }
 }
 
 impl<'k, W> LinkWriter<'k, W>
 where
-    W: WorldState + HasLinks + HasM3 + HasM5,
+    W: LinkWorld + HasM5,
     W::Record: From<LinkRec> + From<M3Rec> + From<M5Rec>,
 {
     /// MAKELINK (ASN-0120, as amended 2026-08-16): build three endsets — a
@@ -481,7 +512,7 @@ where
 
 impl<'k, W> LinkWriter<'k, W>
 where
-    W: WorldState + HasLinks + HasM3,
+    W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
 {
     /// Emit_K (ASN-0086/0126/0128): gated typed-relation emission —

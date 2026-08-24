@@ -3,6 +3,8 @@
 //! canonical address-set encoding [`enc`], and the one pure coverage
 //! classifier [`coverage_class`] with its [`CoverageClass`] key.
 
+use std::collections::BTreeMap;
+
 use im::{OrdMap, OrdSet, Vector};
 use serde::{Deserialize, Serialize};
 use skep_address::{
@@ -21,8 +23,18 @@ use skep_address::{
 /// (§Core data model structural-derives contract): link identity is the store
 /// address (L11b), type/dedup identity is [`coverage_class`]. No seam may key
 /// on the derived impls.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// A span collection: `Default` is `⟨⟩` and `FromIterator<Span>` is the same
+/// verbatim construction [`Endset::from_spans`] performs, so a span pipeline
+/// `.collect()`s here.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Endset(Vector<Span>);
+
+impl FromIterator<Span> for Endset {
+    fn from_iter<I: IntoIterator<Item = Span>>(spans: I) -> Endset {
+        Endset::from_spans(spans)
+    }
+}
 
 impl Endset {
     /// `⟨⟩` — the empty endset (distinct from any zero-width span, which M1's
@@ -112,9 +124,34 @@ pub(crate) fn single_denoted(e: &Endset) -> Option<&Tumbler> {
 /// arity-3 store, §Core data model). Positional accessors only (L6: slot
 /// index is a primitive). Derived `Eq` is STRUCTURAL, never link-value
 /// identity — identity is the store address (L11b).
+///
+/// Serde: a **symmetric shadow pair** — the derived `Serialize` emits the one
+/// named `slots` field and `Deserialize` reads that same shape back through
+/// [`LinkShadow`] into [`Link::new`], so the arity floor holds at the trust
+/// boundary too. Load-bearing: [`crate::LinkState`] rides M2 checkpoints, and
+/// the positional accessors index slots 0–2 directly, so a sub-arity value
+/// smuggled in through a decoded checkpoint would fault inside the replay
+/// fold rather than at the boundary that admitted it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "LinkShadow")]
 pub struct Link {
     slots: Vector<Endset>,
+}
+
+/// Deserialization shadow: the one `slots` field, in the shape the derived
+/// `Serialize` writes.
+#[derive(Deserialize)]
+struct LinkShadow {
+    slots: Vector<Endset>,
+}
+
+/// Deserialization mint path: routes through [`Link::new`], so no decoded
+/// checkpoint can smuggle in a link below the L3 arity floor.
+impl TryFrom<LinkShadow> for Link {
+    type Error = &'static str;
+    fn try_from(s: LinkShadow) -> Result<Link, &'static str> {
+        Link::new(s.slots).ok_or("link value has arity < 3 (the L3 capacity floor)")
+    }
 }
 
 impl Link {
@@ -225,7 +262,7 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
             .collect();
         CoverageClass::Addrs(minimal)
     } else {
-        let mut parts: std::collections::BTreeMap<usize, Vec<Span>> = std::collections::BTreeMap::new();
+        let mut parts: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
         for s in e.spans() {
             parts.entry(s.start().len()).or_default().push(s.clone());
         }

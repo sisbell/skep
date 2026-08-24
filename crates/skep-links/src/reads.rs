@@ -35,6 +35,19 @@ pub struct Tuple {
     pub to: Endset,
 }
 
+/// ASN-0086's pattern pair for [`LinkState::observe`] — the F-side and G-side
+/// probes, named so the two same-typed tumbler slices cannot trade places at
+/// a call. Each side is an AND of coverage probes; an empty side is no
+/// constraint, so `Default` is the unconstrained pattern `(⟨⟩, ⟨⟩)` matching
+/// the whole typed slice.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pattern<'a> {
+    /// Tumblers every match's F must COVER.
+    pub from: &'a [Tumbler],
+    /// Tumblers every match's G must COVER.
+    pub to: &'a [Tumbler],
+}
+
 /// BH2 head: `Sink` at a successor-free node, `Indeterminate` (⊥) at a
 /// branch or cycle.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,20 +120,20 @@ impl LinkState {
     // ─────────────── §F — typed reads & the PL surface ────────────────
 
     /// Observe (ASN-0086): exact ⊆-coverage match over the `v` typed slice —
-    /// every pattern tumbler COVERED by the tuple's F (resp. G); an empty
-    /// pattern is no constraint. The pattern domain is ALL of carrier T
+    /// every [`Pattern`] tumbler COVERED by the tuple's F (resp. G); an empty
+    /// pattern side is no constraint. The pattern domain is ALL of carrier T
     /// (ASN-0086): membership rides [`Endset::covers`], total on T, so ghost
     /// (unallocated) addresses and the non-T4 tumblers inside a non-unit
     /// span's coverage are honest probes. `Default → Active` (raw Observe
     /// never filters — ASN-0128).
-    pub fn observe(&self, ty: &Endset, from_pat: &[Tumbler], to_pat: &[Tumbler], v: View) -> Vec<Tuple> {
+    pub fn observe(&self, ty: &Endset, pat: Pattern<'_>, v: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
         let slice = self.type_slice_class(&class, v);
         let mut out = Vec::new();
         for t in slice.iter() {
             let link = self.link_at(t);
-            let f_ok = from_pat.iter().all(|p| link.from_slot().covers(p));
-            let g_ok = to_pat.iter().all(|p| link.to_slot().covers(p));
+            let f_ok = pat.from.iter().all(|p| link.from_slot().covers(p));
+            let g_ok = pat.to.iter().all(|p| link.to_slot().covers(p));
             if f_ok && g_ok {
                 out.push(Tuple {
                     addr: lift(t),

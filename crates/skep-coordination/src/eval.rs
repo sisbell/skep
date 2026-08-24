@@ -7,7 +7,7 @@
 //!
 //! The one audit seam: every audit read — `is_K@audit`, the audit core-atom
 //! rebuilds (`members`/`targets_of`/`M_K`@audit, per V-AUD's own equations
-//! over `observe(K,&[],&[],Audit)`), `L_K`, `L_dom`, and ever-registration —
+//! over `observe(K, ⟨⟩, Audit)`), `L_K`, `L_dom`, and ever-registration —
 //! passes `View::Audit` to `observe` and relies on M7 returning the audit
 //! slice for it; no second audit-honoring method is assumed anywhere.
 //!
@@ -22,7 +22,7 @@ use std::slice;
 
 use im::OrdSet;
 use skep_address::{is_prefix, validate, Address, Nat, Tumbler};
-use skep_links::{CoverageClass, LinkState, Tip, Tuple, View};
+use skep_links::{CoverageClass, LinkState, Pattern, Tip, Tuple, View};
 use skep_namespace::M3State;
 
 use crate::ast::{Atom, Dom, Lit, Prim, Term, TypeKey, TypeRef, VarId};
@@ -131,7 +131,7 @@ impl<'a> EvalCtx<'a> {
     }
 
     /// `members(K, v)` (D1 / V-AUD / UV): active from M7; audit REBUILT from
-    /// `observe(K,&[],&[],Audit)` per V-AUD's own equations (⋃ F.addrs());
+    /// `observe(K, ⟨⟩, Audit)` per V-AUD's own equations (⋃ F.addrs());
     /// default = active minus the other-BH1-filtered elements.
     fn members_at(&self, k: &TypeKey, view: View) -> OrdSet<Tumbler> {
         match view {
@@ -143,7 +143,7 @@ impl<'a> EvalCtx<'a> {
                 .collect(),
             View::Audit => {
                 let mut out = OrdSet::new();
-                for t in self.links.observe(&k.0, &[], &[], View::Audit) {
+                for t in self.links.observe(&k.0, Pattern::default(), View::Audit) {
                     for a in t.from.addrs() {
                         out.insert(a.clone());
                     }
@@ -172,7 +172,7 @@ impl<'a> EvalCtx<'a> {
                 .collect(),
             View::Audit => {
                 let mut out = OrdSet::new();
-                for t in self.links.observe(&k.0, &[], &[], View::Audit) {
+                for t in self.links.observe(&k.0, Pattern::default(), View::Audit) {
                     if t.from.addrs().any(|a| a == x.tumbler()) {
                         for g in t.to.addrs() {
                             out.insert(g.clone());
@@ -197,7 +197,11 @@ impl<'a> EvalCtx<'a> {
         match view {
             View::Audit => !self
                 .links
-                .observe(&k.0, slice::from_ref(x.tumbler()), &[], View::Audit)
+                .observe(
+                    &k.0,
+                    Pattern { from: slice::from_ref(x.tumbler()), to: &[] },
+                    View::Audit,
+                )
                 .is_empty(),
             View::Active | View::Default => self.links.is_k(&k.0, x.tumbler()),
         }
@@ -406,7 +410,7 @@ fn eval_atom(cx: &EvalCtx<'_>, env: &Env, view: View, a: &Atom) -> Value {
             let a = as_addr(eval_term(cx, env, view, e));
             let active_k_tuple = cx
                 .links
-                .observe(&k.0, &[], &[], View::Active)
+                .observe(&k.0, Pattern::default(), View::Active)
                 .iter()
                 .any(|t| t.addr == a);
             let age = if active_k_tuple {
@@ -505,23 +509,23 @@ pub(crate) fn enum_dom(cx: &EvalCtx<'_>, env: &Env, view: View, d: &Dom) -> Vec<
             .collect(),
         Dom::ActiveSlice(tr) => cx
             .links
-            .observe(&concrete(tr).0, &[], &[], View::Active)
+            .observe(&concrete(tr).0, Pattern::default(), View::Active)
             .into_iter()
             .map(Elem::Tup)
             .collect(),
         Dom::AuditSlice(tr) => cx
             .links
-            .observe(&concrete(tr).0, &[], &[], View::Audit)
+            .observe(&concrete(tr).0, Pattern::default(), View::Audit)
             .into_iter()
             .map(Elem::Tup)
             .collect(),
-        // L_dom = ⋃_{K∈catalog} observe(K,&[],&[],Audit) ↦ t.addr — the
+        // L_dom = ⋃_{K∈catalog} observe(K, ⟨⟩, Audit) ↦ t.addr — the
         // typed-relation sublayer only (open MAKELINK links excluded); never
         // M8's type_slice.
         Dom::LinkDom => {
             let mut out: OrdSet<Tumbler> = OrdSet::new();
             for k in cx.catalog.classes() {
-                for t in cx.links.observe(&k.0, &[], &[], View::Audit) {
+                for t in cx.links.observe(&k.0, Pattern::default(), View::Audit) {
                     out.insert(t.addr.tumbler().clone());
                 }
             }

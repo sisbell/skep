@@ -310,6 +310,45 @@ fn carrier_types_survive_the_journal_wire_format() {
 }
 
 #[test]
+fn the_arity_floor_holds_at_the_wire_boundary() {
+    // Deserialization is a mint path: a two-slot sequence in the shape a Link
+    // serializes as is REFUSED, so the positional slot accessors keep their
+    // floor against a decoded checkpoint, not only against the constructors.
+    let two = im::Vector::from(vec![enc(&[ca(1)]), enc(&[ca(2)])]);
+    let bytes = bincode::serialize(&two).expect("the slot sequence serializes");
+    assert!(bincode::deserialize::<Link>(&bytes).is_err());
+
+    // Arity 3 through the same bytes is admitted, so the refusal is the floor
+    // and not the shape.
+    let three = im::Vector::from(vec![enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)])]);
+    let bytes = bincode::serialize(&three).expect("the slot sequence serializes");
+    let back: Link = bincode::deserialize(&bytes).expect("arity 3 deserializes");
+    assert_eq!(back, Link::new(three).expect("arity 3"));
+}
+
+#[test]
+fn endset_is_a_span_collection_and_the_registry_records_compare() {
+    // Default is ⟨⟩, and collecting a span pipeline is the same verbatim
+    // construction from_spans performs.
+    assert_eq!(Endset::default(), Endset::empty());
+    let spans = [span(&ca(1), &ca(3)), span(&ca(5), &ca(6))];
+    let collected: Endset = spans.iter().cloned().collect();
+    assert_eq!(collected, Endset::from_spans(spans.iter().cloned()));
+
+    // The genesis config records compare as the plain data they are.
+    assert_eq!(reserved(), reserved());
+    assert_eq!(decls(), decls());
+    let mut other = reserved();
+    other.retired = ra(99);
+    assert_ne!(other, reserved());
+    let bh4 = decls()
+        .into_iter()
+        .find(|d| d.key == bh4_ty())
+        .expect("the BH4 decl is in the fixture");
+    assert_ne!(bh4.reg, decls()[0].reg);
+}
+
+#[test]
 fn coverage_class_keys_hash_containers() {
     // CoverageClass is the map key M9 indexes targets_keyed with — Hash + Eq
     // must agree with coverage equality.

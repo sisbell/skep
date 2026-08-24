@@ -234,7 +234,7 @@ pub fn kernel() -> Arc<Kernel<World>> {
 /// The ONE engine-built registry (the test assembler's copy of the
 /// genesis-sealed config — same validated inputs as `LinkState::genesis`).
 pub fn registry() -> Arc<TypeRegistry> {
-    Arc::new(TypeRegistry::build(reserved(), decls()).expect("test genesis type config is valid"))
+    Arc::new(TypeRegistry::build(&reserved(), &decls()).expect("test genesis type config is valid"))
 }
 
 fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {

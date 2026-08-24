@@ -12,7 +12,8 @@ use skep_arrangement::{HasM5, M5Rec, Vstream};
 use skep_content::{ContentWrite, HasContent};
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{
-    Endset, HasLinks, LinkRec, LinkWriter, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry, View,
+    Endset, HasLinks, LinkRec, LinkWriter, Pattern, ReservedAddrs, ShippedType, TypeDecl,
+    TypeRegistry, View,
 };
 use skep_namespace::{HasM3, M3Rec};
 
@@ -280,7 +281,11 @@ where
         let pdef = self.catalog.reserved(ShippedType::PredDef);
         let ever = !w
             .links()
-            .observe(pdef, std::slice::from_ref(start.tumbler()), &[], View::Audit)
+            .observe(
+                pdef,
+                Pattern { from: std::slice::from_ref(start.tumbler()), to: &[] },
+                View::Audit,
+            )
             .is_empty();
         if !ever {
             return DefStatus::Unregistered; // transient — never memoized

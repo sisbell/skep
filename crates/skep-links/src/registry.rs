@@ -33,7 +33,7 @@ pub enum Behavior {
 }
 
 /// One type's registration: shape, idempotence flag, behavior set.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registration {
     pub shape: Shape,
     pub idem: bool,
@@ -42,7 +42,7 @@ pub struct Registration {
 
 /// An app-declared type; `key` names the coverage class (address-denoting by
 /// [`TypeRegistry::build`]'s key-denotation clause).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeDecl {
     pub key: Endset,
     pub reg: Registration,
@@ -53,7 +53,7 @@ pub struct TypeDecl {
 /// registrations are the PredLayer registration agreement — the companion
 /// M7↔M9 build-time coordination point, an M9-negotiated constant, never a
 /// local M7 edit (§B).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReservedAddrs {
     pub pred_def: Address,
     pub pred_stable: Address,
@@ -198,7 +198,14 @@ impl TypeRegistry {
     /// computation, keeping `coverage_class` on the safe `Addrs` path) →
     /// `ReservedClassClash` → `KeyCollision` → `BadBehavior` →
     /// `UnservedWalk` → `UnservedSecondFilter`.
-    pub fn build(reserved: ReservedAddrs, decls: Vec<TypeDecl>) -> Result<TypeRegistry, RegistryError> {
+    /// Borrows both inputs: the shipped keys clone through [`enc`] and each
+    /// app registration clones out of the slice, so the caller keeps the
+    /// config it is about to seal — `rebuild_derived` re-validates straight
+    /// off the `Arc`s it already holds, copying no declaration vector.
+    pub fn build(
+        reserved: &ReservedAddrs,
+        decls: &[TypeDecl],
+    ) -> Result<TypeRegistry, RegistryError> {
         // Reserved-isolation: element-level with subspace ∉ {s_C, s_L}, so a
         // content type class (in s_C) or a link address (in s_L) can never
         // coverage-equal a reserved class (Conflicts §1).
@@ -274,7 +281,7 @@ impl TypeRegistry {
             map.insert(class.clone(), reg);
         }
 
-        for d in &decls {
+        for d in decls {
             if d.key.is_empty() {
                 return Err(RegistryError::EmptyKey);
             }
@@ -369,14 +376,14 @@ mod tests {
     #[test]
     fn the_class_a_shipped_type_reports_is_the_class_of_the_endset_it_reports() {
         let registry = TypeRegistry::build(
-            ReservedAddrs {
+            &ReservedAddrs {
                 pred_def: ra(1),
                 pred_stable: ra(2),
                 retired: ra(3),
                 supersedes: ra(4),
                 retraction: ra(5),
             },
-            vec![],
+            &[],
         )
         .expect("the reserved addresses are element-level outside {s_C, s_L}");
         for t in [

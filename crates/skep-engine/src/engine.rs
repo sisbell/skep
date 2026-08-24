@@ -95,8 +95,7 @@ impl Engine {
     /// [`Engine::coordinator`] covers the decl side.)
     pub fn open(cfg: KernelConfig, genesis: GenesisConfig) -> Result<Engine, EngineError> {
         let registry = Arc::new(
-            TypeRegistry::build(genesis.reserved.clone(), genesis.decls.clone())
-                .map_err(EngineError::Registry)?,
+            TypeRegistry::build(&genesis.reserved, &genesis.decls).map_err(EngineError::Registry)?,
         );
         let world = World::genesis(&genesis).map_err(EngineError::Registry)?;
         let kernel = Arc::new(Kernel::open(cfg, world).map_err(EngineError::Open)?);

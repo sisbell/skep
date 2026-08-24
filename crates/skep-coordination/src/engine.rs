@@ -9,7 +9,7 @@ use std::slice;
 use skep_address::{document_of, Address};
 use skep_kernel::{Snapshot, TxnError, WorldState};
 use skep_links::{
-    Caller, EmitError, Endset, HasLinks, LinkRec, NullifyError, Shape, ShippedType, View,
+    Caller, EmitError, Endset, HasLinks, LinkRec, NullifyError, Pattern, Shape, ShippedType, View,
 };
 use skep_namespace::{HasM3, M3Rec};
 use skep_arrangement::{HasM5, M5Rec};
@@ -452,15 +452,21 @@ where
         };
         match &r.action {
             FireAction::Marker { home, ty } => links
-                .observe(&ty.0, slice::from_ref(x.tumbler()), &[], View::Audit)
+                .observe(
+                    &ty.0,
+                    Pattern { from: slice::from_ref(x.tumbler()), to: &[] },
+                    View::Audit,
+                )
                 .iter()
                 .filter(|t| exact(&t.from, x) && homed(&t.addr, home))
                 .count() as u64,
             FireAction::Nullify { home } => links
                 .observe(
                     self.catalog.reserved(ShippedType::Retraction),
-                    slice::from_ref(home.tumbler()),
-                    slice::from_ref(x.tumbler()),
+                    Pattern {
+                        from: slice::from_ref(home.tumbler()),
+                        to: slice::from_ref(x.tumbler()),
+                    },
                     View::Audit,
                 )
                 .iter()

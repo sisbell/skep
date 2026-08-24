@@ -1,17 +1,20 @@
 //! Carrier-type and registry contracts, stated by the documents: the Link
-//! arity floor and 1-based slots, Endset readback (verbatim decomposition,
-//! `enc(X).addrs() = X`, ⟨⟩ distinctness), coverage-class identity (exact
-//! `Addrs` antichain; conservative `Extents` partition; structural derives ≠
-//! coverage identity; the pinned off-contract panic), `TypeRegistry::build`'s
-//! rejection matrix, and the serde/journal round trips.
+//! arity floor and the 1-based slot range, Endset readback (verbatim
+//! decomposition, `enc(X).addrs() = X` over every subset of a family, ⟨⟩
+//! distinctness), coverage-class identity (exact `Addrs` antichain;
+//! conservative `Extents` partition; invariance under span permutation;
+//! structural derives ≠ coverage identity; the pinned off-contract panic),
+//! `TypeRegistry::build`'s rejection matrix and its R-C0 behavior↔shape
+//! table in full, the five shipped registrations §B pins, and the
+//! serde/journal round trips.
 
 mod common;
 
 use common::*;
 use skep_address::Span;
 use skep_links::{
-    coverage_class, enc, CoverageClass, Endset, Link, LinkState, Registration, RegistryError,
-    ReservedAddrs, Shape, TypeDecl, FROM, TO, TYPE,
+    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration,
+    RegistryError, ReservedAddrs, Shape, ShippedType, TypeDecl, TypeRegistry, FROM, TO, TYPE,
 };
 
 fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
@@ -293,6 +296,204 @@ fn registry_build_rejection_matrix() {
         build(reserved(), vec![d]),
         Err(RegistryError::UnservedSecondFilter)
     ));
+}
+
+#[test]
+fn shipped_types_carry_their_pinned_registrations() {
+    // §B's note-pinned registrations, including the PredLayer registration
+    // agreement (PredDef = PredStable = Unary/⊤/{}) — an M9-negotiated
+    // constant, never a local M7 edit. The endsets are read back elsewhere;
+    // these are the registrations they are seeded under.
+    let reg = TypeRegistry::build(&reserved(), &decls()).expect("valid config builds");
+    let unary_top = |behaviors| Registration {
+        shape: Shape::Unary,
+        idem: true,
+        behaviors,
+    };
+    for (ty, want) in [
+        (
+            ShippedType::Retired,
+            unary_top(im::OrdSet::unit(Behavior::ReadFilter)),
+        ),
+        (
+            ShippedType::Supersedes,
+            Registration {
+                shape: Shape::Binary,
+                idem: true,
+                behaviors: im::OrdSet::unit(Behavior::Walk),
+            },
+        ),
+        (
+            ShippedType::Retraction,
+            Registration {
+                shape: Shape::Binary,
+                idem: true,
+                behaviors: im::OrdSet::new(),
+            },
+        ),
+        (ShippedType::PredDef, unary_top(im::OrdSet::new())),
+        (ShippedType::PredStable, unary_top(im::OrdSet::new())),
+    ] {
+        assert_eq!(
+            reg.registration(&coverage_class(reg.reserved(ty))),
+            Some(&want),
+            "{ty:?}"
+        );
+    }
+}
+
+#[test]
+fn registry_enforces_the_behavior_shape_table_exhaustively() {
+    // R-C0 is a four-row compatibility table, and the two v1 serving fences
+    // sit BEHIND it: an app Walk on a non-Binary shape is a BadBehavior, not
+    // an UnservedWalk. Every (behavior, shape, idem) cell, one build each.
+    let mut key = 40u32;
+    for behavior in [
+        Behavior::ReadFilter,
+        Behavior::Walk,
+        Behavior::ReverseLookup,
+        Behavior::Age,
+    ] {
+        for shape in [Shape::Unary, Shape::Binary, Shape::Multi] {
+            for idem in [false, true] {
+                let decl = TypeDecl {
+                    key: enc(&[ra(key)]),
+                    reg: Registration {
+                        shape,
+                        idem,
+                        behaviors: im::OrdSet::unit(behavior),
+                    },
+                };
+                key += 1;
+                let want = match behavior {
+                    Behavior::ReadFilter if shape != Shape::Unary => {
+                        Err(RegistryError::BadBehavior)
+                    }
+                    Behavior::ReadFilter => Err(RegistryError::UnservedSecondFilter),
+                    Behavior::Walk if shape != Shape::Binary => Err(RegistryError::BadBehavior),
+                    Behavior::Walk => Err(RegistryError::UnservedWalk),
+                    Behavior::ReverseLookup if shape != Shape::Binary => {
+                        Err(RegistryError::BadBehavior)
+                    }
+                    Behavior::ReverseLookup => Ok(()),
+                    Behavior::Age if idem => Err(RegistryError::BadBehavior),
+                    Behavior::Age => Ok(()),
+                };
+                assert_eq!(
+                    LinkState::genesis(reserved(), vec![decl]).map(|_| ()),
+                    want,
+                    "{behavior:?} × {shape:?} × idem={idem}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn registry_rejects_two_reserved_types_sharing_one_address() {
+    // The shipped seeding is collision-checked too: without it one reserved
+    // registration would silently overwrite another, and a retired tuple
+    // would come out walkable.
+    let mut clash = reserved();
+    clash.supersedes = clash.retired.clone();
+    assert!(matches!(
+        LinkState::genesis(clash, vec![]),
+        Err(RegistryError::KeyCollision)
+    ));
+}
+
+#[test]
+fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
+    // Key-denotation is checked BEFORE any class computation, which is what
+    // keeps coverage_class off its panicking path at the registry's door: a
+    // hand-built non-level-uniform key is a typed rejection, not an abort.
+    let skew = Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
+    let d = TypeDecl {
+        key: Endset::from_spans([skew]),
+        reg: Registration {
+            shape: Shape::Multi,
+            idem: false,
+            behaviors: im::OrdSet::new(),
+        },
+    };
+    assert!(matches!(
+        LinkState::genesis(reserved(), vec![d]),
+        Err(RegistryError::NonAddressDenotingKey)
+    ));
+}
+
+#[test]
+fn enc_round_trips_every_address_set() {
+    // AD is a law over sets, not three examples: `enc(X).addrs() = X` for
+    // every subset of a deliberately UNSORTED family, ⟨⟩ and singletons
+    // included — so an encoding that reordered or coalesced would show.
+    let family = [ca(3), ca(1), ca(9), ca(2)];
+    for mask in 0u8..16 {
+        let x: Vec<skep_address::Address> = (0..family.len())
+            .filter(|i| mask & (1u8 << i) != 0)
+            .map(|i| family[i].clone())
+            .collect();
+        let got: Vec<_> = enc(&x).addrs().cloned().collect();
+        let want: Vec<_> = x.iter().map(|a| a.tumbler().clone()).collect();
+        assert_eq!(got, want, "enc(X).addrs() = X for subset {mask:#06b}");
+    }
+}
+
+#[test]
+fn coverage_class_is_invariant_under_span_permutation() {
+    // Identity is coverage, never decomposition — a law over the whole
+    // permutation group, and on BOTH sides of the classifier: the exact
+    // `Addrs` antichain and the conservative `Extents` partition alike.
+    const PERMS: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let units = [ca(1), ca(2), ca(3)];
+    let extents = [
+        span(&ca(1), &ca(3)),
+        span(&ca(5), &ca(7)),
+        span(&ca(9), &ca(11)),
+    ];
+    let unit_class = coverage_class(&enc(&units));
+    let extent_class = coverage_class(&Endset::from_spans(extents.iter().cloned()));
+    assert!(
+        matches!(extent_class, CoverageClass::Extents(_)),
+        "the second family exercises the conservative partition"
+    );
+    for p in PERMS {
+        let u: Vec<_> = p.iter().map(|&i| units[i].clone()).collect();
+        assert_eq!(
+            coverage_class(&enc(&u)),
+            unit_class,
+            "Addrs class under permutation {p:?}"
+        );
+        let e = Endset::from_spans(p.iter().map(|&i| extents[i].clone()));
+        assert_eq!(
+            coverage_class(&e),
+            extent_class,
+            "Extents class under permutation {p:?}"
+        );
+    }
+}
+
+#[test]
+fn slot_is_none_outside_the_one_based_arity_range() {
+    // `slot(i)` is `Some` iff `1 ≤ i ≤ arity` — a law over the index, stated
+    // at the store's own shape and at a wider L3 capacity.
+    for arity in [3usize, 4] {
+        let l = Link::new(vec![enc(&[ca(1)]); arity]).expect("capacity admits arity ≥ 3");
+        for i in 0..=6usize {
+            assert_eq!(
+                l.slot(i).is_some(),
+                (1..=arity).contains(&i),
+                "arity {arity}, slot {i}"
+            );
+        }
+    }
 }
 
 #[test]

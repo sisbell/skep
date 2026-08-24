@@ -289,6 +289,11 @@ pub struct M3State {
     /// child-node capability (Conflicts §7): internal minting never yields a
     /// zeros = 0 address; ongoing admission is `register_node`, never
     /// ASN-0040 baptism. Seeded `{[1]}`.
+    ///
+    /// What its members satisfy is `register_node`'s ADMISSION conditions, not
+    /// an invariant this field carries: [`M3State::apply_m3`] states which
+    /// they are, why no door can re-establish them, and what a violation costs
+    /// on each of the three.
     nodes: im::OrdSet<Address>,
 
     /// Principal registry Π: ownership prefix ↦ opaque id. The prefix is the
@@ -530,17 +535,37 @@ impl M3State {
     /// dispatch to this. TOTALITY DOMAIN (M2's total-apply obligation, stated
     /// here at the seam the engine wires): total — deterministic,
     /// side-effect-free, panic-free — over every record whose `Allocate`
-    /// address has a parent, which every mint's does, since a mint extends a
-    /// REGISTERED parent. Neither shape precondition is owed to the journal:
-    /// the [`Address`] payloads carry T4-validity, and [`M3RecShadow`] carries
-    /// the parent, so a record that arrives from disk or a peer is refused at
-    /// decode rather than folded into a panic. What the fold still trusts is
-    /// an IN-PROCESS producer, which builds the variant directly. An
-    /// `Allocate` that regresses or jumps a frontier (ordinal ≠ count + 1) is
-    /// outside the domain and fail-stops on the contiguity `debug_assert` —
-    /// corruption, not a live error path.
+    /// address BOTH extends a parent AND carries its namespace's frontier + 1
+    /// as its ordinal. Every mint's does: a mint extends a REGISTERED parent
+    /// and emits exactly `c_{m+1}`.
     ///
-    /// `RegisterPrincipal` is the one arm with no gate of its own, and that is
+    /// The two conditions differ in kind, and only the first is owed to the
+    /// journal. Extending a parent is a per-record fact, so it is carried at
+    /// the door: the [`Address`] payloads carry T4-validity and
+    /// [`M3RecShadow`] carries the parent, and a record arriving from disk or
+    /// a peer that lacks either is refused at decode rather than folded into a
+    /// panic. Contiguity is NOT decidable from one record — it is a claim
+    /// about the frontier the record is about to advance — so no door can
+    /// carry it, and it stays a stated condition of the caller: an `Allocate`
+    /// that regresses or jumps a frontier is outside the domain and fail-stops
+    /// on the contiguity `debug_assert`, which is corruption rather than a
+    /// live error path. What the fold trusts for both is an IN-PROCESS
+    /// producer, which builds the variant directly.
+    ///
+    /// `RegisterNode`'s admission conditions — node level, the
+    /// [`MAX_NODE_COMPONENTS`] cap, and bootstrap lineage — belong to
+    /// [`crate::Namespace::register_node`] and are NOT invariants of `nodes`.
+    /// The fold neither re-establishes them nor could refuse, and the record
+    /// door deliberately does not carry them either: a depth check
+    /// at the door would refuse a record M3 itself wrote before the cap
+    /// existed, turning a resource charge into an unreplayable journal. What a
+    /// violation costs is bounded and never a pass — a non-node-level entry is
+    /// unreachable, since [`M3State::is_allocated`] consults `nodes` only on
+    /// the `Node` arm; an off-lineage node is inert, since no principal covers
+    /// it and so `delegate` beneath it is refused `NotAncestor` at (i); and an
+    /// over-cap entry is a permanent resource charge and nothing more.
+    ///
+    /// `RegisterPrincipal` likewise has no gate of its own, and that is
     /// deliberate rather than missing. Id-injectivity — one id ↦ at most one
     /// principal — is a PRODUCER invariant, owned by `delegate`'s
     /// `DuplicateId` gate alone; the fold neither re-checks nor re-establishes
@@ -831,7 +856,9 @@ impl M3State {
     /// `c_{ordinal(a)}` of its decomposed `(parent, g)` namespace (ASN-0040
     /// `S(p, d)` canonical form; T4b unique-parse), so `a ∈ {c₁..cₘ}` iff
     /// `1 ≤ ordinal(a) ≤ m` — genuine chain membership with NO false
-    /// positives, not an approximation.
+    /// positives, not an approximation. The `1 ≤` half is carried by the
+    /// [`Address`] type, since T4 forbids a trailing zero and `ordinal` reads
+    /// the last component, so the code spells only the `≤ m` half.
     fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
@@ -839,7 +866,7 @@ impl M3State {
         // An absent frontier is m = 0, which no positive ordinal is ≤, so the
         // missing key needs no branch of its own.
         let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
-        !n.is_zero() && self.frontiers.get(&key).is_some_and(|m| n <= m)
+        self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
     /// `true` iff `a` exists in the name space — minted on a frontier in ANY
@@ -988,9 +1015,16 @@ impl M3State {
     /// ω(`p`) is `p`'s own principal, so every strict-ancestor delegator is
     /// already refused `NotAuthorized` at (ii), and `p`'s own principal is
     /// already refused `NotAncestor` at (i). Reordering (i) or (ii) behind
-    /// (iv) would not fail loudly — it would let delegation seat a principal
-    /// ABOVE an existing one, which is the nesting invariant (iv) exists to
-    /// hold.
+    /// (iv) would not fail loudly, and what it costs is a wrong rejection CODE
+    /// rather than the nesting invariant. A principal strictly under `p` — or
+    /// `p` itself in Π — implies `p` is allocated: every account-tier address
+    /// is minted by [`M3State::mint_account`], which refuses an unregistered
+    /// anchor, and that chain of refusals runs back up to `p`. So (v)
+    /// freshness independently refuses every input this probe's blind spot
+    /// admits, and answers `NotFresh` where [`crate::DelegateError`]'s
+    /// declaration promises `NotTopDown` — which M10's `RejectCode` mapping
+    /// and the conformance allowlist read. On the live path the invariant has
+    /// two gates; only the published precedence has one.
     pub(crate) fn has_principal_strictly_under(&self, p: &Address) -> bool {
         self.principals
             .range(p.clone()..)

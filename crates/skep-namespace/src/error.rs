@@ -188,9 +188,12 @@ impl fmt::Display for DelegateError {
 impl Error for DelegateError {}
 
 /// `register_node` rejection (ASN-0047 NodeBaptism; §7). The variants are
-/// declared in the order the guards run: `NotValid` and `NotNode` are pure
-/// pre-work — `Rejected` with NO transaction opened — and the two registry
-/// reads follow, under the held node key.
+/// declared in the order the guards run: `NotValid`, `NotNode` and `TooDeep`
+/// are pure pre-work — `Rejected` with NO transaction opened — and `NotFresh`
+/// and `NotDescendantOfBootstrap` follow inside the closure under the held
+/// node key, the first because it reads the registry, the second because this
+/// order puts it after the first (it reads no state; see
+/// [`crate::Namespace::register_node`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeError {
     /// The supplied address is not T4-valid.

@@ -189,10 +189,22 @@ where
     /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). Returns the node
     /// address and its commit `Seq`.
     ///
+    /// Admission grants NO ownership: only a `RegisterNode` is staged, so no
+    /// principal is seated at `addr` and ω(`addr`) stays whoever owns the
+    /// covering prefix — π₀ for everything under `[1]` (O14). An operator for
+    /// the new node is a subsequent [`Namespace::delegate`] by that owner, at
+    /// the prefix [`M3State::next_account_prefix`]`(addr)` names.
+    ///
     /// The first three guards are pure pre-work — validity, level and depth
     /// are decidable from the address alone — so a malformed or oversized
-    /// input rejects via `TxnError::Rejected` with NO transaction opened;
-    /// only the two state-reading guards run under the held lock.
+    /// input rejects via `TxnError::Rejected` with NO transaction opened. The
+    /// bootstrap-lineage guard is decidable from the address alone TOO, and
+    /// is inside the closure anyway: the PINNED order puts `NotFresh` first,
+    /// and `NotFresh` is the one guard that must read the registry. So an
+    /// off-lineage address does open a transaction and take
+    /// [`M3State::nodes_lock_key`] before it is refused — the price of the
+    /// precedence contract, and the reason this guard must NOT be hoisted to
+    /// pre-work the way the first three were.
     ///
     /// The depth guard is a resource refusal, not a shape one: this is the
     /// single path by which bytes a caller chose enter a permanent,

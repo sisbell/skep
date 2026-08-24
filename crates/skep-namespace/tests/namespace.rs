@@ -1288,8 +1288,9 @@ fn register_node_validates_and_admits_supplied_addresses() {
         .expect("delegate under the new node");
 
     // Rejections, in the documented guard order. The first three are pure
-    // pre-work (validity, level and depth read the address alone), the last
-    // two read the registry under the held key.
+    // pre-work (validity, level and depth read the address alone); `NotFresh`
+    // reads the registry under the held key, and `NotDescendantOfBootstrap`
+    // reads none, following it because the order is the contract.
     let before = k.current_seq();
     // NotValid — not T4 ([1,0] has a trailing zero).
     assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);

@@ -219,10 +219,10 @@ impl TypeRegistry {
             if addr.level() != Level::Element {
                 return Err(RegistryError::ReservedSubspaceClash);
             }
-            let ss = addr
+            let subspace = addr
                 .subspace()
                 .expect("an Element-level address carries a subspace (T7)");
-            if *ss == content_subspace() || *ss == link_subspace() {
+            if *subspace == content_subspace() || *subspace == link_subspace() {
                 return Err(RegistryError::ReservedSubspaceClash);
             }
         }
@@ -281,35 +281,37 @@ impl TypeRegistry {
             map.insert(class.clone(), reg);
         }
 
-        for d in decls {
-            if d.key.is_empty() {
+        for decl in decls {
+            if decl.key.is_empty() {
                 return Err(RegistryError::EmptyKey);
             }
-            if !is_address_denoting(&d.key) {
+            if !is_address_denoting(&decl.key) {
                 return Err(RegistryError::NonAddressDenotingKey);
             }
-            let class = coverage_class(&d.key);
+            let class = coverage_class(&decl.key);
             if shipped_classes.contains(&class) {
                 return Err(RegistryError::ReservedClassClash);
             }
             if map.contains_key(&class) {
                 return Err(RegistryError::KeyCollision);
             }
-            let b = &d.reg.behaviors;
-            let bad = (b.contains(&Behavior::ReadFilter) && d.reg.shape != Shape::Unary)
-                || (b.contains(&Behavior::Walk) && d.reg.shape != Shape::Binary)
-                || (b.contains(&Behavior::ReverseLookup) && d.reg.shape != Shape::Binary)
-                || (b.contains(&Behavior::Age) && d.reg.idem);
+            let behaviors = &decl.reg.behaviors;
+            let bad = (behaviors.contains(&Behavior::ReadFilter)
+                && decl.reg.shape != Shape::Unary)
+                || (behaviors.contains(&Behavior::Walk) && decl.reg.shape != Shape::Binary)
+                || (behaviors.contains(&Behavior::ReverseLookup)
+                    && decl.reg.shape != Shape::Binary)
+                || (behaviors.contains(&Behavior::Age) && decl.reg.idem);
             if bad {
                 return Err(RegistryError::BadBehavior);
             }
-            if b.contains(&Behavior::Walk) {
+            if behaviors.contains(&Behavior::Walk) {
                 return Err(RegistryError::UnservedWalk);
             }
-            if b.contains(&Behavior::ReadFilter) {
+            if behaviors.contains(&Behavior::ReadFilter) {
                 return Err(RegistryError::UnservedSecondFilter);
             }
-            map.insert(class, d.reg.clone());
+            map.insert(class, decl.reg.clone());
         }
 
         Ok(TypeRegistry {
@@ -335,8 +337,8 @@ impl TypeRegistry {
     /// The genesis-fixed type endset for a shipped class (M9 reads
     /// PredDef/PredStable through `LinkState::reserved_type`, which delegates
     /// here).
-    pub fn reserved(&self, t: ShippedType) -> &Endset {
-        match t {
+    pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
+        match ty {
             ShippedType::Retired => &self.retired,
             ShippedType::Supersedes => &self.supersedes,
             ShippedType::Retraction => &self.retraction,
@@ -348,8 +350,8 @@ impl TypeRegistry {
     /// The coverage class of a shipped type — the recognition key the write
     /// gates, the hint fold and the read surface all compare against, fixed
     /// at build alongside the endset it classifies.
-    pub(crate) fn shipped_class(&self, t: ShippedType) -> &CoverageClass {
-        match t {
+    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
+        match ty {
             ShippedType::Retired => &self.retired_class,
             ShippedType::Supersedes => &self.supersedes_class,
             ShippedType::Retraction => &self.retraction_class,
@@ -386,16 +388,19 @@ mod tests {
             &[],
         )
         .expect("the reserved addresses are element-level outside {s_C, s_L}");
-        for t in [
+        for ty in [
             ShippedType::Retired,
             ShippedType::Supersedes,
             ShippedType::Retraction,
             ShippedType::PredDef,
             ShippedType::PredStable,
         ] {
-            assert_eq!(*registry.shipped_class(t), coverage_class(registry.reserved(t)));
+            assert_eq!(
+                *registry.shipped_class(ty),
+                coverage_class(registry.reserved_type(ty))
+            );
             // ...and each is registered under exactly that class.
-            assert!(registry.registration(registry.shipped_class(t)).is_some());
+            assert!(registry.registration(registry.shipped_class(ty)).is_some());
         }
     }
 }

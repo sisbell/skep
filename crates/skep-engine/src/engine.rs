@@ -102,7 +102,7 @@ impl Engine {
         {
             let snap = kernel.snapshot();
             for ty in SHIPPED {
-                if snap.world().links().reserved_type(ty) != registry.reserved(ty) {
+                if snap.world().links().reserved_type(ty) != registry.reserved_type(ty) {
                     return Err(EngineError::GenesisDrift(ty));
                 }
             }

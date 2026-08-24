@@ -224,8 +224,8 @@ impl LinkState {
     }
 
     /// The coverage class of a shipped reserved type (guard/recognition key).
-    pub(crate) fn shipped_class(&self, t: ShippedType) -> &CoverageClass {
-        self.registry.shipped_class(t)
+    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
+        self.registry.shipped_class(ty)
     }
 }
 
@@ -239,23 +239,26 @@ impl LinkState {
 /// function's own verdicts, fixed once at [`TypeRegistry::build`]. No second
 /// classifier exists anywhere in M7 (class coherence, §Core data model).
 pub(crate) fn fold_hints(
-    h: &Hints,
+    hints: &Hints,
     registry: &TypeRegistry,
     addr: &Tumbler,
     value: &Link,
 ) -> Hints {
-    let mut out = h.clone();
-    let k = coverage_class(value.type_slot());
+    let mut out = hints.clone();
+    let class = coverage_class(value.type_slot());
 
     // type_slices — `L_K` per coverage class (L8).
-    out.type_slices.entry(k.clone()).or_default().insert(addr.clone());
+    out.type_slices
+        .entry(class.clone())
+        .or_default()
+        .insert(addr.clone());
 
     // nullified — the replay-critical [R] fold, pinned off the surface
     // discipline (§1): insert EVERY denoted to-root (zero roots ⇒ no insert,
     // several ⇒ all inserted; a non-unit-depth [R] to-span contributes no
     // root). Every v1 surface path yields exactly one root, but the fold
     // never invents behavior.
-    if k == *registry.shipped_class(ShippedType::Retraction) {
+    if class == *registry.shipped_class(ShippedType::Retraction) {
         for root in value.to_slot().addrs() {
             out.nullified.insert(root.clone());
         }
@@ -266,7 +269,7 @@ pub(crate) fn fold_hints(
     // degenerate exception — a MAKELINK deposit whose resolved class equals a
     // registered idem⊤ app class — folds an in-memory key here (possibly with
     // Extents from/to): harmless, it never reaches a LockKey (Conflicts §1).
-    if registry.registration(&k).is_some_and(|r| r.idem) {
+    if registry.registration(&class).is_some_and(|r| r.idem) {
         out.dedup
             .entry(DedupKey::of(value))
             .or_default()
@@ -275,7 +278,7 @@ pub(crate) fn fold_hints(
 
     // sup_fwd — one SupEdge out of each denoted old, for a [K_sup]-classed
     // tuple; both endpoints via addrs() (§5).
-    if k == *registry.shipped_class(ShippedType::Supersedes) {
+    if class == *registry.shipped_class(ShippedType::Supersedes) {
         for old in value.from_slot().addrs() {
             let edges = out.sup_fwd.entry(old.clone()).or_default();
             for new in value.to_slot().addrs() {

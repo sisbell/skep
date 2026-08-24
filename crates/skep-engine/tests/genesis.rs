@@ -52,7 +52,7 @@ fn both_registry_consumers_agree() {
     let links = snap.world().links();
 
     for ty in SHIPPED {
-        let ours = engine.registry().reserved(ty);
+        let ours = engine.registry().reserved_type(ty);
         let theirs = links.reserved_type(ty);
         assert_eq!(ours, theirs, "engine registry and LinkState registry disagree on {ty:?}");
         assert!(
@@ -75,7 +75,7 @@ fn coordinator_projects_the_one_registry() {
     for ty in SHIPPED {
         assert_eq!(
             coord.reserved_type(ty),
-            engine.registry().reserved(ty),
+            engine.registry().reserved_type(ty),
             "coordinator catalog and engine registry disagree on {ty:?}"
         );
     }

@@ -36,11 +36,11 @@ impl DedupKey {
     /// (I1a/I4); different class ⇒ no contention. Partitioned BY CLASS, never
     /// by home (§3).
     pub(crate) fn lock_key(&self) -> LockKey {
-        let mut bytes = Vec::new();
-        push_class(&mut bytes, &self.ty);
-        push_class(&mut bytes, &self.from);
-        push_class(&mut bytes, &self.to);
-        LockKey::new(Space::CoverageClass, &bytes)
+        let mut buf = Vec::new();
+        push_class(&mut buf, &self.ty);
+        push_class(&mut buf, &self.from);
+        push_class(&mut buf, &self.to);
+        LockKey::new(Space::CoverageClass, &buf)
     }
 }
 
@@ -50,10 +50,10 @@ fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
             buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
             for t in set.iter() {
                 buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
-                for c in t {
-                    let comp = c.to_bytes_be();
-                    buf.extend_from_slice(&(comp.len() as u64).to_be_bytes());
-                    buf.extend_from_slice(&comp);
+                for component in t {
+                    let bytes = component.to_bytes_be();
+                    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+                    buf.extend_from_slice(&bytes);
                 }
             }
         }

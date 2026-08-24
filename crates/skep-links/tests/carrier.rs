@@ -179,7 +179,7 @@ fn registry_build_accepts_the_shipped_config_and_seeds_five_classes() {
 }
 
 #[test]
-fn registry_build_rejection_matrix() {
+fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
     let ok_reg = Registration {
         shape: Shape::Multi,
         idem: false,
@@ -335,7 +335,7 @@ fn shipped_types_carry_their_pinned_registrations() {
         (ShippedType::PredStable, unary_top(im::OrdSet::new())),
     ] {
         assert_eq!(
-            reg.registration(&coverage_class(reg.reserved(ty))),
+            reg.registration(&coverage_class(reg.reserved_type(ty))),
             Some(&want),
             "{ty:?}"
         );
@@ -528,7 +528,7 @@ fn the_arity_floor_holds_at_the_wire_boundary() {
 }
 
 #[test]
-fn endset_is_a_span_collection_and_the_registry_records_compare() {
+fn endset_collects_from_a_span_pipeline_and_the_genesis_records_compare_by_value() {
     // Default is ⟨⟩, and collecting a span pipeline is the same verbatim
     // construction from_spans performs.
     assert_eq!(Endset::default(), Endset::empty());
@@ -550,7 +550,7 @@ fn endset_is_a_span_collection_and_the_registry_records_compare() {
 }
 
 #[test]
-fn coverage_class_keys_hash_containers() {
+fn coverage_class_hashes_by_coverage_not_decomposition() {
     // CoverageClass is the map key M9 indexes targets_keyed with — Hash + Eq
     // must agree with coverage equality.
     let mut m: im::HashMap<CoverageClass, u32> = im::HashMap::new();

@@ -63,7 +63,7 @@ const SHIPPED: [ShippedType; 5] = [
 impl TypeCatalog {
     /// VALIDATE-ONCE-OR-FAIL projection (mirroring genesis): each
     /// `enc(&[reserved.X])` must be coverage-equal to the injected registry's
-    /// own `reserved(X)` (else `ReservedMismatch(X)`), and each `decls` key
+    /// own `reserved_type(X)` (else `ReservedMismatch(X)`), and each `decls` key
     /// must hold a registration in that registry (else
     /// `DeclNotInRegistry(key)`) — residual drift of the twice-passed
     /// `(reserved, decls)` is caught at assembly, never as a spurious
@@ -92,7 +92,7 @@ impl TypeCatalog {
             // the drift check (byte-identical in fact, both enc of one addr,
             // but only coverage-equality is required: M7 identifies a type
             // by coverage, I0).
-            if class != coverage_class(registry.reserved(t)) {
+            if class != coverage_class(registry.reserved_type(t)) {
                 return Err(CatalogError::ReservedMismatch(t));
             }
             let Some(reg) = registry.registration(&class) else {

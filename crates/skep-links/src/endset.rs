@@ -111,9 +111,9 @@ pub(crate) fn single_denoted(e: &Endset) -> Option<&Tumbler> {
     if !is_address_denoting(e) {
         return None;
     }
-    let mut it = e.addrs();
-    let first = it.next()?;
-    if it.any(|t| t != first) {
+    let mut denoted = e.addrs();
+    let first = denoted.next()?;
+    if denoted.any(|t| t != first) {
         return None;
     }
     Some(first)
@@ -182,11 +182,11 @@ impl Link {
         self.slots.len()
     }
 
-    /// 1-based slot lookup; `None` iff `i < 1 ∨ i > arity` (FOLLOWLINK's
-    /// post-lookup arity bound).
-    pub fn slot(&self, i: usize) -> Option<&Endset> {
-        if (1..=self.slots.len()).contains(&i) {
-            self.slots.get(i - 1)
+    /// 1-based slot lookup; `None` iff `slot < 1 ∨ slot > arity`
+    /// (FOLLOWLINK's post-lookup arity bound).
+    pub fn slot(&self, slot: usize) -> Option<&Endset> {
+        if (1..=self.slots.len()).contains(&slot) {
+            self.slots.get(slot - 1)
         } else {
             None
         }
@@ -278,20 +278,23 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
         }
         CoverageClass::Addrs(minimal)
     } else {
-        let mut parts: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
+        let mut by_start_len: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
         for s in e.spans() {
-            parts.entry(s.start().len()).or_default().push(s.clone());
+            by_start_len
+                .entry(s.start().len())
+                .or_default()
+                .push(s.clone());
         }
-        let mut map: OrdMap<usize, CanonicalForm> = OrdMap::new();
-        for (len, spans) in parts {
+        let mut extents: OrdMap<usize, CanonicalForm> = OrdMap::new();
+        for (start_len, spans) in by_start_len {
             let set: SpanSet = spans.into_iter().collect();
-            let key = canonical_key(&set).expect(
+            let canonical = canonical_key(&set).expect(
                 "coverage_class precondition violated: every span must be level-uniform \
                  (#start == #width); an off-contract hand-built span is a caller error, \
                  never skipped and never coarsened (§Core data model)",
             );
-            map.insert(len, key);
+            extents.insert(start_len, canonical);
         }
-        CoverageClass::Extents(map)
+        CoverageClass::Extents(extents)
     }
 }

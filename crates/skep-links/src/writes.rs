@@ -284,14 +284,14 @@ enum HomeFault {
 /// verdicts. The gate that actually admits a deposit is [`emit_core`], which
 /// asks the same two questions of every value that reaches the mint.
 fn home_gate(m3: &M3State, caller: Caller, homes: &[&Address]) -> Result<(), HomeFault> {
-    for &h in homes {
-        if !m3.is_registered_document(h) {
+    for &home in homes {
+        if !m3.is_registered_document(home) {
             return Err(HomeFault::NotRegistered);
         }
     }
-    for &h in homes {
-        if !caller.is_owner(m3, h) {
-            return Err(HomeFault::NotOwner(h.clone()));
+    for &home in homes {
+        if !caller.is_owner(m3, home) {
+            return Err(HomeFault::NotOwner(home.clone()));
         }
     }
     Ok(())
@@ -387,11 +387,11 @@ where
             // Total: the type slot is level-uniform by upstream validation
             // (emit's ty is address-denoting; the claim's and the retraction
             // emitter's types are the genesis-fixed reserved endsets).
-            let k = coverage_class(value.type_slot());
-            let Some(reg) = links.registry.registration(&k) else {
+            let class = coverage_class(value.type_slot());
+            let Some(reg) = links.registry.registration(&class) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
             };
-            if gate == Gate::Managed && k == *links.shipped_class(ShippedType::Retraction) {
+            if gate == Gate::Managed && class == *links.shipped_class(ShippedType::Retraction) {
                 return Err(EmitCoreError::RetractionClass); // K ≁ R
             }
             if !sh_conf(reg.shape, &value) {
@@ -445,7 +445,11 @@ fn slot_endset(m5: &M5State, slot: &SlotArg) -> Endset {
     match slot {
         SlotArg::Resolve(specs) => specs
             .iter()
-            .flat_map(|sp| m5.resolve(&sp.source, &sp.span).into_iter().map(|r| r.iextent()))
+            .flat_map(|spec| {
+                m5.resolve(&spec.source, &spec.span)
+                    .into_iter()
+                    .map(|run| run.iextent())
+            })
             .collect(),
         SlotArg::Addrs(addrs) => enc(addrs),
     }
@@ -503,7 +507,10 @@ where
                     // spec/type verdict.
                     home_gate(base.m3(), caller, &[home])?;
                     let specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
-                    if !specs.into_iter().all(|s| is_wf_content_spec(base.m3(), s)) {
+                    if !specs
+                        .into_iter()
+                        .all(|spec| is_wf_content_spec(base.m3(), spec))
+                    {
                         return Err(MakeLinkError::IllFormedSpec);
                     }
                     (
@@ -566,11 +573,11 @@ where
         if !is_address_denoting(ty) {
             return Err(TxnError::Rejected(EmitError::NonAddressDenotingType));
         }
-        let k = coverage_class(ty);
-        if k == *self.registry.shipped_class(ShippedType::Supersedes) {
+        let class = coverage_class(ty);
+        if class == *self.registry.shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
-        let idem = self.registry.registration(&k).is_some_and(|r| r.idem);
+        let idem = self.registry.registration(&class).is_some_and(|r| r.idem);
         let value = Link::triple(enc([from]), enc(to), ty.clone());
         let mut keys: Vec<LockKey> = Vec::with_capacity(2);
         if idem {
@@ -607,8 +614,8 @@ where
         home: &Address,
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
-        let rty = self.registry.reserved(ShippedType::Retraction).clone();
-        let value = Link::triple(enc([home]), enc([target]), rty);
+        let retraction = self.registry.reserved_type(ShippedType::Retraction).clone();
+        let value = Link::triple(enc([home]), enc([target]), retraction);
         let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
             {
@@ -642,7 +649,7 @@ where
         old: &Address,
         new: &Address,
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
-        let sup = self.registry.reserved(ShippedType::Supersedes).clone();
+        let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
         let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
         self.kernel.transact(&keys, |stg| {
@@ -692,11 +699,11 @@ where
         d_a: &Address,
     ) -> Result<(Address, Address, Seq), TxnError<EditLinkError>> {
         let mut keys = vec![M3State::link_lock_key(d_s)];
-        let k_a = M3State::link_lock_key(d_a);
-        if k_a != keys[0] {
-            keys.push(k_a);
+        let d_a_key = M3State::link_lock_key(d_a);
+        if d_a_key != keys[0] {
+            keys.push(d_a_key);
         }
-        let sup = self.registry.reserved(ShippedType::Supersedes).clone();
+        let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
         let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
         let r_class = self.registry.shipped_class(ShippedType::Retraction);
         let ((succ, claim), seq) = self.kernel.transact(&keys, |stg| {
@@ -728,11 +735,11 @@ where
                 }
                 // DC guard — total: every slot was just checked
                 // level-uniform.
-                let sc = coverage_class(successor.type_slot());
-                if sc == *r_class {
+                let successor_class = coverage_class(successor.type_slot());
+                if successor_class == *r_class {
                     return Err(EditLinkError::DcViolation);
                 }
-                if sc == *sup_class {
+                if successor_class == *sup_class {
                     let schema_ok = match (
                         single_denoted(successor.from_slot()),
                         single_denoted(successor.to_slot()),

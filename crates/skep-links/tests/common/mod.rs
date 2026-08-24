@@ -203,7 +203,7 @@ pub fn reserved() -> ReservedAddrs {
 }
 
 /// App type keys (ordinals ≥ 10 in subspace 9).
-pub fn rel_ty() -> Endset {
+pub fn idem_top_ty() -> Endset {
     enc(&[ra(10)]) // Binary, idem⊤
 }
 pub fn multi_ty() -> Endset {
@@ -219,7 +219,7 @@ pub fn bh3_ty() -> Endset {
 pub fn decls() -> Vec<TypeDecl> {
     vec![
         TypeDecl {
-            key: rel_ty(),
+            key: idem_top_ty(),
             reg: Registration {
                 shape: Shape::Binary,
                 idem: true,

@@ -11,7 +11,7 @@ use skep_arrangement::Vstream;
 use skep_coordination::{CatalogError, Coordinator};
 use skep_febe::Stores;
 use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
-use skep_links::{HasLinks, LinkStore, RegistryError, ShippedType, TypeRegistry};
+use skep_links::{HasLinks, LinkWriter, RegistryError, ShippedType, TypeRegistry};
 use skep_namespace::Namespace;
 
 use crate::genesis::GenesisConfig;
@@ -140,14 +140,14 @@ impl Engine {
 
     /// M7's driver (borrows the kernel; clones the slice's rebuilt registry
     /// `Arc` internally, per M7's as-built constructor).
-    pub fn linkstore(&self) -> LinkStore<'_, World> {
-        LinkStore::new(&self.kernel)
+    pub fn linkstore(&self) -> LinkWriter<'_, World> {
+        LinkWriter::new(&self.kernel)
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
     /// shared kernel, the engine-built registry, the SAME `(reserved,
     /// decls)` pair, and the two op-handle factories whose bodies discharge
-    /// M9's standing assembly obligation (constructing `Vstream`/`LinkStore`
+    /// M9's standing assembly obligation (constructing `Vstream`/`LinkWriter`
     /// from `&Kernel<W>`). M9's catalog projection is validate-once-or-fail:
     /// drift between the twice-passed pair and the registry fails HERE, at
     /// assembly, never as a spurious type-check miss later.
@@ -185,8 +185,8 @@ fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
-fn mk_link_store(k: &Kernel<World>) -> LinkStore<'_, World> {
-    LinkStore::new(k)
+fn mk_link_store(k: &Kernel<World>) -> LinkWriter<'_, World> {
+    LinkWriter::new(k)
 }
 
 /// The concrete `Stores<World>` impl (M10 §Seams: "at startup, the `Stores`
@@ -211,7 +211,7 @@ impl Stores<World> for EngineStores {
         Vstream::new(&self.kernel)
     }
 
-    fn linkstore(&self) -> LinkStore<'_, World> {
-        LinkStore::new(&self.kernel)
+    fn linkstore(&self) -> LinkWriter<'_, World> {
+        LinkWriter::new(&self.kernel)
     }
 }

@@ -32,7 +32,7 @@ skep-arrangement = { path = "../skep-arrangement" }
 # M6 — the seven content/provenance queries over M10's snapshot; the sole
 # source of variant-carried FaultSite localization (§5).
 skep-retrieval = { path = "../skep-retrieval" }
-# M7 — the five link writes via the LinkStore driver; readlink/followlink off a
+# M7 — the five link writes via the LinkWriter driver; readlink/followlink off a
 # snapshot; Endset/enc/Link/View for argument construction.
 skep-links = { path = "../skep-links" }
 # M8 — the pure *_on twins for every discovery/window/projection/orphan/lineage

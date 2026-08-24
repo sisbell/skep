@@ -12,7 +12,7 @@ use skep_arrangement::{HasM5, M5Rec, Vstream};
 use skep_content::{ContentWrite, HasContent};
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{
-    Endset, HasLinks, LinkRec, LinkStore, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry, View,
+    Endset, HasLinks, LinkRec, LinkWriter, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry, View,
 };
 use skep_namespace::{HasM3, M3Rec};
 
@@ -89,7 +89,7 @@ pub struct Coordinator<W: WorldState> {
     pub(crate) next_rule: u64,
     pub(crate) cursor: usize,
     pub(crate) mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-    pub(crate) mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkStore<'k, W> + Send + Sync>,
+    pub(crate) mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkWriter<'k, W> + Send + Sync>,
 }
 
 impl<W> Coordinator<W>
@@ -103,7 +103,7 @@ where
     /// `TypeCatalog` from and then need not retain; the `(reserved, decls)`
     /// pair naming the app type-key endsets and the five `ShippedType`
     /// endsets for that projection; and two op-handle factories minting a
-    /// borrow-scoped `Vstream`/`LinkStore` off `&Kernel<W>` per call (the
+    /// borrow-scoped `Vstream`/`LinkWriter` off `&Kernel<W>` per call (the
     /// engine — the one crate that can name those constructors — supplies
     /// them; HRTB because each handle borrows the kernel).
     ///
@@ -120,7 +120,7 @@ where
         reserved: ReservedAddrs,
         decls: Vec<TypeDecl>,
         mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-        mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkStore<'k, W> + Send + Sync>,
+        mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkWriter<'k, W> + Send + Sync>,
     ) -> Result<Coordinator<W>, CatalogError> {
         let catalog = TypeCatalog::project(&registry, &reserved, &decls)?;
         Ok(Coordinator {

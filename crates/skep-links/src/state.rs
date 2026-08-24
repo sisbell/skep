@@ -22,11 +22,23 @@ use crate::registry::{RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeR
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum LinkRec {
-    Emit { addr: Tumbler, value: Link },
+    Deposit { addr: Tumbler, value: Link },
 }
 
-/// BH2 forward edges `old → {(new, claim)}` — `[K_sup]` only in v1 (§5).
-type SupEdges = OrdSet<(Tumbler, Tumbler)>;
+/// One supersession edge out of `old`: the claimed successor and the
+/// `[K_sup]` claim asserting it (ASN-0125's `new(e)` and `addr(e)`). It is
+/// the CLAIM's activity that makes the edge operative (Df-SUCC), never the
+/// endpoint's, which is why the claim address is carried rather than
+/// discarded once the edge is built.
+///
+/// Two `Tumbler`s of different kinds, so they are named: `Ord` derives in
+/// field order, making the set's iteration — and therefore `succs`' output
+/// order — the claimed-successor order the walk reads.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SupEdge {
+    pub(crate) new: Tumbler,
+    pub(crate) claim: Tumbler,
+}
 
 /// The recomputable hints — pure functions of `links` (+ `registry`),
 /// maintained incrementally by [`LinkState::apply_link`] and re-seeded by
@@ -36,29 +48,30 @@ type SupEdges = OrdSet<(Tumbler, Tumbler)>;
 pub(crate) struct Hints {
     /// Typed slices `L_K` (Observe / type-match, L8) — audit; active is
     /// derived at query time as `audit ∖ nullified`.
-    pub(crate) type_class: HashMap<CoverageClass, OrdSet<Tumbler>>,
+    pub(crate) type_slices: HashMap<CoverageClass, OrdSet<Tumbler>>,
     /// Resident retraction roots — the tombstone set (active = audit ∖ this).
     /// Monotone (R3/R6a).
     pub(crate) nullified: OrdSet<Tumbler>,
     /// I0-class → addrs (audit; active-filtered at the check) — registered
     /// idem⊤ classes only (I1).
     pub(crate) dedup: HashMap<DedupKey, OrdSet<Tumbler>>,
-    /// BH2 `old → {(new, claim)}`; `[K_sup]` only in v1 (§5).
-    pub(crate) sup_fwd: HashMap<Tumbler, SupEdges>,
-    /// BH4: home document → # homed links (the frontier index, equal to M3's
-    /// frontier by construction — Conflicts §7).
-    pub(crate) home_count: HashMap<Tumbler, u64>,
+    /// BH2 adjacency: `old` → its [`SupEdge`] set; `[K_sup]` only in v1 (§5).
+    pub(crate) sup_fwd: HashMap<Tumbler, OrdSet<SupEdge>>,
+    /// `f_d^Σ` — home document → its chain-frontier index, equal to M3's
+    /// frontier by construction (Conflicts §7). The next emission lands at
+    /// `chain_d(f_d^Σ)`, and BH4 age is measured back from it.
+    pub(crate) home_frontier: HashMap<Tumbler, u64>,
 }
 
 /// M7's slice of the engine's `WorldState`, reached via
 /// [`crate::HasLinks::links`].
 ///
 /// The AUTHORITATIVE state is one map plus the genesis type config: `links`
-/// is append-only with immutable values (a `LinkRec::Emit` only ever inserts
-/// at a fresh key), which makes Permanence (L12/R2), append-only audit (R3),
-/// retraction stability (R6a) and lock-free MVCC reads free. Identity is the
-/// key, never the value: the store is never content-addressed on the endset
-/// (NonInjectivity L11b).
+/// is append-only with immutable values (a `LinkRec::Deposit` only ever
+/// inserts at a fresh key), which makes Permanence (L12/R2), append-only
+/// audit (R3), retraction stability (R6a) and lock-free MVCC reads free.
+/// Identity is the key, never the value: the store is never content-addressed
+/// on the endset (NonInjectivity L11b).
 ///
 /// `registry` and `hints` are `#[serde(skip)]` RECOMPUTABLE state: on
 /// deserialize serde seeds them with their `Default`s, placeholders
@@ -114,7 +127,7 @@ impl LinkState {
     /// corruption, not a live error path (the M3 fold's precedent).
     pub fn apply_link(&self, r: &LinkRec) -> LinkState {
         match r {
-            LinkRec::Emit { addr, value } => {
+            LinkRec::Deposit { addr, value } => {
                 let mut next = self.clone();
                 next.links.insert(addr.clone(), value.clone());
                 next.hints = fold_hints(&self.hints, &self.registry, addr, value);
@@ -162,7 +175,7 @@ impl LinkState {
         self.hints.nullified.contains(t)
     }
 
-    /// The link an INDEX KEY names. Every key in `type_class`/`dedup`/
+    /// The link an INDEX KEY names. Every key in `type_slices`/`dedup`/
     /// `sup_fwd`, and every key `stab` returns, is a key of `links` —
     /// [`fold_hints`] only ever indexes the address it is inserting — so
     /// absence is corruption rather than a miss, and fail-stops here instead
@@ -175,15 +188,15 @@ impl LinkState {
     }
 
     /// The address `mint_link(home)` would mint next —
-    /// `home · 0 · s_L · (1 + home_count[home])`, assembled off M7's own
-    /// homed count and equal to M3's frontier by construction
-    /// (FrontierUnification; Conflicts §7 — no upward M3 read). An absent
-    /// `home_count` gives ordinal 1, the first emission itself. `home` is a
-    /// registered Document, which is what makes the assembly total (§4).
+    /// `home · 0 · s_L · (1 + f_d^Σ)`, assembled off M7's own frontier and
+    /// equal to M3's by construction (FrontierUnification; Conflicts §7 — no
+    /// upward M3 read). An absent frontier gives ordinal 1, the first
+    /// emission itself. `home` is a registered Document, which is what makes
+    /// the assembly total (§4).
     pub(crate) fn next_link_address(&self, home: &Address) -> Address {
         let ordinal = 1 + self
             .hints
-            .home_count
+            .home_frontier
             .get(home.tumbler())
             .copied()
             .unwrap_or(0);
@@ -227,10 +240,10 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
     let mut out = h.clone();
     let k = coverage_class(value.type_slot());
 
-    // type_class — L_K slices (L8).
-    let mut slice = out.type_class.get(&k).cloned().unwrap_or_default();
+    // type_slices — `L_K` per coverage class (L8).
+    let mut slice = out.type_slices.get(&k).cloned().unwrap_or_default();
     slice.insert(addr.clone());
-    out.type_class.insert(k.clone(), slice);
+    out.type_slices.insert(k.clone(), slice);
 
     // nullified — the replay-critical [R] fold, pinned off the surface
     // discipline (§1): insert EVERY denoted to-root (zero roots ⇒ no insert,
@@ -255,26 +268,29 @@ pub(crate) fn fold_hints(h: &Hints, registry: &TypeRegistry, addr: &Tumbler, val
         out.dedup.insert(key, set);
     }
 
-    // sup_fwd — old → (new, claim) for a [K_sup]-classed tuple, both ends via
-    // addrs() (§5).
+    // sup_fwd — one SupEdge out of each denoted old, for a [K_sup]-classed
+    // tuple; both endpoints via addrs() (§5).
     if k == *registry.shipped_class(ShippedType::Supersedes) {
         for old in value.from_slot().addrs() {
             let mut edges = out.sup_fwd.get(old).cloned().unwrap_or_default();
             for new in value.to_slot().addrs() {
-                edges.insert((new.clone(), addr.clone()));
+                edges.insert(SupEdge {
+                    new: new.clone(),
+                    claim: addr.clone(),
+                });
             }
             out.sup_fwd.insert(old.clone(), edges);
         }
     }
 
-    // home_count — keyed by origin(addr) (Conflicts §7). The expects mark the
+    // home_frontier — keyed by home(addr) (Conflicts §7). The expects mark the
     // totality domain: every staged addr is M3-minted, T4-valid, element-level.
-    let origin = document_of(
+    let home = document_of(
         &validate(addr.clone()).expect("LinkRec addrs are M3-minted T4-valid link addresses"),
     )
-    .expect("link addresses are element-level, so their origin Document exists");
-    let n = out.home_count.get(origin.tumbler()).copied().unwrap_or(0);
-    out.home_count.insert(origin.tumbler().clone(), n + 1);
+    .expect("link addresses are element-level, so their home Document exists");
+    let n = out.home_frontier.get(home.tumbler()).copied().unwrap_or(0);
+    out.home_frontier.insert(home.tumbler().clone(), n + 1);
 
     out
 }

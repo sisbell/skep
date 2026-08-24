@@ -101,7 +101,7 @@ use skep_arrangement::Vstream;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
 use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId, Stores};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
-use skep_links::LinkStore;
+use skep_links::LinkWriter;
 use skep_namespace::{Namespace, PrincipalId};
 
 use crate::codec::{op_name, tumbler_string, JsonCodec};
@@ -959,8 +959,8 @@ impl Stores<World> for HistStores {
         Vstream::new(&self.kernel)
     }
 
-    fn linkstore(&self) -> LinkStore<'_, World> {
-        LinkStore::new(&self.kernel)
+    fn linkstore(&self) -> LinkWriter<'_, World> {
+        LinkWriter::new(&self.kernel)
     }
 }
 

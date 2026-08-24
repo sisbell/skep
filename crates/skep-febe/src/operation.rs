@@ -702,7 +702,7 @@ mod tests {
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
-    use skep_links::{HasLinks, LinkRec, LinkState, LinkStore, ReservedAddrs};
+    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs};
     use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
     use super::*;
@@ -834,8 +834,8 @@ mod tests {
         fn vstream(&self) -> Vstream<'_, World> {
             Vstream::new(&self.kernel)
         }
-        fn linkstore(&self) -> LinkStore<'_, World> {
-            LinkStore::new(&self.kernel)
+        fn linkstore(&self) -> LinkWriter<'_, World> {
+            LinkWriter::new(&self.kernel)
         }
     }
 

@@ -71,7 +71,7 @@ pub use skep_links::SlotArg;
 
 use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, WorldState};
-use skep_links::LinkStore;
+use skep_links::LinkWriter;
 use skep_namespace::Namespace;
 
 /// The injected acquisition path for the three transact-driving store-driver
@@ -83,8 +83,8 @@ use skep_namespace::Namespace;
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
 /// crates already publish them — `Namespace::new(&Kernel<W>)`,
-/// `Vstream::new(&Kernel<W>)`, and `LinkStore::new(&Kernel<W>)` (the as-built
-/// `LinkStore::new` takes no registry argument: it clones the genesis-sealed
+/// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>)` (the as-built
+/// `LinkWriter::new` takes no registry argument: it clones the genesis-sealed
 /// `Arc<TypeRegistry>` off a snapshot itself, a benign simplification of the
 /// amendment's stated shape). The binary — which holds the recovered kernel
 /// from M2 recovery — builds a `Stores` impl over them; M10 takes it INJECTED
@@ -99,5 +99,5 @@ pub trait Stores<W: WorldState>: Send + Sync {
     /// M5 driver — borrows the held kernel for the call.
     fn vstream(&self) -> Vstream<'_, W>;
     /// M7 driver — borrows the kernel; holds the genesis-immutable registry.
-    fn linkstore(&self) -> LinkStore<'_, W>;
+    fn linkstore(&self) -> LinkWriter<'_, W>;
 }

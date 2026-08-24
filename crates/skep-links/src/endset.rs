@@ -12,7 +12,7 @@ use skep_address::{
 /// M7-OWNED endset — a READABLE finite span sequence, the as-created
 /// decomposition held VERBATIM (observable via raw read-back — ML2/RL1). NOT
 /// M1's `SpanSet`, which is read-opaque to M7. Coverage is a query-time
-/// projection ([`Endset::denotes`]); the sequence is read through
+/// projection ([`Endset::covers`]); the sequence is read through
 /// [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet` only at an
 /// M1-call boundary ([`Endset::to_spanset`], the lone use).
 ///
@@ -55,15 +55,18 @@ impl Endset {
         self.0.is_empty()
     }
 
-    /// `t ∈ coverage`: `∃ s ∈ spans : s.contains(t)` — total over all of
+    /// `t ∈ coverage(e)`: `∃ s ∈ spans : s.contains(t)` — total over all of
     /// carrier T (the membership projection ASN-0086's pattern domain rides).
-    pub fn denotes(&self, t: &Tumbler) -> bool {
+    /// COVERAGE, the coarser of the module's two matching regimes: every
+    /// tumbler a span reaches, not just the addresses it denotes. The finer
+    /// one — AD denotation, `x ∈ addrs(e)` — is [`Endset::addrs`].
+    pub fn covers(&self, t: &Tumbler) -> bool {
         self.0.iter().any(|s| s.contains(t))
     }
 
-    /// AD readback: the start of each unit-depth span (a span `s` with
-    /// `s == subtree_of(s.start())`); non-unit spans contribute nothing.
-    /// `enc(X).addrs() = X`.
+    /// AD readback — DENOTATION, the finer regime: the start of each
+    /// unit-depth span (a span `s` with `s == subtree_of(s.start())`);
+    /// non-unit spans contribute nothing. `enc(X).addrs() = X`.
     pub fn addrs(&self) -> impl Iterator<Item = &Tumbler> {
         self.0.iter().filter(|s| is_unit_depth(s)).map(|s| s.start())
     }

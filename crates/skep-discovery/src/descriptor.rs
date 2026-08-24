@@ -54,7 +54,7 @@ pub(crate) fn home_ok(q: &FourSet, a: &Tumbler) -> bool {
             let aa = validate(a.clone()).expect("every §G key is T4-valid by M3's mint");
             let doc = document_of(&aa)
                 .expect("a link address has zeros = 3, so its origin Document exists");
-            h.denotes(doc.tumbler())
+            h.covers(doc.tumbler())
         }
     }
 }

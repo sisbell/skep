@@ -25,7 +25,7 @@
 //!   (five shipped classes plus the app decls from the one genesis config),
 //!   the supersession forward edges (the BH2 walk), and M9's definition
 //!   registry projected as `pdef`/`pd_stable` membership. M7's `dedup` and
-//!   `home_count` hints have no public read surface and are exercised by the
+//!   `home_frontier` hints have no public read surface and are exercised by the
 //!   stores' own write-path tests instead — stated here so their absence is
 //!   a scope decision, not an oversight. M3/M4 hold no hints; M5's rebuild
 //!   is the identity in v1.

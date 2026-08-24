@@ -15,7 +15,7 @@ use skep_arrangement::HasM5;
 use skep_discovery::{
     count_v_on, window_v_on, FourSet, LinkQuery, QueryError, SlotSpec, SupClaim, FROM, TO, TYPE,
 };
-use skep_links::{enc, Endset, LinkStore, SlotArg, View};
+use skep_links::{enc, Endset, LinkWriter, SlotArg, View};
 
 fn all_any() -> FourSet {
     FourSet {
@@ -106,7 +106,7 @@ fn image_resolves_dedups_and_clips() {
 fn findlinks_v_is_disjunctive_and_active_filtered() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
 
     // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
@@ -157,7 +157,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     for to in [ca(101), ca(102), ca(103)] {
         store
@@ -202,7 +202,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
 fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
@@ -252,7 +252,7 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
 fn ftt_wildcard_unit_empty_zero_and_conjunction() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
@@ -307,7 +307,7 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
 fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     store
         .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
@@ -357,7 +357,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
 fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
@@ -388,7 +388,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
 fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
@@ -483,7 +483,7 @@ fn delete_orphans_mirrors_delete_preconditions() {
 fn delete_orphans_reports_active_last_witness_losses() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
     let (_link_a, _) = store
@@ -519,7 +519,7 @@ fn delete_orphans_reports_active_last_witness_losses() {
 fn lineage_probes_flipped_slots_with_residence_gate() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
@@ -565,7 +565,7 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
 fn snapshot_twins_read_one_pinned_state() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkStore::new(&k);
+    let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     store
         .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])

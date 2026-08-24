@@ -442,11 +442,11 @@ fn eval_atom(cx: &EvalCtx<'_>, env: &Env, view: View, a: &Atom) -> Value {
         Atom::TupAddrsG(v) => Value::AddrSet(tup(v).to.addrs().cloned().collect()),
         Atom::InCoverageF(e, v) => {
             let x = as_addr(eval_term(cx, env, view, e));
-            Value::Bool(tup(v).from.denotes(x.tumbler()))
+            Value::Bool(tup(v).from.covers(x.tumbler()))
         }
         Atom::InCoverageG(e, v) => {
             let x = as_addr(eval_term(cx, env, view, e));
-            Value::Bool(tup(v).to.denotes(x.tumbler()))
+            Value::Bool(tup(v).to.covers(x.tumbler()))
         }
     }
 }

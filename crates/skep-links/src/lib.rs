@@ -32,7 +32,7 @@
 //! * indexed discovery *presentation* — findlinks/count/pagination/
 //!   projection/RETRIEVEENDSETS and archival in/out (M8, executing over M7's
 //!   primitives across the `M8→M7` edge);
-//! * no `coverage` function — coverage is the query-time `denotes`
+//! * no `coverage` function — coverage is the query-time `covers`
 //!   projection, never a stored value.
 //!
 //! ## Composition
@@ -54,7 +54,7 @@ mod error;
 mod reads;
 mod registry;
 mod state;
-mod store;
+mod writes;
 
 pub use endset::{coverage_class, enc, CoverageClass, Endset, Link};
 // The ONE caller-identity type of the write-surface ownership gate
@@ -71,7 +71,7 @@ pub use registry::{
     TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use store::{LinkStore, SlotArg};
+pub use writes::{LinkWriter, SlotArg};
 
 /// The engine's **read accessor** for M7's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world

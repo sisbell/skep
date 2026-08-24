@@ -12,18 +12,18 @@ use skep_address::SpanSet;
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
-    enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Link, LinkStore,
+    enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Link, LinkWriter,
     MakeLinkError, NotBh4, NullifyError, RetractStaleError, ShippedType, SlotArg, Tip, View,
 };
 
-fn store(k: &skep_kernel::Kernel<World>) -> LinkStore<'_, World> {
-    LinkStore::new(k)
+fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
+    LinkWriter::new(k)
 }
 
 #[test]
 fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let (a1, _) = s
         .emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)])
         .expect("registered Binary emit succeeds");
@@ -72,7 +72,7 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
 #[test]
 fn emit_typed_rejections() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap = k.snapshot();
     let sup = snap
         .world()
@@ -123,7 +123,7 @@ fn emit_typed_rejections() {
 #[test]
 fn emit_idem_dedup_zero_step_and_resurrection() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     // idem⊤: a duplicate returns the incumbent with the base Seq and commits
     // nothing.
     let (a1, s1) = s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("first emit");
@@ -151,7 +151,7 @@ fn emit_idem_dedup_zero_step_and_resurrection() {
 #[test]
 fn nullify_contract_active_view_and_born_nullified_self_emit() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     // P-tgt rejects a non-resident, non-self target.
     assert!(matches!(
         s.nullify(P1, &doc1(), &ca(9)),
@@ -203,7 +203,7 @@ fn nullify_contract_active_view_and_born_nullified_self_emit() {
 #[test]
 fn assert_sup_dedup_walk_and_standoff() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap0 = k.snapshot();
     let sup = snap0
         .world()
@@ -266,7 +266,7 @@ fn assert_sup_dedup_walk_and_standoff() {
 #[test]
 fn editlink_composite_dc_guard_and_currency() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap0 = k.snapshot();
     let sup = snap0
         .world()
@@ -373,7 +373,7 @@ fn editlink_composite_dc_guard_and_currency() {
 fn makelink_resolves_deposits_and_seats() {
     let k = kernel();
     seed_content(&k, &doc1(), 3); // content elements ca(1)..ca(3)
-    let s = store(&k);
+    let s = writer(&k);
 
     let (l1, _) = s
         .makelink(
@@ -504,7 +504,7 @@ fn makelink_resolves_deposits_and_seats() {
 fn makelink_addrs_form_records_names_verbatim() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let s = store(&k);
+    let s = writer(&k);
 
     // A NAME in doc1's never-occupied subspace 3 — a ghost (L9), T4-valid.
     let name = a(&[1, 0, 1, 0, 1, 0, 3, 6, 1]);
@@ -562,7 +562,7 @@ fn makelink_addrs_form_records_names_verbatim() {
 fn stab_and_match_links_overlap_excludes_adjacency() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let s = store(&k);
+    let s = writer(&k);
     // from covers [ca1, ca3); to and ty cover [ca3, ca4).
     let (l, _) = s
         .makelink(
@@ -608,7 +608,7 @@ fn stab_and_match_links_overlap_excludes_adjacency() {
 #[test]
 fn bh4_age_stale_and_the_typed_batch_fence() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap0 = k.snapshot();
     let sup = snap0
         .world()
@@ -675,7 +675,7 @@ fn bh4_age_stale_and_the_typed_batch_fence() {
 #[test]
 fn retired_filter_rewrites_default_views_only() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap0 = k.snapshot();
     let retired = snap0
         .world()
@@ -709,7 +709,7 @@ fn retired_filter_rewrites_default_views_only() {
 #[test]
 fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     s.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(2)]).expect("bh3 tuple");
     // A same-source tuple of ANOTHER type must not disturb the typed reads.
     s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(3)]).expect("rel tuple");
@@ -739,7 +739,7 @@ fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
 #[test]
 fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let snap0 = k.snapshot();
     let sup = snap0
         .world()
@@ -782,7 +782,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         checkpoint: skep_kernel::CheckpointPolicy::Manual,
     };
     let k2 = skep_kernel::Kernel::open(cfg, recovered).expect("reopen");
-    let s2 = store(&k2);
+    let s2 = writer(&k2);
     let (again, _) = s2.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
     assert_eq!(again, a1);
 }
@@ -797,7 +797,7 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     // commits; System (the M9 automation path) is exempt by architecture.
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let s = store(&k);
+    let s = writer(&k);
     let p2 = P2;
     let (x, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
     let (y, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
@@ -850,7 +850,7 @@ fn ownership_gate_holds_on_the_idem_hit_path() {
     // emit whose tuple already exists still rejects NotOwner — the caller
     // cannot observe the dedup branch through the rejection.
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let p2 = P2;
     s.emit(P1, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("incumbent");
     assert!(matches!(
@@ -866,7 +866,7 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     // owner's retraction still lands and filters the active view while the
     // audit view retains everything.
     let k = kernel();
-    let s = store(&k);
+    let s = writer(&k);
     let p2 = P2;
     let (m1, _) = s.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("P1's tuple");
     // Foreign target, owned home: NotOwner carrying the target link.

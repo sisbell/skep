@@ -107,9 +107,9 @@ impl LinkState {
     // ─────────────── §F — typed reads & the PL surface ────────────────
 
     /// Observe (ASN-0086): exact ⊆-coverage match over the `v` typed slice —
-    /// every pattern tumbler denoted by the tuple's F (resp. G); an empty
+    /// every pattern tumbler COVERED by the tuple's F (resp. G); an empty
     /// pattern is no constraint. The pattern domain is ALL of carrier T
-    /// (ASN-0086): membership rides [`Endset::denotes`], total on T, so ghost
+    /// (ASN-0086): membership rides [`Endset::covers`], total on T, so ghost
     /// (unallocated) addresses and the non-T4 tumblers inside a non-unit
     /// span's coverage are honest probes. `Default → Active` (raw Observe
     /// never filters — ASN-0128).
@@ -119,8 +119,8 @@ impl LinkState {
         let mut out = Vec::new();
         for t in slice.iter() {
             let link = self.link_at(t);
-            let f_ok = from_pat.iter().all(|p| link.from_slot().denotes(p));
-            let g_ok = to_pat.iter().all(|p| link.to_slot().denotes(p));
+            let f_ok = from_pat.iter().all(|p| link.from_slot().covers(p));
+            let g_ok = to_pat.iter().all(|p| link.to_slot().covers(p));
             if f_ok && g_ok {
                 out.push(Tuple {
                     addr: lift(t),
@@ -133,14 +133,14 @@ impl LinkState {
     }
 
     /// D2: exact ACTIVE coverage-membership — some active type-`ty` tuple's
-    /// F denotes the probe, which ranges over all of carrier T (`observe`'s
+    /// F COVERS the probe, which ranges over all of carrier T (`observe`'s
     /// pattern domain). Never a `stab` overlap call (an ancestor pattern
     /// would over-match) and never BH1-filtered (BH1 Rewrite scope).
     pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
         self.type_slice_class(&class, View::Active)
             .iter()
-            .any(|addr| self.link_at(addr).from_slot().denotes(t))
+            .any(|addr| self.link_at(addr).from_slot().covers(t))
     }
 
     /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
@@ -165,9 +165,11 @@ impl LinkState {
             .collect()
     }
 
-    /// D3: the denoted targets (G.addrs()) of tuples whose F denotes `x`,
+    /// D3: the denoted targets (G.addrs()) of tuples whose F COVERS `x`,
     /// deduplicated, in Tumbler order; `View::Default` subtracts filtered
-    /// results (with the `J ≠ K'` exclusion, as `members`).
+    /// results (with the `J ≠ K'` exclusion, as `members`). The source
+    /// argument is matched by COVERAGE here; [`LinkState::target_of`] and the
+    /// walk family match a source vertex by DENOTATION instead.
     pub fn targets_of(&self, ty: &Endset, x: &Address, v: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = v == View::Default && class != *self.shipped_class(ShippedType::Retired);
@@ -175,7 +177,7 @@ impl LinkState {
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
             let link = self.link_at(t);
-            if link.from_slot().denotes(x.tumbler()) {
+            if link.from_slot().covers(x.tumbler()) {
                 for g in link.to_slot().addrs() {
                     set.insert(g.clone());
                 }
@@ -258,8 +260,9 @@ impl LinkState {
     }
 
     /// BH3 reverse (§7): sources of active type-`ty` tuples whose G COVERS
-    /// `target` (AM's reverse-lookup rule) — `stab(TO, ·, Audit)` overlap
-    /// prefilter ∩ the active typed slice, exact `denotes` filter
+    /// `target` (AM's reverse-lookup rule — the one member of the family
+    /// matched by coverage rather than denotation) — `stab(TO, ·, Audit)`
+    /// overlap prefilter ∩ the active typed slice, exact `covers` filter
     /// authoritative, collecting each survivor's F.addrs().
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
@@ -268,7 +271,7 @@ impl LinkState {
         let mut set: OrdSet<Tumbler> = OrdSet::new();
         for t in pre.iter().filter(|t| slice.contains(*t)) {
             let link = self.link_at(t);
-            if link.to_slot().denotes(target.tumbler()) {
+            if link.to_slot().covers(target.tumbler()) {
                 for f in link.from_slot().addrs() {
                     set.insert(f.clone());
                 }
@@ -302,7 +305,7 @@ impl LinkState {
         out
     }
 
-    /// BH4 age (§7): `home_count[origin(a)] − ordinal(a)` for a resident
+    /// BH4 age (§7): `f_d^Σ − ordinal(a)` at `a`'s own home, for a resident
     /// link, else `None` — a raw home-relative chain distance (ordinal time,
     /// no clock), meaningful as staleness only for an idem⊥ BH4 type (under
     /// idem⊤ a renewal dedups to the incumbent and age never resets — which
@@ -311,15 +314,15 @@ impl LinkState {
         if !self.resident(a.tumbler()) {
             return None;
         }
-        let origin = document_of(a)?;
-        let count = self
+        let home = document_of(a)?;
+        let frontier = self
             .hints
-            .home_count
-            .get(origin.tumbler())
+            .home_frontier
+            .get(home.tumbler())
             .copied()
             .unwrap_or(0);
         let ord = u64::try_from(ordinal(a.tumbler())).ok()?;
-        Some(count.saturating_sub(ord))
+        Some(frontier.saturating_sub(ord))
     }
 
     /// BH4 stale set (§7): active type-`ty` tuples with `age > h`, served
@@ -471,7 +474,7 @@ impl LinkState {
     /// result-side (`members`/`targets_of`) reads its own `v` for that and
     /// hands this the same value unaltered.
     pub(crate) fn type_slice_class(&self, class: &CoverageClass, v: View) -> OrdSet<Tumbler> {
-        let base = self.hints.type_class.get(class).cloned().unwrap_or_default();
+        let base = self.hints.type_slices.get(class).cloned().unwrap_or_default();
         match coerce(v) {
             View::Active => base.iter().filter(|t| !self.nullified(t)).cloned().collect(),
             _ => base,
@@ -487,15 +490,15 @@ impl LinkState {
         coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }
 
-    /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to
-    /// `claim ∉ nullified`, deduplicated over `new`.
+    /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to edges
+    /// whose CLAIM is unnullified (Df-SUCC), deduplicated over `new`.
     pub(crate) fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
         match self.hints.sup_fwd.get(x) {
             None => OrdSet::new(),
             Some(edges) => edges
                 .iter()
-                .filter(|(_, claim)| !self.nullified(claim))
-                .map(|(new, _)| new.clone())
+                .filter(|e| !self.nullified(&e.claim))
+                .map(|e| e.new.clone())
                 .collect(),
         }
     }

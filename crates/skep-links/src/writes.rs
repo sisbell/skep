@@ -1,4 +1,4 @@
-//! §C/§D — the transact-driving write surface: [`LinkStore`] (the kernel
+//! §C/§D — the transact-driving write surface: [`LinkWriter`] (the kernel
 //! handle + construction-time registry cache), the shared single choke point
 //! [`emit_core`] with its two-disciplines gate (§2), the M2 keyed dedup
 //! sections (§3), and the five public ops.
@@ -30,13 +30,18 @@ use crate::registry::{Shape, ShippedType, TypeRegistry};
 use crate::state::LinkRec;
 use crate::HasLinks;
 
-/// The transact-driving handle: `&'k Kernel<W>` plus a construction-time
-/// `Arc<TypeRegistry>` cache of the genesis-immutable registry (§C) — the
-/// registration/reserved-class reads §3's pre-transact steps consult. Sound
-/// because the registry is sealed at genesis and never drifts (P1/P2, R1/R2):
-/// the cache can never go stale, and it agrees with what `emit_core` consults
-/// inside the txn.
-pub struct LinkStore<'k, W: WorldState> {
+/// M7's single writer of link values — the transact-driving handle: `&'k
+/// Kernel<W>` plus a construction-time `Arc<TypeRegistry>` cache of the
+/// genesis-immutable registry (§C), which the registration/reserved-class
+/// reads of §3's pre-transact steps consult. Sound because the registry is
+/// sealed at genesis and never drifts (P1/P2, R1/R2): the cache can never go
+/// stale, and it agrees with what `emit_core` consults inside the txn.
+///
+/// The handle holds no links. `Σ.L` — the append-only store itself — is
+/// [`crate::LinkState`]'s map, reached through [`crate::HasLinks`] and read
+/// by `readlink`; this type is the write half, the counterpart to M8's
+/// `LinkQuery`.
+pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
     registry: Arc<TypeRegistry>,
 }
@@ -70,17 +75,17 @@ impl SlotArg {
     }
 }
 
-impl<'k, W> LinkStore<'k, W>
+impl<'k, W> LinkWriter<'k, W>
 where
     W: WorldState + HasLinks,
 {
-    /// Construct the store handle: takes ONE `kernel.snapshot()` and clones
+    /// Construct the writer handle: takes ONE `kernel.snapshot()` and clones
     /// the `Arc<TypeRegistry>` off `snapshot.world().links()` — a refcount
     /// bump of the slice's rebuilt registry (§C).
-    pub fn new(kernel: &'k Kernel<W>) -> LinkStore<'k, W> {
+    pub fn new(kernel: &'k Kernel<W>) -> LinkWriter<'k, W> {
         let snap = kernel.snapshot();
         let registry = Arc::clone(&snap.world().links().registry);
-        LinkStore { kernel, registry }
+        LinkWriter { kernel, registry }
     }
 }
 
@@ -324,7 +329,7 @@ where
 {
     // STORE-INVARIANT BACKSTOP (§2): every caller builds arity 3
     // (MAKELINK/Emit_K/assert_sup/claim; editlink pre-checks), so this never
-    // trips — but it guarantees type_class, the FROM/TO/TYPE slots the
+    // trips — but it guarantees type_slices, the FROM/TO/TYPE slots the
     // discovery primitives index, and ASN-0086's |Σ.L| = 3 hold locally.
     assert_eq!(value.arity(), 3, "emit_core: the store holds only arity-3 links");
     if !stg.working().m3().is_registered_document(home) {
@@ -372,7 +377,7 @@ where
     let (addr, m3rec) = stg.working().m3().mint_link(home)?;
     stg.push(m3rec.into());
     stg.push(
-        LinkRec::Emit {
+        LinkRec::Deposit {
             addr: addr.tumbler().clone(),
             value,
         }
@@ -415,7 +420,7 @@ fn slot_endset(m5: &M5State, slot: &SlotArg) -> Endset {
     }
 }
 
-impl<'k, W> LinkStore<'k, W>
+impl<'k, W> LinkWriter<'k, W>
 where
     W: WorldState + HasLinks + HasM3 + HasM5,
     W::Record: From<LinkRec> + From<M3Rec> + From<M5Rec>,
@@ -474,7 +479,7 @@ where
     }
 }
 
-impl<'k, W> LinkStore<'k, W>
+impl<'k, W> LinkWriter<'k, W>
 where
     W: WorldState + HasLinks + HasM3,
     W::Record: From<LinkRec> + From<M3Rec>,

@@ -17,7 +17,7 @@ use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkStore, ReservedAddrs,
+    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, ReservedAddrs,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
@@ -192,8 +192,8 @@ impl Stores<World> for KernelStores {
     fn vstream(&self) -> Vstream<'_, World> {
         Vstream::new(&self.kernel)
     }
-    fn linkstore(&self) -> LinkStore<'_, World> {
-        LinkStore::new(&self.kernel)
+    fn linkstore(&self) -> LinkWriter<'_, World> {
+        LinkWriter::new(&self.kernel)
     }
 }
 

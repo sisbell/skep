@@ -15,7 +15,7 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Behavior, Endset, HasLinks, LinkRec, LinkState, LinkStore, Registration, ReservedAddrs,
+    enc, Behavior, Endset, HasLinks, LinkRec, LinkState, LinkWriter, Registration, ReservedAddrs,
     Shape, TypeDecl, TypeRegistry,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -241,8 +241,8 @@ fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
-fn mk_ls(k: &Kernel<World>) -> LinkStore<'_, World> {
-    LinkStore::new(k)
+fn mk_ls(k: &Kernel<World>) -> LinkWriter<'_, World> {
+    LinkWriter::new(k)
 }
 
 /// The engine-assembled Coordinator over the shared kernel.
@@ -269,9 +269,9 @@ pub fn try_coord(
     )
 }
 
-/// A LinkStore handle for direct upstream writes in tests.
-pub fn links(k: &Arc<Kernel<World>>) -> LinkStore<'_, World> {
-    LinkStore::new(k.as_ref())
+/// A LinkWriter handle for direct upstream writes in tests.
+pub fn links(k: &Arc<Kernel<World>>) -> LinkWriter<'_, World> {
+    LinkWriter::new(k.as_ref())
 }
 
 /// Insert one raw content Val into `doc` (M5's placement composite) and

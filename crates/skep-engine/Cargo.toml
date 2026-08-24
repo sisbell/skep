@@ -28,7 +28,7 @@ skep-content = { path = "../skep-content" }
 skep-arrangement = { path = "../skep-arrangement" }
 skep-links = { path = "../skep-links" }
 # M9 — the Coordinator is engine-assembled: the factory bodies presuppose the
-# engine can build Vstream/LinkStore from &Kernel<W> (M9's standing assembly
+# engine can build Vstream/LinkWriter from &Kernel<W> (M9's standing assembly
 # obligation), and its catalog projects the engine-built registry.
 skep-coordination = { path = "../skep-coordination" }
 # M10 — the demand side: EngineStores realizes the Stores<World> factory the

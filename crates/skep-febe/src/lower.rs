@@ -202,6 +202,13 @@ impl Lower for MakeLinkError {
             MakeLinkError::NotOwner(a) => not_owner(a),
             MakeLinkError::IllFormedSpec => (RejectCode::IllFormedSpec, None),
             MakeLinkError::EmptyTypeResolution => (RejectCode::EmptyTypeResolution, None),
+            MakeLinkError::RetractionClass => (RejectCode::RetractionClass, None),
+            // The `[K_sup]` sole-writer fence, lowering as EmitError's does:
+            // the design's RejectCode union has no same-named leaf, so it
+            // rides DcViolation — the claim-schema discipline editlink's DC
+            // guard names. Permanent is right: reissuing identically cannot
+            // succeed — use AssertSup/EditLink.
+            MakeLinkError::SupersessionClass => (RejectCode::DcViolation, None),
             MakeLinkError::Mint(m) => m.lower(),
             MakeLinkError::Seat(s) => s.lower(),
         }

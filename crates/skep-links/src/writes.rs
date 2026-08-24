@@ -473,6 +473,18 @@ where
     /// Every `Resolve` spec is wf-checked ([`is_wf_content_spec`]) before any
     /// slot is built. `Addrs` slots get no wf step: T4 validity is the whole
     /// precondition, already carried by the `Address` type.
+    ///
+    /// The two SOLE-WRITER fences apply here as they do on the managed
+    /// surface: a resolved type slot in the `[R]` class
+    /// (`RetractionClass`) or the `[K_sup]` class (`SupersessionClass`) is
+    /// refused. They are the open surface's whole type discipline, and they
+    /// are not optional — [`crate::LinkState::apply_link`]'s hint fold
+    /// recognizes a deposit by its type slot's coverage class alone, so an
+    /// `[R]`-classed link deposited through this surface would tombstone
+    /// every address its TO slot denotes, and a `[K_sup]`-classed one would
+    /// enter the supersession adjacency as a claim, both without any of the
+    /// ownership, residence or schema checks `nullify`, `assert_sup` and
+    /// `editlink` establish.
     pub fn makelink(
         &self,
         caller: Caller,
@@ -481,6 +493,8 @@ where
         to: SlotArg,
         ty: SlotArg,
     ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
+        let r_class = self.registry.shipped_class(ShippedType::Retraction);
+        let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
         self.kernel
             .transact(&[M3State::link_lock_key(home)], |stg| {
                 let (e1, e2, e3) = {
@@ -500,6 +514,17 @@ where
                 };
                 if e3.is_empty() {
                     return Err(MakeLinkError::EmptyTypeResolution); // ML6, as-given
+                }
+                // The sole-writer fences. Total: a `Resolve` slot is
+                // level-uniform by M5's construction and an `Addrs` slot is
+                // address-denoting, which are the same two grounds under
+                // which the fold classifies this very value one step later.
+                let e3_class = coverage_class(&e3);
+                if e3_class == *r_class {
+                    return Err(MakeLinkError::RetractionClass); // K ≁ R
+                }
+                if e3_class == *sup_class {
+                    return Err(MakeLinkError::SupersessionClass); // Conflicts §10
                 }
                 let value = Link::triple(e1, e2, e3);
                 let addr = emit_core(stg, caller, home, value, Gate::Open)?;
@@ -650,8 +675,9 @@ where
     ///
     /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
     /// non-resident `original`; a successor of arity ≠ 3 (Conflicts §11),
-    /// empty type slot, or non-level-uniform type slot (`IllFormedSuccessor`
-    /// — the last keeps the DC-guard `coverage_class` total); DC — a
+    /// empty type slot, or a non-level-uniform span in any slot
+    /// (`IllFormedSuccessor` — the last keeps `coverage_class` total for
+    /// both the DC guard and the fold's dedup key); DC — a
     /// retraction-typed successor, or a `[K_sup]`-typed one without the
     /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
     /// irreflexive) (`DcViolation`). The claim's dedup check is a guaranteed
@@ -683,13 +709,24 @@ where
                 if !base.links().resident(original.tumbler()) {
                     return Err(EditLinkError::OriginalNotResident);
                 }
+                // Level-uniformity is required of EVERY slot, not just the
+                // one the DC guard classifies: a deposit of a registered
+                // idem⊤ class folds a dedup key over all three slots
+                // ([`crate::LinkState::apply_link`]), and `coverage_class`
+                // aborts on a non-level-uniform span. Checking only the type
+                // slot would leave a caller-supplied F or G reaching that
+                // abort from inside the transact.
                 let well_formed = successor.arity() == 3
                     && !successor.type_slot().is_empty()
-                    && successor.type_slot().spans().all(|s| s.is_level_uniform());
+                    && (1..=successor.arity()).all(|i| {
+                        successor
+                            .slot(i)
+                            .is_some_and(|e| e.spans().all(|s| s.is_level_uniform()))
+                    });
                 if !well_formed {
                     return Err(EditLinkError::IllFormedSuccessor);
                 }
-                // DC guard — total: the type slot was just checked
+                // DC guard — total: every slot was just checked
                 // level-uniform.
                 let sc = coverage_class(successor.type_slot());
                 if sc == *r_class {

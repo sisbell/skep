@@ -557,3 +557,55 @@ fn coverage_class_keys_hash_containers() {
     m.insert(coverage_class(&enc(&[ca(1), ca(2)])), 7);
     assert_eq!(m.get(&coverage_class(&enc(&[ca(2), ca(1)]))), Some(&7));
 }
+
+#[test]
+fn coverage_class_addrs_is_i0a_stated_as_its_definition() {
+    // I0a computed two ways over the same families: once by the classifier,
+    // once by the definition it implements — "drop every denoted address
+    // that has a distinct denoted prefix", written out in full. The families
+    // interleave roots, their extensions and unrelated siblings in Tumbler
+    // order, and repeat addresses, so an encoding that read only adjacent
+    // pairs, or only the first root, or that let a duplicate mask a root,
+    // would separate the two answers.
+    let acct = a(&[1, 0, 1]);
+    let families: Vec<Vec<skep_address::Address>> = vec![
+        vec![],
+        vec![ca(1)],
+        vec![ca(1), ca(1), ca(1)],
+        vec![ca(3), ca(1), ca(2)],
+        // Two roots, each swallowing several extensions, with the second
+        // root sorting AFTER all of the first's — the contiguity the single
+        // ascending pass depends on.
+        vec![doc1(), ca(9), ca(1), la(4), doc2(), la2(3), la2(1), ca(1)],
+        // A root arriving after its own extension in argument order.
+        vec![ca(1), doc1(), la(4)],
+        // One account-level root above everything, two documents deep.
+        vec![acct.clone(), doc1(), ca(1), doc2(), la2(1)],
+        vec![doc2(), la2(1), doc1(), ca(2), acct.clone()],
+        // Roots with no extensions present, mixed with a swallowed pair.
+        vec![ra(1), doc1(), ca(5), ra(2)],
+    ];
+    for x in &families {
+        let denoted: im::OrdSet<skep_address::Tumbler> =
+            x.iter().map(|d| d.tumbler().clone()).collect();
+        let want: im::OrdSet<skep_address::Tumbler> = denoted
+            .iter()
+            .filter(|p| {
+                !denoted
+                    .iter()
+                    .any(|y| y != *p && skep_address::is_prefix(y, p))
+            })
+            .cloned()
+            .collect();
+        match coverage_class(&enc(x)) {
+            CoverageClass::Addrs(got) => assert_eq!(got, want, "I0a over {x:?}"),
+            CoverageClass::Extents(_) => {
+                panic!("an enc'd address set is address-denoting: {x:?}")
+            }
+        }
+    }
+    // ...and the families are not all antichains already, so the agreement
+    // above is not vacuous.
+    let swallowed = coverage_class(&enc(&[doc1(), ca(1), ca(2)]));
+    assert_eq!(swallowed, coverage_class(&enc(&[doc1()])));
+}

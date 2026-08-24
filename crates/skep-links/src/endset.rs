@@ -253,13 +253,29 @@ pub enum CoverageClass {
 /// type/dedup identity.
 pub fn coverage_class(e: &Endset) -> CoverageClass {
     if is_address_denoting(e) {
-        // I0a: dedup, then drop every address with a distinct denoted prefix.
+        // I0a: dedup, then drop every address with a distinct denoted prefix
+        // — in ONE ascending pass, comparing each candidate only against the
+        // last address retained.
+        //
+        // Sound because T1's order is lexicographic prefix-smaller, which
+        // makes a retained address's extensions CONTIGUOUS: if `y ≼ t` and
+        // `y < z < t`, then `y ≼ z`, since a `z` diverging from `y` at some
+        // position `i < #y` would need `z_i > y_i = t_i` and so would sort
+        // above `t`. So the shortest denoted prefix of `t` is itself
+        // retained, and every element between it and `t` is skipped, leaving
+        // it as `last` when `t` is reached. One prefix test per address
+        // instead of |denoted|² — the count is caller-chosen, and the class
+        // of a stored type slot is recomputed for every link at every replay.
         let denoted: OrdSet<Tumbler> = e.spans().map(|s| s.start().clone()).collect();
-        let minimal: OrdSet<Tumbler> = denoted
-            .iter()
-            .filter(|t| !denoted.iter().any(|y| y != *t && is_prefix(y, t)))
-            .cloned()
-            .collect();
+        let mut minimal: OrdSet<Tumbler> = OrdSet::new();
+        let mut last: Option<&Tumbler> = None;
+        for t in denoted.iter() {
+            if last.is_some_and(|y| is_prefix(y, t)) {
+                continue; // t extends the retained ≼-minimal y
+            }
+            minimal.insert(t.clone());
+            last = Some(t);
+        }
         CoverageClass::Addrs(minimal)
     } else {
         let mut parts: BTreeMap<usize, Vec<Span>> = BTreeMap::new();

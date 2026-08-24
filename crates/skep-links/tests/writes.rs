@@ -1,23 +1,25 @@
 //! Op-level contracts over a real kernel (InMemory): the two write
 //! disciplines and their gates (the shape table cell by cell, the
-//! pre-transact fences, the hoisted home/ω checks on hit AND miss),
-//! idempotent dedup + resurrection, retraction and the active view,
-//! supersession + the BH2 walk at each of its three halts, editlink's atomic
-//! composite and DC guard, MAKELINK end-to-end (wf, resolve, deposit, seat),
-//! EL14 currency disclosure, BH1/BH3/BH4 behaviors and the two matching
-//! regimes they choose between, the non-atomic BH4 batch, the §G discovery
-//! primitives, and the checkpoint-roundtrip + rebuild_derived discipline.
+//! pre-transact fences, the hoisted home/ω checks on hit AND miss), the
+//! `[R]` and `[K_sup]` sole-writer fences on BOTH surfaces, idempotent
+//! dedup + resurrection, retraction and the active view, supersession + the
+//! BH2 walk at each of its three halts, editlink's atomic composite and DC
+//! guard, MAKELINK end-to-end (wf, resolve, deposit, seat), EL14 currency
+//! disclosure, BH1/BH3/BH4 behaviors and the two matching regimes they
+//! choose between, the non-atomic BH4 batch, the §G discovery primitives and
+//! the AND-combiner's agreement with its own conjuncts, and the
+//! checkpoint-roundtrip + rebuild_derived discipline.
 
 mod common;
 
 use common::*;
-use skep_address::SpanSet;
+use skep_address::{Address, SpanSet};
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Link, LinkWriter,
     MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, Shape, ShippedType, SlotArg,
-    Tip, View,
+    Tip, View, FROM, TO, TYPE,
 };
 
 fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
@@ -1501,4 +1503,209 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     assert!(ls.readlink(&m1).is_some());
     assert!(ls.type_slice(&multi_ty(), View::Audit).contains(m1.tumbler()));
     assert!(!ls.type_slice(&multi_ty(), View::Active).contains(m1.tumbler()));
+}
+
+// ---- the sole-writer fences, on the open surface ----
+
+#[test]
+fn makelink_cannot_forge_a_retraction_of_a_foreign_link() {
+    // The hint fold recognizes a deposit by its type slot's CLASS, so the
+    // K ≁ R fence has to hold on every surface that deposits, not only on
+    // the one whose gate states it. Without it, a principal owning any one
+    // document names the shipped `[R]` address in an `Addrs` type slot and
+    // tombstones every link its TO slot denotes — with no ownership check on
+    // any of them, and irreversibly, the tombstone set being monotone and
+    // re-derived at every replay.
+    let k = kernel();
+    let s = writer(&k);
+    let (victim, _) = s
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("P1's own tuple");
+    let before = k.current_seq();
+    assert!(matches!(
+        s.makelink(
+            P2,
+            &sib_doc(), // a home P2 does own — the ω gate is satisfied
+            SlotArg::Addrs(vec![sib_doc()]),
+            SlotArg::Addrs(vec![victim.clone()]),
+            SlotArg::Addrs(vec![reserved().retraction]),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::RetractionClass))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    let snap = k.snapshot();
+    let ls = snap.world().links();
+    assert!(ls.is_active(&victim));
+    assert!(!ls.is_nullified(&victim));
+    assert!(ls.type_slice(&multi_ty(), View::Active).contains(victim.tumbler()));
+    // The owner's own retraction is the one path that reaches the tombstone.
+    s.nullify(P1, &doc1(), &victim).expect("owner retraction");
+    assert!(k.snapshot().world().links().is_nullified(&victim));
+}
+
+#[test]
+fn makelink_cannot_forge_a_supersession_claim() {
+    // The `[K_sup]` fence, the exact parallel. assert_sup and editlink both
+    // establish the Df-DISC(ii) schema — resident endpoints, single denoted
+    // addresses, irreflexivity — before a claim enters the adjacency the
+    // walk family reads back as fact; the open surface establishes none of
+    // it, and its slots are lists, so one deposit would fold |F|×|G| edges.
+    let k = kernel();
+    let s = writer(&k);
+    let before = k.current_seq();
+    assert!(matches!(
+        s.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![la(90), la(91)]), // ghosts: neither is resident
+            SlotArg::Addrs(vec![la(92), la(93)]),
+            SlotArg::Addrs(vec![reserved().supersedes]),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SupersessionClass))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    let snap = k.snapshot();
+    let ls = snap.world().links();
+    let sup = ls.reserved_type(ShippedType::Supersedes).clone();
+    assert!(ls.succs(&sup, &la(90)).is_empty());
+    // The ghost is its own sink with nothing claiming it: no forged edge
+    // entered the adjacency, and no forged claim entered the disclosure.
+    let cur = ls.current(&la(90));
+    assert_eq!(cur.len(), 1);
+    assert_eq!(cur[0].member, la(90));
+    assert!(cur[0].claims.is_empty());
+    // A self-superseding claim over one ghost is refused by the same fence,
+    // so irreflexivity is not reachable around it either.
+    assert!(matches!(
+        s.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![la(90)]),
+            SlotArg::Addrs(vec![la(90)]),
+            SlotArg::Addrs(vec![reserved().supersedes]),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SupersessionClass))
+    ));
+}
+
+#[test]
+fn makelink_still_admits_an_ordinary_registered_class() {
+    // The control for the two fences above: they name two classes, not the
+    // registry. A shipped class with no sole writer (Retired) and an app
+    // class both deposit through the open surface as before.
+    let k = kernel();
+    let s = writer(&k);
+    for ty in [reserved().retired, reserved().pred_def, ra(10)] {
+        s.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(2)]),
+            SlotArg::Addrs(vec![ty.clone()]),
+        )
+        .unwrap_or_else(|e| panic!("open surface admits {ty:?}: {e:?}"));
+    }
+}
+
+#[test]
+fn editlink_rejects_a_non_level_uniform_span_in_any_slot() {
+    // Level-uniformity is required of every slot, not only the one the DC
+    // guard classifies: the hint fold keys a registered idem⊤ deposit on all
+    // three, so a skew span in F or G would reach `coverage_class`'s pinned
+    // off-contract abort from inside the transact — a panic where the design
+    // has a typed rejection.
+    let k = kernel();
+    let s = writer(&k);
+    let (orig, _) = s
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("orig");
+    let skew =
+        || Endset::from_spans([skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12")]);
+    // `retired` is registered idem⊤, so the fold WOULD build a dedup key
+    // over all three slots of this successor.
+    let idem_top = enc(&[reserved().retired]);
+    for (label, successor) in [
+        (
+            "skew F",
+            Link::new([skew(), enc(&[ca(4)]), idem_top.clone()]).expect("arity 3"),
+        ),
+        (
+            "skew G",
+            Link::new([enc(&[ca(3)]), skew(), idem_top.clone()]).expect("arity 3"),
+        ),
+        (
+            "skew TYPE",
+            Link::new([enc(&[ca(3)]), enc(&[ca(4)]), skew()]).expect("arity 3"),
+        ),
+    ] {
+        let got = s.editlink(P1, &orig, successor, &doc1(), &doc1());
+        assert!(
+            matches!(
+                got,
+                Err(TxnError::Rejected(EditLinkError::IllFormedSuccessor))
+            ),
+            "{label}: expected IllFormedSuccessor, got {got:?}"
+        );
+    }
+}
+
+#[test]
+fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
+    // The AND is a conjunction, so narrowing the accumulator by a slot's own
+    // overlap predicate and intersecting whole-store `stab` results are the
+    // same set — over every subset of the constraint pool, in both views,
+    // with a nullified link present so the Active/Audit split is exercised.
+    let k = kernel();
+    let s = writer(&k);
+    let mk = |from: &[Address], to: &[Address], ty: &[Address]| {
+        s.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(from.to_vec()),
+            SlotArg::Addrs(to.to_vec()),
+            SlotArg::Addrs(ty.to_vec()),
+        )
+        .expect("open-surface deposit")
+        .0
+    };
+    let l1 = mk(&[ca(1)], &[ca(2)], &[ca(7)]);
+    let l2 = mk(&[ca(1)], &[ca(4)], &[ca(7)]);
+    let l3 = mk(&[ca(5)], &[ca(2)], &[ca(8)]);
+    let l4 = mk(&[ca(1), ca(5)], &[ca(2), ca(4)], &[ca(7)]);
+    s.nullify(P1, &doc1(), &l3).expect("nullify one");
+
+    let pool = [
+        (FROM, enc(&[ca(1)])),
+        (TO, enc(&[ca(2)])),
+        (TYPE, enc(&[ca(7)])),
+    ];
+    let snap = k.snapshot();
+    let ls = snap.world().links();
+    for v in [View::Audit, View::Active] {
+        for mask in 0u8..8 {
+            let cs: Vec<(usize, Endset)> = (0..pool.len())
+                .filter(|i| mask & (1u8 << i) != 0)
+                .map(|i| pool[i].clone())
+                .collect();
+            let got = ls.match_links(&cs, v);
+            if cs.is_empty() {
+                continue; // the unconstrained branch has no conjuncts to agree with
+            }
+            let want = cs
+                .iter()
+                .map(|(i, q)| ls.stab(*i, q, v))
+                .reduce(|acc, s| acc.iter().filter(|t| s.contains(*t)).cloned().collect())
+                .expect("nonempty");
+            assert_eq!(got, want, "{v:?} constraints {mask:#05b}");
+        }
+    }
+    // ...and the sets are not all equal, so the agreement above is not
+    // vacuous: the three-slot AND admits l1 and l4 only, and Active drops
+    // the nullified link from the one-slot answer.
+    let all = ls.match_links(&pool.to_vec(), View::Audit);
+    assert!(all.contains(l1.tumbler()) && all.contains(l4.tumbler()));
+    assert!(!all.contains(l2.tumbler()) && !all.contains(l3.tumbler()));
+    let to_only = [(TO, enc(&[ca(2)]))];
+    assert!(ls.match_links(&to_only, View::Audit).contains(l3.tumbler()));
+    assert!(!ls.match_links(&to_only, View::Active).contains(l3.tumbler()));
 }

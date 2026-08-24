@@ -34,6 +34,17 @@ pub enum MakeLinkError {
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
     /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
     EmptyTypeResolution,
+    /// The resolved type slot lands in the `[R]` class — retraction writes
+    /// only through `nullify` (K ≁ R). The hint fold recognizes a deposit by
+    /// its type slot's CLASS, never by the surface it arrived through, so an
+    /// `[R]`-classed link deposited here would tombstone every address its
+    /// TO slot denotes; this is the same sole-writer fence `emit` states.
+    RetractionClass,
+    /// The resolved type slot lands in the `[K_sup]` class — supersession
+    /// writes only through `assert_sup`/`editlink`, the two paths that
+    /// establish the Df-DISC(ii) schema (resident endpoints, single denoted
+    /// addresses, irreflexivity) the walk family reads back as fact.
+    SupersessionClass,
     /// M3's mint failed structurally.
     Mint(MintError),
     /// M5's seat step refused (CL-OWN/CL-UNIQ) — unreachable for a freshly
@@ -114,8 +125,9 @@ pub enum EditLinkError {
     NotOwner(Address),
     /// The supplied successor has arity ≠ 3 (the deliberate narrowing of
     /// EDITop's N ≥ 3 — Conflicts §11), an empty type slot, or a
-    /// non-level-uniform type slot (keeps the DC-guard `coverage_class`
-    /// total).
+    /// non-level-uniform span in ANY slot (keeps `coverage_class` total for
+    /// the DC guard, which reads the type slot, and for the hint fold's
+    /// dedup key, which reads all three).
     IllFormedSuccessor,
     /// DC: the successor is retraction-typed, or `[K_sup]`-typed without the
     /// Df-DISC(ii) schema (unit-depth single-addr F/G, resident endpoints,
@@ -180,6 +192,12 @@ impl fmt::Display for MakeLinkError {
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")
             }
+            MakeLinkError::RetractionClass => {
+                f.write_str("makelink: ty ~ [R] — retraction writes only through nullify (K ≁ R)")
+            }
+            MakeLinkError::SupersessionClass => f.write_str(
+                "makelink: ty ~ [K_sup] — supersession writes only through assert_sup/editlink",
+            ),
             MakeLinkError::Mint(e) => write!(f, "makelink: mint failed: {e}"),
             MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e:?}"),
         }
@@ -295,7 +313,7 @@ impl fmt::Display for EditLinkError {
                 f.write_str("editlink: the caller is not the effective owner (ω) of d_s or d_a")
             }
             EditLinkError::IllFormedSuccessor => f.write_str(
-                "editlink: successor arity ≠ 3, empty type slot, or non-level-uniform type slot (Conflicts §11)",
+                "editlink: successor arity ≠ 3, empty type slot, or a non-level-uniform span in some slot (Conflicts §11)",
             ),
             EditLinkError::DcViolation => f.write_str(
                 "editlink: DC — retraction-typed successor, or schema-non-conforming [K_sup]-typed successor",

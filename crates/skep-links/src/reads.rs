@@ -81,10 +81,29 @@ fn overlaps(a: &Span, b: &Span) -> bool {
     )
 }
 
-/// `Tumbler → Address` lift on the way out — infallible, every stored key
-/// being T4-valid by M3's mint (§G return-type convention).
+/// The spanfilade's per-link predicate: `link`'s slot-`i` coverage overlaps
+/// `query`. Absent slot ⇒ no match. The ONE statement of the test, so
+/// [`LinkState::stab`] and every later conjunct of
+/// [`LinkState::match_links`] cannot answer differently.
+fn slot_overlaps(link: &Link, i: usize, query: &Endset) -> bool {
+    link.slot(i)
+        .is_some_and(|slot| query.spans().any(|q| slot.spans().any(|s| overlaps(q, s))))
+}
+
+/// `Tumbler → Address` lift of an INDEX KEY — infallible, every key of
+/// `links` being T4-valid by M3's mint (§G return-type convention).
 fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
+}
+
+/// `Tumbler → Address` lift of a DENOTED address — a tumbler read back out of
+/// a stored slot rather than off an index key, so its validity rests on a
+/// different fact: every slot a deposit path builds comes from [`enc`], whose
+/// spans start at an `Address`'s tumbler, or from M5's `Run::iextent`, whose
+/// start is the run's `i_start` `Address`. Named apart from [`lift`] so the
+/// two obligations can be audited separately.
+fn lift_denoted(t: &Tumbler) -> Address {
+    validate(t.clone()).expect("a denoted slot address is T4-valid: every slot is built by enc or from a Run's iextent")
 }
 
 /// `Default → Active` for the surfaces where `Default` is undefined.
@@ -174,7 +193,7 @@ impl LinkState {
         }
         set.iter()
             .filter(|m| !(subtract && self.is_filtered(m)))
-            .map(lift)
+            .map(lift_denoted)
             .collect()
     }
 
@@ -198,7 +217,7 @@ impl LinkState {
         }
         set.iter()
             .filter(|g| !(subtract && self.is_filtered(g)))
-            .map(lift)
+            .map(lift_denoted)
             .collect()
     }
 
@@ -236,7 +255,7 @@ impl LinkState {
         if !self.serves_walk(ty) {
             return Vec::new();
         }
-        self.succs_operative(x.tumbler()).iter().map(lift).collect()
+        self.succs_operative(x.tumbler()).iter().map(lift_denoted).collect()
     }
 
     /// BH2 chain: the bounded iterative walk over operative successors from
@@ -248,7 +267,7 @@ impl LinkState {
             return Vec::new();
         }
         let (path, _) = self.walk_sup(x.tumbler());
-        path.iter().map(lift).collect()
+        path.iter().map(lift_denoted).collect()
     }
 
     /// BH2 chain membership: `target ∈ chain(ty, addr)` — membership in the
@@ -267,7 +286,7 @@ impl LinkState {
             return Tip::Indeterminate;
         }
         match self.walk_sup(x.tumbler()).1 {
-            Some(sink) => Tip::Sink(lift(&sink)),
+            Some(sink) => Tip::Sink(lift_denoted(&sink)),
             None => Tip::Indeterminate,
         }
     }
@@ -290,7 +309,7 @@ impl LinkState {
                 }
             }
         }
-        set.iter().map(lift).collect()
+        set.iter().map(lift_denoted).collect()
     }
 
     /// BH3 forward projection (§7): ⊥ unless EXACTLY ONE active type-`ty`
@@ -397,7 +416,7 @@ impl LinkState {
             if !self.succs_operative(v).is_empty() {
                 continue; // not a sink
             }
-            let member = lift(v);
+            let member = lift_denoted(v);
             let hits = self.match_links(&[(TO, enc([&member]))], View::Active);
             let claims: Vec<Address> = hits
                 .iter()
@@ -436,8 +455,7 @@ impl LinkState {
             if v == View::Active && self.nullified(addr) {
                 continue;
             }
-            let Some(slot) = link.slot(i) else { continue };
-            if query.spans().any(|q| slot.spans().any(|s| overlaps(q, s))) {
+            if slot_overlaps(link, i, query) {
                 out.insert(addr.clone());
             }
         }
@@ -449,6 +467,14 @@ impl LinkState {
     /// an unconstrained slot is OMITTED, never an empty `Endset`
     /// (`stab(i, ⟨⟩, ·) = ∅` would empty the AND); empty `constraints` ⇒ the
     /// whole `v` slice. `v ∈ {Audit, Active}` only (`Default` coerced).
+    ///
+    /// The first constraint scans `links`; every later one NARROWS the
+    /// accumulator with the same per-link predicate [`stab`] applies, rather
+    /// than scanning the store again and intersecting afterwards. Both read
+    /// the store through [`slot_overlaps`], so the AND cannot come apart from
+    /// its own conjuncts — and a caller's constraint count multiplies the
+    /// surviving set instead of the whole store, which matters because the
+    /// query is caller-supplied and the constraint count with it.
     pub fn match_links(&self, constraints: &[(usize, Endset)], v: View) -> OrdSet<Tumbler> {
         let v = coerce(v);
         let Some(((i0, q0), rest)) = constraints.split_first() else {
@@ -464,8 +490,11 @@ impl LinkState {
         };
         let mut acc = self.stab(*i0, q0, v);
         for (i, q) in rest {
-            let s = self.stab(*i, q, v);
-            acc = acc.iter().filter(|t| s.contains(*t)).cloned().collect();
+            acc = acc
+                .iter()
+                .filter(|t| slot_overlaps(self.link_at(t), *i, q))
+                .cloned()
+                .collect();
         }
         acc
     }
@@ -560,6 +589,6 @@ impl LinkState {
             }
         }
         let t = survivor?;
-        single_denoted(self.link_at(&t).to_slot()).map(lift)
+        single_denoted(self.link_at(&t).to_slot()).map(lift_denoted)
     }
 }

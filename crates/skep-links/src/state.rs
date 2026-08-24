@@ -12,8 +12,10 @@ use skep_address::{
 };
 
 use crate::dedup::DedupKey;
-use crate::endset::{coverage_class, CoverageClass, Link};
-use crate::registry::{RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry};
+use crate::endset::{coverage_class, single_denoted, CoverageClass, Link};
+use crate::registry::{
+    Registration, RegistryError, ReservedAddrs, ShippedType, TypeDecl, TypeRegistry,
+};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction emitter, supersession claim, editlink successor, pdef/pd_stable
@@ -216,6 +218,42 @@ impl LinkState {
         self.hints.nullified.contains(t)
     }
 
+    /// Df-DISC(ii): the `[K_sup]` claim schema — F and G each a unit-depth
+    /// single denoted address, the two distinct, both resident. The one
+    /// statement of the invariant every stored claim holds, and the whole
+    /// reason `assert_sup`/`editlink` are the sole `[K_sup]` writers: the
+    /// supersession adjacency, the walk family and M8's lineage reads all
+    /// take it as fact, so what admits a claim states it here rather than
+    /// inline at the gate that happens to be checking one.
+    pub(crate) fn conforms_to_sup_schema(&self, value: &Link) -> bool {
+        match (
+            single_denoted(value.from_slot()),
+            single_denoted(value.to_slot()),
+        ) {
+            (Some(f), Some(g)) => f != g && self.resident(f) && self.resident(g),
+            _ => false,
+        }
+    }
+
+    /// `f_d^Σ` — the home's chain-frontier hint, 0 for a home holding no
+    /// links yet. The one reading of it: `next_link_address` mints at
+    /// `1 + this`, BH4 `age` counts back from it.
+    pub(crate) fn home_frontier(&self, home: &Address) -> u64 {
+        self.hints
+            .home_frontier
+            .get(home.tumbler())
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The registration of a coverage class, `None` for an unregistered one —
+    /// the slice's delegate to its own registry, beside `shipped_class`, so a
+    /// gate or a read asks the state it already holds rather than reaching
+    /// through it for the lookup.
+    pub(crate) fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
+        self.registry.registration(class)
+    }
+
     /// The link an INDEX KEY names. Every key in `type_slices`/`dedup`/
     /// `sup_fwd`, and every key `stab` returns, is a key of `links` —
     /// [`fold_hints`] only ever indexes the address it is inserting — so
@@ -235,12 +273,7 @@ impl LinkState {
     /// emission itself. `home` is a registered Document, which is what makes
     /// the assembly total (§4).
     pub(crate) fn next_link_address(&self, home: &Address) -> Address {
-        let ordinal = 1 + self
-            .hints
-            .home_frontier
-            .get(home.tumbler())
-            .copied()
-            .unwrap_or(0);
+        let ordinal = 1 + self.home_frontier(home);
         elem_addr(ElemPos {
             doc: home.clone(),
             subspace: link_subspace(),

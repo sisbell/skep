@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 
-use skep_address::subtree_of;
 use skep_links::{
     coverage_class, enc, Behavior, CoverageClass, Endset, Registration, ReservedAddrs, Shape,
     ShippedType, TypeDecl, TypeRegistry,
@@ -43,13 +42,6 @@ pub(crate) struct TypeCatalog {
     pub(crate) supersedes_key: TypeKey,
     pub(crate) pred_def_class: CoverageClass,
     pub(crate) pred_stable_class: CoverageClass,
-}
-
-/// Every span unit-depth (address-denoting): `s == subtree_of(s.start())` per
-/// span — the local twin of M7's crate-private probe, pre-checking a decl key
-/// so the `coverage_class` probe stays total (§Core data model).
-fn address_denoting(e: &Endset) -> bool {
-    e.spans().all(|s| *s == subtree_of(s.start()))
 }
 
 const SHIPPED: [ShippedType; 5] = [
@@ -109,7 +101,7 @@ impl TypeCatalog {
         for d in decls {
             // Pre-checked address-denoting, keeping the coverage_class probe
             // total: a non-denoting key cannot hold a genesis registration.
-            if !address_denoting(&d.key) {
+            if !d.key.is_address_denoting() {
                 return Err(CatalogError::DeclNotInRegistry(TypeKey(d.key.clone())));
             }
             let class = coverage_class(&d.key);

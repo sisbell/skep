@@ -12,7 +12,7 @@ use skep_address::{
 
 use crate::endset::{coverage_class, enc, single_denoted, CoverageClass, Endset, Link};
 use crate::error::{Invalid, NotBh4};
-use crate::registry::{Behavior, Shape, ShippedType};
+use crate::registry::{Behavior, ShippedType};
 use crate::state::LinkState;
 use crate::{FROM, TO};
 
@@ -197,7 +197,7 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = view == View::Default && class != *self.shipped_class(ShippedType::Retired);
+        let subtract = self.subtracts_filtered(&class, view);
         let slice = self.type_slice_class(&class, view);
         let mut members: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
@@ -225,7 +225,7 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = view == View::Default && class != *self.shipped_class(ShippedType::Retired);
+        let subtract = self.subtracts_filtered(&class, view);
         let slice = self.type_slice_class(&class, view);
         let mut targets: OrdSet<Tumbler> = OrdSet::new();
         for t in slice.iter() {
@@ -377,11 +377,9 @@ impl LinkState {
     /// why M7 composes the join).
     pub fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
-        for (class, reg) in self.registry.map.iter() {
-            if reg.shape == Shape::Binary && reg.behaviors.contains(&Behavior::ReverseLookup) {
-                if let Some(t) = self.target_of_class(class, source) {
-                    out.insert(class.clone(), t);
-                }
+        for class in self.registry.reverse_lookup_classes() {
+            if let Some(t) = self.target_of_class(class, source) {
+                out.insert(class.clone(), t);
             }
         }
         out
@@ -397,14 +395,8 @@ impl LinkState {
             return None;
         }
         let home = document_of(a)?;
-        let frontier = self
-            .hints
-            .home_frontier
-            .get(home.tumbler())
-            .copied()
-            .unwrap_or(0);
         let ord = u64::try_from(ordinal(a.tumbler())).ok()?;
-        Some(frontier.saturating_sub(ord))
+        Some(self.home_frontier(&home).saturating_sub(ord))
     }
 
     /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`,
@@ -424,7 +416,6 @@ impl LinkState {
     pub fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
         let registered_bh4 = self
-            .registry
             .registration(&class)
             .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
         if !registered_bh4 {
@@ -447,12 +438,11 @@ impl LinkState {
     /// reachable from `y` via `succ_o` (the `reach_o(y)` fixpoint within the
     /// finite link set), returned ENTIRE — linear → 1, forked → ≥ 2,
     /// mutual-supersession standoff → 0, all legitimate. Each sink carries
-    /// its OWN activity and the FULL operative `out(sink)` — computed per
-    /// sink via the `match_links`/`type_slice` composition (§5), NOT by
-    /// walk-side accumulation (which would drop an operative claim targeting
-    /// the sink from outside the closure; the R0a link-address antichain
-    /// makes the `enc` overlap an exact address match). M7 discloses; the
-    /// consumer narrows — no single "latest" is fabricated.
+    /// its OWN activity and the FULL operative `out(sink)`, read per sink
+    /// from the inbound claim relation ([`LinkState::out_claims`]) rather
+    /// than accumulated during the walk — accumulation would drop an
+    /// operative claim asserted on the sink from outside the closure. M7
+    /// discloses; the consumer narrows — no single "latest" is fabricated.
     pub fn current(&self, y: &Address) -> Vec<CurrentMember> {
         let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
         let mut stack = vec![y.tumbler().clone()];
@@ -464,22 +454,13 @@ impl LinkState {
                 }
             }
         }
-        let sup_slice = self.type_slice_class(
-            self.shipped_class(ShippedType::Supersedes),
-            View::Active,
-        );
         let mut out = Vec::new();
         for t in reach.iter() {
             if !self.succs_operative(t).is_empty() {
                 continue; // not a sink
             }
             let member = lift_denoted(t);
-            let hits = self.match_links(&[(TO, enc([&member]))], View::Active);
-            let claims: Vec<Address> = hits
-                .iter()
-                .filter(|t| sup_slice.contains(*t))
-                .map(lift)
-                .collect();
+            let claims = self.out_claims(t);
             out.push(CurrentMember {
                 active: self.is_active(&member),
                 member,
@@ -587,6 +568,15 @@ impl LinkState {
         }
     }
 
+    /// Whether a read subtracts filtered RESULTS — two rules in one verdict,
+    /// stated once for the two reads (`members`/`targets_of`) that honor
+    /// them: BH1's Rewrite scope, which makes `View::Default` = active ∖
+    /// filtered on those two alone, and the `J ≠ K'` exclusion, which stops
+    /// the shipped filter class from subtracting itself.
+    fn subtracts_filtered(&self, class: &CoverageClass, view: View) -> bool {
+        view == View::Default && *class != *self.shipped_class(ShippedType::Retired)
+    }
+
     /// The v1 walk-serving scope (§5): the walk family serves the shipped
     /// `Supersedes` class and no other. The one statement of the rule
     /// `succs`/`chain`/`tip` apply, and the read-side half of the build-time
@@ -612,6 +602,27 @@ impl LinkState {
                 .map(|e| e.new.clone())
                 .collect(),
         }
+    }
+
+    /// Operative `out(x)` — every active `[K_sup]` claim whose `new` endpoint
+    /// DENOTES `x`, in claim-address order. The reverse of
+    /// [`LinkState::succs_operative`]: that direction reads the forward
+    /// `sup_fwd` hint, this one has no hint and scans the active claim slice,
+    /// which is why the two are named apart rather than derived from one
+    /// another.
+    ///
+    /// Matched by DENOTATION, the claim schema's own regime — a claim's `new`
+    /// is a single denoted address (Df-DISC(ii)), so `g == x` IS the
+    /// relation, total over every argument and needing no precondition. The
+    /// spanfilade's coverage overlap would agree on a link address, where the
+    /// `dom(L)` prefix antichain (R0a) makes the two coincide, and would
+    /// answer with every claim beneath a document- or account-level argument.
+    pub(crate) fn out_claims(&self, x: &Tumbler) -> Vec<Address> {
+        self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
+            .iter()
+            .filter(|claim| self.link_at(claim).to_slot().addrs().any(|g| g == x))
+            .map(lift)
+            .collect()
     }
 
     /// The visited-set-bounded forward walk: the traversed path (from `x`,

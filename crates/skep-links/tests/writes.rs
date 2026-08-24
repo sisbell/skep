@@ -5,8 +5,9 @@
 //! dedup + resurrection, retraction and the active view, supersession + the
 //! BH2 walk at each of its three halts, editlink's atomic composite and DC
 //! guard, MAKELINK end-to-end (wf, resolve, deposit, seat), EL14 currency
-//! disclosure, BH1/BH3/BH4 behaviors and the two matching regimes they
-//! choose between, the non-atomic BH4 batch, the §G discovery primitives and
+//! disclosure and the denotation regime its claim relation reads,
+//! BH1/BH3/BH4 behaviors and the two matching regimes they choose between,
+//! the BH3 join's behavior scope, the non-atomic BH4 batch, the §G discovery primitives and
 //! the AND-combiner's agreement with its own conjuncts, and the
 //! checkpoint-roundtrip + rebuild_derived discipline.
 
@@ -733,6 +734,57 @@ fn current_discloses_a_nullified_sink_with_its_own_activity() {
     assert!(!cur[0].active, "and carries its own activity");
     // The CLAIM is untouched, so the edge stays operative and s1 stays the sink.
     assert_eq!(cur[0].claims, vec![c1]);
+}
+
+#[test]
+fn current_discloses_inbound_claims_by_denotation_never_by_coverage() {
+    // A claim's `new` is a single denoted address (Df-DISC(ii)), so the
+    // inbound relation is denotation — and the difference is visible exactly
+    // where an overlap probe would over-match: a document-level argument,
+    // whose subtree span CONTAINS every link address beneath it. doc1 holds
+    // both endpoints and the claim, and is a successor-free node, so it
+    // discloses as its own sink; no claim names it.
+    let k = kernel();
+    let w = writer(&k);
+    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    // The control: the claim is operative and IS disclosed at the address it
+    // names, so the empty answer below is the matching rule, not absence.
+    let at_sink = links.current(&x);
+    assert_eq!(at_sink.len(), 1);
+    assert_eq!(at_sink[0].member, y);
+    assert_eq!(at_sink[0].claims, vec![c]);
+    let at_doc = links.current(&doc1());
+    assert_eq!(at_doc.len(), 1);
+    assert_eq!(at_doc[0].member, doc1());
+    assert!(
+        at_doc[0].claims.is_empty(),
+        "no claim's `new` denotes doc1; coverage answers with every claim beneath it"
+    );
+}
+
+#[test]
+fn targets_keyed_joins_only_the_reverse_lookup_classes() {
+    // The join covers registered Binary classes DECLARING ReverseLookup — a
+    // fact about registrations, so the registry names them. The shipped
+    // Retraction class is Binary too, and a retraction tuple denotes its own
+    // home in F, so a join that read shape alone would reach it here.
+    let k = kernel();
+    let w = writer(&k);
+    let (m1, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("m1");
+    w.nullify(P1, &doc1(), &m1).expect("retract it from doc1");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    // The control: that class DOES answer target_of for doc1, so its absence
+    // from the join is the behavior scope and not an empty class.
+    let retraction = links.reserved_type(ShippedType::Retraction).clone();
+    assert_eq!(links.target_of(&retraction, &doc1()), Some(m1));
+    assert!(links.targets_keyed(&doc1()).is_empty());
 }
 
 #[test]

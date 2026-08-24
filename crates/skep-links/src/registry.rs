@@ -7,7 +7,7 @@ use im::OrdSet;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Level};
 
-use crate::endset::{coverage_class, enc, is_address_denoting, CoverageClass, Endset};
+use crate::endset::{coverage_class, enc, CoverageClass, Endset};
 
 /// A registered type's tuple shape (ASN-0126 P3): span-count conformance is
 /// `|F| = 1` always, `|G|` per shape — Unary 0, Binary 1, Multi finite.
@@ -148,7 +148,7 @@ pub enum ShippedType {
 /// state and `LinkState::rebuild_derived` reconstructs this before replay.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
-    pub(crate) map: im::HashMap<CoverageClass, Registration>,
+    map: im::HashMap<CoverageClass, Registration>,
     retired: Endset,
     supersedes: Endset,
     retraction: Endset,
@@ -285,7 +285,7 @@ impl TypeRegistry {
             if decl.key.is_empty() {
                 return Err(RegistryError::EmptyKey);
             }
-            if !is_address_denoting(&decl.key) {
+            if !decl.key.is_address_denoting() {
                 return Err(RegistryError::NonAddressDenotingKey);
             }
             let class = coverage_class(&decl.key);
@@ -337,6 +337,22 @@ impl TypeRegistry {
     /// go through the same lookup).
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.map.get(class)
+    }
+
+    /// The classes the BH3 join covers: registered `Binary` classes declaring
+    /// `ReverseLookup`. Which registrations answer to a behavior is this
+    /// registry's own knowledge, so the predicate reads here, where the
+    /// shipped table above and R-C0's app-decl clause are both in view —
+    /// R-C0 already forces `ReverseLookup ⇒ Binary` on every app decl, so the
+    /// shape conjunct guards the shipped literals, which are seeded without
+    /// passing it. Order is the map's, which `targets_keyed` keys away.
+    pub(crate) fn reverse_lookup_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
+        self.map
+            .iter()
+            .filter(|(_, reg)| {
+                reg.shape == Shape::Binary && reg.behaviors.contains(&Behavior::ReverseLookup)
+            })
+            .map(|(class, _)| class)
     }
 
     /// The genesis-fixed type endset for a shipped class (M9 reads

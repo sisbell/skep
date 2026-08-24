@@ -22,7 +22,7 @@ use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{M3Rec, M3State, MintError};
 
 use crate::dedup::DedupKey;
-use crate::endset::{coverage_class, enc, is_address_denoting, single_denoted, Endset, Link};
+use crate::endset::{coverage_class, enc, Endset, Link};
 use crate::error::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
@@ -409,7 +409,7 @@ where
             // (emit's ty is address-denoting; the claim's and the retraction
             // emitter's types are the genesis-fixed reserved endsets).
             let class = coverage_class(value.type_slot());
-            let Some(reg) = links.registry.registration(&class) else {
+            let Some(reg) = links.registration(&class) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
             };
             if gate == Gate::Managed && class == *links.shipped_class(ShippedType::Retraction) {
@@ -593,7 +593,7 @@ where
         from: &Address,
         to: &[Address],
     ) -> Result<(Address, Seq), TxnError<EmitError>> {
-        if !is_address_denoting(ty) {
+        if !ty.is_address_denoting() {
             return Err(TxnError::Rejected(EmitError::NonAddressDenotingType));
         }
         let class = coverage_class(ty);
@@ -779,19 +779,10 @@ where
                 if successor_class == *r_class {
                     return Err(EditLinkError::DcViolation);
                 }
-                if successor_class == *sup_class {
-                    let schema_ok = match (
-                        single_denoted(successor.from_slot()),
-                        single_denoted(successor.to_slot()),
-                    ) {
-                        (Some(f), Some(g)) => {
-                            f != g && base.links().resident(f) && base.links().resident(g)
-                        }
-                        _ => false,
-                    };
-                    if !schema_ok {
-                        return Err(EditLinkError::DcViolation);
-                    }
+                if successor_class == *sup_class
+                    && !base.links().conforms_to_sup_schema(&successor)
+                {
+                    return Err(EditLinkError::DcViolation);
                 }
             }
             let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?;

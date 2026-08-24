@@ -3,7 +3,8 @@
 //! decomposition, `enc(X).addrs() = X` over every subset of a family, ⟨⟩
 //! distinctness), coverage-class identity (exact `Addrs` antichain;
 //! conservative `Extents` partition; invariance under span permutation;
-//! structural derives ≠ coverage identity; the pinned off-contract panic),
+//! structural derives ≠ coverage identity; the pinned off-contract panic and
+//! the address-denoting projection a caller discharges it with),
 //! `TypeRegistry::build`'s rejection matrix and its R-C0 behavior↔shape
 //! table in full, the five shipped registrations §B pins, and the
 //! serde/journal round trips.
@@ -420,6 +421,35 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
         LinkState::genesis(reserved(), vec![d]),
         Err(RegistryError::NonAddressDenotingKey)
     ));
+}
+
+#[test]
+fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
+    // The published projection that discharges coverage_class's precondition:
+    // a caller can ask it of an endset of its own making instead of learning
+    // the answer from a panic or a rejection.
+    assert!(Endset::empty().is_address_denoting()); // vacuous on ⟨⟩
+    assert!(enc(&[ca(1), ra(10)]).is_address_denoting());
+    assert!(!Endset::from_spans([span(&ca(1), &ca(3))]).is_address_denoting());
+    // The load-bearing case: the one span coverage_class aborts on answers
+    // false HERE, so the test and the precondition it guards agree.
+    let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
+    assert!(!skew.is_address_denoting());
+    // ...and it decides exactly as the two refusals it predicts: the
+    // registry's key-denotation clause admits one key and refuses the other.
+    let decl = |key: Endset| TypeDecl {
+        key,
+        reg: Registration {
+            shape: Shape::Multi,
+            idem: false,
+            behaviors: im::OrdSet::new(),
+        },
+    };
+    assert!(matches!(
+        LinkState::genesis(reserved(), vec![decl(skew)]),
+        Err(RegistryError::NonAddressDenotingKey)
+    ));
+    assert!(LinkState::genesis(reserved(), vec![decl(enc(&[ra(20)]))]).is_ok());
 }
 
 #[test]

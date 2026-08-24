@@ -83,6 +83,17 @@ impl Endset {
         self.0.iter().filter(|s| is_unit_depth(s)).map(|s| s.start())
     }
 
+    /// Every span unit-depth — the address-denoting test, vacuously true for
+    /// `⟨⟩`. THE projection a caller applies to satisfy the precondition this
+    /// module states of every classified endset: an address-denoting endset is
+    /// level-uniform, so [`coverage_class`] is total on it. Also the exact
+    /// admission rule of the managed surface's `ty` (`NonAddressDenotingType`)
+    /// and of `TypeRegistry::build`'s key-denotation clause
+    /// (`NonAddressDenotingKey`), so a caller can ask before it is refused.
+    pub fn is_address_denoting(&self) -> bool {
+        self.spans().all(is_unit_depth)
+    }
+
     /// INTERNAL — the one Endset → `SpanSet` boundary fold (concatenation,
     /// order-preserving, exactly M1's singleton+union). Used by FOLLOWLINK
     /// (F1/F3) and the `Extents` partition of [`coverage_class`].
@@ -97,18 +108,11 @@ pub(crate) fn is_unit_depth(s: &Span) -> bool {
     *s == subtree_of(s.start())
 }
 
-/// Every span unit-depth — the address-denoting endset test (the managed
-/// surface's `ty` precondition and `TypeRegistry::build`'s key-denotation
-/// clause). Vacuously true for `⟨⟩`.
-pub(crate) fn is_address_denoting(e: &Endset) -> bool {
-    e.spans().all(is_unit_depth)
-}
-
 /// "Unit-depth single-addr" slot test (ASN-0125 Df-DISC(ii) schema; the BH3
 /// `target_of` single-address-G rule): every span unit-depth AND exactly one
 /// distinct denoted address — returns it.
 pub(crate) fn single_denoted(e: &Endset) -> Option<&Tumbler> {
-    if !is_address_denoting(e) {
+    if !e.is_address_denoting() {
         return None;
     }
     let mut denoted = e.addrs();
@@ -246,13 +250,15 @@ pub enum CoverageClass {
 /// paths validate address-denoting, content paths are `iextent`-level-uniform
 /// by M5's construction, and read-side `ty` arguments are registered
 /// address-denoting types by caller contract (§Core data model totality).
+/// [`Endset::is_address_denoting`] is the test a caller applies to discharge
+/// the precondition on an endset of its own making — one hop from here.
 /// OFF-CONTRACT INPUT PANICS: a hand-built non-level-uniform span (e.g. the
 /// T12-valid `([5,3],[0,2,7])`) hits M1's `LevelMismatch` inside
 /// `canonical_key`, surfaced as a panic naming the precondition — NEVER a
 /// skipped span or a coarser class, either of which would silently corrupt
 /// type/dedup identity.
 pub fn coverage_class(e: &Endset) -> CoverageClass {
-    if is_address_denoting(e) {
+    if e.is_address_denoting() {
         // I0a: dedup, then drop every address with a distinct denoted prefix
         // — in ONE ascending pass, comparing each candidate only against the
         // last address retained.

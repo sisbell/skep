@@ -49,8 +49,7 @@ where
         .intersection(l.type_slice(sup, v)); // restrict to supersession claims (Ŝ^Σ = S^Σ)
     hits.iter()
         .map(|c| {
-            let ca = validate(c.clone()).expect("every §G key is T4-valid by M3's mint");
-            let link = l.readlink(&ca).expect("hit keys are resident links");
+            let link = l.readlink(c).expect("hit keys are resident links");
             // Endpoint extraction hoisted into statements: the `addrs()` iterator
             // borrows `link`, and a tail-expression temporary would outlive it.
             let old = validate(
@@ -72,10 +71,10 @@ where
             SupClaim {
                 old,
                 new,
-                home: document_of(&ca)
+                home: document_of(c)
                     .expect("a link address has zeros = 3, so its origin Document exists"), // EL8b
-                active: l.is_active(&ca),
-                claim: ca,
+                active: l.is_active(c),
+                claim: c.clone(),
             }
         })
         .collect()

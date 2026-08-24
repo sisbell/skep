@@ -21,8 +21,11 @@ use skep_address::{
 /// Derived `PartialEq`/`Eq`/`Hash` are STRUCTURAL (decomposition- and
 /// span-order-sensitive) — serde/container plumbing only, NEVER identity
 /// (§Core data model structural-derives contract): link identity is the store
-/// address (L11b), type/dedup identity is [`coverage_class`]. No seam may key
-/// on the derived impls.
+/// address (L11b), type/dedup identity is [`coverage_class`]. They are VALUE
+/// identity — same spans, same order — which is the right relation for
+/// deduplicating stored endset values; they are not TYPE identity, so nothing
+/// that means a type (a registration, a type index, a catalog key) may key on
+/// them.
 ///
 /// A span collection: `Default` is `⟨⟩` and `FromIterator<Span>` is the same
 /// verbatim construction [`Endset::from_spans`] performs, so a span pipeline
@@ -84,14 +87,26 @@ impl Endset {
     }
 
     /// Every span unit-depth — the address-denoting test, vacuously true for
-    /// `⟨⟩`. THE projection a caller applies to satisfy the precondition this
-    /// module states of every classified endset: an address-denoting endset is
-    /// level-uniform, so [`coverage_class`] is total on it. Also the exact
-    /// admission rule of the managed surface's `ty` (`NonAddressDenotingType`)
-    /// and of `TypeRegistry::build`'s key-denotation clause
-    /// (`NonAddressDenotingKey`), so a caller can ask before it is refused.
+    /// `⟨⟩`. Selects [`coverage_class`]'s exact `Addrs` branch, and is
+    /// verbatim the admission rule of the managed surface's `ty`
+    /// (`NonAddressDenotingType`) and of `TypeRegistry::build`'s
+    /// key-denotation clause (`NonAddressDenotingKey`), so a caller can ask
+    /// before it is refused. STRICTLY STRONGER than
+    /// [`Endset::is_level_uniform`], which is what [`coverage_class`] itself
+    /// requires.
     pub fn is_address_denoting(&self) -> bool {
         self.spans().all(is_unit_depth)
+    }
+
+    /// Every span level-uniform (`#start = #width`) — EXACTLY
+    /// [`coverage_class`]'s precondition, and the test a caller applies to an
+    /// endset of its own making. Implied by
+    /// [`Endset::is_address_denoting`] (a unit-depth span is its own start's
+    /// subtree, so start and width share a length) and strictly weaker than
+    /// it: a content endset of M5 `Run::iextent`s passes this and fails that,
+    /// and is a legal `coverage_class` input.
+    pub fn is_level_uniform(&self) -> bool {
+        self.spans().all(Span::is_level_uniform)
     }
 
     /// INTERNAL — the one Endset → `SpanSet` boundary fold (concatenation,
@@ -250,8 +265,10 @@ pub enum CoverageClass {
 /// paths validate address-denoting, content paths are `iextent`-level-uniform
 /// by M5's construction, and read-side `ty` arguments are registered
 /// address-denoting types by caller contract (§Core data model totality).
-/// [`Endset::is_address_denoting`] is the test a caller applies to discharge
-/// the precondition on an endset of its own making — one hop from here.
+/// [`Endset::is_level_uniform`] is the test a caller applies to discharge the
+/// precondition on an endset of its own making — one hop from here;
+/// [`Endset::is_address_denoting`] is the stronger condition the managed
+/// paths establish, sufficient but not necessary.
 /// OFF-CONTRACT INPUT PANICS: a hand-built non-level-uniform span (e.g. the
 /// T12-valid `([5,3],[0,2,7])`) hits M1's `LevelMismatch` inside
 /// `canonical_key`, surfaced as a panic naming the precondition — NEVER a

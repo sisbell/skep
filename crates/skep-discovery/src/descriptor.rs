@@ -6,7 +6,7 @@
 //! `match_links` (Conflicts #1: M8 implements no combiner).
 
 use im::OrdSet;
-use skep_address::{document_of, validate, Address, Tumbler};
+use skep_address::{document_of, Address};
 use skep_arrangement::HasM5;
 use skep_kernel::{Snapshot, WorldState};
 use skep_links::{Endset, HasLinks, View};
@@ -21,7 +21,7 @@ use crate::{FROM, TO, TYPE};
 /// an empty `Endset`, which it forbids), drop `Any` slots (FL-WILD — omitted,
 /// never an empty constraint), and hand the constrained slots to M7's
 /// AND-of-ORs over the ACTIVE view. `[]` constraints ⇒ the whole active slice.
-pub(crate) fn match_core<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Tumbler> {
+pub(crate) fn match_core<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
     for s in [&q.home, &q.from, &q.to, &q.ty] {
         match s {
             SlotSpec::Empty => return OrdSet::new(),
@@ -46,13 +46,12 @@ pub(crate) fn match_core<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Tumbler> {
 /// `document_of`, never an arrangement-presence test (CN-STAB: a
 /// reverse-orphaned link still satisfies a home-bounded query). `Empty` is
 /// already short-circuited in [`match_core`]; the arm here is defensive.
-pub(crate) fn home_ok(q: &FourSet, a: &Tumbler) -> bool {
+pub(crate) fn home_ok(q: &FourSet, a: &Address) -> bool {
     match &q.home {
         SlotSpec::Any => true,
         SlotSpec::Empty => false,
         SlotSpec::Spans(h) => {
-            let aa = validate(a.clone()).expect("every §G key is T4-valid by M3's mint");
-            let doc = document_of(&aa)
+            let doc = document_of(a)
                 .expect("a link address has zeros = 3, so its origin Document exists");
             h.covers(doc.tumbler())
         }
@@ -71,8 +70,8 @@ where
 {
     match_core(s.world(), q)
         .iter()
-        .filter(|t| home_ok(q, t)) // t: &&Tumbler derefs to home_ok's &Tumbler
-        .map(|t| validate(t.clone()).expect("every §G key is T4-valid by M3's mint"))
+        .filter(|a| home_ok(q, a)) // a: &&Address derefs to home_ok's &Address
+        .cloned()
         .collect()
 }
 
@@ -83,7 +82,7 @@ pub fn count_ftt_on<W>(s: &Snapshot<W>, q: &FourSet) -> usize
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
-    match_core(s.world(), q).iter().filter(|t| home_ok(q, t)).count()
+    match_core(s.world(), q).iter().filter(|a| home_ok(q, a)).count()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -96,5 +95,5 @@ where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
     let m = match_core(s.world(), q);
-    window_over(&m, cur, n, |t| home_ok(q, t))
+    window_over(&m, cur, n, |a| home_ok(q, a))
 }

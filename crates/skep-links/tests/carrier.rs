@@ -425,14 +425,12 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
 
 #[test]
 fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
-    // The published projection that discharges coverage_class's precondition:
-    // a caller can ask it of an endset of its own making instead of learning
-    // the answer from a panic or a rejection.
+    // The published admission rule the managed surface refuses on: a caller
+    // can ask it of an endset of its own making instead of learning the
+    // answer from a rejection.
     assert!(Endset::empty().is_address_denoting()); // vacuous on ⟨⟩
     assert!(enc(&[ca(1), ra(10)]).is_address_denoting());
     assert!(!Endset::from_spans([span(&ca(1), &ca(3))]).is_address_denoting());
-    // The load-bearing case: the one span coverage_class aborts on answers
-    // false HERE, so the test and the precondition it guards agree.
     let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
     assert!(!skew.is_address_denoting());
     // ...and it decides exactly as the two refusals it predicts: the
@@ -450,6 +448,30 @@ fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
         Err(RegistryError::NonAddressDenotingKey)
     ));
     assert!(LinkState::genesis(reserved(), vec![decl(enc(&[ra(20)]))]).is_ok());
+}
+
+#[test]
+fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger() {
+    // The two tests are not interchangeable, and the difference decides
+    // whether a legal input is refused: a content endset of iextent-shaped
+    // spans is NOT address-denoting, IS level-uniform, and classifies without
+    // panicking — so is_address_denoting over-refuses as a discharge test and
+    // is_level_uniform is the one that matches the precondition exactly.
+    let extent = Endset::from_spans([span(&ca(1), &ca(3))]);
+    assert!(!extent.is_address_denoting());
+    assert!(extent.is_level_uniform());
+    assert!(matches!(coverage_class(&extent), CoverageClass::Extents(_)));
+
+    // Denotation implies level-uniformity (a unit-depth span is its own
+    // start's subtree, so start and width share a length) — ⟨⟩ vacuously.
+    assert!(Endset::empty().is_level_uniform());
+    assert!(enc(&[ca(1), ra(10)]).is_level_uniform());
+
+    // The one input coverage_class aborts on fails BOTH, so the precondition
+    // and its test agree exactly where it matters.
+    let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
+    assert!(!skew.is_address_denoting());
+    assert!(!skew.is_level_uniform());
 }
 
 #[test]

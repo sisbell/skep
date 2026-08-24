@@ -10,11 +10,10 @@ use skep_address::{
     Tumbler,
 };
 
-use crate::endset::{coverage_class, enc, single_denoted, CoverageClass, Endset, Link};
+use crate::endset::{coverage_class, single_denoted, CoverageClass, Endset, Link};
 use crate::error::{Invalid, NotBh4};
 use crate::registry::{Behavior, ShippedType};
 use crate::state::LinkState;
-use crate::{FROM, TO};
 
 /// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
 /// `members`/`targets_of`; on `observe` and the §G index primitives it reads
@@ -91,7 +90,10 @@ fn slot_overlaps(link: &Link, slot: usize, query: &Endset) -> bool {
 }
 
 /// `Tumbler → Address` lift of an INDEX KEY — infallible, every key of
-/// `links` being T4-valid by M3's mint (§G return-type convention).
+/// `links` being T4-valid by M3's mint. THE boundary lift, applied wherever a
+/// store key leaves the store: every §F tuple address and every §G result
+/// passes through here, so no consumer restates the mint's guarantee to lift
+/// a key of its own.
 fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
@@ -152,9 +154,8 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn observe(&self, ty: &Endset, pat: Pattern<'_>, view: View) -> Vec<Tuple> {
         let class = coverage_class(ty);
-        let slice = self.type_slice_class(&class, view);
         let mut out = Vec::new();
-        for t in slice.iter() {
+        for t in self.typed(&class, view) {
             let link = self.link_at(t);
             let f_ok = pat.from.iter().all(|p| link.from_slot().covers(p));
             let g_ok = pat.to.iter().all(|p| link.to_slot().covers(p));
@@ -180,8 +181,7 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
         let class = coverage_class(ty);
-        self.type_slice_class(&class, View::Active)
-            .iter()
+        self.typed(&class, View::Active)
             .any(|addr| self.link_at(addr).from_slot().covers(t))
     }
 
@@ -198,9 +198,8 @@ impl LinkState {
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = self.subtracts_filtered(&class, view);
-        let slice = self.type_slice_class(&class, view);
         let mut members: OrdSet<Tumbler> = OrdSet::new();
-        for t in slice.iter() {
+        for t in self.typed(&class, view) {
             let link = self.link_at(t);
             for m in link.from_slot().addrs() {
                 members.insert(m.clone());
@@ -226,9 +225,8 @@ impl LinkState {
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
         let subtract = self.subtracts_filtered(&class, view);
-        let slice = self.type_slice_class(&class, view);
         let mut targets: OrdSet<Tumbler> = OrdSet::new();
-        for t in slice.iter() {
+        for t in self.typed(&class, view) {
             let link = self.link_at(t);
             if link.from_slot().covers(x.tumbler()) {
                 for g in link.to_slot().addrs() {
@@ -263,8 +261,7 @@ impl LinkState {
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         let retired = self.shipped_class(ShippedType::Retired);
-        self.type_slice_class(retired, View::Active)
-            .iter()
+        self.typed(retired, View::Active)
             .any(|t| self.link_at(t).from_slot().addrs().any(|root| is_prefix(root, probe)))
     }
 
@@ -333,9 +330,11 @@ impl LinkState {
 
     /// BH3 reverse (§7): sources of active type-`ty` tuples whose G COVERS
     /// `target` (AM's reverse-lookup rule — the one member of the family
-    /// matched by coverage rather than denotation) — `stab(TO, ·, Audit)`
-    /// overlap prefilter ∩ the active typed slice, exact `covers` filter
-    /// authoritative, collecting each survivor's F.addrs().
+    /// matched by coverage rather than denotation), collecting each match's
+    /// F.addrs(). The active typed slice is the domain and `covers` is the
+    /// whole test — the store-wide span scan [`LinkState::stab`] performs
+    /// would read every link in the docuverse to narrow a set that is a hint
+    /// lookup away and already a subset of what it scanned.
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
@@ -343,10 +342,8 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn sources_to(&self, ty: &Endset, target: &Address) -> Vec<Address> {
         let class = coverage_class(ty);
-        let prefilter = self.stab(TO, &enc([target]), View::Audit);
-        let slice = self.type_slice_class(&class, View::Active);
         let mut sources: OrdSet<Tumbler> = OrdSet::new();
-        for t in prefilter.iter().filter(|t| slice.contains(*t)) {
+        for t in self.typed(&class, View::Active) {
             let link = self.link_at(t);
             if link.to_slot().covers(target.tumbler()) {
                 for f in link.from_slot().addrs() {
@@ -422,8 +419,7 @@ impl LinkState {
             return Err(NotBh4);
         }
         Ok(self
-            .type_slice_class(&class, View::Active)
-            .iter()
+            .typed(&class, View::Active)
             .filter_map(|t| {
                 let a = lift(t);
                 match self.age(&a) {
@@ -487,7 +483,11 @@ impl LinkState {
     /// endset's spans — trivially correct, O(n); the deferred interval index
     /// swaps in behind the same signature and overlap predicate (Open build
     /// decisions).
-    pub fn stab(&self, slot: usize, query: &Endset, view: View) -> OrdSet<Tumbler> {
+    ///
+    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// on it is `Some`; the set is in M1's address order (T1), which is the
+    /// permanent enumeration key a cursor resumes from.
+    pub fn stab(&self, slot: usize, query: &Endset, view: View) -> OrdSet<Address> {
         let view = default_to_active(view);
         let mut out = OrdSet::new();
         for (addr, link) in self.links.iter() {
@@ -495,7 +495,7 @@ impl LinkState {
                 continue;
             }
             if slot_overlaps(link, slot, query) {
-                out.insert(addr.clone());
+                out.insert(lift(addr));
             }
         }
         out
@@ -515,7 +515,11 @@ impl LinkState {
     /// its own conjuncts — and a caller's constraint count multiplies the
     /// surviving set instead of the whole store, which matters because the
     /// query is caller-supplied and the constraint count with it.
-    pub fn match_links(&self, constraints: &[(usize, Endset)], view: View) -> OrdSet<Tumbler> {
+    ///
+    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// on it is `Some`; the set is in M1's address order (T1), which is the
+    /// permanent enumeration key a cursor resumes from.
+    pub fn match_links(&self, constraints: &[(usize, Endset)], view: View) -> OrdSet<Address> {
         let view = default_to_active(view);
         let Some(((first_slot, first_query), rest)) = constraints.split_first() else {
             // No constraint: the whole view slice.
@@ -524,7 +528,7 @@ impl LinkState {
                 if view == View::Active && self.nullified(addr) {
                     continue;
                 }
-                out.insert(addr.clone());
+                out.insert(lift(addr));
             }
             return out;
         };
@@ -532,40 +536,58 @@ impl LinkState {
         for (slot, query) in rest {
             acc = acc
                 .iter()
-                .filter(|t| slot_overlaps(self.link_at(t), *slot, query))
+                .filter(|a| slot_overlaps(self.link_at(a.tumbler()), *slot, query))
                 .cloned()
                 .collect();
         }
         acc
     }
 
-    /// `L_K` (Audit) / `A_K` (Active) — the typed slice as raw index keys.
+    /// `L_K` (Audit) / `A_K` (Active) — the typed slice.
     /// `view ∈ {Audit, Active}` only (`Default` reads as `Active`).
+    ///
+    /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
+    /// on it is `Some`; the set is in M1's address order (T1), which is the
+    /// permanent enumeration key a cursor resumes from.
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
-    pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Tumbler> {
-        self.type_slice_class(&coverage_class(ty), view)
+    pub fn type_slice(&self, ty: &Endset, view: View) -> OrdSet<Address> {
+        let class = coverage_class(ty);
+        self.typed(&class, view).map(lift).collect()
     }
 
     // ───────────────────────── internal helpers ─────────────────────────
 
-    /// The typed slice by class: audit from the hint; active = audit ∖
-    /// nullified, derived at query time (the indexes are append-only —
-    /// Active/audit indexing open decision, default taken).
+    /// The typed slice by class, as a LAZY walk of the audit hint: active =
+    /// audit ∖ nullified, decided per element at query time (the indexes are
+    /// append-only — Active/audit indexing open decision, default taken).
+    ///
+    /// Lazy because nearly every caller wants a walk or a boolean, not a
+    /// container: materializing the `Active` view means a fresh persistent
+    /// tree plus a deep clone of every `Tumbler` in it, and `is_filtered`
+    /// pays that once per result element of `members`/`targets_of` under
+    /// `View::Default`. The one caller that genuinely returns a set —
+    /// [`LinkState::type_slice`] — collects here, where the copy is visible.
     ///
     /// Takes `view` RAW and applies [`default_to_active`] here — the one
     /// place a slice read turns `Default` into `Active`, so a caller that
     /// also honors `Default` result-side (`members`/`targets_of`) reads its
     /// own `view` for that and hands this the same value unaltered.
-    pub(crate) fn type_slice_class(&self, class: &CoverageClass, view: View) -> OrdSet<Tumbler> {
-        let base = self.hints.type_slices.get(class).cloned().unwrap_or_default();
-        match default_to_active(view) {
-            View::Active => base.iter().filter(|t| !self.nullified(t)).cloned().collect(),
-            _ => base,
-        }
+    pub(crate) fn typed<'a>(
+        &'a self,
+        class: &CoverageClass,
+        view: View,
+    ) -> impl Iterator<Item = &'a Tumbler> + 'a {
+        let active = default_to_active(view) == View::Active;
+        self.hints
+            .type_slices
+            .get(class)
+            .into_iter()
+            .flatten()
+            .filter(move |t| !(active && self.nullified(t)))
     }
 
     /// Whether a read subtracts filtered RESULTS — two rules in one verdict,
@@ -618,8 +640,7 @@ impl LinkState {
     /// `dom(L)` prefix antichain (R0a) makes the two coincide, and would
     /// answer with every claim beneath a document- or account-level argument.
     pub(crate) fn out_claims(&self, x: &Tumbler) -> Vec<Address> {
-        self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
-            .iter()
+        self.typed(self.shipped_class(ShippedType::Supersedes), View::Active)
             .filter(|claim| self.link_at(claim).to_slot().addrs().any(|g| g == x))
             .map(lift)
             .collect()
@@ -651,24 +672,22 @@ impl LinkState {
     }
 
     /// `target_of` by class (shared with `targets_keyed`, whose registry walk
-    /// has classes, not endsets).
+    /// has classes, not endsets). Walks the active typed slice and applies
+    /// the denotation test directly: "exactly one" is a property of the set,
+    /// not of the iteration order, so no prefilter is wanted — and a
+    /// whole-store span scan to narrow a hint lookup would cost more than the
+    /// walk it replaced.
     fn target_of_class(&self, class: &CoverageClass, source: &Address) -> Option<Address> {
-        let prefilter = self.stab(FROM, &enc([source]), View::Audit);
-        let slice = self.type_slice_class(class, View::Active);
-        let mut survivor: Option<Tumbler> = None;
-        for t in prefilter.iter() {
-            if !slice.contains(t) {
-                continue;
-            }
+        let mut survivor: Option<&Tumbler> = None;
+        for t in self.typed(class, View::Active) {
             let link = self.link_at(t);
             if link.from_slot().addrs().any(|f| f == source.tumbler()) {
                 if survivor.is_some() {
                     return None; // several active type-ty matches ⇒ ⊥
                 }
-                survivor = Some(t.clone());
+                survivor = Some(t);
             }
         }
-        let t = survivor?;
-        single_denoted(self.link_at(&t).to_slot()).map(lift_denoted)
+        single_denoted(self.link_at(survivor?).to_slot()).map(lift_denoted)
     }
 }

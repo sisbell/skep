@@ -109,7 +109,8 @@ enum Gate {
     /// of it. Neither open-surface caller repeats the test; each states the
     /// obligation in its contract and reads the verdict back through its own
     /// `From<EmitCoreError>` (§2), so no deposited link can carry an empty
-    /// type slot however it arrived.
+    /// type slot however it arrived. Runs NO dedup, so this gate always
+    /// mints: it is what MAKELINK's seat step rests on.
     Open,
     /// Emit_K / assert_sup / editlink claim: registered ∧ shape-conformant ∧
     /// K ≁ R; idem⊤ ⇒ active-view dedup check.
@@ -369,6 +370,14 @@ impl From<HomeFault> for EditLinkError {
 /// deposits, neither of which touches document registration or ω — so the
 /// hoist pins the error order without the backstop being able to contradict
 /// it.
+///
+/// RETURN CONTRACT: under [`Gate::Open`] the address is freshly minted and
+/// two records are staged. Under `Managed`/`Retraction` on an idem⊤ class it
+/// may be an INCUMBENT, with nothing staged — so a caller that stages
+/// anything downstream naming the returned address must either take `Open` or
+/// carry its own miss argument. Both such callers do: MAKELINK seats under
+/// `Open`, and `editlink`'s claim keys its I0 on a successor minted moments
+/// earlier in the same transaction, so no incumbent can exist.
 fn emit_core<W>(
     stg: &mut Staging<W>,
     caller: Caller,
@@ -765,11 +774,8 @@ where
                 // neither shipped class — so it passes the DC guard untouched
                 // and comes back from the gate as `IllFormedSuccessor`.
                 let well_formed = successor.arity() == 3
-                    && (1..=successor.arity()).all(|i| {
-                        successor
-                            .slot(i)
-                            .is_some_and(|e| e.spans().all(|s| s.is_level_uniform()))
-                    });
+                    && (1..=successor.arity())
+                        .all(|i| successor.slot(i).is_some_and(Endset::is_level_uniform));
                 if !well_formed {
                     return Err(EditLinkError::IllFormedSuccessor);
                 }

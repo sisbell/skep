@@ -364,8 +364,8 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_emitter() {
         assert!(!links.is_active(&m1));
         assert!(links.is_active(&r1)); // the retraction emitter itself is active
         // Active slices exclude the nullified tuple; audit keeps it (R3).
-        assert!(!links.type_slice(&multi_ty(), View::Active).contains(m1.tumbler()));
-        assert!(links.type_slice(&multi_ty(), View::Audit).contains(m1.tumbler()));
+        assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
+        assert!(links.type_slice(&multi_ty(), View::Audit).contains(&m1));
     }
     // idem⊤: re-retracting the same target from the same home dedups.
     let (r2, _) = w.nullify(P1, &doc1(), &m1).expect("re-nullify dedups");
@@ -960,7 +960,7 @@ fn makelink_addrs_form_records_names_verbatim() {
         assert_eq!(links.readlink(&l2).expect("resident").to_slot(), &enc([&l1]));
         // Shared-identity typing: both links sit in the name's type slice.
         let slice = links.type_slice(&enc([&name]), View::Active);
-        assert!(slice.contains(l1.tumbler()) && slice.contains(l2.tumbler()));
+        assert!(slice.contains(&l1) && slice.contains(&l2));
     }
 
     // The as-given type floor: empty Addrs ty ⇒ EmptyTypeResolution.
@@ -1046,7 +1046,7 @@ fn makelink_into_a_registered_idem_top_class_deposits_and_never_dedups() {
     let links = snap.world().links();
     assert!(links.is_active(&l) && links.is_active(&e));
     let slice = links.type_slice(&idem_top_ty(), View::Active);
-    assert!(slice.contains(l.tumbler()) && slice.contains(e.tumbler()));
+    assert!(slice.contains(&l) && slice.contains(&e));
 }
 
 #[test]
@@ -1068,32 +1068,32 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
         let snap = k.snapshot();
         let links = snap.world().links();
         // Overlap = ProperOverlap | Containment | Equal.
-        assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(l.tumbler()));
-        assert!(links.stab(1, &enc(&[ca(2)]), View::Audit).contains(l.tumbler()));
+        assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(&l));
+        assert!(links.stab(1, &enc(&[ca(2)]), View::Audit).contains(&l));
         // NOT Adjacent: subtree(ca3) abuts [ca1, ca3) and must not match
         // slot 1 — but does match slot 2.
-        assert!(!links.stab(1, &enc(&[ca(3)]), View::Audit).contains(l.tumbler()));
-        assert!(links.stab(2, &enc(&[ca(3)]), View::Audit).contains(l.tumbler()));
+        assert!(!links.stab(1, &enc(&[ca(3)]), View::Audit).contains(&l));
+        assert!(links.stab(2, &enc(&[ca(3)]), View::Audit).contains(&l));
         // AND-combiner over constrained slots only; empty constraints ⇒ the
         // whole slice.
         assert!(links
             .match_links(&[(1, enc(&[ca(2)])), (2, enc(&[ca(3)]))], View::Audit)
-            .contains(l.tumbler()));
+            .contains(&l));
         assert!(!links
             .match_links(&[(1, enc(&[ca(2)])), (2, enc(&[ca(2)]))], View::Audit)
-            .contains(l.tumbler()));
-        assert!(links.match_links(&[], View::Audit).contains(l.tumbler()));
+            .contains(&l));
+        assert!(links.match_links(&[], View::Audit).contains(&l));
         // The content type is queryable by its coverage: ty resolved to the
         // single address ca(3), so its class is Addrs({ca3}).
-        assert!(links.type_slice(&enc(&[ca(3)]), View::Audit).contains(l.tumbler()));
+        assert!(links.type_slice(&enc(&[ca(3)]), View::Audit).contains(&l));
     }
     // Active view filters nullified results.
     w.nullify(P1, &doc1(), &l).expect("nullify the link");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(!links.stab(1, &enc(&[ca(1)]), View::Active).contains(l.tumbler()));
-    assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(l.tumbler()));
-    assert!(!links.match_links(&[], View::Active).contains(l.tumbler()));
+    assert!(!links.stab(1, &enc(&[ca(1)]), View::Active).contains(&l));
+    assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(&l));
+    assert!(!links.match_links(&[], View::Active).contains(&l));
 }
 
 #[test]
@@ -1379,7 +1379,7 @@ fn sources_to_matches_a_target_by_coverage() {
         .expect("makelink");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(links.type_slice(&bh3_ty(), View::Active).contains(l.tumbler()));
+    assert!(links.type_slice(&bh3_ty(), View::Active).contains(&l));
     assert_eq!(
         links.sources_to(&bh3_ty(), &ca(2)),
         vec![ca(1)],
@@ -1417,7 +1417,7 @@ fn target_of_matches_a_source_by_denotation() {
     let links = snap.world().links();
     // The control: the tuple IS in the active BH3 slice and its F covers the
     // probe, so the ⊥ below is the matching rule and not an absent tuple.
-    assert!(links.type_slice(&bh3_ty(), View::Active).contains(l.tumbler()));
+    assert!(links.type_slice(&bh3_ty(), View::Active).contains(&l));
     let link = links.readlink(&l).expect("resident");
     assert!(link.from_slot().covers(ca(1).tumbler()));
     assert_eq!(
@@ -1586,8 +1586,8 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     let links = snap.world().links();
     assert!(links.is_nullified(&m1));
     assert!(links.readlink(&m1).is_some());
-    assert!(links.type_slice(&multi_ty(), View::Audit).contains(m1.tumbler()));
-    assert!(!links.type_slice(&multi_ty(), View::Active).contains(m1.tumbler()));
+    assert!(links.type_slice(&multi_ty(), View::Audit).contains(&m1));
+    assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
 }
 
 // ---- the sole-writer fences, on the open surface ----
@@ -1622,7 +1622,7 @@ fn makelink_cannot_forge_a_retraction_of_a_foreign_link() {
     let links = snap.world().links();
     assert!(links.is_active(&victim));
     assert!(!links.is_nullified(&victim));
-    assert!(links.type_slice(&multi_ty(), View::Active).contains(victim.tumbler()));
+    assert!(links.type_slice(&multi_ty(), View::Active).contains(&victim));
     // The owner's own retraction is the one path that reaches the tombstone.
     w.nullify(P1, &doc1(), &victim).expect("owner retraction");
     assert!(k.snapshot().world().links().is_nullified(&victim));
@@ -1788,9 +1788,9 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     // vacuous: the three-slot AND admits l1 and l4 only, and Active drops
     // the nullified link from the one-slot answer.
     let all = links.match_links(&pool.to_vec(), View::Audit);
-    assert!(all.contains(l1.tumbler()) && all.contains(l4.tumbler()));
-    assert!(!all.contains(l2.tumbler()) && !all.contains(l3.tumbler()));
+    assert!(all.contains(&l1) && all.contains(&l4));
+    assert!(!all.contains(&l2) && !all.contains(&l3));
     let to_only = [(TO, enc(&[ca(2)]))];
-    assert!(links.match_links(&to_only, View::Audit).contains(l3.tumbler()));
-    assert!(!links.match_links(&to_only, View::Active).contains(l3.tumbler()));
+    assert!(links.match_links(&to_only, View::Audit).contains(&l3));
+    assert!(!links.match_links(&to_only, View::Active).contains(&l3));
 }

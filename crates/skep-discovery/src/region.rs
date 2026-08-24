@@ -8,13 +8,13 @@
 use std::collections::HashSet;
 
 use im::OrdSet;
-use skep_address::{validate, Address, Span, Tumbler};
+use skep_address::{Address, Span};
 use skep_arrangement::{HasM5, Run};
 use skep_kernel::{Snapshot, WorldState};
 use skep_links::{Endset, HasLinks};
 use skep_namespace::HasM3;
 
-use crate::helpers::{addrs, check_region, stab_slots, stab_union, window_over};
+use crate::helpers::{check_region, stab_slots, stab_union, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::{FROM, TO, TYPE};
 
@@ -54,13 +54,13 @@ where
 
 /// The shared selection index of the V-anchored family: the disjunctive
 /// ASN-0127 `findlinks(image(W,d))` ∩ the active view, as M7's native
-/// `OrdSet<Tumbler>` (address order — ASN-0108's permanent enumeration key).
+/// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key).
 /// F-V empty short-circuit: an empty image touches no index.
 pub(crate) fn findlinks_v_set_on<W>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-) -> Result<OrdSet<Tumbler>, QueryError>
+) -> Result<OrdSet<Address>, QueryError>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
@@ -85,7 +85,7 @@ pub fn findlinks_v_on<W>(
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
-    Ok(addrs(&findlinks_v_set_on(s, d, region)?))
+    Ok(findlinks_v_set_on(s, d, region)?.iter().cloned().collect())
 }
 
 /// Present-tense census of region-reaching links; result = foundation ∩
@@ -148,8 +148,7 @@ where
         .union(slots[2].clone());
     let mut out: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
     for c in cand.iter() {
-        let ca = validate(c.clone()).expect("every §G key is T4-valid by M3's mint");
-        let link = w.links().readlink(&ca).expect("stab keys are resident links");
+        let link = w.links().readlink(c).expect("stab keys are resident links");
         for i in [FROM, TO, TYPE] {
             // = ALL slots in v1 (the arity-3 invariant, §1)
             if slots[i - 1].contains(c) {

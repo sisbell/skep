@@ -1,38 +1,29 @@
 //! §Internal design — the shared free helpers every family composes: the
-//! output-boundary address lift, the per-slot/union Active stabs, the region
-//! gate, and the one windowing combinator. All pure over borrowed state;
-//! nothing here snapshots (callers thread ONE snapshot per operation).
+//! per-slot/union Active stabs, the region gate, and the one windowing
+//! combinator. All pure over borrowed state; nothing here snapshots (callers
+//! thread ONE snapshot per operation).
 
 use std::ops::Bound::{Excluded, Unbounded};
 
 use im::OrdSet;
 use num_traits::{One, Zero};
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{Address, Nat, Span};
 use skep_links::{Endset, HasLinks, View};
 
 use crate::types::{Cursor, QueryError, Window};
 use crate::{FROM, TO, TYPE};
 
-/// Lift M7's native discovery keys to validated addresses, at the OUTPUT
-/// boundary only (§G return-type convention): clone each iterated `&Tumbler`,
-/// `validate` infallibly — every key is a T4-valid minted address (M3).
-pub(crate) fn addrs(keys: &OrdSet<Tumbler>) -> Vec<Address> {
-    keys.iter()
-        .map(|t| validate(t.clone()).expect("every §G key is T4-valid by M3's mint"))
-        .collect()
-}
-
 /// Per-slot Active stabs over `{FROM, TO, TYPE}`, kept SEPARATE (slot
 /// attribution reads them — §4). Exact over ALL slots by the v1 arity-3
 /// invariant (§1: every v1 link-creation path deposits an arity-3 link).
 /// `View::Active` discharges addressability — nullified links never match.
-pub(crate) fn stab_slots<W: HasLinks>(w: &W, q: &Endset) -> [OrdSet<Tumbler>; 3] {
+pub(crate) fn stab_slots<W: HasLinks>(w: &W, q: &Endset) -> [OrdSet<Address>; 3] {
     [FROM, TO, TYPE].map(|i| w.links().stab(i, q, View::Active))
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core ∩ the active view: OR across
 /// slots `{FROM, TO, TYPE}` (M7 has no slot-collapsed primitive).
-pub(crate) fn stab_union<W: HasLinks>(w: &W, q: &Endset) -> OrdSet<Tumbler> {
+pub(crate) fn stab_union<W: HasLinks>(w: &W, q: &Endset) -> OrdSet<Address> {
     let [f, t, y] = stab_slots(w, q);
     f.union(t).union(y)
 }
@@ -70,21 +61,21 @@ pub(crate) fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// * `exhausted = batch.len() < n` (a short window, zero included, W9);
 ///   `next` = the ≺-max of the batch, else the cursor unchanged.
 pub(crate) fn window_over(
-    matched: &OrdSet<Tumbler>,
+    matched: &OrdSet<Address>,
     cur: Cursor,
     n: usize,
-    keep: impl Fn(&Tumbler) -> bool,
+    keep: impl Fn(&Address) -> bool,
 ) -> Window {
     let n = n.max(1);
     let lo = match &cur {
         None => Unbounded,
-        Some(c) => Excluded(c.tumbler().clone()),
+        Some(c) => Excluded(c.clone()),
     };
     let batch: Vec<Address> = matched
         .range((lo, Unbounded))
-        .filter(|t| keep(*t)) // t: &&Tumbler → deref to &Tumbler
+        .filter(|a| keep(a)) // a: &&Address → deref to &Address
         .take(n)
-        .map(|t| validate(t.clone()).expect("every §G key is T4-valid by M3's mint"))
+        .cloned()
         .collect();
     let next = batch.last().cloned().or(cur);
     Window {

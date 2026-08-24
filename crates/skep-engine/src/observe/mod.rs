@@ -35,7 +35,7 @@ mod canon;
 use std::fmt;
 
 use serde::Serialize;
-use skep_address::{validate, Address, Tumbler};
+use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 
@@ -156,19 +156,19 @@ fn addr_seq(addrs: &[Address]) -> Canon {
     Canon::Seq(addrs.iter().map(|a| Canon::Str(a.to_string())).collect())
 }
 
-/// Lift an audit-slice key to the `Address` the §F reads take (the M8-style
-/// caller-side lift; infallible for M3-minted addresses).
-fn lift(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("audit-slice addresses are M3-minted and T4-valid")
-}
-
 /// One type class's observable projection: its key endset and its
-/// audit/active slices (both already tumbler-ordered `OrdSet`s).
+/// audit/active slices (both already address-ordered `OrdSet`s).
 fn class_canon(links: &LinkState, ty: &Endset) -> Canon {
     Canon::Map(vec![
         (key("key"), tum_seq(ty.addrs())),
-        (key("audit"), tum_seq(links.type_slice(ty, View::Audit).iter())),
-        (key("active"), tum_seq(links.type_slice(ty, View::Active).iter())),
+        (
+            key("audit"),
+            tum_seq(links.type_slice(ty, View::Audit).iter().map(Address::tumbler)),
+        ),
+        (
+            key("active"),
+            tum_seq(links.type_slice(ty, View::Active).iter().map(Address::tumbler)),
+        ),
     ])
 }
 
@@ -180,15 +180,15 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
     let active = links.match_links(&[], View::Active);
 
     let mut entries: Vec<(Canon, Canon)> = vec![
-        (key("links.audit"), tum_seq(audit.iter())),
-        (key("links.active"), tum_seq(active.iter())),
+        (key("links.audit"), tum_seq(audit.iter().map(Address::tumbler))),
+        (key("links.active"), tum_seq(active.iter().map(Address::tumbler))),
         (
             key("links.nullified"),
             Canon::Seq(
                 audit
                     .iter()
-                    .filter(|t| links.is_nullified(&lift(t)))
-                    .map(|t| Canon::Str(t.to_string()))
+                    .filter(|a| links.is_nullified(a))
+                    .map(|a| Canon::Str(a.to_string()))
                     .collect(),
             ),
         ),
@@ -216,10 +216,10 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
     // `[K_sup]` class — the public projection of M7's `sup_fwd` hint).
     let sup = links.reserved_type(ShippedType::Supersedes);
     let mut edges: Vec<(Canon, Canon)> = Vec::new();
-    for t in audit.iter() {
-        let succs = links.succs(sup, &lift(t));
+    for a in audit.iter() {
+        let succs = links.succs(sup, a);
         if !succs.is_empty() {
-            edges.push((Canon::Str(t.to_string()), addr_seq(&succs)));
+            edges.push((Canon::Str(a.to_string()), addr_seq(&succs)));
         }
     }
     entries.push((key("supersession"), Canon::Map(edges)));

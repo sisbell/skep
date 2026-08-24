@@ -21,7 +21,7 @@
 //! `View::Active`, so results are *foundation ∩ active* and a nullified link
 //! never surfaces (Conflicts #8 — a deliberate divergence from the unfiltered
 //! foundations of ASN-0127/0098/0108/0117). Windowing (ASN-0108) is a
-//! stateless key-cut over M7's native `OrdSet<Tumbler>` — address order IS
+//! stateless key-cut over M7's native `OrdSet<Address>` — address order IS
 //! the permanent enumeration key (Conflicts #3), so the cursor survives
 //! orphaning and M8 pages with no index of its own.
 //!

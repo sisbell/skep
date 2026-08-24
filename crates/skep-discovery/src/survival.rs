@@ -13,7 +13,7 @@ use skep_kernel::{Snapshot, WorldState};
 use skep_links::{Endset, HasLinks};
 use skep_namespace::HasM3;
 
-use crate::helpers::{addrs, stab_union};
+use crate::helpers::stab_union;
 use crate::types::{OrphanReport, QueryError};
 
 /// A single ordinal-level depth-2 V-span value `[subspace, ordinal] ×
@@ -101,6 +101,6 @@ where
         stab_union(w, &Endset::from_spans(retained.iter().map(Run::iextent)))
     };
     Ok(OrphanReport {
-        orphaned: addrs(&cand.relative_complement(surv)),
+        orphaned: cand.relative_complement(surv).into_iter().collect(),
     })
 }

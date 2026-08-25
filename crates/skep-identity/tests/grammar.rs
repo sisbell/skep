@@ -417,7 +417,7 @@ fn public_key_surface() {
 /// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly
 /// 64 hex in, case-insensitively; `None` for anything else.
 #[test]
-fn fingerprint_hex_surface() {
+fn fingerprint_hex_round_trips_and_admits_exactly_64_chars() {
     let f = fp(9);
     let h = f.to_hex();
     assert_eq!(h.len(), 64);

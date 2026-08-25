@@ -79,14 +79,14 @@ struct Act {
     fps: Vec<u8>,
 }
 
-const ACCOUNTS: [&[u32]; 5] = [CLM, ORG, NESTED, ACCT_A, ACCT_B];
+const ACCOUNTS: [&[u32]; 5] = [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B];
 
 /// Candidate homes: every account's doc 1 (own-space, registry-homed,
 /// claimant-homed and stranger-homed arms all reachable — I5's three homing
 /// arms) plus a second document (the home pin's refused residence).
 fn homes() -> Vec<(Address, Address)> {
     vec![
-        (doc1(CLM), addr(CLM)),
+        (doc1(CLAIMANT), addr(CLAIMANT)),
         (doc1(ORG), addr(ORG)),
         (doc1(NESTED), addr(NESTED)),
         (doc1(ACCT_A), addr(ACCT_A)),
@@ -112,14 +112,17 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         })
 }
 
-struct Mat {
+/// One case of the property: a scripted [`Act`] materialized into the
+/// deposit the fold sees, beside the two addresses the invariants reason
+/// over.
+struct Case {
     dep: Dep,
     kind: u8,
     subject: Address,
     home_account: Address,
 }
 
-fn materialize(fx: &mut Fixture, act: &Act) -> Mat {
+fn materialize(fx: &mut Fixture, act: &Act) -> Case {
     let subject_comps = ACCOUNTS[act.subject];
     let (home, home_account) = homes()[act.home].clone();
     let dep = match act.kind {
@@ -137,7 +140,7 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Mat {
             }
         }
     };
-    Mat {
+    Case {
         dep,
         kind: act.kind,
         subject: addr(subject_comps),
@@ -158,20 +161,20 @@ proptest! {
         acts in prop::collection::vec(act_strategy(), 1..40)
     ) {
         let mut fx = Fixture::new();
-        let mats: Vec<Mat> = acts.iter().map(|a| materialize(&mut fx, a)).collect();
+        let cases: Vec<Case> = acts.iter().map(|a| materialize(&mut fx, a)).collect();
         let accounts: Vec<Address> = ACCOUNTS.iter().map(|c| addr(c)).collect();
 
         let mut st = IdentityState::genesis();
         let mut ever_nonempty: BTreeSet<Address> = BTreeSet::new();
-        let mut retired_ever: BTreeSet<(Address, Fingerprint)> = BTreeSet::new();
+        let mut ever_retired: BTreeSet<(Address, Fingerprint)> = BTreeSet::new();
         let mut first_flag: BTreeMap<(Address, Fingerprint), bool> = BTreeMap::new();
         let mut genesis_count: BTreeMap<Address, usize> = BTreeMap::new();
         let mut claims = 0usize;
 
-        for mat in &mats {
-            let pre_nonempty_subject = !st.key_set(&mat.subject).is_empty();
-            let preview = fx.classify(&st, &mat.dep);
-            let (next, verdict) = fx.step(&st, &mat.dep);
+        for case in &cases {
+            let pre_nonempty_subject = !st.key_set(&case.subject).is_empty();
+            let preview = fx.classify(&st, &case.dep);
+            let (next, verdict) = fx.step(&st, &case.dep);
 
             // AUTH-2.57 — classify is exactly the verdict step reaches.
             prop_assert_eq!(&preview, &verdict);
@@ -183,7 +186,7 @@ proptest! {
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is
             // inert (registry-, claimant- and stranger-homed alike).
-            if mat.kind == 0 && pre_nonempty_subject && mat.home_account != mat.subject {
+            if case.kind == 0 && pre_nonempty_subject && case.home_account != case.subject {
                 prop_assert!(matches!(verdict, Verdict::Inert(_)));
             }
 
@@ -209,7 +212,7 @@ proptest! {
                 }
                 Verdict::Honored(Effect::Retire { account, removed }) => {
                     for f in removed {
-                        retired_ever.insert((account.clone(), *f));
+                        ever_retired.insert((account.clone(), *f));
                     }
                 }
                 Verdict::Honored(Effect::Claim { account: _ }) => {
@@ -237,17 +240,21 @@ proptest! {
             }
             // I4 — per (account, fingerprint): retired ⇒ never enrolled
             // again in THAT account's set.
-            for (acct, f) in &retired_ever {
+            for (acct, f) in &ever_retired {
                 prop_assert!(!next.key_set(acct).contains(f));
             }
             // I9 — per (account, fingerprint): the flag anywhere (enrolled
             // or retired) equals the first-enrollment flag in that account.
             for ((acct, f), flag) in &first_flag {
                 let s = next.key_set(acct);
-                if let Some((_, e)) = s.enrolled().find(|(fp2, _)| *fp2 == f) {
-                    prop_assert_eq!(e.anchor, *flag);
+                if let Some((_, enrolled)) =
+                    s.enrolled().find(|(enrolled_fp, _)| *enrolled_fp == f)
+                {
+                    prop_assert_eq!(enrolled.anchor, *flag);
                 }
-                if let Some((_, retired_flag)) = s.retired().find(|(fp2, _)| *fp2 == f) {
+                if let Some((_, retired_flag)) =
+                    s.retired().find(|(retired_fp, _)| *retired_fp == f)
+                {
                     prop_assert_eq!(retired_flag, *flag);
                 }
             }
@@ -258,18 +265,18 @@ proptest! {
         // I2 — `fold(s ++ t) == fold_from(fold(s), t)`, and re-folding the
         // whole stream reproduces the same table (determinism over a fixed
         // ctx and stream).
-        let fold_over = |start: &IdentityState, slice: &[Mat]| -> IdentityState {
+        let fold_over = |start: &IdentityState, slice: &[Case]| -> IdentityState {
             let mut acc = start.clone();
-            for mat in slice {
-                acc = fx.step(&acc, &mat.dep).0;
+            for case in slice {
+                acc = fx.step(&acc, &case.dep).0;
             }
             acc
         };
-        let whole = fold_over(&IdentityState::genesis(), &mats);
+        let whole = fold_over(&IdentityState::genesis(), &cases);
         prop_assert_eq!(&whole, &st);
-        let mid = mats.len() / 2;
-        let head = fold_over(&IdentityState::genesis(), &mats[..mid]);
-        let resumed = fold_over(&head, &mats[mid..]);
+        let mid = cases.len() / 2;
+        let head = fold_over(&IdentityState::genesis(), &cases[..mid]);
+        let resumed = fold_over(&head, &cases[mid..]);
         prop_assert_eq!(&resumed, &st);
     }
 
@@ -282,11 +289,11 @@ proptest! {
     ) {
         let mut fx = Fixture::new();
         fx.ctx.all_unpublished = true;
-        let mats: Vec<Mat> = acts.iter().map(|a| materialize(&mut fx, a)).collect();
+        let cases: Vec<Case> = acts.iter().map(|a| materialize(&mut fx, a)).collect();
         let genesis_state = IdentityState::genesis();
-        for mat in &mats {
-            let (next, verdict) = fx.step(&genesis_state, &mat.dep);
-            if mat.kind <= 2 {
+        for case in &cases {
+            let (next, verdict) = fx.step(&genesis_state, &case.dep);
+            if case.kind <= 2 {
                 let token = token_of(&verdict);
                 prop_assert_eq!(token.as_deref(), Some("unpublished"));
             } else {

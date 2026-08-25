@@ -91,7 +91,7 @@ impl IdentityState {
         }
         // 4 — the per-kind arm.
         match kind {
-            CredentialKind::Claim => self.claim_arm(ctx, dep, &home_account),
+            CredentialKind::Claim => self.claim_path(ctx, dep, &home_account),
             CredentialKind::Enroll => self.enroll_path(ctx, dep, &home_account),
             CredentialKind::Retire => self.retire_path(ctx, dep, &home_account),
         }
@@ -156,7 +156,7 @@ impl IdentityState {
     /// `detail` pin, AUTH-2.68 — the cost gradient runs the wrong way and an
     /// implementation MUST NOT reorder cheap-first). The claim carries NO
     /// payload: this arm reads no bytes (AUTH-2.48).
-    fn claim_arm(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, home_account: &Address) -> Verdict {
+    fn claim_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, home_account: &Address) -> Verdict {
         // 1 — shape: `from = {H}` in address form, `to = ∅` (AUTH-2.48; the
         // fold cannot tell the two empty-`to` wire forms apart, AUTH-2.49).
         if single_address(dep.from).as_ref() != Some(home_account) || !dep.to.is_empty() {
@@ -232,8 +232,8 @@ impl IdentityState {
             // outside `added` WHATEVER its flag (I4 AUTH-2.98; I9 AUTH-2.104).
             let added: Vec<Enrolled> = enrollments
                 .iter()
-                .filter(|k| {
-                    let fp = Fingerprint::of(&k.key);
+                .filter(|enrollment| {
+                    let fp = Fingerprint::of(&enrollment.key);
                     !set.contains(&fp) && !set.retired_contains(&fp)
                 })
                 .map(enrolled_of)
@@ -407,9 +407,9 @@ fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address,
 /// AUTH-2.52 — what an honored enrollment KEEPS from a parsed line: the key
 /// and the flag it enters under. The label is informational (AUTH-1.23) and
 /// is not a fold input, so it stops here — the one place that is decided.
-fn enrolled_of(k: &Enrollment) -> Enrolled {
+fn enrolled_of(enrollment: &Enrollment) -> Enrolled {
     Enrolled {
-        key: k.key,
-        anchor: k.anchor,
+        key: enrollment.key,
+        anchor: enrollment.anchor,
     }
 }

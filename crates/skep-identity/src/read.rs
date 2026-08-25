@@ -88,10 +88,10 @@ pub fn record_bytes(
             return Err(PayloadError::ForeignContent);
         }
         // The reach walk (AUTH-2.42).
-        let mut t = span.start().clone();
-        while span.contains(&t) {
+        let mut pos = span.start().clone();
+        while span.contains(&pos) {
             // 4 — the value, as of the ctx's commit (AUTH-2.38 item 4).
-            let Some(value) = ctx.value_at(&t) else {
+            let Some(value) = ctx.value_at(&pos) else {
                 return Err(PayloadError::MissingValue);
             };
             debug_assert!(
@@ -112,7 +112,7 @@ pub fn record_bytes(
             if positions > MAX_RECORD_BYTES {
                 return Err(PayloadError::TooLarge);
             }
-            t = shift(&t, &one);
+            pos = shift(&pos, &one);
         }
     }
     Ok(out)

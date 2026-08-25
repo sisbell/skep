@@ -23,7 +23,7 @@ fn enroll_ty() -> Vec<Span> {
 /// home anchoring; a home-minted run is native and folds, AUTH-2.96's
 /// copy-from-home row).
 #[test]
-fn foreign_content_vs_native_fold() {
+fn home_minted_bytes_fold_and_foreign_ones_do_not() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let payload = enroll_payload(&[(1, true)]);
@@ -65,11 +65,11 @@ fn cap_fault_fires_before_second_spans_home_check() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let big = vec![b'x'; MAX_RECORD_BYTES + 1];
-    let s1 = fx.mint(&doc1(ACCT_A), &[&big]);
-    let s2 = fx.mint(&doc1(ACCT_B), &[b"foreign"]);
+    let home_span = fx.mint(&doc1(ACCT_A), &[&big]);
+    let foreign_span = fx.mint(&doc1(ACCT_B), &[b"foreign"]);
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![s1[0].clone(), s2[0].clone()],
+        from: vec![home_span[0].clone(), foreign_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
@@ -87,11 +87,11 @@ fn exact_cap_passes_then_foreign_span_refuses() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let exact = vec![b'x'; MAX_RECORD_BYTES];
-    let s1 = fx.mint(&doc1(ACCT_A), &[&exact]);
-    let s2 = fx.mint(&doc1(ACCT_B), &[b"foreign"]);
+    let home_span = fx.mint(&doc1(ACCT_A), &[&exact]);
+    let foreign_span = fx.mint(&doc1(ACCT_B), &[b"foreign"]);
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![s1[0].clone(), s2[0].clone()],
+        from: vec![home_span[0].clone(), foreign_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
@@ -110,11 +110,11 @@ fn endset_order_governs_concatenation() {
     // The key line is minted at the LOWER address, the header at the HIGHER:
     // endset order (header first) disagrees with address order.
     let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    let s_key = fx.mint(&doc1(ACCT_A), &[key_line.as_bytes()]);
-    let s_hdr = fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n"]);
+    let key_span = fx.mint(&doc1(ACCT_A), &[key_line.as_bytes()]);
+    let header_span = fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n"]);
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![s_hdr[0].clone(), s_key[0].clone()],
+        from: vec![header_span[0].clone(), key_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
@@ -124,7 +124,7 @@ fn endset_order_governs_concatenation() {
     // header — proving the honored fold above really was endset order.
     let dep = Dep {
         home: doc1(ACCT_A),
-        from: vec![s_key[0].clone(), s_hdr[0].clone()],
+        from: vec![key_span[0].clone(), header_span[0].clone()],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };
@@ -363,11 +363,15 @@ fn a_missing_value_at_the_cap_is_missing_value_not_too_large() {
 fn three_atom_record_folds() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let l1 = format!("anchor ed25519 {}\n", key(1).to_hex());
-    let l2 = format!("ed25519 {}\n", key(2).to_hex());
+    let anchor_line = format!("anchor ed25519 {}\n", key(1).to_hex());
+    let device_line = format!("ed25519 {}\n", key(2).to_hex());
     let spans = fx.mint(
         &doc1(ACCT_A),
-        &[b"skep-enroll v1\n", l1.as_bytes(), l2.as_bytes()],
+        &[
+            b"skep-enroll v1\n",
+            anchor_line.as_bytes(),
+            device_line.as_bytes(),
+        ],
     );
     let dep = Dep {
         home: doc1(ACCT_A),
@@ -394,7 +398,7 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     use skep_identity::{encode_enroll, Enrollment};
 
     let mut entries: Vec<Enrollment> = (0..897u32)
-        .map(|i| Enrollment::new(keyn(i), false, None).expect("label-free"))
+        .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
     assert!(
@@ -404,7 +408,7 @@ fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     );
     // One label of pad−1 chars adds `pad` bytes (the space plus the label).
     let pad = MAX_RECORD_BYTES - base_len + over;
-    entries[0] = Enrollment::new(keyn(0), false, Some("x".repeat(pad - 1))).expect("label");
+    entries[0] = Enrollment::new(wide_key(0), false, Some("x".repeat(pad - 1))).expect("label");
     let payload = encode_enroll(&entries);
     assert_eq!(payload.len(), MAX_RECORD_BYTES + over);
     payload
@@ -554,7 +558,7 @@ fn unowned_home_is_malformed_shape() {
     let fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let outside = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
-    let dep = fx.claim_dep(&outside, CLM);
+    let dep = fx.claim_dep(&outside, CLAIMANT);
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
@@ -573,7 +577,7 @@ fn unpublished_home_inerts_every_shape() {
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
     assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
 
-    let dep = fx.claim_dep(&doc1(CLM), CLM);
+    let dep = fx.claim_dep(&doc1(CLAIMANT), CLAIMANT);
     assert_token(&fx.classify(&genesis_state, &dep), "unpublished");
 }
 
@@ -626,8 +630,8 @@ fn own_space_retirement_on_a_never_keyed_account_is_no_holder() {
 fn already_claimed_beats_claimant_keyless() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let st = seed_own(&mut fx, &genesis_state, CLM, &[(9, true)]);
-    let st = claim_as(&mut fx, &st, CLM);
+    let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
+    let st = claim_as(&mut fx, &st, CLAIMANT);
     let dep = fx.claim_dep(&doc1(ACCT_B), ACCT_B); // ACCT_B is keyless
     assert_token(&fx.classify(&st, &dep), "already_claimed");
 }
@@ -639,8 +643,8 @@ fn already_claimed_beats_claimant_keyless() {
 fn claimant_not_top_level_beats_already_claimed() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let st = seed_own(&mut fx, &genesis_state, CLM, &[(9, true)]);
-    let st = claim_as(&mut fx, &st, CLM);
+    let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
+    let st = claim_as(&mut fx, &st, CLAIMANT);
     let dep = fx.claim_dep(&doc1(NESTED), NESTED);
     assert_token(&fx.classify(&st, &dep), "claimant_not_top_level");
 }
@@ -722,8 +726,8 @@ fn own_space_genesis_flips_to_no_holder_at_the_claim() {
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(1, true)]));
     assert_honored(&fx.classify(&genesis_state, &dep));
 
-    let st = seed_own(&mut fx, &genesis_state, CLM, &[(9, true)]);
-    let st = claim_as(&mut fx, &st, CLM);
+    let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
+    let st = claim_as(&mut fx, &st, CLAIMANT);
     assert_token(&fx.classify(&st, &dep), "no_holder");
 }
 
@@ -734,11 +738,11 @@ fn own_space_genesis_flips_to_no_holder_at_the_claim() {
 fn claimant_homed_genesis_flips_to_honored_at_the_claim() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let pre = seed_own(&mut fx, &genesis_state, CLM, &[(9, true)]);
-    let dep = fx.enroll_dep(&doc1(CLM), ACCT_A, &enroll_payload(&[(1, true)]));
+    let pre = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
+    let dep = fx.enroll_dep(&doc1(CLAIMANT), ACCT_A, &enroll_payload(&[(1, true)]));
     assert_token(&fx.classify(&pre, &dep), "not_genesis_registry");
 
-    let post = claim_as(&mut fx, &pre, CLM);
+    let post = claim_as(&mut fx, &pre, CLAIMANT);
     match assert_honored(&fx.classify(&post, &dep)) {
         Effect::Genesis { account, .. } => assert_eq!(*account, addr(ACCT_A)),
         _ => panic!("expected a genesis effect"),
@@ -773,8 +777,8 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
     };
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
     let dep = Dep {
-        home: doc1(CLM),
-        from: vec![unit(CLM)],
+        home: doc1(CLAIMANT),
+        from: vec![unit(CLAIMANT)],
         to: vec![unit(ACCT_A)],
         ty: vec![unit(T_CLAIM)],
     };
@@ -792,8 +796,8 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
 
     // The claim's FROM under the same test (AUTH-2.26 governs both).
     let dep = Dep {
-        home: doc1(CLM),
-        from: vec![Span::new(tum(CLM), width_at_last(CLM.len(), 2)).expect("T12")],
+        home: doc1(CLAIMANT),
+        from: vec![Span::new(tum(CLAIMANT), width_at_last(CLAIMANT.len(), 2)).expect("T12")],
         to: vec![],
         ty: vec![unit(T_CLAIM)],
     };
@@ -983,10 +987,10 @@ fn keyed_accounts_iterates_in_address_order() {
     // claim.
     let st = seed_own(&mut fx, &st, ACCT_B, &[(8, true)]);
     let st = seed_own(&mut fx, &st, ACCT_A, &[(7, true)]);
-    let st = seed_own(&mut fx, &st, CLM, &[(9, true)]);
+    let st = seed_own(&mut fx, &st, CLAIMANT, &[(9, true)]);
 
     let got: Vec<_> = st.keyed_accounts().map(|(a, _)| a.clone()).collect();
-    let mut want = vec![addr(ACCT_B), addr(ACCT_A), addr(CLM)];
+    let mut want = vec![addr(ACCT_B), addr(ACCT_A), addr(CLAIMANT)];
     want.sort();
     assert_eq!(got, want);
 }
@@ -1097,36 +1101,36 @@ fn retiring_the_whole_enrolled_set_is_would_empty() {
 /// The claim walk end to end: keyless refusal, honored claim, first-wins
 /// (AUTH-2.67; I6 AUTH-2.101), and the from≠H shape refusal (AUTH-2.48).
 #[test]
-fn claim_flow() {
+fn board_admits_one_claim_and_only_from_a_keyed_account() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
 
     // Keyless claimant, pre-claim: condition 5.
-    let dep = fx.claim_dep(&doc1(CLM), CLM);
+    let dep = fx.claim_dep(&doc1(CLAIMANT), CLAIMANT);
     assert_token(&fx.classify(&genesis_state, &dep), "claimant_keyless");
 
     // Seed both top-level accounts BEFORE the claim (post-claim, an
     // own-space genesis is `no_holder` — the AUTH-2.62 flip).
-    let st = seed_own(&mut fx, &genesis_state, CLM, &[(9, true)]);
+    let st = seed_own(&mut fx, &genesis_state, CLAIMANT, &[(9, true)]);
     let st = seed_own(&mut fx, &st, ACCT_B, &[(8, true)]);
 
     // Claimed: honored; claimant posts.
     let (st, v) = fx.step(&st, &dep);
     match assert_honored(&v) {
-        Effect::Claim { account } => assert_eq!(*account, addr(CLM)),
+        Effect::Claim { account } => assert_eq!(*account, addr(CLAIMANT)),
         _ => panic!("expected a claim effect"),
     }
-    assert_eq!(st.claimant(), Some(&addr(CLM)));
+    assert_eq!(st.claimant(), Some(&addr(CLAIMANT)));
 
     // First-wins: a second claim, even by another seeded top-level account.
     let dep2 = fx.claim_dep(&doc1(ACCT_B), ACCT_B);
     let (st3, v) = fx.step(&st, &dep2);
     assert_token(&v, "already_claimed");
-    assert_eq!(st3.claimant(), Some(&addr(CLM)));
+    assert_eq!(st3.claimant(), Some(&addr(CLAIMANT)));
 
     // A claim whose `from` is not the home's account: shape (condition 1).
     let dep = Dep {
-        home: doc1(CLM),
+        home: doc1(CLAIMANT),
         from: vec![unit(ACCT_A)],
         to: vec![],
         ty: vec![unit(T_CLAIM)],
@@ -1149,12 +1153,12 @@ fn populated_state_survives_serde() {
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[3]));
     let (st, v) = fx.step(&st, &dep);
     assert_honored(&v);
-    let st = seed_own(&mut fx, &st, CLM, &[(9, true)]);
-    let st = claim_as(&mut fx, &st, CLM);
+    let st = seed_own(&mut fx, &st, CLAIMANT, &[(9, true)]);
+    let st = claim_as(&mut fx, &st, CLAIMANT);
 
     let bytes = bincode::serialize(&st).expect("serialize IdentityState");
     let back: IdentityState = bincode::deserialize(&bytes).expect("deserialize IdentityState");
     assert_eq!(back, st);
-    assert_eq!(back.claimant(), Some(&addr(CLM)));
+    assert_eq!(back.claimant(), Some(&addr(CLAIMANT)));
     assert!(back.key_set(&addr(ACCT_A)).contains(&fp(1)));
 }

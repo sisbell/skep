@@ -49,8 +49,8 @@ impl Enrollment {
     /// `\n` is `Err(LabelError::Newline)`.
     pub fn new(key: PublicKey, anchor: bool, label: Option<String>) -> Result<Enrollment, LabelError> {
         let label = match label {
-            Some(l) if l.contains('\n') => return Err(LabelError::Newline),
-            Some(l) if l.is_empty() => None,
+            Some(label) if label.contains('\n') => return Err(LabelError::Newline),
+            Some(label) if label.is_empty() => None,
             other => other,
         };
         Ok(Enrollment { key, anchor, label })
@@ -163,14 +163,14 @@ impl std::error::Error for PayloadError {}
 /// `sig` line is skipped whatever follows, on both kinds (AUTH-2.13,
 /// AUTH-2.14, permanent per AUTH-2.94).
 ///
-/// `read` carries the KIND'S OWN line grammar and nothing else: it receives
-/// the 1-based line number (the header is line 1, AUTH-1.27), the line, and
-/// the items already accepted — the left side of its own AUTH-2.15
+/// `parse_line` carries the KIND'S OWN line grammar and nothing else: it
+/// receives the 1-based line number (the header is line 1, AUTH-1.27), the
+/// line, and the items already accepted — the left side of its own AUTH-2.15
 /// duplicate comparison.
 fn scan<T>(
     bytes: &[u8],
     header: &str,
-    mut read: impl FnMut(usize, &str, &[T]) -> Result<T, PayloadError>,
+    mut parse_line: impl FnMut(usize, &str, &[T]) -> Result<T, PayloadError>,
 ) -> Result<Vec<T>, PayloadError> {
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
     let mut lines = text.split('\n');
@@ -186,7 +186,7 @@ fn scan<T>(
         if split_token(line).0 == "sig" {
             continue;
         }
-        let item = read(n, line, &out)?;
+        let item = parse_line(n, line, &out)?;
         out.push(item);
     }
     if out.is_empty() {
@@ -222,11 +222,11 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         let (anchor, alg, rest) = if first == "anchor" {
             // AUTH-2.11 — the anchor flag is the LEADING token; the line
             // then continues with the alg token.
-            let Some(r) = rest else {
+            let Some(after_anchor) = rest else {
                 return Err(PayloadError::BadLine(n)); // `anchor` alone
             };
-            let (alg, r2) = split_token(r);
-            (true, alg, r2)
+            let (alg, after_alg) = split_token(after_anchor);
+            (true, alg, after_alg)
         } else {
             (false, first, rest)
         };
@@ -236,10 +236,10 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         if !ALGS.iter().any(|a| a.token == alg) {
             return Err(PayloadError::BadLine(n));
         }
-        let Some(r) = rest else {
+        let Some(after_alg) = rest else {
             return Err(PayloadError::BadLine(n)); // alg token with no hex
         };
-        let (hex, after_hex) = split_token(r);
+        let (hex, after_hex) = split_token(after_alg);
         let Ok(key) = PublicKey::parse(alg, hex) else {
             return Err(PayloadError::BadLine(n));
         };
@@ -250,7 +250,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         let label = match after_hex {
             None => None,
             Some("") => return Err(PayloadError::BadLine(n)),
-            Some(l) => Some(l.to_owned()),
+            Some(label) => Some(label.to_owned()),
         };
         // AUTH-2.15 — a fingerprint repeating an earlier line's, compared as
         // PARSED bytes (hex case is no distinction), whatever its flag.
@@ -291,11 +291,11 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 /// AUTH-2.18 — encode an enrollment record; emits lowercase hex (AUTH-2.17)
 /// and the label verbatim, so `parse(encode(x)) == x` holds over the whole
 /// [`Enrollment`] domain (I1, AUTH-2.89).
-pub fn encode_enroll(keys: &[Enrollment]) -> Vec<u8> {
+pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
     let mut s = String::new();
     s.push_str(ENROLL_HEADER);
     s.push('\n');
-    for e in keys {
+    for e in enrollments {
         if e.anchor {
             s.push_str("anchor "); // the LEADING token (AUTH-2.11)
         }

@@ -212,7 +212,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// Case-insensitive hex decode (AUTH-1.3, AUTH-2.17); `None` on an odd
 /// length or a non-hex byte.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    fn val(c: u8) -> Option<u8> {
+    fn nibble(c: u8) -> Option<u8> {
         match c {
             b'0'..=b'9' => Some(c - b'0'),
             b'a'..=b'f' => Some(c - b'a' + 10),
@@ -220,13 +220,13 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
             _ => None,
         }
     }
-    let raw = s.as_bytes();
-    if raw.len() % 2 != 0 {
+    let digits = s.as_bytes();
+    if digits.len() % 2 != 0 {
         return None;
     }
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    for pair in raw.chunks_exact(2) {
-        out.push((val(pair[0])? << 4) | val(pair[1])?);
+    let mut out = Vec::with_capacity(digits.len() / 2);
+    for pair in digits.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
     }
     Some(out)
 }

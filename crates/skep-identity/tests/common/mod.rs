@@ -60,7 +60,7 @@ pub const NODE: &[u32] = &[1, 1];
 /// Commons account; its first document homes the type addresses.
 pub const COMMONS: &[u32] = &[1, 1, 0, 1];
 /// The claimant-to-be (bootstrap tier).
-pub const CLM: &[u32] = &[1, 1, 0, 2];
+pub const CLAIMANT: &[u32] = &[1, 1, 0, 2];
 /// A delegator account (bootstrap tier).
 pub const ORG: &[u32] = &[1, 1, 0, 3];
 /// An account delegated BENEATH `ORG` (its parent is an account, so its
@@ -173,10 +173,10 @@ impl Fixture {
     pub fn new() -> Fixture {
         let mut ctx = TestCtx::default();
         ctx.owners.push((addr(NODE), true));
-        for acct in [COMMONS, CLM, ORG, NESTED, ACCT_A, ACCT_B] {
+        for acct in [COMMONS, CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B] {
             ctx.owners.push((addr(acct), false));
         }
-        for acct in [CLM, ORG, NESTED, ACCT_A, ACCT_B] {
+        for acct in [CLAIMANT, ORG, NESTED, ACCT_A, ACCT_B] {
             ctx.accounts.insert(addr(acct));
         }
         let types = TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_CLAIM));
@@ -262,7 +262,7 @@ pub fn key(i: u8) -> PublicKey {
 }
 
 /// Deterministic test key over a wide index (for many-key records).
-pub fn keyn(i: u32) -> PublicKey {
+pub fn wide_key(i: u32) -> PublicKey {
     let mut raw = [0u8; 32];
     raw[28..].copy_from_slice(&i.to_be_bytes());
     PublicKey::Ed25519(raw)
@@ -272,12 +272,15 @@ pub fn fp(i: u8) -> Fingerprint {
     Fingerprint::of(&key(i))
 }
 
-pub fn enr(i: u8, anchor: bool) -> Enrollment {
+pub fn enrollment(i: u8, anchor: bool) -> Enrollment {
     Enrollment::new(key(i), anchor, None).expect("label-free enrollment")
 }
 
 pub fn enroll_payload(entries: &[(u8, bool)]) -> Vec<u8> {
-    let es: Vec<Enrollment> = entries.iter().map(|&(i, anchor)| enr(i, anchor)).collect();
+    let es: Vec<Enrollment> = entries
+        .iter()
+        .map(|&(i, anchor)| enrollment(i, anchor))
+        .collect();
     encode_enroll(&es)
 }
 

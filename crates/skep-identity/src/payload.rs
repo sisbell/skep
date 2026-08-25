@@ -77,9 +77,17 @@ pub enum PayloadError {
     /// The concatenated FROM-span bytes exceed [`MAX_RECORD_BYTES`]
     /// (AUTH-2.43).
     TooLarge,
-    /// A FROM span was not minted under the link's own home — or its start
-    /// is no content position at all (AUTH-2.38 items 1–3, AUTH-2.40,
-    /// AUTH-2.44).
+    /// The span's START failed one of the three per-span checks that run
+    /// before a byte of it is read (AUTH-2.38 items 1–3): it does not
+    /// VALIDATE to an address; or it validates to a T4-valid NON-position —
+    /// an element field that is not exactly subspace·ordinal (AUTH-2.40);
+    /// or its `document_of` is not the link's home (HOME ANCHORING,
+    /// AUTH-2.44). The position test constrains the field's SHAPE ONLY,
+    /// never WHICH subspace it names (AUTH-2.41): a start in the home's
+    /// LINK subspace IS a position, and walks to [`MissingValue`] — never
+    /// here.
+    ///
+    /// [`MissingValue`]: PayloadError::MissingValue
     ForeignContent,
     /// A FROM span names a position the home had not minted as of the
     /// deposit's position (AUTH-2.38 item 4, AUTH-2.45).
@@ -199,7 +207,7 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         // AUTH-2.9 — the alg token matches as bytes, lowercase, against ALGS
         // (an alg the build does not carry is BadLine; `anchor anchor …` and
         // `anchor sig …` also land here).
-        if !ALGS.iter().any(|(token, _, _)| *token == alg) {
+        if !ALGS.iter().any(|a| a.token == alg) {
             return Err(PayloadError::BadLine(n));
         }
         let Some(r) = rest else {

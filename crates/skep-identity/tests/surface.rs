@@ -50,27 +50,34 @@ fn fingerprint_is_sha256_of_the_framed_key() {
 fn algs_and_arms_agree_both_directions() {
     // Table → arms: every token parses at its row's length, and the
     // constructed arm answers that token at that raw length.
-    for (token, raw_len, _family) in ALGS {
-        let hex = "00".repeat(*raw_len);
-        let k = PublicKey::parse(token, &hex)
-            .unwrap_or_else(|_| panic!("ALGS token {token} does not parse — no arm carries it"));
-        assert_eq!(k.alg(), *token, "arm answers a different token than its row");
-        assert_eq!(k.raw().len(), *raw_len, "row length is not the arm's raw length");
+    for alg in ALGS {
+        let hex = "00".repeat(alg.raw_len);
+        let k = PublicKey::parse(alg.token, &hex).unwrap_or_else(|_| {
+            panic!("ALGS token {} does not parse — no arm carries it", alg.token)
+        });
+        assert_eq!(k.alg(), alg.token, "arm answers a different token than its row");
+        assert_eq!(
+            k.raw().len(),
+            alg.raw_len,
+            "row length is not the arm's raw length"
+        );
     }
     // Arms → table: every variant's token is a row. A NEW VARIANT MUST BE
     // ADDED HERE beside its ALGS row (AUTH-2.91's one-edit-plus-assertion).
     let arms: &[PublicKey] = &[PublicKey::Ed25519([0u8; 32])];
     assert_eq!(arms.len(), ALGS.len(), "arm count and table row count differ");
     for arm in arms {
-        let row = ALGS.iter().find(|(token, _, _)| *token == arm.alg());
-        let (_, raw_len, _) = row.expect("arm token absent from ALGS");
-        assert_eq!(arm.raw().len(), *raw_len);
+        let row = ALGS
+            .iter()
+            .find(|a| a.token == arm.alg())
+            .expect("arm token absent from ALGS");
+        assert_eq!(arm.raw().len(), row.raw_len);
     }
     // No two rows name one key family (AUTH-1.5, the I4 encoding bridge's
     // per-family half — AUTH-2.99).
-    for (i, (_, _, fam_a)) in ALGS.iter().enumerate() {
-        for (_, _, fam_b) in &ALGS[i + 1..] {
-            assert_ne!(fam_a, fam_b, "two ALGS rows name one key family");
+    for (i, a) in ALGS.iter().enumerate() {
+        for b in &ALGS[i + 1..] {
+            assert_ne!(a.family, b.family, "two ALGS rows name one key family");
         }
     }
     assert_eq!(ALG_ED25519, "ed25519");

@@ -10,8 +10,8 @@
 //!
 //! ## What lives here
 //!
-//! * keys and fingerprints — [`PublicKey`], [`ALGS`], [`Fingerprint`]
-//!   (AUTH-1.1–1.10);
+//! * keys and fingerprints — [`PublicKey`], [`ALGS`] with its row type
+//!   [`Alg`], [`Fingerprint`] (AUTH-1.1–1.10);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
 //! * the credential-record constants and payload types — [`ENROLL_HEADER`],
@@ -70,7 +70,7 @@ mod state;
 mod verdict;
 
 pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
-pub use key::{Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
+pub use key::{Alg, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, LabelError, PayloadError,

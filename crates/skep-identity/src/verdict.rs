@@ -69,9 +69,14 @@ pub enum Inert {
     /// (AUTH-2.117), so this arm fires only under a ctx deriving real
     /// publication (a mirror's, AUTH-2.123).
     Unpublished,
-    /// A slot deviates from the kind's shape (AUTH-2.46–2.48; an empty
-    /// `from` lands here AHEAD of the parser, AUTH-2.47), or the home is
-    /// unowned (AUTH-2.66 item 2).
+    /// The deposit cannot be read as its kind's shape, on any of three
+    /// counts: the home is UNOWNED, so there is no H at all (AUTH-2.66
+    /// item 2); a SLOT deviates — an empty `from` (AUTH-2.47, ahead of the
+    /// parser), or a slot that is not one address-form span (AUTH-2.46,
+    /// AUTH-2.48, AUTH-2.26); or the address `to` resolves to is not an
+    /// ACCOUNT (`FoldCtx::is_account`, AUTH-2.33). That last one answers
+    /// THIS token — the fold has no `not_an_account`; that is the key-set
+    /// READ row's (AUTH-2.58).
     MalformedShape,
     /// The payload could not be read or parsed (AUTH-1.27); the wire detail
     /// is `malformed_payload:` joined with `PayloadError::token()` — one

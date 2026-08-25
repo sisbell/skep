@@ -9,6 +9,18 @@ use crate::framing::{framed, KEY_TAG};
 /// `ALGS`' first row.
 pub const ALG_ED25519: &str = "ed25519";
 
+/// One [`ALGS`] row (AUTH-1.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Alg {
+    /// The alg TOKEN — the line grammar's first token (AUTH-1.1).
+    pub token: &'static str,
+    /// The RAW KEY LENGTH in bytes (AUTH-1.2).
+    pub raw_len: usize,
+    /// The KEY FAMILY — a curve, or a PQ parameter set. No two rows may
+    /// name the same family (AUTH-1.5; the assertion is AUTH-2.92's).
+    pub family: &'static str,
+}
+
 /// The algorithm set (AUTH-1.5): the single declared table, three columns —
 /// the TOKEN (the line grammar's first token), the RAW LENGTH, and the KEY
 /// FAMILY (a curve, or a PQ parameter set) — and no two rows may name the
@@ -18,8 +30,11 @@ pub const ALG_ED25519: &str = "ed25519";
 /// set this table admits is an I2 frozen constant (AUTH-2.90); adding a row
 /// is a coordinated grammar upgrade (AUTH-2.91) under the
 /// one-canonical-raw-form-per-token obligation (AUTH-2.99).
-pub const ALGS: &[(&str, usize /* raw key length */, &str /* KEY FAMILY */)] =
-    &[(ALG_ED25519, 32, "edwards25519")];
+pub const ALGS: &[Alg] = &[Alg {
+    token: ALG_ED25519,
+    raw_len: 32,
+    family: "edwards25519",
+}];
 
 /// A public key (AUTH-1.1): v1 admits Ed25519 only, and the enum is the
 /// reserved slot for a future P-256 arm. Syntax-level only — this crate never
@@ -59,12 +74,12 @@ impl PublicKey {
     /// otherwise — case-insensitively, AUTH-1.3) to exactly that row's raw
     /// length (`BadLength` otherwise), and the curve point is never decoded.
     pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, KeyParseError> {
-        let (_, raw_len, _) = ALGS
+        let row = ALGS
             .iter()
-            .find(|(token, _, _)| *token == alg)
+            .find(|a| a.token == alg)
             .ok_or(KeyParseError::UnknownAlg)?;
         let bytes = hex_decode(hex).ok_or(KeyParseError::BadHex)?;
-        if bytes.len() != *raw_len {
+        if bytes.len() != row.raw_len {
             return Err(KeyParseError::BadLength);
         }
         match alg {

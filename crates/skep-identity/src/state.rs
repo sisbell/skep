@@ -70,19 +70,18 @@ impl IdentityState {
             return Verdict::NotCredential;
         };
         // 2 — the home's account (AUTH-2.66 item 2).
-        let home = dep.home;
-        let Some(h) = document_account(ctx, home) else {
+        let Some(h) = document_account(ctx, dep.home) else {
             return Verdict::Inert(Inert::MalformedShape);
         };
         // 3 — publication (AUTH-2.66 item 3; I7, AUTH-2.102).
-        if !ctx.is_published(home) {
+        if !ctx.is_published(dep.home) {
             return Verdict::Inert(Inert::Unpublished);
         }
         // 4 — the per-kind arm.
         match kind {
-            CredentialKind::Claim => self.claim_arm(ctx, dep, home, &h),
-            CredentialKind::Enroll => self.enroll_path(ctx, dep, home, &h),
-            CredentialKind::Retire => self.retire_path(ctx, dep, home, &h),
+            CredentialKind::Claim => self.claim_arm(ctx, dep, &h),
+            CredentialKind::Enroll => self.enroll_path(ctx, dep, &h),
+            CredentialKind::Retire => self.retire_path(ctx, dep, &h),
         }
     }
 
@@ -140,13 +139,7 @@ impl IdentityState {
     /// `detail` pin, AUTH-2.68 — the cost gradient runs the wrong way and an
     /// implementation MUST NOT reorder cheap-first). The claim carries NO
     /// payload: this arm reads no bytes (AUTH-2.48).
-    fn claim_arm(
-        &self,
-        ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
-        home: &Address,
-        h: &Address,
-    ) -> Verdict {
+    fn claim_arm(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
         // 1 — shape: `from = {H}` in address form, `to = ∅` (AUTH-2.48; the
         // fold cannot tell the two empty-`to` wire forms apart, AUTH-2.49).
         if single_address(dep.from).as_ref() != Some(h) || !dep.to.is_empty() {
@@ -155,7 +148,7 @@ impl IdentityState {
         // 2 — the home pin (AUTH-2.127, RES-17), before the delegator read:
         // a wrong-home nested-account claim answers `not_doc_one`, never
         // `claimant_not_top_level`.
-        if *home != doc_1_of(h) {
+        if *dep.home != doc_1_of(h) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         // 3 — the delegator: `Some(Account(_))` and `None` alike refuse.
@@ -180,13 +173,7 @@ impl IdentityState {
     /// (AUTH-2.127 — a wrong-home deposit whose payload is unparseable
     /// answers `malformed_payload`, never `not_doc_one`; a wrong-home
     /// genesis `not_doc_one`, never `not_genesis_registry`), then the arms.
-    fn enroll_path(
-        &self,
-        ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
-        home: &Address,
-        h: &Address,
-    ) -> Verdict {
+    fn enroll_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
         let (a, bytes) = match shape_and_payload(ctx, dep) {
             Ok(read) => read,
             Err(inert) => return Verdict::Inert(inert),
@@ -195,7 +182,7 @@ impl IdentityState {
             Ok(keys) => keys,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *home != doc_1_of(h) {
+        if *dep.home != doc_1_of(h) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         self.enroll_arms(ctx, &a, h, &keys)
@@ -222,10 +209,7 @@ impl IdentityState {
                     let fp = Fingerprint::of(&k.key);
                     !s.contains(&fp) && !s.retired_contains(&fp)
                 })
-                .map(|k| Enrolled {
-                    key: k.key,
-                    anchor: k.anchor,
-                })
+                .map(enrolled_of)
                 .collect();
             if added.is_empty() {
                 return Verdict::Inert(Inert::NothingChanged);
@@ -242,13 +226,7 @@ impl IdentityState {
             // consulted here ONLY (AUTH-2.64).
             let registry = self.genesis_registry(ctx, a);
             if registry.as_ref() == Some(h) {
-                let seeded: Vec<Enrolled> = keys
-                    .iter()
-                    .map(|k| Enrolled {
-                        key: k.key,
-                        anchor: k.anchor,
-                    })
-                    .collect();
+                let seeded: Vec<Enrolled> = keys.iter().map(enrolled_of).collect();
                 return Verdict::Honored(Effect::Genesis {
                     account: a.clone(),
                     keys: seeded,
@@ -275,13 +253,7 @@ impl IdentityState {
     /// mirror of [`enroll_path`] over `parse_retire`.
     ///
     /// [`enroll_path`]: IdentityState::enroll_path
-    fn retire_path(
-        &self,
-        ctx: &impl FoldCtx,
-        dep: &LinkDeposit,
-        home: &Address,
-        h: &Address,
-    ) -> Verdict {
+    fn retire_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
         let (a, bytes) = match shape_and_payload(ctx, dep) {
             Ok(read) => read,
             Err(inert) => return Verdict::Inert(inert),
@@ -290,7 +262,7 @@ impl IdentityState {
             Ok(fps) => fps,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *home != doc_1_of(h) {
+        if *dep.home != doc_1_of(h) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         self.retire_arms(&a, h, &fps)
@@ -326,40 +298,46 @@ impl IdentityState {
         Verdict::Inert(Inert::NotHolderRetirement)
     }
 
+    /// Post one effect's change into `account`'s set: an account with no row
+    /// starts from the EMPTY set (AUTH-2.58's answer, made a real row the
+    /// moment an effect touches it), and the amended set is seated back.
+    /// Every set-touching arm of [`apply`] posts through here, so how a row
+    /// is fetched, defaulted and re-seated is decided in ONE place.
+    ///
+    /// [`apply`]: IdentityState::apply
+    fn post_to_set(&mut self, account: &Address, post: impl FnOnce(&mut KeySet)) {
+        let mut set = self.sets.get(account).cloned().unwrap_or_default();
+        post(&mut set);
+        self.sets.insert(account.clone(), set);
+    }
+
     /// AUTH-2.53 — `apply` reads the effect and DECIDES NOTHING on any arm,
     /// the genesis arm included (no arm reads the payload twice). Map keys
     /// are derived via `Fingerprint::of` on the key inserted, establishing
-    /// AUTH-1.32 by construction. The genesis arm posts `enrolled = K`
-    /// WITHOUT consulting `retired` (AUTH-2.70; sound per AUTH-1.36).
+    /// AUTH-1.32 by construction.
     fn apply(&self, effect: &Effect) -> IdentityState {
         let mut next = self.clone();
         match effect {
-            Effect::Genesis { account, keys } => {
-                let mut set = next.sets.get(account).cloned().unwrap_or_default();
+            // The genesis arm posts `enrolled = K` WITHOUT consulting
+            // `retired` (AUTH-2.70; sound per AUTH-1.36).
+            Effect::Genesis { account, keys } => next.post_to_set(account, |s| {
                 for k in keys {
-                    set.insert_enrolled(*k);
+                    s.insert_enrolled(*k);
                 }
-                next.sets.insert(account.clone(), set);
-            }
-            Effect::Enroll { account, added } => {
-                let mut set = next.sets.get(account).cloned().unwrap_or_default();
+            }),
+            Effect::Enroll { account, added } => next.post_to_set(account, |s| {
                 for k in added {
-                    set.insert_enrolled(*k);
+                    s.insert_enrolled(*k);
                 }
-                next.sets.insert(account.clone(), set);
-            }
-            Effect::Retire { account, removed } => {
-                let mut set = next.sets.get(account).cloned().unwrap_or_default();
+            }),
+            Effect::Retire { account, removed } => next.post_to_set(account, |s| {
                 for fp in removed {
                     // Each fingerprint carries the flag it was enrolled
                     // under (AUTH-2.74's post, AUTH-1.30).
-                    set.move_to_retired(fp);
+                    s.move_to_retired(fp);
                 }
-                next.sets.insert(account.clone(), set);
-            }
-            Effect::Claim { account } => {
-                next.claimant = Some(account.clone());
-            }
+            }),
+            Effect::Claim { account } => next.claimant = Some(account.clone()),
         }
         next
     }
@@ -373,10 +351,7 @@ impl IdentityState {
 /// then the one payload read (AUTH-2.36). Shape checks precede
 /// `record_bytes` (AUTH-2.66: a two-span `to` beside an over-cap `from` is
 /// `malformed_shape`, never `too_large`).
-fn shape_and_payload(
-    ctx: &impl FoldCtx,
-    dep: &LinkDeposit,
-) -> Result<(Address, Vec<u8>), Inert> {
+fn shape_and_payload(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address, Vec<u8>), Inert> {
     if dep.from.is_empty() {
         return Err(Inert::MalformedShape);
     }
@@ -386,4 +361,14 @@ fn shape_and_payload(
     };
     let bytes = record_bytes(ctx, dep.home, dep.from).map_err(Inert::MalformedPayload)?;
     Ok((a, bytes))
+}
+
+/// AUTH-2.52 — what an honored enrollment KEEPS from a parsed line: the key
+/// and the flag it enters under. The label is informational (AUTH-1.23) and
+/// is not a fold input, so it stops here — the one place that is decided.
+fn enrolled_of(k: &Enrollment) -> Enrolled {
+    Enrolled {
+        key: k.key,
+        anchor: k.anchor,
+    }
 }

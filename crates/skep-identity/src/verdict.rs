@@ -23,9 +23,12 @@ pub enum Verdict {
     Honored(Effect),
 }
 
-/// AUTH-2.51/AUTH-2.52 — a faithful description of the change `apply` posts;
-/// `account` on every arm is the set the effect touches. `apply` reads the
-/// effect and DECIDES NOTHING (AUTH-2.53).
+/// AUTH-2.51/AUTH-2.52 — a faithful description of the change `apply` posts.
+/// `account` names the account each arm concerns, which is not the same fact
+/// on all four: on `Genesis`/`Enroll`/`Retire` it is the account whose KEY
+/// SET the post amends; on `Claim` it is the CLAIMANT, and that arm amends
+/// no set — it posts `claimant`. `apply` reads the effect and DECIDES
+/// NOTHING (AUTH-2.53).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// The genesis arm's post (AUTH-2.70): the account AND the keys the step

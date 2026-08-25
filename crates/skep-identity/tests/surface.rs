@@ -80,19 +80,19 @@ fn fingerprint_is_sha256_of_the_framed_key() {
 fn algs_and_arms_agree_both_directions() {
     // Table → arms: every token parses at its row's length, and the
     // constructed arm answers that token at that raw length.
-    for alg in ALGS {
-        let hex = "00".repeat(alg.raw_len);
-        let k = PublicKey::parse(alg.token, &hex).unwrap_or_else(|_| {
+    for row in ALGS {
+        let hex = "00".repeat(row.raw_len);
+        let k = PublicKey::parse(row.token, &hex).unwrap_or_else(|_| {
             panic!(
                 "ALGS token {} does not parse — no arm carries it, or the arm's \
                  array is not this row's raw_len of {}",
-                alg.token, alg.raw_len
+                row.token, row.raw_len
             )
         });
-        assert_eq!(k.alg(), alg.token, "arm answers a different token than its row");
+        assert_eq!(k.alg(), row.token, "arm answers a different token than its row");
         assert_eq!(
             k.raw().len(),
-            alg.raw_len,
+            row.raw_len,
             "row length is not the arm's raw length"
         );
     }

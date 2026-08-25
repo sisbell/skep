@@ -11,7 +11,7 @@
 //! ## What lives here
 //!
 //! * keys and fingerprints — [`PublicKey`] with [`ALG_ED25519`] and its
-//!   refusal [`KeyParseError`], [`ALGS`] with its row type [`Alg`],
+//!   refusal [`KeyParseError`], [`ALGS`] with its row type [`AlgRow`],
 //!   [`Fingerprint`] (AUTH-1.1–1.10);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
@@ -71,7 +71,7 @@ mod state;
 mod verdict;
 
 pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
-pub use key::{Alg, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
+pub use key::{AlgRow, Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, LabelError, PayloadError,

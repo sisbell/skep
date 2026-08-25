@@ -71,7 +71,7 @@ impl KeySet {
     /// AUTH-1.31 — the retired fingerprints in fingerprint order, each
     /// yielding the anchor flag it was ENROLLED under (AUTH-1.30: the flag
     /// is for the fingerprint's lifetime, retirement included, so "was that
-    /// a senior key" is a head read).
+    /// an ANCHOR key" is a head read).
     pub fn retired(&self) -> impl Iterator<Item = (&Fingerprint, bool)> {
         self.retired.iter().map(|(fp, anchor)| (fp, *anchor))
     }

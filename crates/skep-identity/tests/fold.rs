@@ -367,13 +367,13 @@ fn three_atom_record_folds() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
     let anchor_line = format!("anchor ed25519 {}\n", key(1).to_hex());
-    let device_line = format!("ed25519 {}\n", key(2).to_hex());
+    let non_anchor_line = format!("ed25519 {}\n", key(2).to_hex());
     let spans = fx.mint(
         &doc1(ACCT_A),
         &[
             b"skep-enroll v1\n",
             anchor_line.as_bytes(),
-            device_line.as_bytes(),
+            non_anchor_line.as_bytes(),
         ],
     );
     let dep = Dep {
@@ -914,7 +914,7 @@ fn type_addrs_refuses_a_repeated_type_address() {
 
 // -------------------------------------------------- key-set semantics
 
-/// `ACCT_A` seeded with an anchor key and a device key — the state the
+/// `ACCT_A` seeded with an anchor key and a non-anchor key — the state the
 /// enrolled-side claims below start from.
 fn seeded(fx: &mut Fixture) -> IdentityState {
     seed_own(
@@ -925,7 +925,7 @@ fn seeded(fx: &mut Fixture) -> IdentityState {
     )
 }
 
-/// The same account with the device key retired — the state the
+/// The same account with the non-anchor key retired — the state the
 /// retirement-side claims below start from.
 fn seeded_then_retired(fx: &mut Fixture) -> IdentityState {
     let st = seeded(fx);
@@ -1016,7 +1016,7 @@ fn keyed_accounts_iterates_in_address_order() {
     assert_eq!(got, want);
 }
 
-/// I9's conformance arm (AUTH-2.104) — re-listing an enrolled device key
+/// I9's conformance arm (AUTH-2.104) — re-listing an enrolled non-anchor key
 /// under the `anchor` flag answers `nothing_changed` and the flag stays
 /// `false`: a fingerprint's flag is fixed by the record that FIRST enrolls
 /// it, for the fingerprint's lifetime.
@@ -1053,9 +1053,9 @@ fn retiring_an_enrolled_key_names_it_in_the_effect_and_removes_it() {
 }
 
 /// AUTH-1.30 — each retired row carries the flag its key was ENROLLED under,
-/// both ways: an anchor key stays senior in the retired map, a device key
-/// stays ordinary. The lifetime claim is what makes "was that a senior key"
-/// a head read.
+/// both ways: an anchor key stays an anchor in the retired map, a non-anchor
+/// key stays a non-anchor. The lifetime claim is what makes "was that an
+/// ANCHOR key" a head read.
 #[test]
 fn retired_row_carries_the_flag_the_key_was_enrolled_under() {
     let mut fx = Fixture::new();
@@ -1079,7 +1079,7 @@ fn retired_row_carries_the_flag_the_key_was_enrolled_under() {
     assert_eq!(
         flags.get(&fp(2)),
         Some(&false),
-        "the device key's flag survives retirement"
+        "the non-anchor key's flag survives retirement"
     );
 }
 

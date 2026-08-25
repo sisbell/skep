@@ -13,7 +13,7 @@ pub const ALG_ED25519: &str = "ed25519";
 
 /// One [`ALGS`] row (AUTH-1.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Alg {
+pub struct AlgRow {
     /// The alg TOKEN — the line grammar's first token (AUTH-1.1).
     pub token: &'static str,
     /// The RAW KEY LENGTH in bytes (AUTH-1.2).
@@ -32,7 +32,7 @@ pub struct Alg {
 /// set this table admits is an I2 frozen constant (AUTH-2.90); adding a row
 /// is a coordinated grammar upgrade (AUTH-2.91) under the
 /// one-canonical-raw-form-per-token obligation (AUTH-2.99).
-pub const ALGS: &[Alg] = &[Alg {
+pub const ALGS: &[AlgRow] = &[AlgRow {
     token: ALG_ED25519,
     raw_len: 32,
     family: "edwards25519",

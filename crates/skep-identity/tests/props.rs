@@ -72,21 +72,21 @@ proptest! {
 /// given a name, so no property reads a numeric code and no added kind can
 /// fall through a wildcard into `Noise`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Kind {
+enum ActKind {
     Enroll,
     Retire,
     Claim,
     Noise,
 }
 
-impl Kind {
+impl ActKind {
     /// The strategy's draw, mapped in ONE place.
-    fn from_draw(n: u8) -> Kind {
+    fn from_draw(n: u8) -> ActKind {
         match n {
-            0 => Kind::Enroll,
-            1 => Kind::Retire,
-            2 => Kind::Claim,
-            _ => Kind::Noise,
+            0 => ActKind::Enroll,
+            1 => ActKind::Retire,
+            2 => ActKind::Claim,
+            _ => ActKind::Noise,
         }
     }
 
@@ -96,8 +96,8 @@ impl Kind {
     /// added kind states its own answer here rather than inheriting one.
     fn is_credential(self) -> bool {
         match self {
-            Kind::Enroll | Kind::Retire | Kind::Claim => true,
-            Kind::Noise => false,
+            ActKind::Enroll | ActKind::Retire | ActKind::Claim => true,
+            ActKind::Noise => false,
         }
     }
 }
@@ -105,7 +105,7 @@ impl Kind {
 /// One scripted deposit, pre-materialization.
 #[derive(Debug, Clone)]
 struct Act {
-    kind: Kind,
+    kind: ActKind,
     subject: usize,
     home: usize,
     keys: Vec<(u8, bool)>,
@@ -137,7 +137,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         prop::collection::vec(0..6u8, 0..4),
     )
         .prop_map(|(kind, subject, home, keys, fps)| Act {
-            kind: Kind::from_draw(kind),
+            kind: ActKind::from_draw(kind),
             subject,
             home,
             keys,
@@ -150,7 +150,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
 /// over.
 struct Case {
     dep: Dep,
-    kind: Kind,
+    kind: ActKind,
     subject: Address,
     home_account: Address,
 }
@@ -159,10 +159,10 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
     let subject_comps = ACCOUNTS[act.subject];
     let (home, home_account) = homes()[act.home].clone();
     let dep = match act.kind {
-        Kind::Enroll => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
-        Kind::Retire => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
-        Kind::Claim => fx.claim_dep(&home, subject_comps),
-        Kind::Noise => {
+        ActKind::Enroll => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
+        ActKind::Retire => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
+        ActKind::Claim => fx.claim_dep(&home, subject_comps),
+        ActKind::Noise => {
             let from = fx.mint(&home, &[b"noise"]);
             Dep {
                 home: home.clone(),
@@ -219,7 +219,7 @@ proptest! {
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is
             // inert (registry-, claimant- and stranger-homed alike).
-            if case.kind == Kind::Enroll
+            if case.kind == ActKind::Enroll
                 && pre_nonempty_subject
                 && case.home_account != case.subject
             {

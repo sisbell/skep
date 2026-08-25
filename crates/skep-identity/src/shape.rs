@@ -102,11 +102,11 @@ impl TypeAddrs {
 pub struct LinkDeposit<'a> {
     /// The link's home document.
     pub home: &'a Address,
-    /// The FROM endset — the record's spans, in endset order (AUTH-2.3).
+    /// The FROM slot — the record's spans, in ENDSET ORDER (AUTH-2.3).
     pub from: &'a [Span],
-    /// The TO endset.
+    /// The TO slot — read by [`single_address`] (AUTH-2.26).
     pub to: &'a [Span],
-    /// The type slot.
+    /// The TYPE slot — read by [`TypeAddrs::kind_of`] (AUTH-2.22).
     pub ty: &'a [Span],
 }
 

@@ -1,0 +1,24 @@
+[package]
+name = "skep-identity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "AUTH — pure credential data model and the deterministic identity fold: keys, fingerprints, framing, the record grammar, key sets, classify/step"
+
+[dependencies]
+# AUTH-2.1 pins the dependency set: skep-address, sha2, im, serde — light
+# enough for the engine, M10, checkpoint/replay, and any mirror tool to carry.
+# No I/O, no clock, no config, no signature library.
+skep-address = { path = "../skep-address" }
+im.workspace = true
+serde.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+# proptest — the invariants' own Test: clauses (I1–I9) name proptest.
+proptest.workspace = true
+# bincode — exercises the checkpoint-facing serde surface (AUTH-1.40) through
+# a format that admits non-string map keys (Fingerprint-/Address-keyed OrdMaps,
+# which a JSON round trip cannot carry).
+bincode.workspace = true

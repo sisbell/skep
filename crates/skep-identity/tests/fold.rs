@@ -170,11 +170,14 @@ fn repeated_spans_repeat_their_lines() {
 fn span_past_the_mint_is_missing_value() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
+    let home = doc1(ACCT_A);
     let key_line = format!("ed25519 {}\n", key(1).to_hex());
-    fx.mint(&doc1(ACCT_A), &[b"skep-enroll v1\n", key_line.as_bytes()]);
+    fx.mint(&home, &[b"skep-enroll v1\n", key_line.as_bytes()]);
+    // The span reaches exactly ONE position past the mint — asked of the
+    // fixture, so the width follows the mint above instead of restating it.
     let dep = Dep {
-        home: doc1(ACCT_A),
-        from: vec![content_run(&doc1(ACCT_A), 1, 3)], // ords 1..4; 3 unminted
+        home: home.clone(),
+        from: vec![content_run(&home, 1, fx.next_ord(&home))],
         to: vec![unit(ACCT_A)],
         ty: enroll_ty(),
     };

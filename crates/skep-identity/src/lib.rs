@@ -10,13 +10,14 @@
 //!
 //! ## What lives here
 //!
-//! * keys and fingerprints — [`PublicKey`], [`ALGS`] with its row type
-//!   [`Alg`], [`Fingerprint`] (AUTH-1.1–1.10);
+//! * keys and fingerprints — [`PublicKey`] with [`ALG_ED25519`] and its
+//!   refusal [`KeyParseError`], [`ALGS`] with its row type [`Alg`],
+//!   [`Fingerprint`] (AUTH-1.1–1.10);
 //! * framing and the tag set — [`Tag`], [`framed`], [`TAGS`]
 //!   (AUTH-1.11–1.17);
 //! * the credential-record constants and payload types — [`ENROLL_HEADER`],
-//!   [`RETIRE_HEADER`], [`MAX_RECORD_BYTES`], [`Enrollment`],
-//!   [`PayloadError`] (AUTH-1.18–1.28) — with the line grammar
+//!   [`RETIRE_HEADER`], [`MAX_RECORD_BYTES`], [`Enrollment`] with its refusal
+//!   [`LabelError`], [`PayloadError`] (AUTH-1.18–1.28) — with the line grammar
 //!   [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
 //!   (AUTH-2.6–2.19);
 //! * the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,

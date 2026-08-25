@@ -12,7 +12,7 @@
 
 use core::fmt;
 
-use crate::key::{Fingerprint, PublicKey, ALGS};
+use crate::key::{Fingerprint, PublicKey};
 
 /// AUTH-1.18 — the enrollment header, line 1 byte-exact (AUTH-2.7).
 pub const ENROLL_HEADER: &str = "skep-enroll v1";
@@ -237,16 +237,16 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         } else {
             (false, first, rest)
         };
-        // AUTH-2.9 — the alg token matches as bytes, lowercase, against ALGS
-        // (an alg the build does not carry is BadLine; `anchor anchor …` and
-        // `anchor sig …` also land here).
-        if !ALGS.iter().any(|a| a.token == alg) {
-            return Err(PayloadError::BadLine(n));
-        }
         let Some(after_alg) = rest else {
             return Err(PayloadError::BadLine(n)); // alg token with no hex
         };
         let (hex, after_hex) = split_token(after_alg);
+        // AUTH-2.9/AUTH-2.12 — the alg token is admitted by `PublicKey::parse`
+        // alone, which is where `ALGS` decides admission (AUTH-1.6): the token
+        // matches as BYTES, lowercase, so an alg the build does not carry,
+        // `anchor anchor …` and `anchor sig …` all arrive here and all answer
+        // BadLine. This grammar asks whether the pair is admitted and never
+        // why — the parse's three refusals are one line fault.
         let Ok(key) = PublicKey::parse(alg, hex) else {
             return Err(PayloadError::BadLine(n));
         };

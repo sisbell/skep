@@ -165,7 +165,7 @@ impl IdentityState {
         // 2 — the home pin (AUTH-2.127, RES-17), before the delegator read:
         // a wrong-home nested-account claim answers `not_doc_one`, never
         // `claimant_not_top_level`.
-        if *dep.home != doc_1_of(home_account) {
+        if !homed_in_doc_one(dep, home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         // 3 — the delegator: `Some(Account(_))` and `None` alike refuse.
@@ -206,7 +206,7 @@ impl IdentityState {
             Ok(enrollments) => enrollments,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *dep.home != doc_1_of(home_account) {
+        if !homed_in_doc_one(dep, home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         self.enroll_arms(ctx, &subject, home_account, &enrollments)
@@ -294,7 +294,7 @@ impl IdentityState {
             Ok(fps) => fps,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *dep.home != doc_1_of(home_account) {
+        if !homed_in_doc_one(dep, home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         self.retire_arms(&subject, home_account, &fps)
@@ -382,6 +382,16 @@ impl IdentityState {
         }
         next
     }
+}
+
+/// AUTH-2.127 (RES-17) — THE home pin, in one place: a credential link is
+/// honored only in its account's FIRST document (`doc_1_of`, AUTH-2.126).
+/// The operand is the HOME'S account, never the subject. All three arms test
+/// it and each answers `Inert::NotDocOne` itself; WHERE each tests it is that
+/// arm's own precedence pin (AUTH-2.66 for enroll/retire, AUTH-2.67 item 2
+/// for the claim), which is what its call site says.
+fn homed_in_doc_one(dep: &LinkDeposit, home_account: &Address) -> bool {
+    *dep.home == doc_1_of(home_account)
 }
 
 /// AUTH-2.66 item 4, ENROLL/RETIRE arm entry: `!from.is_empty()`

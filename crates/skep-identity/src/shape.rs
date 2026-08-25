@@ -39,7 +39,25 @@ impl TypeAddrs {
     /// AUTH-2.21 — precomputes the three `subtree_of(T)` unit-subtree spans
     /// ONCE, so [`TypeAddrs::kind_of`] allocates nothing of its own on the
     /// fold hook (span comparison allocation, if any, is M1's — AUTH-2.107).
+    ///
+    /// PRECONDITION — the three addresses are PAIRWISE DISTINCT.
+    /// [`TypeAddrs::kind_of`] answers the FIRST span a `ty` is `Equal` to, in
+    /// the declared order enroll · retire · claim, so a repeat makes the
+    /// LATER kind UNREACHABLE — `kind_of` never answers it, for any `ty`.
+    /// With `claim == enroll` every board claim folds as an enrollment
+    /// instead, is refused for the shape an enrollment has not got (a
+    /// claim's `to` is empty, so `malformed_shape`), and the board can never
+    /// be claimed. That is the CALLER's bug — the engine wires ONE
+    /// `IDENTITY_TYPES` from three distinct commons-seeding constants
+    /// (AUTH-2.79) — so it stops here rather than travelling as a value. The
+    /// assertion is unconditional: this runs once at construction, off the
+    /// fold path AUTH-2.57 governs.
     pub fn new(enroll: Address, retire: Address, claim: Address) -> TypeAddrs {
+        assert!(
+            enroll != retire && enroll != claim && retire != claim,
+            "TypeAddrs::new: the three credential type addresses must be \
+             pairwise distinct (AUTH-2.20); a repeat shadows a whole kind"
+        );
         let enroll_span = subtree_of(enroll.tumbler());
         let retire_span = subtree_of(retire.tumbler());
         let claim_span = subtree_of(claim.tumbler());
@@ -92,13 +110,19 @@ pub struct LinkDeposit<'a> {
     pub ty: &'a [Span],
 }
 
-/// AUTH-2.26 — `Some(A)` iff the slot is exactly one span `Equal` to
-/// `subtree_of(its start)`, `None` otherwise. Governs both kinds' `to` and
-/// the claim's `from`; it is NOT applied to enroll/retire's `from` in either
-/// direction (AUTH-2.27 — non-emptiness plus the per-span home check are
-/// that slot's whole rule). `pub` so every discovery caller applies it
-/// paired with `kind_of` (AUTH-2.28, AUTH-2.112). An I2 frozen rule
-/// (AUTH-2.90).
+/// AUTH-2.26 — `Some(A)` iff the slot is exactly ONE span whose start
+/// VALIDATES to an address `A` (M1 `validate`) and which is `Equal` (M1
+/// `classify_spans`) to `subtree_of(A)`; `None` otherwise, and the answer is
+/// that validated start. The validity clause is NOT implied by the other
+/// two: `subtree_of` takes a tumbler and `classify_spans` compares
+/// endpoints, so neither consults T4 — a span may be `Equal` to
+/// `subtree_of(its start)` with a T4-INVALID start (adjacent zeros, say),
+/// and such a slot answers `None`, never a panic (AUTH-2.57). Governs both
+/// kinds' `to` and the claim's `from`; it is NOT applied to enroll/retire's
+/// `from` in either direction (AUTH-2.27 — non-emptiness plus the per-span
+/// home check are that slot's whole rule). `pub` so every discovery caller
+/// applies it paired with `kind_of` (AUTH-2.28, AUTH-2.112). An I2 frozen
+/// rule (AUTH-2.90).
 pub fn single_address(slot: &[Span]) -> Option<Address> {
     let [span] = slot else { return None };
     let addr = validate(span.start().clone()).ok()?;

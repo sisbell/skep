@@ -33,6 +33,13 @@ pub struct Enrolled {
 ///   `is_empty()` implies `retired = ∅` and no genesis can re-enroll a
 ///   retired fingerprint (the genesis arm posts `enrolled = K` WITHOUT
 ///   consulting `retired`, AUTH-2.70).
+///
+/// On the WRITE path the three are held by different means: AUTH-1.32 by
+/// construction here (the enrolling mutator derives the map key from the
+/// value it inserts), AUTH-1.35 and AUTH-1.36 as PRECONDITIONS stated on the
+/// two crate-private mutators and discharged by the posting arms —
+/// re-checked nowhere on this side, so a new posting arm inherits them and
+/// must discharge them itself.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySet {
     enrolled: OrdMap<Fingerprint, Enrolled>,
@@ -89,6 +96,17 @@ impl KeySet {
     /// Enrol one key, the map key derived via `Fingerprint::of` on the key
     /// inserted — establishing AUTH-1.32 by construction (AUTH-2.53).
     /// Crate-private: only `apply` posts.
+    ///
+    /// PRECONDITION — `Fingerprint::of(&e.key) ∉ retired`. This routine does
+    /// NOT consult `retired`, and nothing ever removes from it, so AUTH-1.35
+    /// (`enrolled ∩ retired = ∅`) and with it I4 (AUTH-2.98) are the
+    /// CALLER's to preserve; nothing here re-checks them. Both posting arms
+    /// discharge it: the holder arm filters on [`retired_contains`]
+    /// (AUTH-2.69), and the genesis arm needs no filter because it fires only
+    /// on an empty set and AUTH-1.36 gives `enrolled = ∅ ⇒ retired = ∅`
+    /// (AUTH-2.70).
+    ///
+    /// [`retired_contains`]: KeySet::retired_contains
     pub(crate) fn insert_enrolled(&mut self, e: Enrolled) {
         self.enrolled.insert(Fingerprint::of(&e.key), e);
     }
@@ -98,6 +116,12 @@ impl KeySet {
     /// not enrolled moves nothing, so the act is total and decides nothing
     /// (AUTH-2.53). Crate-private: only `apply` posts, and `classify`
     /// guarantees the membership.
+    ///
+    /// PRECONDITION — the fingerprints moved in one post do not exhaust
+    /// `enrolled`. This routine does NOT consult the set's size, so
+    /// AUTH-1.36 (`retired ≠ ∅ ⇒ enrolled ≠ ∅`) and with it I3 (AUTH-2.97)
+    /// are the CALLER's to preserve. The retirement arm discharges it with
+    /// its `WouldEmpty` test (AUTH-2.74).
     pub(crate) fn move_to_retired(&mut self, fp: &Fingerprint) {
         if let Some(e) = self.enrolled.remove(fp) {
             self.retired.insert(*fp, e.anchor);

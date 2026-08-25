@@ -60,6 +60,12 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, NODE_HELLO_TAG];
 /// `tag ‖ (per field f, in order: be32(len(f)) ‖ f)`, where `be32` is the
 /// 4-byte big-endian byte length; the framing is injective for a fixed tag.
 ///
+/// PRECONDITION — every field is shorter than 2^32 bytes, so its length is
+/// what `be32` writes. A longer field is a CALLER's bug and not an outcome:
+/// nothing here frames one (the fields are alg tokens and raw keys), and
+/// truncating the length would silently break the injectivity above rather
+/// than refuse it. It panics, naming the obligation.
+///
 /// AUTH-1.14 — debug-asserts that `tag` is a member of [`TAGS`], so a tag
 /// declared but not listed fails at its first use; release builds pay
 /// nothing and produce identical bytes.

@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 
 use common::*;
 use skep_address::Span;
-use skep_identity::{single_address, Effect, IdentityState, Verdict, MAX_RECORD_BYTES};
+use skep_identity::{single_address, Effect, IdentityState, TypeAddrs, Verdict, MAX_RECORD_BYTES};
 
 fn enroll_ty() -> Vec<Span> {
     vec![unit(T_ENROLL)]
@@ -889,6 +889,17 @@ fn unrecognized_type_slots_are_not_credential() {
         assert!(matches!(v, Verdict::NotCredential), "expected NotCredential");
         assert_eq!(next, genesis_state, "NotCredential must leave state unchanged");
     }
+}
+
+/// AUTH-2.20/AUTH-2.21 — the three type addresses are pairwise distinct. A
+/// repeat would make the later kind unreachable: `kind_of` answers the
+/// FIRST span a `ty` is `Equal` to, so it would never answer that kind for
+/// any `ty`. The refusal is a panic because a duplicate is the engine's
+/// mis-wiring and not an input a record can carry.
+#[test]
+#[should_panic(expected = "pairwise distinct")]
+fn type_addrs_refuses_a_repeated_type_address() {
+    let _ = TypeAddrs::new(addr(T_ENROLL), addr(T_RETIRE), addr(T_RETIRE));
 }
 
 // -------------------------------------------------- key-set semantics

@@ -71,10 +71,15 @@ impl PublicKey {
         hex_encode(self.raw())
     }
 
-    /// AUTH-1.4 — SYNTAX-ONLY admission: the alg token is looked up in
-    /// [`ALGS`] (`UnknownAlg` when absent), the hex MUST decode (`BadHex`
-    /// otherwise — case-insensitively, AUTH-1.3) to exactly that row's raw
-    /// length (`BadLength` otherwise), and the curve point is never decoded.
+    /// AUTH-1.4 — SYNTAX-ONLY admission, the checks in THIS order with the
+    /// FIRST failure the verdict: the alg token is looked up in [`ALGS`]
+    /// (`UnknownAlg` when absent), then the hex MUST decode (`BadHex`
+    /// otherwise — case-insensitively, AUTH-1.3), then the decoded bytes must
+    /// be exactly that row's raw length (`BadLength` otherwise); the curve
+    /// point is never decoded. The order is observable and pinned:
+    /// `parse("rsa", "zz")` is `UnknownAlg`, `parse("ed25519", "zz")` is
+    /// `BadHex` — a length test hoisted ahead of the decode would flip that
+    /// second row, which is what `public_key_surface` watches.
     pub fn parse(alg: &str, hex: &str) -> Result<PublicKey, KeyParseError> {
         let row = ALGS
             .iter()

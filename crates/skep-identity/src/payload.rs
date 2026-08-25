@@ -214,6 +214,13 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
 /// lines 2..n in order with the first failing line the verdict, and `Empty`
 /// only after a clean scan. Hex tokens are case-insensitive (AUTH-2.17);
 /// keyword tokens match as bytes, lowercase (AUTH-2.9).
+///
+/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
+/// `Empty` otherwise), in the record's LINE ORDER (which is the order
+/// `Effect::Genesis`/`Enroll` carry to `apply`), and no two entries carry
+/// the same key (AUTH-2.15 answers `DuplicateKey(n)` otherwise) — the
+/// promise that fixes a fingerprint's anchor flag within one record (I9,
+/// AUTH-2.104).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
     scan(bytes, ENROLL_HEADER, |n, line, seen: &[Enrollment]| {
         // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
@@ -268,6 +275,15 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// after the fingerprint token is `BadLine` (AUTH-2.14). The scan and the
 /// fault precedence are the ones BOTH kinds share — the same ones the
 /// enrollment kind reads under (AUTH-2.19).
+///
+/// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
+/// `Empty` otherwise), in the record's LINE ORDER, and DUPLICATE-FREE
+/// (AUTH-2.15 answers `DuplicateKey(n)` otherwise). The distinctness is a
+/// promise the retirement arm's proof rests on, not an implementation
+/// detail: that arm reads `|removed| == |enrolled|` as set equality
+/// (AUTH-2.74), and a record listing one fingerprint twice beside the rest
+/// of the set would pass that test, empty the set, and void I3 (AUTH-2.97)
+/// and AUTH-1.36.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
     scan(bytes, RETIRE_HEADER, |n, line, seen: &[Fingerprint]| {
         // AUTH-2.14 — no label, no trailing separator: ANY remainder after

@@ -12,17 +12,19 @@ use skep_address::{checked_inc, parent, Address, Level, Tumbler};
 /// the VALUE at one I-address AS OF THE CTX'S COMMIT — the point in the
 /// record stream the ctx answers as of, which for the fold is the deposit's
 /// own commit — never at-head (AUTH-2.5: a value read answered at head MUST
-/// NOT be used to fold); `None` means the home never minted that address.
-/// The two facts an implementor must not fuse: `at` is a POSITION (an
-/// element address, AUTH-2.40), the commit is a point in the STREAM, and
-/// "position" throughout this crate is only ever the former.
+/// NOT be used to fold); `None` means the home had not minted that address
+/// AS OF THAT COMMIT — not that it never will. The two facts an implementor
+/// must not fuse: `at` is a POSITION (an element address, AUTH-2.40), the
+/// commit is a point in the STREAM, and "position" throughout this crate is
+/// only ever the former.
 ///
 /// AUTH-2.30 — the key is `&Tumbler`, the walk's own output and M4's own
 /// key, so NO fallible per-position `validate` lift exists on the payload
 /// path: a span start's validity and position-hood are checked ONCE per
 /// span, ahead of the walk (AUTH-2.38).
 pub trait Values {
-    /// The value at `at`, as of the ctx's commit; `None` iff never minted.
+    /// The value at `at`, as of the ctx's commit; `None` iff the home had
+    /// not minted `at` as of that commit.
     ///
     /// AUTH-1.22 — every `Some` answer carries AT LEAST ONE BYTE, and that is
     /// the implementor's obligation rather than a nicety: the payload read's
@@ -43,6 +45,18 @@ pub trait FoldCtx: Values {
     /// AUTH-2.32 — ω(a), UNPROJECTED: one longest-prefix resolution over the
     /// principal registry (M3 `effective_owner`, AUTH-2.108); `None` iff `a`
     /// is unowned.
+    ///
+    /// The prefix answered is a PRINCIPAL prefix — the address M3 registered
+    /// the principal at, node- or account-level — never a document- or
+    /// element-level address. This crate takes doc-1 arithmetic on it
+    /// (`inc(prefix, 2)`, AUTH-2.126/AUTH-2.109) for the home pin, and a
+    /// prefix at any other level answers an address that is document-of
+    /// nothing: under such a ctx NO credential deposit can pass the home pin
+    /// at all, so an otherwise-conforming one refuses `not_doc_one` —
+    /// silently, and in release. The crate's `doc_1_of` debug-asserts only
+    /// the element-level half, the half that trips M1's TA5a gate; a
+    /// document-level prefix passes that gate, is monitored nowhere, and is
+    /// the implementor's alone.
     fn owner_of(&self, a: &Address) -> Option<Owner>;
 
     /// AUTH-2.33 — M3 `entity_level(a) == Some(Account)`.
@@ -107,6 +121,9 @@ pub(crate) fn delegator(ctx: &impl FoldCtx, a: &Address) -> Option<Delegator> {
 /// against M1's `inc`: `k = 2` appends one zero then a `1`) — with NO query
 /// and NO new seam method; [`FoldCtx`] still answers AUTH-2.31's four facts.
 /// The home pin (AUTH-2.127) compares credential homes against this address.
+///
+/// The operand is an ω prefix, so the level obligation this arithmetic rests
+/// on is [`FoldCtx::owner_of`]'s, stated there.
 pub(crate) fn doc_1_of(a: &Address) -> Address {
     match checked_inc(a, 2) {
         Ok(doc) => doc,

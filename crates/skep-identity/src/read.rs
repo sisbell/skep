@@ -45,12 +45,17 @@ use crate::seam::Values;
 ///    length exceed `MAX_RECORD_BYTES`, checked BEFORE appending
 ///    (AUTH-2.43), so at most `MAX_RECORD_BYTES` bytes are ever copied.
 ///
-/// Termination rides on the byte cap alone, and so on AUTH-1.22's wire-codec
-/// premise: a span whose width acts above the element level covers every
-/// ordinal above its start, so only growing `out` ends the walk. That premise
-/// is [`Values`]' declared obligation, debug-asserted here at the one call
-/// that depends on it; a round admitting zero-byte values must add a second
-/// bound before this walk can run under it.
+/// Termination is bounded TWICE, because a span whose width acts above the
+/// element level covers every ordinal above its start and so bounds nothing
+/// itself. The byte cap ends the walk on a conforming ctx — one that keeps
+/// AUTH-1.22's wire-codec premise, [`Values`]' declared obligation, that
+/// every value carries at least one byte. Under a ctx that breaks it, the
+/// per-record POSITION budget below ends the walk instead, in bounded work.
+///
+/// The budget is not a sixth pinned check and does not touch AUTH-2.38's
+/// order: it sits after items 4 and 5, and it CANNOT fire on a conforming
+/// ctx in any cell — after the k-th append such a ctx has `out.len() >= k`,
+/// and item 5 has already refused every `k > MAX_RECORD_BYTES`.
 pub fn record_bytes(
     ctx: &impl Values,
     home: &Address,
@@ -58,6 +63,10 @@ pub fn record_bytes(
 ) -> Result<Vec<u8>, PayloadError> {
     let one = Nat::from(1u32);
     let mut out: Vec<u8> = Vec::new();
+    // AUTH-1.22's premise as a BOUND rather than a note: the ONLY thing that
+    // ends this walk under a ctx that answers a zero-byte value at a covered
+    // position, and unreachable under one that does not.
+    let mut positions: usize = 0;
     for span in from {
         // 1 — validity (checked ONCE per span, ahead of the walk: AUTH-2.30).
         let Ok(start) = validate(span.start().clone()) else {
@@ -88,13 +97,21 @@ pub fn record_bytes(
             debug_assert!(
                 !value.is_empty(),
                 "Values answered a zero-byte value at a covered position — \
-                 AUTH-1.22's premise is broken and this walk is unbounded"
+                 AUTH-1.22's premise is broken and the byte cap bounds nothing"
             );
             // 5 — the cap, BEFORE the value is appended (AUTH-2.43).
             if out.len() + value.len() > MAX_RECORD_BYTES {
                 return Err(PayloadError::TooLarge);
             }
             out.extend_from_slice(value);
+            // The position budget, AFTER items 4 and 5 so the pinned fault
+            // precedence is untouched. `>` and not `>=`: a record of exactly
+            // MAX_RECORD_BYTES one-byte positions is a legal record — the
+            // exceed-only boundary of AUTH-2.43, read in positions.
+            positions += 1;
+            if positions > MAX_RECORD_BYTES {
+                return Err(PayloadError::TooLarge);
+            }
             t = shift(&t, &one);
         }
     }

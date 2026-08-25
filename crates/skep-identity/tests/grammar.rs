@@ -384,6 +384,10 @@ fn public_key_surface() {
 
     use skep_identity::KeyParseError;
     assert!(matches!(PublicKey::parse("rsa", &h), Err(KeyParseError::UnknownAlg)));
+    // BadHex BEFORE BadLength, on a token of the wrong length AND the wrong
+    // bytes: the decode precedes the measure here, so a length test hoisted
+    // ahead of it — the shape `Fingerprint::parse_hex` legitimately has,
+    // AUTH-1.9 fixing ONE admitted length — would flip this row to BadLength.
     assert!(matches!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex)));
     assert!(matches!(
         PublicKey::parse("ed25519", &h[..63]),

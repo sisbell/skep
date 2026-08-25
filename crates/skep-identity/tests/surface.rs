@@ -83,7 +83,11 @@ fn algs_and_arms_agree_both_directions() {
     for alg in ALGS {
         let hex = "00".repeat(alg.raw_len);
         let k = PublicKey::parse(alg.token, &hex).unwrap_or_else(|_| {
-            panic!("ALGS token {} does not parse — no arm carries it", alg.token)
+            panic!(
+                "ALGS token {} does not parse — no arm carries it, or the arm's \
+                 array is not this row's raw_len of {}",
+                alg.token, alg.raw_len
+            )
         });
         assert_eq!(k.alg(), alg.token, "arm answers a different token than its row");
         assert_eq!(

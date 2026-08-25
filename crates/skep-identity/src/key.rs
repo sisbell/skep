@@ -85,11 +85,17 @@ impl PublicKey {
             return Err(KeyParseError::BadLength);
         }
         match alg {
-            ALG_ED25519 => {
-                let mut raw = [0u8; 32];
-                raw.copy_from_slice(&bytes);
-                Ok(PublicKey::Ed25519(raw))
-            }
+            // The conversion is CHECKED, so the arm's array length and its
+            // ALGS row's `raw_len` need not agree for this to be sound: an
+            // arm whose array is not its row's length answers `BadLength` —
+            // the token the row check above already answers — rather than
+            // panicking on a length the caller chose. That agreement is the
+            // AUTH-2.92 assertion's, and adding an arm (AUTH-2.91) cannot
+            // make a hostile line panic here while it is out.
+            ALG_ED25519 => match <[u8; 32]>::try_from(bytes.as_slice()) {
+                Ok(raw) => Ok(PublicKey::Ed25519(raw)),
+                Err(_) => Err(KeyParseError::BadLength),
+            },
             // Reachable only if ALGS carries a token no arm constructs — the
             // drift the AUTH-2.92 assertion fails at test time.
             _ => Err(KeyParseError::UnknownAlg),
@@ -158,8 +164,13 @@ impl Fingerprint {
     }
 
     /// AUTH-1.9 — accepts exactly 64 hex characters, case-insensitively;
-    /// `None` for anything else.
+    /// `None` for anything else. The length is the FIRST test, so a caller's
+    /// string sizes no allocation here: AUTH-1.9 fixes the admitted length at
+    /// a constant, and every other length answers `None` whatever its bytes.
     pub fn parse_hex(s: &str) -> Option<Fingerprint> {
+        if s.len() != 64 {
+            return None;
+        }
         let bytes = hex_decode(s)?;
         let raw: [u8; 32] = bytes.try_into().ok()?;
         Some(Fingerprint(raw))

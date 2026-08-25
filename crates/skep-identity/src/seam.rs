@@ -26,12 +26,15 @@ pub trait Values {
     ///
     /// AUTH-1.22 — every `Some` answer carries AT LEAST ONE BYTE, and that is
     /// the implementor's obligation rather than a nicety: the payload read's
-    /// reach walk (AUTH-2.42) is bounded by the byte cap alone (AUTH-2.43),
-    /// because a span whose width acts above the element level covers every
-    /// ordinal above its start. A ctx that can answer `Some(&[])` at a covered
-    /// position leaves that walk unbounded and MUST NOT be used to fold until
-    /// a second bound on per-record span/position work exists. `record_bytes`
-    /// debug-asserts the premise at the one call that rests on it.
+    /// reach walk (AUTH-2.42) is bounded by the byte cap (AUTH-2.43) only
+    /// while it holds, because a span whose width acts above the element
+    /// level covers every ordinal above its start. A ctx that answers
+    /// `Some(&[])` at a covered position is NOT one this crate folds under:
+    /// `record_bytes` refuses the record on its per-record position budget —
+    /// the second bound, which ends such a walk in bounded work — and
+    /// debug-asserts the premise at the one call that rests on it. The budget
+    /// answers `TooLarge`, so a ctx breaking the premise cannot read a record
+    /// at all; it does not make such a ctx conforming.
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]>;
 }
 

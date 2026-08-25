@@ -206,11 +206,11 @@ fn invalid_start_is_foreign_content_not_a_panic() {
 }
 
 /// AUTH-1.22 — a ctx answering `Some(&[])` at a covered position breaks the
-/// premise the reach walk's only bound rests on (the byte cap, AUTH-2.43:
-/// nothing else ends a walk whose span acts above the element level). Debug
-/// builds refuse such a ctx at the read rather than folding under it; the
-/// span here covers one position, so the refusal is the assertion and never
-/// the hang it guards against.
+/// premise the byte cap rests on (AUTH-2.43: a value appending nothing can
+/// never reach it). Debug builds name the broken premise at the read rather
+/// than folding under it, one step before the position budget would refuse
+/// the record — the release-build bound
+/// [`a_zero_byte_ctx_is_bounded_by_the_position_budget`] pins.
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "AUTH-1.22")]
@@ -386,10 +386,11 @@ fn three_atom_record_folds() {
     }
 }
 
-/// Corpus: a 64 KiB record folds · a 64 KiB+1 record is inert (AUTH-2.43's
-/// exceed-only boundary; AUTH-1.19's per-record scope).
-#[test]
-fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
+/// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes: 897 key
+/// lines, the first carrying a label sized to land the total on the mark.
+/// Built FROM the constant, so a change to the cap moves the record with it
+/// and `max_record_bytes_is_64_kib` stays the one assertion that discovers it.
+fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     use skep_identity::{encode_enroll, Enrollment};
 
     let mut entries: Vec<Enrollment> = (0..897u32)
@@ -401,29 +402,96 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
         "fixture arithmetic: {base_len} bytes of key lines leaves no room for a \
          label pad under a {MAX_RECORD_BYTES}-byte cap"
     );
-    let pad = MAX_RECORD_BYTES - base_len;
-
-    // Exactly the cap: one label of pad−1 chars adds `pad` bytes (the space
-    // plus the label).
+    // One label of pad−1 chars adds `pad` bytes (the space plus the label).
+    let pad = MAX_RECORD_BYTES - base_len + over;
     entries[0] = Enrollment::new(keyn(0), false, Some("x".repeat(pad - 1))).expect("label");
     let payload = encode_enroll(&entries);
-    assert_eq!(payload.len(), MAX_RECORD_BYTES);
+    assert_eq!(payload.len(), MAX_RECORD_BYTES + over);
+    payload
+}
 
+/// Corpus: a 64 KiB record folds · a 64 KiB+1 record is inert (AUTH-2.43's
+/// exceed-only boundary; AUTH-1.19's per-record scope).
+#[test]
+fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
     let mut fx = Fixture::new();
     let genesis_state = IdentityState::genesis();
-    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &payload);
+
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &cap_sized_enroll_payload(0));
     match assert_honored(&fx.classify(&genesis_state, &dep)) {
         Effect::Genesis { keys, .. } => assert_eq!(keys.len(), 897),
         _ => panic!("expected a genesis effect"),
     }
 
     // One byte more: inert.
-    entries[0] = Enrollment::new(keyn(0), false, Some("x".repeat(pad))).expect("label");
-    let payload = encode_enroll(&entries);
-    assert_eq!(payload.len(), MAX_RECORD_BYTES + 1);
-    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &payload);
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &cap_sized_enroll_payload(1));
     assert_token(
         &fx.classify(&genesis_state, &dep),
+        "malformed_payload:too_large",
+    );
+}
+
+/// AUTH-2.43's exceed-only boundary read in POSITIONS: a 64 KiB record spread
+/// ONE BYTE PER POSITION walks exactly `MAX_RECORD_BYTES` positions and folds.
+/// The per-record position budget is `>`, never `>=`, so the widest record a
+/// conforming ctx can carry is a record and not a refusal — the slip a
+/// reviser makes, and the boundary the budget's own soundness argument names.
+#[test]
+fn a_record_of_cap_many_one_byte_positions_folds() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    let payload = cap_sized_enroll_payload(0);
+
+    // One position per byte: the conforming ctx that walks the most positions
+    // a record can have, since every value carries at least one (AUTH-1.22).
+    for (i, byte) in payload.iter().enumerate() {
+        let ord = u32::try_from(i + 1).expect("cap fits a u32 ordinal");
+        fx.ctx.values.insert(content_pos(&home, ord), vec![*byte]);
+    }
+    let width = u32::try_from(MAX_RECORD_BYTES).expect("cap fits a u32 width");
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![content_run(&home, 1, width)],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    match assert_honored(&fx.classify(&IdentityState::genesis(), &dep)) {
+        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), 897),
+        _ => panic!("expected a genesis effect"),
+    }
+}
+
+/// AUTH-1.22 — the release-build bound. A ctx answering `Some(&[])` at a
+/// covered position appends nothing, so the byte cap can never fire; the span
+/// here has its width acting ABOVE the ordinal, so it covers every ordinal
+/// above its start and the reach bounds nothing either. The per-record
+/// position budget is what ends this walk, in bounded work, with `too_large`.
+///
+/// Runs under `cargo test --release` only: a debug build refuses the same ctx
+/// one step earlier at the read's `debug_assert`, which is what
+/// [`zero_byte_value_is_refused_at_the_read`] pins.
+#[cfg(not(debug_assertions))]
+#[test]
+fn a_zero_byte_ctx_is_bounded_by_the_position_budget() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+
+    // One position past the budget, so the walk reaches the refusal rather
+    // than outrunning the mint into `missing_value`.
+    for ord in 1..=u32::try_from(MAX_RECORD_BYTES + 1).expect("cap fits a u32 ordinal") {
+        fx.ctx.values.insert(content_pos(&home, ord), Vec::new());
+    }
+    let start = content_pos(&home, 1);
+    let mut w = vec![0u32; start.len()];
+    w[start.len() - 2] = 1; // action point at the subspace, above the ordinal
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![Span::new(start, tum(&w)).expect("T12-valid width")],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:too_large",
     );
 }

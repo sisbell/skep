@@ -1,5 +1,7 @@
 //! Keys and fingerprints — AUTH-1.1–1.10.
 
+use core::fmt;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -95,6 +97,17 @@ impl PublicKey {
     }
 }
 
+/// The two facts [`alg`] and [`to_hex`] already publish (AUTH-1.2,
+/// AUTH-1.3), not thirty-two decimal bytes.
+///
+/// [`alg`]: PublicKey::alg
+/// [`to_hex`]: PublicKey::to_hex
+impl fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PublicKey({} {})", self.alg(), self.to_hex())
+    }
+}
+
 /// [`PublicKey::parse`] rejection (AUTH-1.1, AUTH-1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyParseError {
@@ -105,6 +118,21 @@ pub enum KeyParseError {
     /// The decoded bytes are not exactly the `ALGS` row's raw length.
     BadLength,
 }
+
+/// Prose, never a second wire vocabulary: a `KeyParseError` reaches no wire.
+/// `parse_enroll` answers `PayloadError::BadLine(n)` for every one of these,
+/// and that is the fault a consumer renders (AUTH-1.28).
+impl fmt::Display for KeyParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            KeyParseError::UnknownAlg => "alg token is absent from ALGS",
+            KeyParseError::BadHex => "key hex does not decode",
+            KeyParseError::BadLength => "decoded key is not the ALGS row's raw length",
+        })
+    }
+}
+
+impl std::error::Error for KeyParseError {}
 
 /// The algorithm-agnostic identity of a key (AUTH-1.7):
 /// `SHA-256(framed(KEY_TAG, [alg, raw]))` (AUTH-1.8). A FOLD INPUT, not
@@ -140,6 +168,21 @@ impl Fingerprint {
     /// The raw digest bytes (AUTH-1.7).
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+}
+
+/// The AUTH-1.9 flat hex form, not thirty-two decimal bytes.
+impl fmt::Debug for Fingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Fingerprint({})", self.to_hex())
+    }
+}
+
+/// AUTH-1.9 — the flat 64-lowercase-hex form, the only form the daemon
+/// emits; grouped rendering is a client display convention (AUTH-1.10).
+impl fmt::Display for Fingerprint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.to_hex())
     }
 }
 

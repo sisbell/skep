@@ -293,14 +293,7 @@ pub fn token_of(v: &Verdict) -> Option<String> {
 pub fn assert_token(v: &Verdict, want: &str) {
     match token_of(v) {
         Some(got) => assert_eq!(got, want, "wrong inert token"),
-        None => panic!(
-            "expected Inert({want}), got {}",
-            if matches!(v, Verdict::Honored(_)) {
-                "Honored"
-            } else {
-                "NotCredential"
-            }
-        ),
+        None => panic!("expected Inert({want}), got {v:?}"),
     }
 }
 
@@ -308,8 +301,7 @@ pub fn assert_token(v: &Verdict, want: &str) {
 pub fn assert_honored(v: &Verdict) -> &Effect {
     match v {
         Verdict::Honored(effect) => effect,
-        Verdict::Inert(i) => panic!("expected Honored, got Inert({})", i.token()),
-        Verdict::NotCredential => panic!("expected Honored, got NotCredential"),
+        other => panic!("expected Honored, got {other:?}"),
     }
 }
 

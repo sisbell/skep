@@ -8,18 +8,34 @@
 //! escapes the prefix-free check over `TAGS` (the assertion verifying
 //! AUTH-1.15 is a test obligation pinned with I2, AUTH-2.93).
 
+use core::fmt;
+
 /// A framing tag (AUTH-1.11). The field is private, with no public
 /// constructor (AUTH-1.13): a foreign crate CANNOT frame under an undeclared
 /// tag — consumers (bebe's `NODE_HELLO_TAG`, AUTH-2.118) hold the declared
 /// constants only. Tags chosen in other documents (the invite payload's, the
 /// realm fingerprint's — AUTH-1.17) are declared HERE when chosen: the
 /// constant AND its row in [`TAGS`], one edit in one place.
+///
+/// `Copy`, because a tag is two words that [`framed`] only reads: a caller
+/// binds a declared constant, or walks [`TAGS`], and frames under what it
+/// holds as often as it likes. `PartialEq` is what membership in `TAGS` is
+/// tested by, here and in the conformance assertion.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Tag(&'static [u8]);
 
 impl Tag {
     /// The tag's bytes (AUTH-1.11).
     pub fn as_bytes(&self) -> &'static [u8] {
         self.0
+    }
+}
+
+/// The tag as written: every declared tag begins `skep-` and is ASCII
+/// (AUTH-1.15), so the bytes are the name.
+impl fmt::Debug for Tag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Tag({})", String::from_utf8_lossy(self.0))
     }
 }
 
@@ -49,9 +65,8 @@ pub const TAGS: &[Tag] = &[KEY_TAG, SESSION_TAG, NODE_HELLO_TAG];
 /// nothing and produce identical bytes.
 pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
     debug_assert!(
-        TAGS.iter().any(|t| t.0 == tag.0),
-        "framed: tag {:?} is declared but not listed in TAGS (AUTH-1.14)",
-        core::str::from_utf8(tag.0)
+        TAGS.contains(&tag),
+        "framed: {tag:?} is declared but not listed in TAGS (AUTH-1.14)"
     );
     let mut out =
         Vec::with_capacity(tag.0.len() + fields.iter().map(|f| 4 + f.len()).sum::<usize>());

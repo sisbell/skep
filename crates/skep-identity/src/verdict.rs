@@ -9,7 +9,7 @@ use crate::payload::PayloadError;
 /// AUTH-2.51 — a deposit's fold verdict. `classify` is the verdict `step`
 /// would reach without applying it (AUTH-2.57) — the daemon's precheck and
 /// the mirror's oracle.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// Not a credential deposit at all (AUTH-2.77): nullifies, `assert_sup`
     /// claims, retraction/supersession tuples, unrecognized types — state
@@ -26,7 +26,7 @@ pub enum Verdict {
 /// AUTH-2.51/AUTH-2.52 — a faithful description of the change `apply` posts;
 /// `account` on every arm is the set the effect touches. `apply` reads the
 /// effect and DECIDES NOTHING (AUTH-2.53).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     /// The genesis arm's post (AUTH-2.70): the account AND the keys the step
     /// seeds it with, in the same `Enrolled` shape `Enroll` uses — never the

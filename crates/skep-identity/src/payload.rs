@@ -10,6 +10,8 @@
 //!
 //! [`scan`]: scan
 
+use core::fmt;
+
 use crate::key::{Fingerprint, PublicKey, ALGS};
 
 /// AUTH-1.18 — the enrollment header, line 1 byte-exact (AUTH-2.7).
@@ -31,7 +33,7 @@ pub const MAX_RECORD_BYTES: usize = 64 * 1024;
 /// line grammar from v1 (the LEADING token `anchor`, AUTH-1.26, AUTH-2.11);
 /// a fingerprint's flag is fixed for the fingerprint's lifetime by the
 /// record that first enrolls it (I9, AUTH-2.104).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Enrollment {
     /// The enrolled public key.
     pub key: PublicKey,
@@ -66,6 +68,16 @@ pub enum LabelError {
     /// The label contains `\n` — outside the AUTH-1.24 domain.
     Newline,
 }
+
+impl fmt::Display for LabelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LabelError::Newline => f.write_str("label contains a newline"),
+        }
+    }
+}
+
+impl std::error::Error for LabelError {}
 
 /// AUTH-1.27 — a payload fault. `TooLarge`, `ForeignContent` and
 /// `MissingValue` report that a record's payload could not be READ; the
@@ -124,6 +136,20 @@ impl PayloadError {
         }
     }
 }
+
+/// AUTH-1.28's token, and only it: `Display` is a second ENTRY to [`token`]'s
+/// one authority, never a second vocabulary — `format!("{e}")` and
+/// `e.token()` answer the same string, so a consumer that formats is citing
+/// rather than transcribing.
+///
+/// [`token`]: PayloadError::token
+impl fmt::Display for PayloadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.token())
+    }
+}
+
+impl std::error::Error for PayloadError {}
 
 /// AUTH-2.19 — the scan BOTH kinds share, in ONE implementation: UTF-8
 /// first, else `NotUtf8` (item 1); line 1 the header, literally, byte-exact,

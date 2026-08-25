@@ -58,7 +58,7 @@ pub trait FoldCtx: Values {
 /// `is_bootstrap` is `id == BOOTSTRAP_PRINCIPAL`, compared inside the ctx
 /// implementor where the principal ids live — never inside `skep-identity`
 /// (AUTH-2.32, AUTH-2.108).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Owner {
     /// The owning principal's prefix.
     pub prefix: Address,

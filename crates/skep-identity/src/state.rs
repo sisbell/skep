@@ -31,11 +31,23 @@ static EMPTY_KEY_SET: LazyLock<KeySet> = LazyLock::new(KeySet::default);
 /// and the fold's frozen constants, and of nothing else (I2, AUTH-2.90).
 ///
 /// [`step`]: IdentityState::step
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdentityState {
     sets: OrdMap<Address, KeySet>,
     claimant: Option<Address>,
 }
+
+/// The engine seats [`IdentityState`] in its `World` (AUTH-2.79–2.88), and
+/// `skep_kernel::WorldState` demands `Send + Sync + 'static`. NOTHING in this
+/// crate names that bound, so a field that revoked it would break the
+/// ENGINE's build, at a trait error naming `World` rather than the field that
+/// caused it. The promise is checked here instead, beside the fields — one
+/// assertion covering `KeySet`, `Enrolled`, `PublicKey` and `Fingerprint`
+/// transitively.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync + 'static>() {}
+    assert_send_sync::<IdentityState>();
+};
 
 /// AUTH-2.60 — the bound identity readers dispatch under, wherever the slice
 /// rides (the World; a mirror's projection): M10's `key_set` row and skepd's

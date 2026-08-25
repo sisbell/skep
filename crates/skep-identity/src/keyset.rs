@@ -8,7 +8,7 @@ use crate::key::PublicKey;
 
 /// AUTH-1.29 — one enrolled key: the public key and its anchor flag. The
 /// same shape `Effect::Genesis`/`Effect::Enroll` name (AUTH-2.52).
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Enrolled {
     /// The enrolled public key.
     pub key: PublicKey,
@@ -33,7 +33,7 @@ pub struct Enrolled {
 ///   `is_empty()` implies `retired = ∅` and no genesis can re-enroll a
 ///   retired fingerprint (the genesis arm posts `enrolled = K` WITHOUT
 ///   consulting `retired`, AUTH-2.70).
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeySet {
     enrolled: OrdMap<Fingerprint, Enrolled>,
     retired: OrdMap<Fingerprint, bool /* anchor */>,

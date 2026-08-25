@@ -52,7 +52,7 @@ fn foreign_content_vs_native_fold() {
     };
     let (next, v) = fx.step(&genesis_state, &dep);
     assert_token(&v, "malformed_payload:foreign_content");
-    assert!(next == genesis_state);
+    assert_eq!(next, genesis_state);
 }
 
 /// Corpus: first FROM span home-minted at 64 KiB+1, second span transcluded
@@ -354,7 +354,7 @@ fn three_atom_record_folds() {
     };
     match assert_honored(&fx.classify(&genesis_state, &dep)) {
         Effect::Genesis { account, keys } => {
-            assert!(*account == addr(ACCT_A));
+            assert_eq!(*account, addr(ACCT_A));
             assert_eq!(keys.len(), 2);
             assert!(keys[0].anchor);
             assert!(!keys[1].anchor);
@@ -604,7 +604,7 @@ fn claimant_homed_genesis_flips_to_honored_at_the_claim() {
 
     let post = claim_as(&mut fx, &pre, CLM);
     match assert_honored(&fx.classify(&post, &dep)) {
-        Effect::Genesis { account, .. } => assert!(*account == addr(ACCT_A)),
+        Effect::Genesis { account, .. } => assert_eq!(*account, addr(ACCT_A)),
         _ => panic!("expected a genesis effect"),
     }
 }
@@ -687,10 +687,7 @@ fn unrecognized_type_slots_are_not_credential() {
         };
         let (next, v) = fx.step(&genesis_state, &dep);
         assert!(matches!(v, Verdict::NotCredential), "expected NotCredential");
-        assert!(
-            next == genesis_state,
-            "NotCredential must leave state unchanged"
-        );
+        assert_eq!(next, genesis_state, "NotCredential must leave state unchanged");
     }
 }
 
@@ -715,14 +712,14 @@ fn key_set_lifecycle() {
     let listed: Vec<_> = s.enrolled().map(|(f, _)| *f).collect();
     let mut sorted = listed.clone();
     sorted.sort();
-    assert!(listed == sorted);
+    assert_eq!(listed, sorted);
     assert_eq!(st.keyed_accounts().count(), 1);
 
     // I9 conformance: re-list the device key under the anchor flag.
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
     let (st2, v) = fx.step(&st, &dep);
     assert_token(&v, "nothing_changed");
-    assert!(st2 == st);
+    assert_eq!(st2, st);
     assert!(!st2.key_set(&a).is_anchor(&fp(2)));
 
     // Retire the device key: `removed` names it; the retired row carries the
@@ -731,8 +728,8 @@ fn key_set_lifecycle() {
     let (st3, v) = fx.step(&st2, &dep);
     match assert_honored(&v) {
         Effect::Retire { account, removed } => {
-            assert!(*account == a);
-            assert!(*removed == vec![fp(2)]);
+            assert_eq!(*account, a);
+            assert_eq!(*removed, vec![fp(2)]);
         }
         _ => panic!("expected a retire effect"),
     }
@@ -741,27 +738,27 @@ fn key_set_lifecycle() {
     assert!(!s3.is_anchor(&fp(2)));
     let retired: Vec<_> = s3.retired().collect();
     assert_eq!(retired.len(), 1);
-    assert!(*retired[0].0 == fp(2));
+    assert_eq!(*retired[0].0, fp(2));
     assert!(!retired[0].1);
 
     // Retiring it again touches nothing: removed = F ∩ enrolled = ∅.
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
     let (st4, v) = fx.step(&st3, &dep);
     assert_token(&v, "nothing_changed");
-    assert!(st4 == st3);
+    assert_eq!(st4, st3);
 
     // I4: a retired fingerprint never re-enters — the re-enrollment line is
     // outside `added` whatever its flag.
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
     let (st5, v) = fx.step(&st4, &dep);
     assert_token(&v, "nothing_changed");
-    assert!(st5 == st4);
+    assert_eq!(st5, st4);
 
     // I3: retiring the whole remaining set is `would_empty`, record inert.
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
     let (st6, v) = fx.step(&st5, &dep);
     assert_token(&v, "would_empty");
-    assert!(st6 == st5);
+    assert_eq!(st6, st5);
 }
 
 /// The claim walk end to end: keyless refusal, honored claim, first-wins
@@ -783,16 +780,16 @@ fn claim_flow() {
     // Claimed: honored; claimant posts.
     let (st, v) = fx.step(&st, &dep);
     match assert_honored(&v) {
-        Effect::Claim { account } => assert!(*account == addr(CLM)),
+        Effect::Claim { account } => assert_eq!(*account, addr(CLM)),
         _ => panic!("expected a claim effect"),
     }
-    assert!(st.claimant() == Some(&addr(CLM)));
+    assert_eq!(st.claimant(), Some(&addr(CLM)));
 
     // First-wins: a second claim, even by another seeded top-level account.
     let dep2 = fx.claim_dep(&doc1(ACCT_B), ACCT_B);
     let (st3, v) = fx.step(&st, &dep2);
     assert_token(&v, "already_claimed");
-    assert!(st3.claimant() == Some(&addr(CLM)));
+    assert_eq!(st3.claimant(), Some(&addr(CLM)));
 
     // A claim whose `from` is not the home's account: shape (condition 1).
     let dep = Dep {
@@ -824,7 +821,7 @@ fn populated_state_survives_serde() {
 
     let bytes = bincode::serialize(&st).expect("serialize IdentityState");
     let back: IdentityState = bincode::deserialize(&bytes).expect("deserialize IdentityState");
-    assert!(back == st);
-    assert!(back.claimant() == Some(&addr(CLM)));
+    assert_eq!(back, st);
+    assert_eq!(back.claimant(), Some(&addr(CLM)));
     assert!(back.key_set(&addr(ACCT_A)).contains(&fp(1)));
 }

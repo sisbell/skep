@@ -1,5 +1,6 @@
 //! The declared-value assertions I2 pins (AUTH-2.92 `ALGS`, AUTH-2.93
-//! `TAGS`), the framing byte pins, the fold token authority, and the
+//! `TAGS`), the framing byte pins, the fold token authority, the standard
+//! trait surface every consumer dispatches through, and the
 //! checkpoint-facing serde surface.
 
 mod common;
@@ -7,8 +8,8 @@ mod common;
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, Enrolled, Fingerprint, IdentityState, Inert, PayloadError, PublicKey, ALGS,
-    ALG_ED25519, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS,
+    framed, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError, LabelError,
+    PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS,
 };
 
 /// AUTH-1.12 — `framed(tag, fields) = tag ‖ (be32(len(f)) ‖ f)…`, byte-pinned.
@@ -90,8 +91,7 @@ fn tags_are_skep_prefixed_and_prefix_free() {
     for tag in TAGS {
         assert!(
             tag.as_bytes().starts_with(b"skep-"),
-            "tag {:?} does not begin skep-",
-            core::str::from_utf8(tag.as_bytes())
+            "{tag:?} does not begin skep-"
         );
     }
     for (i, a) in TAGS.iter().enumerate() {
@@ -99,18 +99,16 @@ fn tags_are_skep_prefixed_and_prefix_free() {
             if i != j {
                 assert!(
                     !b.as_bytes().starts_with(a.as_bytes()),
-                    "tag {:?} is a prefix of {:?}",
-                    core::str::from_utf8(a.as_bytes()),
-                    core::str::from_utf8(b.as_bytes())
+                    "{a:?} is a prefix of {b:?}"
                 );
             }
         }
     }
     // The three declared constants are the table, in declaration order.
     assert_eq!(TAGS.len(), 3);
-    assert_eq!(TAGS[0].as_bytes(), KEY_TAG.as_bytes());
-    assert_eq!(TAGS[1].as_bytes(), SESSION_TAG.as_bytes());
-    assert_eq!(TAGS[2].as_bytes(), NODE_HELLO_TAG.as_bytes());
+    assert_eq!(TAGS[0], KEY_TAG);
+    assert_eq!(TAGS[1], SESSION_TAG);
+    assert_eq!(TAGS[2], NODE_HELLO_TAG);
 }
 
 /// AUTH-2.55 — `Inert::token()`: the one authority, all twelve rows,
@@ -139,7 +137,7 @@ fn inert_token_map() {
 #[test]
 fn genesis_state_is_default_and_answers_empty() {
     let st = IdentityState::genesis();
-    assert!(st == IdentityState::default());
+    assert_eq!(st, IdentityState::default());
     assert!(st.key_set(&addr(ACCT_A)).is_empty());
     assert!(st.claimant().is_none());
     assert_eq!(st.keyed_accounts().count(), 0);
@@ -154,15 +152,108 @@ fn value_types_survive_serde() {
     let k = key(0x11);
     let bytes = bincode::serialize(&k).expect("serialize PublicKey");
     let back: PublicKey = bincode::deserialize(&bytes).expect("deserialize PublicKey");
-    assert!(back == k);
+    assert_eq!(back, k);
 
     let f = fp(0x22);
     let bytes = bincode::serialize(&f).expect("serialize Fingerprint");
     let back: Fingerprint = bincode::deserialize(&bytes).expect("deserialize Fingerprint");
-    assert!(back == f);
+    assert_eq!(back, f);
 
     let e = Enrolled { key: k, anchor: true };
     let bytes = bincode::serialize(&e).expect("serialize Enrolled");
     let back: Enrolled = bincode::deserialize(&bytes).expect("deserialize Enrolled");
-    assert!(back == e);
+    assert_eq!(back, e);
+}
+
+/// AUTH-1.40 — the checkpointed shape, pinned as BYTES rather than as a
+/// round trip. `Enrolled` rides inside `KeySet` inside `IdentityState`, so
+/// its encoding is part of the compatibility surface that freezes with the
+/// first checkpoint a v1 board writes; a round trip agrees with itself after
+/// any field-type change and would not notice. The anchor flag is ONE byte:
+/// widening it — to an enum, an integer, a struct — moves every later field
+/// of every checkpoint written since, and this assertion is where that is
+/// discovered.
+#[test]
+fn enrolled_checkpoint_encoding_is_pinned() {
+    let raw = [0x11u8; 32];
+    let e = Enrolled {
+        key: PublicKey::Ed25519(raw),
+        anchor: true,
+    };
+
+    let mut want: Vec<u8> = Vec::new();
+    want.extend_from_slice(&0u32.to_le_bytes()); // the Ed25519 variant index
+    want.extend_from_slice(&raw); // the raw key bytes
+    want.push(1); // the anchor flag, one byte
+
+    assert_eq!(bincode::serialize(&e).expect("serialize Enrolled"), want);
+}
+
+/// AUTH-1.28 — `PayloadError`'s `Display` is a second ENTRY to `token()`'s
+/// one authority and never a second vocabulary: over EVERY variant, both
+/// spell the same string. A row whose `Display` drifted from its token would
+/// give a formatting consumer a fault name the wire does not use.
+#[test]
+fn payload_error_display_is_the_token() {
+    for e in [
+        PayloadError::TooLarge,
+        PayloadError::ForeignContent,
+        PayloadError::MissingValue,
+        PayloadError::NotUtf8,
+        PayloadError::BadHeader,
+        PayloadError::Empty,
+        PayloadError::BadLine(7),
+        PayloadError::DuplicateKey(12),
+    ] {
+        assert_eq!(e.to_string(), e.token(), "Display and token disagree");
+    }
+}
+
+/// The three types this crate returns in `Err` compose with `?` into
+/// `Box<dyn Error>`, so a consumer plumbs them rather than defining a local
+/// wrapper enum to re-implement `Display` behind.
+#[test]
+fn error_types_lift_into_dyn_error() {
+    fn lift(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
+        Box::new(e)
+    }
+    // Each carries its own message through the erasure.
+    let boxed = lift(PublicKey::parse("rsa", "00").expect_err("unknown alg"));
+    assert_eq!(boxed.to_string(), KeyParseError::UnknownAlg.to_string());
+    let boxed = lift(Enrollment::new(key(1), false, Some("a\nb".to_owned())).expect_err("newline"));
+    assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
+    let boxed = lift(PayloadError::BadLine(4));
+    assert_eq!(boxed.to_string(), "bad_line:4");
+}
+
+/// AUTH-1.9/AUTH-1.3 — the hand-written renderings, so a fingerprint in a
+/// log line or a `{:?}` is the hex a reader can grep for, never thirty-two
+/// decimal bytes. `Display` on a fingerprint is `to_hex` exactly: the flat
+/// form the daemon emits (grouped rendering is the client's, AUTH-1.10).
+#[test]
+fn key_and_fingerprint_render_as_their_hex() {
+    let k = key(0xab);
+    let want = format!("PublicKey(ed25519 {})", k.to_hex());
+    assert_eq!(format!("{k:?}"), want);
+
+    let f = fp(0xab);
+    assert_eq!(f.to_string(), f.to_hex());
+    assert_eq!(format!("{f:?}"), format!("Fingerprint({})", f.to_hex()));
+}
+
+/// A `Tag` is `Copy`, so a BOUND tag frames as often as a caller likes and
+/// `TAGS` iterates by value — the framing surface does not ration the
+/// declared constants (AUTH-1.13's private field is what rations WHICH tags
+/// exist). `Debug` renders the bytes, which for a `skep-` ASCII tag is the
+/// name (AUTH-1.15).
+#[test]
+fn tag_is_copy_and_debugs_as_its_bytes() {
+    let tag = KEY_TAG;
+    let once = framed(tag, &[b"a"]);
+    let twice = framed(tag, &[b"a"]);
+    assert_eq!(once, twice);
+    for t in TAGS {
+        assert_eq!(framed(*t, &[]), t.as_bytes());
+    }
+    assert_eq!(format!("{KEY_TAG:?}"), "Tag(skep-key-v1)");
 }

@@ -20,7 +20,7 @@ pub enum CredentialKind {
 /// the exact three addresses are OPEN (AUTH-7.1) and this crate is
 /// parametric over them — `IDENTITY_TYPES` itself is an I2 frozen constant
 /// (AUTH-2.90), and a mirror must fix ONE address form for it (AUTH-2.125).
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TypeAddrs {
     // The addresses, kept per AUTH-2.20's field list; nothing reads them
     // outside `kind_of`'s precomputed spans, hence the allows.
@@ -80,6 +80,7 @@ impl TypeAddrs {
 /// M7's `enc` on ALL THREE slots (AUTH-2.24); `from` is in ENDSET ORDER and
 /// stays that way — no constructor may sort, dedup, or normalize it
 /// (AUTH-2.25).
+#[derive(Debug, Clone, Copy)]
 pub struct LinkDeposit<'a> {
     /// The link's home document.
     pub home: &'a Address,

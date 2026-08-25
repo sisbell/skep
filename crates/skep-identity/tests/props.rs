@@ -48,7 +48,7 @@ proptest! {
         }
         let encoded = encode_enroll(&enrollments);
         let parsed = parse_enroll(&encoded);
-        prop_assert!(matches!(&parsed, Ok(p) if *p == enrollments));
+        prop_assert_eq!(parsed, Ok(enrollments));
     }
 
     /// AUTH-2.17's round-trip on the retirement kind.
@@ -62,7 +62,7 @@ proptest! {
             }
         }
         let parsed = parse_retire(&encode_retire(&fps));
-        prop_assert!(matches!(&parsed, Ok(p) if *p == fps));
+        prop_assert_eq!(parsed, Ok(fps));
     }
 }
 
@@ -174,11 +174,11 @@ proptest! {
             let (next, verdict) = fx.step(&st, &mat.dep);
 
             // AUTH-2.57 — classify is exactly the verdict step reaches.
-            prop_assert!(preview == verdict);
+            prop_assert_eq!(&preview, &verdict);
             // Only Honored moves the state (I8 for NotCredential, and every
             // inert verdict leaves the table untouched).
             if !matches!(verdict, Verdict::Honored(_)) {
-                prop_assert!(next == st);
+                prop_assert_eq!(&next, &st);
             }
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is
@@ -224,7 +224,7 @@ proptest! {
 
             // I6 — `claimant` never changes once `Some`.
             if let Some(claimant) = st.claimant() {
-                prop_assert!(next.claimant() == Some(claimant));
+                prop_assert_eq!(next.claimant(), Some(claimant));
             }
             // I3 — `!S.is_empty()` is monotone over the stream.
             for acct in &ever_nonempty {
@@ -245,10 +245,10 @@ proptest! {
             for ((acct, f), flag) in &first_flag {
                 let s = next.key_set(acct);
                 if let Some((_, e)) = s.enrolled().find(|(fp2, _)| *fp2 == f) {
-                    prop_assert!(e.anchor == *flag);
+                    prop_assert_eq!(e.anchor, *flag);
                 }
                 if let Some((_, retired_flag)) = s.retired().find(|(fp2, _)| *fp2 == f) {
-                    prop_assert!(retired_flag == *flag);
+                    prop_assert_eq!(retired_flag, *flag);
                 }
             }
 
@@ -266,11 +266,11 @@ proptest! {
             acc
         };
         let whole = fold_over(&IdentityState::genesis(), &mats);
-        prop_assert!(whole == st);
+        prop_assert_eq!(&whole, &st);
         let mid = mats.len() / 2;
         let head = fold_over(&IdentityState::genesis(), &mats[..mid]);
         let resumed = fold_over(&head, &mats[mid..]);
-        prop_assert!(resumed == st);
+        prop_assert_eq!(&resumed, &st);
     }
 
     /// I7 (AUTH-2.102) — `is_published == false ⇒ Inert(Unpublished)` for
@@ -287,11 +287,12 @@ proptest! {
         for mat in &mats {
             let (next, verdict) = fx.step(&genesis_state, &mat.dep);
             if mat.kind <= 2 {
-                prop_assert!(token_of(&verdict).as_deref() == Some("unpublished"));
+                let token = token_of(&verdict);
+                prop_assert_eq!(token.as_deref(), Some("unpublished"));
             } else {
                 prop_assert!(matches!(verdict, Verdict::NotCredential));
             }
-            prop_assert!(next == genesis_state);
+            prop_assert_eq!(&next, &genesis_state);
         }
     }
 }

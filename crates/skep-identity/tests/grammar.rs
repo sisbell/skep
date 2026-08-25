@@ -7,7 +7,7 @@ mod common;
 use common::{fp, key};
 use skep_identity::{
     encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, Fingerprint, LabelError,
-    PayloadError, PublicKey,
+    PayloadError, PublicKey, ALG_ED25519,
 };
 
 fn hex(i: u8) -> String {
@@ -202,11 +202,11 @@ fn malformed_anchor_lines_are_bad_line() {
 fn hex_tokens_are_case_insensitive() {
     let lower = format!("skep-enroll v1\ned25519 {}\n", hex(7));
     let upper = format!("skep-enroll v1\ned25519 {}\n", hex(7).to_uppercase());
-    assert!(ok_enroll(lower.as_bytes()) == ok_enroll(upper.as_bytes()));
+    assert_eq!(ok_enroll(lower.as_bytes()), ok_enroll(upper.as_bytes()));
 
     let lower = format!("skep-retire v1\n{}\n", fp(7).to_hex());
     let upper = format!("skep-retire v1\n{}\n", fp(7).to_hex().to_uppercase());
-    assert!(ok_retire(lower.as_bytes()) == ok_retire(upper.as_bytes()));
+    assert_eq!(ok_retire(lower.as_bytes()), ok_retire(upper.as_bytes()));
 }
 
 /// A blank line after line 1 is ignored but still counts for numbering
@@ -319,11 +319,11 @@ fn round_trip_domain_corners() {
         Enrollment::new(key(5), false, None).unwrap(),
     ];
     let parsed = ok_enroll(&encode_enroll(&corners));
-    assert!(parsed == corners);
+    assert_eq!(parsed, corners);
 
     let fps = vec![fp(1), fp(2), fp(3)];
     let parsed = ok_retire(&encode_retire(&fps));
-    assert!(parsed == fps);
+    assert_eq!(parsed, fps);
 }
 
 /// AUTH-1.25 — `Enrollment::new` is the only constructor: `Some("")` maps
@@ -365,7 +365,7 @@ fn public_key_surface() {
 
     // Case-insensitive parse; syntax-only (0xff…ff is no curve point and is
     // admitted anyway — AUTH-1.4 never decodes the point).
-    assert!(PublicKey::parse("ed25519", &h.to_uppercase()).unwrap() == k);
+    assert_eq!(PublicKey::parse("ed25519", &h.to_uppercase()).unwrap(), k);
     assert!(PublicKey::parse("ed25519", &"ff".repeat(32)).is_ok());
 
     use skep_identity::KeyParseError;
@@ -379,6 +379,21 @@ fn public_key_surface() {
         PublicKey::parse("ed25519", &h[..62]),
         Err(KeyParseError::BadLength)
     ));
+
+    // `parse` takes two `&str` in a row, so a caller CAN swap them — and the
+    // swap is loud, on either argument's own check: a hex string is in no
+    // ALGS row, and `ed25519` is seven characters, an odd length no hex
+    // decode admits. Nothing silently parses the wrong way round, which is
+    // why AUTH-1.4's table lookup can stay inside this function rather than
+    // being lifted into the caller's types.
+    assert!(matches!(
+        PublicKey::parse(&h, ALG_ED25519),
+        Err(KeyParseError::UnknownAlg)
+    ));
+    assert!(matches!(
+        PublicKey::parse(ALG_ED25519, ALG_ED25519),
+        Err(KeyParseError::BadHex)
+    ));
 }
 
 /// AUTH-1.9 — `Fingerprint::to_hex`/`parse_hex`: 64 lowercase out; exactly
@@ -389,8 +404,8 @@ fn fingerprint_hex_surface() {
     let h = f.to_hex();
     assert_eq!(h.len(), 64);
     assert_eq!(h, h.to_lowercase());
-    assert!(Fingerprint::parse_hex(&h).unwrap() == f);
-    assert!(Fingerprint::parse_hex(&h.to_uppercase()).unwrap() == f);
+    assert_eq!(Fingerprint::parse_hex(&h).unwrap(), f);
+    assert_eq!(Fingerprint::parse_hex(&h.to_uppercase()).unwrap(), f);
     assert!(Fingerprint::parse_hex(&h[..62]).is_none());
     assert!(Fingerprint::parse_hex(&format!("{h}00")).is_none());
     assert!(Fingerprint::parse_hex(&format!("g{}", &h[1..])).is_none());

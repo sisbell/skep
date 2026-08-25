@@ -3,7 +3,7 @@
 use skep_address::{classify_spans, subtree_of, validate, Address, Span, SpanRel};
 
 /// AUTH-2.20 — the three credential kinds a link's type slot can name.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CredentialKind {
     /// An enrollment record (`ty = {T_enroll}`).
     Enroll,
@@ -19,8 +19,10 @@ pub enum CredentialKind {
 /// from the commons-seeding constants via [`TypeAddrs::new`] (AUTH-2.79);
 /// the exact three addresses are OPEN (AUTH-7.1) and this crate is
 /// parametric over them — `IDENTITY_TYPES` itself is an I2 frozen constant
-/// (AUTH-2.90), and a mirror must fix ONE address form for it (AUTH-2.125).
-#[derive(Debug, Clone)]
+/// (AUTH-2.90), and a mirror must fix ONE address form for it (AUTH-2.125):
+/// the agreement `PartialEq` exists to let a cross-mirror test state, since
+/// AUTH-2.20's field list leaves no reader to compare through.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeAddrs {
     // The addresses, kept per AUTH-2.20's field list; nothing reads them
     // outside `kind_of`'s precomputed spans, hence the allows.

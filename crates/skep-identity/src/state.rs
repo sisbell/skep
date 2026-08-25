@@ -37,16 +37,20 @@ pub struct IdentityState {
     claimant: Option<Address>,
 }
 
-/// The engine seats [`IdentityState`] in its `World` (AUTH-2.79–2.88), and
-/// `skep_kernel::WorldState` demands `Send + Sync + 'static`. NOTHING in this
-/// crate names that bound, so a field that revoked it would break the
-/// ENGINE's build, at a trait error naming `World` rather than the field that
-/// caused it. The promise is checked here instead, beside the fields — one
-/// assertion covering `KeySet`, `Enrolled`, `PublicKey` and `Fingerprint`
+/// The engine seats [`IdentityState`] in its `World` (AUTH-2.79–2.88) and
+/// holds ONE [`TypeAddrs`] as `IDENTITY_TYPES` (AUTH-2.79) for the daemon's
+/// life, behind skepd's `Arc<Daemon>`; `skep_kernel::WorldState` demands
+/// `Send + Sync + 'static` of the first and the `Arc` demands it of the
+/// second. NOTHING in this crate names either bound, so a field that revoked
+/// one would break the ENGINE's or SKEPD's build, at a trait error naming
+/// `World` or `Arc<Daemon>` rather than the field that caused it. Both
+/// promises are checked here — one assertion each, covering `KeySet`,
+/// `Enrolled`, `PublicKey`, `Fingerprint`, `Address` and `Span`
 /// transitively.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync + 'static>() {}
     assert_send_sync::<IdentityState>();
+    assert_send_sync::<TypeAddrs>();
 };
 
 /// AUTH-2.60 — the bound identity readers dispatch under, wherever the slice

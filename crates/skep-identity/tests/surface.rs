@@ -8,9 +8,9 @@ mod common;
 use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
-    framed, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError, LabelError,
-    PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, MAX_RECORD_BYTES, NODE_HELLO_TAG,
-    SESSION_TAG, TAGS,
+    framed, CredentialKind, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError,
+    LabelError, PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, MAX_RECORD_BYTES,
+    NODE_HELLO_TAG, SESSION_TAG, TAGS,
 };
 
 /// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: a
@@ -257,6 +257,48 @@ fn error_types_lift_into_dyn_error() {
     assert_eq!(boxed.to_string(), LabelError::Newline.to_string());
     let boxed = lift(PayloadError::BadLine(4));
     assert_eq!(boxed.to_string(), "bad_line:4");
+}
+
+/// The vocabularies a consumer tallies are usable as MAP KEYS. `Eq` without
+/// `Hash` walls off `HashMap`/`HashSet` with no way for a caller to climb it
+/// (the orphan rule puts both the trait and the type out of reach), and only
+/// [`Inert`] and [`PayloadError`] carry a `token()` to key by instead —
+/// [`CredentialKind`] has no escape hatch at all, so a per-kind tally would
+/// have nowhere to go.
+#[test]
+fn vocabulary_types_are_usable_as_map_keys() {
+    use std::collections::{HashMap, HashSet};
+
+    // The per-reason tally a refusal metric is: three verdicts, two rows.
+    let mut tally: HashMap<Inert, u32> = HashMap::new();
+    for inert in [
+        Inert::NotDocOne,
+        Inert::NotDocOne,
+        Inert::MalformedPayload(PayloadError::BadLine(2)),
+    ] {
+        *tally.entry(inert).or_insert(0) += 1;
+    }
+    assert_eq!(tally.len(), 2);
+    assert_eq!(tally[&Inert::NotDocOne], 2);
+
+    // The other four, in the shape a conformance list takes.
+    let faults: HashSet<PayloadError> = [
+        PayloadError::BadLine(2),
+        PayloadError::BadLine(2),
+        PayloadError::NotUtf8,
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(faults.len(), 2);
+    let kinds = HashSet::from([CredentialKind::Enroll, CredentialKind::Claim]);
+    assert_eq!(kinds.len(), 2);
+    let key_faults = HashSet::from([KeyParseError::BadHex, KeyParseError::UnknownAlg]);
+    assert_eq!(key_faults.len(), 2);
+    // `LabelError` has one variant, so a set over it holds at most one row.
+    assert_eq!(
+        HashSet::from([LabelError::Newline, LabelError::Newline]).len(),
+        1
+    );
 }
 
 /// AUTH-1.9/AUTH-1.3 — the hand-written renderings, so a fingerprint in a

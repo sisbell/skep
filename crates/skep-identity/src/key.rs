@@ -120,7 +120,7 @@ impl fmt::Debug for PublicKey {
 }
 
 /// [`PublicKey::parse`] rejection (AUTH-1.1, AUTH-1.4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyParseError {
     /// The alg token is absent from [`ALGS`].
     UnknownAlg,

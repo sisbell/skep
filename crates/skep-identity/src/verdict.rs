@@ -65,7 +65,7 @@ pub enum Effect {
 }
 
 /// AUTH-2.54 — the inert vocabulary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Inert {
     /// The home document is not published (AUTH-2.66 item 3; I7,
     /// AUTH-2.102). In v1 the origin wires `is_published` constant `true`

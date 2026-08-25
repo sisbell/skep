@@ -63,7 +63,7 @@ impl Enrollment {
 }
 
 /// [`Enrollment::new`] rejection (AUTH-1.23–1.25).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LabelError {
     /// The label contains `\n` — outside the AUTH-1.24 domain.
     Newline,
@@ -84,7 +84,7 @@ impl std::error::Error for LabelError {}
 /// remaining variants that it could not be PARSED. The `usize` is a 1-based
 /// line number, the header being line 1; `DuplicateKey` names the REPEATING
 /// line (AUTH-2.15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PayloadError {
     /// The concatenated FROM-span bytes exceed [`MAX_RECORD_BYTES`]
     /// (AUTH-2.43).

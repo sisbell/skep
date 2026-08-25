@@ -45,22 +45,20 @@ impl DedupKey {
 }
 
 fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
-    match class {
-        CoverageClass::Addrs(set) => {
-            buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
-            for t in set.iter() {
-                buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
-                for component in t {
-                    let bytes = component.to_bytes_be();
-                    buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
-                    buf.extend_from_slice(&bytes);
-                }
-            }
-        }
-        CoverageClass::Extents(_) => unreachable!(
-            "no Extents class is ever serialized into a LockKey: every idem⊤ dedup key is \
+    let Some(set) = class.denoted() else {
+        unreachable!(
+            "no extent class is ever serialized into a LockKey: every idem⊤ dedup key is \
              validated address-denoting before the lock is built (§Core data model)"
-        ),
+        )
+    };
+    buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
+    for t in set.iter() {
+        buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
+        for component in t {
+            let bytes = component.to_bytes_be();
+            buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            buf.extend_from_slice(&bytes);
+        }
     }
 }
 

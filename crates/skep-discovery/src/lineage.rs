@@ -50,8 +50,6 @@ where
     hits.iter()
         .map(|c| {
             let link = l.readlink(c).expect("hit keys are resident links");
-            // Endpoint extraction hoisted into statements: the `addrs()` iterator
-            // borrows `link`, and a tail-expression temporary would outlive it.
             let old = validate(
                 link.from_slot()
                     .addrs()

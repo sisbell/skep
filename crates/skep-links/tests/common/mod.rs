@@ -7,6 +7,8 @@
 
 #![allow(dead_code)] // each integration test binary uses a subset
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{HasM5, M5Rec, M5State, VPos, VSpec};
@@ -223,7 +225,7 @@ pub fn decls() -> Vec<TypeDecl> {
             reg: Registration {
                 shape: Shape::Binary,
                 idem: true,
-                behaviors: im::OrdSet::new(),
+                behaviors: BTreeSet::new(),
             },
         },
         TypeDecl {
@@ -231,7 +233,7 @@ pub fn decls() -> Vec<TypeDecl> {
             reg: Registration {
                 shape: Shape::Multi,
                 idem: false,
-                behaviors: im::OrdSet::new(),
+                behaviors: BTreeSet::new(),
             },
         },
         TypeDecl {
@@ -239,7 +241,7 @@ pub fn decls() -> Vec<TypeDecl> {
             reg: Registration {
                 shape: Shape::Unary,
                 idem: false,
-                behaviors: im::OrdSet::unit(Behavior::Age),
+                behaviors: BTreeSet::from([Behavior::Age]),
             },
         },
         TypeDecl {
@@ -247,7 +249,7 @@ pub fn decls() -> Vec<TypeDecl> {
             reg: Registration {
                 shape: Shape::Binary,
                 idem: false,
-                behaviors: im::OrdSet::unit(Behavior::ReverseLookup),
+                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
             },
         },
     ]

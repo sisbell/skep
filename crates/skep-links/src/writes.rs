@@ -543,11 +543,8 @@ where
                     // P0 then ω on home, hoisted so both win over every
                     // spec/type verdict.
                     home_gate(base.m3(), caller, &[home])?;
-                    let specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
-                    if !specs
-                        .into_iter()
-                        .all(|spec| is_wf_content_spec(base.m3(), spec))
-                    {
+                    let mut specs = from.specs().iter().chain(to.specs()).chain(ty.specs());
+                    if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
                         return Err(MakeLinkError::IllFormedSpec);
                     }
                     (
@@ -560,7 +557,7 @@ where
                 // level-uniform by M5's construction and an `Addrs` slot is
                 // address-denoting, which are the same two grounds under
                 // which the fold classifies this very value one step later.
-                // `⟨⟩` classifies as the empty `Addrs` antichain, which is
+                // `⟨⟩` classifies as the empty denoted antichain, which is
                 // neither shipped class, so ML6 stays the deposit gate's
                 // check and no input can satisfy both.
                 let e3_class = coverage_class(&e3);
@@ -592,7 +589,7 @@ where
     ///
     /// PRE-TRANSACT rejections (no transaction opened — §3): `ty` not
     /// address-denoting (`NonAddressDenotingType`, before ANY class
-    /// computation, keeping `coverage_class` on the safe `Addrs` path) and
+    /// computation, keeping `coverage_class` on the safe denoted path) and
     /// `ty ~ [K_sup]` (`SupersessionClass` — assert_sup/editlink are the
     /// sole `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts
     /// §10). The lock set is `[dedup_key, link_lock_key(home)]` for a
@@ -776,7 +773,7 @@ where
                 // abort from inside the transact.
                 //
                 // `e₃ ≠ ∅` is NOT restated here: it is the deposit gate's
-                // check, and `⟨⟩` classifies as the empty `Addrs` antichain —
+                // check, and `⟨⟩` classifies as the empty denoted antichain —
                 // neither shipped class — so it passes the DC guard untouched
                 // and comes back from the gate as `IllFormedSuccessor`.
                 let well_formed = successor.arity() == 3

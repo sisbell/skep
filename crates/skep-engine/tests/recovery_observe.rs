@@ -10,6 +10,8 @@
 
 #![cfg(feature = "observe")]
 
+use std::collections::BTreeSet;
+
 mod common;
 
 use common::*;
@@ -28,7 +30,7 @@ fn rich_genesis() -> GenesisConfig {
         reg: Registration {
             shape: Shape::Binary,
             idem: true,
-            behaviors: im::OrdSet::<Behavior>::new(),
+            behaviors: BTreeSet::<Behavior>::new(),
         },
     }];
     cfg

@@ -92,7 +92,7 @@ impl Endset {
     }
 
     /// Every span unit-depth — the address-denoting test, vacuously true for
-    /// `⟨⟩`. Selects [`coverage_class`]'s exact `Addrs` branch, and is
+    /// `⟨⟩`. Selects [`coverage_class`]'s exact denoted branch, and is
     /// verbatim the admission rule of the managed surface's `ty`
     /// (`NonAddressDenotingType`) and of `TypeRegistry::build`'s
     /// key-denotation clause (`NonAddressDenotingKey`), so a caller can ask
@@ -114,9 +114,26 @@ impl Endset {
         self.spans().all(Span::is_level_uniform)
     }
 
+    /// INTERNAL — the "unit-depth single-addr" slot test (ASN-0125
+    /// Df-DISC(ii) schema; the BH3 `target_of` single-address-G rule): every
+    /// span unit-depth AND exactly one distinct denoted address — returns it.
+    /// A pure question about this endset, so it sits beside the module's
+    /// other projections rather than reading one from outside.
+    pub(crate) fn single_denoted(&self) -> Option<&Tumbler> {
+        if !self.is_address_denoting() {
+            return None;
+        }
+        let mut denoted = self.addrs();
+        let first = denoted.next()?;
+        if denoted.any(|t| t != first) {
+            return None;
+        }
+        Some(first)
+    }
+
     /// INTERNAL — the one Endset → `SpanSet` boundary fold (concatenation,
     /// order-preserving, exactly M1's singleton+union). Used by FOLLOWLINK
-    /// (F1/F3) and the `Extents` partition of [`coverage_class`].
+    /// (F1/F3) and the extent partition of [`coverage_class`].
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
     }
@@ -126,21 +143,6 @@ impl Endset {
 /// subtree span: `s == subtree_of(s.start())` (§Core data model).
 pub(crate) fn is_unit_depth(s: &Span) -> bool {
     *s == subtree_of(s.start())
-}
-
-/// "Unit-depth single-addr" slot test (ASN-0125 Df-DISC(ii) schema; the BH3
-/// `target_of` single-address-G rule): every span unit-depth AND exactly one
-/// distinct denoted address — returns it.
-pub(crate) fn single_denoted(e: &Endset) -> Option<&Tumbler> {
-    if !e.is_address_denoting() {
-        return None;
-    }
-    let mut denoted = e.addrs();
-    let first = denoted.next()?;
-    if denoted.any(|t| t != first) {
-        return None;
-    }
-    Some(first)
 }
 
 /// A link value: a positional sequence of endsets, arity = `slots.len() ≥ 3`
@@ -242,29 +244,62 @@ pub fn enc<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> Endset {
 }
 
 /// Type / I0 identity of an endset — coverage equality, NEVER decomposition
-/// (§Core data model). `Addrs` is exact (the ≼-minimal denoted antichain,
-/// I0a); `Extents` is the conservative per-endpoint-length canonical
-/// partition for content extents (over-discriminates across lengths, never
-/// merges distinct classes — the safe direction for type-matching and dedup).
+/// (§Core data model). An address-denoting endset's class is exact (the
+/// ≼-minimal denoted antichain, I0a); a content extent's is the conservative
+/// per-endpoint-length canonical partition (over-discriminates across
+/// lengths, never merges distinct classes — the safe direction for
+/// type-matching and dedup).
 ///
-/// NOT `Serialize`: `Extents` wraps M1's non-`Serialize` `CanonicalForm` —
-/// this type lives only in the skip-serialized registry/hints, and every
-/// idem⊤ dedup `LockKey` serializes an `Addrs` class only (§Core data model).
+/// OPAQUE, and that is what makes it an identity: [`coverage_class`] is the
+/// only constructor, so holding one of these is a FACT about some endset
+/// rather than an assertion a caller can make. A hand-assembled non-minimal
+/// antichain would be the class of no endset — unregistered by accident
+/// rather than by fact, and forgeable as a key of the map
+/// [`crate::LinkState::targets_keyed`] returns.
+/// [`CoverageClass::denoted`] is the one observation of the representation.
+///
+/// NOT `Serialize`: the extent case wraps M1's non-`Serialize`
+/// `CanonicalForm` — this type lives only in the skip-serialized
+/// registry/hints, and every idem⊤ dedup `LockKey` serializes a denoted
+/// class only (§Core data model).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CoverageClass {
+pub struct CoverageClass(Class);
+
+/// The two coverage regimes, private so the representation stays M7's: the
+/// extent partition is a documented over-discrimination the design reserves
+/// the right to tighten, which it can only do while nothing outside this
+/// crate can name it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Class {
     /// ≼-minimal antichain — address-denoting endsets (exact).
     Addrs(OrdSet<Tumbler>),
     /// Per-length canonical coverage — content extents (safe, conservative).
     Extents(OrdMap<usize, CanonicalForm>),
 }
 
-/// PURE coverage CLASS of an endset (no store state, hence no `&self`).
+impl CoverageClass {
+    /// The ≼-minimal denoted antichain (I0a) of an address-denoting endset's
+    /// class; `None` for a content-extent class, whose partition is
+    /// conservative and carries no denotation. Read-only: there is no
+    /// constructor taking one, so a caller can inspect the identity without
+    /// being able to state one.
+    pub fn denoted(&self) -> Option<&OrdSet<Tumbler>> {
+        match &self.0 {
+            Class::Addrs(set) => Some(set),
+            Class::Extents(_) => None,
+        }
+    }
+}
+
+/// PURE coverage CLASS of an endset (no store state, hence no `&self`) — the
+/// ONE constructor of [`CoverageClass`].
 ///
-/// Address-denoting endset (every span unit-depth) ⇒ `Addrs` = its ≼-minimal
-/// denoted antichain (I0a, exact); general level-uniform content endset ⇒
-/// `Extents` = per-`#start` partition, each folded to a `SpanSet` then
-/// `canonical_key`d. The lone place an endset folds to a `SpanSet`. PUBLIC so
-/// M9 can key `targets_keyed`'s map via `coverage_class(ty)`.
+/// Address-denoting endset (every span unit-depth) ⇒ its ≼-minimal denoted
+/// antichain (I0a, exact, readable through [`CoverageClass::denoted`]);
+/// general level-uniform content endset ⇒ the per-`#start` partition, each
+/// part folded to a `SpanSet` then `canonical_key`d. The lone place an endset
+/// folds to a `SpanSet`. PUBLIC so M9 can key `targets_keyed`'s map via
+/// `coverage_class(ty)`.
 ///
 /// TOTAL ON LEVEL-UNIFORM INPUT — which is all it ever receives: managed
 /// paths validate address-denoting, content paths are `iextent`-level-uniform
@@ -304,7 +339,7 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
             minimal.insert(t.clone());
             last = Some(t);
         }
-        CoverageClass::Addrs(minimal)
+        CoverageClass(Class::Addrs(minimal))
     } else {
         let mut by_start_len: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
         for s in e.spans() {
@@ -323,6 +358,6 @@ pub fn coverage_class(e: &Endset) -> CoverageClass {
             );
             extents.insert(start_len, canonical);
         }
-        CoverageClass::Extents(extents)
+        CoverageClass(Class::Extents(extents))
     }
 }

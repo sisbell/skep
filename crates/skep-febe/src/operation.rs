@@ -436,7 +436,7 @@ where
             //    the one snapshot.
             Op::ReadLink { a } => {
                 let snap = self.stores.kernel().snapshot();
-                let link = snap.world().links().readlink(&a);
+                let link = snap.world().links().readlink(&a).cloned();
                 Ok(Response::LinkValue { link, as_of: snap.seq() })
             }
             // Carries its own Result in-band, deliberately (§2): M7 defines

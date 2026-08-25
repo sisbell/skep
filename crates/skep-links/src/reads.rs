@@ -10,7 +10,7 @@ use skep_address::{
     Tumbler,
 };
 
-use crate::endset::{coverage_class, single_denoted, CoverageClass, Endset, Link};
+use crate::endset::{coverage_class, CoverageClass, Endset, Link};
 use crate::error::{Invalid, NotBh4};
 use crate::registry::{Behavior, ShippedType};
 use crate::state::LinkState;
@@ -24,6 +24,15 @@ pub enum View {
     Audit,
     Active,
     Default,
+}
+
+/// `View::Default` — the std name for the variant this module already calls
+/// the default view (not derived: `Audit` is declared first, and declaration
+/// order here is the design's).
+impl Default for View {
+    fn default() -> View {
+        View::Default
+    }
 }
 
 /// One observed typed-relation tuple — endsets are M7's readable [`Endset`].
@@ -94,6 +103,10 @@ fn slot_overlaps(link: &Link, slot: usize, query: &Endset) -> bool {
 /// store key leaves the store: every §F tuple address and every §G result
 /// passes through here, so no consumer restates the mint's guarantee to lift
 /// a key of its own.
+///
+/// Borrows, because an index key belongs to the store and the read only looks
+/// at it — the ownership counterpart of [`lift_denoted`], whose argument the
+/// read produced and is about to drop.
 fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
@@ -104,8 +117,15 @@ fn lift(t: &Tumbler) -> Address {
 /// spans start at an `Address`'s tumbler, or from M5's `Run::iextent`, whose
 /// start is the run's `i_start` `Address`. Named apart from [`lift`] so the
 /// two obligations can be audited separately.
-fn lift_denoted(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("a denoted slot address is T4-valid: every slot is built by enc or from a Run's iextent")
+///
+/// CONSUMES its argument: a denoted address is read out of a slot into a set
+/// or a path the read owns and is about to drop, so the caller hands it over
+/// rather than making `validate` copy a `Vec<Nat>` per component. The one
+/// caller still holding a borrow clones at its own site.
+fn lift_denoted(t: Tumbler) -> Address {
+    validate(t).expect(
+        "a denoted slot address is T4-valid: every slot is built by enc or from a Run's iextent",
+    )
 }
 
 /// `Default → Active` for the surfaces where `Default` is undefined.
@@ -123,8 +143,14 @@ impl LinkState {
     /// (= ⊥) on absence. Total; recorded, never resolved; never dereferences
     /// covered links (RL4/RL6). The persistent map is already the positive
     /// cache (immutability ⇒ never stale).
-    pub fn readlink(&self, a: &Address) -> Option<Link> {
-        self.links.get(a.tumbler()).cloned()
+    ///
+    /// Borrows out of the snapshot, `get`-shaped, so a caller that only tests
+    /// residence or reads one slot pays nothing and a caller that keeps the
+    /// value clones at its own site. `link_at` is the crate-internal
+    /// infallible twin, for an address that came off an index key rather than
+    /// from a caller.
+    pub fn readlink(&self, a: &Address) -> Option<&Link> {
+        self.links.get(a.tumbler())
     }
 
     /// FOLLOWLINK (ASN-0114): the recorded slot's coverage as a `SpanSet`
@@ -206,7 +232,7 @@ impl LinkState {
             }
         }
         members
-            .iter()
+            .into_iter()
             .filter(|m| !(subtract && self.is_filtered(m)))
             .map(lift_denoted)
             .collect()
@@ -235,7 +261,7 @@ impl LinkState {
             }
         }
         targets
-            .iter()
+            .into_iter()
             .filter(|g| !(subtract && self.is_filtered(g)))
             .map(lift_denoted)
             .collect()
@@ -279,7 +305,10 @@ impl LinkState {
         if !self.serves_walk(ty) {
             return Vec::new();
         }
-        self.succs_operative(x.tumbler()).iter().map(lift_denoted).collect()
+        self.succs_operative(x.tumbler())
+            .into_iter()
+            .map(lift_denoted)
+            .collect()
     }
 
     /// BH2 chain: the bounded iterative walk over operative successors from
@@ -297,7 +326,7 @@ impl LinkState {
             return Vec::new();
         }
         let (path, _) = self.walk_sup(x.tumbler());
-        path.iter().map(lift_denoted).collect()
+        path.into_iter().map(lift_denoted).collect()
     }
 
     /// BH2 chain membership: `target ∈ chain(ty, addr)` — membership in the
@@ -323,7 +352,7 @@ impl LinkState {
             return Tip::Indeterminate;
         }
         match self.walk_sup(x.tumbler()).1 {
-            Some(sink) => Tip::Sink(lift_denoted(&sink)),
+            Some(sink) => Tip::Sink(lift_denoted(sink)),
             None => Tip::Indeterminate,
         }
     }
@@ -351,7 +380,7 @@ impl LinkState {
                 }
             }
         }
-        sources.iter().map(lift_denoted).collect()
+        sources.into_iter().map(lift_denoted).collect()
     }
 
     /// BH3 forward projection (§7): ⊥ unless EXACTLY ONE active type-`ty`
@@ -452,12 +481,12 @@ impl LinkState {
             }
         }
         let mut out = Vec::new();
-        for t in reach.iter() {
-            if !self.succs_operative(t).is_empty() {
+        for t in reach {
+            if self.has_operative_succ(&t) {
                 continue; // not a sink
             }
+            let claims = self.out_claims(&t);
             let member = lift_denoted(t);
-            let claims = self.out_claims(t);
             out.push(CurrentMember {
                 active: self.is_active(&member),
                 member,
@@ -619,6 +648,19 @@ impl LinkState {
         coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }
 
+    /// Whether `x` has any operative successor — the sink test, answered
+    /// without building `succ_o(x)`: the Df-SUCC filter is the same one
+    /// [`LinkState::succs_operative`] applies, and deduplicating the survivors
+    /// over `new` cannot change whether there are any, so the raw edge set
+    /// decides it. [`LinkState::current`] asks only whether a reached node is
+    /// a sink; the walk, which needs the successors themselves, builds them.
+    pub(crate) fn has_operative_succ(&self, x: &Tumbler) -> bool {
+        self.hints
+            .sup_fwd
+            .get(x)
+            .is_some_and(|edges| edges.iter().any(|e| !self.nullified(&e.claim)))
+    }
+
     /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to edges
     /// whose CLAIM is unnullified (Df-SUCC), deduplicated over `new`.
     pub(crate) fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
@@ -694,6 +736,10 @@ impl LinkState {
                 survivor = Some(t);
             }
         }
-        single_denoted(self.link_at(survivor?).to_slot()).map(lift_denoted)
+        self.link_at(survivor?)
+            .to_slot()
+            .single_denoted()
+            .cloned()
+            .map(lift_denoted)
     }
 }

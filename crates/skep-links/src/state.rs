@@ -12,7 +12,7 @@ use skep_address::{
 };
 
 use crate::dedup::DedupKey;
-use crate::endset::{coverage_class, single_denoted, CoverageClass, Link};
+use crate::endset::{coverage_class, CoverageClass, Link};
 use crate::registry::{Registration, RegistryError, ShippedType, TypeConfig, TypeRegistry};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
@@ -218,8 +218,8 @@ impl LinkState {
     /// inline at the gate that happens to be checking one.
     pub(crate) fn conforms_to_sup_schema(&self, value: &Link) -> bool {
         match (
-            single_denoted(value.from_slot()),
-            single_denoted(value.to_slot()),
+            value.from_slot().single_denoted(),
+            value.to_slot().single_denoted(),
         ) {
             (Some(f), Some(g)) => f != g && self.resident(f) && self.resident(g),
             _ => false,
@@ -331,7 +331,8 @@ pub(crate) fn fold_hints(
     // class skips the key entirely (no dedup check ever reads it). The one
     // degenerate exception — a MAKELINK deposit whose resolved class equals a
     // registered idem⊤ app class — folds an in-memory key here (possibly with
-    // Extents from/to): harmless, it never reaches a LockKey (Conflicts §1).
+    // extent-classed from/to): harmless, it never reaches a LockKey
+    // (Conflicts §1).
     if registry.registration(&class).is_some_and(|r| r.idem) {
         out.dedup
             .entry(DedupKey::of(value))

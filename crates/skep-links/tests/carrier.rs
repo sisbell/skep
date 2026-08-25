@@ -1,8 +1,8 @@
 //! Carrier-type and registry contracts, stated by the documents: the Link
 //! arity floor and the 1-based slot range, Endset readback (verbatim
 //! decomposition, `enc(X).addrs() = X` over every subset of a family, ⟨⟩
-//! distinctness), coverage-class identity (exact `Addrs` antichain;
-//! conservative `Extents` partition; invariance under span permutation;
+//! distinctness), coverage-class identity (exact denoted antichain;
+//! conservative extent partition; invariance under span permutation;
 //! structural derives ≠ coverage identity; the pinned off-contract panic and
 //! the address-denoting projection a caller discharges it with),
 //! `TypeRegistry::build`'s rejection matrix and its R-C0 behavior↔shape
@@ -10,6 +10,8 @@
 //! serde/journal round trips.
 
 mod common;
+
+use std::collections::BTreeSet;
 
 use common::*;
 use skep_address::Span;
@@ -137,19 +139,21 @@ fn coverage_class_addrs_is_the_minimal_antichain() {
 #[test]
 fn coverage_class_extents_is_canonical_per_length_and_variant_distinct() {
     // Same coverage, different decompositions (both containing a non-unit
-    // span): one Extents class (canonical form merges the adjacent split).
+    // span): one extent class (canonical form merges the adjacent split).
     let whole = Endset::from_spans([span(&ca(1), &ca(4))]);
     let split = Endset::from_spans([span(&ca(1), &ca(3)), span(&ca(3), &ca(4))]);
     assert_ne!(whole, split); // structural
     assert_eq!(coverage_class(&whole), coverage_class(&split));
-    // An all-unit decomposition of the SAME coverage lands in Addrs — a
-    // different variant, deliberately distinct (over-discrimination is the
-    // safe direction; class coherence keeps every guard and fold on the same
-    // verdict).
+    // An all-unit decomposition of the SAME coverage lands in the denoted
+    // regime — a different class, deliberately distinct (over-discrimination
+    // is the safe direction; class coherence keeps every guard and fold on
+    // the same verdict).
     let units = enc(&[ca(1), ca(2), ca(3)]);
     assert_ne!(coverage_class(&units), coverage_class(&whole));
+    assert!(coverage_class(&units).denoted().is_some());
+    assert!(coverage_class(&whole).denoted().is_none());
     // A width-1 iextent IS the unit span: single content addresses land in
-    // the exact Addrs path.
+    // the exact denoted path.
     let one = Endset::from_spans([span(&ca(3), &ca(4))]);
     assert_eq!(coverage_class(&one), coverage_class(&enc(&[ca(3)])));
 }
@@ -185,7 +189,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
     let ok_reg = Registration {
         shape: Shape::Multi,
         idem: false,
-        behaviors: im::OrdSet::new(),
+        behaviors: BTreeSet::new(),
     };
     // Each rejection needs its own configuration, and two of them vary the
     // reserved half against no decls, so the closure assembles both.
@@ -255,7 +259,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: Registration {
             shape: Shape::Binary,
             idem: true,
-            behaviors: im::OrdSet::unit(skep_links::Behavior::ReadFilter),
+            behaviors: BTreeSet::from([skep_links::Behavior::ReadFilter]),
         },
     };
     assert!(matches!(
@@ -268,7 +272,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: Registration {
             shape: Shape::Multi,
             idem: true,
-            behaviors: im::OrdSet::unit(skep_links::Behavior::Age),
+            behaviors: BTreeSet::from([skep_links::Behavior::Age]),
         },
     };
     assert!(matches!(
@@ -282,7 +286,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: Registration {
             shape: Shape::Binary,
             idem: false,
-            behaviors: im::OrdSet::unit(skep_links::Behavior::Walk),
+            behaviors: BTreeSet::from([skep_links::Behavior::Walk]),
         },
     };
     assert!(matches!(
@@ -295,7 +299,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: Registration {
             shape: Shape::Unary,
             idem: true,
-            behaviors: im::OrdSet::unit(skep_links::Behavior::ReadFilter),
+            behaviors: BTreeSet::from([skep_links::Behavior::ReadFilter]),
         },
     };
     assert!(matches!(
@@ -319,14 +323,14 @@ fn shipped_types_carry_their_pinned_registrations() {
     for (ty, want) in [
         (
             ShippedType::Retired,
-            unary_top(im::OrdSet::unit(Behavior::ReadFilter)),
+            unary_top(BTreeSet::from([Behavior::ReadFilter])),
         ),
         (
             ShippedType::Supersedes,
             Registration {
                 shape: Shape::Binary,
                 idem: true,
-                behaviors: im::OrdSet::unit(Behavior::Walk),
+                behaviors: BTreeSet::from([Behavior::Walk]),
             },
         ),
         (
@@ -334,11 +338,11 @@ fn shipped_types_carry_their_pinned_registrations() {
             Registration {
                 shape: Shape::Binary,
                 idem: true,
-                behaviors: im::OrdSet::new(),
+                behaviors: BTreeSet::new(),
             },
         ),
-        (ShippedType::PredDef, unary_top(im::OrdSet::new())),
-        (ShippedType::PredStable, unary_top(im::OrdSet::new())),
+        (ShippedType::PredDef, unary_top(BTreeSet::new())),
+        (ShippedType::PredStable, unary_top(BTreeSet::new())),
     ] {
         assert_eq!(
             reg.registration(&coverage_class(reg.reserved_type(ty))),
@@ -367,7 +371,7 @@ fn registry_enforces_the_behavior_shape_table_exhaustively() {
                     reg: Registration {
                         shape,
                         idem,
-                        behaviors: im::OrdSet::unit(behavior),
+                        behaviors: BTreeSet::from([behavior]),
                     },
                 };
                 key += 1;
@@ -419,7 +423,7 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
         reg: Registration {
             shape: Shape::Multi,
             idem: false,
-            behaviors: im::OrdSet::new(),
+            behaviors: BTreeSet::new(),
         },
     };
     assert!(matches!(
@@ -445,7 +449,7 @@ fn is_address_denoting_answers_the_question_the_module_asks_its_callers() {
         reg: Registration {
             shape: Shape::Multi,
             idem: false,
-            behaviors: im::OrdSet::new(),
+            behaviors: BTreeSet::new(),
         },
     };
     assert!(matches!(
@@ -465,7 +469,10 @@ fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger(
     let extent = Endset::from_spans([span(&ca(1), &ca(3))]);
     assert!(!extent.is_address_denoting());
     assert!(extent.is_level_uniform());
-    assert!(matches!(coverage_class(&extent), CoverageClass::Extents(_)));
+    assert!(
+        coverage_class(&extent).denoted().is_none(),
+        "a content extent classifies into the conservative partition, which denotes nothing"
+    );
 
     // Denotation implies level-uniformity (a unit-depth span is its own
     // start's subtree, so start and width share a length) — ⟨⟩ vacuously.
@@ -500,7 +507,7 @@ fn enc_round_trips_every_address_set() {
 fn coverage_class_is_invariant_under_span_permutation() {
     // Identity is coverage, never decomposition — a law over the whole
     // permutation group, and on BOTH sides of the classifier: the exact
-    // `Addrs` antichain and the conservative `Extents` partition alike.
+    // denoted antichain and the conservative extent partition alike.
     const PERMS: [[usize; 3]; 6] = [
         [0, 1, 2],
         [0, 2, 1],
@@ -518,7 +525,7 @@ fn coverage_class_is_invariant_under_span_permutation() {
     let unit_class = coverage_class(&enc(&units));
     let extent_class = coverage_class(&Endset::from_spans(extents.iter().cloned()));
     assert!(
-        matches!(extent_class, CoverageClass::Extents(_)),
+        extent_class.denoted().is_none(),
         "the second family exercises the conservative partition"
     );
     for p in PERMS {
@@ -526,13 +533,13 @@ fn coverage_class_is_invariant_under_span_permutation() {
         assert_eq!(
             coverage_class(&enc(&u)),
             unit_class,
-            "Addrs class under permutation {p:?}"
+            "denoted class under permutation {p:?}"
         );
         let e = Endset::from_spans(p.iter().map(|&i| extents[i].clone()));
         assert_eq!(
             coverage_class(&e),
             extent_class,
-            "Extents class under permutation {p:?}"
+            "extent class under permutation {p:?}"
         );
     }
 }
@@ -663,12 +670,11 @@ fn coverage_class_addrs_is_i0a_stated_as_its_definition() {
             })
             .cloned()
             .collect();
-        match coverage_class(&enc(x)) {
-            CoverageClass::Addrs(got) => assert_eq!(got, want, "I0a over {x:?}"),
-            CoverageClass::Extents(_) => {
-                panic!("an enc'd address set is address-denoting: {x:?}")
-            }
-        }
+        let class = coverage_class(&enc(x));
+        let got = class
+            .denoted()
+            .unwrap_or_else(|| panic!("an enc'd address set is address-denoting: {x:?}"));
+        assert_eq!(*got, want, "I0a over {x:?}");
     }
     // ...and the families are not all antichains already, so the agreement
     // above is not vacuous.

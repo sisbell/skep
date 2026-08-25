@@ -3,7 +3,8 @@
 //! ([`TypeRegistry::build`]) and never mutated (P1/P2 of ASN-0126, R1/R2 of
 //! ASN-0128 — no mutator exists).
 
-use im::OrdSet;
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Level};
 
@@ -21,8 +22,8 @@ pub enum Shape {
     Multi,
 }
 
-/// The four behavior atoms BH1–BH4 (ASN-0128). `Ord` so the set backs
-/// `im::OrdSet`.
+/// The four behavior atoms BH1–BH4 (ASN-0128). `Ord` so the set backs a
+/// `BTreeSet`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Behavior {
     /// BH1 — read-filter (⇒ Unary).
@@ -35,12 +36,18 @@ pub enum Behavior {
     Age,
 }
 
-/// One type's registration: shape, idempotence flag, behavior set.
+/// One type's registration: shape, idempotence flag, behavior set. A `std`
+/// `BTreeSet` over a four-variant `Copy` enum — an app declaring a type
+/// constructs this, and the registration is immutable after
+/// [`TypeRegistry::build`], so there are no persistent updates to share and
+/// nothing here is worth a third-party collection in an app's manifest. The
+/// per-fold sharing the design asks for is one level up, on
+/// [`crate::LinkState`]'s `Arc<TypeConfig>`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registration {
     pub shape: Shape,
     pub idem: bool,
-    pub behaviors: OrdSet<Behavior>,
+    pub behaviors: BTreeSet<Behavior>,
 }
 
 /// An app-declared type; `key` names the coverage class (address-denoting by
@@ -109,7 +116,7 @@ pub enum RegistryError {
     ReservedSubspaceClash,
     /// Key-denotation: a `TypeDecl.key` is not address-denoting (keeps
     /// `coverage_class` on level-uniform keys AND every idem⊤ dedup `LockKey`
-    /// on the serializable `Addrs` class — §B).
+    /// on the serializable denoted class — §B).
     NonAddressDenotingKey,
     /// v1 serving fence: an app-declared BH2 Walk is rejected — only the
     /// shipped Supersedes walk is served (§5).
@@ -217,7 +224,7 @@ impl TypeRegistry {
     /// without an order): reserved-isolation over the five addresses; shipped
     /// seeding (a duplicate reserved class ⇒ `KeyCollision`); then per app
     /// decl `EmptyKey` → `NonAddressDenotingKey` (BEFORE any class
-    /// computation, keeping `coverage_class` on the safe `Addrs` path) →
+    /// computation, keeping `coverage_class` on the safe denoted path) →
     /// `ReservedClassClash` → `KeyCollision` → `BadBehavior` →
     /// `UnservedWalk` → `UnservedSecondFilter`.
     /// Borrows the configuration: the shipped keys clone through [`enc`] and
@@ -263,19 +270,22 @@ impl TypeRegistry {
         let pred_def_class = coverage_class(&pred_def);
         let pred_stable_class = coverage_class(&pred_stable);
 
-        let unary_top = |behaviors: OrdSet<Behavior>| Registration {
+        let unary_top = |behaviors: BTreeSet<Behavior>| Registration {
             shape: Shape::Unary,
             idem: true,
             behaviors,
         };
         let shipped: [(&CoverageClass, Registration); 5] = [
-            (&retired_class, unary_top(OrdSet::unit(Behavior::ReadFilter))),
+            (
+                &retired_class,
+                unary_top(BTreeSet::from([Behavior::ReadFilter])),
+            ),
             (
                 &supersedes_class,
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
-                    behaviors: OrdSet::unit(Behavior::Walk),
+                    behaviors: BTreeSet::from([Behavior::Walk]),
                 },
             ),
             (
@@ -283,12 +293,12 @@ impl TypeRegistry {
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
-                    behaviors: OrdSet::new(),
+                    behaviors: BTreeSet::new(),
                 },
             ),
             // The PredLayer registration agreement (M7↔M9 constant, §B).
-            (&pred_def_class, unary_top(OrdSet::new())),
-            (&pred_stable_class, unary_top(OrdSet::new())),
+            (&pred_def_class, unary_top(BTreeSet::new())),
+            (&pred_stable_class, unary_top(BTreeSet::new())),
         ];
 
         let mut map: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
@@ -350,11 +360,11 @@ impl TypeRegistry {
     }
 
     /// The public class → registration lookup: `Some(reg)` for a registered
-    /// class, `None` for an unregistered one. `class` is a [`coverage_class`]
-    /// output — the only way to name one — so `None` means unregistered, never
-    /// malformed, and a caller holding an `Endset` classifies it first (M9
-    /// projects the shipped registrations this way; M7's own gates and reads
-    /// go through the same lookup).
+    /// class, `None` for an unregistered one. [`CoverageClass`] is opaque and
+    /// [`coverage_class`] is its only constructor, so every argument is some
+    /// endset's actual class and `None` means unregistered — a caller holding
+    /// an `Endset` classifies it first (M9 projects the shipped registrations
+    /// this way; M7's own gates and reads go through the same lookup).
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.map.get(class)
     }

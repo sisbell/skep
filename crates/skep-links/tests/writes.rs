@@ -282,6 +282,14 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
 }
 
 #[test]
+fn view_defaults_to_the_default_view() {
+    // The std name means the variant the module calls the default view, not
+    // `Audit` — which is merely the one declaration order puts first, and is
+    // what a derive would have picked.
+    assert_eq!(View::default(), View::Default);
+}
+
+#[test]
 fn observe_coerces_default_to_active_and_never_filters() {
     // Raw Observe is an index probe, so BH1's result-side rewrite is
     // undefined for it: Default reads as Active even when every match's F is
@@ -544,7 +552,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     {
         let snap = k.snapshot();
         let links = snap.world().links();
-        assert_eq!(links.readlink(&s1).as_ref(), Some(&succ_value)); // supplied value verbatim
+        assert_eq!(links.readlink(&s1), Some(&succ_value)); // supplied value verbatim
         let claim = links.readlink(&c1).expect("claim resident");
         assert_eq!(claim.from_slot(), &enc([&orig])); // F = old
         assert_eq!(claim.to_slot(), &enc([&s1])); // G = new (fresh successor)
@@ -735,6 +743,44 @@ fn current_discloses_a_nullified_sink_with_its_own_activity() {
     assert!(!cur[0].active, "and carries its own activity");
     // The CLAIM is untouched, so the edge stays operative and s1 stays the sink.
     assert_eq!(cur[0].claims, vec![c1]);
+}
+
+#[test]
+fn a_node_whose_only_claim_is_retracted_is_its_own_sink() {
+    // Df-SUCC on the SINK test: it is the claim's activity that makes an
+    // edge operative, so the endpoint of a retracted claim is not a
+    // successor and the source is successor-free. The complement of the
+    // test above — there the successor was nullified and the claim stood;
+    // here the claim is nullified and the successor stands.
+    let k = kernel();
+    let w = writer(&k);
+    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
+    {
+        // The control: while the claim is operative, x is not a sink and y is.
+        let snap = k.snapshot();
+        let cur = snap.world().links().current(&x);
+        assert_eq!(cur.len(), 1);
+        assert_eq!(cur[0].member, y);
+        assert_eq!(cur[0].claims, vec![c.clone()]);
+    }
+    w.nullify(P1, &doc1(), &c).expect("retract the claim");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    let cur = links.current(&x);
+    assert_eq!(cur.len(), 1, "x is now successor-free");
+    assert_eq!(cur[0].member, x);
+    assert!(cur[0].active);
+    assert!(
+        cur[0].claims.is_empty(),
+        "a retracted claim is not an operative inbound claim either"
+    );
+    // ...and y, still resident, discloses as its own sink with no claim on it.
+    let at_y = links.current(&y);
+    assert_eq!(at_y.len(), 1);
+    assert_eq!(at_y[0].member, y);
+    assert!(at_y[0].claims.is_empty());
 }
 
 #[test]

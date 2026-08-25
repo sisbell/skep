@@ -8,6 +8,7 @@
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use common::*;
@@ -137,7 +138,7 @@ fn catalog_projects_validates_and_serves_reserved_endsets() {
     let mut extra = decls();
     extra.push(TypeDecl {
         key: enc(&[ra(20)]),
-        reg: Registration { shape: Shape::Unary, idem: true, behaviors: im::OrdSet::new() },
+        reg: Registration { shape: Shape::Unary, idem: true, behaviors: BTreeSet::new() },
     });
     assert!(matches!(
         try_coord(&k, registry(), reserved(), extra),

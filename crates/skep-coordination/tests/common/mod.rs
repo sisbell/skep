@@ -6,6 +6,7 @@
 
 #![allow(dead_code)] // each integration test binary uses a subset
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -172,18 +173,18 @@ pub fn decls() -> Vec<TypeDecl> {
     vec![
         TypeDecl {
             key: rel_ty(),
-            reg: Registration { shape: Shape::Binary, idem: true, behaviors: im::OrdSet::new() },
+            reg: Registration { shape: Shape::Binary, idem: true, behaviors: BTreeSet::new() },
         },
         TypeDecl {
             key: multi_ty(),
-            reg: Registration { shape: Shape::Multi, idem: false, behaviors: im::OrdSet::new() },
+            reg: Registration { shape: Shape::Multi, idem: false, behaviors: BTreeSet::new() },
         },
         TypeDecl {
             key: bh4_ty(),
             reg: Registration {
                 shape: Shape::Unary,
                 idem: false,
-                behaviors: im::OrdSet::unit(Behavior::Age),
+                behaviors: BTreeSet::from([Behavior::Age]),
             },
         },
         TypeDecl {
@@ -191,12 +192,12 @@ pub fn decls() -> Vec<TypeDecl> {
             reg: Registration {
                 shape: Shape::Binary,
                 idem: false,
-                behaviors: im::OrdSet::unit(Behavior::ReverseLookup),
+                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
             },
         },
         TypeDecl {
             key: marker_ty(),
-            reg: Registration { shape: Shape::Unary, idem: true, behaviors: im::OrdSet::new() },
+            reg: Registration { shape: Shape::Unary, idem: true, behaviors: BTreeSet::new() },
         },
     ]
 }

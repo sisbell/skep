@@ -41,7 +41,5 @@ skep-febe = { path = "../skep-febe" }
 # lifecycle test, never needed by the assembly itself.
 skep-retrieval = { path = "../skep-retrieval" }
 skep-discovery = { path = "../skep-discovery" }
-# App TypeDecl construction (Registration.behaviors is an im::OrdSet).
-im.workspace = true
 # Fsync journals for the lifecycle/recovery tests.
 tempfile.workspace = true

@@ -1,15 +1,19 @@
 //! Op-level contracts over a real kernel (InMemory): the two write
 //! disciplines and their gates (the shape table cell by cell, the
-//! pre-transact fences, the hoisted home/ω checks on hit AND miss), the
-//! `[R]` and `[K_sup]` sole-writer fences on BOTH surfaces, idempotent
-//! dedup + resurrection, retraction and the active view, supersession + the
-//! BH2 walk at each of its three halts, editlink's atomic composite and DC
-//! guard, MAKELINK end-to-end (wf, resolve, deposit, seat), EL14 currency
-//! disclosure and the denotation regime its claim relation reads,
+//! pre-transact fences, the hoisted home/ω checks on hit AND miss and ahead
+//! of an op's own declared-first verdict), the `[R]` and `[K_sup]`
+//! sole-writer fences on BOTH surfaces, idempotent dedup + resurrection,
+//! retraction, its irreversibility and the active view, supersession + the
+//! BH2 walk at each of its three halts, editlink's atomic composite, its two
+//! distinct homes and its DC guard clause by clause, MAKELINK end-to-end (wf
+//! over every slot's specs, multi-spec resolution, deposit, seat), EL14
+//! currency disclosure and the denotation regime its claim relation reads,
 //! BH1/BH3/BH4 behaviors and the two matching regimes they choose between,
-//! the BH3 join's behavior scope, the non-atomic BH4 batch, the §G discovery primitives and
-//! the AND-combiner's agreement with its own conjuncts, and the
-//! checkpoint-roundtrip + rebuild_derived discipline.
+//! the BH3 join's behavior scope, the non-atomic BH4 batch, the §G discovery
+//! primitives with their `Default → Active` coercion and their empty-query
+//! floor, the AND-combiner's agreement with its own conjuncts, the verbatim
+//! order FOLLOWLINK folds, and the checkpoint-roundtrip + rebuild_derived
+//! discipline.
 
 mod common;
 
@@ -1840,4 +1844,321 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     let to_only = [(TO, enc(&[ca(2)]))];
     assert!(links.match_links(&to_only, View::Audit).contains(&l3));
     assert!(!links.match_links(&to_only, View::Active).contains(&l3));
+}
+
+#[test]
+fn an_observed_tuple_carries_the_link_s_own_f_and_g_in_those_roles() {
+    // A Tuple's `from` and `to` are the matched link's F and G slots IN THOSE
+    // ROLES — two same-typed fields read off two same-typed sources, so
+    // nothing but this pins which is which. A Multi tuple with |F| ≠ |G| is
+    // what makes an exchange fail on arity as well as on content.
+    let k = kernel();
+    let w = writer(&k);
+    let (a1, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2), ca(3)])
+        .expect("Multi admits |G| = 2");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    let tuples = links.observe(&multi_ty(), Pattern::default(), View::Active);
+    assert_eq!(tuples.len(), 1);
+    assert_eq!(tuples[0].addr, a1);
+    assert_eq!(tuples[0].from, enc(&[ca(1)]), "the F slot, verbatim");
+    assert_eq!(tuples[0].to, enc(&[ca(2), ca(3)]), "the G slot, verbatim");
+    // ...and each is the link's own slot, so the tuple cannot disagree with
+    // the value READLINK returns.
+    let link = links.readlink(&a1).expect("resident");
+    assert_eq!(&tuples[0].from, link.from_slot());
+    assert_eq!(&tuples[0].to, link.to_slot());
+}
+
+#[test]
+fn editlink_deposits_the_successor_in_d_s_and_the_claim_in_d_a() {
+    // The two homes are not interchangeable: the successor deposits into
+    // `d_s`, the claim into `d_a`. Every other editlink case passes one
+    // document twice, where an exchange is invisible — and permanent, in an
+    // append-only store, against the wrong document's link chain.
+    let k = kernel();
+    let w = writer(&k);
+    let snap0 = k.snapshot();
+    let sup = snap0
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+    let (orig, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("orig");
+    assert_eq!(orig, la(1)); // so doc1's next mint is la(2), doc2's first la2(1)
+    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let (s, c, _) = w
+        .editlink(P1, &orig, succ_value.clone(), &doc1(), &doc2())
+        .expect("P1 owns both homes");
+    assert_eq!(s, la(2), "the successor lands on d_s's link chain");
+    assert_eq!(c, la2(1), "the claim lands on d_a's");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert_eq!(links.readlink(&s), Some(&succ_value));
+    let claim = links.readlink(&c).expect("claim resident");
+    assert_eq!(claim.from_slot(), &enc([&orig]));
+    assert_eq!(claim.to_slot(), &enc([&s]));
+    assert_eq!(claim.type_slot(), &sup);
+    assert_eq!(links.chain(&sup, &orig), vec![orig.clone(), s.clone()]);
+}
+
+#[test]
+fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addresses() {
+    // Df-DISC(ii) is "exactly one DISTINCT denoted address" per endpoint, not
+    // "at least one": a claim whose F names two links would enter the
+    // supersession adjacency with an F the walk family reads as one vertex,
+    // and the fold would build an edge per FROM×TO pair — the amplification
+    // the [K_sup] fence exists to stop, through the surface it admits.
+    let k = kernel();
+    let w = writer(&k);
+    let snap0 = k.snapshot();
+    let sup = snap0
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+    let (orig, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("orig");
+    let (z, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
+    let multi_f = Link::new([enc([&orig, &z]), enc([&z]), sup.clone()]).expect("arity 3");
+    assert!(matches!(
+        w.editlink(P1, &orig, multi_f, &doc1(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::DcViolation))
+    ));
+    let multi_g = Link::new([enc([&orig]), enc([&orig, &z]), sup.clone()]).expect("arity 3");
+    assert!(matches!(
+        w.editlink(P1, &orig, multi_g, &doc1(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::DcViolation))
+    ));
+    // ...and the rule turns on DISTINCT: the same address named twice denotes
+    // one, so it conforms — and the admitted claim enters the adjacency.
+    let repeated = Link::new([enc([&z, &z]), enc([&orig]), sup.clone()]).expect("arity 3");
+    let (s, _, _) = w
+        .editlink(P1, &orig, repeated, &doc1(), &doc1())
+        .expect("one distinct address, named twice");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(
+        links.succs(&sup, &z).contains(&orig),
+        "the conforming claim is an operative edge"
+    );
+    assert!(links.is_active(&s));
+}
+
+#[test]
+fn nullifying_a_retraction_restores_nothing() {
+    // The tombstone set is monotone (R3/R6a) and the fold re-derives it from
+    // the [R] link at every replay, whether or not that link is itself
+    // nullified. This is where the module's two suppression mechanisms part
+    // company: retiring reads the ACTIVE retired slice and is undoable
+    // (is_filtered_reads_the_active_retired_slice), nullifying is not.
+    let k = kernel();
+    let w = writer(&k);
+    let (m1, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("target");
+    let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract it");
+    let (r2, _) = w
+        .nullify(P1, &doc1(), &r1)
+        .expect("retract the retraction — an ordinary resident, owned target");
+    assert_ne!(r2, r1, "a distinct I0 class, so the retraction lands fresh");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(links.is_nullified(&r1), "the retraction is itself retracted");
+    assert!(
+        links.is_nullified(&m1),
+        "and its target stays nullified — the set is monotone"
+    );
+    assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
+    // The replay half: the fold re-derives the tombstone from a nullified
+    // [R] link, so recovery restores nothing either.
+    let bytes = bincode::serialize(snap.world()).expect("world serializes");
+    let recovered: World = bincode::deserialize(&bytes).expect("world deserializes");
+    let recovered = skep_kernel::WorldState::rebuild_derived(recovered);
+    assert!(recovered.links().is_nullified(&m1));
+    assert!(recovered.links().is_nullified(&r1));
+}
+
+#[test]
+fn makelink_wf_checks_every_slot_s_specs_not_only_the_from_slot() {
+    // wf runs over from ⌢ to ⌢ ty, and the TYPE slot is where its absence is
+    // least visible: an unchecked ill-formed spec resolves to nothing and
+    // comes back as EmptyTypeResolution — a truthful-looking answer to a
+    // different question.
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let bad = || spec(&a(&[1, 0, 1, 0, 7]), 1, 1, 1); // unregistered source
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![bad()]),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1)])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::IllFormedSpec))
+    ));
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![]),
+            SlotArg::Resolve(vec![bad()])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::IllFormedSpec))
+    ));
+}
+
+#[test]
+fn the_discovery_primitives_read_default_as_active() {
+    // `View::Default` is undefined for a raw index probe, so all three §G
+    // primitives coerce it to `Active` — which M8 depends on, `View`'s own
+    // `Default` impl being `Default`. An uncoerced view falls through to the
+    // Audit branch and a nullified link reappears in a discovery result.
+    let k = kernel();
+    let w = writer(&k);
+    let (kept, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("kept");
+    let (gone, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(3), &[ca(4)])
+        .expect("gone");
+    w.nullify(P1, &doc1(), &gone).expect("nullify one");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    // Both links share a TYPE slot, so one query reaches both.
+    let q = multi_ty();
+    assert!(
+        links.stab(TYPE, &q, View::Audit).contains(&gone),
+        "the Audit answer is not vacuous"
+    );
+    assert!(links.stab(TYPE, &q, View::Default).contains(&kept));
+    assert_eq!(
+        links.stab(TYPE, &q, View::Default),
+        links.stab(TYPE, &q, View::Active)
+    );
+    assert!(!links.stab(TYPE, &q, View::Default).contains(&gone));
+    let cs = [(TYPE, q.clone())];
+    assert_eq!(
+        links.match_links(&cs, View::Default),
+        links.match_links(&cs, View::Active)
+    );
+    assert!(!links.match_links(&cs, View::Default).contains(&gone));
+    // The unconstrained branch coerces on its own — the constrained one hands
+    // its view to `stab`, which would coerce for it.
+    assert!(links.match_links(&[], View::Audit).contains(&gone));
+    assert!(!links.match_links(&[], View::Default).contains(&gone));
+    assert_eq!(
+        links.match_links(&[], View::Default),
+        links.match_links(&[], View::Active)
+    );
+    assert!(links.type_slice(&multi_ty(), View::Audit).contains(&gone));
+    assert_eq!(
+        links.type_slice(&multi_ty(), View::Default),
+        links.type_slice(&multi_ty(), View::Active)
+    );
+    assert!(!links.type_slice(&multi_ty(), View::Default).contains(&gone));
+}
+
+#[test]
+fn editlink_reports_an_unregistered_home_before_a_non_resident_original() {
+    // `OriginalNotResident` is declared first, and the home/ω pair is hoisted
+    // ahead of every other in-transaction verdict — so editlink is the one op
+    // where the declared and realized orders diverge, and the one place the
+    // hoist is observable.
+    let k = kernel();
+    let w = writer(&k);
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    assert!(matches!(
+        w.editlink(P1, &la(90), succ, &a(&[1, 0, 1, 0, 7]), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
+    ));
+}
+
+#[test]
+fn stab_with_an_empty_query_matches_nothing() {
+    // The premise of `match_links`' caller contract: an unconstrained slot is
+    // OMITTED, never passed as ⟨⟩, because `stab(slot, ⟨⟩, ·) = ∅` would
+    // empty the AND.
+    let k = kernel();
+    let w = writer(&k);
+    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("a link to miss");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert!(links.stab(FROM, &Endset::empty(), View::Audit).is_empty());
+    assert!(
+        !links.match_links(&[], View::Audit).is_empty(),
+        "omitting the slot is the contract, and the store is not empty"
+    );
+    assert!(
+        links
+            .match_links(&[(FROM, Endset::empty())], View::Audit)
+            .is_empty(),
+        "passing ⟨⟩ is not"
+    );
+}
+
+#[test]
+fn followlink_folds_the_whole_slot_in_its_recorded_order() {
+    // The fold is concatenation, order-preserving (RL1's verbatim read-back
+    // through F1/F3) — so a deliberately unsorted multi-span slot reads back
+    // unsorted, uncoalesced and whole. Every other followlink case is one
+    // span or none, where a normalizing fold would agree.
+    let k = kernel();
+    let w = writer(&k);
+    let (l, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(2), ca(1)]), // unsorted, on purpose
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("open-surface deposit");
+    let want: SpanSet = [
+        skep_address::subtree_of(ca(2).tumbler()),
+        skep_address::subtree_of(ca(1).tumbler()),
+    ]
+    .into_iter()
+    .collect();
+    let snap = k.snapshot();
+    assert_eq!(snap.world().links().followlink(&l, FROM), Ok(want));
+}
+
+#[test]
+fn a_resolve_slot_concatenates_every_spec_in_argument_order() {
+    // A `Resolve` slot flat-maps ITS specs to I-extents: every spec, in
+    // argument order, un-coalesced. Every other Resolve slot in the suite
+    // carries zero specs or one, where a slot that took only the first would
+    // agree.
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let w = writer(&k);
+    let (l, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 3, 1), spec(&doc1(), 1, 1, 1)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("makelink");
+    let iext = |lo: u32, hi: u32| {
+        skep_address::Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
+            .expect("well-formed")
+    };
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert_eq!(
+        links.readlink(&l).expect("resident").from_slot(),
+        &Endset::from_spans([iext(3, 4), iext(1, 2)]),
+        "argument order, un-coalesced"
+    );
 }

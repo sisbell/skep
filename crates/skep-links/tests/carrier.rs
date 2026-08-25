@@ -2,12 +2,15 @@
 //! arity floor and the 1-based slot range, Endset readback (verbatim
 //! decomposition, `enc(X).addrs() = X` over every subset of a family, ⟨⟩
 //! distinctness), coverage-class identity (exact denoted antichain;
-//! conservative extent partition; invariance under span permutation;
+//! conservative extent partition, keyed per `#start` so a mixed-length
+//! endset classifies rather than aborts; invariance under span permutation;
 //! structural derives ≠ coverage identity; the pinned off-contract panic and
 //! the address-denoting projection a caller discharges it with),
-//! `TypeRegistry::build`'s rejection matrix and its R-C0 behavior↔shape
-//! table in full, the five shipped registrations §B pins, and the
-//! serde/journal round trips.
+//! `TypeRegistry::build`'s rejection matrix, its pinned check order where two
+//! clauses collide, and its R-C0 behavior↔shape table in full, the five
+//! shipped registrations §B pins, the fold's freshness gate — the one store
+//! invariant that would otherwise fail silently — and the serde/journal
+//! round trips.
 
 mod common;
 
@@ -16,7 +19,7 @@ use std::collections::BTreeSet;
 use common::*;
 use skep_address::Span;
 use skep_links::{
-    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration,
+    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkRec, LinkState, Registration,
     RegistryError, ReservedAddrs, Shape, ShippedType, TypeConfig, TypeDecl, TypeRegistry, FROM,
     TO, TYPE,
 };
@@ -680,4 +683,101 @@ fn coverage_class_addrs_is_i0a_stated_as_its_definition() {
     // above is not vacuous.
     let swallowed = coverage_class(&enc(&[doc1(), ca(1), ca(2)]));
     assert_eq!(swallowed, coverage_class(&enc(&[doc1()])));
+}
+
+#[test]
+fn coverage_class_partitions_a_mixed_length_endset_by_start_length() {
+    // The conservative branch is a partition BY `#start`, each part folded
+    // and canonicalized on its own — because M1's canonical form is defined
+    // within one length class and refuses a heterogeneous set outright. A
+    // mixed-length endset is legal, level-uniform input (editlink checks
+    // level-uniformity per span, not a shared length), so classifying it must
+    // answer rather than abort.
+    let shallow = vspan(1, 1, 2); // #start = 2 — level-uniform, not unit-depth
+    let deep = span(&ca(1), &ca(3)); // #start = 8
+    let mixed = Endset::from_spans([shallow.clone(), deep.clone()]);
+    assert!(mixed.is_level_uniform(), "every span, on its own");
+    assert!(!mixed.is_address_denoting());
+    let class = coverage_class(&mixed); // must not abort: canonical_key is per part
+    assert!(class.denoted().is_none(), "a content extent denotes nothing");
+    // Each part contributes: the class is neither part's own.
+    assert_ne!(
+        class,
+        coverage_class(&Endset::from_spans([shallow.clone()]))
+    );
+    assert_ne!(class, coverage_class(&Endset::from_spans([deep.clone()])));
+    // The partition is keyed by LENGTH, not by position.
+    assert_eq!(class, coverage_class(&Endset::from_spans([deep, shallow])));
+}
+
+#[test]
+#[should_panic(expected = "fresh address")]
+fn apply_link_refuses_a_second_deposit_at_one_address() {
+    // Freshness is the one store invariant whose violation is SILENT — the
+    // insert would replace an immutable value, leaving its address in the
+    // displaced value's type slice, double-counting the home frontier and
+    // voiding Permanence, none of it observable at the fold that admitted it.
+    // Unconstructible through the kernel (M3's mint never re-issues and M2
+    // replays each record once), which is why the assert is its only witness.
+    let state = LinkState::genesis(config()).expect("valid config builds");
+    let rec = LinkRec::Deposit {
+        addr: la(1).tumbler().clone(),
+        value: Link::triple(enc(&[ca(1)]), enc(&[ca(2)]), idem_top_ty()),
+    };
+    let once = state.apply_link(&rec);
+    let _twice = once.apply_link(&rec); // corruption, not a live error path
+}
+
+#[test]
+fn registry_reports_the_earlier_clause_when_a_decl_fails_two() {
+    // `build`'s check order is pinned, and the key clauses run BEFORE the
+    // behavior↔shape table. Each decl below fails two clauses at once, so it
+    // is the precedence and not the only answer the input can get — the
+    // BadBehavior half is `Age` with idem⊤ (R-C0), separately reachable in
+    // registry_enforces_the_behavior_shape_table_exhaustively.
+    let age_idem_top = |shape| Registration {
+        shape,
+        idem: true,
+        behaviors: BTreeSet::from([Behavior::Age]),
+    };
+    let ok_reg = Registration {
+        shape: Shape::Multi,
+        idem: false,
+        behaviors: BTreeSet::new(),
+    };
+    // EmptyKey, ahead of the behavior table.
+    assert_eq!(
+        LinkState::genesis(config_with(vec![TypeDecl {
+            key: Endset::empty(),
+            reg: age_idem_top(Shape::Multi),
+        }]))
+        .map(|_| ()),
+        Err(RegistryError::EmptyKey)
+    );
+    // NonAddressDenotingKey, likewise — and this is the one that keeps
+    // `coverage_class` off its panicking path at the registry's door.
+    assert_eq!(
+        LinkState::genesis(config_with(vec![TypeDecl {
+            key: Endset::from_spans([span(&ca(1), &ca(3))]),
+            reg: age_idem_top(Shape::Binary),
+        }]))
+        .map(|_| ()),
+        Err(RegistryError::NonAddressDenotingKey)
+    );
+    // KeyCollision, likewise: the first decl is admitted, the second shares
+    // its class AND carries the bad behavior.
+    assert_eq!(
+        LinkState::genesis(config_with(vec![
+            TypeDecl {
+                key: enc(&[ra(20)]),
+                reg: ok_reg,
+            },
+            TypeDecl {
+                key: enc(&[ra(20)]),
+                reg: age_idem_top(Shape::Multi),
+            },
+        ]))
+        .map(|_| ()),
+        Err(RegistryError::KeyCollision)
+    );
 }

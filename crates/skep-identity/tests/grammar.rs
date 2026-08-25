@@ -155,6 +155,20 @@ fn sig_lines_are_skipped_with_garbage() {
     assert_eq!(ok_retire(record.as_bytes()).len(), 1);
 }
 
+/// Corpus: `signature …` and `sigx` — the skip tests the FIRST TOKEN for
+/// EQUALITY, never a prefix, so a near-miss keyword is an ordinary line and
+/// fails its kind's grammar (AUTH-2.8, AUTH-2.13). A prefix test would
+/// silently ignore a malformed line inside a STRICT grammar.
+#[test]
+fn a_token_merely_beginning_sig_is_not_a_sig_line() {
+    let record = format!("skep-enroll v1\nsignature whatever\ned25519 {}\n", hex(1));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(2));
+    assert_eq!(
+        err_retire(b"skep-retire v1\nsigx\n"),
+        PayloadError::BadLine(2)
+    );
+}
+
 /// Corpus: a key line whose first token is an alg the build does not carry
 /// (`mldsa44 <hex>`; `p256 <hex>` before its coordinated upgrade) —
 /// `bad_line` ⇒ whole record inert (AUTH-2.12, AUTH-2.91).

@@ -81,3 +81,28 @@ pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{framed, Tag, TAGS};
+
+    /// AUTH-1.14 — the second of AUTH-1.16's two mechanisms. The private
+    /// field stops an UNDECLARED tag; this assertion stops one DECLARED but
+    /// missing from [`TAGS`], at its first use. Without it a forgotten row
+    /// frames silently and escapes the prefix-free check, which ranges over
+    /// `TAGS` alone — so a tag colliding with an existing prefix would ship
+    /// and domain separation would be broken for whatever it signs. Written
+    /// here because only this module can hold an unlisted `Tag`, which is
+    /// the first mechanism working.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "AUTH-1.14")]
+    fn framing_under_a_declared_but_unlisted_tag_is_refused() {
+        let unlisted = Tag(b"skep-unlisted-v1");
+        assert!(
+            !TAGS.contains(&unlisted),
+            "fixture: the tag must not be listed"
+        );
+        let _ = framed(unlisted, &[b"x"]);
+    }
+}

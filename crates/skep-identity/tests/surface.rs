@@ -1,7 +1,7 @@
 //! The declared-value assertions I2 pins (AUTH-2.92 `ALGS`, AUTH-2.93
-//! `TAGS`), the framing byte pins, the fold token authority, the standard
-//! trait surface every consumer dispatches through, and the
-//! checkpoint-facing serde surface.
+//! `TAGS`, and AUTH-1.21's record cap), the framing byte pins, the fold
+//! token authority, the standard trait surface every consumer dispatches
+//! through, and the checkpoint-facing serde surface.
 
 mod common;
 
@@ -9,8 +9,20 @@ use common::{addr, fp, key, ACCT_A};
 use sha2::{Digest, Sha256};
 use skep_identity::{
     framed, Enrolled, Enrollment, Fingerprint, IdentityState, Inert, KeyParseError, LabelError,
-    PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS,
+    PayloadError, PublicKey, ALGS, ALG_ED25519, KEY_TAG, MAX_RECORD_BYTES, NODE_HELLO_TAG,
+    SESSION_TAG, TAGS,
 };
+
+/// AUTH-1.18/AUTH-1.21 — the record cap's VALUE, not merely its name: a
+/// PERMANENT pin, an I2 frozen constant (AUTH-2.90) with no fold version, so
+/// a board that folded a record under one cap and a mirror reading under
+/// another disagree forever about which records are `too_large`. Every other
+/// vector sizes its payload FROM this constant and so stays green if it
+/// moves; this is the one assertion a change is discovered at.
+#[test]
+fn max_record_bytes_is_64_kib() {
+    assert_eq!(MAX_RECORD_BYTES, 65_536);
+}
 
 /// AUTH-1.12 — `framed(tag, fields) = tag ‖ (be32(len(f)) ‖ f)…`, byte-pinned.
 #[test]
@@ -33,6 +45,23 @@ fn framed_is_injective_across_field_boundaries() {
     assert_ne!(framed(KEY_TAG, &[b"ab", b"c"]), framed(KEY_TAG, &[b"a", b"bc"]));
     assert_ne!(framed(KEY_TAG, &[b"abc"]), framed(KEY_TAG, &[b"ab", b"c"]));
     assert_ne!(framed(KEY_TAG, &[]), framed(KEY_TAG, &[b""]));
+}
+
+/// AUTH-1.12 — injectivity survives fields no narrower prefix could measure.
+/// Every example above uses one- to three-byte fields, which stay separated
+/// even under a one-byte length; these pairs are the ones that collide the
+/// moment the prefix width shrinks (256 wraps a u8, 65536 a u16), so this is
+/// where the be32 in the frame is actually load-bearing.
+#[test]
+fn framing_is_injective_at_the_prefix_width_boundaries() {
+    for len in [256usize, 65_536] {
+        let big = vec![0u8; len];
+        assert_ne!(
+            framed(KEY_TAG, &[&big, b""]),
+            framed(KEY_TAG, &[b"", &big]),
+            "a {len}-byte field must not frame alike across a boundary shift"
+        );
+    }
 }
 
 /// AUTH-1.8 — `Fingerprint::of(key) = SHA-256(framed(KEY_TAG, [alg, raw]))`,

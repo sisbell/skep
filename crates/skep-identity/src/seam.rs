@@ -135,10 +135,13 @@ mod tests {
     /// AUTH-2.126/AUTH-2.109 — the doc-1 form is `A·0·1` (`inc(A, 2)`).
     #[test]
     fn doc_1_is_account_dot_0_dot_1() {
-        assert!(doc_1_of(&addr(&[1, 1, 0, 5])) == addr(&[1, 1, 0, 5, 0, 1]));
+        assert_eq!(doc_1_of(&addr(&[1, 1, 0, 5])), addr(&[1, 1, 0, 5, 0, 1]));
         // A nested account's first document sits under the nested prefix.
-        assert!(doc_1_of(&addr(&[1, 1, 0, 3, 1])) == addr(&[1, 1, 0, 3, 1, 0, 1]));
+        assert_eq!(
+            doc_1_of(&addr(&[1, 1, 0, 3, 1])),
+            addr(&[1, 1, 0, 3, 1, 0, 1])
+        );
         // A node-level prefix (the bootstrap owner's) still answers totally.
-        assert!(doc_1_of(&addr(&[1, 1])) == addr(&[1, 1, 0, 1]));
+        assert_eq!(doc_1_of(&addr(&[1, 1])), addr(&[1, 1, 0, 1]));
     }
 }

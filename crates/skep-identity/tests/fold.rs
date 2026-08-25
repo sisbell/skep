@@ -6,9 +6,11 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::*;
 use skep_address::Span;
-use skep_identity::{Effect, IdentityState, Verdict, MAX_RECORD_BYTES};
+use skep_identity::{single_address, Effect, IdentityState, Verdict, MAX_RECORD_BYTES};
 
 fn enroll_ty() -> Vec<Span> {
     vec![unit(T_ENROLL)]
@@ -334,6 +336,27 @@ fn cap_counts_bytes_never_positions() {
     );
 }
 
+/// AUTH-2.38's items in ORDER: with the record already AT the cap, the next
+/// position's value is read (item 4) BEFORE the cap is tested (item 5), so
+/// an unminted position answers `missing_value` — never `too_large`, which
+/// is what a cap test hoisted to the top of the walk would answer.
+#[test]
+fn a_missing_value_at_the_cap_is_missing_value_not_too_large() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    fx.mint(&home, &[&vec![b'x'; MAX_RECORD_BYTES]]); // ord 1 fills the budget
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![content_run(&home, 1, 2)], // ords 1..3; ord 2 unminted
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_payload:missing_value",
+    );
+}
+
 /// Corpus: a three-atom record whose concatenated bytes are under the cap —
 /// honored (AUTH-2.3: multi-span records are ordinary).
 #[test]
@@ -373,8 +396,12 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
         .map(|i| Enrollment::new(keyn(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
+    assert!(
+        base_len + 2 <= MAX_RECORD_BYTES,
+        "fixture arithmetic: {base_len} bytes of key lines leaves no room for a \
+         label pad under a {MAX_RECORD_BYTES}-byte cap"
+    );
     let pad = MAX_RECORD_BYTES - base_len;
-    assert!(pad >= 2, "fixture arithmetic: need room for a label pad");
 
     // Exactly the cap: one label of pad−1 chars adds `pad` bytes (the space
     // plus the label).
@@ -513,6 +540,17 @@ fn registry_homed_retirement_is_not_holder_retirement() {
     assert_token(&fx.classify(&st, &dep), "not_holder_retirement");
 }
 
+/// AUTH-2.76's first refusal arm: a retirement homed in the subject's OWN
+/// doc 1 on an account that has never held a key — `no_holder`, never
+/// `not_holder_retirement`, which is the ancestor-homed refusal and names a
+/// relationship this deposit does not have.
+#[test]
+fn own_space_retirement_on_a_never_keyed_account_is_no_holder() {
+    let mut fx = Fixture::new();
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
+    assert_token(&fx.classify(&IdentityState::genesis(), &dep), "no_holder");
+}
+
 /// Corpus: a claim by a KEYLESS TOP-LEVEL account on an already-claimed
 /// board — `already_claimed`, never `claimant_keyless` (AUTH-2.68's pinned
 /// coexistence cell).
@@ -537,6 +575,36 @@ fn claimant_not_top_level_beats_already_claimed() {
     let st = claim_as(&mut fx, &st, CLM);
     let dep = fx.claim_dep(&doc1(NESTED), NESTED);
     assert_token(&fx.classify(&st, &dep), "claimant_not_top_level");
+}
+
+/// AUTH-2.62's `None ⇒ None` and AUTH-2.72's written order: an own-space
+/// genesis on an account with no delegator — where `registry == None` and
+/// `H == A` BOTH hold — is `not_genesis_registry`, never `no_holder`. The
+/// `registry.is_none()` test that precedes the own-space refusal is the only
+/// thing that decides this cell.
+#[test]
+fn own_space_genesis_without_a_delegator_is_not_genesis_registry() {
+    let mut fx = Fixture::new();
+    fx.register_orphan();
+    let dep = fx.enroll_dep(&doc1(ORPHAN), ORPHAN, &enroll_payload(&[(1, true)]));
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "not_genesis_registry",
+    );
+}
+
+/// AUTH-2.67 condition 3's `None` half: a claim by an account with no
+/// delegator is `claimant_not_top_level` — `Some(Account(_))` and `None`
+/// alike refuse, and a keyless one answers this before `claimant_keyless`.
+#[test]
+fn claim_without_a_delegator_is_claimant_not_top_level() {
+    let mut fx = Fixture::new();
+    fx.register_orphan();
+    let dep = fx.claim_dep(&doc1(ORPHAN), ORPHAN);
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "claimant_not_top_level",
+    );
 }
 
 /// Corpus: a holder enrollment (`H == A`, set non-empty) homed in a
@@ -664,10 +732,68 @@ fn to_slot_shape_is_malformed_on_all_kinds() {
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
 }
 
-/// Corpus: a `ty` slot whose single span is a CONTENT I-span of the home ·
-/// a `ty` of TWO spans, one of which IS `subtree_of(T_enroll)` · a `ty` of
-/// ONE span CONTAINING `subtree_of(T_enroll)` — `NotCredential` on each
-/// (AUTH-2.22's exactly-one-span-`Equal` rule).
+/// AUTH-2.26 — the whole rule, directly: `Some(A)` for exactly one span
+/// EQUAL to `subtree_of(its start)`, `None` for every other slot — empty,
+/// two spans, a span that is no subtree, and a span whose start does not
+/// VALIDATE. That last answers `None`, never a panic (AUTH-2.57).
+#[test]
+fn single_address_admits_exactly_one_address_form_span() {
+    assert_eq!(single_address(&[]), None);
+    assert_eq!(single_address(&[unit(ACCT_A)]), Some(addr(ACCT_A)));
+    assert_eq!(single_address(&[unit(ACCT_A), unit(ACCT_B)]), None);
+    // One span covering TWO account subtrees: `Equal` to no subtree.
+    let two = Span::new(tum(ACCT_A), width_at_last(ACCT_A.len(), 2)).expect("T12");
+    assert_eq!(single_address(&[two]), None);
+    // Adjacent zeros: T4-invalid as an address, legal as a carrier tumbler.
+    let invalid = Span::new(tum(&[1, 1, 0, 5, 0, 1, 0, 0, 1]), width_at_last(9, 1)).expect("T12");
+    assert_eq!(single_address(&[invalid]), None);
+}
+
+/// AUTH-2.57 totality on the `to` slot: a `to` span whose start does not
+/// VALIDATE is `malformed_shape` — the refusal
+/// `invalid_start_is_foreign_content_not_a_panic` pins on the `from` side.
+#[test]
+fn invalid_to_start_is_malformed_shape_not_a_panic() {
+    let mut fx = Fixture::new();
+    let from = fx.mint(&doc1(ACCT_A), &[&enroll_payload(&[(1, true)])]);
+    let invalid = Span::new(tum(&[1, 1, 0, 5, 0, 1, 0, 0, 1]), width_at_last(9, 1)).expect("T12");
+    let dep = Dep {
+        home: doc1(ACCT_A),
+        from,
+        to: vec![invalid],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_shape",
+    );
+}
+
+/// AUTH-2.46/AUTH-2.26 — an EMPTY `to` on an enroll deposit is
+/// `malformed_shape`: the same slot value the CLAIM kind requires
+/// (AUTH-2.48) is a refusal here, so the arity test is per kind.
+#[test]
+fn empty_to_on_an_enrollment_is_malformed_shape() {
+    let mut fx = Fixture::new();
+    let from = fx.mint(&doc1(ACCT_A), &[&enroll_payload(&[(1, true)])]);
+    let dep = Dep {
+        home: doc1(ACCT_A),
+        from,
+        to: vec![],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_shape",
+    );
+}
+
+/// Corpus: a `ty` slot of NO spans · one whose single span is a CONTENT
+/// I-span of the home · a `ty` of TWO spans, one of which IS
+/// `subtree_of(T_enroll)` · a `ty` of ONE span CONTAINING
+/// `subtree_of(T_enroll)` · one CONTAINED BY it — `NotCredential` on each
+/// (AUTH-2.22's exactly-one-span-`Equal` rule: every other arity, and every
+/// overlap class other than `Equal`, in BOTH containment directions).
 #[test]
 fn unrecognized_type_slots_are_not_credential() {
     let mut fx = Fixture::new();
@@ -675,9 +801,11 @@ fn unrecognized_type_slots_are_not_credential() {
     let spans = fx.mint(&doc1(ACCT_A), &[&enroll_payload(&[(1, true)])]);
 
     for ty in [
-        vec![unit(&[1, 1, 0, 5, 0, 1, 0, 1, 1])], // a content I-span of the home
-        vec![unit(T_ENROLL), unit(T_RETIRE)],     // two spans, one IS the type's
-        vec![unit(&[1, 1, 0, 1, 0, 1, 0, 2])],    // CONTAINS subtree_of(T_enroll)
+        vec![],                                      // no span at all: an arity too
+        vec![unit(&[1, 1, 0, 5, 0, 1, 0, 1, 1])],    // a content I-span of the home
+        vec![unit(T_ENROLL), unit(T_RETIRE)],        // two spans, one IS the type's
+        vec![unit(&[1, 1, 0, 1, 0, 1, 0, 2])],       // CONTAINS subtree_of(T_enroll)
+        vec![unit(&[1, 1, 0, 1, 0, 1, 0, 2, 1, 1])], // CONTAINED BY it
     ] {
         let dep = Dep {
             home: doc1(ACCT_A),
@@ -693,72 +821,209 @@ fn unrecognized_type_slots_are_not_credential() {
 
 // -------------------------------------------------- key-set semantics
 
-/// AUTH-1.30/AUTH-1.31 accessor semantics, the retire flow's flag carriage
-/// (AUTH-2.74), `WouldEmpty` (I3), the I4 re-entry refusal, and I9's
-/// conformance arm (re-listing an enrolled device key as `anchor` answers
-/// `nothing_changed` and the flag stays `false`).
-#[test]
-fn key_set_lifecycle() {
-    let mut fx = Fixture::new();
-    let genesis_state = IdentityState::genesis();
-    let st = seed_own(&mut fx, &genesis_state, ACCT_A, &[(1, true), (2, false)]);
-    let a = addr(ACCT_A);
+/// `ACCT_A` seeded with an anchor key and a device key — the state the
+/// enrolled-side claims below start from.
+fn seeded(fx: &mut Fixture) -> IdentityState {
+    seed_own(
+        fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, true), (2, false)],
+    )
+}
 
-    let s = st.key_set(&a);
-    assert!(!s.is_empty());
-    assert!(s.contains(&fp(1)) && s.is_anchor(&fp(1)));
-    assert!(s.contains(&fp(2)) && !s.is_anchor(&fp(2)));
-    // Fingerprint-ordered iteration (AUTH-1.31).
-    let listed: Vec<_> = s.enrolled().map(|(f, _)| *f).collect();
-    let mut sorted = listed.clone();
-    sorted.sort();
-    assert_eq!(listed, sorted);
-    assert_eq!(st.keyed_accounts().count(), 1);
-
-    // I9 conformance: re-list the device key under the anchor flag.
-    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
-    let (st2, v) = fx.step(&st, &dep);
-    assert_token(&v, "nothing_changed");
-    assert_eq!(st2, st);
-    assert!(!st2.key_set(&a).is_anchor(&fp(2)));
-
-    // Retire the device key: `removed` names it; the retired row carries the
-    // flag it was ENROLLED under (false).
+/// The same account with the device key retired — the state the
+/// retirement-side claims below start from.
+fn seeded_then_retired(fx: &mut Fixture) -> IdentityState {
+    let st = seeded(fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
-    let (st3, v) = fx.step(&st2, &dep);
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+    st
+}
+
+/// AUTH-1.31 — `contains` and `is_anchor` report membership NOW and the flag
+/// the key entered under; a seeded account's set is non-empty.
+#[test]
+fn enrolled_reads_report_membership_and_the_anchor_flag() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx);
+    let set = st.key_set(&addr(ACCT_A));
+    assert!(!set.is_empty());
+    assert!(set.contains(&fp(1)) && set.is_anchor(&fp(1)));
+    assert!(set.contains(&fp(2)) && !set.is_anchor(&fp(2)));
+}
+
+/// AUTH-1.31 — `enrolled()` answers FINGERPRINT order, not the order the
+/// record listed the keys in (the ordering the realm genesis-set framing
+/// reuses, AUTH-2.119). The record here lists its lines in DESCENDING
+/// fingerprint order, so a set iterating in record order answers the exact
+/// reverse of the claim.
+#[test]
+fn enrolled_iterates_in_fingerprint_order_not_record_order() {
+    let mut fx = Fixture::new();
+    let mut ascending = [1u8, 2, 3, 4];
+    ascending.sort_by_key(|&i| fp(i));
+    let record: Vec<(u8, bool)> = ascending.iter().rev().map(|&i| (i, false)).collect();
+    let st = seed_own(&mut fx, &IdentityState::genesis(), ACCT_A, &record);
+
+    let got: Vec<_> = st
+        .key_set(&addr(ACCT_A))
+        .enrolled()
+        .map(|(f, _)| *f)
+        .collect();
+    let want: Vec<_> = ascending.iter().map(|&i| fp(i)).collect();
+    assert_eq!(got, want);
+}
+
+/// AUTH-1.31 — `retired()` answers FINGERPRINT order, whatever order the
+/// retirement record named the fingerprints in.
+#[test]
+fn retired_iterates_in_fingerprint_order() {
+    let mut fx = Fixture::new();
+    let mut ascending = [1u8, 2, 3];
+    ascending.sort_by_key(|&i| fp(i));
+    // A fourth key stays enrolled, so retiring these three is not
+    // `would_empty` (I3).
+    let st = seed_own(
+        &mut fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, false), (2, false), (3, false), (4, false)],
+    );
+    let named: Vec<u8> = ascending.iter().rev().copied().collect();
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&named));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+
+    let got: Vec<_> = st
+        .key_set(&addr(ACCT_A))
+        .retired()
+        .map(|(f, _)| *f)
+        .collect();
+    let want: Vec<_> = ascending.iter().map(|&i| fp(i)).collect();
+    assert_eq!(got, want);
+}
+
+/// AUTH-2.59 — `keyed_accounts()` answers ADDRESS order, not the order the
+/// accounts were seeded in; `/dump`'s identity section is built from this.
+#[test]
+fn keyed_accounts_iterates_in_address_order() {
+    let mut fx = Fixture::new();
+    let st = IdentityState::genesis();
+    // Seeded high address first, so insertion order is the reverse of the
+    // claim.
+    let st = seed_own(&mut fx, &st, ACCT_B, &[(8, true)]);
+    let st = seed_own(&mut fx, &st, ACCT_A, &[(7, true)]);
+    let st = seed_own(&mut fx, &st, CLM, &[(9, true)]);
+
+    let got: Vec<_> = st.keyed_accounts().map(|(a, _)| a.clone()).collect();
+    let mut want = vec![addr(ACCT_B), addr(ACCT_A), addr(CLM)];
+    want.sort();
+    assert_eq!(got, want);
+}
+
+/// I9's conformance arm (AUTH-2.104) — re-listing an enrolled device key
+/// under the `anchor` flag answers `nothing_changed` and the flag stays
+/// `false`: a fingerprint's flag is fixed by the record that FIRST enrolls
+/// it, for the fingerprint's lifetime.
+#[test]
+fn re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx);
+    let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
+    let (next, v) = fx.step(&st, &dep);
+    assert_token(&v, "nothing_changed");
+    assert_eq!(next, st);
+    assert!(!next.key_set(&addr(ACCT_A)).is_anchor(&fp(2)));
+}
+
+/// AUTH-2.74 — an honored retirement names the removed fingerprints in its
+/// effect, and the key leaves `enrolled` for `retired`.
+#[test]
+fn retiring_an_enrolled_key_names_it_in_the_effect_and_removes_it() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx);
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
+    let (next, v) = fx.step(&st, &dep);
     match assert_honored(&v) {
         Effect::Retire { account, removed } => {
-            assert_eq!(*account, a);
+            assert_eq!(*account, addr(ACCT_A));
             assert_eq!(*removed, vec![fp(2)]);
         }
-        _ => panic!("expected a retire effect"),
+        other => panic!("expected a retire effect, got {other:?}"),
     }
-    let s3 = st3.key_set(&a);
-    assert!(!s3.contains(&fp(2)));
-    assert!(!s3.is_anchor(&fp(2)));
-    let retired: Vec<_> = s3.retired().collect();
-    assert_eq!(retired.len(), 1);
-    assert_eq!(*retired[0].0, fp(2));
-    assert!(!retired[0].1);
+    let set = next.key_set(&addr(ACCT_A));
+    assert!(!set.contains(&fp(2)));
+    assert!(!set.is_anchor(&fp(2)));
+    assert_eq!(set.retired().count(), 1);
+}
 
-    // Retiring it again touches nothing: removed = F ∩ enrolled = ∅.
+/// AUTH-1.30 — each retired row carries the flag its key was ENROLLED under,
+/// both ways: an anchor key stays senior in the retired map, a device key
+/// stays ordinary. The lifetime claim is what makes "was that a senior key"
+/// a head read.
+#[test]
+fn retired_row_carries_the_flag_the_key_was_enrolled_under() {
+    let mut fx = Fixture::new();
+    let st = seed_own(
+        &mut fx,
+        &IdentityState::genesis(),
+        ACCT_A,
+        &[(1, true), (2, false), (3, false)],
+    );
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1, 2]));
+    let (st, v) = fx.step(&st, &dep);
+    assert_honored(&v);
+
+    let set = st.key_set(&addr(ACCT_A));
+    let flags: BTreeMap<_, _> = set.retired().collect();
+    assert_eq!(
+        flags.get(&fp(1)),
+        Some(&true),
+        "the anchor key's flag survives retirement"
+    );
+    assert_eq!(
+        flags.get(&fp(2)),
+        Some(&false),
+        "the device key's flag survives retirement"
+    );
+}
+
+/// AUTH-2.74 — retiring an already-retired fingerprint touches nothing:
+/// `removed = F ∩ enrolled = ∅`, so the record is `nothing_changed`.
+#[test]
+fn retiring_an_already_retired_key_changes_nothing() {
+    let mut fx = Fixture::new();
+    let st = seeded_then_retired(&mut fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[2]));
-    let (st4, v) = fx.step(&st3, &dep);
+    let (next, v) = fx.step(&st, &dep);
     assert_token(&v, "nothing_changed");
-    assert_eq!(st4, st3);
+    assert_eq!(next, st);
+}
 
-    // I4: a retired fingerprint never re-enters — the re-enrollment line is
-    // outside `added` whatever its flag.
+/// I4 (AUTH-2.98) — a retired fingerprint never re-enters its account's set:
+/// the re-enrollment line is outside `added` whatever flag it carries.
+#[test]
+fn a_retired_fingerprint_never_re_enrolls() {
+    let mut fx = Fixture::new();
+    let st = seeded_then_retired(&mut fx);
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &enroll_payload(&[(2, true)]));
-    let (st5, v) = fx.step(&st4, &dep);
+    let (next, v) = fx.step(&st, &dep);
     assert_token(&v, "nothing_changed");
-    assert_eq!(st5, st4);
+    assert_eq!(next, st);
+}
 
-    // I3: retiring the whole remaining set is `would_empty`, record inert.
+/// I3 (AUTH-2.97) — a retirement naming the WHOLE enrolled set is inert
+/// whole: `would_empty`, so non-emptiness stays monotone.
+#[test]
+fn retiring_the_whole_enrolled_set_is_would_empty() {
+    let mut fx = Fixture::new();
+    let st = seeded_then_retired(&mut fx);
     let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1]));
-    let (st6, v) = fx.step(&st5, &dep);
+    let (next, v) = fx.step(&st, &dep);
     assert_token(&v, "would_empty");
-    assert_eq!(st6, st5);
+    assert_eq!(next, st);
 }
 
 /// The claim walk end to end: keyless refusal, honored claim, first-wins

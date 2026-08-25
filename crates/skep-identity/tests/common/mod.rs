@@ -70,6 +70,11 @@ pub const NESTED: &[u32] = &[1, 1, 0, 3, 1];
 pub const ACCT_A: &[u32] = &[1, 1, 0, 5];
 /// Another bootstrap-tier account.
 pub const ACCT_B: &[u32] = &[1, 1, 0, 6];
+/// An account whose PARENT is unowned — ω answers nothing above it, so
+/// `delegator` is `None`: AUTH-2.62's third row, the tier AUTH-2.63 says can
+/// never be seeded. Registered only by [`Fixture::register_orphan`], so the
+/// standard board is untouched.
+pub const ORPHAN: &[u32] = &[2, 1, 0, 1];
 
 /// Placeholder credential type addresses in the commons doc's link subspace
 /// (AUTH-7.1 leaves the real ones to commons-seeding).
@@ -180,6 +185,14 @@ impl Fixture {
             types,
             next_ord: BTreeMap::new(),
         }
+    }
+
+    /// Register [`ORPHAN`] as an owned account under a node NO principal
+    /// owns, so `owner_of(parent(ORPHAN))` is `None` and `delegator` answers
+    /// `None`. Additive: no other vector registers anything under `[2, 1]`.
+    pub fn register_orphan(&mut self) {
+        self.ctx.owners.push((addr(ORPHAN), false));
+        self.ctx.accounts.insert(addr(ORPHAN));
     }
 
     /// Mints `parts` as consecutive one-atom content positions of `home`;

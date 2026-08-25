@@ -130,7 +130,7 @@ impl Fingerprint {
 
 /// Lowercase hex (AUTH-1.3, AUTH-1.9, AUTH-2.17 — every encoder emits
 /// lowercase).
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -142,7 +142,7 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 
 /// Case-insensitive hex decode (AUTH-1.3, AUTH-2.17); `None` on an odd
 /// length or a non-hex byte.
-pub(crate) fn hex_decode(s: &str) -> Option<Vec<u8>> {
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
     fn val(c: u8) -> Option<u8> {
         match c {
             b'0'..=b'9' => Some(c - b'0'),

@@ -185,6 +185,28 @@ fn invalid_start_is_foreign_content_not_a_panic() {
     assert_token(&fx.classify(&genesis, &dep), "malformed_payload:foreign_content");
 }
 
+/// AUTH-1.22 — a ctx answering `Some(&[])` at a covered position breaks the
+/// premise the reach walk's only bound rests on (the byte cap, AUTH-2.43:
+/// nothing else ends a walk whose span acts above the element level). Debug
+/// builds refuse such a ctx at the read rather than folding under it; the
+/// span here covers one position, so the refusal is the assertion and never
+/// the hang it guards against.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "AUTH-1.22")]
+fn zero_byte_value_is_refused_at_the_read() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    fx.ctx.values.insert(content_pos(&home, 1), Vec::new());
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![content_run(&home, 1, 1)],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    let _ = fx.classify(&IdentityState::genesis(), &dep);
+}
+
 /// Corpus: a document-level start equal to the home · a subspace-only
 /// element start · an element field deeper than subspace·ordinal —
 /// `foreign_content` on all three, never `missing_value`, never a walk of

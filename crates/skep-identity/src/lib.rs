@@ -16,10 +16,11 @@
 //!   (AUTH-1.11–1.17);
 //! * the credential-record constants and payload types — [`ENROLL_HEADER`],
 //!   [`RETIRE_HEADER`], [`MAX_RECORD_BYTES`], [`Enrollment`],
-//!   [`PayloadError`] (AUTH-1.18–1.28), the line grammar
+//!   [`PayloadError`] (AUTH-1.18–1.28) — with the line grammar
 //!   [`parse_enroll`]/[`parse_retire`]/[`encode_enroll`]/[`encode_retire`]
-//!   (AUTH-2.6–2.19), and the ONE pinned payload read [`record_bytes`]
-//!   (AUTH-2.36–2.45);
+//!   (AUTH-2.6–2.19);
+//! * the ONE pinned payload read — [`record_bytes`] (AUTH-2.3–2.5,
+//!   AUTH-2.36–2.45);
 //! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
 //! * shape recognition — [`CredentialKind`], [`TypeAddrs`], [`LinkDeposit`],
 //!   [`single_address`] (AUTH-2.20–2.28);
@@ -62,6 +63,7 @@ mod framing;
 mod key;
 mod keyset;
 mod payload;
+mod read;
 mod seam;
 mod shape;
 mod state;
@@ -71,9 +73,10 @@ pub use framing::{framed, Tag, KEY_TAG, NODE_HELLO_TAG, SESSION_TAG, TAGS};
 pub use key::{Fingerprint, KeyParseError, PublicKey, ALGS, ALG_ED25519};
 pub use keyset::{Enrolled, KeySet};
 pub use payload::{
-    encode_enroll, encode_retire, parse_enroll, parse_retire, record_bytes, Enrollment, LabelError,
-    PayloadError, ENROLL_HEADER, MAX_RECORD_BYTES, RETIRE_HEADER,
+    encode_enroll, encode_retire, parse_enroll, parse_retire, Enrollment, LabelError, PayloadError,
+    ENROLL_HEADER, MAX_RECORD_BYTES, RETIRE_HEADER,
 };
+pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};
 pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 pub use state::{HasIdentity, IdentityState};

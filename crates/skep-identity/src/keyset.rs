@@ -69,29 +69,35 @@ impl KeySet {
         self.retired.iter().map(|(fp, anchor)| (fp, *anchor))
     }
 
-    /// Retired-set membership — a fold-arm read (AUTH-2.69's
-    /// `k ∉ retired`); crate-private, not part of AUTH-1.29's surface.
+    /// ⇔ `fp` is retired — the point form of what [`retired`] discloses in
+    /// bulk. Crate-private because AUTH-1.29 fixes the public surface; the
+    /// enrollment arm's `k ∉ retired` (AUTH-2.69) is its one caller.
+    ///
+    /// [`retired`]: KeySet::retired
     pub(crate) fn retired_contains(&self, fp: &Fingerprint) -> bool {
         self.retired.contains_key(fp)
     }
 
-    /// Enrolled-set size — the `WouldEmpty` comparison's right side
-    /// (AUTH-2.74); crate-private.
+    /// How many keys are enrolled NOW. Crate-private for the same reason; the
+    /// retirement arm's whole-set test (AUTH-2.74) is its one caller, sound
+    /// there because that arm filtered its `removed` from `enrolled` and
+    /// AUTH-2.15 left the record's fingerprints duplicate-free.
     pub(crate) fn enrolled_len(&self) -> usize {
         self.enrolled.len()
     }
 
-    /// Insert one enrolled key, the map key derived via `Fingerprint::of` on
-    /// the key inserted — establishing AUTH-1.32 by construction
-    /// (AUTH-2.53). Crate-private: only `apply` posts.
+    /// Enrol one key, the map key derived via `Fingerprint::of` on the key
+    /// inserted — establishing AUTH-1.32 by construction (AUTH-2.53).
+    /// Crate-private: only `apply` posts.
     pub(crate) fn insert_enrolled(&mut self, e: Enrolled) {
         self.enrolled.insert(Fingerprint::of(&e.key), e);
     }
 
     /// Move one enrolled fingerprint to `retired`, carrying the flag it was
-    /// enrolled under (AUTH-2.74's post). Crate-private: only `apply` posts;
-    /// `classify` guarantees membership, and a non-member moves nothing
-    /// (total, decides nothing — AUTH-2.53).
+    /// enrolled under (AUTH-1.30, AUTH-2.74's post); a fingerprint that is
+    /// not enrolled moves nothing, so the act is total and decides nothing
+    /// (AUTH-2.53). Crate-private: only `apply` posts, and `classify`
+    /// guarantees the membership.
     pub(crate) fn move_to_retired(&mut self, fp: &Fingerprint) {
         if let Some(e) = self.enrolled.remove(fp) {
             self.retired.insert(*fp, e.anchor);

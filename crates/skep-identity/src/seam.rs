@@ -19,6 +19,15 @@ use skep_address::{checked_inc, parent, Address, Level, Tumbler};
 /// span, ahead of the walk (AUTH-2.38).
 pub trait Values {
     /// The value at `at`, as of the ctx's position; `None` iff never minted.
+    ///
+    /// AUTH-1.22 — every `Some` answer carries AT LEAST ONE BYTE, and that is
+    /// the implementor's obligation rather than a nicety: the payload read's
+    /// reach walk (AUTH-2.42) is bounded by the byte cap alone (AUTH-2.43),
+    /// because a span whose width acts above the element level covers every
+    /// ordinal above its start. A ctx that can answer `Some(&[])` at a covered
+    /// position leaves that walk unbounded and MUST NOT be used to fold until
+    /// a second bound on per-record span/position work exists. `record_bytes`
+    /// debug-asserts the premise at the one call that rests on it.
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]>;
 }
 

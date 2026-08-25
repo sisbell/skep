@@ -1,17 +1,16 @@
-//! Credential-record constants, payload types, the pinned line grammar, and
-//! the ONE payload read — AUTH-1.18–1.28, AUTH-2.3–2.19, AUTH-2.36–2.45.
+//! Credential-record constants, payload types, and the pinned line grammar —
+//! AUTH-1.18–1.28, AUTH-2.6–2.19.
 //!
-//! The grammar (headers, tokenization, both kinds' line forms, the parse
-//! fault precedence) and the four payload pins (per-span check order, the
-//! reach walk, the byte cap, home anchoring) are PERMANENT protocol pins —
-//! I2 frozen constants (AUTH-2.90). A Rust non-folding reader obtains the
-//! payload read by LINKING [`record_bytes`], never by re-implementing it
-//! (AUTH-2.37).
-
-use skep_address::{document_of, shift, validate, Address, Level, Nat, Span};
+//! One doorkeeper: record BYTES in, typed records out. The grammar — headers,
+//! tokenization, both kinds' line forms, the parse fault precedence — is a
+//! PERMANENT protocol pin, an I2 frozen constant (AUTH-2.90). Both kinds
+//! share one strictness and one fault precedence (AUTH-2.14, AUTH-2.19), so
+//! [`scan`] holds that obligation once and each kind's parser holds only its
+//! own line grammar. The bytes themselves arrive from `crate::read`.
+//!
+//! [`scan`]: scan
 
 use crate::key::{Fingerprint, PublicKey, ALGS};
-use crate::seam::Values;
 
 /// AUTH-1.18 — the enrollment header, line 1 byte-exact (AUTH-2.7).
 pub const ENROLL_HEADER: &str = "skep-enroll v1";
@@ -118,20 +117,48 @@ impl PayloadError {
     }
 }
 
-/// AUTH-2.6 — lines split on `\n` ONLY, nothing trimmed (`\r` is an ordinary
-/// payload byte); AUTH-2.19 item 1 — UTF-8 first, else `NotUtf8`.
-fn decode_lines(bytes: &[u8]) -> Result<Vec<&str>, PayloadError> {
+/// AUTH-2.19 — the scan BOTH kinds share, in ONE implementation: UTF-8
+/// first, else `NotUtf8` (item 1); line 1 the header, literally, byte-exact,
+/// else `BadHeader` (AUTH-2.7, item 2 — a leading blank line, a trailing
+/// space, a CRLF header each fail here); then lines 2..n IN ORDER (item 3),
+/// the FIRST failing line the verdict; and `Empty` only after a clean scan
+/// (AUTH-2.16, item 4).
+///
+/// Lines split on `\n` ONLY, nothing trimmed — `\r` is an ordinary payload
+/// byte (AUTH-2.6). A zero-length line is ignored (AUTH-2.6, AUTH-2.7); a
+/// `sig` line is skipped whatever follows, on both kinds (AUTH-2.13,
+/// AUTH-2.14, permanent per AUTH-2.94).
+///
+/// `read` carries the KIND'S OWN line grammar and nothing else: it receives
+/// the 1-based line number (the header is line 1, AUTH-1.27), the line, and
+/// the items already accepted — the left side of its own AUTH-2.15
+/// duplicate comparison.
+fn scan<T>(
+    bytes: &[u8],
+    header: &str,
+    mut read: impl FnMut(usize, &str, &[T]) -> Result<T, PayloadError>,
+) -> Result<Vec<T>, PayloadError> {
     let text = core::str::from_utf8(bytes).map_err(|_| PayloadError::NotUtf8)?;
-    Ok(text.split('\n').collect())
-}
-
-/// AUTH-2.7/AUTH-2.19 item 2 — line 1 is the header, literally, byte-exact
-/// (a leading blank line, a trailing space, a CRLF header each fail here).
-fn check_header(lines: &[&str], header: &str) -> Result<(), PayloadError> {
-    if lines.first().copied() != Some(header) {
+    let mut lines = text.split('\n');
+    if lines.next() != Some(header) {
         return Err(PayloadError::BadHeader);
     }
-    Ok(())
+    let mut out: Vec<T> = Vec::new();
+    for (idx, line) in lines.enumerate() {
+        let n = idx + 2; // 1-based, the header line 1 (AUTH-1.27)
+        if line.is_empty() {
+            continue;
+        }
+        if split_token(line).0 == "sig" {
+            continue;
+        }
+        let item = read(n, line, &out)?;
+        out.push(item);
+    }
+    if out.is_empty() {
+        return Err(PayloadError::Empty);
+    }
+    Ok(out)
 }
 
 /// AUTH-2.8 — tokens separate on exactly one ASCII 0x20, with NO collapsing
@@ -146,27 +173,18 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// AUTH-2.18 — parse an enrollment record (AUTH-2.12's grammar: line 1
-/// `skep-enroll v1`, each further line `[anchor ]ed25519 <64 hex>[ <label>]`).
-/// Strict: any unparseable line makes the whole record inert. Fault
-/// precedence per AUTH-2.19: UTF-8, header, then lines 2..n IN ORDER (first
-/// failing line wins — `BadLine(n)` or `DuplicateKey(n)`), `Empty` only
-/// after a clean scan. Hex tokens are case-insensitive (AUTH-2.17); keyword
-/// tokens match as bytes, lowercase (AUTH-2.9).
+/// AUTH-2.18 — parse an enrollment record: line 1 `skep-enroll v1`, each
+/// further line `[anchor ]ed25519 <64 hex>[ <label>]` (AUTH-2.12). Strict —
+/// any unparseable line makes the whole record inert; the scan and the fault
+/// precedence are the ones BOTH kinds share (AUTH-2.19): UTF-8, header, then
+/// lines 2..n in order with the first failing line the verdict, and `Empty`
+/// only after a clean scan. Hex tokens are case-insensitive (AUTH-2.17);
+/// keyword tokens match as bytes, lowercase (AUTH-2.9).
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
-    let lines = decode_lines(bytes)?;
-    check_header(&lines, ENROLL_HEADER)?;
-    let mut out: Vec<Enrollment> = Vec::new();
-    for (idx, line) in lines.iter().enumerate().skip(1) {
-        let n = idx + 1; // 1-based; the header is line 1 (AUTH-1.27)
-        if line.is_empty() {
-            continue; // a zero-length line is ignored (AUTH-2.6, AUTH-2.7)
-        }
-        // AUTH-2.12 — dispatch on the FIRST token: sig · anchor · alg · else.
+    scan(bytes, ENROLL_HEADER, |n, line, seen: &[Enrollment]| {
+        // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
+        // scan has taken the `sig` lines already).
         let (first, rest) = split_token(line);
-        if first == "sig" {
-            continue; // AUTH-2.13 — skipped, whatever follows (AUTH-2.94)
-        }
         let (anchor, alg, rest) = if first == "anchor" {
             // AUTH-2.11 — the anchor flag is the LEADING token; the line
             // then continues with the alg token.
@@ -202,43 +220,26 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
         };
         // AUTH-2.15 — a fingerprint repeating an earlier line's, compared as
         // PARSED bytes (hex case is no distinction), whatever its flag.
-        if out.iter().any(|e| e.key == key) {
+        if seen.iter().any(|e| e.key == key) {
             return Err(PayloadError::DuplicateKey(n));
         }
         // The parsed label is in the AUTH-1.24 domain by construction
         // (non-empty checked above; no '\n' — lines were split on it).
-        let Ok(enrollment) = Enrollment::new(key, anchor, label) else {
-            return Err(PayloadError::BadLine(n));
-        };
-        out.push(enrollment);
-    }
-    if out.is_empty() {
-        return Err(PayloadError::Empty); // AUTH-2.16, AUTH-2.19 item 4
-    }
-    Ok(out)
+        Enrollment::new(key, anchor, label).map_err(|_| PayloadError::BadLine(n))
+    })
 }
 
-/// AUTH-2.18 — parse a retirement record (AUTH-2.14's grammar: line 1
-/// `skep-retire v1`, each further line `<64 hex fingerprint>` AND NOTHING
-/// ELSE — any remainder after the fingerprint token is `BadLine`; `sig`
-/// lines are skipped). Both kinds share one strictness and one fault
-/// precedence (AUTH-2.19).
+/// AUTH-2.18 — parse a retirement record: line 1 `skep-retire v1`, each
+/// further line `<64 hex fingerprint>` AND NOTHING ELSE — any remainder
+/// after the fingerprint token is `BadLine` (AUTH-2.14). The scan and the
+/// fault precedence are the ones BOTH kinds share — the same ones the
+/// enrollment kind reads under (AUTH-2.19).
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
-    let lines = decode_lines(bytes)?;
-    check_header(&lines, RETIRE_HEADER)?;
-    let mut out: Vec<Fingerprint> = Vec::new();
-    for (idx, line) in lines.iter().enumerate().skip(1) {
-        let n = idx + 1;
-        if line.is_empty() {
-            continue;
-        }
-        let (first, rest) = split_token(line);
-        if first == "sig" {
-            continue; // AUTH-2.13/AUTH-2.14 — skipped, whatever follows
-        }
+    scan(bytes, RETIRE_HEADER, |n, line, seen: &[Fingerprint]| {
         // AUTH-2.14 — no label, no trailing separator: ANY remainder after
         // the fingerprint token (`<64 hex> ` and `<64 hex> note` alike) is
         // BadLine.
+        let (first, rest) = split_token(line);
         if rest.is_some() {
             return Err(PayloadError::BadLine(n));
         }
@@ -246,15 +247,11 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
             return Err(PayloadError::BadLine(n));
         };
         // AUTH-2.15 — never `removed = {F}` twice: the repeat is named.
-        if out.contains(&fp) {
+        if seen.contains(&fp) {
             return Err(PayloadError::DuplicateKey(n));
         }
-        out.push(fp);
-    }
-    if out.is_empty() {
-        return Err(PayloadError::Empty);
-    }
-    Ok(out)
+        Ok(fp)
+    })
 }
 
 /// AUTH-2.18 — encode an enrollment record; emits lowercase hex (AUTH-2.17)
@@ -292,83 +289,3 @@ pub fn encode_retire(fps: &[Fingerprint]) -> Vec<u8> {
     s.into_bytes()
 }
 
-/// AUTH-2.36 — THE ONE implementation of the pinned payload read: the
-/// link's own FROM endset, its I-spans' bytes read in ENDSET ORDER and
-/// concatenated, verbatim (SPAN BINDING, AUTH-2.3 — nothing sorts, dedups,
-/// normalizes or coalesces; spans may repeat, overlap, or split a line,
-/// AUTH-2.4). Bound at [`Values`] — the one-method supertrait, never the
-/// whole world seam; [`MAX_RECORD_BYTES`] is INTERNAL and not a parameter.
-///
-/// Per SPAN, in endset order, the checks run in THIS order — the first
-/// failure is the verdict (AUTH-2.38), and the per-span INTERLEAVE is pinned
-/// (AUTH-2.39: each span's checks and positions complete before the next
-/// span's checks begin — never a home pass over every span first):
-///
-/// 1. the start VALIDATES to an `Address` (M1), else `ForeignContent`;
-/// 2. the start is an element POSITION — element field EXACTLY two
-///    components, a subspace and an ordinal (AUTH-2.40); a document-level
-///    start, a subspace-only start, and a deeper element field are each
-///    T4-valid NON-positions ⇒ `ForeignContent`, never coerced. The test
-///    constrains the field's SHAPE, never which subspace it names
-///    (AUTH-2.41: a link-subspace start IS a position and walks to
-///    `MissingValue`);
-/// 3. `document_of(start) == home` (HOME ANCHORING, AUTH-2.44), else
-///    `ForeignContent` before a byte of that span is read;
-///
-/// then, per POSITION of the span — the reach WALK is M1 `shift(t, 1)` from
-/// `span.start()`, taken while the address is still inside the span's reach,
-/// NEVER a count read off `width`'s last component (AUTH-2.42):
-///
-/// 4. the value — `ctx.value_at(t)`; `None` ⇒ `MissingValue` (reachable:
-///    an endset names addresses verbatim, AUTH-2.45);
-/// 5. the cap — `TooLarge` iff the bytes appended so far plus THIS value's
-///    length exceed `MAX_RECORD_BYTES`, checked BEFORE appending
-///    (AUTH-2.43), so at most `MAX_RECORD_BYTES` bytes are ever copied.
-///
-/// Termination rides on AUTH-1.22's wire-codec premise (every value ≥ 1
-/// byte, so the cap bounds the walk); a round admitting zero-byte values
-/// must add a second bound.
-pub fn record_bytes(
-    ctx: &impl Values,
-    home: &Address,
-    from: &[Span],
-) -> Result<Vec<u8>, PayloadError> {
-    let one = Nat::from(1u32);
-    let mut out: Vec<u8> = Vec::new();
-    for span in from {
-        // 1 — validity (checked ONCE per span, ahead of the walk: AUTH-2.30).
-        let Ok(start) = validate(span.start().clone()) else {
-            return Err(PayloadError::ForeignContent);
-        };
-        // 2 — position-hood (AUTH-2.40): element level, field = subspace·ordinal.
-        let is_position = start.level() == Level::Element
-            && start.element_field().is_some_and(|field| field.len() == 2);
-        if !is_position {
-            return Err(PayloadError::ForeignContent);
-        }
-        // 3 — home anchoring (AUTH-2.44), before a byte of the span is read.
-        let Some(span_doc) = document_of(&start) else {
-            // Unreachable: an Element-level address has a document prefix;
-            // kept total rather than panicking (AUTH-2.57).
-            return Err(PayloadError::ForeignContent);
-        };
-        if span_doc != *home {
-            return Err(PayloadError::ForeignContent);
-        }
-        // The reach walk (AUTH-2.42).
-        let mut t = span.start().clone();
-        while span.contains(&t) {
-            // 4 — the value, as of the ctx's position (AUTH-2.38 item 4).
-            let Some(value) = ctx.value_at(&t) else {
-                return Err(PayloadError::MissingValue);
-            };
-            // 5 — the cap, BEFORE the value is appended (AUTH-2.43).
-            if out.len() + value.len() > MAX_RECORD_BYTES {
-                return Err(PayloadError::TooLarge);
-            }
-            out.extend_from_slice(value);
-            t = shift(&t, &one);
-        }
-    }
-    Ok(out)
-}

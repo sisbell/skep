@@ -9,7 +9,8 @@ use skep_address::Address;
 
 use crate::key::Fingerprint;
 use crate::keyset::{Enrolled, KeySet};
-use crate::payload::{parse_enroll, parse_retire, record_bytes, Enrollment};
+use crate::payload::{parse_enroll, parse_retire, Enrollment};
+use crate::read::record_bytes;
 use crate::seam::{delegator, doc_1_of, document_account, Delegator, FoldCtx};
 use crate::shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
 use crate::verdict::{Effect, Inert, Verdict};

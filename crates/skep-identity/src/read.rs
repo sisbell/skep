@@ -81,7 +81,7 @@ pub fn record_bytes(
         // The reach walk (AUTH-2.42).
         let mut t = span.start().clone();
         while span.contains(&t) {
-            // 4 — the value, as of the ctx's position (AUTH-2.38 item 4).
+            // 4 — the value, as of the ctx's commit (AUTH-2.38 item 4).
             let Some(value) = ctx.value_at(&t) else {
                 return Err(PayloadError::MissingValue);
             };

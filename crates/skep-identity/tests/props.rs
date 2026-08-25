@@ -116,12 +116,12 @@ struct Mat {
     dep: Dep,
     kind: u8,
     subject: Address,
-    home_acct: Address,
+    home_account: Address,
 }
 
 fn materialize(fx: &mut Fixture, act: &Act) -> Mat {
     let subject_comps = ACCOUNTS[act.subject];
-    let (home, home_acct) = homes()[act.home].clone();
+    let (home, home_account) = homes()[act.home].clone();
     let dep = match act.kind {
         0 => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
         1 => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
@@ -141,7 +141,7 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Mat {
         dep,
         kind: act.kind,
         subject: addr(subject_comps),
-        home_acct,
+        home_account,
     }
 }
 
@@ -183,7 +183,7 @@ proptest! {
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is
             // inert (registry-, claimant- and stranger-homed alike).
-            if mat.kind == 0 && pre_nonempty_subject && mat.home_acct != mat.subject {
+            if mat.kind == 0 && pre_nonempty_subject && mat.home_account != mat.subject {
                 prop_assert!(matches!(verdict, Verdict::Inert(_)));
             }
 
@@ -283,15 +283,15 @@ proptest! {
         let mut fx = Fixture::new();
         fx.ctx.all_unpublished = true;
         let mats: Vec<Mat> = acts.iter().map(|a| materialize(&mut fx, a)).collect();
-        let genesis = IdentityState::genesis();
+        let genesis_state = IdentityState::genesis();
         for mat in &mats {
-            let (next, verdict) = fx.step(&genesis, &mat.dep);
+            let (next, verdict) = fx.step(&genesis_state, &mat.dep);
             if mat.kind <= 2 {
                 prop_assert!(token_of(&verdict).as_deref() == Some("unpublished"));
             } else {
                 prop_assert!(matches!(verdict, Verdict::NotCredential));
             }
-            prop_assert!(next == genesis);
+            prop_assert!(next == genesis_state);
         }
     }
 }

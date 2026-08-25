@@ -70,7 +70,7 @@ impl IdentityState {
             return Verdict::NotCredential;
         };
         // 2 — the home's account (AUTH-2.66 item 2).
-        let Some(h) = document_account(ctx, dep.home) else {
+        let Some(home_account) = document_account(ctx, dep.home) else {
             return Verdict::Inert(Inert::MalformedShape);
         };
         // 3 — publication (AUTH-2.66 item 3; I7, AUTH-2.102).
@@ -79,9 +79,9 @@ impl IdentityState {
         }
         // 4 — the per-kind arm.
         match kind {
-            CredentialKind::Claim => self.claim_arm(ctx, dep, &h),
-            CredentialKind::Enroll => self.enroll_path(ctx, dep, &h),
-            CredentialKind::Retire => self.retire_path(ctx, dep, &h),
+            CredentialKind::Claim => self.claim_arm(ctx, dep, &home_account),
+            CredentialKind::Enroll => self.enroll_path(ctx, dep, &home_account),
+            CredentialKind::Retire => self.retire_path(ctx, dep, &home_account),
         }
     }
 
@@ -115,9 +115,14 @@ impl IdentityState {
         self.claimant.as_ref()
     }
 
-    /// AUTH-2.59 — every keyed account with its set, in ADDRESS ORDER (the
+    /// AUTH-2.59 — every KEYED account with its set, in ADDRESS ORDER (the
     /// `OrdMap`'s own order); `/dump`'s identity section is built from this.
-    pub fn accounts(&self) -> impl Iterator<Item = (&Address, &KeySet)> {
+    /// An unkeyed or unknown account has no row here and [`key_set`] answers
+    /// it the empty set — this is not the board's account roster, which is
+    /// M3's fact and not this slice's (AUTH-2.58).
+    ///
+    /// [`key_set`]: IdentityState::key_set
+    pub fn keyed_accounts(&self) -> impl Iterator<Item = (&Address, &KeySet)> {
         self.sets.iter()
     }
 
@@ -128,10 +133,10 @@ impl IdentityState {
     /// attempt `NotGenesisRegistry`, AUTH-2.63; unreachable for an address
     /// M3 admits as an account, pinned for totality). Consulted ONLY by the
     /// enroll genesis arm (AUTH-2.64).
-    fn genesis_registry(&self, ctx: &impl FoldCtx, a: &Address) -> Option<Address> {
-        match delegator(ctx, a)? {
+    fn genesis_registry(&self, ctx: &impl FoldCtx, subject: &Address) -> Option<Address> {
+        match delegator(ctx, subject)? {
             Delegator::Account(d) => Some(d),
-            Delegator::Bootstrap => Some(self.claimant.clone().unwrap_or_else(|| a.clone())),
+            Delegator::Bootstrap => Some(self.claimant.clone().unwrap_or_else(|| subject.clone())),
         }
     }
 
@@ -139,20 +144,20 @@ impl IdentityState {
     /// `detail` pin, AUTH-2.68 — the cost gradient runs the wrong way and an
     /// implementation MUST NOT reorder cheap-first). The claim carries NO
     /// payload: this arm reads no bytes (AUTH-2.48).
-    fn claim_arm(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
+    fn claim_arm(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, home_account: &Address) -> Verdict {
         // 1 — shape: `from = {H}` in address form, `to = ∅` (AUTH-2.48; the
         // fold cannot tell the two empty-`to` wire forms apart, AUTH-2.49).
-        if single_address(dep.from).as_ref() != Some(h) || !dep.to.is_empty() {
+        if single_address(dep.from).as_ref() != Some(home_account) || !dep.to.is_empty() {
             return Verdict::Inert(Inert::MalformedShape);
         }
         // 2 — the home pin (AUTH-2.127, RES-17), before the delegator read:
         // a wrong-home nested-account claim answers `not_doc_one`, never
         // `claimant_not_top_level`.
-        if *dep.home != doc_1_of(h) {
+        if *dep.home != doc_1_of(home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
         // 3 — the delegator: `Some(Account(_))` and `None` alike refuse.
-        if !matches!(delegator(ctx, h), Some(Delegator::Bootstrap)) {
+        if !matches!(delegator(ctx, home_account), Some(Delegator::Bootstrap)) {
             return Verdict::Inert(Inert::ClaimantNotTopLevel);
         }
         // 4 — first-wins (AUTH-2.68: a keyless top-level claim on a claimed
@@ -161,11 +166,13 @@ impl IdentityState {
             return Verdict::Inert(Inert::AlreadyClaimed);
         }
         // 5 — a keyless claimant cannot claim.
-        if self.key_set(h).is_empty() {
+        if self.key_set(home_account).is_empty() {
             return Verdict::Inert(Inert::ClaimantKeyless);
         }
         // 6 — post: `claimant = Some(H)`.
-        Verdict::Honored(Effect::Claim { account: h.clone() })
+        Verdict::Honored(Effect::Claim {
+            account: home_account.clone(),
+        })
     }
 
     /// AUTH-2.66 item 4, ENROLL: arm entry (shape, then the one payload
@@ -173,19 +180,24 @@ impl IdentityState {
     /// (AUTH-2.127 — a wrong-home deposit whose payload is unparseable
     /// answers `malformed_payload`, never `not_doc_one`; a wrong-home
     /// genesis `not_doc_one`, never `not_genesis_registry`), then the arms.
-    fn enroll_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
-        let (a, bytes) = match shape_and_payload(ctx, dep) {
-            Ok(read) => read,
+    fn enroll_path(
+        &self,
+        ctx: &impl FoldCtx,
+        dep: &LinkDeposit,
+        home_account: &Address,
+    ) -> Verdict {
+        let (subject, bytes) = match subject_and_record(ctx, dep) {
+            Ok(found) => found,
             Err(inert) => return Verdict::Inert(inert),
         };
-        let keys = match parse_enroll(&bytes) {
-            Ok(keys) => keys,
+        let enrollments = match parse_enroll(&bytes) {
+            Ok(enrollments) => enrollments,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *dep.home != doc_1_of(h) {
+        if *dep.home != doc_1_of(home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
-        self.enroll_arms(ctx, &a, h, &keys)
+        self.enroll_arms(ctx, &subject, home_account, &enrollments)
     }
 
     /// AUTH-2.69–2.72 — the enrollment arms, in the written order (hoisting
@@ -194,20 +206,23 @@ impl IdentityState {
     fn enroll_arms(
         &self,
         ctx: &impl FoldCtx,
-        a: &Address,
-        h: &Address,
-        keys: &[Enrollment],
+        subject: &Address,
+        home_account: &Address,
+        enrollments: &[Enrollment],
     ) -> Verdict {
-        let s = self.key_set(a);
+        let set = self.key_set(subject);
+        // AUTH-2.69's `H == A` — the record is homed in the subject's OWN
+        // space.
+        let own_space = home_account == subject;
         // Holder arm (AUTH-2.69): `H == A ∧ !S.is_empty()`.
-        if h == a && !s.is_empty() {
+        if own_space && !set.is_empty() {
             // A line naming an already-enrolled or retired fingerprint is
             // outside `added` WHATEVER its flag (I4 AUTH-2.98; I9 AUTH-2.104).
-            let added: Vec<Enrolled> = keys
+            let added: Vec<Enrolled> = enrollments
                 .iter()
                 .filter(|k| {
                     let fp = Fingerprint::of(&k.key);
-                    !s.contains(&fp) && !s.retired_contains(&fp)
+                    !set.contains(&fp) && !set.retired_contains(&fp)
                 })
                 .map(enrolled_of)
                 .collect();
@@ -215,21 +230,21 @@ impl IdentityState {
                 return Verdict::Inert(Inert::NothingChanged);
             }
             return Verdict::Honored(Effect::Enroll {
-                account: a.clone(),
+                account: subject.clone(),
                 added,
             });
         }
-        if s.is_empty() {
+        if set.is_empty() {
             // Genesis arm (AUTH-2.70): `genesis_registry(A) == Some(H)`;
             // fires at most once per account by construction (the set never
             // re-empties — I3 AUTH-2.97, I5 AUTH-2.100). The registry is
             // consulted here ONLY (AUTH-2.64).
-            let registry = self.genesis_registry(ctx, a);
-            if registry.as_ref() == Some(h) {
-                let seeded: Vec<Enrolled> = keys.iter().map(enrolled_of).collect();
+            let registry = self.genesis_registry(ctx, subject);
+            if registry.as_ref() == Some(home_account) {
+                let keys: Vec<Enrolled> = enrollments.iter().map(enrolled_of).collect();
                 return Verdict::Honored(Effect::Genesis {
-                    account: a.clone(),
-                    keys: seeded,
+                    account: subject.clone(),
+                    keys,
                 });
             }
             // Refusal arms (AUTH-2.71), conditions in the WRITTEN order
@@ -238,7 +253,7 @@ impl IdentityState {
             if registry.is_none() {
                 return Verdict::Inert(Inert::NotGenesisRegistry);
             }
-            if h == a {
+            if own_space {
                 return Verdict::Inert(Inert::NoHolder);
             }
             return Verdict::Inert(Inert::NotGenesisRegistry);
@@ -253,46 +268,60 @@ impl IdentityState {
     /// mirror of [`enroll_path`] over `parse_retire`.
     ///
     /// [`enroll_path`]: IdentityState::enroll_path
-    fn retire_path(&self, ctx: &impl FoldCtx, dep: &LinkDeposit, h: &Address) -> Verdict {
-        let (a, bytes) = match shape_and_payload(ctx, dep) {
-            Ok(read) => read,
+    fn retire_path(
+        &self,
+        ctx: &impl FoldCtx,
+        dep: &LinkDeposit,
+        home_account: &Address,
+    ) -> Verdict {
+        let (subject, bytes) = match subject_and_record(ctx, dep) {
+            Ok(found) => found,
             Err(inert) => return Verdict::Inert(inert),
         };
         let fps = match parse_retire(&bytes) {
             Ok(fps) => fps,
             Err(e) => return Verdict::Inert(Inert::MalformedPayload(e)),
         };
-        if *dep.home != doc_1_of(h) {
+        if *dep.home != doc_1_of(home_account) {
             return Verdict::Inert(Inert::NotDocOne);
         }
-        self.retire_arms(&a, h, &fps)
+        self.retire_arms(&subject, home_account, &fps)
     }
 
     /// AUTH-2.74–2.76 — the retirement arms. ANCHOR-BLIND on purpose
     /// (AUTH-2.75): seniority is testimony, a write-path check, never a fold
     /// input. The retirement arms never read `delegator` (AUTH-2.64,
     /// AUTH-2.76).
-    fn retire_arms(&self, a: &Address, h: &Address, fps: &[Fingerprint]) -> Verdict {
-        let s = self.key_set(a);
+    fn retire_arms(
+        &self,
+        subject: &Address,
+        home_account: &Address,
+        fps: &[Fingerprint],
+    ) -> Verdict {
+        let set = self.key_set(subject);
+        // AUTH-2.74's `H == A` — the record is homed in the subject's OWN
+        // space.
+        let own_space = home_account == subject;
         // Holder arm (AUTH-2.74): `H == A ∧ !S.is_empty()`.
-        if h == a && !s.is_empty() {
-            let removed: Vec<Fingerprint> = fps.iter().filter(|fp| s.contains(fp)).copied().collect();
+        if own_space && !set.is_empty() {
+            let removed: Vec<Fingerprint> =
+                fps.iter().filter(|fp| set.contains(fp)).copied().collect();
             if removed.is_empty() {
                 return Verdict::Inert(Inert::NothingChanged);
             }
             // `removed ⊆ enrolled` and F is duplicate-free (AUTH-2.15), so
             // equal size ⟺ set equality: the WHOLE record is inert (I3).
-            if removed.len() == s.enrolled_len() {
+            if removed.len() == set.enrolled_len() {
                 return Verdict::Inert(Inert::WouldEmpty);
             }
             return Verdict::Honored(Effect::Retire {
-                account: a.clone(),
+                account: subject.clone(),
                 removed,
             });
         }
         // Refusal arms (AUTH-2.76): own-space on a never-keyed set, else the
         // One rule — no ancestor retires a holder's keys.
-        if h == a {
+        if own_space {
             return Verdict::Inert(Inert::NoHolder);
         }
         Verdict::Inert(Inert::NotHolderRetirement)
@@ -320,21 +349,21 @@ impl IdentityState {
         match effect {
             // The genesis arm posts `enrolled = K` WITHOUT consulting
             // `retired` (AUTH-2.70; sound per AUTH-1.36).
-            Effect::Genesis { account, keys } => next.post_to_set(account, |s| {
+            Effect::Genesis { account, keys } => next.post_to_set(account, |set| {
                 for k in keys {
-                    s.insert_enrolled(*k);
+                    set.insert_enrolled(*k);
                 }
             }),
-            Effect::Enroll { account, added } => next.post_to_set(account, |s| {
+            Effect::Enroll { account, added } => next.post_to_set(account, |set| {
                 for k in added {
-                    s.insert_enrolled(*k);
+                    set.insert_enrolled(*k);
                 }
             }),
-            Effect::Retire { account, removed } => next.post_to_set(account, |s| {
+            Effect::Retire { account, removed } => next.post_to_set(account, |set| {
                 for fp in removed {
                     // Each fingerprint carries the flag it was enrolled
                     // under (AUTH-2.74's post, AUTH-1.30).
-                    s.move_to_retired(fp);
+                    set.move_to_retired(fp);
                 }
             }),
             Effect::Claim { account } => next.claimant = Some(account.clone()),
@@ -351,16 +380,16 @@ impl IdentityState {
 /// then the one payload read (AUTH-2.36). Shape checks precede
 /// `record_bytes` (AUTH-2.66: a two-span `to` beside an over-cap `from` is
 /// `malformed_shape`, never `too_large`).
-fn shape_and_payload(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address, Vec<u8>), Inert> {
+fn subject_and_record(ctx: &impl FoldCtx, dep: &LinkDeposit) -> Result<(Address, Vec<u8>), Inert> {
     if dep.from.is_empty() {
         return Err(Inert::MalformedShape);
     }
-    let a = match single_address(dep.to) {
-        Some(a) if ctx.is_account(&a) => a,
+    let subject = match single_address(dep.to) {
+        Some(subject) if ctx.is_account(&subject) => subject,
         _ => return Err(Inert::MalformedShape),
     };
     let bytes = record_bytes(ctx, dep.home, dep.from).map_err(Inert::MalformedPayload)?;
-    Ok((a, bytes))
+    Ok((subject, bytes))
 }
 
 /// AUTH-2.52 — what an honored enrollment KEEPS from a parsed line: the key

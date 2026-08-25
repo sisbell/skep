@@ -135,14 +135,14 @@ fn inert_token_map() {
 }
 
 /// AUTH-1.41 — `genesis() == default()`; AUTH-2.58 — the empty set for an
-/// unknown account; AUTH-2.56 — no claimant, no accounts at genesis.
+/// unknown account; AUTH-2.56 — no claimant, no keyed accounts at genesis.
 #[test]
 fn genesis_state_is_default_and_answers_empty() {
     let st = IdentityState::genesis();
     assert!(st == IdentityState::default());
     assert!(st.key_set(&addr(ACCT_A)).is_empty());
     assert!(st.claimant().is_none());
-    assert_eq!(st.accounts().count(), 0);
+    assert_eq!(st.keyed_accounts().count(), 0);
 }
 
 /// AUTH-1.1/AUTH-1.7/AUTH-1.29 — the journaled/checkpointed value types

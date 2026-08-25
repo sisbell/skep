@@ -90,7 +90,7 @@ pub enum PayloadError {
     /// [`MissingValue`]: PayloadError::MissingValue
     ForeignContent,
     /// A FROM span names a position the home had not minted as of the
-    /// deposit's position (AUTH-2.38 item 4, AUTH-2.45).
+    /// deposit's commit (AUTH-2.38 item 4, AUTH-2.45).
     MissingValue,
     /// The payload does not decode as UTF-8 (AUTH-2.19 item 1).
     NotUtf8,

@@ -9,16 +9,20 @@
 use skep_address::{checked_inc, parent, Address, Level, Tumbler};
 
 /// AUTH-2.29 — the seam's one genuinely world-side fact (M4 `value_at`):
-/// the VALUE at one I-address AS OF THE CTX'S POSITION — never at-head
-/// (AUTH-2.5: a value read answered at head MUST NOT be used to fold);
-/// `None` means the home never minted that address.
+/// the VALUE at one I-address AS OF THE CTX'S COMMIT — the point in the
+/// record stream the ctx answers as of, which for the fold is the deposit's
+/// own commit — never at-head (AUTH-2.5: a value read answered at head MUST
+/// NOT be used to fold); `None` means the home never minted that address.
+/// The two facts an implementor must not fuse: `at` is a POSITION (an
+/// element address, AUTH-2.40), the commit is a point in the STREAM, and
+/// "position" throughout this crate is only ever the former.
 ///
 /// AUTH-2.30 — the key is `&Tumbler`, the walk's own output and M4's own
 /// key, so NO fallible per-position `validate` lift exists on the payload
 /// path: a span start's validity and position-hood are checked ONCE per
 /// span, ahead of the walk (AUTH-2.38).
 pub trait Values {
-    /// The value at `at`, as of the ctx's position; `None` iff never minted.
+    /// The value at `at`, as of the ctx's commit; `None` iff never minted.
     ///
     /// AUTH-1.22 — every `Some` answer carries AT LEAST ONE BYTE, and that is
     /// the implementor's obligation rather than a nicety: the payload read's

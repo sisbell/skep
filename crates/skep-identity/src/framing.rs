@@ -78,9 +78,7 @@ pub fn framed(tag: Tag, fields: &[&[u8]]) -> Vec<u8> {
         Vec::with_capacity(tag.0.len() + fields.iter().map(|f| 4 + f.len()).sum::<usize>());
     out.extend_from_slice(tag.0);
     for field in fields {
-        // be32 framing: a field a u32 cannot measure would silently break
-        // injectivity, so it is refused loudly instead (no caller frames one:
-        // the fields here are alg tokens and raw keys).
+        // The be32 PRECONDITION above, enforced rather than truncated.
         let len = u32::try_from(field.len()).expect("framed field length exceeds be32");
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(field);

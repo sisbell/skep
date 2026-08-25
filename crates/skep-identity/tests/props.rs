@@ -68,11 +68,44 @@ proptest! {
 
 // --------------------------------------------------------- stream fixture
 
-/// One scripted deposit, pre-materialization. Kinds: 0 enroll, 1 retire,
-/// 2 claim, 3 noise (an unrecognized type slot).
+/// The four acts a scripted stream can carry — the strategy's `0..4` draw
+/// given a name, so no property reads a numeric code and no added kind can
+/// fall through a wildcard into `Noise`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Enroll,
+    Retire,
+    Claim,
+    Noise,
+}
+
+impl Kind {
+    /// The strategy's draw, mapped in ONE place.
+    fn from_draw(n: u8) -> Kind {
+        match n {
+            0 => Kind::Enroll,
+            1 => Kind::Retire,
+            2 => Kind::Claim,
+            _ => Kind::Noise,
+        }
+    }
+
+    /// ⇔ the act is one of the three shapes `kind_of` recognizes — what I7
+    /// asks of an act before it demands `unpublished` (AUTH-2.102); `Noise`
+    /// is `NotCredential` whatever the board. Matched exhaustively, so an
+    /// added kind states its own answer here rather than inheriting one.
+    fn is_credential(self) -> bool {
+        match self {
+            Kind::Enroll | Kind::Retire | Kind::Claim => true,
+            Kind::Noise => false,
+        }
+    }
+}
+
+/// One scripted deposit, pre-materialization.
 #[derive(Debug, Clone)]
 struct Act {
-    kind: u8,
+    kind: Kind,
     subject: usize,
     home: usize,
     keys: Vec<(u8, bool)>,
@@ -104,7 +137,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
         prop::collection::vec(0..6u8, 0..4),
     )
         .prop_map(|(kind, subject, home, keys, fps)| Act {
-            kind,
+            kind: Kind::from_draw(kind),
             subject,
             home,
             keys,
@@ -117,7 +150,7 @@ fn act_strategy() -> impl Strategy<Value = Act> {
 /// over.
 struct Case {
     dep: Dep,
-    kind: u8,
+    kind: Kind,
     subject: Address,
     home_account: Address,
 }
@@ -126,10 +159,10 @@ fn materialize(fx: &mut Fixture, act: &Act) -> Case {
     let subject_comps = ACCOUNTS[act.subject];
     let (home, home_account) = homes()[act.home].clone();
     let dep = match act.kind {
-        0 => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
-        1 => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
-        2 => fx.claim_dep(&home, subject_comps),
-        _ => {
+        Kind::Enroll => fx.enroll_dep(&home, subject_comps, &enroll_payload(&act.keys)),
+        Kind::Retire => fx.retire_dep(&home, subject_comps, &retire_payload(&act.fps)),
+        Kind::Claim => fx.claim_dep(&home, subject_comps),
+        Kind::Noise => {
             let from = fx.mint(&home, &[b"noise"]);
             Dep {
                 home: home.clone(),
@@ -186,7 +219,10 @@ proptest! {
             // I5 — the latch: once the subject's set has EVER been
             // non-empty, every enrollment homed outside its own space is
             // inert (registry-, claimant- and stranger-homed alike).
-            if case.kind == 0 && pre_nonempty_subject && case.home_account != case.subject {
+            if case.kind == Kind::Enroll
+                && pre_nonempty_subject
+                && case.home_account != case.subject
+            {
                 prop_assert!(matches!(verdict, Verdict::Inert(_)));
             }
 
@@ -293,7 +329,7 @@ proptest! {
         let genesis_state = IdentityState::genesis();
         for case in &cases {
             let (next, verdict) = fx.step(&genesis_state, &case.dep);
-            if case.kind <= 2 {
+            if case.kind.is_credential() {
                 let token = token_of(&verdict);
                 prop_assert_eq!(token.as_deref(), Some("unpublished"));
             } else {

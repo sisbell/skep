@@ -393,14 +393,21 @@ fn three_atom_record_folds() {
     }
 }
 
-/// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes: 897 key
-/// lines, the first carrying a label sized to land the total on the mark.
-/// Built FROM the constant, so a change to the cap moves the record with it
-/// and `max_record_bytes_is_64_kib` stays the one assertion that discovers it.
+/// The key lines [`cap_sized_enroll_payload`] writes — chosen so that a
+/// `MAX_RECORD_BYTES` budget of `ed25519 <64 hex>` lines leaves room for the
+/// label that pads the record onto the mark; the helper asserts that as a
+/// fixture precondition.
+const CAP_SIZED_LINES: u32 = 897;
+
+/// An enrollment record of exactly `MAX_RECORD_BYTES + over` bytes:
+/// [`CAP_SIZED_LINES`] key lines, the first carrying a label sized to land
+/// the total on the mark. Built FROM the constant, so a change to the cap
+/// moves the record with it and `max_record_bytes_is_64_kib` stays the one
+/// assertion that discovers it.
 fn cap_sized_enroll_payload(over: usize) -> Vec<u8> {
     use skep_identity::{encode_enroll, Enrollment};
 
-    let mut entries: Vec<Enrollment> = (0..897u32)
+    let mut entries: Vec<Enrollment> = (0..CAP_SIZED_LINES)
         .map(|i| Enrollment::new(wide_key(i), false, None).expect("label-free"))
         .collect();
     let base_len = encode_enroll(&entries).len();
@@ -426,7 +433,7 @@ fn record_at_exactly_the_cap_folds_and_one_more_byte_inerts() {
 
     let dep = fx.enroll_dep(&doc1(ACCT_A), ACCT_A, &cap_sized_enroll_payload(0));
     match assert_honored(&fx.classify(&genesis_state, &dep)) {
-        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), 897),
+        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_LINES as usize),
         _ => panic!("expected a genesis effect"),
     }
 
@@ -463,7 +470,7 @@ fn a_record_of_cap_many_one_byte_positions_folds() {
         ty: enroll_ty(),
     };
     match assert_honored(&fx.classify(&IdentityState::genesis(), &dep)) {
-        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), 897),
+        Effect::Genesis { keys, .. } => assert_eq!(keys.len(), CAP_SIZED_LINES as usize),
         _ => panic!("expected a genesis effect"),
     }
 }

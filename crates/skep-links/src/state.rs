@@ -3,6 +3,7 @@
 //! hints), the one journal delta [`LinkRec`], the pure fold
 //! [`LinkState::apply_link`], and the load-time [`LinkState::rebuild_derived`].
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use im::{HashMap, OrdMap, OrdSet};
@@ -341,13 +342,20 @@ pub(crate) fn fold_hints(
     }
 
     // sup_fwd — one SupEdge out of each denoted old, for a [K_sup]-classed
-    // tuple; both endpoints via addrs() (§5).
+    // tuple; both endpoints via addrs() (§5). DISTINCT endpoints, because the
+    // schema admits repeats: Df-DISC(ii) demands one distinct denoted address
+    // a side, so a slot may name it any number of times, and a repeated span
+    // cannot add an edge — it can only multiply the work of adding one, at
+    // every deposit AND at every replay. Deduplicating first makes the
+    // schema-conformant case the 1 × 1 it is.
     if class == *registry.shipped_class(ShippedType::Supersedes) {
-        for old in value.from_slot().addrs() {
+        let olds: BTreeSet<&Tumbler> = value.from_slot().addrs().collect();
+        let news: BTreeSet<&Tumbler> = value.to_slot().addrs().collect();
+        for old in olds {
             let edges = out.sup_fwd.entry(old.clone()).or_default();
-            for new in value.to_slot().addrs() {
+            for new in &news {
                 edges.insert(SupEdge {
-                    new: new.clone(),
+                    new: (*new).clone(),
                     claim: addr.clone(),
                 });
             }

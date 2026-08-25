@@ -333,3 +333,35 @@ pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
         .insert(Caller::System, doc, vp(1, 1), vals)
         .expect("test content INSERT succeeds");
 }
+
+/// Seed `doc` with `runs` content elements arranged as `runs` SEPARATE
+/// I-runs: one INSERT of one value at V-position 1 each time, so every new
+/// element takes a fresh I-address ahead of everything already there and the
+/// V-order descends through I-space. No two neighbours are I-contiguous, so
+/// `resolve` coalesces nothing and one spec over the whole document yields
+/// one run per element — the expansion `seed_content`'s single wide INSERT
+/// (one run, whatever its width) cannot produce.
+pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
+    for i in 0..runs {
+        skep_arrangement::Vstream::new(k)
+            .insert(
+                Caller::System,
+                doc,
+                vp(1, 1),
+                vec![Val::new(vec![b'a' + (i % 26) as u8])],
+            )
+            .expect("test content INSERT succeeds");
+    }
+}
+
+/// COPY `src`'s first `width` V-positions to the front of `dst`, `times`
+/// over. A copy carries the source's run decomposition with it, so `dst`
+/// ends holding `times × runs(src)` runs for `times` transactions — the
+/// multiplicative half of the amplification a `Resolve` slot inherits.
+pub fn copy_whole(k: &Kernel<World>, src: &Address, width: u32, dst: &Address, times: u32) {
+    for _ in 0..times {
+        skep_arrangement::Vstream::new(k)
+            .copy(Caller::System, dst, vp(1, 1), vec![spec(src, 1, 1, width)])
+            .expect("test content COPY succeeds");
+    }
+}

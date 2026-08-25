@@ -16,7 +16,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use skep_address::{content_subspace, Address};
+use skep_address::{content_subspace, Address, Span};
 use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec};
 use skep_kernel::{Kernel, LockKey, Seq, Staging, TxnError, WorldState};
 use skep_namespace::{M3Rec, M3State, MintError};
@@ -471,22 +471,55 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
         && spec.span.width().get(1).is_some_and(|w| w.bits() == 0)
 }
 
-/// One MAKELINK slot's endset, read off the txn base. `Resolve`: ρ as content
-/// I-extents — readable, level-uniform spans (ML1 coverage-exactness by
-/// construction: the runs trace exactly allocated content, cross-origin runs
-/// arrive un-coalesced). `Addrs`: the canonical name encoding, deposited
-/// unresolved.
-fn slot_endset(m5: &M5State, slot: &SlotArg) -> Endset {
+/// The most I-extent spans ONE MAKELINK [`SlotArg::Resolve`] slot may
+/// contribute; past it the slot is refused ([`MakeLinkError::SlotTooLarge`]).
+///
+/// Every other endset a write path builds is one span per address the CALLER
+/// named — [`enc`] over an `Addrs` slot, `enc` over [`emit`](LinkWriter::emit)'s
+/// `to` — so its span count is linear in the request that carried it, and
+/// whatever bounds the request bounds the slot. A `Resolve` slot is not:
+/// `resolve` yields one run per contiguous I-segment, so one ~80-byte spec
+/// expands to as many spans as the SOURCE document happens to be fragmented,
+/// a slot's specs sum those, and the result is stored VERBATIM (ML1
+/// coverage-exactness forbids coalescing it away). The bound restores the tie
+/// to the request.
+///
+/// The budget is live memory inside the transact. All three slots are built
+/// and held under M2's applier lock before any record is encoded, so
+/// `MAX_TXN_BYTES` — charged against the ENCODED transaction after the
+/// closure returns — bounds what the store keeps and not what the closure
+/// allocates. An element-level I-extent is two 8-component tumblers of
+/// `BigUint`, order half a kilobyte live, so this bound is ~2 MB a slot and
+/// ~6 MB across a three-slot MAKELINK: the order of the request body a
+/// caller is allowed to send in the first place, which is the property the
+/// address-named forms have for free. It is not a bound on `resolve`'s own
+/// per-spec run vector, which is M5's allocation and one source document's
+/// fragmentation.
+pub const MAX_RESOLVE_SPANS: usize = 4096;
+
+/// One MAKELINK slot's endset, read off the txn base — `None` iff a `Resolve`
+/// slot expands past [`MAX_RESOLVE_SPANS`]. `Resolve`: ρ as content I-extents
+/// — readable, level-uniform spans (ML1 coverage-exactness by construction:
+/// the runs trace exactly allocated content, cross-origin runs arrive
+/// un-coalesced), counted as they are produced, so an over-budget slot stops
+/// accumulating instead of being built and then measured. `Addrs`: the
+/// canonical name encoding, deposited unresolved, one span per name and so
+/// already bounded by the request that named them.
+fn slot_endset(m5: &M5State, slot: &SlotArg) -> Option<Endset> {
     match slot {
-        SlotArg::Resolve(specs) => specs
-            .iter()
-            .flat_map(|spec| {
-                m5.resolve(&spec.source, &spec.span)
-                    .into_iter()
-                    .map(|run| run.iextent())
-            })
-            .collect(),
-        SlotArg::Addrs(addrs) => enc(addrs),
+        SlotArg::Resolve(specs) => {
+            let mut spans: Vec<Span> = Vec::new();
+            for spec in specs {
+                for run in m5.resolve(&spec.source, &spec.span) {
+                    if spans.len() == MAX_RESOLVE_SPANS {
+                        return None;
+                    }
+                    spans.push(run.iextent());
+                }
+            }
+            Some(Endset::from_spans(spans))
+        }
+        SlotArg::Addrs(addrs) => Some(enc(addrs)),
     }
 }
 
@@ -512,8 +545,13 @@ where
     /// (distinct links always — ML0), NO provenance.
     ///
     /// Every `Resolve` spec is wf-checked ([`is_wf_content_spec`]) before any
-    /// slot is built. `Addrs` slots get no wf step: T4 validity is the whole
-    /// precondition, already carried by the `Address` type.
+    /// slot is built, and each `Resolve` slot is bounded at
+    /// [`MAX_RESOLVE_SPANS`] I-extents (`SlotTooLarge`) — a spec's expansion
+    /// is the source document's fragmentation rather than the request's size,
+    /// so it is the one slot form that carries a bound. `Addrs` slots get
+    /// neither step: T4 validity is the whole precondition, already carried
+    /// by the `Address` type, and one span per name is already bounded by the
+    /// request that named them.
     ///
     /// The two SOLE-WRITER fences apply here as they do on the managed
     /// surface: a resolved type slot in the `[R]` class
@@ -547,11 +585,9 @@ where
                     if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
                         return Err(MakeLinkError::IllFormedSpec);
                     }
-                    (
-                        slot_endset(base.m5(), &from),
-                        slot_endset(base.m5(), &to),
-                        slot_endset(base.m5(), &ty),
-                    )
+                    let build =
+                        |slot| slot_endset(base.m5(), slot).ok_or(MakeLinkError::SlotTooLarge);
+                    (build(&from)?, build(&to)?, build(&ty)?)
                 };
                 // The sole-writer fences. Total: a `Resolve` slot is
                 // level-uniform by M5's construction and an `Addrs` slot is
@@ -718,15 +754,17 @@ where
     }
 
     /// editlink (ASN-0125 EDITop): ONE composite over the two home alloc
-    /// keys — deduped before the transact (`d_s == d_a` collapses `[k, k]`
-    /// to `[k]`; M2's `transact(keys)` makes no duplicate-key promise) —
-    /// inlining two `emit_core` calls (the public `assert_sup` CANNOT be
-    /// called: M2 is non-reentrant). Allocates the fresh successor (value
-    /// supplied — M10 builds it via M5 `resolve` + `Run::iextent` +
-    /// `Endset::from_spans`/`enc` + `Link::triple`, off any prior snapshot —
-    /// ML8/EL0), then asserts it supersedes `original`. Successor born
-    /// UNSEATED; both writes commit atomically (EL7); `original` untouched
-    /// (L12).
+    /// keys — sorted and deduped before the transact, so the pair reaches M2
+    /// in a canonical order rather than the caller's, and `d_s == d_a`
+    /// collapses `[k, k]` to `[k]` (M2's `transact(keys)` promises nothing
+    /// about order or duplicates, and this is the only op handing it two keys
+    /// of one space) — inlining two `emit_core` calls (the public
+    /// `assert_sup` CANNOT be called: M2 is non-reentrant). Allocates the
+    /// fresh successor (value supplied — M10 builds it via M5 `resolve` +
+    /// `Run::iextent` + `Endset::from_spans`/`enc` + `Link::triple`, off any
+    /// prior snapshot — ML8/EL0), then asserts it supersedes `original`.
+    /// Successor born UNSEATED; both writes commit atomically (EL7);
+    /// `original` untouched (L12).
     ///
     /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
     /// non-resident `original`; a successor of arity ≠ 3 (Conflicts §11),
@@ -746,11 +784,16 @@ where
         d_s: &Address,
         d_a: &Address,
     ) -> Result<(Address, Address, Seq), TxnError<EditLinkError>> {
-        let mut keys = vec![M3State::link_lock_key(d_s)];
-        let d_a_key = M3State::link_lock_key(d_a);
-        if d_a_key != keys[0] {
-            keys.push(d_a_key);
-        }
+        // The one op that hands M2 two keys of ONE space, so the one whose
+        // relative order would otherwise be the caller's: two concurrent
+        // edits over the same pair of homes, named in opposite orders, would
+        // present them in opposite orders. Emitted in M2's own bytewise
+        // order, so the pair is the same set in the same sequence however it
+        // was written, whatever the applier does with it. `dedup` behind the
+        // sort subsumes `d_s == d_a` (M2 promises nothing about duplicates).
+        let mut keys = vec![M3State::link_lock_key(d_s), M3State::link_lock_key(d_a)];
+        keys.sort();
+        keys.dedup();
         let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
         let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
         let r_class = self.registry.shipped_class(ShippedType::Retraction);

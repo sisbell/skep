@@ -128,6 +128,14 @@ fn lift_denoted(t: Tumbler) -> Address {
     )
 }
 
+/// BH1's test against a root set: some root is a prefix of the probe — the
+/// ONE statement of it, so the single-probe read and the result-side
+/// subtraction cannot answer differently. The probe ranges over all of
+/// carrier T, roots or not.
+fn under_any<'a>(roots: impl IntoIterator<Item = &'a Tumbler>, probe: &Tumbler) -> bool {
+    roots.into_iter().any(|root| is_prefix(root, probe))
+}
+
 /// `Default → Active` for the surfaces where `Default` is undefined.
 fn default_to_active(view: View) -> View {
     match view {
@@ -231,9 +239,15 @@ impl LinkState {
                 members.insert(m.clone());
             }
         }
+        // The filter domain once for the whole result, not once per element.
+        let roots: Vec<&Tumbler> = if subtract {
+            self.retired_roots().collect()
+        } else {
+            Vec::new()
+        };
         members
             .into_iter()
-            .filter(|m| !(subtract && self.is_filtered(m)))
+            .filter(|m| !(subtract && under_any(roots.iter().copied(), m)))
             .map(lift_denoted)
             .collect()
     }
@@ -260,9 +274,15 @@ impl LinkState {
                 }
             }
         }
+        // The filter domain once for the whole result, not once per element.
+        let roots: Vec<&Tumbler> = if subtract {
+            self.retired_roots().collect()
+        } else {
+            Vec::new()
+        };
         targets
             .into_iter()
-            .filter(|g| !(subtract && self.is_filtered(g)))
+            .filter(|g| !(subtract && under_any(roots.iter().copied(), g)))
             .map(lift_denoted)
             .collect()
     }
@@ -286,9 +306,7 @@ impl LinkState {
     /// Correct TYPE-LESS because v1 registers exactly one BH1 type —
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
-        let retired = self.shipped_class(ShippedType::Retired);
-        self.type_slice_class(retired, View::Active)
-            .any(|t| self.link_at(t).from_slot().addrs().any(|root| is_prefix(root, probe)))
+        under_any(self.retired_roots(), probe)
     }
 
     /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
@@ -464,11 +482,11 @@ impl LinkState {
     /// reachable from `y` via `succ_o` (the `reach_o(y)` fixpoint within the
     /// finite link set), returned ENTIRE — linear → 1, forked → ≥ 2,
     /// mutual-supersession standoff → 0, all legitimate. Each sink carries
-    /// its OWN activity and the FULL operative `out(sink)`, read per sink
-    /// from the inbound claim relation ([`LinkState::out_claims`]) rather
-    /// than accumulated during the walk — accumulation would drop an
-    /// operative claim asserted on the sink from outside the closure. M7
-    /// discloses; the consumer narrows — no single "latest" is fabricated.
+    /// its OWN activity and the FULL operative `out(sink)`, read from the
+    /// inbound claim relation ([`LinkState::out_claims`], once for all sinks
+    /// at once) rather than accumulated during the walk — accumulation would
+    /// drop an operative claim asserted on the sink from outside the closure.
+    /// M7 discloses; the consumer narrows — no single "latest" is fabricated.
     pub fn current(&self, y: &Address) -> Vec<CurrentMember> {
         let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
         let mut stack = vec![y.tumbler().clone()];
@@ -480,20 +498,23 @@ impl LinkState {
                 }
             }
         }
-        let mut out = Vec::new();
-        for t in reach {
-            if self.has_operative_succ(&t) {
-                continue; // not a sink
-            }
-            let claims = self.out_claims(&t);
-            let member = lift_denoted(t);
-            out.push(CurrentMember {
-                active: self.is_active(&member),
-                member,
-                claims,
-            });
-        }
-        out
+        // The sinks, ascending because `reach` is — then ONE walk of the
+        // active claim slice for all of them together.
+        let sinks: Vec<Tumbler> = reach
+            .into_iter()
+            .filter(|t| !self.has_operative_succ(t))
+            .collect();
+        self.out_claims(sinks)
+            .into_iter()
+            .map(|(t, claims)| {
+                let member = lift_denoted(t);
+                CurrentMember {
+                    active: self.is_active(&member),
+                    member,
+                    claims,
+                }
+            })
+            .collect()
     }
 
     /// The genesis-fixed endset of a shipped class — M9 reads
@@ -564,10 +585,13 @@ impl LinkState {
         };
         let mut acc = self.stab(*first_slot, first_query, view);
         for (slot, query) in rest {
+            // Consumed, not read: the accumulator is this call's own and only
+            // shrinks, so a survivor moves into the next round rather than
+            // being deep-copied out of the last one — a caller's constraint
+            // count is otherwise a per-address copy count.
             acc = acc
-                .iter()
+                .into_iter()
                 .filter(|a| slot_overlaps(self.link_at(a.tumbler()), *slot, query))
-                .cloned()
                 .collect();
         }
         acc
@@ -625,6 +649,17 @@ impl LinkState {
             .filter(move |t| !(active && self.nullified(t)))
     }
 
+    /// BH1's filter DOMAIN: the roots of the active shipped `Retired` slice.
+    /// Lazy, so a single probe still short-circuits at the first root that
+    /// covers it; collectable, so a read that filters MANY probes derives the
+    /// domain once instead of re-walking the slice — and re-deriving each
+    /// root's span — per result element.
+    pub(crate) fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
+        let retired = self.shipped_class(ShippedType::Retired);
+        self.type_slice_class(retired, View::Active)
+            .flat_map(move |t| self.link_at(t).from_slot().addrs())
+    }
+
     /// Whether a read subtracts filtered RESULTS — two rules in one verdict,
     /// stated once for the two reads (`members`/`targets_of`) that honor
     /// them: BH1's Rewrite scope, which makes `View::Default` = active ∖
@@ -674,12 +709,13 @@ impl LinkState {
         }
     }
 
-    /// Operative `out(x)` — every active `[K_sup]` claim whose `new` endpoint
-    /// DENOTES `x`, in claim-address order. The reverse of
-    /// [`LinkState::succs_operative`]: that direction reads the forward
-    /// `sup_fwd` hint, this one has no hint and scans the active claim slice,
-    /// which is why the two are named apart rather than derived from one
-    /// another.
+    /// Operative `out(x)` for EVERY `x` in `probes`, paired with it and in
+    /// claim-address order — the reverse of [`LinkState::succs_operative`],
+    /// which reads the forward `sup_fwd` hint. This direction has no hint, so
+    /// it is answered for a SET in one walk of the active claim slice rather
+    /// than re-walked per probe: [`LinkState::current`] asks it of every sink
+    /// it reaches, and a per-probe form makes that quadratic in a store whose
+    /// claim count a caller chooses.
     ///
     /// Matched by DENOTATION, the claim schema's own regime — a claim's `new`
     /// is a single denoted address (Df-DISC(ii)), so `g == x` IS the
@@ -687,11 +723,25 @@ impl LinkState {
     /// spanfilade's coverage overlap would agree on a link address, where the
     /// `dom(L)` prefix antichain (R0a) makes the two coincide, and would
     /// answer with every claim beneath a document- or account-level argument.
-    pub(crate) fn out_claims(&self, x: &Tumbler) -> Vec<Address> {
-        self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
-            .filter(|claim| self.link_at(claim).to_slot().addrs().any(|g| g == x))
-            .map(lift)
-            .collect()
+    ///
+    /// Probes come back ASCENDING, deduplicated, whatever order they arrived
+    /// in — sorted here rather than asked of the caller, so the binary search
+    /// the walk does is sound by construction.
+    pub(crate) fn out_claims(&self, probes: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
+        let mut buckets: Vec<(Tumbler, Vec<Address>)> =
+            probes.into_iter().map(|t| (t, Vec::new())).collect();
+        buckets.sort_by(|(a, _), (b, _)| a.cmp(b));
+        buckets.dedup_by(|(a, _), (b, _)| a == b);
+        for claim in
+            self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
+        {
+            for g in self.link_at(claim).to_slot().addrs() {
+                if let Ok(i) = buckets.binary_search_by(|(t, _)| t.cmp(g)) {
+                    buckets[i].1.push(lift(claim));
+                }
+            }
+        }
+        buckets
     }
 
     /// The visited-set-bounded forward walk: the traversed path (from `x`,

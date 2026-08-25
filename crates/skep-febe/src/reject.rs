@@ -111,6 +111,7 @@ pub enum RejectCode {
     NotContentSubspace,
     // ── M7 link ──
     IllFormedSpec,
+    SlotTooLarge,
     EmptyTypeResolution,
     ShapeViolation,
     RetractionClass,

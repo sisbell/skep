@@ -43,6 +43,12 @@ pub enum MakeLinkError {
     /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
     /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
+    /// A `Resolve` slot resolved past [`crate::MAX_RESOLVE_SPANS`] I-extents.
+    /// A spec's expansion is the SOURCE document's fragmentation, not the
+    /// request's size, so the one slot form whose cost the caller does not
+    /// pay for in bytes is the one form that carries a bound. `Addrs` slots
+    /// cannot raise it: they are one span per name.
+    SlotTooLarge,
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
     /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
     EmptyTypeResolution,
@@ -204,6 +210,11 @@ impl fmt::Display for MakeLinkError {
             }
             MakeLinkError::IllFormedSpec => f.write_str(
                 "makelink: a V-spec is not a registered-source depth-2 content V-position (wf, Conflicts §12)",
+            ),
+            MakeLinkError::SlotTooLarge => write!(
+                f,
+                "makelink: a Resolve slot resolved past {} I-extents",
+                crate::MAX_RESOLVE_SPANS
             ),
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")

@@ -12,8 +12,10 @@
 //! the BH3 join's behavior scope, the non-atomic BH4 batch, the §G discovery
 //! primitives with their `Default → Active` coercion and their empty-query
 //! floor, the AND-combiner's agreement with its own conjuncts, the verbatim
-//! order FOLLOWLINK folds, and the checkpoint-roundtrip + rebuild_derived
-//! discipline.
+//! order FOLLOWLINK folds, the ratio a `Resolve` slot amplifies by and the
+//! span budget bounding it at its exact boundary, editlink's canonical
+//! two-home lock order, BH1's whole multi-root filter domain, and the
+//! checkpoint-roundtrip + rebuild_derived discipline.
 
 mod common;
 
@@ -1942,9 +1944,10 @@ fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addre
         .expect("one distinct address, named twice");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(
-        links.succs(&sup, &z).contains(&orig),
-        "the conforming claim is an operative edge"
+    assert_eq!(
+        links.succs(&sup, &z),
+        vec![orig.clone()],
+        "ONE edge out of a slot that names z twice — a repeated span cannot add one"
     );
     assert!(links.is_active(&s));
 }
@@ -2161,4 +2164,204 @@ fn a_resolve_slot_concatenates_every_spec_in_argument_order() {
         &Endset::from_spans([iext(3, 4), iext(1, 2)]),
         "argument order, un-coalesced"
     );
+}
+
+#[test]
+fn a_resolve_spec_expands_to_one_span_per_fragment() {
+    // The ratio `MAX_RESOLVE_SPANS` bounds: ONE ~80-byte spec stores one span
+    // per I-run of the SOURCE document, so the slot's size is that document's
+    // fragmentation rather than the request's. The `Addrs` form has no such
+    // ratio — one span per name the caller wrote — which is why the bound
+    // sits on this arm alone.
+    let k = kernel();
+    fragment_content(&k, &doc1(), 4);
+    let w = writer(&k);
+    let (fragmented, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 4)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("makelink");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        let from = links.readlink(&fragmented).expect("resident").from_slot();
+        assert_eq!(from.len(), 4, "one 4-position spec, four stored spans");
+        // Width-1 I-extents descending through I-space, which is what keeps
+        // them un-coalesced and the expansion real.
+        let starts: Vec<_> = from.spans().map(|s| s.start().clone()).collect();
+        let want: Vec<_> = [ca(4), ca(3), ca(2), ca(1)]
+            .iter()
+            .map(|a| a.tumbler().clone())
+            .collect();
+        assert_eq!(starts, want);
+    }
+    // The control: the same coverage, contiguously allocated, costs ONE span
+    // — so the count is the source's shape and not the query's width.
+    seed_content(&k, &doc2(), 4);
+    let (contiguous, _) = w
+        .makelink(
+            P1,
+            &doc2(),
+            SlotArg::Resolve(vec![spec(&doc2(), 1, 1, 4)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("makelink");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert_eq!(
+        links.readlink(&contiguous).expect("resident").from_slot().len(),
+        1
+    );
+}
+
+#[test]
+fn a_resolve_slot_past_the_span_budget_is_refused() {
+    // The budget itself, at its exact boundary. doc1 is fragmented into 64
+    // runs and copied into doc2 64 times — a copy carries the source's run
+    // decomposition, so 128 writes put doc2 exactly at the budget, and one
+    // more copy puts the same query past it.
+    let k = kernel();
+    let budget = skep_links::MAX_RESOLVE_SPANS as u32;
+    let per_copy = 64u32;
+    fragment_content(&k, &doc1(), per_copy);
+    copy_whole(&k, &doc1(), per_copy, &doc2(), budget / per_copy);
+    let w = writer(&k);
+    let resolve_all = |width: u32| SlotArg::Resolve(vec![spec(&doc2(), 1, 1, width)]);
+
+    let (at_budget, _) = w
+        .makelink(
+            P1,
+            &doc2(),
+            resolve_all(budget),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("exactly the budget is admitted");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert_eq!(
+            links.readlink(&at_budget).expect("resident").from_slot().len(),
+            skep_links::MAX_RESOLVE_SPANS,
+            "the admitted slot really did expand to the whole budget"
+        );
+    }
+
+    copy_whole(&k, &doc1(), per_copy, &doc2(), 1);
+    let over = budget + per_copy;
+    let before = k.current_seq();
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc2(),
+            resolve_all(over),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    // The bound is on the SLOT, not on the FROM position: the same
+    // over-budget resolution in the type slot is refused the same way.
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc2(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![]),
+            resolve_all(over)
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+    // ...and an `Addrs` slot of any size is untouched by it: its span count
+    // is one per name, already paid for in request bytes.
+    w.makelink(
+        P1,
+        &doc2(),
+        SlotArg::Addrs(vec![ca(1); 16]),
+        SlotArg::Addrs(vec![]),
+        SlotArg::Addrs(vec![ra(10)]),
+    )
+    .expect("the name form carries no span budget");
+}
+
+#[test]
+fn editlink_locks_two_homes_in_one_canonical_order() {
+    // The one op that hands M2 two keys of a SINGLE space, so the only one
+    // whose key order would otherwise be the caller's. Two edits naming the
+    // same pair of homes in opposite orders present the same key set; each
+    // still deposits into the homes its own arguments name, so canonicalizing
+    // the pair changed no outcome. (The race itself is not reachable from a
+    // single-threaded in-memory kernel; what is checkable here is that the
+    // ordering is invisible to the op.)
+    let k = kernel();
+    let w = writer(&k);
+    let (orig, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("orig");
+    assert_eq!(orig, la(1)); // doc1's next mint is la(2); doc2's first is la2(1)
+    let succ = || Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+
+    let (s1, c1, _) = w
+        .editlink(P1, &orig, succ(), &doc1(), &doc2())
+        .expect("d_s = doc1, d_a = doc2");
+    assert_eq!((s1, c1), (la(2), la2(1)));
+
+    let (s2, c2, _) = w
+        .editlink(P1, &orig, succ(), &doc2(), &doc1())
+        .expect("the same pair of homes, named the other way round");
+    assert_eq!((s2, c2), (la2(2), la(3)));
+}
+
+#[test]
+fn the_default_view_subtracts_under_every_active_retired_root() {
+    // BH1's filter domain is the WHOLE active Retired slice, and the
+    // result-side subtraction derives it once for the whole result rather
+    // than once per element — so a result filtered by the second or third
+    // root must be subtracted exactly as one filtered by the first.
+    let k = kernel();
+    let w = writer(&k);
+    let retired = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Retired)
+        .clone();
+    for (src, tgt) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
+        w.emit(P1, &doc1(), &multi_ty(), &src, &[tgt])
+            .expect("relation");
+    }
+    for root in [ca(2), ca(3), ca(7)] {
+        w.emit(P1, &doc1(), &retired, &root, &[])
+            .expect("retire a root");
+    }
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    assert_eq!(
+        links.members(&multi_ty(), View::Active),
+        vec![ca(1), ca(2), ca(3)],
+        "the unfiltered control"
+    );
+    assert_eq!(
+        links.members(&multi_ty(), View::Default),
+        vec![ca(1)],
+        "the second and third roots subtract as surely as the first"
+    );
+    // The third root reaches the targets side, which collects the domain of
+    // its own accord.
+    assert_eq!(links.targets_of(&multi_ty(), &ca(3), View::Active), vec![ca(7)]);
+    assert!(links
+        .targets_of(&multi_ty(), &ca(3), View::Default)
+        .is_empty());
+    // Each root still answers the single-probe read, which short-circuits
+    // rather than collecting.
+    for root in [ca(2), ca(3), ca(7)] {
+        assert!(links.is_filtered(root.tumbler()));
+    }
+    assert!(!links.is_filtered(ca(1).tumbler()));
 }

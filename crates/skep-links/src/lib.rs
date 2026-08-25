@@ -74,7 +74,7 @@ pub use registry::{
     TypeDecl, TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use writes::{LinkWriter, SlotArg};
+pub use writes::{LinkWriter, SlotArg, MAX_RESOLVE_SPANS};
 
 /// The engine's **read accessor** for M7's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world

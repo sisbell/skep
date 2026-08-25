@@ -201,6 +201,12 @@ impl Lower for MakeLinkError {
             MakeLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
             MakeLinkError::NotOwner(a) => not_owner(a),
             MakeLinkError::IllFormedSpec => (RejectCode::IllFormedSpec, None),
+            // Its own leaf rather than a ride on `IllFormedSpec`: the spec is
+            // well formed and the slot is too big, and the two ask different
+            // things of the client — fix the spec, versus narrow the span.
+            // Permanent by the catch-all is right, for the reason
+            // `TxnOverBudget` is: no retry shrinks the resolution.
+            MakeLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             MakeLinkError::EmptyTypeResolution => (RejectCode::EmptyTypeResolution, None),
             MakeLinkError::RetractionClass => (RejectCode::RetractionClass, None),
             // The `[K_sup]` sole-writer fence, lowering as EmitError's does:

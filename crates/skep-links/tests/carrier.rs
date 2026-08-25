@@ -54,12 +54,12 @@ fn triple_is_the_creation_shape_and_needs_no_arity_discharge() {
     // The store's one creation shape, infallible: same value the general
     // constructor yields, with no Option for a caller to discharge.
     let (f, g, ty) = (enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)]));
-    let t = Link::triple(f.clone(), g.clone(), ty.clone());
-    assert_eq!(t.arity(), 3);
-    assert_eq!(Link::new([f, g, ty]), Some(t.clone()));
-    assert_eq!(t.from_slot(), &enc(&[ca(1)]));
-    assert_eq!(t.to_slot(), &enc(&[ca(2)]));
-    assert_eq!(t.type_slot(), &enc(&[ra(10)]));
+    let triple = Link::triple(f.clone(), g.clone(), ty.clone());
+    assert_eq!(triple.arity(), 3);
+    assert_eq!(Link::new([f, g, ty]), Some(triple.clone()));
+    assert_eq!(triple.from_slot(), &enc(&[ca(1)]));
+    assert_eq!(triple.to_slot(), &enc(&[ca(2)]));
+    assert_eq!(triple.type_slot(), &enc(&[ra(10)]));
     // Empty slots are the type's business only at the arity floor: triple
     // admits ⟨⟩ anywhere, and e₃ ≠ ∅ stays a write-boundary check.
     assert!(Link::triple(Endset::empty(), Endset::empty(), Endset::empty())
@@ -195,8 +195,10 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         behaviors: BTreeSet::new(),
     };
     // Each rejection needs its own configuration, and two of them vary the
-    // reserved half against no decls, so the closure assembles both.
-    let build = |reserved: ReservedAddrs, decls: Vec<TypeDecl>| {
+    // reserved half against no decls, so the closure assembles both. Every
+    // case reaches its rejection through `LinkState::genesis`, the normal
+    // entry, so the propagation path is tested along with the verdict.
+    let genesis = |reserved: ReservedAddrs, decls: Vec<TypeDecl>| {
         LinkState::genesis(TypeConfig { reserved, decls })
     };
 
@@ -204,14 +206,14 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
     let mut bad = reserved();
     bad.retired = ca(1);
     assert!(matches!(
-        build(bad, vec![]),
+        genesis(bad, vec![]),
         Err(RegistryError::ReservedSubspaceClash)
     ));
     // ...and a non-element reserved address.
     let mut bad = reserved();
     bad.retraction = doc1();
     assert!(matches!(
-        build(bad, vec![]),
+        genesis(bad, vec![]),
         Err(RegistryError::ReservedSubspaceClash)
     ));
 
@@ -220,7 +222,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         key: Endset::empty(),
         reg: ok_reg.clone(),
     };
-    assert!(matches!(build(reserved(), vec![d]), Err(RegistryError::EmptyKey)));
+    assert!(matches!(genesis(reserved(), vec![d]), Err(RegistryError::EmptyKey)));
 
     // NonAddressDenotingKey: a non-unit span in the key.
     let d = TypeDecl {
@@ -228,7 +230,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::NonAddressDenotingKey)
     ));
 
@@ -238,7 +240,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::ReservedClassClash)
     ));
 
@@ -252,7 +254,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        build(reserved(), vec![d1, d2]),
+        genesis(reserved(), vec![d1, d2]),
         Err(RegistryError::KeyCollision)
     ));
 
@@ -266,7 +268,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::BadBehavior)
     ));
     // ...and Age with idem⊤.
@@ -279,7 +281,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::BadBehavior)
     ));
 
@@ -293,7 +295,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::UnservedWalk)
     ));
     // ...and app ReadFilter (a second BH1) rejected.
@@ -306,7 +308,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        build(reserved(), vec![d]),
+        genesis(reserved(), vec![d]),
         Err(RegistryError::UnservedSecondFilter)
     ));
 }

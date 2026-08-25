@@ -51,7 +51,11 @@ pub(crate) struct Hints {
     /// derived at query time as `audit ∖ nullified`.
     pub(crate) type_slices: HashMap<CoverageClass, OrdSet<Tumbler>>,
     /// Resident retraction roots — the tombstone set (active = audit ∖ this).
-    /// Monotone (R3/R6a).
+    /// Monotone (R3/R6a). Membership is EXACT (`contains`), never
+    /// prefix-closed: a root tombstones the one address it denotes and
+    /// nothing beneath it. BH1's filter roots are the prefix-closed ones
+    /// ([`crate::LinkState::is_filtered`]), and the two regimes must not be
+    /// read across.
     pub(crate) nullified: OrdSet<Tumbler>,
     /// I0-class → addrs (audit; active-filtered at the check) — registered
     /// idem⊤ classes only (I1).
@@ -205,7 +209,9 @@ impl LinkState {
 
     /// Tombstoned: `t` is a retraction root. The one statement of the rule
     /// every active view applies — active = audit ∖ this — monotone
-    /// (R3/R6a). The public form is `is_nullified`.
+    /// (R3/R6a). EXACT membership, never a prefix test: a root tombstones
+    /// the one address it denotes, so nothing beneath a nullified document
+    /// or account is nullified by it. The public form is `is_nullified`.
     pub(crate) fn nullified(&self, t: &Tumbler) -> bool {
         self.hints.nullified.contains(t)
     }
@@ -321,7 +327,9 @@ pub(crate) fn fold_hints(
     // discipline (§1): insert EVERY denoted to-root (zero roots ⇒ no insert,
     // several ⇒ all inserted; a non-unit-depth [R] to-span contributes no
     // root). Every v1 surface path yields exactly one root, but the fold
-    // never invents behavior.
+    // never invents behavior. A root tombstones the ONE address it denotes:
+    // the set is read by exact membership, so inserting a document address
+    // here would tombstone that document and no link under it.
     if class == *registry.shipped_class(ShippedType::Retraction) {
         for root in value.to_slot().addrs() {
             out.nullified.insert(root.clone());

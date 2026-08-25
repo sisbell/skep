@@ -358,7 +358,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
 /// over. A copy carries the source's run decomposition with it, so `dst`
 /// ends holding `times × runs(src)` runs for `times` transactions — the
 /// multiplicative half of the amplification a `Resolve` slot inherits.
-pub fn copy_whole(k: &Kernel<World>, src: &Address, width: u32, dst: &Address, times: u32) {
+pub fn copy_prefix(k: &Kernel<World>, src: &Address, width: u32, dst: &Address, times: u32) {
     for _ in 0..times {
         skep_arrangement::Vstream::new(k)
             .copy(Caller::System, dst, vp(1, 1), vec![spec(src, 1, 1, width)])

@@ -1548,13 +1548,12 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
-    let p2 = P2;
     let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
     let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
     let before = k.current_seq();
     assert!(matches!(
         w.makelink(
-            p2,
+            P2,
             &doc1(),
             SlotArg::Resolve(vec![]),
             SlotArg::Resolve(vec![]),
@@ -1563,22 +1562,22 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
         Err(TxnError::Rejected(MakeLinkError::NotOwner(d))) if d == doc1()
     ));
     assert!(matches!(
-        w.emit(p2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NotOwner(d))) if d == doc1()
     ));
     assert!(matches!(
-        w.assert_sup(p2, &doc1(), &x, &y),
+        w.assert_sup(P2, &doc1(), &x, &y),
         Err(TxnError::Rejected(AssertSupError::NotOwner(d))) if d == doc1()
     ));
     let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
     // Foreign d_s (successor home): the error names d_s.
     assert!(matches!(
-        w.editlink(p2, &x, succ.clone(), &doc1(), &sib_doc()),
+        w.editlink(P2, &x, succ.clone(), &doc1(), &sib_doc()),
         Err(TxnError::Rejected(EditLinkError::NotOwner(d))) if d == doc1()
     ));
     // Foreign d_a (claim home): the error names d_a.
     assert!(matches!(
-        w.editlink(p2, &x, succ.clone(), &sib_doc(), &doc1()),
+        w.editlink(P2, &x, succ.clone(), &sib_doc(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::NotOwner(d))) if d == doc1()
     ));
     // Across an op's several homes, EVERY registration is asked before ANY
@@ -1601,10 +1600,9 @@ fn ownership_gate_holds_on_the_idem_hit_path() {
     // cannot observe the dedup branch through the rejection.
     let k = kernel();
     let w = writer(&k);
-    let p2 = P2;
     w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("incumbent");
     assert!(matches!(
-        w.emit(p2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NotOwner(_)))
     ));
 }
@@ -1617,16 +1615,15 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     // audit view retains everything.
     let k = kernel();
     let w = writer(&k);
-    let p2 = P2;
     let (m1, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("P1's tuple");
     // Foreign target, owned home: NotOwner carrying the target link.
     assert!(matches!(
-        w.nullify(p2, &sib_doc(), &m1),
+        w.nullify(P2, &sib_doc(), &m1),
         Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == m1
     ));
     // Foreign home is rejected first, naming the home.
     assert!(matches!(
-        w.nullify(p2, &doc1(), &m1),
+        w.nullify(P2, &doc1(), &m1),
         Err(TxnError::Rejected(NullifyError::NotOwner(d))) if d == doc1()
     ));
     {
@@ -1819,22 +1816,22 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     ];
     let snap = k.snapshot();
     let links = snap.world().links();
-    for v in [View::Audit, View::Active] {
+    for view in [View::Audit, View::Active] {
         for mask in 0u8..8 {
-            let cs: Vec<(usize, Endset)> = (0..pool.len())
+            let constraints: Vec<(usize, Endset)> = (0..pool.len())
                 .filter(|i| mask & (1u8 << i) != 0)
                 .map(|i| pool[i].clone())
                 .collect();
-            let got = links.match_links(&cs, v);
-            if cs.is_empty() {
+            let got = links.match_links(&constraints, view);
+            if constraints.is_empty() {
                 continue; // the unconstrained branch has no conjuncts to agree with
             }
-            let want = cs
+            let want = constraints
                 .iter()
-                .map(|(i, q)| links.stab(*i, q, v))
+                .map(|(slot, query)| links.stab(*slot, query, view))
                 .reduce(|acc, s| acc.iter().filter(|t| s.contains(*t)).cloned().collect())
                 .expect("nonempty");
-            assert_eq!(got, want, "{v:?} constraints {mask:#05b}");
+            assert_eq!(got, want, "{view:?} constraints {mask:#05b}");
         }
     }
     // ...and the sets are not all equal, so the agreement above is not
@@ -2036,23 +2033,23 @@ fn the_discovery_primitives_read_default_as_active() {
     let snap = k.snapshot();
     let links = snap.world().links();
     // Both links share a TYPE slot, so one query reaches both.
-    let q = multi_ty();
+    let query = multi_ty();
     assert!(
-        links.stab(TYPE, &q, View::Audit).contains(&gone),
+        links.stab(TYPE, &query, View::Audit).contains(&gone),
         "the Audit answer is not vacuous"
     );
-    assert!(links.stab(TYPE, &q, View::Default).contains(&kept));
+    assert!(links.stab(TYPE, &query, View::Default).contains(&kept));
     assert_eq!(
-        links.stab(TYPE, &q, View::Default),
-        links.stab(TYPE, &q, View::Active)
+        links.stab(TYPE, &query, View::Default),
+        links.stab(TYPE, &query, View::Active)
     );
-    assert!(!links.stab(TYPE, &q, View::Default).contains(&gone));
-    let cs = [(TYPE, q.clone())];
+    assert!(!links.stab(TYPE, &query, View::Default).contains(&gone));
+    let constraints = [(TYPE, query.clone())];
     assert_eq!(
-        links.match_links(&cs, View::Default),
-        links.match_links(&cs, View::Active)
+        links.match_links(&constraints, View::Default),
+        links.match_links(&constraints, View::Active)
     );
-    assert!(!links.match_links(&cs, View::Default).contains(&gone));
+    assert!(!links.match_links(&constraints, View::Default).contains(&gone));
     // The unconstrained branch coerces on its own — the constrained one hands
     // its view to `stab`, which would coerce for it.
     assert!(links.match_links(&[], View::Audit).contains(&gone));
@@ -2229,15 +2226,15 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
     let budget = skep_links::MAX_RESOLVE_SPANS as u32;
     let per_copy = 64u32;
     fragment_content(&k, &doc1(), per_copy);
-    copy_whole(&k, &doc1(), per_copy, &doc2(), budget / per_copy);
+    copy_prefix(&k, &doc1(), per_copy, &doc2(), budget / per_copy);
     let w = writer(&k);
-    let resolve_all = |width: u32| SlotArg::Resolve(vec![spec(&doc2(), 1, 1, width)]);
+    let resolve_doc2 = |width: u32| SlotArg::Resolve(vec![spec(&doc2(), 1, 1, width)]);
 
     let (at_budget, _) = w
         .makelink(
             P1,
             &doc2(),
-            resolve_all(budget),
+            resolve_doc2(budget),
             SlotArg::Addrs(vec![]),
             SlotArg::Addrs(vec![ra(10)]),
         )
@@ -2252,14 +2249,14 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
         );
     }
 
-    copy_whole(&k, &doc1(), per_copy, &doc2(), 1);
+    copy_prefix(&k, &doc1(), per_copy, &doc2(), 1);
     let over = budget + per_copy;
     let before = k.current_seq();
     assert!(matches!(
         w.makelink(
             P1,
             &doc2(),
-            resolve_all(over),
+            resolve_doc2(over),
             SlotArg::Addrs(vec![]),
             SlotArg::Addrs(vec![ra(10)])
         ),
@@ -2274,7 +2271,7 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
             &doc2(),
             SlotArg::Addrs(vec![ca(1)]),
             SlotArg::Addrs(vec![]),
-            resolve_all(over)
+            resolve_doc2(over)
         ),
         Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
     ));

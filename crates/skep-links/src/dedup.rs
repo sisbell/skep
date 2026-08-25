@@ -45,14 +45,14 @@ impl DedupKey {
 }
 
 fn push_class(buf: &mut Vec<u8>, class: &CoverageClass) {
-    let Some(set) = class.denoted() else {
+    let Some(denoted) = class.denoted() else {
         unreachable!(
             "no extent class is ever serialized into a LockKey: every idem⊤ dedup key is \
              validated address-denoting before the lock is built (§Core data model)"
         )
     };
-    buf.extend_from_slice(&(set.len() as u64).to_be_bytes());
-    for t in set.iter() {
+    buf.extend_from_slice(&(denoted.len() as u64).to_be_bytes());
+    for t in denoted.iter() {
         buf.extend_from_slice(&(t.len() as u64).to_be_bytes());
         for component in t {
             let bytes = component.to_bytes_be();

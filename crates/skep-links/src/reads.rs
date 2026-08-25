@@ -293,7 +293,12 @@ impl LinkState {
     }
 
     /// Tuple status by address: a resident retraction root (the tombstone
-    /// set; monotone — R3/R6a).
+    /// set; monotone — R3/R6a). EXACT membership: `a` is nullified iff `a`
+    /// itself is a retraction root, so nullifying a document or an account
+    /// address tombstones that address alone and no link beneath it. The
+    /// module's other suppression mechanism reads the opposite way —
+    /// [`LinkState::is_filtered`] is prefix-closed over BH1's retired roots
+    /// — so the two are not interchangeable at a probe.
     pub fn is_nullified(&self, a: &Address) -> bool {
         self.nullified(a.tumbler())
     }
@@ -500,10 +505,7 @@ impl LinkState {
         }
         // The sinks, ascending because `reach` is — then ONE walk of the
         // active claim slice for all of them together.
-        let sinks: Vec<Tumbler> = reach
-            .into_iter()
-            .filter(|t| !self.has_operative_succ(t))
-            .collect();
+        let sinks: Vec<Tumbler> = reach.into_iter().filter(|t| self.is_sink(t)).collect();
         self.out_claims(sinks)
             .into_iter()
             .map(|(t, claims)| {
@@ -683,14 +685,16 @@ impl LinkState {
         coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }
 
-    /// Whether `x` has any operative successor — the sink test, answered
-    /// without building `succ_o(x)`: the Df-SUCC filter is the same one
-    /// [`LinkState::succs_operative`] applies, and deduplicating the survivors
-    /// over `new` cannot change whether there are any, so the raw edge set
-    /// decides it. [`LinkState::current`] asks only whether a reached node is
-    /// a sink; the walk, which needs the successors themselves, builds them.
-    pub(crate) fn has_operative_succ(&self, x: &Tumbler) -> bool {
-        self.hints
+    /// Whether `x` is a SINK — successor-free in the operative graph,
+    /// answered without building `succ_o(x)`: the Df-SUCC filter is the same
+    /// one [`LinkState::succs_operative`] applies, and deduplicating the
+    /// survivors over `new` cannot change whether there are any, so the raw
+    /// edge set decides it. [`LinkState::current`] asks only whether a
+    /// reached node is a sink; the walk, which needs the successors
+    /// themselves, builds them.
+    pub(crate) fn is_sink(&self, x: &Tumbler) -> bool {
+        !self
+            .hints
             .sup_fwd
             .get(x)
             .is_some_and(|edges| edges.iter().any(|e| !self.nullified(&e.claim)))

@@ -505,8 +505,8 @@ pub const MAX_RESOLVE_SPANS: usize = 4096;
 /// accumulating instead of being built and then measured. `Addrs`: the
 /// canonical name encoding, deposited unresolved, one span per name and so
 /// already bounded by the request that named them.
-fn slot_endset(m5: &M5State, slot: &SlotArg) -> Option<Endset> {
-    match slot {
+fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
+    match arg {
         SlotArg::Resolve(specs) => {
             let mut spans: Vec<Span> = Vec::new();
             for spec in specs {
@@ -585,9 +585,9 @@ where
                     if !specs.all(|spec| is_wf_content_spec(base.m3(), spec)) {
                         return Err(MakeLinkError::IllFormedSpec);
                     }
-                    let build =
-                        |slot| slot_endset(base.m5(), slot).ok_or(MakeLinkError::SlotTooLarge);
-                    (build(&from)?, build(&to)?, build(&ty)?)
+                    let endset_of =
+                        |arg| slot_endset(base.m5(), arg).ok_or(MakeLinkError::SlotTooLarge);
+                    (endset_of(&from)?, endset_of(&to)?, endset_of(&ty)?)
                 };
                 // The sole-writer fences. Total: a `Resolve` slot is
                 // level-uniform by M5's construction and an `Addrs` slot is

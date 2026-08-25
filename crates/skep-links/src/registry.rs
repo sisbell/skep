@@ -176,7 +176,7 @@ pub enum ShippedType {
 /// and `LinkState::rebuild_derived` reconstructs this before replay.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
-    map: im::HashMap<CoverageClass, Registration>,
+    registrations: im::HashMap<CoverageClass, Registration>,
     retired: Endset,
     supersedes: Endset,
     retraction: Endset,
@@ -197,7 +197,7 @@ impl Default for TypeRegistry {
     fn default() -> TypeRegistry {
         let empty_class = coverage_class(&Endset::empty());
         TypeRegistry {
-            map: im::HashMap::new(),
+            registrations: im::HashMap::new(),
             retired: Endset::empty(),
             supersedes: Endset::empty(),
             retraction: Endset::empty(),
@@ -301,14 +301,14 @@ impl TypeRegistry {
             (&pred_stable_class, unary_top(BTreeSet::new())),
         ];
 
-        let mut map: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
+        let mut registrations: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
         let mut shipped_classes: Vec<CoverageClass> = Vec::with_capacity(5);
         for (class, reg) in shipped {
-            if map.contains_key(class) {
+            if registrations.contains_key(class) {
                 return Err(RegistryError::KeyCollision);
             }
             shipped_classes.push(class.clone());
-            map.insert(class.clone(), reg);
+            registrations.insert(class.clone(), reg);
         }
 
         for decl in &config.decls {
@@ -322,7 +322,7 @@ impl TypeRegistry {
             if shipped_classes.contains(&class) {
                 return Err(RegistryError::ReservedClassClash);
             }
-            if map.contains_key(&class) {
+            if registrations.contains_key(&class) {
                 return Err(RegistryError::KeyCollision);
             }
             let behaviors = &decl.reg.behaviors;
@@ -341,11 +341,11 @@ impl TypeRegistry {
             if behaviors.contains(&Behavior::ReadFilter) {
                 return Err(RegistryError::UnservedSecondFilter);
             }
-            map.insert(class, decl.reg.clone());
+            registrations.insert(class, decl.reg.clone());
         }
 
         Ok(TypeRegistry {
-            map,
+            registrations,
             retired,
             supersedes,
             retraction,
@@ -366,7 +366,7 @@ impl TypeRegistry {
     /// an `Endset` classifies it first (M9 projects the shipped registrations
     /// this way; M7's own gates and reads go through the same lookup).
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
-        self.map.get(class)
+        self.registrations.get(class)
     }
 
     /// The classes the BH3 join covers: registered `Binary` classes declaring
@@ -375,9 +375,9 @@ impl TypeRegistry {
     /// shipped table above and R-C0's app-decl clause are both in view —
     /// R-C0 already forces `ReverseLookup ⇒ Binary` on every app decl, so the
     /// shape conjunct guards the shipped literals, which are seeded without
-    /// passing it. Order is the map's, which `targets_keyed` keys away.
+    /// passing it. Order is the table's, which `targets_keyed` keys away.
     pub(crate) fn reverse_lookup_classes(&self) -> impl Iterator<Item = &CoverageClass> + '_ {
-        self.map
+        self.registrations
             .iter()
             .filter(|(_, reg)| {
                 reg.shape == Shape::Binary && reg.behaviors.contains(&Behavior::ReverseLookup)

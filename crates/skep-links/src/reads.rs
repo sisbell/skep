@@ -111,12 +111,16 @@ fn lift(t: &Tumbler) -> Address {
     validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
 
-/// `Tumbler → Address` lift of a DENOTED address — a tumbler read back out of
-/// a stored slot rather than off an index key, so its validity rests on a
-/// different fact: every slot a deposit path builds comes from [`enc`], whose
+/// `Tumbler → Address` lift of a DENOTED address, T4-valid on either of two
+/// grounds. A tumbler read back out of a stored slot rests on the slot's
+/// construction: every slot a deposit path builds comes from [`enc`], whose
 /// spans start at an `Address`'s tumbler, or from M5's `Run::iextent`, whose
-/// start is the run's `i_start` `Address`. Named apart from [`lift`] so the
-/// two obligations can be audited separately.
+/// start is the run's `i_start` `Address`. A tumbler the walk family hands
+/// back may instead be the CALLER'S OWN ARGUMENT — `chain` seeds its path
+/// with it, `tip` reports a successor-free node as its own sink, and
+/// `current` reaches `y` when nothing supersedes it — and there the ground is
+/// stronger still: the caller held an `Address`. Named apart from [`lift`] so
+/// the two families of obligation can be audited separately.
 ///
 /// CONSUMES its argument: a denoted address is read out of a slot into a set
 /// or a path the read owns and is about to drop, so the caller hands it over
@@ -124,7 +128,8 @@ fn lift(t: &Tumbler) -> Address {
 /// caller still holding a borrow clones at its own site.
 fn lift_denoted(t: Tumbler) -> Address {
     validate(t).expect(
-        "a denoted slot address is T4-valid: every slot is built by enc or from a Run's iextent",
+        "a denoted address is T4-valid: it is either a slot start (enc or a Run's iextent) \
+         or the caller's own argument, echoed back by the walk",
     )
 }
 
@@ -180,7 +185,8 @@ impl LinkState {
     /// carrier T (ASN-0086): membership rides [`Endset::covers`], total on T,
     /// so ghost (unallocated) addresses and the non-T4 tumblers inside a
     /// non-unit span's coverage are honest probes. `Default → Active` (raw
-    /// Observe never filters — ASN-0128).
+    /// Observe never filters — ASN-0128). Matches come back in ASCENDING
+    /// TUPLE-ADDRESS order, the typed slice's own.
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
@@ -383,10 +389,11 @@ impl LinkState {
     /// BH3 reverse (§7): sources of active type-`ty` tuples whose G COVERS
     /// `target` (AM's reverse-lookup rule — the one member of the family
     /// matched by coverage rather than denotation), collecting each match's
-    /// F.addrs(). The active typed slice is the domain and `covers` is the
-    /// whole test — the store-wide span scan [`LinkState::stab`] performs
-    /// would read every link in the docuverse to narrow a set that is a hint
-    /// lookup away and already a subset of what it scanned.
+    /// F.addrs() — deduplicated, in Tumbler order, as `members`/`targets_of`.
+    /// The active typed slice is the domain and `covers` is the whole test —
+    /// the store-wide span scan [`LinkState::stab`] performs would read every
+    /// link in the docuverse to narrow a set that is a hint lookup away and
+    /// already a subset of what it scanned.
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
@@ -440,23 +447,41 @@ impl LinkState {
     /// chain), meaningful as staleness only for an idem⊥ BH4 type (under
     /// idem⊤ a renewal dedups to the incumbent and age never resets — which
     /// is exactly why R-C0 forces BH4 ⇒ idem⊥).
+    ///
+    /// `None` means NON-RESIDENCE and nothing else — an exactness M9 already
+    /// builds on. The home and the ordinal are facts about a key of `links`
+    /// that this module has already committed to elsewhere, so each
+    /// fail-stops rather than answering `None` and reading as absence.
     pub fn age(&self, a: &Address) -> Option<u64> {
         if !self.resident(a.tumbler()) {
             return None;
         }
-        let home = document_of(a)?;
-        let ord = u64::try_from(ordinal(a.tumbler())).ok()?;
+        let home = document_of(a).expect(
+            "a resident link key is element-level, so its home exists: the hint fold that \
+             indexed it fail-stopped on exactly this",
+        );
+        // A resident link's ordinal counts deposits on its home's chain, and
+        // `home_frontier` counts the same deposits in a `u64` — so an ordinal
+        // outside `u64` is a frontier that overflowed first, and the field
+        // type is the commitment this reads back.
+        let ord = u64::try_from(ordinal(a.tumbler()))
+            .expect("a link ordinal indexes its home's chain, which `home_frontier` counts in u64");
         Some(self.home_frontier(&home).saturating_sub(ord))
     }
 
-    /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`,
-    /// served only where declared — `Err(NotBh4)` unless the in-contract
-    /// `ty` is registered with BH4 (Age). The typed rejection keeps
-    /// `Ok(vec![])` a truthful freshness claim (never conflated with "not a
-    /// BH4 type") and IS the fence: `retract_stale` builds its batch from
-    /// this call, so a refusal here is the batch's refusal, and the nullifier
-    /// can never be aimed at an idem⊤ class (e.g. mass-nullifying old
-    /// `[K_sup]` claims).
+    /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`, in
+    /// ASCENDING ADDRESS ORDER — the active typed slice's own order — served
+    /// only where declared: `Err(NotBh4)` unless the in-contract `ty` is
+    /// registered with BH4 (Age). The typed rejection keeps `Ok(vec![])` a
+    /// truthful freshness claim (never conflated with "not a BH4 type") and
+    /// IS the fence: `retract_stale` builds its batch from this call, so a
+    /// refusal here is the batch's refusal, and the nullifier can never be
+    /// aimed at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims).
+    ///
+    /// The ORDER is load-bearing, not incidental: `retract_stale` issues one
+    /// `nullify` per element in it, and its published claim that a batch
+    /// halted by a foreign-owned tuple halts at the same point on every
+    /// re-run is exactly this determinism.
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — [`coverage_class`] classifies it BEFORE the BH4
@@ -492,6 +517,9 @@ impl LinkState {
     /// at once) rather than accumulated during the walk — accumulation would
     /// drop an operative claim asserted on the sink from outside the closure.
     /// M7 discloses; the consumer narrows — no single "latest" is fabricated.
+    ///
+    /// Members come back ASCENDING by address, and each member's `claims`
+    /// ascending by claim address.
     pub fn current(&self, y: &Address) -> Vec<CurrentMember> {
         let mut reach: OrdSet<Tumbler> = OrdSet::unit(y.tumbler().clone());
         let mut stack = vec![y.tumbler().clone()];

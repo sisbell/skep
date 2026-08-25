@@ -1075,10 +1075,11 @@ fn makelink_wf_admits_exactly_the_depth_2_ordinal_content_spec() {
 #[test]
 fn makelink_into_a_registered_idem_top_class_deposits_and_never_dedups() {
     // Conflicts §1's degenerate coincidence: a MAKELINK deposit whose type
-    // slot lands in a registered idem⊤ class folds an in-memory dedup key
-    // carrying an Extents component. It is harmless — the open surface takes
-    // no dedup lock, so no such key is ever serialized — and it is not an
-    // incumbent any Emit_K can hit, the I0 key being the whole triple.
+    // slot lands in a registered idem⊤ class folds an in-memory dedup key,
+    // possibly carrying an extent-classed component. No such key reaches a
+    // LockKey — the open surface takes no dedup lock — and this one is no
+    // Emit_K incumbent either, because the I0 key is the whole triple and
+    // this F is extent-classed where an emit's is denoted.
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
@@ -1094,12 +1095,56 @@ fn makelink_into_a_registered_idem_top_class_deposits_and_never_dedups() {
     let (e, _) = w
         .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
         .expect("emit into the same class");
-    assert_ne!(e, l, "the folded MAKELINK key is not an Emit_K incumbent");
+    assert_ne!(e, l, "a distinct I0 class, so the emit deposits fresh");
     let snap = k.snapshot();
     let links = snap.world().links();
     assert!(links.is_active(&l) && links.is_active(&e));
     let slice = links.type_slice(&idem_top_ty(), View::Active);
     assert!(slice.contains(&l) && slice.contains(&e));
+}
+
+#[test]
+fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
+    // The other half of the same coincidence, and the one an `emit` caller
+    // can observe: when the MAKELINK deposit's I0 triple DOES match, the
+    // folded key is the incumbent that emit's dedup check hits. The open
+    // surface applies no shape gate, so what comes back is a link this very
+    // call would have been refused for — which is why `emit` documents its
+    // hit as returning the class's incumbent rather than a tuple it admitted.
+    let k = kernel();
+    let w = writer(&k);
+    // enc([ca1, ca1]) denotes {ca1}, so this F shares an I0 class with
+    // emit's own enc({ca1}) — while storing two spans, where Binary's shape
+    // gate forces one.
+    let (l, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1), ca(1)]),
+            SlotArg::Addrs(vec![ca(2)]),
+            SlotArg::Addrs(vec![ra(10)]), // idem_top_ty — registered Binary, idem⊤
+        )
+        .expect("the open surface has no shape gate");
+    let before = k.current_seq();
+    let (e, seq) = w
+        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .expect("the emit's own value is Binary-conformant");
+    assert_eq!(e, l, "the MAKELINK deposit IS the incumbent this emit hits");
+    assert_eq!(seq, before, "zero-step: nothing committed");
+    assert_eq!(k.current_seq(), before);
+    let snap = k.snapshot();
+    let incumbent = snap.world().links().readlink(&e).expect("resident");
+    assert_eq!(
+        incumbent.from_slot().len(),
+        2,
+        "and it carries an F the shape gate this call passed would refuse"
+    );
+    // The control: the same emit against a shape-conformant store deposits,
+    // so the equality above is the dedup hit and not an absent write path.
+    let (fresh, _) = w
+        .emit(P1, &doc1(), &idem_top_ty(), &ca(3), &[ca(4)])
+        .expect("a distinct I0 class");
+    assert_ne!(fresh, e);
 }
 
 #[test]

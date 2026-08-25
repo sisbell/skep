@@ -564,6 +564,9 @@ where
     /// enter the supersession adjacency as a claim, both without any of the
     /// ownership, residence or schema checks `nullify`, `assert_sup` and
     /// `editlink` establish.
+    ///
+    /// RETURNS `(link, seq)`: the address of the deposited link, which is
+    /// also the one seated in `home`'s link subspace.
     pub fn makelink(
         &self,
         caller: Caller,
@@ -623,6 +626,15 @@ where
     /// seat. idem⊤ ⇒ dedup against the ACTIVE view; a hit returns the
     /// incumbent with the base `Seq` and commits NOTHING.
     ///
+    /// WHAT A HIT RETURNS: the T1-LEAST ACTIVE tuple of the I0 class, which
+    /// is the class's incumbent and not a tuple this call admitted. The gate
+    /// runs over the value this call BUILT; the incumbent may have been
+    /// deposited through the open surface, which applies neither the shape
+    /// gate nor a dedup check ([`Shape`](crate::Shape),
+    /// [`Registration`](crate::Registration)) — so a caller that reads the
+    /// returned address back may find a link its own emission would have been
+    /// refused for, and one of several active tuples of that identity.
+    ///
     /// PRE-TRANSACT rejections (no transaction opened — §3): `ty` not
     /// address-denoting (`NonAddressDenotingType`, before ANY class
     /// computation, keeping `coverage_class` on the safe denoted path) and
@@ -632,6 +644,9 @@ where
     /// registered idem⊤ `ty`, else `[link_lock_key(home)]` — the
     /// registration read comes from the construction-time cache, race-free
     /// because the registry is genesis-immutable (§3 step 1).
+    ///
+    /// RETURNS `(tuple, seq)`: the address of the deposited tuple, or — on a
+    /// dedup hit — the incumbent's, with the base `Seq`.
     pub fn emit(
         &self,
         caller: Caller,
@@ -677,8 +692,10 @@ where
     /// broader moderation question (territorial retraction, viewer-side
     /// filtering) is an explicitly deferred scope decision (wire.md). Both
     /// checks precede P-tgt, so the auth verdict never depends on residence
-    /// timing. The self-target case passes by arithmetic: `a_emit`'s account
-    /// IS home's account.
+    /// timing, and `home` is checked BEFORE the target — the address
+    /// `NotOwner` carries is `home`'s when a caller owns neither. The
+    /// self-target case passes by arithmetic: `a_emit`'s account IS home's
+    /// account.
     ///
     /// POSTCONDITION, on a fresh deposit and on a dedup hit alike:
     /// `is_nullified(target)` holds, and `target` is gone from every
@@ -692,6 +709,11 @@ where
     /// company, and a caller chooses between them here: the BH1 `Retired`
     /// filter reads the ACTIVE retired slice, so retiring is undoable by
     /// nullifying the retirement; nullifying is not undoable by anything.
+    ///
+    /// RETURNS `(retraction, seq)`: the address of the `[R]` tuple itself —
+    /// never `target` — or, on a dedup hit, the incumbent retraction's, with
+    /// the base `Seq`. (The born-nullified case is where the two coincide:
+    /// there `target` IS the address this tuple occupies.)
     pub fn nullify(
         &self,
         caller: Caller,
@@ -726,6 +748,18 @@ where
     /// so a duplicate `(old, new)` even from a different home dedups to the
     /// first claim (Conflicts §9). Requires `home` registered, both
     /// endpoints resident, `old ≠ new` (Df-DISC(ii)); checked in that order.
+    ///
+    /// RETURNS `(claim, seq)`: the address of the `[K_sup]` claim — never an
+    /// endpoint — or, on a dedup hit, the incumbent claim's, with the base
+    /// `Seq`.
+    ///
+    /// OWNERSHIP is required on `home` and on NOTHING ELSE: the caller need
+    /// not own `old` or `new`, so a claim may be asserted over links owned by
+    /// others, and the walk family and M8's lineage reads then report it as
+    /// fact. Retracting it needs ω on the CLAIM, whose home is the asserter's
+    /// — so the endpoints' owner cannot retract a foreign claim about their
+    /// own links. The wider question this belongs to (moderation, viewer-side
+    /// filtering) is the deferred scope decision `nullify` names.
     pub fn assert_sup(
         &self,
         caller: Caller,
@@ -765,6 +799,18 @@ where
     /// prior snapshot — ML8/EL0), then asserts it supersedes `original`.
     /// Successor born UNSEATED; both writes commit atomically (EL7);
     /// `original` untouched (L12).
+    ///
+    /// RETURNS `(successor, claim, seq)`: the SUCCESSOR's address first,
+    /// deposited in `d_s`; the CLAIM's second, deposited in `d_a`. The two
+    /// are same-typed and permanently distinguishable only by which home's
+    /// link chain they landed on, so the positions are part of the contract.
+    ///
+    /// OWNERSHIP is required on `d_s` and `d_a` and on NOTHING ELSE: the
+    /// caller need not own `original`, so an edit may claim to supersede a
+    /// link owned by another account, exactly as `assert_sup` may. What the
+    /// operation deposits lands in the caller's own homes; what it asserts
+    /// about `original` is retractable only by ω on the claim, which is
+    /// `d_a`'s.
     ///
     /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
     /// non-resident `original`; a successor of arity ≠ 3 (Conflicts §11),
@@ -870,6 +916,11 @@ where
     /// the same point on every re-run: safe, and not progressive past it.
     /// Nullifying what one owns is the caller's business, done by aiming
     /// `nullify` directly.
+    ///
+    /// "The same point on every re-run" is a property rather than a hope
+    /// because the batch is issued in [`stale`](crate::LinkState::stale)'s
+    /// order, which that read publishes as ascending by address. Results come
+    /// back in it, one `(retraction address, seq)` per nullified target.
     pub fn retract_stale(
         &self,
         caller: Caller,

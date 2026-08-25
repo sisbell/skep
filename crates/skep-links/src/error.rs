@@ -110,7 +110,8 @@ pub enum NullifyError {
     /// The caller is not the effective owner (ω) of the address carried:
     /// `home`, or the TARGET link's own address (self-retraction only —
     /// the v1 nullify target policy; owning the retraction's home does not
-    /// license retracting someone else's link).
+    /// license retracting someone else's link). `home` is checked FIRST, so
+    /// a caller owning neither is told about `home`.
     NotOwner(Address),
     /// P-tgt: `target` is neither a resident link nor the address this call's
     /// own retraction tuple would occupy (`a_emit`) — sterilization made

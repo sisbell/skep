@@ -116,8 +116,11 @@ pub struct LinkState {
     /// ── AUTHORITATIVE ── the genesis [`TypeConfig`]; `Arc` ⇒ O(1) per-fold
     /// clone (serde `rc`).
     pub(crate) config: Arc<TypeConfig>,
-    /// ── RECOMPUTABLE ── lookup map; rebuilt from `config`.
-    #[serde(skip)]
+    /// ── RECOMPUTABLE ── lookup map; rebuilt from `config`. The seed is
+    /// named: [`crate::registry::placeholder_registry`] is the one value that
+    /// stands in until `rebuild_derived` runs, and the registry publishes no
+    /// `Default` for a bare `skip` to reach.
+    #[serde(skip, default = "crate::registry::placeholder_registry")]
     pub(crate) registry: Arc<TypeRegistry>,
     /// ── RECOMPUTABLE ── rebuilt from `links`+`registry`.
     #[serde(skip)]
@@ -147,8 +150,8 @@ impl LinkState {
     /// once per committed record (M2 guarantees this — deliberately NOT coded
     /// idempotent).
     ///
-    /// Totality domain, all three clauses owed by M3's `mint_link` and held
-    /// by every record M7's own paths stage: `addr` is T4-valid, is
+    /// Totality domain over `addr`, all three clauses owed by M3's `mint_link`
+    /// and held by every record M7's own paths stage: `addr` is T4-valid, is
     /// element-level, and is FRESH (`addr ∉ dom(links)`) — the mint allocates
     /// on the home's link frontier and never re-issues, and M2 replays each
     /// committed record exactly once. A hand-built `addr` is OUTSIDE the
@@ -161,6 +164,18 @@ impl LinkState {
     /// displaced value's type slice, double-counting the home frontier and
     /// voiding Permanence — none of it observable at the fold that admitted
     /// it.
+    ///
+    /// Totality domain over `value`, two further clauses, owed by `emit_core`
+    /// and the ops that reach it: ARITY EXACTLY 3, and EVERY SLOT
+    /// LEVEL-UNIFORM. This is the store's one insertion point, so they are
+    /// the same two value invariants [`LinkState`] states, met here or not at
+    /// all — and they take different channels on violation. A
+    /// non-level-uniform slot fail-stops inside the fold, where
+    /// [`coverage_class`] aborts naming its precondition. An arity other than
+    /// 3 is ADMITTED silently, the [`Link`] type holding only the L3 floor of
+    /// ≥ 3, and makes ASN-0086's `|Σ.L| = 3` false for that stored value —
+    /// which is why `emit_core` asserts it ahead of every mint rather than
+    /// leaving it to the type.
     pub fn apply_link(&self, r: &LinkRec) -> LinkState {
         match r {
             LinkRec::Deposit { addr, value } => {
@@ -337,11 +352,14 @@ pub(crate) fn fold_hints(
     }
 
     // dedup — registered idem⊤ classes only (§1); an unregistered or idem⊥
-    // class skips the key entirely (no dedup check ever reads it). The one
-    // degenerate exception — a MAKELINK deposit whose resolved class equals a
-    // registered idem⊤ app class — folds an in-memory key here (possibly with
-    // extent-classed from/to): harmless, it never reaches a LockKey
-    // (Conflicts §1).
+    // class skips the key entirely (no dedup check ever reads it). Keyed by
+    // CLASS, never by the surface a deposit arrived through, so a MAKELINK
+    // deposit whose resolved type class is a registered idem⊤ one is indexed
+    // here too (possibly with extent-classed from/to). No such key ever
+    // reaches a LockKey — the open surface takes no dedup lock (Conflicts §1)
+    // — but the key IS a live entry: an `emit` whose whole I0 triple matches
+    // it hits that link as the incumbent, having applied to it none of the
+    // managed surface's shape or dedup discipline.
     if registry.registration(&class).is_some_and(|r| r.idem) {
         out.dedup
             .entry(DedupKey::of(value))

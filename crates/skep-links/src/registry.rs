@@ -4,6 +4,7 @@
 //! ASN-0128 — no mutator exists).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Level};
@@ -15,6 +16,14 @@ use crate::endset::{coverage_class, enc, CoverageClass, Endset};
 /// span (Unary), exactly one (Binary), or any finite number (Multi). That
 /// count is P3's set-valued `|F|`/`|G|` on the duplicate-free endsets the
 /// managed surface builds ([`Endset::len`]).
+///
+/// Sh-conf is a GATE ON THE MANAGED SURFACE, not an invariant of the store:
+/// `emit`, `assert_sup` and `editlink`'s claim pass it; MAKELINK and an
+/// `editlink` successor take the open deposit gate and are shape-blind. So a
+/// stored link may sit in a registered class without conforming to that
+/// class's shape, and a read over a typed slice must not assume otherwise.
+/// The two classes whose STORED discipline is guaranteed are `[R]` and
+/// `[K_sup]`, held by their sole-writer fences rather than by this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Shape {
     Unary,
@@ -43,6 +52,14 @@ pub enum Behavior {
 /// nothing here is worth a third-party collection in an app's manifest. The
 /// per-fold sharing the design asks for is one level up, on
 /// [`crate::LinkState`]'s `Arc<TypeConfig>`.
+///
+/// `idem` is the MANAGED SURFACE'S DEDUP DISCIPLINE, not a uniqueness
+/// invariant on the class: MAKELINK deposits into a registered idem⊤ class
+/// with neither the dedup lock nor the in-transaction check, so a class may
+/// hold several active tuples of one I0 identity. That is why the incumbent
+/// a dedup hit returns is specified as the T1-LEAST active match rather than
+/// as "the one" (`LinkState::active_incumbent`). `shape` is a gate in the
+/// same sense — see [`Shape`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registration {
     pub shape: Shape,
@@ -174,6 +191,13 @@ pub enum ShippedType {
 /// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint; the
 /// serializable [`TypeConfig`] it was built from is the authoritative state
 /// and `LinkState::rebuild_derived` reconstructs this before replay.
+///
+/// INVARIANT, established by [`TypeRegistry::build`], its sole constructor:
+/// the five shipped classes are pairwise distinct (`KeyCollision` refuses a
+/// duplicate reserved address), each is registered, and `shipped_class(t)` is
+/// the class of `reserved_type(t)`. Every guard that recognizes a deposit by
+/// its class, and every read that compares one against a shipped class,
+/// leans on all three.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     registrations: im::HashMap<CoverageClass, Registration>,
@@ -189,27 +213,30 @@ pub struct TypeRegistry {
     pred_stable_class: CoverageClass,
 }
 
-/// The empty registry — exists ONLY so serde can seed `LinkState`'s
-/// `#[serde(skip)] registry` field on deserialize; `rebuild_derived` replaces
-/// it from the sealed [`TypeConfig`] BEFORE replay, so it is never consulted
-/// live.
-impl Default for TypeRegistry {
-    fn default() -> TypeRegistry {
-        let empty_class = coverage_class(&Endset::empty());
-        TypeRegistry {
-            registrations: im::HashMap::new(),
-            retired: Endset::empty(),
-            supersedes: Endset::empty(),
-            retraction: Endset::empty(),
-            pred_def: Endset::empty(),
-            pred_stable: Endset::empty(),
-            retired_class: empty_class.clone(),
-            supersedes_class: empty_class.clone(),
-            retraction_class: empty_class.clone(),
-            pred_def_class: empty_class.clone(),
-            pred_stable_class: empty_class,
-        }
-    }
+/// The empty registry, which holds NONE of [`TypeRegistry`]'s invariant: it
+/// registers nothing, every shipped endset is `⟨⟩`, and all five shipped
+/// classes are one value. It exists solely so serde can seed `LinkState`'s
+/// `#[serde(skip)] registry` field on deserialize, which is why it is named
+/// here and has no other caller: `rebuild_derived` replaces it from the
+/// sealed [`TypeConfig`] BEFORE replay, so it is never consulted live. Not a
+/// `Default` impl — the type publishes one constructor, and a second one
+/// that establishes nothing would be a legal way to state a fact no endset
+/// has.
+pub(crate) fn placeholder_registry() -> Arc<TypeRegistry> {
+    let empty_class = coverage_class(&Endset::empty());
+    Arc::new(TypeRegistry {
+        registrations: im::HashMap::new(),
+        retired: Endset::empty(),
+        supersedes: Endset::empty(),
+        retraction: Endset::empty(),
+        pred_def: Endset::empty(),
+        pred_stable: Endset::empty(),
+        retired_class: empty_class.clone(),
+        supersedes_class: empty_class.clone(),
+        retraction_class: empty_class.clone(),
+        pred_def_class: empty_class.clone(),
+        pred_stable_class: empty_class,
+    })
 }
 
 impl TypeRegistry {

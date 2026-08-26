@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Level};
 
-use crate::endset::{coverage_class, enc, CoverageClass, Endset};
+use crate::endset::{coverage_class, enc, CoverageClass, Endset, Link};
 
 /// A registered type's tuple shape (ASN-0126 P3): conformance counts the
 /// stored decomposition's spans — one FROM span always, and per shape no TO
@@ -29,6 +29,25 @@ pub enum Shape {
     Unary,
     Binary,
     Multi,
+}
+
+/// Sh-conf (P3): a value's SPAN COUNTS against a REGISTERED shape — the rule
+/// [`Shape`] states, deciding it where the shape is declared rather than at
+/// the gate that happens to consult it. Never infers a shape from the tuple
+/// (a `(1,0)` tuple conforms under Unary AND Multi). Reads both counts off
+/// the link itself, so they cannot arrive in the wrong order.
+///
+/// The counts are of the stored decomposition ([`Endset::len`]), which is
+/// ASN-0126's set-valued `|F|`/`|G|` on a duplicate-free endset — every endset
+/// this gate sees, since `emit` builds both slots through [`enc`] — and
+/// over-counts a repeated span.
+pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
+    value.from_slot().len() == 1
+        && match shape {
+            Shape::Unary => value.to_slot().is_empty(),
+            Shape::Binary => value.to_slot().len() == 1,
+            Shape::Multi => true,
+        }
 }
 
 /// The four behavior atoms BH1–BH4 (ASN-0128). `Ord` so the set backs a
@@ -412,9 +431,12 @@ impl TypeRegistry {
             .map(|(class, _)| class)
     }
 
-    /// The genesis-fixed type endset for a shipped class (M9 reads
-    /// PredDef/PredStable through `LinkState::reserved_type`, which delegates
-    /// here).
+    /// The genesis-fixed type endset for a shipped class — for a caller
+    /// holding the registry: M9's catalog projection compares each shipped
+    /// class against this at assembly, and M7's own write ops read the
+    /// `Retraction` and `Supersedes` endsets here to build their tuples.
+    /// [`crate::LinkState::reserved_type`] is the snapshot-bound delegate, for
+    /// a caller holding the slice instead.
     pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
         match ty {
             ShippedType::Retired => &self.retired,
@@ -479,6 +501,39 @@ mod tests {
             );
             // ...and each is registered under exactly that class.
             assert!(registry.registration(registry.shipped_class(ty)).is_some());
+        }
+    }
+
+    #[test]
+    fn sh_conf_reads_both_span_counts_against_the_declared_shape() {
+        // The rule [`Shape`] states, decided where the shape is declared: one
+        // FROM span always, and per shape no TO span, exactly one, or any
+        // finite number. The `|F| = 1` clause is the half no write path can
+        // present — `emit` forces `enc({from})` and an `editlink` successor
+        // takes the open gate — so it holds here or nowhere.
+        let none = Endset::empty;
+        let one = || enc([&ra(1)]);
+        let two = || enc([&ra(1), &ra(2)]);
+        for (shape, admits) in [
+            (Shape::Unary, [true, false, false]),
+            (Shape::Binary, [false, true, false]),
+            (Shape::Multi, [true, true, true]),
+        ] {
+            for (g, to) in [none(), one(), two()].into_iter().enumerate() {
+                assert_eq!(
+                    sh_conf(shape, &Link::triple(one(), to.clone(), one())),
+                    admits[g],
+                    "{shape:?} admits |G| = {g} at |F| = 1"
+                );
+                // A shape is never inferred from the tuple: whatever |G| does,
+                // an |F| off 1 conforms to none of the three.
+                for from in [none(), two()] {
+                    assert!(
+                        !sh_conf(shape, &Link::triple(from, to.clone(), one())),
+                        "{shape:?} refuses |F| ≠ 1 at |G| = {g}"
+                    );
+                }
+            }
         }
     }
 }

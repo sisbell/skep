@@ -221,6 +221,15 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
 /// the same key (AUTH-2.15 answers `DuplicateKey(n)` otherwise) — the
 /// promise that fixes a fingerprint's anchor flag within one record (I9,
 /// AUTH-2.104).
+///
+/// PRECONDITION — `bytes` is ONE record's bytes, at most
+/// [`MAX_RECORD_BYTES`]: what `crate::record_bytes` answers, and the only
+/// source AUTH-2.37 admits. Nothing here re-checks that cap; it is the
+/// CALLER's, and what makes it matter is AUTH-2.15 — the duplicate test
+/// compares each line's key against every key already accepted, so the scan
+/// is QUADRATIC in the line count. Under the cap that is at most 897 lines
+/// (a 73-byte minimum line) and ~4·10⁵ comparisons; on 64 MiB of such lines
+/// it is ~4·10¹¹.
 pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
     scan(bytes, ENROLL_HEADER, |n, line, seen: &[Enrollment]| {
         // AUTH-2.12 — dispatch on the FIRST token: anchor · alg · else (the
@@ -284,6 +293,15 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// (AUTH-2.74), and a record listing one fingerprint twice beside the rest
 /// of the set would pass that test, empty the set, and void I3 (AUTH-2.97)
 /// and AUTH-1.36.
+///
+/// PRECONDITION — `bytes` is ONE record's bytes, at most
+/// [`MAX_RECORD_BYTES`]: what `crate::record_bytes` answers, and the only
+/// source AUTH-2.37 admits. Nothing here re-checks that cap; it is the
+/// CALLER's, and what makes it matter is AUTH-2.15 — the duplicate test
+/// compares each line's fingerprint against every fingerprint already
+/// accepted, so the scan is QUADRATIC in the line count. Under the cap that
+/// is at most 1008 lines (a 65-byte minimum line) and ~5·10⁵ comparisons; on
+/// 64 MiB of such lines it is ~5·10¹¹.
 pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
     scan(bytes, RETIRE_HEADER, |n, line, seen: &[Fingerprint]| {
         // AUTH-2.14 — no label, no trailing separator: ANY remainder after

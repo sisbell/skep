@@ -356,6 +356,66 @@ fn reach_walk_never_a_count_off_width() {
     );
 }
 
+/// AUTH-2.42 — the reach walk's membership test is M1 `Span::contains`' rule
+/// (`start ≤ pos < reach`) taken against a reach derived once per span,
+/// because `contains` recomputes `start ⊕ width` per call and `⊕`'s cost is
+/// the WIDTH's component count, which T12 does not bound. Two spellings of
+/// one rule, so the agreement is stated rather than assumed: over widths
+/// acting at every admissible position, with and without a trailing tail, and
+/// over ordinals below, at, inside and above the reach.
+#[test]
+fn the_reach_walks_membership_test_agrees_with_span_contains() {
+    let home = doc1(ACCT_A);
+    let start = content_pos(&home, 4);
+    for action_point in 0..start.len() {
+        for tail in [0usize, 1, 7] {
+            let mut w = vec![0u32; start.len() + tail];
+            w[action_point] = 1;
+            let span = Span::new(start.clone(), tum(&w)).expect("T12-valid width");
+            let reach = span.reach();
+            for ord in [1u32, 3, 4, 5, 9, 1_000] {
+                let pos = content_pos(&home, ord);
+                assert_eq!(
+                    span.contains(&pos),
+                    *span.start() <= pos && pos < reach,
+                    "action point {action_point}, tail {tail}, ordinal {ord}"
+                );
+            }
+        }
+    }
+}
+
+/// AUTH-2.42 — a width whose component COUNT exceeds the start's. T12 bounds
+/// the width's ACTION POINT and not its length, so a wire-expressible span can
+/// carry an arbitrarily long width tail, which `⊕` copies verbatim into the
+/// reach. The verdict is exactly the tail-free span's
+/// ([`reach_walk_never_a_count_off_width`]'s), and the work scales with the
+/// POSITIONS walked rather than with the width's length — a corpus seed worth
+/// promoting to the fuzzing tier, where the wall-clock oracle lives.
+#[test]
+fn a_long_width_tail_changes_no_verdict() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    let key_line = format!("ed25519 {}\n", key(1).to_hex());
+    fx.mint(&home, &[b"skep-enroll v1\n", key_line.as_bytes()]);
+    let start = content_pos(&home, 1);
+    // The action point `reach_walk_never_a_count_off_width` uses — at the
+    // subspace, above the ordinal — plus 4096 trailing components T12 admits
+    // and nothing in the read bounds.
+    let mut w = vec![0u32; start.len() + 4096];
+    w[start.len() - 2] = 1;
+    let dep = Dep {
+        home: home.clone(),
+        from: vec![Span::new(start, tum(&w)).expect("T12-valid width")],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_payload:missing_value",
+    );
+}
+
 /// Corpus: an EMPTY `from` — `malformed_shape`, never a payload token
 /// (AUTH-2.47: pinned ahead of the parser, never reaches `record_bytes`).
 #[test]

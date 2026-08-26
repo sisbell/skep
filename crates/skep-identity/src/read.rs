@@ -87,9 +87,25 @@ pub fn record_bytes(
         if span_doc != *home {
             return Err(PayloadError::ForeignContent);
         }
-        // The reach walk (AUTH-2.42).
+        // The reach walk (AUTH-2.42). The span's REACH — `start ⊕ width`, M1
+        // `Span::reach` — is a derivation of two operands this loop never
+        // touches, so it is taken ONCE per span. M1's `Span::contains`
+        // recomputes it on every call, and `⊕` allocates and clones one
+        // component per component of `width`, whose tail it copies verbatim
+        // into the reach; T12 bounds the width's ACTION POINT and says nothing
+        // about its component COUNT, so a wire-chosen width can be
+        // arbitrarily long. Asked per position, inside a loop the byte cap
+        // bounds at MAX_RECORD_BYTES, that would let one width multiply the
+        // work of every position it covers; taken here, the per-position cost
+        // is the START's component count, which home anchoring pins at
+        // `#home + 3`.
+        let reach = span.reach();
         let mut pos = span.start().clone();
-        while span.contains(&pos) {
+        // `start ≤ pos < reach` — M1 `Span::contains`' half-open membership,
+        // spelled against the reach above. Two spellings of one rule, so the
+        // agreement is checked rather than assumed:
+        // `the_reach_walks_membership_test_agrees_with_span_contains`.
+        while *span.start() <= pos && pos < reach {
             // 4 — the value, as of the ctx's commit (AUTH-2.38 item 4).
             let Some(value) = ctx.value_at(&pos) else {
                 return Err(PayloadError::MissingValue);

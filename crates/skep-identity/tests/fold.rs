@@ -10,7 +10,10 @@ use std::collections::BTreeMap;
 
 use common::*;
 use skep_address::Span;
-use skep_identity::{single_address, Effect, IdentityState, TypeAddrs, Verdict, MAX_RECORD_BYTES};
+use skep_identity::{
+    record_bytes, single_address, Effect, Enrolled, IdentityState, TypeAddrs, Verdict,
+    MAX_RECORD_BYTES,
+};
 
 fn enroll_ty() -> Vec<Span> {
     vec![unit(T_ENROLL)]
@@ -187,6 +190,35 @@ fn span_past_the_mint_is_missing_value() {
     );
 }
 
+/// AUTH-2.36/AUTH-2.3 — the read's ANSWER, not merely the verdict it leads
+/// to: the FROM spans' bytes concatenated in ENDSET ORDER, verbatim. Every
+/// other payload vector reads this function through a parse fault, which
+/// watches only the normalizations the GRAMMAR would notice. A read that
+/// stripped a trailing `\r` is the sharp case: `\r` is an ordinary payload
+/// byte (AUTH-2.6), so every other vector in the corpus stays green while a
+/// mirror is handed different bytes than the origin. (A trim that also ate
+/// the line's `\n` is caught by the grammar-sensitive vectors; the byte the
+/// grammar does not judge is the one nothing else watches.) `record_bytes` is
+/// `pub` for the non-folding reader AUTH-2.37 requires to LINK it rather than
+/// re-implement it, and this is the only vector that calls it as that reader
+/// does.
+#[test]
+fn record_bytes_answers_the_spans_bytes_verbatim_in_endset_order() {
+    let mut fx = Fixture::new();
+    let home = doc1(ACCT_A);
+    // Bytes a helpful read would be tempted to touch — a CR, a trailing
+    // 0x20, uppercase hex. Judging them is the GRAMMAR's business
+    // (AUTH-2.6, AUTH-2.10, AUTH-2.17), never the read's.
+    let spans = fx.mint(&home, &[b"one\r", b"two ", b"THREE"]);
+    let got = record_bytes(&fx.ctx, &home, &spans).expect("home-minted spans read");
+    assert_eq!(got, b"one\rtwo THREE".to_vec());
+
+    // ENDSET order, not address order: the same three spans, named backwards.
+    let reversed: Vec<_> = spans.iter().rev().cloned().collect();
+    let got = record_bytes(&fx.ctx, &home, &reversed).expect("home-minted spans read");
+    assert_eq!(got, b"THREEtwo one\r".to_vec());
+}
+
 /// Corpus: a FROM span whose start does not VALIDATE — `foreign_content`,
 /// never a panic (AUTH-2.38 item 1).
 #[test]
@@ -204,6 +236,27 @@ fn invalid_start_is_foreign_content_not_a_panic() {
     };
     assert_token(
         &fx.classify(&genesis_state, &dep),
+        "malformed_payload:foreign_content",
+    );
+}
+
+/// AUTH-2.38 item 3 — home anchoring is decided BEFORE a byte of the span is
+/// read, so a span in ANOTHER document answers `foreign_content` whether or
+/// not that document ever minted the position. Every other foreign span in
+/// the corpus is minted, so a home check moved down into the walk — the
+/// natural place for it once the position is in hand — keeps answering
+/// `foreign_content` for those and answers `missing_value` here.
+#[test]
+fn a_foreign_span_is_foreign_content_even_where_nothing_was_minted() {
+    let fx = Fixture::new(); // nothing minted in ACCT_B at all
+    let dep = Dep {
+        home: doc1(ACCT_A),
+        from: vec![content_run(&doc1(ACCT_B), 1, 1)],
+        to: vec![unit(ACCT_A)],
+        ty: enroll_ty(),
+    };
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
         "malformed_payload:foreign_content",
     );
 }
@@ -570,6 +623,46 @@ fn unowned_home_is_malformed_shape() {
     let outside = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
     let dep = fx.claim_dep(&outside, CLAIMANT);
     assert_token(&fx.classify(&genesis_state, &dep), "malformed_shape");
+}
+
+/// AUTH-2.66 item 1 before item 2 — the KIND is settled first, so a deposit
+/// whose `ty` names no credential type is `NotCredential` even where the home
+/// has no owner at all. `unowned_home_is_malformed_shape` uses a credential
+/// `ty` and `unrecognized_type_slots_are_not_credential` an owned home, so
+/// the cell where both hold is decided by nothing: an ω lookup hoisted ahead
+/// of `kind_of` refuses an ordinary link the fold has no business judging.
+#[test]
+fn an_unrecognized_type_in_an_unowned_home_is_not_credential() {
+    let fx = Fixture::new();
+    let outside = addr(&[2, 1, 0, 9, 0, 1]); // under no registered prefix
+    let dep = Dep {
+        home: outside,
+        from: vec![unit(ACCT_A)],
+        to: vec![unit(ACCT_A)],
+        ty: vec![unit(&[1, 1, 0, 1, 0, 1, 0, 1, 1])], // a content I-span
+    };
+    assert_eq!(
+        fx.classify(&IdentityState::genesis(), &dep),
+        Verdict::NotCredential
+    );
+}
+
+/// AUTH-2.66 item 2 before item 3 — the home's ACCOUNT is settled before
+/// publication, so an unowned home answers `malformed_shape` even on a board
+/// where nothing is published. `unowned_home_is_malformed_shape` runs on a
+/// fully published board and `unpublished_home_inerts_every_shape` on owned
+/// homes, so a publication test hoisted above the ω read flips this cell to
+/// `unpublished` and leaves both of them green.
+#[test]
+fn an_unowned_home_is_malformed_shape_even_on_an_unpublished_board() {
+    let mut fx = Fixture::new();
+    fx.ctx.all_unpublished = true;
+    let outside = addr(&[2, 1, 0, 9, 0, 1]);
+    let dep = fx.claim_dep(&outside, CLAIMANT);
+    assert_token(
+        &fx.classify(&IdentityState::genesis(), &dep),
+        "malformed_shape",
+    );
 }
 
 /// I7 (AUTH-2.102) — `is_published == false ⇒ Inert(Unpublished)` for every
@@ -1031,6 +1124,55 @@ fn re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing() {
     assert!(!next.key_set(&addr(ACCT_A)).is_anchor(&fp(2)));
 }
 
+/// AUTH-2.69 — the holder post: `added` is exactly the lines whose
+/// fingerprints are neither ENROLLED nor RETIRED, whatever flag the line
+/// carries (I4 AUTH-2.98, I9 AUTH-2.104), and the filtered lines do NOT ride
+/// in on the new key's coat-tails.
+/// `re_listing_an_enrolled_key_under_the_anchor_flag_changes_nothing` and
+/// `a_retired_fingerprint_never_re_enrolls` pin records where EVERY line is
+/// filtered out — which an `added` computed as "all the lines, if any line is
+/// new" also satisfies; this mixed record is what tells them apart. It is
+/// also the corpus's only assertion of an `Effect::Enroll`.
+#[test]
+fn a_holder_enrollment_adds_only_the_lines_that_are_neither_enrolled_nor_retired() {
+    let mut fx = Fixture::new();
+    // enrolled = {fp(1): anchor}, retired = {fp(2): non-anchor}.
+    let st = seeded_then_retired(&mut fx);
+    // Line 2 re-lists the ENROLLED key under the OPPOSITE flag; line 3 the
+    // RETIRED one; line 4 is new, and an anchor.
+    let dep = fx.enroll_dep(
+        &doc1(ACCT_A),
+        ACCT_A,
+        &enroll_payload(&[(1, false), (2, true), (3, true)]),
+    );
+    let (next, v) = fx.step(&st, &dep);
+    match assert_honored(&v) {
+        Effect::Enroll { account, added } => {
+            assert_eq!(*account, addr(ACCT_A));
+            assert_eq!(
+                *added,
+                vec![Enrolled {
+                    key: key(3),
+                    anchor: true
+                }],
+                "only the new line is added, with the flag that line carries"
+            );
+        }
+        other => panic!("expected an enroll effect, got {other:?}"),
+    }
+    let set = next.key_set(&addr(ACCT_A));
+    assert!(set.contains(&fp(3)), "the new key is enrolled");
+    assert!(set.is_anchor(&fp(3)), "under the flag its line carried");
+    assert!(
+        set.is_anchor(&fp(1)),
+        "I9: the re-listed key keeps its FIRST flag"
+    );
+    assert!(
+        !set.contains(&fp(2)),
+        "I4: the retired key does not re-enter"
+    );
+}
+
 /// AUTH-2.74 — an honored retirement names the removed fingerprints in its
 /// effect, and the key leaves `enrolled` for `retired`.
 #[test]
@@ -1119,6 +1261,30 @@ fn retiring_the_whole_enrolled_set_is_would_empty() {
     assert_eq!(next, st);
 }
 
+/// I3 (AUTH-2.97) — the whole-set test is SET EQUALITY, never a size
+/// coincidence: a retirement naming every enrolled fingerprint AND a
+/// fingerprint that is enrolled nowhere is still `would_empty`. `removed` is
+/// `F ∩ enrolled` (AUTH-2.74), so the stranger is filtered out and the two
+/// sizes agree. A `removed` that carried the stranger — or a `WouldEmpty`
+/// test read off the RECORD's length — honors this record, empties the
+/// account's set, and voids I3 and AUTH-1.36. Every other retirement vector
+/// names only fingerprints the account has held, so this is the one that
+/// tells the intersection from the record.
+#[test]
+fn retiring_the_whole_set_plus_a_stranger_is_still_would_empty() {
+    let mut fx = Fixture::new();
+    // enrolled = {fp(1), fp(2)}; key 5 is enrolled nowhere on this board.
+    let st = seeded(&mut fx);
+    let dep = fx.retire_dep(&doc1(ACCT_A), ACCT_A, &retire_payload(&[1, 2, 5]));
+    let (next, v) = fx.step(&st, &dep);
+    assert_token(&v, "would_empty");
+    assert_eq!(next, st);
+    assert!(
+        !next.key_set(&addr(ACCT_A)).is_empty(),
+        "I3: an account's set never re-empties"
+    );
+}
+
 /// The claim walk end to end: keyless refusal, honored claim, first-wins
 /// (AUTH-2.67; I6 AUTH-2.101), and the from≠H shape refusal (AUTH-2.48).
 #[test]
@@ -1157,6 +1323,56 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
         ty: vec![unit(T_CLAIM)],
     };
     assert_token(&fx.classify(&st3, &dep), "malformed_shape");
+}
+
+/// AUTH-1.40 — the checkpointed frame AROUND `Enrolled`: `KeySet`'s two maps
+/// in declaration order, each a length then its rows, a `Fingerprint` key as
+/// its thirty-two raw bytes, and a RETIRED row as the ONE anchor byte
+/// AUTH-1.29 fixes. `enrolled_checkpoint_encoding_is_pinned` owns the
+/// `Enrolled` row; this owns everything around it. The edit it is here for is
+/// the tempting one — storing the whole `Enrolled` in `retired` so the flag
+/// comes along instead of being carried by hand — which keeps `retired()`'s
+/// `(&Fingerprint, bool)` signature, passes every other vector, and silently
+/// rewrites every checkpoint's bytes.
+#[test]
+fn key_set_checkpoint_encoding_is_pinned() {
+    let mut fx = Fixture::new();
+    // enrolled = {fp(1): anchor}, retired = {fp(2): non-anchor} — ONE row in
+    // each map, so fingerprint order is not a variable in this expectation.
+    let st = seeded_then_retired(&mut fx);
+
+    let mut want: Vec<u8> = Vec::new();
+    want.extend_from_slice(&1u64.to_le_bytes()); // `enrolled`: one row
+    want.extend_from_slice(fp(1).as_bytes()); // the map key: 32 raw bytes
+    want.extend_from_slice(&0u32.to_le_bytes()); // the value: Ed25519 variant
+    want.extend_from_slice(&[1u8; 32]); // key(1)'s raw bytes
+    want.push(1); // the anchor flag
+    want.extend_from_slice(&1u64.to_le_bytes()); // `retired`: one row
+    want.extend_from_slice(fp(2).as_bytes());
+    want.push(0); // the retired row is the FLAG, one byte
+
+    assert_eq!(
+        bincode::serialize(st.key_set(&addr(ACCT_A))).expect("serialize KeySet"),
+        want
+    );
+}
+
+/// AUTH-1.40 — `sets` encodes BEFORE `claimant`, which is the half
+/// `genesis_checkpoint_encoding_is_pinned` cannot see: at genesis both fields
+/// are zero bytes and swapping them changes nothing. A state with one keyed
+/// account opens on that map's eight-byte length of 1, where a swapped state
+/// opens on `claimant`'s one-byte `None`. Only the PREFIX is asserted — what
+/// follows is an `Address`, whose encoding is M1's to pin and not this
+/// crate's.
+#[test]
+fn identity_state_encodes_sets_before_claimant() {
+    let mut fx = Fixture::new();
+    let st = seeded(&mut fx); // one keyed account, unclaimed
+    let bytes = bincode::serialize(&st).expect("serialize IdentityState");
+    assert!(
+        bytes.starts_with(&1u64.to_le_bytes()),
+        "a checkpoint opens on `sets`' row count, not on `claimant`"
+    );
 }
 
 /// AUTH-1.40 — a populated `IdentityState` (sets, retirements, claimant)

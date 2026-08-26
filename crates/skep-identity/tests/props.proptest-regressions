@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e65a4e298c1565149f69bedf25276472690bc926cabe3cb5a6c748085431e111 # shrinks to acts = [Act { kind: Enroll, subject: 1, home: 1, keys: [(0, false)], fps: [] }]
+cc 4fd30be97decfd90043c37a81a0d813f0ff04150b5ebfdeadb664c851cb36dc3 # shrinks to acts = [Act { kind: Enroll, subject: 1, home: 1, keys: [(3, false)], fps: [] }, Act { kind: Enroll, subject: 1, home: 1, keys: [(3, true), (0, false)], fps: [] }]

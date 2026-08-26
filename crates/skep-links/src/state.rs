@@ -20,9 +20,20 @@ use crate::registry::{Registration, RegistryError, ShippedType, TypeConfig, Type
 /// retraction tuple, supersession claim, editlink successor, pdef/pd_stable
 /// classifier — is a deposit of an immutable link at a fresh address. There
 /// is no update, no delete, no tombstone record (L12/R2/R3).
+///
+/// The variant is `#[non_exhaustive]`, so no foreign crate can build a
+/// `LinkRec` by struct literal: `emit_core` is the only constructor, and the
+/// journal is the boundary that keeps it so. That is what puts
+/// [`LinkState::apply_link`]'s totality domain — a fresh, T4-valid,
+/// element-level address carrying an arity-3 all-level-uniform value — inside
+/// this crate's reach, where the deposit gate discharges every clause of it.
+/// The engine only `From`-lifts an already-built value and folds it; the
+/// match in [`LinkState::apply_link`] is in M7's own crate, so it
+/// destructures freely.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum LinkRec {
+    #[non_exhaustive]
     Deposit { addr: Tumbler, value: Link },
 }
 
@@ -422,4 +433,68 @@ pub(crate) fn fold_hints(
     *out.home_frontier.entry(home.tumbler().clone()).or_insert(0) += 1;
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::Nat;
+
+    use super::*;
+    use crate::endset::enc;
+    use crate::registry::{ReservedAddrs, TypeDecl};
+
+    /// `[9,0,9,0,9,0,9,k]` — element-level in subspace 9, outside {s_C, s_L},
+    /// which is the reserved-isolation precondition `TypeRegistry::build`
+    /// checks first.
+    fn ra(k: u32) -> Address {
+        addr(&[9, 0, 9, 0, 9, 0, 9, k])
+    }
+
+    /// doc1's content element `k`.
+    fn ca(k: u32) -> Address {
+        addr(&[1, 0, 1, 0, 1, 0, 1, k])
+    }
+
+    /// doc1's link element `k` — where a deposit lands.
+    fn la(k: u32) -> Address {
+        addr(&[1, 0, 1, 0, 1, 0, 2, k])
+    }
+
+    fn addr(comps: &[u32]) -> Address {
+        validate(Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty"))
+            .expect("T4-valid")
+    }
+
+    fn config() -> TypeConfig {
+        TypeConfig {
+            reserved: ReservedAddrs {
+                pred_def: ra(1),
+                pred_stable: ra(2),
+                retired: ra(3),
+                supersedes: ra(4),
+                retraction: ra(5),
+            },
+            decls: Vec::<TypeDecl>::new(),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "fresh address")]
+    fn apply_link_refuses_a_second_deposit_at_one_address() {
+        // Freshness is the one store invariant whose violation is SILENT — the
+        // insert would replace an immutable value, leaving its address in the
+        // displaced value's type slice, double-counting the home frontier and
+        // voiding Permanence, none of it observable at the fold that admitted
+        // it. Unconstructible through the kernel (M3's mint never re-issues and
+        // M2 replays each record once) and unconstructible outside this crate
+        // (the `Deposit` variant is `#[non_exhaustive]`), which is why the
+        // assert is its only witness and why the witness lives here.
+        let state = LinkState::genesis(config()).expect("valid config builds");
+        let rec = LinkRec::Deposit {
+            addr: la(1).tumbler().clone(),
+            value: Link::triple(enc([&ca(1)]), enc([&ca(2)]), enc([&ra(10)])),
+        };
+        let once = state.apply_link(&rec);
+        let _twice = once.apply_link(&rec); // corruption, not a live error path
+    }
 }

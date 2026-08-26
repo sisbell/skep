@@ -1175,10 +1175,10 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
         // AND-combiner over constrained slots only; empty constraints ⇒ the
         // whole slice.
         assert!(links
-            .match_links(&[(1, enc(&[ca(2)])), (2, enc(&[ca(3)]))], View::Audit)
+            .match_links(&[(1, &enc(&[ca(2)])), (2, &enc(&[ca(3)]))], View::Audit)
             .contains(&l));
         assert!(!links
-            .match_links(&[(1, enc(&[ca(2)])), (2, enc(&[ca(2)]))], View::Audit)
+            .match_links(&[(1, &enc(&[ca(2)])), (2, &enc(&[ca(2)]))], View::Audit)
             .contains(&l));
         assert!(links.match_links(&[], View::Audit).contains(&l));
         // The content type is queryable by its coverage: ty resolved to the
@@ -1863,9 +1863,9 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     let links = snap.world().links();
     for view in [View::Audit, View::Active] {
         for mask in 0u8..8 {
-            let constraints: Vec<(usize, Endset)> = (0..pool.len())
+            let constraints: Vec<(usize, &Endset)> = (0..pool.len())
                 .filter(|i| mask & (1u8 << i) != 0)
-                .map(|i| pool[i].clone())
+                .map(|i| (pool[i].0, &pool[i].1))
                 .collect();
             let got = links.match_links(&constraints, view);
             if constraints.is_empty() {
@@ -1873,7 +1873,7 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
             }
             let want = constraints
                 .iter()
-                .map(|(slot, query)| links.stab(*slot, query, view))
+                .map(|&(slot, query)| links.stab(slot, query, view))
                 .reduce(|acc, s| acc.iter().filter(|t| s.contains(*t)).cloned().collect())
                 .expect("nonempty");
             assert_eq!(got, want, "{view:?} constraints {mask:#05b}");
@@ -1882,10 +1882,12 @@ fn match_links_narrows_to_the_same_set_its_conjuncts_intersect() {
     // ...and the sets are not all equal, so the agreement above is not
     // vacuous: the three-slot AND admits l1 and l4 only, and Active drops
     // the nullified link from the one-slot answer.
-    let all = links.match_links(&pool.to_vec(), View::Audit);
+    let every: Vec<(usize, &Endset)> = pool.iter().map(|(slot, query)| (*slot, query)).collect();
+    let all = links.match_links(&every, View::Audit);
     assert!(all.contains(&l1) && all.contains(&l4));
     assert!(!all.contains(&l2) && !all.contains(&l3));
-    let to_only = [(TO, enc(&[ca(2)]))];
+    let to_query = enc(&[ca(2)]);
+    let to_only = [(TO, &to_query)];
     assert!(links.match_links(&to_only, View::Audit).contains(&l3));
     assert!(!links.match_links(&to_only, View::Active).contains(&l3));
 }
@@ -2089,7 +2091,7 @@ fn the_discovery_primitives_read_default_as_active() {
         links.stab(TYPE, &query, View::Active)
     );
     assert!(!links.stab(TYPE, &query, View::Default).contains(&gone));
-    let constraints = [(TYPE, query.clone())];
+    let constraints = [(TYPE, &query)];
     assert_eq!(
         links.match_links(&constraints, View::Default),
         links.match_links(&constraints, View::Active)
@@ -2144,7 +2146,7 @@ fn stab_with_an_empty_query_matches_nothing() {
     );
     assert!(
         links
-            .match_links(&[(FROM, Endset::empty())], View::Audit)
+            .match_links(&[(FROM, &Endset::empty())], View::Audit)
             .is_empty(),
         "passing ⟨⟩ is not"
     );

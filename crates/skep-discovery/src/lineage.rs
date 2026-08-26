@@ -45,8 +45,9 @@ where
         return Vec::new(); // residence gate (EL4 + R0a)
     }
     let sup = l.reserved_type(ShippedType::Supersedes);
+    let named = enc([key]); // bound: M7 borrows a constraint's query
     let hits = l
-        .match_links(&[(slot, enc([key]))], v) // claims naming `key` at `slot`
+        .match_links(&[(slot, &named)], v) // claims naming `key` at `slot`
         .intersection(l.type_slice(sup, v)); // restrict to supersession claims (Ŝ^Σ = S^Σ)
     hits.iter()
         .map(|c| {

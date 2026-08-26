@@ -227,7 +227,7 @@ impl fmt::Display for MakeLinkError {
                 "makelink: ty ~ [K_sup] — supersession writes only through assert_sup/editlink",
             ),
             MakeLinkError::Mint(e) => write!(f, "makelink: mint failed: {e}"),
-            MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e:?}"),
+            MakeLinkError::Seat(e) => write!(f, "makelink: seat refused: {e}"),
         }
     }
 }
@@ -235,6 +235,7 @@ impl Error for MakeLinkError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             MakeLinkError::Mint(e) => Some(e),
+            MakeLinkError::Seat(e) => Some(e),
             _ => None,
         }
     }

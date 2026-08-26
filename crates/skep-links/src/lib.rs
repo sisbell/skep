@@ -76,6 +76,40 @@ pub use registry::{
 pub use state::{LinkRec, LinkState};
 pub use writes::{LinkWriter, SlotArg, MAX_RESOLVE_SPANS};
 
+/// The auto traits M7's slice promises without saying. `WorldState` is
+/// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
+/// those bounds of [`LinkState`] and [`LinkRec`] through types no signature
+/// in this crate mentions — and they are kept by what the private fields
+/// contain, so swapping this crate's `im` for the `Rc`-backed `im-rc` would
+/// revoke them with nothing here failing to build. Asserted in the library
+/// rather than the suite, because that is the build a manifest change is made
+/// in, and it is this crate's manifest that names `im`.
+const _: fn() = || {
+    fn owed<T: Send + Sync + 'static>() {}
+    owed::<LinkState>(); // the `WorldState` bound reaches this through the engine
+    owed::<LinkRec>(); // and this through `WorldState::Record`
+    owed::<TypeConfig>();
+    owed::<TypeRegistry>();
+    owed::<Endset>();
+    owed::<Link>();
+    owed::<CoverageClass>();
+    owed::<Tuple>();
+    owed::<CurrentMember>();
+    // Every rejection too: a caller that boxes one meets
+    // `Box<dyn Error + Send + Sync>`, which is the crossing form.
+    owed::<MakeLinkError>();
+    owed::<EmitError>();
+    owed::<NullifyError>();
+    owed::<AssertSupError>();
+    owed::<EditLinkError>();
+    owed::<RegistryError>();
+    owed::<NotBh4>();
+    owed::<Invalid>();
+    owed::<RetractStaleError>();
+    // `LinkWriter` is deliberately absent: it borrows the kernel, so it is
+    // not `'static` and cannot ride this helper.
+};
+
 /// The engine's **read accessor** for M7's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world
 /// (`W: WorldState + HasLinks`), and M7 — built before `W` exists — codes

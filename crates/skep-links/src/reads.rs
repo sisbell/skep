@@ -580,22 +580,27 @@ impl LinkState {
     /// surviving set instead of the whole store, which matters because the
     /// query is caller-supplied and the constraint count with it.
     ///
+    /// Each query is BORROWED, as [`stab`](LinkState::stab) borrows its own:
+    /// a constraint is read and dropped, never kept, so a caller assembling
+    /// its list out of a request it already holds hands over references
+    /// rather than a copy per constrained slot.
+    ///
     /// Every returned address is a KEY of `links`, so [`LinkState::readlink`]
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
-    pub fn match_links(&self, constraints: &[(usize, Endset)], view: View) -> OrdSet<Address> {
-        let Some(((first_slot, first_query), rest)) = constraints.split_first() else {
+    pub fn match_links(&self, constraints: &[(usize, &Endset)], view: View) -> OrdSet<Address> {
+        let Some((&(first_slot, first_query), rest)) = constraints.split_first() else {
             return self.scan(view, |_| true); // no constraint: the whole view slice
         };
-        let mut acc = self.stab(*first_slot, first_query, view);
-        for (slot, query) in rest {
+        let mut acc = self.stab(first_slot, first_query, view);
+        for &(slot, query) in rest {
             // Consumed, not read: the accumulator is this call's own and only
             // shrinks, so a survivor moves into the next round rather than
             // being deep-copied out of the last one — a caller's constraint
             // count is otherwise a per-address copy count.
             acc = acc
                 .into_iter()
-                .filter(|a| slot_overlaps(self.link_at(a.tumbler()), *slot, query))
+                .filter(|a| slot_overlaps(self.link_at(a.tumbler()), slot, query))
                 .collect();
         }
         acc
@@ -734,19 +739,19 @@ impl LinkState {
         coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
     }
 
-    /// Whether `x` is a SINK — successor-free in the operative graph,
-    /// answered without building `succ_o(x)`: the Df-SUCC filter is the same
+    /// Whether `x` is a SINK — successor-free in the operative graph: `x` has
+    /// no edges at all, or every edge out of it carries a nullified claim.
+    /// Answered without building `succ_o(x)`: the Df-SUCC filter is the same
     /// one [`LinkState::succs_operative`] applies, and deduplicating the
     /// survivors over `new` cannot change whether there are any, so the raw
     /// edge set decides it. [`LinkState::current`] asks only whether a
     /// reached node is a sink; the walk, which needs the successors
     /// themselves, builds them.
     pub(crate) fn is_sink(&self, x: &Tumbler) -> bool {
-        !self
-            .hints
+        self.hints
             .sup_fwd
             .get(x)
-            .is_some_and(|edges| edges.iter().any(|e| !self.nullified(&e.claim)))
+            .is_none_or(|edges| edges.iter().all(|e| self.nullified(&e.claim)))
     }
 
     /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to edges

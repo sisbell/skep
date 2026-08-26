@@ -29,15 +29,15 @@ pub(crate) fn match_core<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
             _ => {}
         }
     }
-    let mut cons: Vec<(usize, Endset)> = Vec::new();
+    let mut cons: Vec<(usize, &Endset)> = Vec::new();
     if let SlotSpec::Spans(e) = &q.from {
-        cons.push((FROM, e.clone())); // e non-empty (checked above)
+        cons.push((FROM, e)); // e non-empty (checked above)
     }
     if let SlotSpec::Spans(e) = &q.to {
-        cons.push((TO, e.clone()));
+        cons.push((TO, e));
     }
     if let SlotSpec::Spans(e) = &q.ty {
-        cons.push((TYPE, e.clone()));
+        cons.push((TYPE, e));
     }
     w.links().match_links(&cons, View::Active)
 }

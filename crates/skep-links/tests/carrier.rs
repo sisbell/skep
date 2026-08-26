@@ -8,9 +8,10 @@
 //! the address-denoting projection a caller discharges it with),
 //! `TypeRegistry::build`'s rejection matrix, its pinned check order where two
 //! clauses collide, and its R-C0 behavior↔shape table in full, the five
-//! shipped registrations §B pins, the fold's freshness gate — the one store
-//! invariant that would otherwise fail silently — and the serde/journal
-//! round trips.
+//! shipped registrations §B pins, and the serde/journal round trips. (The
+//! fold's freshness gate is watched from inside the crate: the one store
+//! invariant that would otherwise fail silently is witnessed by a deposit no
+//! foreign crate can construct.)
 
 mod common;
 
@@ -19,7 +20,7 @@ use std::collections::BTreeSet;
 use common::*;
 use skep_address::Span;
 use skep_links::{
-    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkRec, LinkState, Registration,
+    coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration,
     RegistryError, ReservedAddrs, Shape, ShippedType, TypeConfig, TypeDecl, TypeRegistry, FROM,
     TO, TYPE,
 };
@@ -772,24 +773,6 @@ fn coverage_class_partitions_a_mixed_length_endset_by_start_length() {
     assert_ne!(class, coverage_class(&Endset::from_spans([deep.clone()])));
     // The partition is keyed by LENGTH, not by position.
     assert_eq!(class, coverage_class(&Endset::from_spans([deep, shallow])));
-}
-
-#[test]
-#[should_panic(expected = "fresh address")]
-fn apply_link_refuses_a_second_deposit_at_one_address() {
-    // Freshness is the one store invariant whose violation is SILENT — the
-    // insert would replace an immutable value, leaving its address in the
-    // displaced value's type slice, double-counting the home frontier and
-    // voiding Permanence, none of it observable at the fold that admitted it.
-    // Unconstructible through the kernel (M3's mint never re-issues and M2
-    // replays each record once), which is why the assert is its only witness.
-    let state = LinkState::genesis(config()).expect("valid config builds");
-    let rec = LinkRec::Deposit {
-        addr: la(1).tumbler().clone(),
-        value: Link::triple(enc(&[ca(1)]), enc(&[ca(2)]), idem_top_ty()),
-    };
-    let once = state.apply_link(&rec);
-    let _twice = once.apply_link(&rec); // corruption, not a live error path
 }
 
 #[test]

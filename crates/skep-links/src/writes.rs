@@ -1,7 +1,7 @@
 //! §C/§D — the transact-driving write surface: [`LinkWriter`] (the kernel
 //! handle + construction-time registry cache), the shared single choke point
 //! [`emit_core`] with its two-disciplines gate (§2), the M2 keyed dedup
-//! sections (§3), and the five public ops.
+//! sections (§3), and the six public ops (five deposits plus the BH4 batch).
 //!
 //! Concurrency belongs to the kernel: nothing here locks, threads, or caches
 //! beyond the genesis-immutable registry `Arc` the design mandates.
@@ -27,7 +27,7 @@ use crate::error::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
 };
-use crate::registry::{Shape, ShippedType, TypeRegistry};
+use crate::registry::{sh_conf, ShippedType, TypeRegistry};
 use crate::state::LinkRec;
 use crate::{HasLinks, LinkWorld};
 
@@ -96,8 +96,31 @@ where
     /// bump of the slice's rebuilt registry (§C).
     pub fn new(kernel: &'k Kernel<W>) -> LinkWriter<'k, W> {
         let snap = kernel.snapshot();
-        let registry = Arc::clone(&snap.world().links().registry);
+        let registry = Arc::clone(snap.world().links().registry());
         LinkWriter { kernel, registry }
+    }
+
+    /// The M2 lock set a deposit needs to meet [`emit_core`]'s dedup CHECK:
+    /// the I0 section iff the value's class is a REGISTERED idem⊤ one — the
+    /// same predicate `emit_core` evaluates on `reg.idem` — then the home's
+    /// alloc key. One derivation of the decision, beside [`DedupKey::of`]'s
+    /// one derivation of the key, so "the section M2 serializes is the section
+    /// the check reads" covers taking a section at all and not merely which
+    /// bytes it carries.
+    ///
+    /// The two ops that deliberately take NO dedup section say so at their own
+    /// key sets: MAKELINK, whose open surface faces no dedup check (ML0), and
+    /// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
+    /// second classification of its `ty` — one ascending pass over a type
+    /// slot's denoted addresses, on a path that already pays one.
+    fn dedup_lock_set(&self, value: &Link, home: &Address) -> Vec<LockKey> {
+        let mut keys: Vec<LockKey> = Vec::with_capacity(2);
+        let class = coverage_class(value.type_slot());
+        if self.registry.registration(&class).is_some_and(|r| r.idem) {
+            keys.push(DedupKey::of(value).lock_key());
+        }
+        keys.push(M3State::link_lock_key(home));
+        keys
     }
 }
 
@@ -110,7 +133,7 @@ enum Gate {
     /// obligation in its contract and reads the verdict back through its own
     /// `From<EmitCoreError>` (§2), so no deposited link can carry an empty
     /// type slot however it arrived. Runs NO dedup, so this gate always
-    /// mints: it is what MAKELINK's seat step rests on.
+    /// answers [`Deposited::Fresh`]: it is what MAKELINK's seat step rests on.
     Open,
     /// Emit_K / assert_sup / editlink claim: registered ∧ shape-conformant ∧
     /// K ≁ R; idem⊤ ⇒ active-view dedup check.
@@ -118,6 +141,43 @@ enum Gate {
     /// Nullify: the Managed discipline with the `[R]` class ADMITTED rather
     /// than refused — the one clause that separates the two.
     Retraction,
+}
+
+/// What [`emit_core`] did — two words, because the choke point has two
+/// outcomes and an `Address` alone names both.
+enum Deposited {
+    /// Freshly minted: the M3 allocation and the `LinkRec` are staged.
+    Fresh(Address),
+    /// The active incumbent of an idem⊤ class: NOTHING staged.
+    Incumbent(Address),
+}
+
+impl Deposited {
+    /// The address, whichever outcome — for a caller that stages nothing
+    /// downstream naming it, and reports it as "the address of the tuple of
+    /// this identity" (`emit`, `nullify`, `assert_sup`).
+    fn address(self) -> Address {
+        match self {
+            Deposited::Fresh(addr) | Deposited::Incumbent(addr) => addr,
+        }
+    }
+
+    /// The address of a link THIS call minted — what a caller staging a seat
+    /// for it, or handing it back as freshly its own, is relying on. Stating
+    /// the reliance here is what keeps it from being an argument in a
+    /// doc-comment: MAKELINK takes [`Gate::Open`], which runs no dedup, and
+    /// `editlink`'s claim keys its I0 on a successor minted moments earlier in
+    /// the same transaction, so neither can meet an incumbent.
+    fn minted(self) -> Address {
+        match self {
+            Deposited::Fresh(addr) => addr,
+            Deposited::Incumbent(_) => unreachable!(
+                "emit_core returns an incumbent only under Managed/Retraction on an idem⊤ \
+                 class; this caller took the Open gate or keys its I0 on an address minted \
+                 in this same transaction"
+            ),
+        }
+    }
 }
 
 /// `emit_core`'s internal error; each public op maps it through the `From`
@@ -259,25 +319,6 @@ fn lift_nullify(e: TxnError<NullifyError>) -> TxnError<RetractStaleError> {
     }
 }
 
-/// Sh-conf (P3): the value's SPAN COUNTS against the registered shape — never
-/// inferring shape from the tuple (a `(1,0)` tuple conforms under Unary AND
-/// Multi). Every shape requires one FROM span; Unary admits no TO span, Binary
-/// exactly one, Multi any finite number. Reads both counts off the link
-/// itself, so they cannot arrive in the wrong order.
-///
-/// The counts are of the stored decomposition ([`Endset::len`]), which is
-/// ASN-0126's set-valued `|F|`/`|G|` on a duplicate-free endset — every endset
-/// this gate sees, since [`emit`](LinkWriter::emit) builds both slots through
-/// [`enc`] — and over-counts a repeated span.
-fn sh_conf(shape: Shape, value: &Link) -> bool {
-    value.from_slot().len() == 1
-        && match shape {
-            Shape::Unary => value.to_slot().is_empty(),
-            Shape::Binary => value.to_slot().len() == 1,
-            Shape::Multi => true,
-        }
-}
-
 /// The doorkeeper's verdict on a deposit's home documents, in the vocabulary
 /// every op translates from (the `From` impls below).
 enum HomeFault {
@@ -376,20 +417,17 @@ impl From<HomeFault> for EditLinkError {
 /// hoist pins the error order without the backstop being able to contradict
 /// it.
 ///
-/// RETURN CONTRACT: under [`Gate::Open`] the address is freshly minted and
-/// two records are staged. Under `Managed`/`Retraction` on an idem⊤ class it
-/// may be an INCUMBENT, with nothing staged — so a caller that stages
-/// anything downstream naming the returned address must either take `Open` or
-/// carry its own miss argument. Both such callers do: MAKELINK seats under
-/// `Open`, and `editlink`'s claim keys its I0 on a successor minted moments
-/// earlier in the same transaction, so no incumbent can exist.
+/// RETURN CONTRACT: [`Deposited`], which distinguishes a freshly minted
+/// address (two records staged) from an idem⊤ INCUMBENT (nothing staged). A
+/// caller that stages anything downstream naming the address takes
+/// [`Deposited::minted`], which states that reliance where it is relied on.
 fn emit_core<W>(
     stg: &mut Staging<W>,
     caller: Caller,
     home: &Address,
     value: Link,
     gate: Gate,
-) -> Result<Address, EmitCoreError>
+) -> Result<Deposited, EmitCoreError>
 where
     W: LinkWorld,
     W::Record: From<LinkRec> + From<M3Rec>,
@@ -434,7 +472,7 @@ where
             }
             if reg.idem {
                 if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
-                    return Ok(incumbent); // zero-step: stage NOTHING
+                    return Ok(Deposited::Incumbent(incumbent)); // zero-step
                 }
             }
         }
@@ -450,7 +488,7 @@ where
         }
         .into(),
     );
-    Ok(addr)
+    Ok(Deposited::Fresh(addr))
 }
 
 /// wf for one MAKELINK `Resolve` spec: a registered source, and a depth-2
@@ -544,7 +582,8 @@ where
     /// byte-identical — M3's contract). NO shape gate, NO idem dedup
     /// (distinct links always — ML0), NO provenance.
     ///
-    /// Every `Resolve` spec is wf-checked ([`is_wf_content_spec`]) before any
+    /// Every `Resolve` spec is wf-checked — a registered source, and a depth-2
+    /// content V-position with ordinal displacement — before any
     /// slot is built, and each `Resolve` slot is bounded at
     /// [`MAX_RESOLVE_SPANS`] I-extents (`SlotTooLarge`) — a spec's expansion
     /// is the source document's fragmentation rather than the request's size,
@@ -577,6 +616,9 @@ where
     ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
         let r_class = self.registry.shipped_class(ShippedType::Retraction);
         let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
+        // No dedup section: the open surface takes no dedup CHECK either
+        // (ML0 — distinct links always), so `dedup_lock_set`'s question does
+        // not arise and the home's alloc key is the whole set.
         self.kernel
             .transact(&[M3State::link_lock_key(home)], |stg| {
                 let (e1, e2, e3) = {
@@ -607,7 +649,9 @@ where
                     return Err(MakeLinkError::SupersessionClass); // Conflicts §10
                 }
                 let value = Link::triple(e1, e2, e3);
-                let addr = emit_core(stg, caller, home, value, Gate::Open)?;
+                // `minted`, because the seat below names this address: the
+                // Open gate runs no dedup, so it cannot be an incumbent.
+                let addr = emit_core(stg, caller, home, value, Gate::Open)?.minted();
                 let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
                 stg.push(seat.into());
                 Ok(addr)
@@ -662,16 +706,10 @@ where
         if class == *self.registry.shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
-        let idem = self.registry.registration(&class).is_some_and(|r| r.idem);
         let value = Link::triple(enc([from]), enc(to), ty.clone());
-        let mut keys: Vec<LockKey> = Vec::with_capacity(2);
-        if idem {
-            keys.push(DedupKey::of(&value).lock_key());
-        }
-        keys.push(M3State::link_lock_key(home));
+        let keys = self.dedup_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
-            let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
-            Ok(addr)
+            Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
         })
     }
 
@@ -722,7 +760,7 @@ where
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
         let retraction = self.registry.reserved_type(ShippedType::Retraction).clone();
         let value = Link::triple(enc([home]), enc([target]), retraction);
-        let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
+        let keys = self.dedup_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -736,8 +774,7 @@ where
                     return Err(NullifyError::BadTarget); // P-tgt
                 }
             }
-            let addr = emit_core(stg, caller, home, value, Gate::Retraction)?;
-            Ok(addr)
+            Ok(emit_core(stg, caller, home, value, Gate::Retraction)?.address())
         })
     }
 
@@ -769,7 +806,7 @@ where
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
         let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
-        let keys = [DedupKey::of(&value).lock_key(), M3State::link_lock_key(home)];
+        let keys = self.dedup_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -782,8 +819,7 @@ where
                     return Err(AssertSupError::SelfSupersession); // irreflexive
                 }
             }
-            let addr = emit_core(stg, caller, home, value, Gate::Managed)?;
-            Ok(addr)
+            Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
         })
     }
 
@@ -837,6 +873,11 @@ where
         // order, so the pair is the same set in the same sequence however it
         // was written, whatever the applier does with it. `dedup` behind the
         // sort subsumes `d_s == d_a` (M2 promises nothing about duplicates).
+        //
+        // No dedup section, so `dedup_lock_set` is not the shape here: the
+        // successor takes the Open gate, which runs no dedup check, and the
+        // claim's check is a guaranteed miss (its I0 carries a successor
+        // minted inside this transaction).
         let mut keys = vec![M3State::link_lock_key(d_s), M3State::link_lock_key(d_a)];
         keys.sort();
         keys.dedup();
@@ -883,9 +924,12 @@ where
                     return Err(EditLinkError::DcViolation);
                 }
             }
-            let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?;
-            let claim_value = Link::triple(enc([original]), enc([&succ]), sup.clone());
-            let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?;
+            // Both `minted`: this op reports each address as one it deposited,
+            // and the claim's own I0 carries `succ`, minted a line above in
+            // this same transaction, so no incumbent of that class exists.
+            let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?.minted();
+            let claim_value = Link::triple(enc([original]), enc([&succ]), sup);
+            let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?.minted();
             Ok((succ, claim))
         })?;
         Ok((succ, claim, seq))

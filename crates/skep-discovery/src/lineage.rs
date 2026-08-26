@@ -32,9 +32,10 @@ use crate::{FROM, TO};
 /// per-claim conformance filter, faithful because the assembled system is
 /// edit-disciplined (EL-DM — every `[K_sup]` claim is born through M7's
 /// `assert_sup`/`editlink`, which schema-conform their emission). The
-/// reliance is semantic only, never safety-bearing: every emit-shaped
-/// `[K_sup]` tuple carries unit-depth single-address F and G by M7's shape
-/// gates, so the endpoint read-out cannot fault.
+/// reliance is semantic only, never safety-bearing: every stored `[K_sup]`
+/// tuple carries unit-depth single-address F and G by M7's `[K_sup]`
+/// sole-writer fences — `Endset::single_denoted`, the test those fences
+/// establish — so the endpoint read-out cannot fault.
 fn claims_on<W>(s: &Snapshot<W>, slot: usize, key: &Address, v: View) -> Vec<SupClaim>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
@@ -52,17 +53,21 @@ where
             let link = l.readlink(c).expect("hit keys are resident links");
             let old = validate(
                 link.from_slot()
-                    .addrs()
-                    .next()
-                    .expect("[K_sup] F is unit-depth single-address (M7's shape gate)")
+                    .single_denoted()
+                    .expect(
+                        "a [K_sup] F denotes exactly one address (Df-DISC(ii), held by M7's \
+                         sole-writer fences)",
+                    )
                     .clone(),
             )
             .expect("denoted claim endpoints are T4-valid link addresses");
             let new = validate(
                 link.to_slot()
-                    .addrs()
-                    .next()
-                    .expect("[K_sup] G is unit-depth single-address (M7's shape gate)")
+                    .single_denoted()
+                    .expect(
+                        "a [K_sup] G denotes exactly one address (Df-DISC(ii), held by M7's \
+                         sole-writer fences)",
+                    )
                     .clone(),
             )
             .expect("denoted claim endpoints are T4-valid link addresses");

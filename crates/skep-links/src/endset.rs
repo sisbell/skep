@@ -16,7 +16,8 @@ use skep_address::{
 /// M1's `SpanSet`, which is read-opaque to M7. Coverage is a query-time
 /// projection ([`Endset::covers`]); the sequence is read through
 /// [`Endset::spans`]/[`Endset::addrs`] and folds to a `SpanSet` only at an
-/// M1-call boundary ([`Endset::to_spanset`], the lone use).
+/// M1-call boundary: the crate-internal whole-endset fold FOLLOWLINK
+/// performs.
 ///
 /// Derived `PartialEq`/`Eq`/`Hash` are STRUCTURAL (decomposition- and
 /// span-order-sensitive) — serde/container plumbing only, NEVER identity
@@ -114,12 +115,19 @@ impl Endset {
         self.spans().all(Span::is_level_uniform)
     }
 
-    /// INTERNAL — the "unit-depth single-addr" slot test (ASN-0125
-    /// Df-DISC(ii) schema; the BH3 `target_of` single-address-G rule): every
-    /// span unit-depth AND exactly one distinct denoted address — returns it.
-    /// A pure question about this endset, so it sits beside the module's
-    /// other projections rather than reading one from outside.
-    pub(crate) fn single_denoted(&self) -> Option<&Tumbler> {
+    /// The "unit-depth single-addr" slot test (ASN-0125 Df-DISC(ii) schema;
+    /// the BH3 `target_of` single-address-G rule): every span unit-depth AND
+    /// exactly one distinct denoted address — returns it. A pure question
+    /// about this endset, so it sits beside the module's other projections.
+    ///
+    /// This is what the `[K_sup]` SOLE-WRITER FENCES establish of every stored
+    /// claim, and the test a reader of one applies to read its endpoints back
+    /// — never [`Shape`](crate::Shape), whose span-count conformance is a gate
+    /// on the managed surface and says nothing about denotation. STRICTLY
+    /// STRONGER than `addrs().next()`, which takes the first unit-depth start
+    /// where this refuses a slot naming several distinct addresses; the two
+    /// agree on every claim the fences admit.
+    pub fn single_denoted(&self) -> Option<&Tumbler> {
         if !self.is_address_denoting() {
             return None;
         }
@@ -131,9 +139,9 @@ impl Endset {
         Some(first)
     }
 
-    /// INTERNAL — the one Endset → `SpanSet` boundary fold (concatenation,
-    /// order-preserving, exactly M1's singleton+union). Used by FOLLOWLINK
-    /// (F1/F3) and the extent partition of [`coverage_class`].
+    /// INTERNAL — the one WHOLE-ENDSET fold to a `SpanSet` (concatenation,
+    /// order-preserving, exactly M1's singleton+union), and FOLLOWLINK's
+    /// (F1/F3) sole use.
     pub(crate) fn to_spanset(&self) -> SpanSet {
         self.0.iter().cloned().collect()
     }
@@ -152,8 +160,8 @@ pub(crate) fn is_unit_depth(s: &Span) -> bool {
 /// identity — identity is the store address (L11b).
 ///
 /// Serde: a **symmetric shadow pair** — the derived `Serialize` emits the one
-/// named `slots` field and `Deserialize` reads that same shape back through
-/// [`LinkShadow`] into [`Link::new`], so the arity floor holds at the trust
+/// named `slots` field and `Deserialize` reads that same shape back through a
+/// private shadow into [`Link::new`], so the arity floor holds at the trust
 /// boundary too. Load-bearing: [`crate::LinkState`] rides M2 checkpoints, and
 /// the positional accessors index slots 0–2 directly, so a sub-arity value
 /// smuggled in through a decoded checkpoint would fault inside the replay
@@ -297,8 +305,9 @@ impl CoverageClass {
 /// Address-denoting endset (every span unit-depth) ⇒ its ≼-minimal denoted
 /// antichain (I0a, exact, readable through [`CoverageClass::denoted`]);
 /// general level-uniform content endset ⇒ the per-`#start` partition, each
-/// part folded to a `SpanSet` then `canonical_key`d. The lone place an endset
-/// folds to a `SpanSet`. PUBLIC so M9 can key `targets_keyed`'s map via
+/// part folded to a `SpanSet` then `canonical_key`d — built per part from its
+/// own spans, never through the whole-endset fold, the parts being span
+/// groups rather than endsets. PUBLIC so M9 can key `targets_keyed`'s map via
 /// `coverage_class(ty)`.
 ///
 /// TOTAL ON LEVEL-UNIFORM INPUT — which is all it ever receives: managed

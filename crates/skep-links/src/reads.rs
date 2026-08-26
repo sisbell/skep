@@ -13,7 +13,7 @@ use skep_address::{
 use crate::endset::{coverage_class, CoverageClass, Endset, Link};
 use crate::error::{Invalid, NotBh4};
 use crate::registry::{Behavior, ShippedType};
-use crate::state::LinkState;
+use crate::state::{lift, LinkState};
 
 /// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
 /// `members`/`targets_of`; on `observe` and the §G index primitives it reads
@@ -98,19 +98,6 @@ fn slot_overlaps(link: &Link, slot: usize, query: &Endset) -> bool {
         .is_some_and(|endset| query.spans().any(|q| endset.spans().any(|s| overlaps(q, s))))
 }
 
-/// `Tumbler → Address` lift of an INDEX KEY — infallible, every key of
-/// `links` being T4-valid by M3's mint. THE boundary lift, applied wherever a
-/// store key leaves the store: every §F tuple address and every §G result
-/// passes through here, so no consumer restates the mint's guarantee to lift
-/// a key of its own.
-///
-/// Borrows, because an index key belongs to the store and the read only looks
-/// at it — the ownership counterpart of [`lift_denoted`], whose argument the
-/// read produced and is about to drop.
-fn lift(t: &Tumbler) -> Address {
-    validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
-}
-
 /// `Tumbler → Address` lift of a DENOTED address, T4-valid on either of two
 /// grounds. A tumbler read back out of a stored slot rests on the slot's
 /// construction: every slot a deposit path builds comes from [`enc`], whose
@@ -119,8 +106,8 @@ fn lift(t: &Tumbler) -> Address {
 /// back may instead be the CALLER'S OWN ARGUMENT — `chain` seeds its path
 /// with it, `tip` reports a successor-free node as its own sink, and
 /// `current` reaches `y` when nothing supersedes it — and there the ground is
-/// stronger still: the caller held an `Address`. Named apart from [`lift`] so
-/// the two families of obligation can be audited separately.
+/// stronger still: the caller held an `Address`. Named apart from the store's
+/// own [`lift`] so the two families of obligation can be audited separately.
 ///
 /// CONSUMES its argument: a denoted address is read out of a slot into a set
 /// or a path the read owns and is about to drop, so the caller hands it over
@@ -237,7 +224,6 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn members(&self, ty: &Endset, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = self.subtracts_filtered(&class, view);
         let mut members: OrdSet<Tumbler> = OrdSet::new();
         for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
@@ -245,17 +231,7 @@ impl LinkState {
                 members.insert(m.clone());
             }
         }
-        // The filter domain once for the whole result, not once per element.
-        let roots: Vec<&Tumbler> = if subtract {
-            self.retired_roots().collect()
-        } else {
-            Vec::new()
-        };
-        members
-            .into_iter()
-            .filter(|m| !(subtract && under_any(roots.iter().copied(), m)))
-            .map(lift_denoted)
-            .collect()
+        self.denoted_result(&class, view, members)
     }
 
     /// D3: the denoted targets (G.addrs()) of tuples whose F COVERS `x`,
@@ -270,7 +246,6 @@ impl LinkState {
     /// (§Core data model totality).
     pub fn targets_of(&self, ty: &Endset, x: &Address, view: View) -> Vec<Address> {
         let class = coverage_class(ty);
-        let subtract = self.subtracts_filtered(&class, view);
         let mut targets: OrdSet<Tumbler> = OrdSet::new();
         for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
@@ -280,17 +255,7 @@ impl LinkState {
                 }
             }
         }
-        // The filter domain once for the whole result, not once per element.
-        let roots: Vec<&Tumbler> = if subtract {
-            self.retired_roots().collect()
-        } else {
-            Vec::new()
-        };
-        targets
-            .into_iter()
-            .filter(|g| !(subtract && under_any(roots.iter().copied(), g)))
-            .map(lift_denoted)
-            .collect()
+        self.denoted_result(&class, view, targets)
     }
 
     /// Tuple status by address: resident and not nullified.
@@ -464,9 +429,20 @@ impl LinkState {
         // `home_frontier` counts the same deposits in a `u64` — so an ordinal
         // outside `u64` is a frontier that overflowed first, and the field
         // type is the commitment this reads back.
+        //
+        // The subtraction cannot underflow for the same reason it is exact:
+        // the mint allocates at `1 + f_d^Σ` and the fold that indexes the
+        // deposit increments that same frontier, in one transaction, so a
+        // resident link's ordinal runs `1..f` and the newest link's IS `f`.
+        // An ordinal past the frontier is corruption, and fail-stops here
+        // rather than reporting 0 — which means "deposited just now", the one
+        // wrong answer `stale` would propagate as freshness.
         let ord = u64::try_from(ordinal(a.tumbler()))
             .expect("a link ordinal indexes its home's chain, which `home_frontier` counts in u64");
-        Some(self.home_frontier(&home).saturating_sub(ord))
+        Some(self.home_frontier(&home).checked_sub(ord).expect(
+            "a resident link's ordinal is at most its home's frontier: the fold that indexed \
+             the link incremented that same frontier",
+        ))
     }
 
     /// BH4 stale set (§7): active type-`ty` tuples older than `horizon`, in
@@ -513,8 +489,8 @@ impl LinkState {
     /// finite link set), returned ENTIRE — linear → 1, forked → ≥ 2,
     /// mutual-supersession standoff → 0, all legitimate. Each sink carries
     /// its OWN activity and the FULL operative `out(sink)`, read from the
-    /// inbound claim relation ([`LinkState::out_claims`], once for all sinks
-    /// at once) rather than accumulated during the walk — accumulation would
+    /// inbound claim relation in ONE walk for all sinks at once, rather than
+    /// accumulated during the walk — accumulation would
     /// drop an operative claim asserted on the sink from outside the closure.
     /// M7 discloses; the consumer narrows — no single "latest" is fabricated.
     ///
@@ -547,9 +523,12 @@ impl LinkState {
             .collect()
     }
 
-    /// The genesis-fixed endset of a shipped class — M9 reads
-    /// `PredDef`/`PredStable` here (the registry lookup is internal; this is
-    /// the public read).
+    /// The genesis-fixed endset of a shipped class, read off a snapshot — for
+    /// a caller holding the SLICE: M8's lineage reads name `Supersedes` this
+    /// way, and the engine's observe dump and its genesis-drift check name all
+    /// five. A caller holding the registry itself asks
+    /// [`TypeRegistry::reserved_type`](crate::TypeRegistry::reserved_type),
+    /// which is public and is where this delegates.
     pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
         self.registry.reserved_type(ty)
     }
@@ -569,17 +548,7 @@ impl LinkState {
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     pub fn stab(&self, slot: usize, query: &Endset, view: View) -> OrdSet<Address> {
-        let view = default_to_active(view);
-        let mut out = OrdSet::new();
-        for (addr, link) in self.links.iter() {
-            if view == View::Active && self.nullified(addr) {
-                continue;
-            }
-            if slot_overlaps(link, slot, query) {
-                out.insert(lift(addr));
-            }
-        }
-        out
+        self.scan(view, |link| slot_overlaps(link, slot, query))
     }
 
     /// The AND-of-(per-slot overlap) combiner — findlinks' core, factored
@@ -590,9 +559,10 @@ impl LinkState {
     /// as `Active`).
     ///
     /// The first constraint scans `links`; every later one NARROWS the
-    /// accumulator with the same per-link predicate [`stab`] applies, rather
-    /// than scanning the store again and intersecting afterwards. Both read
-    /// the store through [`slot_overlaps`], so the AND cannot come apart from
+    /// accumulator with the same per-link predicate [`stab`](LinkState::stab)
+    /// applies, rather than scanning the store again and intersecting
+    /// afterwards. Both read the store through the same per-link overlap test,
+    /// so the AND cannot come apart from
     /// its own conjuncts — and a caller's constraint count multiplies the
     /// surviving set instead of the whole store, which matters because the
     /// query is caller-supplied and the constraint count with it.
@@ -601,17 +571,8 @@ impl LinkState {
     /// on it is `Some`; the set is in M1's address order (T1), which is the
     /// permanent enumeration key a cursor resumes from.
     pub fn match_links(&self, constraints: &[(usize, Endset)], view: View) -> OrdSet<Address> {
-        let view = default_to_active(view);
         let Some(((first_slot, first_query), rest)) = constraints.split_first() else {
-            // No constraint: the whole view slice.
-            let mut out = OrdSet::new();
-            for (addr, _) in self.links.iter() {
-                if view == View::Active && self.nullified(addr) {
-                    continue;
-                }
-                out.insert(lift(addr));
-            }
-            return out;
+            return self.scan(view, |_| true); // no constraint: the whole view slice
         };
         let mut acc = self.stab(*first_slot, first_query, view);
         for (slot, query) in rest {
@@ -644,6 +605,26 @@ impl LinkState {
     }
 
     // ───────────────────────── internal helpers ─────────────────────────
+
+    /// The whole-store scan under a view: every link `keep` admits, as
+    /// addresses in M1's order. The ONE place `links` is walked end to end,
+    /// and the ONE place a STORE SCAN turns `Default` into `Active`, so
+    /// [`LinkState::stab`] and [`LinkState::match_links`]' unconstrained
+    /// branch cannot answer differently about a view. (The typed reads make
+    /// the same conversion at their own one place, the slice walk.)
+    fn scan(&self, view: View, keep: impl Fn(&Link) -> bool) -> OrdSet<Address> {
+        let active = default_to_active(view) == View::Active;
+        let mut out = OrdSet::new();
+        for (addr, link) in self.links.iter() {
+            if active && self.nullified(addr) {
+                continue;
+            }
+            if keep(link) {
+                out.insert(lift(addr));
+            }
+        }
+        out
+    }
 
     /// The typed slice by class, as a LAZY walk of the audit hint: active =
     /// audit ∖ nullified, decided per element at query time (the indexes are
@@ -690,13 +671,36 @@ impl LinkState {
             .flat_map(move |t| self.link_at(t).from_slot().addrs())
     }
 
-    /// Whether a read subtracts filtered RESULTS — two rules in one verdict,
-    /// stated once for the two reads (`members`/`targets_of`) that honor
-    /// them: BH1's Rewrite scope, which makes `View::Default` = active ∖
-    /// filtered on those two alone, and the `J ≠ K'` exclusion, which stops
-    /// the shipped filter class from subtracting itself.
-    fn subtracts_filtered(&self, class: &CoverageClass, view: View) -> bool {
-        view == View::Default && *class != *self.shipped_class(ShippedType::Retired)
+    /// The result-side BH1 rewrite, whole: a denoted result set lifted to
+    /// addresses, minus the filtered ones under `View::Default`. Two rules and
+    /// one judgement, stated once for the two reads (`members`/`targets_of`)
+    /// that honor them.
+    ///
+    /// The rules are BH1's Rewrite scope, which confines `Default` = active ∖
+    /// filtered to those two reads, and the `J ≠ K'` exclusion, which stops
+    /// the shipped filter class from subtracting itself. The judgement is that
+    /// the filter DOMAIN is derived ONCE for the whole result rather than once
+    /// per element: [`LinkState::is_filtered`] re-walks the active `Retired`
+    /// slice per probe, which is right for a single probe and quadratic across
+    /// a result set.
+    fn denoted_result(
+        &self,
+        class: &CoverageClass,
+        view: View,
+        denoted: OrdSet<Tumbler>,
+    ) -> Vec<Address> {
+        let subtract =
+            view == View::Default && *class != *self.shipped_class(ShippedType::Retired);
+        let roots: Vec<&Tumbler> = if subtract {
+            self.retired_roots().collect()
+        } else {
+            Vec::new()
+        };
+        denoted
+            .into_iter()
+            .filter(|t| !(subtract && under_any(roots.iter().copied(), t)))
+            .map(lift_denoted)
+            .collect()
     }
 
     /// The v1 walk-serving scope (§5): the walk family serves the shipped

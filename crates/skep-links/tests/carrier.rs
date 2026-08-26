@@ -188,6 +188,39 @@ fn registry_build_accepts_the_shipped_config_and_seeds_five_classes() {
 }
 
 #[test]
+fn the_published_registry_is_the_one_rebuilt_from_the_sealed_config() {
+    // The registry an assembler SHARES instead of building a second one from
+    // the same configuration. It must answer as the validated lookup after a
+    // checkpoint round trip — where the skipped field deserializes as a seed
+    // that registers nothing and reports every shipped endset as ⟨⟩ — because
+    // that is the state a recovering assembler reads it out of.
+    let state = LinkState::genesis(config()).expect("valid config builds");
+    let bytes = bincode::serialize(&state).expect("the slice serializes");
+    let recovered: LinkState = bincode::deserialize(&bytes).expect("the slice deserializes");
+    let recovered = recovered.rebuild_derived();
+    for ty in [
+        ShippedType::PredDef,
+        ShippedType::PredStable,
+        ShippedType::Retired,
+        ShippedType::Supersedes,
+        ShippedType::Retraction,
+    ] {
+        let endset = recovered.registry().reserved_type(ty);
+        assert_eq!(endset, state.registry().reserved_type(ty), "{ty:?}");
+        assert!(
+            recovered.registry().registration(&coverage_class(endset)).is_some(),
+            "{ty:?} is registered in the published registry"
+        );
+    }
+    // ...and the app decls with them, so what is shared is the whole
+    // configuration and not only the shipped five.
+    assert!(recovered
+        .registry()
+        .registration(&coverage_class(&bh4_ty()))
+        .is_some());
+}
+
+#[test]
 fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
     let ok_reg = Registration {
         shape: Shape::Multi,
@@ -489,6 +522,35 @@ fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger(
     let skew = Endset::from_spans([Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12-valid")]);
     assert!(!skew.is_address_denoting());
     assert!(!skew.is_level_uniform());
+}
+
+#[test]
+fn single_denoted_is_stricter_than_the_first_denoted_address() {
+    // The Df-DISC(ii) slot test M8 reads a stored claim's endpoints back
+    // through, published so the reliance is on M7's rule rather than on a
+    // transcription of it. It is STRICTLY stronger than `addrs().next()`, and
+    // this is the whole of the difference: several DISTINCT denoted addresses
+    // is ⊥, where taking the first would answer with one of them.
+    let two = enc(&[ca(1), ca(2)]);
+    assert_eq!(two.addrs().next(), Some(ca(1).tumbler()));
+    assert_eq!(two.single_denoted(), None, "two distinct addresses denote no one");
+
+    // "Exactly one DISTINCT address", not "exactly one span": a repeated name
+    // denotes one, which is the reading `editlink`'s DC guard admits.
+    assert_eq!(enc(&[ca(1)]).single_denoted(), Some(ca(1).tumbler()));
+    assert_eq!(enc(&[ca(1), ca(1)]).single_denoted(), Some(ca(1).tumbler()));
+
+    // ⟨⟩ denotes nothing, and a non-unit-depth span is refused OUTRIGHT
+    // rather than skipped — the endset below denotes ca(9) to `addrs`, and
+    // this test is unit-depth-ALL, so it answers ⊥.
+    assert_eq!(Endset::empty().single_denoted(), None);
+    let mixed = Endset::from_spans(
+        [span(&ca(1), &ca(3))]
+            .into_iter()
+            .chain(enc(&[ca(9)]).spans().cloned()),
+    );
+    assert_eq!(mixed.addrs().next(), Some(ca(9).tumbler()));
+    assert_eq!(mixed.single_denoted(), None);
 }
 
 #[test]

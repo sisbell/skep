@@ -77,8 +77,7 @@ pub enum Behavior {
 /// with neither the dedup lock nor the in-transaction check, so a class may
 /// hold several active tuples of one I0 identity. That is why the incumbent
 /// a dedup hit returns is specified as the T1-LEAST active match rather than
-/// as "the one" (`LinkState::active_incumbent`). `shape` is a gate in the
-/// same sense — see [`Shape`].
+/// as "the one". `shape` is a gate in the same sense — see [`Shape`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registration {
     pub shape: Shape,

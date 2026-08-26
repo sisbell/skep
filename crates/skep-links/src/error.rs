@@ -163,7 +163,7 @@ pub enum EditLinkError {
 /// The staleness family's served-only-where-declared rejection (§7): `ty` is
 /// not registered with BH4 (Age), so `stale` does not serve it. A typed
 /// refusal, never `Ok(vec![])` — so a caller reading an empty stale set is
-/// reading a truthful freshness claim, never "this type does not do
+/// reading a truthful freshness answer, never "this type does not do
 /// staleness".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotBh4;

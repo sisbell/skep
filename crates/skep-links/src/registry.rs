@@ -50,17 +50,43 @@ pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
         }
 }
 
-/// The four behavior atoms BH1–BH4 (ASN-0128). `Ord` so the set backs a
-/// `BTreeSet`.
+/// The four behavior atoms of ASN-0128, whose names there are `ReadFilter`
+/// (BH1), `DeterminateWalk` (BH2), `TypedReverseLookup` (BH3) and
+/// `AgeStaleness` (BH4); each variant below names its own. `Ord` so the set
+/// backs a `BTreeSet`.
+///
+/// Declaring one CONFERS a set of reads and, separately, GATES a smaller set
+/// — in v1 only BH3's join and BH4's `stale` read a declaration back, the
+/// other two being fixed to their shipped class and fenced at build. Each
+/// variant says which is which, because "declared ⇒ served" is the property
+/// the two serving fences buy and it is not the same as "declared ⇒ consulted".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Behavior {
-    /// BH1 — read-filter (⇒ Unary).
+    /// BH1 — ASN-0128's `ReadFilter` (⇒ Unary). CONFERS `is_filtered` and the
+    /// result-side `View::Default` rewrite. GATES NOTHING at read time: v1's
+    /// `is_filtered` is type-less, reading the shipped `Retired` class
+    /// directly, and an app declaration is refused at build
+    /// (`UnservedSecondFilter`), so this declaration exists on exactly one
+    /// registration and no read consults it.
     ReadFilter,
-    /// BH2 — walk (⇒ Binary).
+    /// BH2 — ASN-0128's `DeterminateWalk` (⇒ Binary), and DETERMINACY is the
+    /// half of that name the variant drops: the walk it confers halts at a
+    /// branch or a cycle rather than choosing, which is what `Tip`'s
+    /// `Indeterminate` reports the absence of. CONFERS `succs`, `chain`,
+    /// `tip`, `is_in_chain`. GATES NOTHING at read time: the walk-scope test
+    /// compares against the shipped `Supersedes` CLASS, and an app declaration
+    /// is refused at build (`UnservedWalk`).
     Walk,
-    /// BH3 — reverse lookup (⇒ Binary).
+    /// BH3 — ASN-0128's `TypedReverseLookup` (⇒ Binary). CONFERS `sources_to`,
+    /// `target_of`, `targets_keyed`. Of those, `targets_keyed` alone consults
+    /// the declaration (through `reverse_lookup_classes`); `sources_to` and
+    /// `target_of` answer for any registered class, declared or not.
     ReverseLookup,
-    /// BH4 — age/staleness (⇒ idem = ⊥, any shape).
+    /// BH4 — ASN-0128's `AgeStaleness` (⇒ idem = ⊥, any shape). CONFERS `age`,
+    /// `stale`, `retract_stale`. GATES `stale` — and so `retract_stale`, which
+    /// builds its batch from it — and NOT `age`, which reads no registration
+    /// and answers for any resident link. The `Age` half of the corpus name is
+    /// the ungated one; the `Staleness` half is the gate.
     Age,
 }
 

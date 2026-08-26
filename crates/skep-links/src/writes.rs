@@ -100,20 +100,23 @@ where
         LinkWriter { kernel, registry }
     }
 
-    /// The M2 lock set a deposit needs to meet [`emit_core`]'s dedup CHECK:
-    /// the I0 section iff the value's class is a REGISTERED idem⊤ one — the
-    /// same predicate `emit_core` evaluates on `reg.idem` — then the home's
-    /// alloc key. One derivation of the decision, beside [`DedupKey::of`]'s
-    /// one derivation of the key, so "the section M2 serializes is the section
-    /// the check reads" covers taking a section at all and not merely which
-    /// bytes it carries.
+    /// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
+    /// class is a REGISTERED idem⊤ one — the same predicate [`emit_core`]
+    /// evaluates on `reg.idem`, so the section is taken exactly when the check
+    /// reads one — then the home's alloc key, always. A caller hands the
+    /// result to `transact` entire and adds nothing.
+    ///
+    /// One derivation of the dedup DECISION, beside [`DedupKey::of`]'s one
+    /// derivation of the key, so "the section M2 serializes is the section the
+    /// check reads" covers taking a section at all and not merely which bytes
+    /// it carries.
     ///
     /// The two ops that deliberately take NO dedup section say so at their own
     /// key sets: MAKELINK, whose open surface faces no dedup check (ML0), and
     /// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
     /// second classification of its `ty` — one ascending pass over a type
     /// slot's denoted addresses, on a path that already pays one.
-    fn dedup_lock_set(&self, value: &Link, home: &Address) -> Vec<LockKey> {
+    fn deposit_lock_set(&self, value: &Link, home: &Address) -> Vec<LockKey> {
         let mut keys: Vec<LockKey> = Vec::with_capacity(2);
         let class = coverage_class(value.type_slot());
         if self.registry.registration(&class).is_some_and(|r| r.idem) {
@@ -617,7 +620,7 @@ where
         let r_class = self.registry.shipped_class(ShippedType::Retraction);
         let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
         // No dedup section: the open surface takes no dedup CHECK either
-        // (ML0 — distinct links always), so `dedup_lock_set`'s question does
+        // (ML0 — distinct links always), so `deposit_lock_set`'s question does
         // not arise and the home's alloc key is the whole set.
         self.kernel
             .transact(&[M3State::link_lock_key(home)], |stg| {
@@ -707,7 +710,7 @@ where
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
         let value = Link::triple(enc([from]), enc(to), ty.clone());
-        let keys = self.dedup_lock_set(&value, home);
+        let keys = self.deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
         })
@@ -760,7 +763,7 @@ where
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
         let retraction = self.registry.reserved_type(ShippedType::Retraction).clone();
         let value = Link::triple(enc([home]), enc([target]), retraction);
-        let keys = self.dedup_lock_set(&value, home);
+        let keys = self.deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -806,7 +809,7 @@ where
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
         let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
-        let keys = self.dedup_lock_set(&value, home);
+        let keys = self.deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -874,7 +877,7 @@ where
         // was written, whatever the applier does with it. `dedup` behind the
         // sort subsumes `d_s == d_a` (M2 promises nothing about duplicates).
         //
-        // No dedup section, so `dedup_lock_set` is not the shape here: the
+        // No dedup section, so `deposit_lock_set` is not the shape here: the
         // successor takes the Open gate, which runs no dedup check, and the
         // claim's check is a guaranteed miss (its I0 carries a successor
         // minted inside this transaction).

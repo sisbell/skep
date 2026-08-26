@@ -120,10 +120,14 @@ fn lift_denoted(t: Tumbler) -> Address {
     )
 }
 
-/// BH1's test against a root set: some root is a prefix of the probe — the
-/// ONE statement of it, so the single-probe read and the result-side
-/// subtraction cannot answer differently. The probe ranges over all of
-/// carrier T, roots or not.
+/// BH1's test against a root set: PREFIX-CLOSURE over the roots — some root
+/// is a prefix of the probe. The ONE statement of it, so the single-probe read
+/// and the result-side subtraction cannot answer differently. The probe ranges
+/// over all of carrier T, roots or not.
+///
+/// On roots denoted out of an `enc`-built endset this reproduces exactly that
+/// endset's coverage, which is why the prefix form and a whole-endset `covers`
+/// are indistinguishable everywhere the managed surface writes.
 fn under_any<'a>(roots: impl IntoIterator<Item = &'a Tumbler>, probe: &Tumbler) -> bool {
     roots.into_iter().any(|root| is_prefix(root, probe))
 }
@@ -274,11 +278,20 @@ impl LinkState {
         self.nullified(a.tumbler())
     }
 
-    /// BH1 read-filter (§7): membership in the shipped `Retired` class's
-    /// active filter slice — some active retired root is a prefix of the
-    /// probe, computed lazily (the filtered subtree is never materialized).
-    /// The probe ranges over all of carrier T (the `is_k` membership regime:
-    /// every tumbler under a retired root is filtered, addresses or not).
+    /// BH1 read-filter (§7): `∃ x ∈ addrs(F) : x ≼ probe` over the active
+    /// shipped `Retired` slice — some address a retired tuple's F DENOTES is
+    /// a prefix of the probe, computed lazily (the filtered subtree is never
+    /// materialized). The probe ranges over all of carrier T: every tumbler
+    /// under a denoted retired root is filtered, addresses or not.
+    ///
+    /// Equal to [`Endset::covers`] on an address-denoting F — a unit-depth
+    /// span's coverage IS its start's prefix set — hence on every `Retired`
+    /// tuple `emit` can build, `emit` forcing `enc({from})`. STRICTLY NARROWER
+    /// on an F carrying a non-unit-depth span, which the open surface can
+    /// deposit and which denotes nothing: such a span contributes no root and
+    /// filters nothing, where its coverage is non-empty. NOT
+    /// [`LinkState::is_k`]'s regime, which is `covers` outright.
+    ///
     /// Correct TYPE-LESS because v1 registers exactly one BH1 type —
     /// build-enforced (`UnservedSecondFilter`, §B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
@@ -334,7 +347,7 @@ impl LinkState {
 
     /// BH2 head: `Sink(head)` when the walk halts at a successor-free node;
     /// `Indeterminate` (⊥) at a branch or cycle — and for a registered `ty`
-    /// other than `Supersedes` (v1 serving scope: no positive head claim is
+    /// other than `Supersedes` (v1 serving scope: no positive head is
     /// fabricated).
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
@@ -449,13 +462,13 @@ impl LinkState {
     /// ASCENDING ADDRESS ORDER — the active typed slice's own order — served
     /// only where declared: `Err(NotBh4)` unless the in-contract `ty` is
     /// registered with BH4 (Age). The typed rejection keeps `Ok(vec![])` a
-    /// truthful freshness claim (never conflated with "not a BH4 type") and
+    /// truthful freshness answer (never conflated with "not a BH4 type") and
     /// IS the fence: `retract_stale` builds its batch from this call, so a
     /// refusal here is the batch's refusal, and the nullifier can never be
     /// aimed at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims).
     ///
     /// The ORDER is load-bearing, not incidental: `retract_stale` issues one
-    /// `nullify` per element in it, and its published claim that a batch
+    /// `nullify` per element in it, and its published guarantee that a batch
     /// halted by a foreign-owned tuple halts at the same point on every
     /// re-run is exactly this determinism.
     ///
@@ -660,7 +673,11 @@ impl LinkState {
             .filter(move |t| !(active && self.nullified(t)))
     }
 
-    /// BH1's filter DOMAIN: the roots of the active shipped `Retired` slice.
+    /// BH1's filter DOMAIN: the addresses every active shipped `Retired`
+    /// tuple's F DENOTES. Denotation, so a non-unit-depth span in a `Retired`
+    /// F contributes no root — the managed surface cannot build one (`emit`
+    /// forces `enc({from})`), the open surface can.
+    ///
     /// Lazy, so a single probe still short-circuits at the first root that
     /// covers it; collectable, so a read that filters MANY probes derives the
     /// domain once instead of re-walking the slice — and re-deriving each
@@ -745,27 +762,29 @@ impl LinkState {
         }
     }
 
-    /// Operative `out(x)` for EVERY `x` in `probes`, paired with it and in
-    /// claim-address order — the reverse of [`LinkState::succs_operative`],
-    /// which reads the forward `sup_fwd` hint. This direction has no hint, so
-    /// it is answered for a SET in one walk of the active claim slice rather
-    /// than re-walked per probe: [`LinkState::current`] asks it of every sink
-    /// it reaches, and a per-probe form makes that quadratic in a store whose
-    /// claim count a caller chooses.
+    /// Operative `out(x)` for EVERY vertex `x` in `vertices`, paired with it
+    /// and in claim-address order — the reverse of
+    /// [`LinkState::succs_operative`], which reads the forward `sup_fwd` hint.
+    /// This direction has no hint, so it is answered for a SET in one walk of
+    /// the active claim slice rather than re-walked per vertex:
+    /// [`LinkState::current`] asks it of every sink it reaches, and a
+    /// per-vertex form makes that quadratic in a store whose claim count a
+    /// caller chooses.
     ///
     /// Matched by DENOTATION, the claim schema's own regime — a claim's `new`
     /// is a single denoted address (Df-DISC(ii)), so `g == x` IS the
     /// relation, total over every argument and needing no precondition. The
-    /// spanfilade's coverage overlap would agree on a link address, where the
-    /// `dom(L)` prefix antichain (R0a) makes the two coincide, and would
-    /// answer with every claim beneath a document- or account-level argument.
+    /// vertices are link addresses, never coverage probes: the spanfilade's
+    /// overlap would agree on one, where the `dom(L)` prefix antichain (R0a)
+    /// makes the two coincide, and would answer with every claim beneath a
+    /// document- or account-level argument.
     ///
-    /// Probes come back ASCENDING, deduplicated, whatever order they arrived
+    /// Vertices come back ASCENDING, deduplicated, whatever order they arrived
     /// in — sorted here rather than asked of the caller, so the binary search
     /// the walk does is sound by construction.
-    pub(crate) fn out_claims(&self, probes: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
+    pub(crate) fn out_claims(&self, vertices: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
         let mut buckets: Vec<(Tumbler, Vec<Address>)> =
-            probes.into_iter().map(|t| (t, Vec::new())).collect();
+            vertices.into_iter().map(|t| (t, Vec::new())).collect();
         buckets.sort_by(|(a, _), (b, _)| a.cmp(b));
         buckets.dedup_by(|(a, _), (b, _)| a == b);
         for claim in

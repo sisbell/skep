@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M8 — Link Query & Discovery: the read-only query/presentation layer over the link subsystem — content-region discovery, four-set descriptor queries, counting, windowed pagination, projection, RETRIEVEENDSETS, delete-orphan previews, and supersession lineage — composed from M7/M5/M3 over one M2 snapshot, owning no state and no index"
+readme = "README.md"
 
 [dependencies]
 # The internal result-set carrier: M7's §G primitives return im::OrdSet<Tumbler>

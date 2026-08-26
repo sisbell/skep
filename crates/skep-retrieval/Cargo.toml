@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M6 — Content Retrieval & Query: the read-only observer surface over documents — RETRIEVEV, document-extent queries, SHOWORIGIN (V-arity), SHOWDELETIONS, COMPARE, FINDDOCSCONTAINING — each a pure function of one pinned M2 snapshot"
+readme = "README.md"
 
 [dependencies]
 # Nat::zero()/one()/is_zero() are trait fns the per-position ordinal math keeps

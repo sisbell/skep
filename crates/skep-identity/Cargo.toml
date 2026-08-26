@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "AUTH — pure credential data model and the deterministic identity fold: keys, fingerprints, framing, the record grammar, key sets, classify/step"
+readme = "README.md"
 
 [dependencies]
 # AUTH-2.1 pins the dependency set: skep-address, sha2, im, serde — light

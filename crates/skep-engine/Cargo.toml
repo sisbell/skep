@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one type configuration, the pinned recovery order, and the observe dump surface"
+readme = "README.md"
 
 [features]
 # `observe` gates the WorldDump surface for the conformance/crash harnesses.

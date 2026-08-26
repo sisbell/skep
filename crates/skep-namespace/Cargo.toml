@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M3 — the authoritative permanent name space: single minting authority (frontier allocation), entity registry, and principal registry with ω ownership resolution"
+readme = "README.md"
 
 [dependencies]
 # The design's mandated shapes (§Core data model): persistent `im` collections

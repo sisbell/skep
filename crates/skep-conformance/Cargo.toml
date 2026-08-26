@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "Conformance harness: plays the vendored udanax-green golden scenarios against skep's real Operation<World>::execute surface and reports, scenario by scenario, where the two systems agree and where they diverge. The harness never negotiates with the goldens and never negotiates with skep."
+readme = "README.md"
 
 [dependencies]
 # The assembled engine (the one concrete World) and the operation surface we

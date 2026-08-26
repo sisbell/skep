@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "The MCP adapter: JSON-RPC 2.0 over stdio on the agent side, skepd's HTTP/JSON wire on the other. One static binary an operator points a harness at; tool name → wire op is mechanical, skepd documents pass through verbatim, rejections are data."
+readme = "README.md"
 
 [dependencies]
 # Both protocols are small enough to own — a written-out HTTP/1.1 client

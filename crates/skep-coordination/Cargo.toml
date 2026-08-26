@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M9 — Predicate & Coordination Layer: the closed statically-typed predicate/query algebra (PL) over M7/M3 structural state, predicate definitions persisted as content (pdef/pd_stable), and the reactive rule engine with quiescence detection, fair stepping, and the termination lint"
+readme = "README.md"
 
 [dependencies]
 # Value's persistent sets/maps (AddrSet/AddrSeq/Map, the Env) and cheap

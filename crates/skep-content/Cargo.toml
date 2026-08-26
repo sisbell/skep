@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M4 — the permascroll: an append-only, write-once map from allocated I-address to opaque content value, plus the two point queries over it (contains / value_at)"
+readme = "README.md"
 
 [features]
 # Open build decision #4 — the optional defensive content-address assertion

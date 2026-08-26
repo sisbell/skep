@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M5 — Arrangements & Editing (Vstream): the per-document mutable V→I arrangement (POOM) plus the append-only content-provenance relation R; editing/versioning operations, link seating for M7, forward/reverse arrangement reads, and the R read surface"
+readme = "README.md"
 
 [dependencies]
 # The design's mandated slice shapes (§Core data model): persistent im

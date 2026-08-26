@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "M2 — generic transactional substrate: WAL + atomic-install + keyed-serialization + snapshot kernel over an engine-supplied WorldState"
+readme = "README.md"
 
 [dependencies]
 # The design's mandated crates (M2 §Dependencies & seams): lock-free root

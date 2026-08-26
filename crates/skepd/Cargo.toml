@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
+license.workspace = true
 description = "The skep daemon: one long-running process owning one World, serving the full M10 operation surface over HTTP/JSON to local clients. Transport, configuration, and process lifetime — no semantics."
+readme = "README.md"
 
 [features]
 # `observe` forwards the engine's WorldDump surface as GET /dump. Default-ON

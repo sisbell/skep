@@ -216,6 +216,16 @@ impl LinkState {
         }
     }
 
+    /// The validated registry behind the sealed [`TypeConfig`] —
+    /// reconstructed from it by [`LinkState::rebuild_derived`] BEFORE replay,
+    /// so this is the registry the hint fold and every write gate actually run
+    /// against. Published so an assembler SHARES this instance rather than
+    /// building a second one from the same configuration and then owing an
+    /// agreement check between the two.
+    pub fn registry(&self) -> &Arc<TypeRegistry> {
+        &self.registry
+    }
+
     /// Residence: `t ∈ dom(links)` (crate-internal; the public forms are
     /// `readlink`/`is_active`).
     pub(crate) fn resident(&self, t: &Tumbler) -> bool {
@@ -305,13 +315,28 @@ impl LinkState {
             .get(key)?
             .iter()
             .find(|t| !self.nullified(t))
-            .map(|t| validate(t.clone()).expect("stored link keys are T4-valid by M3's mint"))
+            .map(lift)
     }
 
     /// The coverage class of a shipped reserved type (guard/recognition key).
     pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
         self.registry.shipped_class(ty)
     }
+}
+
+/// `Tumbler → Address` lift of an INDEX KEY — infallible, every key of
+/// `links` being T4-valid by M3's mint. THE boundary lift, applied wherever a
+/// store key leaves the store: every §F tuple address, every §G result and
+/// every dedup incumbent passes through here, so no reader — inside the crate
+/// or out — restates the mint's guarantee to lift a key of its own. It sits
+/// beside [`LinkState::link_at`] because both are facts about the keys of one
+/// map.
+///
+/// Borrows, because an index key belongs to the store and the read only looks
+/// at it — the ownership counterpart of the read surface's `lift_denoted`,
+/// whose argument the read produced and is about to drop.
+pub(crate) fn lift(t: &Tumbler) -> Address {
+    validate(t.clone()).expect("every stored link key is T4-valid by M3's mint")
 }
 
 /// The incremental hint fold shared by [`LinkState::apply_link`] (per record)

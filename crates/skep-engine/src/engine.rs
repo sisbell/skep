@@ -1,8 +1,8 @@
 //! The assembled engine handle: `Kernel::open` over the genesis [`World`],
-//! the engine-built `Arc<TypeRegistry>` (the second consumer of the one
-//! genesis configuration), the store-driver constructors, the M9
-//! `Coordinator` assembly, and the `Stores<World>` factory M10's transport
-//! injects. All dispatch and construction — no semantics.
+//! the one `Arc<TypeRegistry>` (M7's own, shared out of the recovered slice),
+//! the store-driver constructors, the M9 `Coordinator` assembly, and the
+//! `Stores<World>` factory M10's transport injects. All dispatch and
+//! construction — no semantics.
 
 use std::fmt;
 use std::sync::Arc;
@@ -61,10 +61,10 @@ const SHIPPED: [ShippedType; 5] = [
 ];
 
 /// The assembled engine: the recovered kernel over the one concrete
-/// [`World`], the engine-built registry, and the genesis configuration both
-/// were fed from — held so every later consumer (M9's catalog, the observe
-/// surface's app-class enumeration) reads the SAME config, never a copy that
-/// could drift.
+/// [`World`], the registry M7's slice validated from its own sealed
+/// configuration, and that configuration — held so every later consumer (M9's
+/// catalog, the observe surface's app-class enumeration) reads the SAME
+/// registry and the SAME config, never a copy that could drift.
 pub struct Engine {
     kernel: Arc<Kernel<World>>,
     registry: Arc<TypeRegistry>,
@@ -74,38 +74,38 @@ pub struct Engine {
 impl Engine {
     /// Recover-or-init (M2's `Kernel::open`) over the full genesis world.
     ///
-    /// The one genesis configuration feeds BOTH registry consumers here
-    /// (the genesis seam): `World::genesis` seals the `TypeConfig` into M7's
-    /// slice, and the engine builds its own `Arc<TypeRegistry>` from that
-    /// same value — M7's slice-internal registry `Arc` is crate-private
-    /// (as built), so the engine cannot share it and must rebuild; identical
-    /// inputs through the one validate-once-or-fail `TypeRegistry::build`
-    /// make the two equal, and M9's catalog projection re-checks that at
-    /// `coordinator()`.
+    /// The genesis seam. `TypeRegistry::build` validates the PASSED
+    /// configuration — validate-once-or-fail, before any kernel exists — and
+    /// the resulting registry is the comparison basis below and nothing else.
+    /// The registry the engine keeps is M7's own: the slice reconstructs it
+    /// from the configuration the journal sealed, before replay, so the
+    /// instance every later consumer reads (M9's catalog, the observe surface)
+    /// is the one the store's fold and write gates actually run against, not a
+    /// second build that would then owe an agreement check.
     ///
     /// Caller contract (M2, restated): pass the SAME `genesis` config on
     /// every open of a given `cfg.journal_path`. The engine trips a wire on
     /// violation: when recovery restores a checkpointed world, the slice's
     /// OWN sealed config (deserialized from the journal, not from `genesis`)
     /// must agree with the passed one on every shipped class, else
-    /// [`EngineError::GenesisDrift`] — a pure agreement check, catching the
-    /// drifted-reopen mistake loudly instead of splitting the registry
-    /// consumers silently. (App-decl drift beyond the shipped five is not
+    /// [`EngineError::GenesisDrift`] — catching the drifted-reopen mistake
+    /// loudly at assembly. (App-decl drift beyond the shipped five is not
     /// publicly enumerable from the slice; M9's catalog projection at
     /// [`Engine::coordinator`] covers the decl side.)
     pub fn open(cfg: KernelConfig, genesis: GenesisConfig) -> Result<Engine, EngineError> {
-        let registry =
-            Arc::new(TypeRegistry::build(&genesis.types).map_err(EngineError::Registry)?);
+        let passed = TypeRegistry::build(&genesis.types).map_err(EngineError::Registry)?;
         let world = World::genesis(&genesis).map_err(EngineError::Registry)?;
         let kernel = Arc::new(Kernel::open(cfg, world).map_err(EngineError::Open)?);
-        {
+        let registry = {
             let snap = kernel.snapshot();
+            let links = snap.world().links();
             for ty in SHIPPED {
-                if snap.world().links().reserved_type(ty) != registry.reserved_type(ty) {
+                if links.reserved_type(ty) != passed.reserved_type(ty) {
                     return Err(EngineError::GenesisDrift(ty));
                 }
             }
-        }
+            Arc::clone(links.registry())
+        };
         Ok(Engine { kernel, registry, genesis })
     }
 
@@ -115,8 +115,9 @@ impl Engine {
         &self.kernel
     }
 
-    /// The ONE engine-built registry behind the genesis-sealed config — the
-    /// instance M9 projects (M9 builds no second `TypeRegistry`).
+    /// The ONE registry behind the genesis-sealed config — M7's own instance,
+    /// shared rather than rebuilt, and the one M9 projects (M9 builds no
+    /// second `TypeRegistry`).
     pub fn registry(&self) -> &Arc<TypeRegistry> {
         &self.registry
     }
@@ -143,8 +144,8 @@ impl Engine {
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
-    /// shared kernel, the engine-built registry, the type configuration those
-    /// were built from, and the two op-handle factories whose bodies discharge
+    /// shared kernel, the one registry, the type configuration it was
+    /// validated from, and the two op-handle factories whose bodies discharge
     /// M9's standing assembly obligation (constructing `Vstream`/`LinkWriter`
     /// from `&Kernel<W>`). M9 takes the configuration as its two halves and
     /// its catalog projection is validate-once-or-fail: drift between the

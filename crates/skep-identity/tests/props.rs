@@ -294,6 +294,16 @@ proptest! {
                     prop_assert_eq!(retired_flag, *flag);
                 }
             }
+            // AUTH-1.32 — the map key is an INDEX over the value, never a
+            // second authority: every enrolled row's key is the fingerprint
+            // of the key that row holds. Established by construction in
+            // `apply` (AUTH-2.53) and re-checked nowhere on the write path,
+            // so this is the only statement of it over a folded table.
+            for acct in &accounts {
+                for (enrolled_fp, enrolled) in next.key_set(acct).enrolled() {
+                    prop_assert_eq!(*enrolled_fp, Fingerprint::of(&enrolled.key));
+                }
+            }
 
             st = next;
         }

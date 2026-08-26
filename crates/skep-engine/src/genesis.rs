@@ -1,7 +1,7 @@
 //! Genesis — the engine's first own obligation: construct the initial world,
-//! holding the one type configuration in ONE place so both registry consumers
-//! (M7's genesis-sealed `LinkState` and the engine-built `Arc<TypeRegistry>`
-//! M9 projects) are fed from the same validated inputs and can never drift.
+//! holding the one type configuration in ONE place so that the registry every
+//! consumer reads (M7's slice validates it; the engine and M9 share that one
+//! instance) rests on a single set of validated inputs and cannot drift.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::M5State;
@@ -18,11 +18,11 @@ use crate::world::World;
 /// types.
 ///
 /// Every consumer is fed from this one value: [`World::genesis`] seals it
-/// into M7's `LinkState`, [`crate::Engine::open`] builds the engine's own
-/// `Arc<TypeRegistry>` from it (M7's slice-internal registry `Arc` is not
-/// exported), and [`crate::Engine::coordinator`] hands it to M9, whose
-/// validate-once-or-fail catalog projection re-checks it against the
-/// engine-built registry — so residual drift is caught at assembly.
+/// into M7's `LinkState`, which validates it into the registry
+/// [`crate::Engine::open`] then shares out, and
+/// [`crate::Engine::coordinator`] hands both to M9, whose
+/// validate-once-or-fail catalog projection re-checks the configuration
+/// against that registry — so residual drift is caught at assembly.
 ///
 /// M2's caller contract: the SAME configuration must be passed on every
 /// `open()` of a given journal (genesis must be byte-identical); the config

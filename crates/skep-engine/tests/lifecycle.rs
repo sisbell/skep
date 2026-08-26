@@ -128,7 +128,8 @@ fn cross_store_lifecycle_under_fsync() {
 
 /// Reopening a checkpointed journal under an edited genesis config trips the
 /// engine's drift wire (M2's byte-identical-genesis contract, checked at
-/// assembly) instead of silently splitting the two registry consumers.
+/// assembly) instead of silently running under a configuration the journal
+/// was never sealed with.
 #[test]
 fn drifted_genesis_reopen_is_refused() {
     let dir = tempdir().expect("tempdir");

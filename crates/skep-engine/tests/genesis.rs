@@ -1,9 +1,11 @@
 //! Genesis: the initial world seeds each store per its own design, and the
-//! one `TypeConfig` feeds every registry consumer —
-//! M7's genesis-sealed slice, the engine-built `Arc<TypeRegistry>`, and
-//! M9's validate-once-or-fail catalog projection — without drift.
+//! one `TypeConfig` reaches every registry consumer — M7's genesis-sealed
+//! slice, the engine handle, and M9's validate-once-or-fail catalog
+//! projection — as ONE validated registry, not as copies that could drift.
 
 mod common;
+
+use std::sync::Arc;
 
 use common::*;
 use skep_address::Level;
@@ -42,19 +44,23 @@ fn genesis_seeds_each_store_per_its_design() {
     assert!(w.links().match_links(&[], View::Audit).is_empty());
 }
 
-/// The genesis seam: the engine-built registry and the world's own sealed
-/// registry are fed from the one configuration and agree on every shipped
-/// class — endset and registration alike.
+/// The genesis seam: the registry the engine publishes IS the one M7's slice
+/// validated from its own sealed configuration — one instance, so the two
+/// consumers cannot disagree by construction rather than by comparison — and
+/// every shipped class is registered in it.
 #[test]
-fn both_registry_consumers_agree() {
+fn the_engine_publishes_the_slice_s_own_registry() {
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
     let links = snap.world().links();
 
+    assert!(
+        Arc::ptr_eq(engine.registry(), links.registry()),
+        "the engine must share M7's registry, not rebuild a second one"
+    );
     for ty in SHIPPED {
         let ours = engine.registry().reserved_type(ty);
-        let theirs = links.reserved_type(ty);
-        assert_eq!(ours, theirs, "engine registry and LinkState registry disagree on {ty:?}");
+        assert_eq!(ours, links.reserved_type(ty), "shipped class {ty:?}");
         assert!(
             engine.registry().registration(&coverage_class(ours)).is_some(),
             "shipped class {ty:?} must be registered"
@@ -62,9 +68,9 @@ fn both_registry_consumers_agree() {
     }
 }
 
-/// The third consumer: M9's catalog projection validates against the
-/// engine-built registry at assembly (drift would fail `coordinator()`
-/// here), and the empty rule registry is vacuously quiescent.
+/// The third consumer: M9's catalog projection validates against that same
+/// registry at assembly (drift would fail `coordinator()` here), and the
+/// empty rule registry is vacuously quiescent.
 #[test]
 fn coordinator_projects_the_one_registry() {
     let engine = mem_engine();

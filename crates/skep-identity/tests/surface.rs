@@ -144,6 +144,22 @@ fn tags_are_skep_prefixed_and_prefix_free() {
     assert_eq!(TAGS[2], NODE_HELLO_TAG);
 }
 
+/// AUTH-1.11 — the three declared tags' BYTES, not merely their properties.
+/// A tag IS the domain separator, so its bytes are the protocol; two of the
+/// three are consumed outside this crate (skepd signs under [`SESSION_TAG`],
+/// bebe under [`NODE_HELLO_TAG`], AUTH-2.118), where no shared test would
+/// notice an edit. `tags_are_skep_prefixed_and_prefix_free` keeps holding
+/// after any rename that stays `skep-`-prefixed, and `framed_bytes_are_pinned`
+/// states [`KEY_TAG`] alone; this is where a changed session or node-hello
+/// tag — which silently invalidates every signature made under the old one —
+/// is discovered.
+#[test]
+fn the_declared_tag_bytes_are_pinned() {
+    assert_eq!(KEY_TAG.as_bytes(), b"skep-key-v1".as_slice());
+    assert_eq!(SESSION_TAG.as_bytes(), b"skep-session-v1".as_slice());
+    assert_eq!(NODE_HELLO_TAG.as_bytes(), b"skep-node-hello-v1".as_slice());
+}
+
 /// AUTH-2.55 — `Inert::token()`: the one authority, all twelve rows,
 /// snake_case of the variant name.
 #[test]
@@ -220,6 +236,30 @@ fn enrolled_checkpoint_encoding_is_pinned() {
     want.push(1); // the anchor flag, one byte
 
     assert_eq!(bincode::serialize(&e).expect("serialize Enrolled"), want);
+}
+
+/// AUTH-1.40 — the FIRST checkpoint a v1 board writes, pinned as bytes,
+/// because that is the one the shape freezes with: the empty `sets` map's
+/// eight-byte length and `claimant`'s one-byte `None`, and no `Address`,
+/// which is why this shape can be stated here at all. NINE bytes is the
+/// claim: eight for the map's length prefix, one for the `Option`
+/// discriminant. A third field, or either field's width at empty changing —
+/// a `claimant` that stopped being an `Option`, a length prefix that is not
+/// a `u64` — moves every later byte of every checkpoint written since, and
+/// `populated_state_survives_serde` agrees with itself after all of them.
+/// What this cannot see is the two fields' ORDER, because at genesis every
+/// byte is zero; `identity_state_encodes_sets_before_claimant` is where that
+/// half is pinned, over a state that has a row to put first.
+#[test]
+fn genesis_checkpoint_encoding_is_pinned() {
+    let mut want: Vec<u8> = Vec::new();
+    want.extend_from_slice(&0u64.to_le_bytes()); // `sets`: an empty map
+    want.push(0); // `claimant`: None
+
+    assert_eq!(
+        bincode::serialize(&IdentityState::genesis()).expect("serialize IdentityState"),
+        want
+    );
 }
 
 /// AUTH-1.28 — `PayloadError`'s `Display` is a second ENTRY to `token()`'s

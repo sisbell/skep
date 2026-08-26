@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::json;
 
@@ -72,12 +73,36 @@ pub fn write_reports(
     let jsonl_path = out_dir.join("report.jsonl");
     let summary_path = out_dir.join("summary.md");
 
-    fs::write(&jsonl_path, render_jsonl(records))
-        .map_err(|e| format!("write {}: {e}", jsonl_path.display()))?;
-    let summary = render_summary(records);
-    fs::write(&summary_path, &summary)
-        .map_err(|e| format!("write {}: {e}", summary_path.display()))?;
+    publish(&jsonl_path, &render_jsonl(records))?;
+    publish(&summary_path, &render_summary(records))?;
     Ok((jsonl_path, summary_path))
+}
+
+/// Write `body` to `path` so that no concurrent reader ever observes a
+/// partial one: into a sibling temp file first, then `rename`, which POSIX
+/// makes atomic within a directory. A plain `fs::write` truncates in place,
+/// so a reader that `stat`s between the truncate and the write sees length 0.
+///
+/// That reader is a sibling TEST. The two gate tests both drive the full
+/// sweep over this one canonical artifact — deliberately, so operators read
+/// one report — and a test runner that gives each test its own PROCESS runs
+/// them concurrently, which no in-process lock can serialize.
+///
+/// The temp name carries the pid AND a per-call counter, so no two writers
+/// share it: colliding on the temp would reintroduce the torn read one step
+/// earlier, where a rename would then publish it.
+fn publish(path: &Path, body: &str) -> Result<(), String> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::write(&tmp, body).map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("publish {}: {e}", path.display())
+    })
 }
 
 /// The category × verdict table, as printed to summary.md and stderr.

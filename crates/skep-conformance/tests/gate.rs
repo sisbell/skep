@@ -11,9 +11,16 @@ use skep_conformance::runner::run_all;
 
 /// `harness_integrity` and `conformance_ratchet` both drive [`run_all`],
 /// which writes the ONE operator-facing report under `target/conformance/`.
-/// Cargo runs them on parallel threads of this binary, so without this lock
-/// the second run truncates the file the first is about to `stat` — observed
-/// as a one-in-many flake, 2026-08-21.
+/// Under a THREADED runner they share this binary, and this lock keeps the
+/// second sweep from starting while the first still has assertions to make
+/// about the files it wrote.
+///
+/// It cannot reach a runner that gives each test its own PROCESS, which is
+/// the arrangement the workspace's own runner uses — there the two sweeps
+/// genuinely overlap. What makes the report safe to read under either is
+/// that `write_reports` PUBLISHES by rename rather than truncating in place,
+/// so the path never names a partial file; this lock only spares a threaded
+/// run the redundant second sweep.
 ///
 /// Serialized rather than given separate output directories ON PURPOSE: the
 /// report is a single canonical artifact operators read (the harness's
@@ -33,9 +40,10 @@ fn report_guard() -> std::sync::MutexGuard<'static, ()> {
 
 #[test]
 fn harness_integrity() {
-    // Held for the WHOLE body: the metadata assertions below read the file
-    // this run wrote, so releasing after `run_all` would leave exactly the
-    // truncate-while-stat window this lock exists to close.
+    // Held for the WHOLE body: the metadata assertions below read the files
+    // this run wrote, so a threaded runner must not start the sibling sweep
+    // underneath them. A sibling PROCESS may, and the rename-publish in
+    // `write_reports` is what keeps those assertions true when it does.
     let _report = report_guard();
     let out = run_all().expect("the harness must load goldens, run, and write reports");
 

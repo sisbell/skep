@@ -217,6 +217,12 @@ pub fn bh4_ty() -> Endset {
 pub fn bh3_ty() -> Endset {
     enc(&[ra(13)]) // Binary, idem⊥, ReverseLookup
 }
+/// A SECOND BH3 class, so the join has more than one class to cover — the
+/// cardinality at which "across EVERY BH3-registered Binary type" says
+/// anything.
+pub fn bh3_alt_ty() -> Endset {
+    enc(&[ra(14)]) // Binary, idem⊥, ReverseLookup
+}
 
 pub fn decls() -> Vec<TypeDecl> {
     vec![
@@ -246,6 +252,14 @@ pub fn decls() -> Vec<TypeDecl> {
         },
         TypeDecl {
             key: bh3_ty(),
+            reg: Registration {
+                shape: Shape::Binary,
+                idem: false,
+                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
+            },
+        },
+        TypeDecl {
+            key: bh3_alt_ty(),
             reg: Registration {
                 shape: Shape::Binary,
                 idem: false,

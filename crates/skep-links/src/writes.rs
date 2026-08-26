@@ -740,8 +740,15 @@ where
     ///
     /// POSTCONDITION, on a fresh deposit and on a dedup hit alike:
     /// `is_nullified(target)` holds, and `target` is gone from every
-    /// `View::Active` slice, every operative `succ_o` edge and every `stale`
-    /// set — while `readlink` and the `Audit` view keep it (R3).
+    /// `View::Active` slice and every `stale` set — and, where `target` is
+    /// itself a `[K_sup]` claim, from every operative `succ_o` edge — while
+    /// `readlink` and the `Audit` view keep it (R3).
+    ///
+    /// A nullified ENDPOINT leaves its edges operative: Df-SUCC reads the
+    /// CLAIM's activity and never the endpoint's, so the walk family still
+    /// names a nullified successor and `current` still discloses it as a
+    /// sink, carrying its own activity (EL14e). Suppressing an endpoint from
+    /// the supersession graph means retracting the claims that name it.
     ///
     /// IRREVOCABLE. The tombstone set is monotone (R3/R6a) and the hint fold
     /// re-derives it from the `[R]` link at every replay, whether or not that

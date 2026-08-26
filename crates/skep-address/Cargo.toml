@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
-description = "M1 — pure value-level address & span algebra: tumblers, T4 structure, position arithmetic, span-set algebra"
+license.workspace = true
+description = "Pure value-level address and span algebra for a Xanadu-style docuverse: tumblers, structural validation, position arithmetic, span-set algebra"
+readme = "README.md"
+keywords = ["skep", "xanadu", "hypertext", "tumbler", "address"]
+categories = ["data-structures", "mathematics"]
 
 [dependencies]
 # M1 owns the journaled value types, so M1 carries the design's feature

@@ -30,8 +30,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 repository = "https://github.com/sisbell/skep"
-# license: DECISION PENDING (owner's call; Rust convention is
-# "MIT OR Apache-2.0"). Add here + LICENSE files in one commit when chosen.
+# Owner-ruled 2026-08-25: dual license, the Rust convention.
+license = "MIT OR Apache-2.0"
 
 # Shared external dependency versions — one place, no drift. Features here
 # are the union each consumer may rely on; crates may add features but

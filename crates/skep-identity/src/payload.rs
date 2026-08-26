@@ -114,7 +114,14 @@ pub enum PayloadError {
     /// `NothingChanged`.
     Empty,
     /// The named line repeats an earlier line's fingerprint, compared as
-    /// PARSED bytes (AUTH-2.15).
+    /// PARSED bytes (AUTH-2.15) — for the ENROLLMENT kind the parsed KEY,
+    /// whose fingerprint is a function of it. WITHIN one line the kind's own
+    /// line grammar decides FIRST, on both kinds: a line that repeats an
+    /// earlier key AND fails its grammar (an enrollment's empty label
+    /// remainder, a retirement's `<64 hex> note`) answers [`BadLine`], never
+    /// this.
+    ///
+    /// [`BadLine`]: PayloadError::BadLine
     DuplicateKey(usize),
 }
 
@@ -213,7 +220,9 @@ fn split_token(s: &str) -> (&str, Option<&str>) {
 /// precedence are the ones BOTH kinds share (AUTH-2.19): UTF-8, header, then
 /// lines 2..n in order with the first failing line the verdict, and `Empty`
 /// only after a clean scan. Hex tokens are case-insensitive (AUTH-2.17);
-/// keyword tokens match as bytes, lowercase (AUTH-2.9).
+/// keyword tokens match as bytes, lowercase (AUTH-2.9). Within a line the
+/// grammar decides before the AUTH-2.15 duplicate test
+/// ([`PayloadError::DuplicateKey`]).
 ///
 /// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
 /// `Empty` otherwise), in the record's LINE ORDER (which is the order
@@ -283,7 +292,8 @@ pub fn parse_enroll(bytes: &[u8]) -> Result<Vec<Enrollment>, PayloadError> {
 /// further line `<64 hex fingerprint>` AND NOTHING ELSE — any remainder
 /// after the fingerprint token is `BadLine` (AUTH-2.14). The scan and the
 /// fault precedence are the ones BOTH kinds share — the same ones the
-/// enrollment kind reads under (AUTH-2.19).
+/// enrollment kind reads under (AUTH-2.19). Within a line the grammar decides
+/// before the AUTH-2.15 duplicate test ([`PayloadError::DuplicateKey`]).
 ///
 /// POSTCONDITION — on `Ok`, the vector is NON-EMPTY (AUTH-2.16 answers
 /// `Empty` otherwise), in the record's LINE ORDER, and DUPLICATE-FREE
@@ -323,8 +333,22 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 }
 
 /// AUTH-2.18 — encode an enrollment record; emits lowercase hex (AUTH-2.17)
-/// and the label verbatim, so `parse(encode(x)) == x` holds over the whole
-/// [`Enrollment`] domain (I1, AUTH-2.89).
+/// and the label verbatim.
+///
+/// PRECONDITION — `enrollments` is NON-EMPTY and no two entries carry the
+/// same key: [`parse_enroll`]'s POSTCONDITION read from the other side, since
+/// a header-only record is `Empty` (AUTH-2.16) and a repeated key is
+/// `DuplicateKey(n)` (AUTH-2.15). Outside that domain this function still
+/// answers bytes — it emits what it is given and re-checks nothing — but they
+/// are bytes NO parser admits, so a depositor who writes them spends a
+/// permanent record on one the fold can never honor.
+///
+/// POSTCONDITION — within it, `parse_enroll(encode_enroll(x)) == Ok(x)` over
+/// the whole [`Enrollment`] domain per entry: every anchor flag and every
+/// AUTH-1.24 label, trailing 0x20 included (I1, AUTH-2.89). The encoded
+/// LENGTH is a third obligation owned elsewhere — a record over
+/// [`MAX_RECORD_BYTES`] round-trips here and is refused at the READ
+/// (AUTH-2.43).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
     let mut out = String::new();
     out.push_str(ENROLL_HEADER);
@@ -346,6 +370,15 @@ pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
 }
 
 /// AUTH-2.18 — encode a retirement record; lowercase hex (AUTH-2.17).
+///
+/// PRECONDITION — `fps` is NON-EMPTY and DUPLICATE-FREE, [`parse_retire`]'s
+/// POSTCONDITION read from the other side (`Empty`, AUTH-2.16;
+/// `DuplicateKey(n)`, AUTH-2.15); outside that domain the bytes are a record
+/// no parser admits, and nothing here re-checks them.
+///
+/// POSTCONDITION — within it, `parse_retire(encode_retire(x)) == Ok(x)`
+/// (I1, AUTH-2.89), under the same [`MAX_RECORD_BYTES`] obligation as
+/// [`encode_enroll`].
 pub fn encode_retire(fps: &[Fingerprint]) -> Vec<u8> {
     let mut out = String::new();
     out.push_str(RETIRE_HEADER);

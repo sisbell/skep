@@ -30,13 +30,20 @@ pub trait Values {
     /// the implementor's obligation rather than a nicety: the payload read's
     /// reach walk (AUTH-2.42) is bounded by the byte cap (AUTH-2.43) only
     /// while it holds, because a span whose width acts above the element
-    /// level covers every ordinal above its start. A ctx that answers
-    /// `Some(&[])` at a covered position is NOT one this crate folds under:
-    /// `record_bytes` refuses the record on its per-record position budget —
-    /// the second bound, which ends such a walk in bounded work — and
-    /// debug-asserts the premise at the one call that rests on it. The budget
-    /// answers `TooLarge`, so a ctx breaking the premise cannot read a record
-    /// at all; it does not make such a ctx conforming.
+    /// level covers every ordinal above its start.
+    ///
+    /// A ctx that answers `Some(&[])` at a covered position is NOT one this
+    /// crate folds under — and in RELEASE the crate cannot tell you so. Two
+    /// mechanisms bear on the violation and NEITHER is a detector: the
+    /// per-record position budget bounds the WORST case, where every covered
+    /// position answers `Some(&[])` and nothing else would end the walk (it
+    /// ends at `TooLarge`, in bounded work); and `record_bytes` debug-asserts
+    /// the premise at the one call that rests on it, so a debug build names
+    /// the violation at its first occurrence. A SINGLE zero-byte answer among
+    /// non-empty ones reaches neither: it appends nothing, the walk ends where
+    /// it always would, and the record reads, parses and FOLDS with nothing
+    /// anywhere reporting that the premise was broken. Discharging AUTH-1.22
+    /// is the implementor's, in full.
     fn value_at(&self, at: &Tumbler) -> Option<&[u8]>;
 }
 
@@ -86,6 +93,14 @@ pub struct Owner {
 /// AUTH-2.35 — the crate's own ω projection (never re-implemented outside
 /// it): the account a document belongs to, `ctx.owner_of(doc)?.prefix`. A
 /// non-folding reader takes `owner_of(doc)?.prefix` itself.
+///
+/// The answer is whatever prefix ω resolved, at the level
+/// [`FoldCtx::owner_of`] fixes: account-level for a document under a
+/// registered account principal, node-level for one owned directly by the
+/// bootstrap principal. Every use of H in this crate is a comparison or
+/// [`doc_1_of`]'s arithmetic, both total at either level — so an arm that
+/// ever needs account-hood must ask [`FoldCtx::is_account`] (AUTH-2.33) for
+/// it and not presume it here.
 pub(crate) fn document_account(ctx: &impl FoldCtx, doc: &Address) -> Option<Address> {
     ctx.owner_of(doc).map(|owner| owner.prefix)
 }

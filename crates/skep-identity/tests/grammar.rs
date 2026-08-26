@@ -260,6 +260,30 @@ fn retire_duplicate_names_the_repeating_line() {
     assert_eq!(err_retire(record.as_bytes()), PayloadError::DuplicateKey(3));
 }
 
+/// WITHIN one line the kind's own grammar decides BEFORE the AUTH-2.15
+/// duplicate test, on both kinds: a line that repeats an earlier key AND
+/// fails its grammar is `bad_line`, never `duplicate_key`. Two pinned wire
+/// tokens hold at once here and the contract says which speaks
+/// (`PayloadError::DuplicateKey`); every other duplicate vector uses
+/// well-formed lines and every other grammar vector a single line, so the
+/// cell where both refusals hold is this one's alone.
+#[test]
+fn a_line_that_both_repeats_and_malforms_is_bad_line() {
+    // Line 3 repeats line 2's key and ends in the separator — an EMPTY label
+    // remainder, which is `bad_line` (AUTH-2.10).
+    let record = format!("skep-enroll v1\ned25519 {}\ned25519 {} \n", hex(4), hex(4));
+    assert_eq!(err_enroll(record.as_bytes()), PayloadError::BadLine(3));
+
+    // Line 3 repeats line 2's fingerprint and carries a remainder, which the
+    // retirement grammar admits nowhere (AUTH-2.14).
+    let record = format!(
+        "skep-retire v1\n{}\n{} note\n",
+        fp(4).to_hex(),
+        fp(4).to_hex()
+    );
+    assert_eq!(err_retire(record.as_bytes()), PayloadError::BadLine(3));
+}
+
 /// Corpus: a header-only retirement — `empty`, never `nothing_changed`
 /// (AUTH-2.16, `sig` lines included).
 #[test]

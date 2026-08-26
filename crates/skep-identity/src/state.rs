@@ -79,6 +79,9 @@ impl IdentityState {
     /// 4. the per-kind arm — claim (AUTH-2.67) or enroll/retire
     ///    (AUTH-2.69–2.76); every other deposit is AUTH-2.77's.
     ///
+    /// Total under the same conforming-ctx condition as [`step`], and the two
+    /// debug assertions that condition names are reached from here.
+    ///
     /// [`step`]: IdentityState::step
     pub fn classify(&self, types: &TypeAddrs, ctx: &impl FoldCtx, dep: &LinkDeposit) -> Verdict {
         // 1 — kind (AUTH-2.66 item 1).
@@ -102,7 +105,17 @@ impl IdentityState {
     }
 
     /// AUTH-2.56/AUTH-2.57 — classify-then-apply (on `Honored`) or self
-    /// unchanged. Total; never panics.
+    /// unchanged.
+    ///
+    /// TOTAL under a CONFORMING ctx — one meeting [`Values`]' and [`FoldCtx`]'s
+    /// stated obligations: no input a RECORD can carry reaches a panic, and
+    /// every refusal travels as a [`Verdict`]. A ctx that breaks an obligation
+    /// is the ctx's bug and each site says so: a zero-byte value at a covered
+    /// position (AUTH-1.22) debug-asserts in `record_bytes`, and an
+    /// element-level ω prefix (AUTH-2.126) debug-asserts in `doc_1_of`. Both
+    /// are a broken PRECONDITION, not an exception to this postcondition.
+    ///
+    /// [`Values`]: crate::Values
     pub fn step(
         &self,
         types: &TypeAddrs,
@@ -360,6 +373,19 @@ impl IdentityState {
     /// the genesis arm included (no arm reads the payload twice). Map keys
     /// are derived via `Fingerprint::of` on the key inserted, establishing
     /// AUTH-1.32 by construction.
+    ///
+    /// PRECONDITION — `effect` is one [`classify`] answered for THIS state.
+    /// This is where [`KeySet`]'s two mutator preconditions arrive, and it
+    /// discharges neither: `Retire`'s `removed` must be a PROPER subset of the
+    /// account's enrolled set — the `WouldEmpty` test, AUTH-2.74 — or
+    /// AUTH-1.36 and I3 are void, and the fingerprints moved in one post are
+    /// this arm's whole loop; `Enroll`'s `added` and `Genesis`' `keys` must be
+    /// outside `retired` (AUTH-2.69's filter, AUTH-2.70's empty-set premise)
+    /// or AUTH-1.35 and I4 are void. [`step`] is the only caller and it passes
+    /// `classify`'s own answer.
+    ///
+    /// [`classify`]: IdentityState::classify
+    /// [`step`]: IdentityState::step
     fn apply(&self, effect: &Effect) -> IdentityState {
         let mut next = self.clone();
         match effect {

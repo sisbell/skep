@@ -19,6 +19,18 @@ use crate::seam::Values;
 /// AUTH-2.4). Bound at [`Values`] — the one-method supertrait, never the
 /// whole world seam; [`MAX_RECORD_BYTES`] is INTERNAL and not a parameter.
 ///
+/// PRECONDITION — `home` is the link's HOME DOCUMENT: a DOCUMENT-level
+/// address, what M1 `document_of` answers for the link's own address
+/// (AUTH-2.82). Check 3 compares `document_of(start)` — always a document —
+/// against it, so a `home` at any other level matches NOTHING a span can
+/// carry: every span refuses `ForeignContent` and every record is inert,
+/// silently and in release. Nothing here checks it and there is nothing to
+/// check — `home` is the caller's own datum. [`LinkDeposit`]'s two
+/// constructors establish it (AUTH-2.23); a non-folding reader LINKING this
+/// function (AUTH-2.37) owes the same.
+///
+/// [`LinkDeposit`]: crate::LinkDeposit
+///
 /// Per SPAN, in endset order, the checks run in THIS order — the first
 /// failure is the verdict (AUTH-2.38), and the per-span INTERLEAVE is pinned
 /// (AUTH-2.39: each span's checks and positions complete before the next
@@ -49,7 +61,8 @@ use crate::seam::Values;
 /// element level covers every ordinal above its start and so bounds nothing
 /// itself. The byte cap ends the walk on a conforming ctx — one that keeps
 /// AUTH-1.22's wire-codec premise, [`Values`]' declared obligation, that
-/// every value carries at least one byte. Under a ctx that breaks it, the
+/// every value carries at least one byte. Where a ctx answers a zero-byte
+/// value at EVERY position a span covers, the cap can never fire and the
 /// per-record POSITION budget below ends the walk instead, in bounded work.
 ///
 /// The budget is not a sixth pinned check and does not touch AUTH-2.38's
@@ -63,9 +76,10 @@ pub fn record_bytes(
 ) -> Result<Vec<u8>, PayloadError> {
     let one = Nat::from(1u32);
     let mut out: Vec<u8> = Vec::new();
-    // AUTH-1.22's premise as a BOUND rather than a note: the ONLY thing that
-    // ends this walk under a ctx that answers a zero-byte value at a covered
-    // position, and unreachable under one that does not.
+    // AUTH-1.22's premise as a BOUND rather than a note: the only thing that
+    // ends this walk under a ctx answering a zero-byte value at EVERY position
+    // the span covers, and unreachable under one that keeps the premise. It
+    // bounds the worst case; it does not DETECT a violation (`Values`).
     let mut positions: usize = 0;
     for span in from {
         // 1 — validity (checked ONCE per span, ahead of the walk: AUTH-2.30).

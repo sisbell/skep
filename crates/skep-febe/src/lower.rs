@@ -205,7 +205,7 @@ impl Lower for MakeLinkError {
             // well formed and the slot is too big, and the two ask different
             // things of the client — fix the spec, versus narrow the span.
             // Permanent by the catch-all is right, for the reason
-            // `TxnOverBudget` is: no retry shrinks the resolution.
+            // `TxnOverBudget` is: no retry shrinks the slot.
             MakeLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             MakeLinkError::EmptyTypeResolution => (RejectCode::EmptyTypeResolution, None),
             MakeLinkError::RetractionClass => (RejectCode::RetractionClass, None),
@@ -238,6 +238,10 @@ impl Lower for EmitError {
             // identically cannot succeed — use AssertSup/EditLink.
             EmitError::SupersessionClass => (RejectCode::DcViolation, None),
             EmitError::NonAddressDenotingType => (RejectCode::NonAddressDenotingType, None),
+            // The same per-slot span budget MAKELINK's slots carry, on `to`
+            // — so the same leaf, and permanent for the same reason: no
+            // retry shrinks the list.
+            EmitError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EmitError::Mint(m) => m.lower(),
         }
     }
@@ -274,6 +278,9 @@ impl Lower for EditLinkError {
             EditLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
             // Carries whichever home failed — d_s or d_a.
             EditLinkError::NotOwner(a) => not_owner(a),
+            // The successor's slots are resolve-built here in M10, so this is
+            // the same budget and the same leaf MAKELINK's slots take.
+            EditLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EditLinkError::IllFormedSuccessor => (RejectCode::IllFormedSuccessor, None),
             EditLinkError::DcViolation => (RejectCode::DcViolation, None),
             EditLinkError::Mint(m) => m.lower(),

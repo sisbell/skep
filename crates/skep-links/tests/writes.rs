@@ -19,8 +19,9 @@
 //! primitives with their `Default → Active` coercion, their empty-query floor
 //! and their absent-slot rule, the AND-combiner's agreement with its own
 //! conjuncts, the verbatim order FOLLOWLINK folds, the ratio a `Resolve` slot
-//! amplifies by and the span budget bounding it at its exact boundary,
-//! editlink's canonical two-home lock order, BH1's whole multi-root filter
+//! amplifies by and the per-slot span budget at its exact boundary on every
+//! op and slot form that carries one, editlink's canonical two-home lock
+//! order, BH1's whole multi-root filter
 //! domain, the rejection family's `Display`/`source` chaining, and the
 //! checkpoint-roundtrip + rebuild_derived discipline.
 
@@ -2616,11 +2617,11 @@ fn a_resolve_slot_concatenates_every_spec_in_argument_order() {
 
 #[test]
 fn a_resolve_spec_expands_to_one_span_per_fragment() {
-    // The ratio `MAX_RESOLVE_SPANS` bounds: ONE ~80-byte spec stores one span
-    // per I-run of the SOURCE document, so the slot's size is that document's
-    // fragmentation rather than the request's. The `Addrs` form has no such
-    // ratio — one span per name the caller wrote — which is why the bound
-    // sits on this arm alone.
+    // The ratio the span budget bounds on this arm: ONE ~80-byte spec stores
+    // one span per I-run of the SOURCE document, so the slot's size is that
+    // document's fragmentation rather than the request's. The `Addrs` form's
+    // COUNT has no such ratio — one span per name the caller wrote — which is
+    // why the two forms amplify differently and are held to one budget.
     let k = kernel();
     fragment_content(&k, &doc1(), 4);
     let w = writer(&k);
@@ -2674,7 +2675,7 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
     // decomposition, so 128 writes put doc2 exactly at the budget, and one
     // more copy puts the same query past it.
     let k = kernel();
-    let budget = skep_links::MAX_RESOLVE_SPANS as u32;
+    let budget = skep_links::MAX_SLOT_SPANS as u32;
     let per_copy = 64u32;
     fragment_content(&k, &doc1(), per_copy);
     copy_prefix(&k, &doc1(), per_copy, &doc2(), budget / per_copy);
@@ -2695,7 +2696,7 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
         let links = snap.world().links();
         assert_eq!(
             links.readlink(&at_budget).expect("resident").from_slot().len(),
-            skep_links::MAX_RESOLVE_SPANS,
+            skep_links::MAX_SLOT_SPANS,
             "the admitted slot really did expand to the whole budget"
         );
     }
@@ -2726,8 +2727,8 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
         ),
         Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
     ));
-    // ...and an `Addrs` slot of any size is untouched by it: its span count
-    // is one per name, already paid for in request bytes.
+    // ...and a slot inside the budget is admitted whichever form built it:
+    // the bound counts spans, and is not a property of the `Resolve` arm.
     w.makelink(
         P1,
         &doc2(),
@@ -2735,7 +2736,162 @@ fn a_resolve_slot_past_the_span_budget_is_refused() {
         SlotArg::Addrs(vec![]),
         SlotArg::Addrs(vec![ra(10)]),
     )
-    .expect("the name form carries no span budget");
+    .expect("sixteen names is well inside the budget");
+}
+
+#[test]
+fn an_addrs_slot_past_the_span_budget_is_refused() {
+    // The name form's own amplification, and it is not the span COUNT: that
+    // is one per name, linear in the request. It is the BYTES — a dotted
+    // address is ~19 wire bytes and the span it becomes is two 8-component
+    // `BigUint` tumblers, order half a kilobyte live — so a slot bounded only
+    // by the request body would name hundreds of thousands of spans, and
+    // build them inside the transact under M2's applier lock.
+    let k = kernel();
+    let w = writer(&k);
+    let names = |n: u32| -> Vec<Address> { (1..=n).map(ca).collect() };
+    let budget = skep_links::MAX_SLOT_SPANS as u32;
+
+    let (at_budget, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(names(budget)),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)]),
+        )
+        .expect("exactly the budget is admitted");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert_eq!(
+            links.readlink(&at_budget).expect("resident").from_slot().len(),
+            skep_links::MAX_SLOT_SPANS,
+            "the admitted slot really did carry the whole budget"
+        );
+    }
+
+    let before = k.current_seq();
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(names(budget + 1)),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(10)])
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    // The bound is on the SLOT, not on a position: the same over-budget list
+    // in the type slot is refused the same way.
+    assert!(matches!(
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(names(budget + 1))
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SlotTooLarge))
+    ));
+}
+
+#[test]
+fn emit_rejects_a_to_list_past_the_span_budget() {
+    // `to` is the one managed slot a caller sizes — `enc({from})` is one span
+    // and `ty` is a registered class's key — and the shape gate cannot bound
+    // it: Multi admits any finite `|G|`. So the same per-slot span budget
+    // MAKELINK's slots carry sits here, pre-transact.
+    let k = kernel();
+    let w = writer(&k);
+    let targets = |n: u32| -> Vec<Address> { (1..=n).map(ca).collect() };
+    let budget = skep_links::MAX_SLOT_SPANS as u32;
+
+    let (at_budget, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &targets(budget))
+        .expect("exactly the budget is admitted");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert_eq!(
+            links.readlink(&at_budget).expect("resident").to_slot().len(),
+            skep_links::MAX_SLOT_SPANS,
+            "Multi really does admit a |G| this wide"
+        );
+    }
+
+    let before = k.current_seq();
+    assert!(matches!(
+        w.emit(P1, &doc1(), &multi_ty(), &ca(2), &targets(budget + 1)),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
+    // Pre-transact, so ahead of the shape gate — which the same input also
+    // violates under Binary.
+    assert!(matches!(
+        w.emit(P1, &doc1(), &idem_top_ty(), &ca(3), &targets(budget + 1)),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
+    ));
+    // ...and each verdict is separately reachable, so the above is the
+    // precedence and not the only answer either input can get.
+    assert!(matches!(
+        w.emit(P1, &doc1(), &idem_top_ty(), &ca(3), &[ca(4), ca(5)]),
+        Err(TxnError::Rejected(EmitError::ShapeViolation))
+    ));
+}
+
+#[test]
+fn editlink_rejects_a_successor_slot_past_the_span_budget() {
+    // The successor's slots are the CALLER's, resolve-built (M10 expands
+    // V-specs into them), so their span count is a source document's
+    // fragmentation rather than the request's size — the same expansion
+    // MAKELINK's `Resolve` slots are bounded against, one op over. Every
+    // per-span step after this check runs inside the transact: the
+    // level-uniformity walk over all three slots, the DC guard's
+    // `coverage_class`, and the fold's dedup key over all three again.
+    let k = kernel();
+    let w = writer(&k);
+    let (orig, _) = w
+        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .expect("orig");
+    let slot = |n: u32| -> Endset {
+        (1..=n)
+            .map(|i| skep_address::subtree_of(ca(i).tumbler()))
+            .collect()
+    };
+    let budget = skep_links::MAX_SLOT_SPANS as u32;
+
+    let at_budget =
+        Link::new([slot(budget), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+    let (s, _, _) = w
+        .editlink(P1, &orig, at_budget, &doc1(), &doc1())
+        .expect("exactly the budget is admitted");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert_eq!(
+            links.readlink(&s).expect("resident").from_slot().len(),
+            skep_links::MAX_SLOT_SPANS,
+            "the admitted slot really did carry the whole budget"
+        );
+    }
+
+    // One span more, refused before anything is staged — and refused ahead of
+    // `IllFormedSuccessor`, which is where the per-span walk lives.
+    let before = k.current_seq();
+    let over = Link::new([slot(budget + 1), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+    assert!(matches!(
+        w.editlink(P1, &orig, over, &doc1(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    // The bound is on ANY slot, not on the one the DC guard classifies.
+    let over_ty = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), slot(budget + 1)]).expect("arity 3");
+    assert!(matches!(
+        w.editlink(P1, &orig, over_ty, &doc1(), &doc1()),
+        Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
+    ));
 }
 
 #[test]

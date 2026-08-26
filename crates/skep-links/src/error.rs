@@ -11,9 +11,10 @@
 //!   gate, each dedup short-circuit, and each op's own residence and
 //!   well-formedness checks — so an unregistered or unowned home is refused
 //!   on hit AND miss, whatever else the input violates (Conflicts §8);
-//! * [`EmitError::NonAddressDenotingType`] and
-//!   [`EmitError::SupersessionClass`] are pre-transact, so they outrank every
-//!   in-transaction verdict including the home/ω pair;
+//! * [`EmitError::NonAddressDenotingType`], [`EmitError::SupersessionClass`]
+//!   and [`EmitError::SlotTooLarge`] are pre-transact — in that firing order
+//!   — so all three outrank every in-transaction verdict including the home/ω
+//!   pair;
 //! * [`RetractStaleError::NotBh4`] is likewise pre-transact, ahead of the
 //!   constituent nullifies' own rejections.
 
@@ -43,11 +44,12 @@ pub enum MakeLinkError {
     /// s_C ∧ #width = 2 ∧ width₁ = 0`) — the deliberate depth-2 narrowing of
     /// ASN-0120's `#u_j ≥ 2` (Conflicts §12). `Addrs` slots have no wf step.
     IllFormedSpec,
-    /// A `Resolve` slot resolved past [`crate::MAX_RESOLVE_SPANS`] I-extents.
-    /// A spec's expansion is the SOURCE document's fragmentation, not the
-    /// request's size, so the one slot form whose cost the caller does not
-    /// pay for in bytes is the one form that carries a bound. `Addrs` slots
-    /// cannot raise it: they are one span per name.
+    /// A slot carries more than [`crate::MAX_SLOT_SPANS`] spans, in whichever
+    /// form built it: a `Resolve` slot resolved past the budget, or an
+    /// `Addrs` list naming more addresses than it. The bound is on the SLOT,
+    /// because both forms amplify — a spec's expansion is the SOURCE
+    /// document's fragmentation rather than the request's size, and a name's
+    /// span costs order half a kilobyte live against ~19 wire bytes.
     SlotTooLarge,
     /// The type slot is empty as given (ML6 — `e₃ ≠ ∅`): the `Resolve`
     /// spec-set resolved to `⟨⟩`, or the `Addrs` name list was empty.
@@ -98,6 +100,13 @@ pub enum EmitError {
     /// `ty` is not address-denoting — rejected before any class computation
     /// (§Core data model totality). Pre-transact.
     NonAddressDenotingType,
+    /// `to` names more than [`crate::MAX_SLOT_SPANS`] addresses — the
+    /// per-slot span budget on the one managed slot whose cardinality the
+    /// caller chooses. Pre-transact, and so ahead of `ShapeViolation`, which
+    /// an over-budget `to` also satisfies under Unary and Binary. Reachable
+    /// only where an app registers a `Multi` type: the five shipped classes
+    /// are Unary or Binary, so the shape gate holds `|G| ≤ 1` without it.
+    SlotTooLarge,
     /// M3's mint failed structurally.
     Mint(MintError),
 }
@@ -146,6 +155,13 @@ pub enum EditLinkError {
     /// The caller is not the effective owner (ω) of the carried home —
     /// `d_s` or `d_a`, whichever failed.
     NotOwner(Address),
+    /// A successor slot carries more than [`crate::MAX_SLOT_SPANS`] spans.
+    /// The successor's slots are built by the CALLER — M10 resolves V-specs
+    /// into them — so a slot's span count is the source document's
+    /// fragmentation rather than the request's size, exactly as a MAKELINK
+    /// `Resolve` slot's is. Checked ahead of `IllFormedSuccessor` because
+    /// every per-span step below it runs inside the transact.
+    SlotTooLarge,
     /// The supplied successor has arity ≠ 3 (the deliberate narrowing of
     /// EDITop's N ≥ 3 — Conflicts §11), an empty type slot, or a
     /// non-level-uniform span in ANY slot (keeps `coverage_class` total for
@@ -214,8 +230,8 @@ impl fmt::Display for MakeLinkError {
             ),
             MakeLinkError::SlotTooLarge => write!(
                 f,
-                "makelink: a Resolve slot resolved past {} I-extents",
-                crate::MAX_RESOLVE_SPANS
+                "makelink: a slot carries more than {} spans",
+                crate::MAX_SLOT_SPANS
             ),
             MakeLinkError::EmptyTypeResolution => {
                 f.write_str("makelink: the type slot is empty as given (ML6)")
@@ -263,6 +279,11 @@ impl fmt::Display for EmitError {
             EmitError::NonAddressDenotingType => {
                 f.write_str("emit: ty is not address-denoting (rejected before class computation)")
             }
+            EmitError::SlotTooLarge => write!(
+                f,
+                "emit: to names more than {} addresses",
+                crate::MAX_SLOT_SPANS
+            ),
             EmitError::Mint(e) => write!(f, "emit: mint failed: {e}"),
         }
     }
@@ -341,6 +362,11 @@ impl fmt::Display for EditLinkError {
             EditLinkError::NotOwner(_) => {
                 f.write_str("editlink: the caller is not the effective owner (ω) of d_s or d_a")
             }
+            EditLinkError::SlotTooLarge => write!(
+                f,
+                "editlink: a successor slot carries more than {} spans",
+                crate::MAX_SLOT_SPANS
+            ),
             EditLinkError::IllFormedSuccessor => f.write_str(
                 "editlink: successor arity ≠ 3, empty type slot, or a non-level-uniform span in some slot (Conflicts §11)",
             ),

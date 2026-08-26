@@ -512,47 +512,49 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
         && spec.span.width().get(1).is_some_and(|w| w.bits() == 0)
 }
 
-/// The most I-extent spans ONE MAKELINK [`SlotArg::Resolve`] slot may
-/// contribute; past it the slot is refused ([`MakeLinkError::SlotTooLarge`]).
+/// The most spans ONE slot may carry — the budget every caller-shaped slot
+/// is held to, whichever form built it: MAKELINK's [`SlotArg::Resolve`] and
+/// [`SlotArg::Addrs`] slots ([`MakeLinkError::SlotTooLarge`]), an `editlink`
+/// successor's slots ([`EditLinkError::SlotTooLarge`]), and
+/// [`emit`](LinkWriter::emit)'s `to` ([`EmitError::SlotTooLarge`]).
 ///
-/// Every other endset a write path builds is one span per address the CALLER
-/// named — [`enc`] over an `Addrs` slot, `enc` over [`emit`](LinkWriter::emit)'s
-/// `to` — so its span count is linear in the request that carried it, and
-/// whatever bounds the request bounds the slot. A `Resolve` slot is not:
-/// `resolve` yields one run per contiguous I-segment, so one ~80-byte spec
-/// expands to as many spans as the SOURCE document happens to be fragmented,
-/// a slot's specs sum those, and the result is stored VERBATIM (ML1
-/// coverage-exactness forbids coalescing it away). The bound restores the tie
-/// to the request.
+/// Both slot forms amplify, and differently. A `Resolve` slot's span count is
+/// not the request's size at all: `resolve` yields one run per contiguous
+/// I-segment, so one ~80-byte spec expands to as many spans as the SOURCE
+/// document happens to be fragmented, a slot's specs sum those, and the
+/// result is stored VERBATIM (ML1 coverage-exactness forbids coalescing it
+/// away). An address-named slot's span COUNT is linear in the request, but
+/// its BYTES are not: a dotted address is ~19 wire bytes and the span it
+/// becomes is `subtree_of` over it — two 8-component `BigUint` tumblers,
+/// order half a kilobyte live — so a slot bounded only by the request body
+/// would name hundreds of thousands of spans.
 ///
 /// The budget is live memory inside the transact. All three slots are built
 /// and held under M2's applier lock before any record is encoded, so
 /// `MAX_TXN_BYTES` — charged against the ENCODED transaction after the
 /// closure returns — bounds what the store keeps and not what the closure
-/// allocates. An element-level I-extent is two 8-component tumblers of
-/// `BigUint`, order half a kilobyte live, so this bound is ~2 MB a slot and
-/// ~6 MB across a three-slot MAKELINK: the order of the request body a
-/// caller is allowed to send in the first place, which is the property the
-/// address-named forms have for free. It is not a bound on `resolve`'s own
-/// per-spec run vector, which is M5's allocation and one source document's
-/// fragmentation.
-pub const MAX_RESOLVE_SPANS: usize = 4096;
+/// allocates. At order half a kilobyte per element-level span this bound is
+/// ~2 MB a slot and ~6 MB across a three-slot MAKELINK: the order of the
+/// request body a caller is allowed to send in the first place. It is not a
+/// bound on `resolve`'s own per-spec run vector, which is M5's allocation and
+/// one source document's fragmentation.
+pub const MAX_SLOT_SPANS: usize = 4096;
 
-/// One MAKELINK slot's endset, read off the txn base — `None` iff a `Resolve`
-/// slot expands past [`MAX_RESOLVE_SPANS`]. `Resolve`: ρ as content I-extents
-/// — readable, level-uniform spans (ML1 coverage-exactness by construction:
-/// the runs trace exactly allocated content, cross-origin runs arrive
-/// un-coalesced), counted as they are produced, so an over-budget slot stops
-/// accumulating instead of being built and then measured. `Addrs`: the
-/// canonical name encoding, deposited unresolved, one span per name and so
-/// already bounded by the request that named them.
+/// One MAKELINK slot's endset, read off the txn base — `None` iff the slot
+/// carries more than [`MAX_SLOT_SPANS`] spans, in either form. `Resolve`: ρ
+/// as content I-extents — readable, level-uniform spans (ML1
+/// coverage-exactness by construction: the runs trace exactly allocated
+/// content, cross-origin runs arrive un-coalesced), counted as they are
+/// produced, so an over-budget slot stops accumulating instead of being built
+/// and then measured. `Addrs`: the canonical name encoding, deposited
+/// unresolved, one span per name, counted before the encoding is built.
 fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
     match arg {
         SlotArg::Resolve(specs) => {
             let mut spans: Vec<Span> = Vec::new();
             for spec in specs {
                 for run in m5.resolve(&spec.source, &spec.span) {
-                    if spans.len() == MAX_RESOLVE_SPANS {
+                    if spans.len() == MAX_SLOT_SPANS {
                         return None;
                     }
                     spans.push(run.iextent());
@@ -560,7 +562,7 @@ fn slot_endset(m5: &M5State, arg: &SlotArg) -> Option<Endset> {
             }
             Some(Endset::from_spans(spans))
         }
-        SlotArg::Addrs(addrs) => Some(enc(addrs)),
+        SlotArg::Addrs(addrs) => (addrs.len() <= MAX_SLOT_SPANS).then(|| enc(addrs)),
     }
 }
 
@@ -586,14 +588,14 @@ where
     /// (distinct links always — ML0), NO provenance.
     ///
     /// Every `Resolve` spec is wf-checked — a registered source, and a depth-2
-    /// content V-position with ordinal displacement — before any
-    /// slot is built, and each `Resolve` slot is bounded at
-    /// [`MAX_RESOLVE_SPANS`] I-extents (`SlotTooLarge`) — a spec's expansion
-    /// is the source document's fragmentation rather than the request's size,
-    /// so it is the one slot form that carries a bound. `Addrs` slots get
-    /// neither step: T4 validity is the whole precondition, already carried
-    /// by the `Address` type, and one span per name is already bounded by the
-    /// request that named them.
+    /// content V-position with ordinal displacement — before any slot is
+    /// built; `Addrs` names get no wf step, T4 validity being the whole
+    /// precondition and already carried by the `Address` type. EVERY slot,
+    /// in either form, is bounded at [`MAX_SLOT_SPANS`] spans
+    /// (`SlotTooLarge`): a spec's expansion is the source document's
+    /// fragmentation rather than the request's size, and a name's span costs
+    /// order half a kilobyte live against ~19 wire bytes, so neither form's
+    /// live cost is bounded by the request body that carried it.
     ///
     /// The two SOLE-WRITER fences apply here as they do on the managed
     /// surface: a resolved type slot in the `[R]` class
@@ -682,12 +684,16 @@ where
     /// returned address back may find a link its own emission would have been
     /// refused for, and one of several active tuples of that identity.
     ///
-    /// PRE-TRANSACT rejections (no transaction opened — §3): `ty` not
-    /// address-denoting (`NonAddressDenotingType`, before ANY class
-    /// computation, keeping `coverage_class` on the safe denoted path) and
-    /// `ty ~ [K_sup]` (`SupersessionClass` — assert_sup/editlink are the
-    /// sole `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts
-    /// §10). The lock set is `[dedup_key, link_lock_key(home)]` for a
+    /// PRE-TRANSACT rejections (no transaction opened — §3), in firing order:
+    /// `ty` not address-denoting (`NonAddressDenotingType`, before ANY class
+    /// computation, keeping `coverage_class` on the safe denoted path); `ty ~
+    /// [K_sup]` (`SupersessionClass` — assert_sup/editlink are the sole
+    /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
+    /// and `to` past [`MAX_SLOT_SPANS`] addresses (`SlotTooLarge` — the same
+    /// per-slot span budget MAKELINK's slots carry, on the one managed slot
+    /// whose cardinality the caller chooses, and ahead of `ShapeViolation`,
+    /// which an over-budget `to` also satisfies under every shape but Multi).
+    /// The lock set is `[dedup_key, link_lock_key(home)]` for a
     /// registered idem⊤ `ty`, else `[link_lock_key(home)]` — the
     /// registration read comes from the construction-time cache, race-free
     /// because the registry is genesis-immutable (§3 step 1).
@@ -708,6 +714,13 @@ where
         let class = coverage_class(ty);
         if class == *self.registry.shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
+        }
+        // The one managed slot a caller sizes. `enc({from})` is one span and
+        // `ty` is a registered class's key, so `to` is where the span budget
+        // bites; ahead of the shape gate, which admits any finite `|G|` under
+        // Multi and so cannot bound it.
+        if to.len() > MAX_SLOT_SPANS {
+            return Err(TxnError::Rejected(EmitError::SlotTooLarge));
         }
         let value = Link::triple(enc([from]), enc(to), ty.clone());
         let keys = self.deposit_lock_set(&value, home);
@@ -859,7 +872,11 @@ where
     /// `d_a`'s.
     ///
     /// Rejects (against the txn base): unregistered `d_s`/`d_a`;
-    /// non-resident `original`; a successor of arity ≠ 3 (Conflicts §11),
+    /// non-resident `original`; a successor slot past [`MAX_SLOT_SPANS`]
+    /// spans (`SlotTooLarge` — the slots are the caller's, resolve-built, so
+    /// their span count is a source document's fragmentation rather than the
+    /// request's size, and every per-span step after this one runs inside the
+    /// transact); a successor of arity ≠ 3 (Conflicts §11),
     /// empty type slot, or a non-level-uniform span in any slot
     /// (`IllFormedSuccessor` — the last keeps `coverage_class` total for
     /// both the DC guard and the fold's dedup key); DC — a
@@ -903,6 +920,20 @@ where
                 home_gate(base.m3(), caller, &[d_s, d_a])?;
                 if !base.links().resident(original.tumbler()) {
                     return Err(EditLinkError::OriginalNotResident);
+                }
+                // The successor's span budget, ahead of every per-span
+                // verdict: the level-uniformity walk below, the DC guard's
+                // `coverage_class`, and the fold's dedup key over ALL THREE
+                // slots are each linear in this count, and all three run
+                // inside the transact under M2's applier lock. The slots are
+                // built by the CALLER — M10 resolves V-specs into them — so
+                // the count is the SOURCE document's fragmentation rather
+                // than the request's size, which is the same expansion
+                // MAKELINK's `Resolve` slots are bounded against.
+                if (1..=successor.arity())
+                    .any(|i| successor.slot(i).is_some_and(|e| e.len() > MAX_SLOT_SPANS))
+                {
+                    return Err(EditLinkError::SlotTooLarge);
                 }
                 // Level-uniformity is required of EVERY slot, not just the
                 // one the DC guard classifies: a deposit of a registered

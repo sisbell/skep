@@ -364,7 +364,7 @@ fn reach_walk_never_a_count_off_width() {
 /// acting at every admissible position, with and without a trailing tail, and
 /// over ordinals below, at, inside and above the reach.
 #[test]
-fn the_reach_walks_membership_test_agrees_with_span_contains() {
+fn reach_walk_membership_agrees_with_span_contains() {
     let home = doc1(ACCT_A);
     let start = content_pos(&home, 4);
     for action_point in 0..start.len() {
@@ -977,8 +977,8 @@ fn single_address_admits_exactly_one_address_form_span() {
     assert_eq!(single_address(&[unit(ACCT_A)]), Some(addr(ACCT_A)));
     assert_eq!(single_address(&[unit(ACCT_A), unit(ACCT_B)]), None);
     // One span covering TWO account subtrees: `Equal` to no subtree.
-    let two = Span::new(tum(ACCT_A), width_at_last(ACCT_A.len(), 2)).expect("T12");
-    assert_eq!(single_address(&[two]), None);
+    let two_accounts = Span::new(tum(ACCT_A), width_at_last(ACCT_A.len(), 2)).expect("T12");
+    assert_eq!(single_address(&[two_accounts]), None);
     // Adjacent zeros: T4-invalid as an address, legal as a carrier tumbler.
     let invalid = Span::new(tum(&[1, 1, 0, 5, 0, 1, 0, 0, 1]), width_at_last(9, 1)).expect("T12");
     assert_eq!(single_address(&[invalid]), None);
@@ -1370,10 +1370,10 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
     assert_eq!(st.claimant(), Some(&addr(CLAIMANT)));
 
     // First-wins: a second claim, even by another seeded top-level account.
-    let dep2 = fx.claim_dep(&doc1(ACCT_B), ACCT_B);
-    let (st3, v) = fx.step(&st, &dep2);
+    let second_claim = fx.claim_dep(&doc1(ACCT_B), ACCT_B);
+    let (st, v) = fx.step(&st, &second_claim);
     assert_token(&v, "already_claimed");
-    assert_eq!(st3.claimant(), Some(&addr(CLAIMANT)));
+    assert_eq!(st.claimant(), Some(&addr(CLAIMANT)));
 
     // A claim whose `from` is not the home's account: shape (condition 1).
     let dep = Dep {
@@ -1382,7 +1382,7 @@ fn board_admits_one_claim_and_only_from_a_keyed_account() {
         to: vec![],
         ty: vec![unit(T_CLAIM)],
     };
-    assert_token(&fx.classify(&st3, &dep), "malformed_shape");
+    assert_token(&fx.classify(&st, &dep), "malformed_shape");
 }
 
 /// AUTH-1.40 — the checkpointed frame AROUND `Enrolled`: `KeySet`'s two maps

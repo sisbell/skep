@@ -104,7 +104,7 @@ pub fn record_bytes(
         // `start ≤ pos < reach` — M1 `Span::contains`' half-open membership,
         // spelled against the reach above. Two spellings of one rule, so the
         // agreement is checked rather than assumed:
-        // `the_reach_walks_membership_test_agrees_with_span_contains`.
+        // `reach_walk_membership_agrees_with_span_contains`.
         while *span.start() <= pos && pos < reach {
             // 4 — the value, as of the ctx's commit (AUTH-2.38 item 4).
             let Some(value) = ctx.value_at(&pos) else {

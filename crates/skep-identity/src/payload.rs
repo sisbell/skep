@@ -307,11 +307,11 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
         // AUTH-2.14 — no label, no trailing separator: ANY remainder after
         // the fingerprint token (`<64 hex> ` and `<64 hex> note` alike) is
         // BadLine.
-        let (first, rest) = split_token(line);
+        let (hex, rest) = split_token(line);
         if rest.is_some() {
             return Err(PayloadError::BadLine(n));
         }
-        let Some(fp) = Fingerprint::parse_hex(first) else {
+        let Some(fp) = Fingerprint::parse_hex(hex) else {
             return Err(PayloadError::BadLine(n));
         };
         // AUTH-2.15 — never `removed = {F}` twice: the repeat is named.
@@ -326,34 +326,34 @@ pub fn parse_retire(bytes: &[u8]) -> Result<Vec<Fingerprint>, PayloadError> {
 /// and the label verbatim, so `parse(encode(x)) == x` holds over the whole
 /// [`Enrollment`] domain (I1, AUTH-2.89).
 pub fn encode_enroll(enrollments: &[Enrollment]) -> Vec<u8> {
-    let mut s = String::new();
-    s.push_str(ENROLL_HEADER);
-    s.push('\n');
-    for e in enrollments {
-        if e.anchor {
-            s.push_str("anchor "); // the LEADING token (AUTH-2.11)
+    let mut out = String::new();
+    out.push_str(ENROLL_HEADER);
+    out.push('\n');
+    for enrollment in enrollments {
+        if enrollment.anchor {
+            out.push_str("anchor "); // the LEADING token (AUTH-2.11)
         }
-        s.push_str(e.key.alg());
-        s.push(' ');
-        s.push_str(&e.key.to_hex());
-        if let Some(label) = e.label() {
-            s.push(' ');
-            s.push_str(label);
+        out.push_str(enrollment.key.alg());
+        out.push(' ');
+        out.push_str(&enrollment.key.to_hex());
+        if let Some(label) = enrollment.label() {
+            out.push(' ');
+            out.push_str(label);
         }
-        s.push('\n');
+        out.push('\n');
     }
-    s.into_bytes()
+    out.into_bytes()
 }
 
 /// AUTH-2.18 — encode a retirement record; lowercase hex (AUTH-2.17).
 pub fn encode_retire(fps: &[Fingerprint]) -> Vec<u8> {
-    let mut s = String::new();
-    s.push_str(RETIRE_HEADER);
-    s.push('\n');
+    let mut out = String::new();
+    out.push_str(RETIRE_HEADER);
+    out.push('\n');
     for fp in fps {
-        s.push_str(&fp.to_hex());
-        s.push('\n');
+        out.push_str(&fp.to_hex());
+        out.push('\n');
     }
-    s.into_bytes()
+    out.into_bytes()
 }
 

@@ -282,14 +282,14 @@ proptest! {
             // I9 — per (account, fingerprint): the flag anywhere (enrolled
             // or retired) equals the first-enrollment flag in that account.
             for ((acct, f), flag) in &first_flag {
-                let s = next.key_set(acct);
+                let set = next.key_set(acct);
                 if let Some((_, enrolled)) =
-                    s.enrolled().find(|(enrolled_fp, _)| *enrolled_fp == f)
+                    set.enrolled().find(|(enrolled_fp, _)| *enrolled_fp == f)
                 {
                     prop_assert_eq!(enrolled.anchor, *flag);
                 }
                 if let Some((_, retired_flag)) =
-                    s.retired().find(|(retired_fp, _)| *retired_fp == f)
+                    set.retired().find(|(retired_fp, _)| *retired_fp == f)
                 {
                     prop_assert_eq!(retired_flag, *flag);
                 }
@@ -311,9 +311,9 @@ proptest! {
         // I2 — `fold(s ++ t) == fold_from(fold(s), t)`, and re-folding the
         // whole stream reproduces the same table (determinism over a fixed
         // ctx and stream).
-        let fold_over = |start: &IdentityState, slice: &[Case]| -> IdentityState {
+        let fold_over = |start: &IdentityState, segment: &[Case]| -> IdentityState {
             let mut acc = start.clone();
-            for case in slice {
+            for case in segment {
                 acc = fx.step(&acc, &case.dep).0;
             }
             acc

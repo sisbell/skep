@@ -144,7 +144,8 @@ impl FoldCtx for TestCtx {
 
 // ---------------------------------------------------------------- deposits
 
-/// An owned deposit; `link()` borrows it as the fold's `LinkDeposit`.
+/// An owned deposit; `as_link_deposit()` borrows it as the fold's
+/// [`LinkDeposit`].
 pub struct Dep {
     pub home: Address,
     pub from: Vec<Span>,
@@ -153,7 +154,7 @@ pub struct Dep {
 }
 
 impl Dep {
-    pub fn link(&self) -> LinkDeposit<'_> {
+    pub fn as_link_deposit(&self) -> LinkDeposit<'_> {
         LinkDeposit {
             home: &self.home,
             from: &self.from,
@@ -195,14 +196,14 @@ impl Fixture {
         self.ctx.accounts.insert(addr(ORPHAN));
     }
 
-    /// Mints `parts` as consecutive one-atom content positions of `home`;
+    /// Mints `values` as consecutive one-atom content positions of `home`;
     /// answers one unit span per atom, in mint order.
-    pub fn mint(&mut self, home: &Address, parts: &[&[u8]]) -> Vec<Span> {
+    pub fn mint(&mut self, home: &Address, values: &[&[u8]]) -> Vec<Span> {
         let mut spans = Vec::new();
-        for part in parts {
+        for value in values {
             let ord = self.next_ord.entry(home.clone()).or_insert(1);
             let pos = content_pos(home, *ord);
-            self.ctx.values.insert(pos.clone(), part.to_vec());
+            self.ctx.values.insert(pos.clone(), value.to_vec());
             spans.push(subtree_of(&pos));
             *ord += 1;
         }
@@ -246,11 +247,11 @@ impl Fixture {
     }
 
     pub fn step(&self, st: &IdentityState, dep: &Dep) -> (IdentityState, Verdict) {
-        st.step(&self.types, &self.ctx, &dep.link())
+        st.step(&self.types, &self.ctx, &dep.as_link_deposit())
     }
 
     pub fn classify(&self, st: &IdentityState, dep: &Dep) -> Verdict {
-        st.classify(&self.types, &self.ctx, &dep.link())
+        st.classify(&self.types, &self.ctx, &dep.as_link_deposit())
     }
 }
 
@@ -277,15 +278,15 @@ pub fn enrollment(i: u8, anchor: bool) -> Enrollment {
 }
 
 pub fn enroll_payload(entries: &[(u8, bool)]) -> Vec<u8> {
-    let es: Vec<Enrollment> = entries
+    let enrollments: Vec<Enrollment> = entries
         .iter()
         .map(|&(i, anchor)| enrollment(i, anchor))
         .collect();
-    encode_enroll(&es)
+    encode_enroll(&enrollments)
 }
 
-pub fn retire_payload(idxs: &[u8]) -> Vec<u8> {
-    let fps: Vec<Fingerprint> = idxs.iter().map(|&i| fp(i)).collect();
+pub fn retire_payload(indices: &[u8]) -> Vec<u8> {
+    let fps: Vec<Fingerprint> = indices.iter().map(|&i| fp(i)).collect();
     encode_retire(&fps)
 }
 

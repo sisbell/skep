@@ -163,7 +163,7 @@ fn the_declared_tag_bytes_are_pinned() {
 /// AUTH-2.55 — `Inert::token()`: the one authority, all twelve rows,
 /// snake_case of the variant name.
 #[test]
-fn inert_token_map() {
+fn every_inert_variant_has_its_pinned_token() {
     assert_eq!(Inert::Unpublished.token(), "unpublished");
     assert_eq!(Inert::MalformedShape.token(), "malformed_shape");
     assert_eq!(

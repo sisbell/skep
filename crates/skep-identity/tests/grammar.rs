@@ -355,7 +355,7 @@ fn enrollment_constructor_polices_the_label_domain() {
 
 /// AUTH-1.28 — `PayloadError::token()`: the one authority, all eight rows.
 #[test]
-fn payload_error_token_map() {
+fn every_payload_error_variant_has_its_pinned_token() {
     assert_eq!(PayloadError::TooLarge.token(), "too_large");
     assert_eq!(PayloadError::ForeignContent.token(), "foreign_content");
     assert_eq!(PayloadError::MissingValue.token(), "missing_value");
@@ -373,28 +373,34 @@ fn public_key_surface() {
     let k = key(0xab);
     assert_eq!(k.alg(), "ed25519");
     assert_eq!(k.raw().len(), 32);
-    let h = k.to_hex();
-    assert_eq!(h.len(), 64);
-    assert_eq!(h, h.to_lowercase());
+    let key_hex = k.to_hex();
+    assert_eq!(key_hex.len(), 64);
+    assert_eq!(key_hex, key_hex.to_lowercase());
 
     // Case-insensitive parse; syntax-only (0xff…ff is no curve point and is
     // admitted anyway — AUTH-1.4 never decodes the point).
-    assert_eq!(PublicKey::parse("ed25519", &h.to_uppercase()).unwrap(), k);
+    assert_eq!(
+        PublicKey::parse("ed25519", &key_hex.to_uppercase()).unwrap(),
+        k
+    );
     assert!(PublicKey::parse("ed25519", &"ff".repeat(32)).is_ok());
 
     use skep_identity::KeyParseError;
-    assert!(matches!(PublicKey::parse("rsa", &h), Err(KeyParseError::UnknownAlg)));
+    assert!(matches!(
+        PublicKey::parse("rsa", &key_hex),
+        Err(KeyParseError::UnknownAlg)
+    ));
     // BadHex BEFORE BadLength, on a token of the wrong length AND the wrong
     // bytes: the decode precedes the measure here, so a length test hoisted
     // ahead of it — the shape `Fingerprint::parse_hex` legitimately has,
     // AUTH-1.9 fixing ONE admitted length — would flip this row to BadLength.
     assert!(matches!(PublicKey::parse("ed25519", "zz"), Err(KeyParseError::BadHex)));
     assert!(matches!(
-        PublicKey::parse("ed25519", &h[..63]),
+        PublicKey::parse("ed25519", &key_hex[..63]),
         Err(KeyParseError::BadHex) // 63 chars: odd length cannot decode
     ));
     assert!(matches!(
-        PublicKey::parse("ed25519", &h[..62]),
+        PublicKey::parse("ed25519", &key_hex[..62]),
         Err(KeyParseError::BadLength)
     ));
 
@@ -405,7 +411,7 @@ fn public_key_surface() {
     // why AUTH-1.4's table lookup can stay inside this function rather than
     // being lifted into the caller's types.
     assert!(matches!(
-        PublicKey::parse(&h, ALG_ED25519),
+        PublicKey::parse(&key_hex, ALG_ED25519),
         Err(KeyParseError::UnknownAlg)
     ));
     assert!(matches!(
@@ -419,12 +425,12 @@ fn public_key_surface() {
 #[test]
 fn fingerprint_hex_round_trips_and_admits_exactly_64_chars() {
     let f = fp(9);
-    let h = f.to_hex();
-    assert_eq!(h.len(), 64);
-    assert_eq!(h, h.to_lowercase());
-    assert_eq!(Fingerprint::parse_hex(&h).unwrap(), f);
-    assert_eq!(Fingerprint::parse_hex(&h.to_uppercase()).unwrap(), f);
-    assert!(Fingerprint::parse_hex(&h[..62]).is_none());
-    assert!(Fingerprint::parse_hex(&format!("{h}00")).is_none());
-    assert!(Fingerprint::parse_hex(&format!("g{}", &h[1..])).is_none());
+    let fp_hex = f.to_hex();
+    assert_eq!(fp_hex.len(), 64);
+    assert_eq!(fp_hex, fp_hex.to_lowercase());
+    assert_eq!(Fingerprint::parse_hex(&fp_hex).unwrap(), f);
+    assert_eq!(Fingerprint::parse_hex(&fp_hex.to_uppercase()).unwrap(), f);
+    assert!(Fingerprint::parse_hex(&fp_hex[..62]).is_none());
+    assert!(Fingerprint::parse_hex(&format!("{fp_hex}00")).is_none());
+    assert!(Fingerprint::parse_hex(&format!("g{}", &fp_hex[1..])).is_none());
 }

@@ -56,7 +56,7 @@ use skep_namespace::PrincipalId;
 use skep_retrieval::{CorrPair, DeliveryItem, Operand, Region, Spec, SpecFault};
 
 /// The daemon's JSON codec — stateless; one instance serves every client.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct JsonCodec;
 
 impl Codec for JsonCodec {
@@ -119,10 +119,11 @@ fn to_bytes(v: Value) -> Vec<u8> {
 /// Build a JSON object with keys sorted — THE determinism device. Every
 /// JSON object this crate emits is constructed through it — wire responses,
 /// transport-error bodies, and the sidecar's own file lines — so canonical
-/// output is alphabetical-by-key under any serde_json map backend.
-pub(crate) fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
-    let mut pairs = pairs;
-    pairs.sort_by(|a, b| a.0.cmp(b.0));
+/// output is alphabetical-by-key under any serde_json map backend. The sort
+/// is STABLE, which is what makes "the last pair given wins" a fact about
+/// duplicate keys rather than an accident of the sort.
+pub(crate) fn obj(mut pairs: Vec<(&'static str, Value)>) -> Value {
+    pairs.sort_by_key(|&(k, _)| k);
     let mut m = Map::new();
     for (k, v) in pairs {
         m.insert(k.to_string(), v);
@@ -130,18 +131,17 @@ pub(crate) fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
     Value::Object(m)
 }
 
-/// Render a tumbler dotted-decimal — the same encoding the conformance
-/// goldens use ("1.1.0.1", zeros explicit, components canonical decimal).
-/// That encoding is M1's own `Display`, so the wire form and the tumbler's
-/// canonical text are one rendering rather than two that must be kept equal.
-pub fn tumbler_string(t: &Tumbler) -> String {
-    t.to_string()
-}
-
 // ── parse (wire → Request) ──────────────────────────────────────────────
 
 /// Internal parse fault; becomes `ParseError::detail`.
+#[derive(Debug)]
 struct PErr(String);
+
+impl std::fmt::Display for PErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 type PResult<T> = Result<T, PErr>;
 
@@ -278,7 +278,7 @@ impl Obj {
 
     fn field<T>(&mut self, k: &'static str, f: impl Fn(&Value) -> PResult<T>) -> PResult<T> {
         let v = self.take(k)?;
-        f(&v).map_err(|e| PErr(format!("field '{k}': {}", e.0)))
+        f(&v).map_err(|e| PErr(format!("field '{k}': {e}")))
     }
 
     fn string(&mut self, k: &'static str) -> PResult<String> {
@@ -288,7 +288,7 @@ impl Obj {
     fn opt_string(&mut self, k: &'static str) -> PResult<Option<String>> {
         match self.take_opt(k) {
             None => Ok(None),
-            Some(v) => p_string(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {}", e.0))),
+            Some(v) => p_string(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}"))),
         }
     }
 
@@ -369,7 +369,7 @@ impl Obj {
         match self.take_opt(k) {
             None => Ok(None),
             Some(v) => {
-                p_addr(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {}", e.0)))
+                p_addr(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}")))
             }
         }
     }
@@ -444,14 +444,14 @@ fn need<'a>(m: &'a Map<String, Value>, k: &'static str) -> PResult<&'a Value> {
 }
 
 fn sub<T>(m: &Map<String, Value>, k: &'static str, f: impl Fn(&Value) -> PResult<T>) -> PResult<T> {
-    f(need(m, k)?).map_err(|e| PErr(format!("{k}: {}", e.0)))
+    f(need(m, k)?).map_err(|e| PErr(format!("{k}: {e}")))
 }
 
 fn p_list<T>(v: &Value, f: impl Fn(&Value) -> PResult<T>) -> PResult<Vec<T>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     arr.iter()
         .enumerate()
-        .map(|(i, x)| f(x).map_err(|e| PErr(format!("[{i}]: {}", e.0))))
+        .map(|(i, x)| f(x).map_err(|e| PErr(format!("[{i}]: {e}"))))
         .collect()
 }
 
@@ -504,7 +504,7 @@ fn p_val_forms(v: &Value) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
     for (i, x) in arr.iter().enumerate() {
-        p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {}", e.0)))?;
+        p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {e}")))?;
     }
     Ok(out)
 }
@@ -551,13 +551,18 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
 }
 
 fn p_hex(s: &str) -> PResult<Vec<u8>> {
-    // `% 2`, not `is_multiple_of`: the workspace MSRV is 1.85 and
-    // `u64::is_multiple_of` stabilized in 1.87 (clippy::incompatible_msrv).
+    // The odd-length refusal comes FIRST, because `chunks_exact` below
+    // drops a trailing half-byte in silence — exactly the reading this
+    // check exists to refuse. (`% 2` and not `is_multiple_of`: the
+    // workspace MSRV is 1.85 and that stabilized in 1.87 —
+    // clippy::incompatible_msrv.)
     if s.len() % 2 != 0 {
         return Err(PErr("hex string has odd length".into()));
     }
-    let b = s.as_bytes();
-    (0..s.len() / 2).map(|i| Ok(hex_digit(b[2 * i])? * 16 + hex_digit(b[2 * i + 1])?)).collect()
+    s.as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Ok(hex_digit(pair[0])? * 16 + hex_digit(pair[1])?))
+        .collect()
 }
 
 fn hex_digit(c: u8) -> PResult<u8> {
@@ -627,8 +632,12 @@ fn p_successor(v: &Value) -> PResult<SuccessorSpec> {
 fn p_successor_ty(v: &Value) -> PResult<SlotArg> {
     let m = p_obj(v, &["addrs", "resolve"])?;
     match (m.get("addrs"), m.get("resolve")) {
-        (Some(a), None) => Ok(SlotArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {}", e.0)))?)),
-        (None, Some(r)) => Ok(SlotArg::Resolve(p_list(r, p_vspec).map_err(|e| PErr(format!("resolve: {}", e.0)))?)),
+        (Some(a), None) => {
+            Ok(SlotArg::Addrs(p_list(a, p_addr).map_err(|e| PErr(format!("addrs: {e}")))?))
+        }
+        (None, Some(r)) => {
+            Ok(SlotArg::Resolve(p_list(r, p_vspec).map_err(|e| PErr(format!("resolve: {e}")))?))
+        }
         _ => Err(PErr("expected exactly one of 'addrs' or 'resolve'".into())),
     }
 }
@@ -961,8 +970,12 @@ fn j_nat(n: &Nat) -> Value {
     Value::String(n.to_string())
 }
 
+/// Dotted-decimal, zeros explicit, components canonical decimal — M1's own
+/// `Display`, so the wire form and a tumbler's canonical text are ONE
+/// rendering rather than two that must be kept equal. (The conformance
+/// goldens read the same encoding.)
 fn j_tum(t: &Tumbler) -> Value {
-    Value::String(tumbler_string(t))
+    Value::String(t.to_string())
 }
 
 fn j_addr(a: &Address) -> Value {
@@ -1104,10 +1117,14 @@ fn j_atom(v: &Val) -> Value {
     }
 }
 
-fn hex_string(b: &[u8]) -> String {
+/// Lowercase hex — the encoding behind `{"hex"}`, `{"atom_hex"}`, and the
+/// fuzz harness's reproduction form, so all three read the same bytes back.
+pub(crate) fn hex_string(b: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);
-    for byte in b {
-        s.push_str(&format!("{byte:02x}"));
+    for &byte in b {
+        s.push(DIGITS[(byte >> 4) as usize] as char);
+        s.push(DIGITS[(byte & 0x0f) as usize] as char);
     }
     s
 }
@@ -1357,12 +1374,12 @@ mod tests {
     /// runs of digits joined by single dots; magnitude is unbounded.
     #[test]
     fn tumbler_parse_edges() {
-        let ok = p_tum(&Value::String("1.0.1".into())).map(|t| tumbler_string(&t));
-        assert_eq!(ok.map_err(|e| e.0).unwrap(), "1.0.1");
+        let ok = p_tum(&Value::String("1.0.1".into())).map(|t| t.to_string());
+        assert_eq!(ok.expect("'1.0.1' parses"), "1.0.1");
         // Beyond u64: parses through the BigUint path and renders back.
         let big = "18446744073709551616"; // 2^64
-        let t = p_tum(&Value::String(big.into())).map_err(|e| e.0).unwrap();
-        assert_eq!(tumbler_string(&t), big);
+        let t = p_tum(&Value::String(big.into())).expect("a beyond-u64 component parses");
+        assert_eq!(t.to_string(), big);
         for bad in ["", ".", "1..2", "1.", ".1", "1.-2", "1.+2", "1.a", "1 .2"] {
             assert!(p_tum(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
         }
@@ -1375,12 +1392,11 @@ mod tests {
     #[test]
     fn value_forms_parse_per_byte_and_atoms_marshal_apart() {
         let mut vs: Vec<Val> = Vec::new();
-        p_val_form(&Value::String("hé".into()), &mut vs).map_err(|e| e.0).unwrap();
+        p_val_form(&Value::String("hé".into()), &mut vs).expect("a string value form parses");
         assert_eq!(vs.len(), 3, "'h' plus the two bytes of 'é'");
         assert!(vs.iter().all(|v| v.len() == 1));
         p_val_form(&obj(vec![("atom", Value::String("hé".into()))]), &mut vs)
-            .map_err(|e| e.0)
-            .unwrap();
+            .expect("an atom value form parses");
         assert_eq!(vs.len(), 4);
         assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
         // Canonical inverse: the run reassembles, the atom stays its own form.
@@ -1390,10 +1406,9 @@ mod tests {
         // Empty per-byte forms are vacuous; empty atoms are inexpressible;
         // multi-key objects and non-string/object elements are malformed.
         let mut none: Vec<Val> = Vec::new();
-        p_val_form(&Value::String(String::new()), &mut none).map_err(|e| e.0).unwrap();
+        p_val_form(&Value::String(String::new()), &mut none).expect("\"\" is vacuous");
         p_val_form(&obj(vec![("hex", Value::String(String::new()))]), &mut none)
-            .map_err(|e| e.0)
-            .unwrap();
+            .expect("an empty hex string is vacuous");
         assert!(none.is_empty());
         for bad in [
             obj(vec![("atom", Value::String(String::new()))]),

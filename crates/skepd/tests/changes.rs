@@ -372,7 +372,7 @@ fn pre_feature_positions_answer_bare_entries() {
     use skep_febe::{Codec, Operation, Response, SessionId};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
     use skep_namespace::PrincipalId;
-    use skepd::{tumbler_string, JsonCodec};
+    use skepd::JsonCodec;
 
     let dir = tempfile::tempdir().expect("tempdir");
     {
@@ -399,7 +399,7 @@ fn pre_feature_positions_answer_bare_entries() {
 
         let boot = febe.bootstrap_session();
         let prefix = match exec(boot, r#"{"op":"next_account_prefix","parent":"1"}"#) {
-            Response::MaybeAddr { addr: Some(a), .. } => tumbler_string(a.tumbler()),
+            Response::MaybeAddr { addr: Some(a), .. } => a.tumbler().to_string(),
             other => panic!("next_account_prefix: {}", unexpected(&other)),
         };
         let account = match exec(
@@ -408,7 +408,7 @@ fn pre_feature_positions_answer_bare_entries() {
         ) {
             Response::AckAddr { addr, at } => {
                 assert_eq!(at.0, 2, "delegate commits at position 2; re-pin wire.md");
-                tumbler_string(addr.tumbler())
+                addr.tumbler().to_string()
             }
             other => panic!("delegate: {}", unexpected(&other)),
         };
@@ -419,7 +419,7 @@ fn pre_feature_positions_answer_bare_entries() {
         ) {
             Response::AckAddr { addr, at } => {
                 assert_eq!(at.0, 3, "create commits at position 3; re-pin wire.md");
-                tumbler_string(addr.tumbler())
+                addr.tumbler().to_string()
             }
             other => panic!("create: {}", unexpected(&other)),
         };

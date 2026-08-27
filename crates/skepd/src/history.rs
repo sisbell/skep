@@ -99,8 +99,13 @@ struct ReconstructPermits {
     available: AtomicUsize,
 }
 
-/// One held permit; dropping it releases the slot.
-pub(crate) struct ReconstructPermit<'a> {
+/// One held permit; dropping it releases the slot. Named rather than
+/// hidden behind an opaque `impl Drop`, so a caller can store it, borrow
+/// it, and read what it is — the standing every guard in `std` has. Public
+/// only to be the return type of the daemon's test hook, and
+/// `#[doc(hidden)]` for the same reason.
+#[doc(hidden)]
+pub struct ReconstructPermit<'a> {
     permits: &'a ReconstructPermits,
 }
 

@@ -133,13 +133,11 @@ pub fn codec_roundtrip_oracle(frame: &[u8]) -> bool {
     }
 }
 
-/// Lowercase hex of a byte slice — the reproduction form findings record.
+/// Lowercase hex of a byte slice — the reproduction form findings record,
+/// and the codec's own hex encoding, so a finding's bytes read back through
+/// the `{"hex"}` form they may have come from.
 pub fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
+    crate::codec::hex_string(bytes)
 }
 
 // ── the HTTP oracle ──────────────────────────────────────────────────────

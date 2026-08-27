@@ -51,20 +51,22 @@ use crate::codec::obj;
 /// journal/checkpoint files, which this crate never touches).
 const SIDECAR_FILE: &str = "commits.log";
 
-/// One committed position's metadata. Every field is `None` for a bare
-/// (reconstructed) position — served as explicit `null`s.
+/// One committed position's metadata — and this file's crash-honesty rule
+/// as a type. A position is either one the daemon OBSERVED committing,
+/// carrying all of op/docs/time, or a BARE one reconstructed from the
+/// journal, carrying none of them. Three independent `Option`s would admit
+/// six more combinations, and this file has a meaning for neither the
+/// half-recorded position nor the record that remembers when but not what.
 #[derive(Clone)]
-pub(crate) struct Meta {
-    pub op: Option<String>,
-    pub docs: Option<Vec<String>>,
-    pub time: Option<u64>,
+pub(crate) enum Meta {
+    /// Reconstructed, not witnessed: served as explicit `null`s, never as
+    /// an invented value.
+    Bare,
+    /// Witnessed at ack time by the daemon's own write path.
+    Recorded { op: String, docs: Vec<String>, time: u64 },
 }
 
 impl Meta {
-    fn bare() -> Meta {
-        Meta { op: None, docs: None, time: None }
-    }
-
     /// One `GET /changes` entry: the position and all three fields, a bare
     /// position's rendering as explicit `null`s — the crash-honesty rule of
     /// this file, expressed where the rule is stated rather than at the
@@ -73,32 +75,28 @@ impl Meta {
     /// absent and null alike, so the shorter line costs nothing there,
     /// while a client reading the wire is owed the field it asked about.
     pub fn entry(&self, at: u64) -> Value {
+        let (docs, op, time) = match self {
+            Meta::Bare => (Value::Null, Value::Null, Value::Null),
+            Meta::Recorded { op, docs, time } => (
+                Value::Array(docs.iter().map(|s| Value::String(s.clone())).collect()),
+                Value::String(op.clone()),
+                Value::Number((*time).into()),
+            ),
+        };
         obj(vec![
             ("at", Value::Number(at.into())),
-            (
-                "docs",
-                match &self.docs {
-                    Some(d) => {
-                        Value::Array(d.iter().map(|s| Value::String(s.clone())).collect())
-                    }
-                    None => Value::Null,
-                },
-            ),
-            (
-                "op",
-                match &self.op {
-                    Some(s) => Value::String(s.clone()),
-                    None => Value::Null,
-                },
-            ),
-            (
-                "time",
-                match self.time {
-                    Some(t) => Value::Number(t.into()),
-                    None => Value::Null,
-                },
-            ),
+            ("docs", docs),
+            ("op", op),
+            ("time", time),
         ])
+    }
+
+    /// The recorded wall-clock time, or `None` for a bare position.
+    fn time(&self) -> Option<u64> {
+        match self {
+            Meta::Bare => None,
+            Meta::Recorded { time, .. } => Some(*time),
+        }
     }
 }
 
@@ -193,15 +191,15 @@ impl Sidecar {
         if head > low {
             let (bare, stop) = reconstruct(engine, low, head);
             for &at in &bare {
-                map.insert(at, Meta::bare());
-                file.write_all(&entry_line(at, &Meta::bare()))?;
+                map.insert(at, Meta::Bare);
+                file.write_all(&entry_line(at, &Meta::Bare))?;
             }
             if let Some(s) = stop {
                 min_since = min_since.max(s);
                 file.write_all(&min_since_line(s))?;
             }
         }
-        let last_time = map.values().filter_map(|m| m.time).max().unwrap_or(0);
+        let last_time = map.values().filter_map(Meta::time).max().unwrap_or(0);
         Ok(Sidecar {
             inner: Mutex::new(Inner { file, map, min_since, open_head: head, last_time }),
         })
@@ -222,7 +220,7 @@ impl Sidecar {
             .unwrap_or(0);
         let time = now.max(g.last_time);
         g.last_time = time;
-        let meta = Meta { op: Some(op.to_string()), docs: Some(docs), time: Some(time) };
+        let meta = Meta::Recorded { op: op.to_string(), docs, time };
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
         if let Err(e) = g.file.write_all(&entry_line(at, &meta)) {
@@ -256,7 +254,7 @@ impl Sidecar {
     /// The newest recorded commit's wall-clock time — `null` when the head
     /// position's record is bare or nothing is recorded (never invented).
     pub fn head_time(&self) -> Option<u64> {
-        self.inner.lock().map.values().next_back().and_then(|m| m.time)
+        self.inner.lock().map.values().next_back().and_then(Meta::time)
     }
 }
 
@@ -315,6 +313,12 @@ fn parse_records(bytes: &[u8]) -> (Vec<Rec>, usize) {
 /// The min-since record has two spellings in the field — `min_since` and
 /// `floor` — and both read, because an unparseable line ends trust in
 /// everything after it.
+///
+/// The three entry fields are read TOGETHER, because [`Meta`] has only two
+/// states: all three present is a recorded position, all three absent (or
+/// `null`) is a bare one, and a line carrying some of them is not a line
+/// this daemon wrote — so trust ends there exactly as at an unparseable
+/// one, and the reopen walk re-covers the position as bare.
 fn parse_line(line: &[u8]) -> Option<Rec> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
@@ -322,24 +326,21 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
         return Some(Rec::MinSince(s.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;
-    let op = match m.get("op") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(v.as_str()?.to_string()),
-    };
-    let docs = match m.get("docs") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(
-            v.as_array()?
+    let present = |k: &str| !matches!(m.get(k), None | Some(Value::Null));
+    let meta = match (present("op"), present("docs"), present("time")) {
+        (false, false, false) => Meta::Bare,
+        (true, true, true) => Meta::Recorded {
+            op: m["op"].as_str()?.to_string(),
+            docs: m["docs"]
+                .as_array()?
                 .iter()
                 .map(|d| d.as_str().map(str::to_string))
                 .collect::<Option<Vec<String>>>()?,
-        ),
+            time: m["time"].as_u64()?,
+        },
+        _ => return None,
     };
-    let time = match m.get("time") {
-        None | Some(Value::Null) => None,
-        Some(v) => Some(v.as_u64()?),
-    };
-    Some(Rec::Entry(at, Meta { op, docs, time }))
+    Some(Rec::Entry(at, meta))
 }
 
 /// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"op":"…","time":T}`
@@ -348,17 +349,13 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
 /// lets `GET /changes` answer byte-identically across a restart.
 fn entry_line(at: u64, meta: &Meta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
-    if let Some(op) = &meta.op {
+    if let Meta::Recorded { op, docs, time } = meta {
         pairs.push(("op", Value::String(op.clone())));
-    }
-    if let Some(docs) = &meta.docs {
         pairs.push((
             "docs",
             Value::Array(docs.iter().map(|d| Value::String(d.clone())).collect()),
         ));
-    }
-    if let Some(t) = meta.time {
-        pairs.push(("time", Value::Number(t.into())));
+        pairs.push(("time", Value::Number((*time).into())));
     }
     line_bytes(obj(pairs))
 }
@@ -387,37 +384,35 @@ mod tests {
     /// that will replay it.
     #[test]
     fn lines_are_key_sorted_and_replay_as_written() {
-        let meta = Meta {
-            op: Some("insert".into()),
-            docs: Some(vec!["1.0.1.0.1".into()]),
-            time: Some(1_700_000_000_000),
+        let meta = Meta::Recorded {
+            op: "insert".into(),
+            docs: vec!["1.0.1.0.1".into()],
+            time: 1_700_000_000_000,
         };
         assert_eq!(
             entry_line(8, &meta),
             b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000000}\n"
         );
-        assert_eq!(entry_line(3, &Meta::bare()), b"{\"at\":3}\n");
+        assert_eq!(entry_line(3, &Meta::Bare), b"{\"at\":3}\n");
         assert_eq!(min_since_line(2048), b"{\"min_since\":2048}\n");
 
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(&entry_line(8, &meta));
-        file.extend_from_slice(&entry_line(3, &Meta::bare()));
+        file.extend_from_slice(&entry_line(3, &Meta::Bare));
         file.extend_from_slice(&min_since_line(2048));
         let (recs, end) = parse_records(&file);
         assert_eq!(end, file.len(), "every whole line is trusted");
         assert_eq!(recs.len(), 3);
         match &recs[0] {
-            Rec::Entry(at, m) => {
-                assert_eq!((*at, m.op.as_deref(), m.time), (8, Some("insert"), meta.time));
-                assert_eq!(m.docs.as_deref(), Some(&["1.0.1.0.1".to_string()][..]));
+            Rec::Entry(at, Meta::Recorded { op, docs, time }) => {
+                assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
+                assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
             }
-            Rec::MinSince(_) => panic!("first line is an entry"),
+            _ => panic!("first line is a recorded entry"),
         }
         match recs[1] {
-            Rec::Entry(at, ref m) => {
-                assert!(at == 3 && m.op.is_none() && m.docs.is_none() && m.time.is_none())
-            }
-            Rec::MinSince(_) => panic!("second line is a bare entry"),
+            Rec::Entry(at, Meta::Bare) => assert_eq!(at, 3),
+            _ => panic!("second line is a bare entry"),
         }
         match recs[2] {
             Rec::MinSince(s) => assert_eq!(s, 2048),
@@ -432,7 +427,7 @@ mod tests {
     fn both_spellings_of_the_min_since_record_replay() {
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(b"{\"floor\":2048}\n");
-        file.extend_from_slice(&entry_line(2049, &Meta::bare()));
+        file.extend_from_slice(&entry_line(2049, &Meta::Bare));
         let (recs, end) = parse_records(&file);
         assert_eq!(end, file.len(), "the `floor` spelling does not end trust");
         match recs[0] {
@@ -445,23 +440,41 @@ mod tests {
         }
     }
 
+    /// A position is recorded or it is bare; a line naming some of the
+    /// three fields is not one this daemon wrote, so trust ends there —
+    /// the same treatment an unparseable line gets, and the reopen walk
+    /// re-covers the position as bare rather than serving half a record.
+    #[test]
+    fn a_half_recorded_line_ends_trust() {
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(&entry_line(1, &Meta::Bare));
+        file.extend_from_slice(b"{\"at\":2,\"op\":\"insert\"}\n");
+        file.extend_from_slice(&entry_line(3, &Meta::Bare));
+        let (recs, end) = parse_records(&file);
+        assert_eq!(recs.len(), 1, "trust ends at the half-recorded line");
+        assert_eq!(end, entry_line(1, &Meta::Bare).len(), "and truncation cuts there");
+        // A `null`-valued field is absence, not a half record.
+        let (recs, _) = parse_records(b"{\"at\":4,\"docs\":null,\"op\":null,\"time\":null}\n");
+        assert!(matches!(recs.as_slice(), [Rec::Entry(4, Meta::Bare)]));
+    }
+
     /// The wire entry names every field, a bare position's as explicit
     /// `null` — never invented, and never merely absent, which a client
     /// could not tell from a field this daemon does not know about. The
     /// file line omits what the wire nulls; both are deliberate.
     #[test]
     fn wire_entries_null_what_the_file_line_omits() {
-        let meta = Meta {
-            op: Some("insert".into()),
-            docs: Some(vec!["1.0.1.0.1".into()]),
-            time: Some(1_700_000_000_000),
+        let meta = Meta::Recorded {
+            op: "insert".into(),
+            docs: vec!["1.0.1.0.1".into()],
+            time: 1_700_000_000_000,
         };
         assert_eq!(
             serde_json::to_string(&meta.entry(8)).expect("json"),
             r#"{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1700000000000}"#
         );
         assert_eq!(
-            serde_json::to_string(&Meta::bare().entry(3)).expect("json"),
+            serde_json::to_string(&Meta::Bare.entry(3)).expect("json"),
             r#"{"at":3,"docs":null,"op":null,"time":null}"#
         );
     }

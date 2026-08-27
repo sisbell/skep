@@ -55,5 +55,10 @@ mod sidecar;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use codec::{tumbler_string, JsonCodec};
-pub use server::{serve, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
+pub use codec::JsonCodec;
+pub use server::{serve, Content, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
+
+/// The reconstruction permit the daemon's test hook hands out — public only
+/// because that hook's return type must be nameable; not a stable API.
+#[doc(hidden)]
+pub use history::ReconstructPermit;

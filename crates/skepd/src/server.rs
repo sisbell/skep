@@ -91,7 +91,7 @@
 //! ruling. A build without the feature has no `/` route (404).
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
@@ -108,8 +108,8 @@ use skep_febe::{Codec, Op, OpKind, Operation, Response, SessionId};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
 
-use crate::codec::{check_keys, obj, op_name, tumbler_string, JsonCodec};
-use crate::history::{History, Unavailable};
+use crate::codec::{check_keys, obj, op_name, JsonCodec};
+use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::{ChangesAnswer, Sidecar};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
@@ -168,6 +168,7 @@ const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 /// `Daemon::open` failure — every variant is an operator-intervention
 /// condition: report and stop, never retry.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DaemonError {
     /// The engine could not genesis/recover (corrupt journal, bad
     /// checkpoint, drifted genesis config).
@@ -187,34 +188,82 @@ impl std::fmt::Display for DaemonError {
     }
 }
 
-impl std::error::Error for DaemonError {}
+/// `Display` states the whole condition on one line — that is what the
+/// operator reads — and `source` additionally exposes the cause as a link,
+/// so a generic reporter walking the chain finds one where there is one.
+impl std::error::Error for DaemonError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            DaemonError::Engine(e) => Some(e),
+            DaemonError::Sidecar(e) => Some(e),
+        }
+    }
+}
 
-/// One handler result: status, content type, body. `POST /op` is always
-/// `200` once a `Response` exists — rejections included; the `Response`
-/// envelope, not the HTTP status, is the operation protocol. Non-200 codes
-/// are transport-level only (`{"error": …}` bodies, wire.md §Transport
-/// errors).
+/// A response body and the media type naming it — one value, because a
+/// reply may neither carry bytes it does not name nor name a type it has no
+/// bytes for.
+#[derive(Debug)]
+pub struct Content {
+    pub content_type: &'static str,
+    pub bytes: Vec<u8>,
+}
+
+/// One handler result: a status, an optional body, and any extra headers.
+/// `POST /op` is always `200` once a `Response` exists — rejections
+/// included; the `Response` envelope, not the HTTP status, is the operation
+/// protocol. Non-200 codes are transport-level only (`{"error": …}` bodies,
+/// wire.md §Transport errors).
+///
+/// `content: None` is the bodiless answer, written with no content headers
+/// at all (the 204 preflight). Making bodilessness the body's own absence
+/// is what keeps the writer from inferring it from the status, where a 204
+/// built with bytes would drop them in silence.
+#[non_exhaustive]
 pub struct Reply {
     pub status: u16,
-    pub content_type: &'static str,
-    pub body: Vec<u8>,
+    pub content: Option<Content>,
     /// Extra response headers beyond the universal set (`Content-Type`,
     /// `Content-Length`, `Access-Control-Allow-Origin`, `Connection`) —
     /// the preflight trio rides here.
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
+/// The body's LENGTH, never its bytes: a `/dump` reply is a whole world and
+/// an inlined body would make `dbg!` useless exactly where it is reached
+/// for.
+impl std::fmt::Debug for Reply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reply")
+            .field("status", &self.status)
+            .field("content_type", &self.content.as_ref().map(|c| c.content_type))
+            .field("body_len", &self.body().len())
+            .field("headers", &self.headers)
+            .finish()
+    }
+}
+
 impl Reply {
+    /// The body bytes; empty for a bodiless reply.
+    pub fn body(&self) -> &[u8] {
+        self.content.as_ref().map_or(&[], |c| c.bytes.as_slice())
+    }
+
+    /// A reply carrying `bytes` under `content_type`.
+    fn bodied(status: u16, content_type: &'static str, bytes: Vec<u8>) -> Reply {
+        Reply {
+            status,
+            content: Some(Content { content_type, bytes }),
+            headers: Vec::new(),
+        }
+    }
+
     /// A JSON reply at `status` — the success answers, which each name
     /// their own code. A refusal names a [`TransportError`] instead and
     /// takes its status from there.
     fn json(status: u16, v: Value) -> Reply {
-        Reply {
-            status,
-            content_type: "application/json",
-            body: serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail"),
-            headers: Vec::new(),
-        }
+        let bytes = serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail");
+        Reply::bodied(status, "application/json", bytes)
     }
 
     /// The CORS preflight answer (wire v4): 204, no body, the fixed method
@@ -223,8 +272,7 @@ impl Reply {
     fn preflight() -> Reply {
         Reply {
             status: 204,
-            content_type: "",
-            body: Vec::new(),
+            content: None,
             headers: vec![
                 ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
                 ("Access-Control-Allow-Headers", "Content-Type, Skepd-Session"),
@@ -239,6 +287,7 @@ impl Reply {
 /// the accept path spawns a subscriber thread that owns the socket
 /// (`serve_events`), and the type makes reaching it through the plain reply
 /// path unrepresentable.
+#[derive(Debug)]
 pub enum Routed {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
@@ -261,6 +310,21 @@ pub struct HttpRequest {
     pub session_token: Option<String>,
     /// The body, exactly `Content-Length` bytes (empty when absent).
     pub body: Vec<u8>,
+}
+
+/// The body's LENGTH and the token's PRESENCE: the body runs to the 8 MiB
+/// cap, and the token names a live session, which is not a thing to leave
+/// in a log line.
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("query", &self.query)
+            .field("session_token", &self.session_token.as_ref().map(|_| "<token>"))
+            .field("body_len", &self.body.len())
+            .finish()
+    }
 }
 
 /// The transport's whole error vocabulary — every `{"error": …}` name this
@@ -459,6 +523,15 @@ pub struct Daemon {
     history: History,
 }
 
+/// Deliberately opaque: reporting the log position would take the kernel's
+/// lock, and a `Debug` that can block is one that turns `dbg!` into a
+/// hazard. [`Daemon::log_position`] is how you ask.
+impl std::fmt::Debug for Daemon {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Daemon").finish_non_exhaustive()
+    }
+}
+
 impl Daemon {
     /// Open (genesis or recover) the one world at `data_dir`, replay the
     /// commit-metadata sidecar, and assemble the operation surface. Every
@@ -538,12 +611,9 @@ impl Daemon {
             #[cfg(feature = "observe")]
             ("GET", "/dump") => self.get_dump(req.query.as_deref()),
             #[cfg(feature = "client")]
-            ("GET", "/") => Reply {
-                status: 200,
-                content_type: "text/html; charset=utf-8",
-                body: BOARD_HTML.as_bytes().to_vec(),
-                headers: Vec::new(),
-            },
+            ("GET", "/") => {
+                Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
+            }
             (_, p) if known_path(p) => refuse(
                 TransportError::MethodNotAllowed,
                 Some("see wire.md for the endpoint list"),
@@ -610,12 +680,7 @@ impl Daemon {
     /// the `Response` says: the envelope, not the HTTP status, is the
     /// operation protocol.
     fn op_reply(&self, resp: &Response) -> Reply {
-        Reply {
-            status: 200,
-            content_type: "application/json",
-            body: self.codec.marshal(resp),
-            headers: Vec::new(),
-        }
+        Reply::bodied(200, "application/json", self.codec.marshal(resp))
     }
 
     /// Feed the sidecar from a write's answer: an ack carries the committed
@@ -647,11 +712,10 @@ impl Daemon {
             | Response::Rejected(_) => return,
         };
         let docs = match docs {
-            AffectedDocs::Named(v) => v.iter().map(|a| tumbler_string(a.tumbler())).collect(),
-            AffectedDocs::Minted => match minted {
-                Some(a) => vec![tumbler_string(a.tumbler())],
-                None => Vec::new(),
-            },
+            AffectedDocs::Named(v) => v,
+            AffectedDocs::Minted => {
+                minted.map(|a| vec![a.tumbler().to_string()]).unwrap_or_default()
+            }
         };
         self.sidecar.record(at.0, op_name(kind), docs);
     }
@@ -662,7 +726,7 @@ impl Daemon {
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
     #[doc(hidden)]
-    pub fn try_hold_reconstruction_permit(&self) -> Option<impl Drop + '_> {
+    pub fn try_hold_reconstruction_permit(&self) -> Option<ReconstructPermit<'_>> {
         self.history.try_hold_permit()
     }
 
@@ -749,12 +813,7 @@ impl Daemon {
                 Err(e) => return unavailable_reply(e),
             },
         };
-        Reply {
-            status: 200,
-            content_type: "text/plain; charset=utf-8",
-            body: dump.into_string().into_bytes(),
-            headers: Vec::new(),
-        }
+        Reply::bodied(200, "text/plain; charset=utf-8", dump.into_string().into_bytes())
     }
 }
 
@@ -829,8 +888,10 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
 /// MINTED document for create/fork/version (known only from the ack);
 /// delegate/register_node touch no document.
 enum AffectedDocs {
-    /// The documents the frame itself names.
-    Named(Vec<Address>),
+    /// The documents the frame itself names, already in the sidecar's
+    /// dotted-decimal form — the only form anything downstream wants, so
+    /// no address is cloned here to be rendered and dropped a moment later.
+    Named(Vec<String>),
     /// The document the write mints, known only from its ack.
     Minted,
 }
@@ -842,7 +903,7 @@ enum AffectedDocs {
 /// decided, and that one decision classifies it for the history surface
 /// too.
 fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
-    let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
+    let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
     match op {
         Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, AffectedDocs::Minted)),
         Op::Delegate { .. } => Some((OpKind::Delegate, AffectedDocs::Named(Vec::new()))),
@@ -858,9 +919,9 @@ fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
         Op::Nullify { home, .. } => Some((OpKind::Nullify, one(home))),
         Op::AssertSup { home, .. } => Some((OpKind::AssertSup, one(home))),
         Op::EditLink { d_s, d_a, .. } => {
-            let mut docs = vec![d_s.clone()];
+            let mut docs = vec![d_s.tumbler().to_string()];
             if d_a != d_s {
-                docs.push(d_a.clone());
+                docs.push(d_a.tumbler().to_string());
             }
             Some((OpKind::EditLink, AffectedDocs::Named(docs)))
         }
@@ -1082,11 +1143,25 @@ impl CommitFeed {
 /// event-stream subscriber threads.
 pub struct Skepd {
     daemon: Arc<Daemon>,
-    listener: Arc<TcpListener>,
+    /// Held, never read: the workers own clones, so this handle is what
+    /// keeps [`Skepd::port`] bound for exactly as long as the server value
+    /// exists rather than only while a worker survives.
+    _listener: Arc<TcpListener>,
     workers: Vec<JoinHandle<()>>,
     subscribers: Arc<Mutex<Vec<JoinHandle<()>>>>,
     stop: Arc<AtomicBool>,
     port: u16,
+}
+
+/// The bound port and the worker count — no lock is taken, so this is safe
+/// to reach for from anywhere, including a thread that already holds one.
+impl std::fmt::Debug for Skepd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Skepd")
+            .field("port", &self.port)
+            .field("workers", &self.workers.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Bind `127.0.0.1:port` (`0` = ephemeral) and serve with `workers`
@@ -1098,11 +1173,12 @@ pub struct Skepd {
 /// to request/response: the worker hands the socket to a dedicated
 /// subscriber thread and returns to `accept` at once, so open streams never
 /// occupy the op pool.
-pub fn serve(
-    daemon: Daemon,
-    port: u16,
-    workers: usize,
-) -> Result<Skepd, Box<dyn std::error::Error + Send + Sync>> {
+///
+/// Failure is exactly the socket's: binding the address, or reading back
+/// the port it bound. Naming `io::Error` rather than boxing it is what lets
+/// a caller dispatch on `ErrorKind` — `AddrInUse` to try the next port,
+/// `PermissionDenied` for a privileged one — without a downcast.
+pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let daemon = Arc::new(daemon);
     let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
     let port = listener.local_addr()?.port();
@@ -1137,7 +1213,7 @@ pub fn serve(
             })
         })
         .collect();
-    Ok(Skepd { daemon, listener, workers: handles, subscribers, stop, port })
+    Ok(Skepd { daemon, _listener: listener, workers: handles, subscribers, stop, port })
 }
 
 impl Skepd {
@@ -1153,11 +1229,13 @@ impl Skepd {
         &self.daemon
     }
 
-    /// Block until the workers exit (they don't, absent [`Skepd::shutdown`])
-    /// — the binary's foreground call. Crash-stop is the shutdown story:
-    /// M2's WAL makes recovery the clean path, so no signal machinery.
-    pub fn wait(self) {
-        for h in self.workers {
+    /// Block until the workers exit — the binary's foreground call, which
+    /// returns when something else stops the server. Crash-stop is the
+    /// shutdown story: M2's WAL makes recovery the clean path, so no signal
+    /// machinery. Returning ends every event stream too, since the server
+    /// is dropped here.
+    pub fn wait(mut self) {
+        for h in self.workers.drain(..) {
             let _ = h.join();
         }
     }
@@ -1165,30 +1243,52 @@ impl Skepd {
     /// Orderly stop for embedders and tests: release and join the op
     /// workers, then end every event stream — the feed broadcast wakes each
     /// subscriber, which drops its socket (the client sees a clean close)
-    /// and exits — and join those threads too. Dropping the daemon last
-    /// releases the kernel's journal-directory lock so the same data dir
-    /// can be reopened. Bounded: nothing here waits on a client.
-    pub fn shutdown(self) {
-        let Skepd { daemon, listener, workers, subscribers, stop, port } = self;
-        stop.store(true, Ordering::Release);
+    /// and exits — and join those threads too. Returning releases the
+    /// kernel's journal-directory lock, so the same data dir can be
+    /// reopened. Bounded: nothing here waits on a client.
+    ///
+    /// Calling it is how a caller learns the stop *finished*; a server that
+    /// is merely dropped stops the same way, so a panic between [`serve`]
+    /// and here cannot leak the threads or strand the lock.
+    pub fn shutdown(mut self) {
+        self.stop_and_join();
+    }
+
+    /// The whole stop, against `&mut self` so both [`Skepd::shutdown`] and
+    /// `Drop` run it. Idempotent through the flag it already owns: a
+    /// dropped-after-shutdown server takes the early return, and the joins
+    /// have already happened.
+    fn stop_and_join(&mut self) {
+        if self.stop.swap(true, Ordering::AcqRel) {
+            return;
+        }
         // One wake connect per worker: a worker blocked in `accept` returns
         // and the flag breaks its loop. A worker mid-request exits at its
         // next loop check instead, leaving its wake connect unclaimed in
-        // the backlog — harmless; the listener drops below.
-        for _ in 0..workers.len() {
-            let _ = TcpStream::connect(("127.0.0.1", port));
+        // the backlog — harmless; the listener drops with the struct.
+        for _ in 0..self.workers.len() {
+            let _ = TcpStream::connect(("127.0.0.1", self.port));
         }
-        for h in workers {
+        for h in self.workers.drain(..) {
             let _ = h.join();
         }
         // The workers are gone, so no new subscriber can appear past here.
-        daemon.commit_feed.shutdown();
-        let subs = std::mem::take(&mut *subscribers.lock());
+        self.daemon.commit_feed.shutdown();
+        let subs = std::mem::take(&mut *self.subscribers.lock());
         for h in subs {
             let _ = h.join();
         }
-        drop(listener);
-        drop(daemon);
+    }
+}
+
+/// The threads, the listener and the journal-directory lock are released by
+/// dropping the server, not by remembering to ask — so an unwinding test or
+/// an early return leaves nothing running and nothing locked. Panic-free by
+/// construction (the locks do not poison, and every join and connect is
+/// discarded), so it is safe during an unwind.
+impl Drop for Skepd {
+    fn drop(&mut self) {
+        self.stop_and_join();
     }
 }
 
@@ -1379,10 +1479,10 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 /// Write one complete reply; the connection closes behind it. Every
 /// response carries `Access-Control-Allow-Origin: *` — wire v4's CORS
 /// posture, enforced at this one choke point so no reply can miss it — and
-/// `Connection: close` (one request per connection). A 204 carries no body
-/// and no content headers (RFC 7230).
-fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
-    let mut out = Vec::with_capacity(reply.body.len() + 256);
+/// `Connection: close` (one request per connection). A bodiless reply
+/// carries no content headers (RFC 7230's 204).
+fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
+    let mut out = Vec::with_capacity(reply.body().len() + 256);
     out.extend_from_slice(
         format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
     );
@@ -1390,19 +1490,17 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply) -> std::io::Result<()> {
     for (name, value) in &reply.headers {
         out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
     }
-    if reply.status != 204 {
+    // The body and the headers describing it come from one value, so the
+    // two cannot disagree about whether there is one.
+    if let Some(c) = &reply.content {
         out.extend_from_slice(
-            format!(
-                "Content-Type: {}\r\nContent-Length: {}\r\n",
-                reply.content_type,
-                reply.body.len()
-            )
-            .as_bytes(),
+            format!("Content-Type: {}\r\nContent-Length: {}\r\n", c.content_type, c.bytes.len())
+                .as_bytes(),
         );
-    }
-    out.extend_from_slice(b"Connection: close\r\n\r\n");
-    if reply.status != 204 {
-        out.extend_from_slice(&reply.body);
+        out.extend_from_slice(b"Connection: close\r\n\r\n");
+        out.extend_from_slice(&c.bytes);
+    } else {
+        out.extend_from_slice(b"Connection: close\r\n\r\n");
     }
     stream.write_all(&out)
 }
@@ -1570,7 +1668,7 @@ mod tests {
         let r = refuse(TransportError::PayloadTooLarge, Some("too big"));
         assert_eq!(r.status, 413);
         assert_eq!(
-            String::from_utf8(r.body).expect("json"),
+            String::from_utf8(r.body().to_vec()).expect("json"),
             r#"{"detail":"too big","error":"payload_too_large"}"#
         );
         let r = refuse_with(
@@ -1579,8 +1677,24 @@ mod tests {
         );
         assert_eq!(r.status, 400);
         assert_eq!(
-            String::from_utf8(r.body).expect("json"),
+            String::from_utf8(r.body().to_vec()).expect("json"),
             r#"{"error":"beyond_head","head":12}"#
         );
+    }
+
+    /// The body and the type naming it travel together: a bodiless reply
+    /// writes no content headers at all, and a bodied one writes both —
+    /// which is what makes "a 204 that silently drops its bytes" and
+    /// "`Content-Type:` with nothing after it" unconstructible rather than
+    /// merely unwritten.
+    #[test]
+    fn a_bodiless_reply_writes_no_content_headers() {
+        let pre = Reply::preflight();
+        assert!(pre.content.is_none(), "the preflight names no body");
+        assert!(pre.body().is_empty());
+        let json = Reply::json(200, obj(vec![("ok", Value::Bool(true))]));
+        let c = json.content.as_ref().expect("a JSON reply names its body");
+        assert_eq!(c.content_type, "application/json");
+        assert_eq!(c.bytes, br#"{"ok":true}"#);
     }
 }

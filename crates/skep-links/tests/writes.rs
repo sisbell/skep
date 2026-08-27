@@ -395,8 +395,8 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
     // Born-nullified self-target: the target may be the address this call's
     // own retraction tuple would occupy (P-tgt's second disjunct) — doc2's
     // first link is la2(1).
-    let (e, _) = w.nullify(P1, &doc2(), &la2(1)).expect("self-targeting retraction");
-    assert_eq!(e, la2(1));
+    let (born_nullified, _) = w.nullify(P1, &doc2(), &la2(1)).expect("self-targeting retraction");
+    assert_eq!(born_nullified, la2(1));
     {
         let snap = k.snapshot();
         assert!(snap.world().links().is_nullified(&la2(1)));
@@ -409,8 +409,10 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         w.nullify(P1, &doc1(), &la(4)),
         Err(TxnError::Rejected(NullifyError::BadTarget))
     ));
-    let (e3, _) = w.nullify(P1, &doc1(), &la(3)).expect("self-targeting on a used chain");
-    assert_eq!(e3, la(3));
+    let (born_on_used_chain, _) = w
+        .nullify(P1, &doc1(), &la(3))
+        .expect("self-targeting on a used chain");
+    assert_eq!(born_on_used_chain, la(3));
     let snap = k.snapshot();
     assert!(snap.world().links().is_nullified(&la(3)));
 }
@@ -1293,19 +1295,19 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
         let snap = k.snapshot();
         let links = snap.world().links();
         // Overlap = ProperOverlap | Containment | Equal.
-        assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(&l));
-        assert!(links.stab(1, &enc(&[ca(2)]), View::Audit).contains(&l));
+        assert!(links.stab(FROM, &enc(&[ca(1)]), View::Audit).contains(&l));
+        assert!(links.stab(FROM, &enc(&[ca(2)]), View::Audit).contains(&l));
         // NOT Adjacent: subtree(ca3) abuts [ca1, ca3) and must not match
-        // slot 1 — but does match slot 2.
-        assert!(!links.stab(1, &enc(&[ca(3)]), View::Audit).contains(&l));
-        assert!(links.stab(2, &enc(&[ca(3)]), View::Audit).contains(&l));
+        // FROM — but does match TO.
+        assert!(!links.stab(FROM, &enc(&[ca(3)]), View::Audit).contains(&l));
+        assert!(links.stab(TO, &enc(&[ca(3)]), View::Audit).contains(&l));
         // AND-combiner over constrained slots only; empty constraints ⇒ the
         // whole slice.
         assert!(links
-            .match_links(&[(1, &enc(&[ca(2)])), (2, &enc(&[ca(3)]))], View::Audit)
+            .match_links(&[(FROM, &enc(&[ca(2)])), (TO, &enc(&[ca(3)]))], View::Audit)
             .contains(&l));
         assert!(!links
-            .match_links(&[(1, &enc(&[ca(2)])), (2, &enc(&[ca(2)]))], View::Audit)
+            .match_links(&[(FROM, &enc(&[ca(2)])), (TO, &enc(&[ca(2)]))], View::Audit)
             .contains(&l));
         assert!(links.match_links(&[], View::Audit).contains(&l));
         // The content type is queryable by its coverage: ty resolved to the
@@ -1316,8 +1318,8 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
     w.nullify(P1, &doc1(), &l).expect("nullify the link");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(!links.stab(1, &enc(&[ca(1)]), View::Active).contains(&l));
-    assert!(links.stab(1, &enc(&[ca(1)]), View::Audit).contains(&l));
+    assert!(!links.stab(FROM, &enc(&[ca(1)]), View::Active).contains(&l));
+    assert!(links.stab(FROM, &enc(&[ca(1)]), View::Audit).contains(&l));
     assert!(!links.match_links(&[], View::Active).contains(&l));
 }
 
@@ -2224,7 +2226,8 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
     // the view selects the slice.
     let k = kernel();
     let w = writer(&k);
-    let addrs = |ts: Vec<Tuple>| ts.into_iter().map(|t| t.addr).collect::<Vec<_>>();
+    let tuple_addrs =
+        |tuples: Vec<Tuple>| tuples.into_iter().map(|tuple| tuple.addr).collect::<Vec<_>>();
     let (a1, _) = w
         .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2), ca(3)])
         .expect("a1");
@@ -2235,20 +2238,20 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
         let links = snap.world().links();
         // EVERY match, not the first — and ascending by tuple address.
         assert_eq!(
-            addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
+            tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
             vec![a1.clone(), a2.clone(), a3.clone()]
         );
         // One F-probe selects two of the three.
         let f = [ca(1).tumbler().clone()];
         assert_eq!(
-            addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &[] }, View::Active)),
+            tuple_addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &[] }, View::Active)),
             vec![a1.clone(), a3.clone()]
         );
         // A pattern side is an AND of its probes, not an OR: a1's G covers
         // ca(2) AND ca(3); a3's covers only ca(3), so an OR would keep it.
         let g = [ca(2).tumbler().clone(), ca(3).tumbler().clone()];
         assert_eq!(
-            addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &g }, View::Active)),
+            tuple_addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &g }, View::Active)),
             vec![a1.clone()]
         );
     }
@@ -2258,11 +2261,11 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
-        addrs(links.observe(&multi_ty(), Pattern::default(), View::Audit)),
+        tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Audit)),
         vec![a1.clone(), a2.clone(), a3.clone()]
     );
     assert_eq!(
-        addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
+        tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
         vec![a1, a3]
     );
 }
@@ -2855,7 +2858,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     let (orig, _) = w
         .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
         .expect("orig");
-    let slot = |n: u32| -> Endset {
+    let spans = |n: u32| -> Endset {
         (1..=n)
             .map(|i| skep_address::subtree_of(ca(i).tumbler()))
             .collect()
@@ -2863,7 +2866,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     let budget = skep_links::MAX_SLOT_SPANS as u32;
 
     let at_budget =
-        Link::new([slot(budget), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+        Link::new([spans(budget), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
     let (s, _, _) = w
         .editlink(P1, &orig, at_budget, &doc1(), &doc1())
         .expect("exactly the budget is admitted");
@@ -2880,14 +2883,14 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     // One span more, refused before anything is staged — and refused ahead of
     // `IllFormedSuccessor`, which is where the per-span walk lives.
     let before = k.current_seq();
-    let over = Link::new([slot(budget + 1), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+    let over = Link::new([spans(budget + 1), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &orig, over, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
     ));
     assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
     // The bound is on ANY slot, not on the one the DC guard classifies.
-    let over_ty = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), slot(budget + 1)]).expect("arity 3");
+    let over_ty = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), spans(budget + 1)]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &orig, over_ty, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
@@ -2936,8 +2939,8 @@ fn the_default_view_subtracts_under_every_active_retired_root() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    for (src, tgt) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
-        w.emit(P1, &doc1(), &multi_ty(), &src, &[tgt])
+    for (source, target) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
+        w.emit(P1, &doc1(), &multi_ty(), &source, &[target])
             .expect("relation");
     }
     for root in [ca(2), ca(3), ca(7)] {

@@ -269,7 +269,7 @@ pub fn decls() -> Vec<TypeDecl> {
     ]
 }
 
-/// The fixture type configuration — the five reserved addresses plus the four
+/// The fixture type configuration — the five reserved addresses plus the five
 /// app decls above. `config_with(decls)` names the cases that vary the decls
 /// against the same reserved addresses.
 pub fn config() -> TypeConfig {

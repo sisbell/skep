@@ -176,13 +176,12 @@ fn coverage_class_panics_on_an_off_contract_span() {
 fn registry_build_accepts_the_shipped_config_and_seeds_five_classes() {
     let state = LinkState::genesis(config()).expect("valid config builds");
     // The five shipped endsets read back through reserved_type.
-    use skep_links::ShippedType as S;
     for (ty, addr) in [
-        (S::PredDef, ra(1)),
-        (S::PredStable, ra(2)),
-        (S::Retired, ra(3)),
-        (S::Supersedes, ra(4)),
-        (S::Retraction, ra(5)),
+        (ShippedType::PredDef, ra(1)),
+        (ShippedType::PredStable, ra(2)),
+        (ShippedType::Retired, ra(3)),
+        (ShippedType::Supersedes, ra(4)),
+        (ShippedType::Retraction, ra(5)),
     ] {
         assert_eq!(state.reserved_type(ty), &enc(&[addr]));
     }
@@ -252,48 +251,48 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
     ));
 
     // EmptyKey.
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: Endset::empty(),
         reg: ok_reg.clone(),
     };
-    assert!(matches!(genesis(reserved(), vec![d]), Err(RegistryError::EmptyKey)));
+    assert!(matches!(genesis(reserved(), vec![decl]), Err(RegistryError::EmptyKey)));
 
     // NonAddressDenotingKey: a non-unit span in the key.
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: Endset::from_spans([span(&ca(1), &ca(3))]),
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::NonAddressDenotingKey)
     ));
 
     // ReservedClassClash: an app key coverage-equal to a shipped class (R-C1).
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: enc(&[ra(3)]),
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::ReservedClassClash)
     ));
 
     // KeyCollision: two app decls sharing one coverage class (C0).
-    let d1 = TypeDecl {
+    let decl_a = TypeDecl {
         key: enc(&[ra(20)]),
         reg: ok_reg.clone(),
     };
-    let d2 = TypeDecl {
+    let decl_b = TypeDecl {
         key: enc(&[ra(20)]),
         reg: ok_reg.clone(),
     };
     assert!(matches!(
-        genesis(reserved(), vec![d1, d2]),
+        genesis(reserved(), vec![decl_a, decl_b]),
         Err(RegistryError::KeyCollision)
     ));
 
     // BadBehavior (R-C0): ReadFilter on a non-Unary shape...
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: enc(&[ra(21)]),
         reg: Registration {
             shape: Shape::Binary,
@@ -302,11 +301,11 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::BadBehavior)
     ));
     // ...and Age with idem⊤.
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: enc(&[ra(22)]),
         reg: Registration {
             shape: Shape::Multi,
@@ -315,12 +314,12 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::BadBehavior)
     ));
 
     // v1 serving fence — declared ⇒ served: app Walk rejected...
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: enc(&[ra(23)]),
         reg: Registration {
             shape: Shape::Binary,
@@ -329,11 +328,11 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::UnservedWalk)
     ));
     // ...and app ReadFilter (a second BH1) rejected.
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: enc(&[ra(24)]),
         reg: Registration {
             shape: Shape::Unary,
@@ -342,7 +341,7 @@ fn registry_build_rejects_each_ill_formed_config_with_its_own_error() {
         },
     };
     assert!(matches!(
-        genesis(reserved(), vec![d]),
+        genesis(reserved(), vec![decl]),
         Err(RegistryError::UnservedSecondFilter)
     ));
 }
@@ -457,7 +456,7 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
     // keeps coverage_class off its panicking path at the registry's door: a
     // hand-built non-level-uniform key is a typed rejection, not an abort.
     let skew = Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
-    let d = TypeDecl {
+    let decl = TypeDecl {
         key: Endset::from_spans([skew]),
         reg: Registration {
             shape: Shape::Multi,
@@ -466,7 +465,7 @@ fn registry_rejects_a_non_level_uniform_key_before_classifying_it() {
         },
     };
     assert!(matches!(
-        LinkState::genesis(config_with(vec![d])),
+        LinkState::genesis(config_with(vec![decl])),
         Err(RegistryError::NonAddressDenotingKey)
     ));
 }
@@ -676,7 +675,7 @@ fn endset_collects_from_a_span_pipeline_and_the_genesis_records_compare_by_value
     assert_ne!(other, reserved());
     let bh4 = decls()
         .into_iter()
-        .find(|d| d.key == bh4_ty())
+        .find(|decl| decl.key == bh4_ty())
         .expect("the BH4 decl is in the fixture");
     assert_ne!(bh4.reg, decls()[0].reg);
 
@@ -728,7 +727,7 @@ fn coverage_class_addrs_is_i0a_stated_as_its_definition() {
     ];
     for x in &families {
         let denoted: im::OrdSet<skep_address::Tumbler> =
-            x.iter().map(|d| d.tumbler().clone()).collect();
+            x.iter().map(|addr| addr.tumbler().clone()).collect();
         let want: im::OrdSet<skep_address::Tumbler> = denoted
             .iter()
             .filter(|p| {

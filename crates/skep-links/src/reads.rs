@@ -188,8 +188,8 @@ impl LinkState {
         let mut out = Vec::new();
         for t in self.type_slice_class(&class, view) {
             let link = self.link_at(t);
-            let f_ok = pat.from.iter().all(|p| link.from_slot().covers(p));
-            let g_ok = pat.to.iter().all(|p| link.to_slot().covers(p));
+            let f_ok = pat.from.iter().all(|probe| link.from_slot().covers(probe));
+            let g_ok = pat.to.iter().all(|probe| link.to_slot().covers(probe));
             if f_ok && g_ok {
                 out.push(Tuple {
                     addr: lift(t),
@@ -210,10 +210,10 @@ impl LinkState {
     /// or `iextent`-built — [`coverage_class`] classifies it, so a
     /// hand-built non-level-uniform `ty` panics naming that precondition
     /// (§Core data model totality).
-    pub fn is_k(&self, ty: &Endset, t: &Tumbler) -> bool {
+    pub fn is_k(&self, ty: &Endset, probe: &Tumbler) -> bool {
         let class = coverage_class(ty);
         self.type_slice_class(&class, View::Active)
-            .any(|addr| self.link_at(addr).from_slot().covers(t))
+            .any(|t| self.link_at(t).from_slot().covers(probe))
     }
 
     /// D1: the denoted member set (F.addrs() over the slice), deduplicated,
@@ -235,7 +235,7 @@ impl LinkState {
                 members.insert(m.clone());
             }
         }
-        self.denoted_result(&class, view, members)
+        self.subtract_filtered(&class, view, members)
     }
 
     /// D3: the denoted targets (G.addrs()) of tuples whose F COVERS `x`,
@@ -259,7 +259,7 @@ impl LinkState {
                 }
             }
         }
-        self.denoted_result(&class, view, targets)
+        self.subtract_filtered(&class, view, targets)
     }
 
     /// Tuple status by address: resident and not nullified.
@@ -705,7 +705,7 @@ impl LinkState {
     /// per element: [`LinkState::is_filtered`] re-walks the active `Retired`
     /// slice per probe, which is right for a single probe and quadratic across
     /// a result set.
-    fn denoted_result(
+    fn subtract_filtered(
         &self,
         class: &CoverageClass,
         view: View,
@@ -788,20 +788,20 @@ impl LinkState {
     /// in — sorted here rather than asked of the caller, so the binary search
     /// the walk does is sound by construction.
     pub(crate) fn out_claims(&self, vertices: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
-        let mut buckets: Vec<(Tumbler, Vec<Address>)> =
+        let mut out: Vec<(Tumbler, Vec<Address>)> =
             vertices.into_iter().map(|t| (t, Vec::new())).collect();
-        buckets.sort_by(|(a, _), (b, _)| a.cmp(b));
-        buckets.dedup_by(|(a, _), (b, _)| a == b);
+        out.sort_by(|(a, _), (b, _)| a.cmp(b));
+        out.dedup_by(|(a, _), (b, _)| a == b);
         for claim in
             self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
         {
             for g in self.link_at(claim).to_slot().addrs() {
-                if let Ok(i) = buckets.binary_search_by(|(t, _)| t.cmp(g)) {
-                    buckets[i].1.push(lift(claim));
+                if let Ok(i) = out.binary_search_by(|(t, _)| t.cmp(g)) {
+                    out[i].1.push(lift(claim));
                 }
             }
         }
-        buckets
+        out
     }
 
     /// The visited-set-bounded forward walk: the traversed path (from `x`,
@@ -810,11 +810,11 @@ impl LinkState {
     fn walk_sup(&self, x: &Tumbler) -> (Vec<Tumbler>, Option<Tumbler>) {
         let mut path = vec![x.clone()];
         let mut visited = OrdSet::unit(x.clone());
-        let mut cur = x.clone();
+        let mut node = x.clone();
         loop {
-            let succs = self.succs_operative(&cur);
+            let succs = self.succs_operative(&node);
             match succs.len() {
-                0 => return (path, Some(cur)),
+                0 => return (path, Some(node)),
                 1 => {
                     let next = succs.iter().next().expect("len == 1").clone();
                     if visited.contains(&next) {
@@ -822,7 +822,7 @@ impl LinkState {
                     }
                     visited.insert(next.clone());
                     path.push(next.clone());
-                    cur = next;
+                    node = next;
                 }
                 _ => return (path, None), // branch
             }

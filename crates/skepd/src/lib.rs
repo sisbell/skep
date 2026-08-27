@@ -41,6 +41,7 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+mod history;
 mod server;
 mod sidecar;
 

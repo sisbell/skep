@@ -15,13 +15,14 @@
 //!
 //! **History is served from the journal** (wire v3): `POST /op-at` answers
 //! any READ frame as of any committed position, and `GET /dump?at=N`
-//! (observe builds) dumps that position's world. The mechanism is the
-//! engine's bounded replay (`Engine::world_at` — checkpoint-or-genesis base
-//! plus journal fold, per request, uncached); the daemon then runs the frame
-//! through a throwaway in-memory M10 over the historical world and stamps
-//! the requested position as `as_of`. Writes never reach history — a write
-//! frame is refused at the transport (`400 write_at_history`) before
-//! anything runs — and the live `/op` path is untouched.
+//! (observe builds) dumps that position's world. Both ask `history.rs`,
+//! which owns the reconstruction (the engine's bounded replay), its
+//! concurrency budget, and the `as_of` stamping; what this file adds is the
+//! envelope, the read/write classification, and the one mapping from an
+//! unavailable answer onto the wire's transport errors. Writes never reach
+//! history — a write frame is refused at the transport
+//! (`400 write_at_history`) before anything runs — and the live `/op` path
+//! is untouched.
 //!
 //! **Durability is configuration, not code**: [`Daemon::open`] opens M2's
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
@@ -89,22 +90,21 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use skep_address::Address;
-use skep_arrangement::Vstream;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
-use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId, Stores};
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
-use skep_links::LinkWriter;
-use skep_namespace::{Namespace, PrincipalId};
+use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
+use skep_namespace::PrincipalId;
 
-use crate::codec::{op_name, tumbler_string, JsonCodec};
+use crate::codec::{check_keys, obj, op_name, tumbler_string, JsonCodec};
+use crate::history::{History, Unavailable};
 use crate::sidecar::{ChangesAnswer, Sidecar};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
@@ -142,13 +142,6 @@ const HEAD_MAX: usize = 64 * 1024;
 /// REVISIT at the media round: blob upload will raise this for its route
 /// only (a route-scoped cap, not a bigger global one).
 const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
-
-/// Concurrent historical reconstructions (`Engine::world_at` behind
-/// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
-/// deserialize plus journal fold, per call, uncached — two keeps history
-/// panes serviceable without letting core-bound replay occupy the whole
-/// worker pool. Surplus callers get `503 history_busy`, never a queue.
-const OPAT_MAX_CONCURRENT: usize = 2;
 
 /// `/changes` page size when `limit` is absent.
 const CHANGES_LIMIT_DEFAULT: usize = 256;
@@ -239,15 +232,124 @@ pub enum Routed {
     EventStream,
 }
 
+/// The transport's whole error vocabulary — every `{"error": …}` name this
+/// daemon can answer, and the only way one is written. EXHAUSTIVE over the
+/// wire's transport-error table (wire.md §Transport errors, §Reading
+/// history, §The change feed), so a new failure cannot ship without a
+/// documented name, exactly as `code_name` guarantees for M10's rejections.
+#[derive(Clone, Copy)]
+enum TransportError {
+    // The envelope and query parsers.
+    MalformedSessionRequest,
+    MalformedOpAt,
+    MalformedChanges,
+    #[cfg(feature = "observe")]
+    MalformedAt,
+    // Routing.
+    NoSuchEndpoint,
+    MethodNotAllowed,
+    // The history surface.
+    WriteAtHistory,
+    BeyondHead,
+    NotAPosition,
+    HistoryReclaimed,
+    HistoryBusy,
+    NoJournal,
+    HistoryIo,
+    HistoryCorrupt,
+    // The HTTP layer.
+    MalformedHttp,
+    PayloadTooLarge,
+    InternalPanic,
+}
+
+impl TransportError {
+    fn name(self) -> &'static str {
+        match self {
+            TransportError::MalformedSessionRequest => "malformed_session_request",
+            TransportError::MalformedOpAt => "malformed_op_at",
+            TransportError::MalformedChanges => "malformed_changes",
+            #[cfg(feature = "observe")]
+            TransportError::MalformedAt => "malformed_at",
+            TransportError::NoSuchEndpoint => "no_such_endpoint",
+            TransportError::MethodNotAllowed => "method_not_allowed",
+            TransportError::WriteAtHistory => "write_at_history",
+            TransportError::BeyondHead => "beyond_head",
+            TransportError::NotAPosition => "not_a_position",
+            TransportError::HistoryReclaimed => "history_reclaimed",
+            TransportError::HistoryBusy => "history_busy",
+            TransportError::NoJournal => "no_journal",
+            TransportError::HistoryIo => "history_io",
+            TransportError::HistoryCorrupt => "history_corrupt",
+            TransportError::MalformedHttp => "malformed_http",
+            TransportError::PayloadTooLarge => "payload_too_large",
+            TransportError::InternalPanic => "internal_panic",
+        }
+    }
+}
+
 /// A transport-level error body: `{"error": name}` plus an optional detail.
 /// Deliberately NOT the `{"resp": "rejected"}` shape — no `Op` was involved.
-fn err_body(name: &str, detail: Option<&str>) -> Value {
-    let mut m = Map::new();
-    m.insert("error".into(), Value::String(name.into()));
+fn err_body(err: TransportError, detail: Option<&str>) -> Value {
+    let mut pairs = vec![("error", Value::String(err.name().into()))];
     if let Some(d) = detail {
-        m.insert("detail".into(), Value::String(d.into()));
+        pairs.push(("detail", Value::String(d.into())));
     }
-    Value::Object(m)
+    obj(pairs)
+}
+
+/// The paths this daemon serves — the one place the route set is stated, so
+/// preflight, method refusal and dispatch cannot disagree about what exists.
+/// A known path answers `OPTIONS` with a preflight and a wrong method with
+/// `405`; everything else is the ordinary `404`.
+fn known_path(path: &str) -> bool {
+    matches!(path, "/session" | "/op" | "/op-at" | "/health" | "/events" | "/changes")
+        || (cfg!(feature = "observe") && path == "/dump")
+        || (cfg!(feature = "client") && path == "/")
+}
+
+/// Identity as local trust: the token ↔ `SessionId` binding, and the one
+/// policy over it. Clients name their own principal at `POST /session` and
+/// get an opaque token back; a `SessionId` never rides the wire (M10's
+/// non-forgeability precondition). Tokens die with the process — a token
+/// from a previous run misses the map, and a miss is not an error: it
+/// resolves to the guest, under which M10 itself serves reads and rejects
+/// writes `Unauthenticated`, so the daemon holds no auth policy of its own.
+struct Sessions {
+    map: Mutex<HashMap<String, SessionId>>,
+    /// A session opened and immediately closed at startup: permanently
+    /// unbound, never reissued (M10 §6) — what an absent or unknown token
+    /// resolves to.
+    guest: SessionId,
+    /// Per-uptime random token prefix: a stale token from a previous run
+    /// misses instead of silently aliasing onto a fresh session.
+    seed: u64,
+    counter: AtomicU64,
+}
+
+impl Sessions {
+    fn new(guest: SessionId) -> Sessions {
+        let seed = {
+            use std::collections::hash_map::RandomState;
+            use std::hash::{BuildHasher, Hasher};
+            RandomState::new().build_hasher().finish()
+        };
+        Sessions { map: Mutex::new(HashMap::new()), guest, seed, counter: AtomicU64::new(1) }
+    }
+
+    /// Mint the opaque token naming `sid`, and remember the binding.
+    fn bind(&self, sid: SessionId) -> String {
+        let n = self.counter.fetch_add(1, Ordering::Relaxed);
+        let token = format!("{:016x}.{:x}", self.seed, n);
+        self.map.lock().insert(token.clone(), sid);
+        token
+    }
+
+    /// The session a request runs under: its token's, or the guest for a
+    /// token that is absent or unknown.
+    fn resolve(&self, token: Option<&str>) -> SessionId {
+        token.and_then(|t| self.map.lock().get(t).copied()).unwrap_or(self.guest)
+    }
 }
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
@@ -257,16 +359,8 @@ pub struct Daemon {
     engine: Engine,
     op: Operation<World>,
     codec: JsonCodec,
-    sessions: Mutex<HashMap<String, SessionId>>,
-    /// A session opened and immediately closed at startup: permanently
-    /// unbound, never reissued (M10 §6). Requests carrying no usable token
-    /// execute under it — M10 itself then serves reads and rejects writes
-    /// `Unauthenticated`, so the daemon holds no auth policy of its own.
-    guest: SessionId,
-    /// Per-uptime random token prefix: a stale token from a previous run
-    /// misses instead of silently aliasing onto a fresh session.
-    token_seed: u64,
-    token_counter: AtomicU64,
+    /// The token ↔ session binding and the guest policy over it.
+    sessions: Sessions,
     /// The commit feed behind `GET /events` (wire v4): `/op` publishes its
     /// post-execute log position, subscriber threads block on the condvar.
     feed: EventFeed,
@@ -282,10 +376,11 @@ pub struct Daemon {
     /// tail — either way the reopen walk re-covers the gap as bare
     /// entries. Reads never take this lock.
     write_serial: Mutex<()>,
-    /// Bounds concurrent `world_at` reconstructions ([`OPAT_MAX_CONCURRENT`]);
-    /// `/op-at` needs no session and reconstruction is per-call uncached, so
-    /// without this any local caller could pin every worker on replay.
-    reconstruct_permits: ReconstructPermits,
+    /// The history surface behind `/op-at` and `/dump?at`, holding its own
+    /// reconstruction budget: neither route needs a session and replay is
+    /// per-call uncached, so without that budget any local caller could pin
+    /// every worker on reconstruction.
+    history: History,
 }
 
 impl Daemon {
@@ -309,30 +404,26 @@ impl Daemon {
         // reaches a store (the binding is dropped before any request runs).
         let guest = op.open_session(PrincipalId(u64::MAX));
         op.close_session(guest);
-        let token_seed = {
-            use std::collections::hash_map::RandomState;
-            use std::hash::{BuildHasher, Hasher};
-            RandomState::new().build_hasher().finish()
-        };
         let feed = EventFeed::at(op.log_position());
         Ok(Daemon {
             engine,
             op,
             codec: JsonCodec,
-            sessions: Mutex::new(HashMap::new()),
-            guest,
-            token_seed,
-            token_counter: AtomicU64::new(1),
+            sessions: Sessions::new(guest),
             feed,
             sidecar,
             write_serial: Mutex::new(()),
-            reconstruct_permits: ReconstructPermits::new(OPAT_MAX_CONCURRENT),
+            history: History::new(),
         })
     }
 
-    /// The assembled engine (kernel, registry, genesis config).
-    pub fn engine(&self) -> &Engine {
-        &self.engine
+    /// The world as of a committed position — the same bounded replay
+    /// `POST /op-at` answers from, for embedders that want the state rather
+    /// than a wire answer. Unbudgeted: the reconstruction permit bounds
+    /// concurrent HTTP callers, and an embedder calling this holds the
+    /// daemon itself.
+    pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
+        self.engine.world_at(at)
     }
 
     /// Current log position (M10's `log_position`; never regresses).
@@ -358,13 +449,7 @@ impl Daemon {
             ("GET", "/events") => Routed::EventStream,
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404.
-            ("OPTIONS", "/session" | "/op" | "/op-at" | "/health" | "/events" | "/changes") => {
-                Routed::Reply(Reply::preflight())
-            }
-            #[cfg(feature = "observe")]
-            ("OPTIONS", "/dump") => Routed::Reply(Reply::preflight()),
-            #[cfg(feature = "client")]
-            ("OPTIONS", "/") => Routed::Reply(Reply::preflight()),
+            ("OPTIONS", p) if known_path(p) => Routed::Reply(Reply::preflight()),
             _ => Routed::Reply(self.reply(method, path, query, session, body)),
         }
     }
@@ -393,22 +478,14 @@ impl Daemon {
                 body: BOARD_HTML.as_bytes().to_vec(),
                 headers: Vec::new(),
             },
-            (_, "/session") | (_, "/op") | (_, "/op-at") | (_, "/health") | (_, "/events")
-            | (_, "/changes") => Reply::json(
+            (_, p) if known_path(p) => Reply::json(
                 405,
-                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
+                err_body(
+                    TransportError::MethodNotAllowed,
+                    Some("see wire.md for the endpoint list"),
+                ),
             ),
-            #[cfg(feature = "observe")]
-            (_, "/dump") => Reply::json(
-                405,
-                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
-            ),
-            #[cfg(feature = "client")]
-            (_, "/") => Reply::json(
-                405,
-                err_body("method_not_allowed", Some("see wire.md for the endpoint list")),
-            ),
-            _ => Reply::json(404, err_body("no_such_endpoint", Some(path))),
+            _ => Reply::json(404, err_body(TransportError::NoSuchEndpoint, Some(path))),
         }
     }
 
@@ -419,17 +496,21 @@ impl Daemon {
         let principal = match session_principal(body) {
             Ok(p) => p,
             Err(detail) => {
-                return Reply::json(400, err_body("malformed_session_request", Some(&detail)))
+                return Reply::json(
+                    400,
+                    err_body(TransportError::MalformedSessionRequest, Some(&detail)),
+                )
             }
         };
         let sid = self.op.open_session(PrincipalId(principal));
-        let n = self.token_counter.fetch_add(1, Ordering::Relaxed);
-        let token = format!("{:016x}.{:x}", self.token_seed, n);
-        self.sessions.lock().insert(token.clone(), sid);
-        let mut m = Map::new();
-        m.insert("principal".into(), Value::Number(principal.into()));
-        m.insert("session".into(), Value::String(token));
-        Reply::json(200, Value::Object(m))
+        let token = self.sessions.bind(sid);
+        Reply::json(
+            200,
+            obj(vec![
+                ("principal", Value::Number(principal.into())),
+                ("session", Value::String(token)),
+            ]),
+        )
     }
 
     /// `POST /op` — one frame in, one marshaled `Response` out; the HTTP
@@ -442,9 +523,7 @@ impl Daemon {
     /// already serializes the commits themselves, so this costs nothing it
     /// wasn't already paying. Reads bypass the lock entirely.
     fn post_op(&self, session: Option<&str>, body: &[u8]) -> Reply {
-        let sid = session
-            .and_then(|t| self.sessions.lock().get(t).copied())
-            .unwrap_or(self.guest);
+        let sid = self.sessions.resolve(session);
         let resp = match self.codec.parse(body) {
             Ok(req) => match write_meta(&req.op) {
                 None => self.execute(sid, req),
@@ -464,23 +543,48 @@ impl Daemon {
         // append (above), so a subscriber waking on the event already finds
         // the position in `/changes`.
         self.feed.publish(self.op.log_position());
+        self.op_reply(&resp)
+    }
+
+    /// One marshaled operation answer as its reply — always `200`, whatever
+    /// the `Response` says: the envelope, not the HTTP status, is the
+    /// operation protocol.
+    fn op_reply(&self, resp: &Response) -> Reply {
         Reply {
             status: 200,
             content_type: "application/json",
-            body: self.codec.marshal(&resp),
+            body: self.codec.marshal(resp),
             headers: Vec::new(),
         }
     }
 
     /// Feed the sidecar from a write's answer: an ack carries the committed
     /// position; a rejection committed nothing and records nothing. Runs
-    /// under `write_serial`.
+    /// under `write_serial`. EXHAUSTIVE with no `_` arm, like the other
+    /// `Response` walks here: a new answer shape carrying a committed
+    /// position must decide whether the change feed reports it, and fails
+    /// to compile until it does.
     fn observe_commit(&self, kind: OpKind, docs: DocsSrc, resp: &Response) {
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
             Response::AckEdit { at, .. } => (*at, None),
-            _ => return,
+            Response::Delivery { .. }
+            | Response::SpanSet { .. }
+            | Response::Addrs { .. }
+            | Response::MaybeAddr { .. }
+            | Response::Count { .. }
+            | Response::Page { .. }
+            | Response::Endsets { .. }
+            | Response::Runs { .. }
+            | Response::Bool { .. }
+            | Response::LinkValue { .. }
+            | Response::Follow { .. }
+            | Response::Deletions { .. }
+            | Response::Compare { .. }
+            | Response::Orphans { .. }
+            | Response::Claims { .. }
+            | Response::Rejected(_) => return,
         };
         let docs = match docs {
             DocsSrc::These(v) => v.iter().map(|a| tumbler_string(a.tumbler())).collect(),
@@ -496,27 +600,14 @@ impl Daemon {
         self.op.execute(sid, req)
     }
 
-    /// `Engine::world_at` under a reconstruction permit
-    /// ([`OPAT_MAX_CONCURRENT`]). The permit spans the engine call alone,
-    /// never the surrounding request, and exhaustion answers `Err` with the
-    /// wire's `503 history_busy` — no queueing: a worker parked behind a
-    /// core-bound replay is a worker lost to live traffic.
-    fn world_at_permitted(&self, at: Seq) -> Result<World, Reply> {
-        let Some(_permit) = self.reconstruct_permits.try_acquire() else {
-            return Err(busy_reply());
-        };
-        self.engine.world_at(at).map_err(history_error_reply)
-    }
-
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): hold one reconstruction permit exactly as an in-flight
-    /// `world_at` does, or `None` when all [`OPAT_MAX_CONCURRENT`] are
-    /// taken. Real reconstructions finish in milliseconds, so the
-    /// integration tests pin the counter through this instead of racing
-    /// the engine.
+    /// reconstruction does, or `None` when the whole budget is taken. Real
+    /// reconstructions finish in milliseconds, so the integration tests pin
+    /// the counter through this instead of racing the engine.
     #[doc(hidden)]
     pub fn try_hold_reconstruction_permit(&self) -> Option<impl Drop + '_> {
-        self.reconstruct_permits.try_acquire()
+        self.history.try_hold_permit()
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -528,52 +619,38 @@ impl Daemon {
     fn post_op_at(&self, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
-            Err(detail) => return Reply::json(400, err_body("malformed_op_at", Some(&detail))),
+            Err(detail) => {
+                return Reply::json(400, err_body(TransportError::MalformedOpAt, Some(&detail)))
+            }
         };
         let req = match self.codec.parse(&frame) {
             Ok(r) => r,
-            Err(e) => {
-                let resp = self.codec.unparseable(e);
-                return Reply {
-                    status: 200,
-                    content_type: "application/json",
-                    body: self.codec.marshal(&resp),
-                    headers: Vec::new(),
-                };
-            }
+            Err(e) => return self.op_reply(&self.codec.unparseable(e)),
         };
         if !op_is_read(&req.op) {
             // The ruling-fixed body, exactly: {"error": "write_at_history"}.
-            let mut m = Map::new();
-            m.insert("error".into(), Value::String("write_at_history".into()));
-            return Reply::json(400, Value::Object(m));
+            return Reply::json(400, err_body(TransportError::WriteAtHistory, None));
         }
-        let world = match self.world_at_permitted(at) {
-            Ok(w) => w,
-            Err(reply) => return reply,
-        };
-        let mut resp = execute_read_on(world, req);
-        stamp_as_of(&mut resp, at);
-        Reply {
-            status: 200,
-            content_type: "application/json",
-            body: self.codec.marshal(&resp),
-            headers: Vec::new(),
+        match self.history.read_at(&self.engine, at, req) {
+            Ok(resp) => self.op_reply(&resp),
+            Err(e) => unavailable_reply(e),
         }
     }
 
     fn get_health(&self) -> Reply {
-        let mut m = Map::new();
         // The newest recorded commit's wall-clock time (wire v6) — null
         // when unrecorded (fresh world, bare head): transport metadata,
         // never invented.
-        m.insert(
-            "head_time".into(),
-            self.sidecar.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
-        );
-        m.insert("log_position".into(), Value::Number(self.op.log_position().0.into()));
-        m.insert("ok".into(), Value::Bool(true));
-        Reply::json(200, Value::Object(m))
+        let head_time =
+            self.sidecar.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
+        Reply::json(
+            200,
+            obj(vec![
+                ("head_time", head_time),
+                ("log_position", Value::Number(self.op.log_position().0.into())),
+                ("ok", Value::Bool(true)),
+            ]),
+        )
     }
 
     /// `GET /changes?since=N[&limit=K]` (wire v6) — the delta read: the
@@ -584,54 +661,53 @@ impl Daemon {
         let (since, limit) = match changes_params(query) {
             Ok(x) => x,
             Err(detail) => {
-                return Reply::json(400, err_body("malformed_changes", Some(&detail)))
+                return Reply::json(
+                    400,
+                    err_body(TransportError::MalformedChanges, Some(&detail)),
+                )
             }
         };
         match self.sidecar.changes(since, limit) {
-            ChangesAnswer::Reclaimed { floor } => {
-                let mut m = Map::new();
-                m.insert("error".into(), Value::String("history_reclaimed".into()));
-                if let Some(f) = floor {
-                    m.insert("floor".into(), Value::Number(f.into()));
-                }
-                Reply::json(410, Value::Object(m))
-            }
+            ChangesAnswer::Reclaimed { floor } => reclaimed_reply(floor),
             ChangesAnswer::Page { entries, last, more } => {
                 let list: Vec<Value> = entries
                     .iter()
                     .map(|(at, meta)| {
-                        let mut e = Map::new();
-                        e.insert("at".into(), Value::Number((*at).into()));
-                        e.insert(
-                            "docs".into(),
-                            meta.docs
-                                .as_ref()
-                                .map(|d| {
-                                    Value::Array(
-                                        d.iter().map(|s| Value::String(s.clone())).collect(),
-                                    )
-                                })
-                                .unwrap_or(Value::Null),
-                        );
-                        e.insert(
-                            "op".into(),
-                            meta.op
-                                .as_ref()
-                                .map(|s| Value::String(s.clone()))
-                                .unwrap_or(Value::Null),
-                        );
-                        e.insert(
-                            "time".into(),
-                            meta.time.map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
-                        );
-                        Value::Object(e)
+                        obj(vec![
+                            ("at", Value::Number((*at).into())),
+                            (
+                                "docs",
+                                meta.docs
+                                    .as_ref()
+                                    .map(|d| {
+                                        Value::Array(
+                                            d.iter().map(|s| Value::String(s.clone())).collect(),
+                                        )
+                                    })
+                                    .unwrap_or(Value::Null),
+                            ),
+                            (
+                                "op",
+                                meta.op
+                                    .as_ref()
+                                    .map(|s| Value::String(s.clone()))
+                                    .unwrap_or(Value::Null),
+                            ),
+                            (
+                                "time",
+                                meta.time.map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
+                            ),
+                        ])
                     })
                     .collect();
-                let mut m = Map::new();
-                m.insert("changes".into(), Value::Array(list));
-                m.insert("last".into(), Value::Number(last.into()));
-                m.insert("more".into(), Value::Bool(more));
-                Reply::json(200, Value::Object(m))
+                Reply::json(
+                    200,
+                    obj(vec![
+                        ("changes", Value::Array(list)),
+                        ("last", Value::Number(last.into())),
+                        ("more", Value::Bool(more)),
+                    ]),
+                )
             }
         }
     }
@@ -644,13 +720,15 @@ impl Daemon {
     fn get_dump(&self, query: Option<&str>) -> Reply {
         let at = match dump_at_param(query) {
             Ok(x) => x,
-            Err(detail) => return Reply::json(400, err_body("malformed_at", Some(&detail))),
+            Err(detail) => {
+                return Reply::json(400, err_body(TransportError::MalformedAt, Some(&detail)))
+            }
         };
         let dump = match at {
             None => self.engine.world_dump(),
-            Some(at) => match self.world_at_permitted(at) {
+            Some(at) => match self.history.world_at(&self.engine, at) {
                 Ok(w) => skep_engine::observe::dump(&w, self.engine.genesis_config()),
-                Err(reply) => return reply,
+                Err(e) => return unavailable_reply(e),
             },
         };
         Reply {
@@ -669,11 +747,7 @@ fn session_principal(body: &[u8]) -> Result<u64, String> {
     let Value::Object(m) = v else {
         return Err("session request must be a JSON object".into());
     };
-    for k in m.keys() {
-        if k != "principal" {
-            return Err(format!("unknown field '{k}'"));
-        }
-    }
+    check_keys(&m, &["principal"])?;
     m.get("principal")
         .and_then(Value::as_u64)
         .ok_or_else(|| "missing or non-integer field 'principal'".into())
@@ -734,9 +808,12 @@ enum DocsSrc {
     Minted,
 }
 
-/// The sidecar metadata of a write `Op` — `None` for reads. EXHAUSTIVE
-/// with no `_` arm, like [`op_is_read`]: a new `Op` variant fails to
-/// compile here until its feed entry is decided.
+/// The sidecar metadata of a write `Op` — `None` for reads, which is also
+/// THE read/write partition: [`op_is_read`] is defined as this answer's
+/// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
+/// `_` arm: a new `Op` fails to compile here until its feed entry is
+/// decided, and that one decision classifies it for the history surface
+/// too.
 fn write_meta(op: &Op) -> Option<(OpKind, DocsSrc)> {
     let one = |a: &Address| DocsSrc::These(vec![a.clone()]);
     match op {
@@ -797,11 +874,7 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Vec<u8>), String> {
     let Value::Object(m) = v else {
         return Err("op-at envelope must be a JSON object".into());
     };
-    for k in m.keys() {
-        if k != "at" && k != "frame" {
-            return Err(format!("unknown field '{k}'"));
-        }
-    }
+    check_keys(&m, &["at", "frame"])?;
     let at = m
         .get("at")
         .and_then(Value::as_u64)
@@ -830,220 +903,85 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
         .map_err(|_| format!("at: '{v}' is not a position (a non-negative integer)"))
 }
 
-/// The reconstruction bound behind [`OPAT_MAX_CONCURRENT`]: a counting
-/// try-acquire with no queue and no blocking — plain atomics, no new
-/// dependency. The guard returns its permit on drop, early returns and
-/// panics included.
-struct ReconstructPermits {
-    available: AtomicUsize,
-}
-
-/// One held permit; dropping it releases the slot.
-struct ReconstructPermit<'a> {
-    permits: &'a ReconstructPermits,
-}
-
-impl ReconstructPermits {
-    fn new(n: usize) -> ReconstructPermits {
-        ReconstructPermits { available: AtomicUsize::new(n) }
+/// The `410 history_reclaimed` refusal: the position asked for is older
+/// than what can still be answered, and `floor` — when one exists — names
+/// the oldest that can. One construction, shared by the history surface and
+/// the change feed, so the two cannot describe the same condition
+/// differently.
+fn reclaimed_reply(floor: Option<u64>) -> Reply {
+    let mut pairs =
+        vec![("error", Value::String(TransportError::HistoryReclaimed.name().into()))];
+    if let Some(f) = floor {
+        pairs.push(("floor", Value::Number(f.into())));
     }
-
-    /// One permit, or `None` right now — never blocks.
-    fn try_acquire(&self) -> Option<ReconstructPermit<'_>> {
-        self.available
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
-            .ok()
-            .map(|_| ReconstructPermit { permits: self })
-    }
+    Reply::json(410, obj(pairs))
 }
 
-impl Drop for ReconstructPermit<'_> {
-    fn drop(&mut self) {
-        self.permits.available.fetch_add(1, Ordering::Release);
-    }
-}
-
-/// The permit-exhausted refusal: `503 history_busy`, the wire's one
-/// retry-class transport error (wire.md §Reading history). Distinct from
-/// every position error — the position may be fine; the daemon is
-/// momentarily saturated with reconstructions, so try again shortly.
-fn busy_reply() -> Reply {
-    Reply::json(
-        503,
-        err_body("history_busy", Some("all reconstruction permits are in use; retry shortly")),
-    )
-}
-
-/// Map a bounded-replay failure onto the wire's transport errors. The two
-/// ruling-fixed bodies (`write_at_history` lives at its check site;
-/// `beyond_head` here) are emitted exactly as specified; the rest are this
-/// daemon's own wire decisions, documented in wire.md §Reading history.
-fn history_error_reply(e: HistoryError) -> Reply {
-    let mut m = Map::new();
-    let (status, name) = match e {
+/// Map an unavailable historical answer onto the wire's transport errors —
+/// the one place the history surface's `Unavailable` becomes HTTP. The
+/// ruling-fixed `beyond_head` body is emitted exactly as specified; the
+/// rest are this daemon's own wire decisions, documented in wire.md
+/// §Reading history. `history_busy` is the one retry-class error: the
+/// position may be perfectly good and the daemon momentarily saturated.
+fn unavailable_reply(e: Unavailable) -> Reply {
+    let journal = match e {
+        Unavailable::Busy => {
+            return Reply::json(
+                503,
+                err_body(
+                    TransportError::HistoryBusy,
+                    Some("all reconstruction permits are in use; retry shortly"),
+                ),
+            )
+        }
+        Unavailable::Journal(e) => e,
+    };
+    let mut pairs: Vec<(&'static str, Value)> = Vec::new();
+    let (status, err) = match journal {
         HistoryError::BeyondHead { head } => {
-            m.insert("head".into(), Value::Number(head.0.into()));
-            (400, "beyond_head")
+            pairs.push(("head", Value::Number(head.0.into())));
+            (400, TransportError::BeyondHead)
         }
         HistoryError::NotABoundary { nearest } => {
-            m.insert("nearest".into(), Value::Number(nearest.0.into()));
-            (400, "not_a_position")
+            pairs.push(("nearest", Value::Number(nearest.0.into())));
+            (400, TransportError::NotAPosition)
         }
-        HistoryError::Reclaimed { floor } => {
-            if let Some(fl) = floor {
-                m.insert("floor".into(), Value::Number(fl.0.into()));
-            }
-            (410, "history_reclaimed")
-        }
+        HistoryError::Reclaimed { floor } => return reclaimed_reply(floor.map(|f| f.0)),
         // Unreachable under this daemon's Fsync configuration; mapped so the
         // surface stays total over the engine's error type.
         HistoryError::Unjournaled => {
-            m.insert(
-                "detail".into(),
+            pairs.push((
+                "detail",
                 Value::String("this daemon holds no journal; history is unavailable".into()),
-            );
-            (500, "no_journal")
+            ));
+            (500, TransportError::NoJournal)
         }
         HistoryError::Io(err) => {
-            m.insert("detail".into(), Value::String(err.to_string()));
-            (500, "history_io")
+            pairs.push(("detail", Value::String(err.to_string())));
+            (500, TransportError::HistoryIo)
         }
         HistoryError::Corruption { at, .. } => {
-            m.insert(
-                "detail".into(),
-                Value::String(format!("journal corrupt at rest; next intact frame at {}", at.0)),
-            );
-            (500, "history_corrupt")
+            pairs.push((
+                "detail",
+                Value::String(format!(
+                    "journal corrupt at rest; next intact frame at {}",
+                    at.0
+                )),
+            ));
+            (500, TransportError::HistoryCorrupt)
         }
     };
-    m.insert("error".into(), Value::String(name.into()));
-    Reply::json(status, Value::Object(m))
-}
-
-/// Run one already-classified READ frame against a historical world: a
-/// throwaway in-memory M2 kernel rooted at that world, a throwaway M10 over
-/// it, one `execute`. All the read semantics stay M10's and the stores' —
-/// the daemon only assembles. The session is minted and retired up front
-/// (the guest pattern): reads are principal-free, and even a misclassified
-/// write would meet M10's own `Unauthenticated` wall rather than a store.
-fn execute_read_on(world: World, req: Request) -> Response {
-    let cfg = KernelConfig {
-        durability: Durability::InMemory,
-        checkpoint: CheckpointPolicy::Manual,
-    };
-    let kernel =
-        Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));
-    let op = Operation::new(Box::new(HistStores { kernel }));
-    let sid = op.open_session(PrincipalId(u64::MAX));
-    op.close_session(sid);
-    op.execute(sid, req)
-}
-
-/// `Stores<World>` over the throwaway historical kernel — the same shape as
-/// the engine's `EngineStores`, which is constructible only over the live
-/// recovered kernel and so cannot serve here.
-struct HistStores {
-    kernel: Arc<Kernel<World>>,
-}
-
-impl Stores<World> for HistStores {
-    fn kernel(&self) -> &Kernel<World> {
-        &self.kernel
-    }
-
-    fn namespace(&self) -> Namespace<'_, World> {
-        Namespace::new(&self.kernel)
-    }
-
-    fn vstream(&self) -> Vstream<'_, World> {
-        Vstream::new(&self.kernel)
-    }
-
-    fn linkstore(&self) -> LinkWriter<'_, World> {
-        LinkWriter::new(&self.kernel)
-    }
-}
-
-/// Stamp the requested position as `as_of`: the throwaway kernel is rooted
-/// at the historical world with its own seq at 0, so M10's snapshot-seq
-/// stamping — correct live — must be overwritten with the position the
-/// answer is OF. Purely mechanical; every read shape is listed, writes
-/// cannot reach here, and rejections carry no `as_of` at history exactly as
-/// they carry none live.
-fn stamp_as_of(resp: &mut Response, at: Seq) {
-    match resp {
-        Response::Delivery { as_of, .. }
-        | Response::SpanSet { as_of, .. }
-        | Response::Addrs { as_of, .. }
-        | Response::MaybeAddr { as_of, .. }
-        | Response::Count { as_of, .. }
-        | Response::Page { as_of, .. }
-        | Response::Endsets { as_of, .. }
-        | Response::Runs { as_of, .. }
-        | Response::Bool { as_of, .. }
-        | Response::LinkValue { as_of, .. }
-        | Response::Follow { as_of, .. }
-        | Response::Deletions { as_of, .. }
-        | Response::Compare { as_of, .. }
-        | Response::Orphans { as_of, .. }
-        | Response::Claims { as_of, .. } => *as_of = at,
-        Response::Ack { .. }
-        | Response::AckAddr { .. }
-        | Response::AckEdit { .. }
-        | Response::Rejected(_) => {}
-    }
+    pairs.push(("error", Value::String(err.name().into())));
+    Reply::json(status, obj(pairs))
 }
 
 /// The wire's read/write partition, mirroring M10's own `Op::is_read`
 /// (crate-private there, so restated here — the one classification the
-/// history surface needs before dispatch). EXHAUSTIVE with no `_` arm: a
-/// new `Op` variant fails to compile here until classified, the same
-/// guarantee M10 gives its dispatch tables.
-//
-// The two-arm shape is load-bearing (compile-time non-exhaustiveness on a
-// new variant), so the `matches!` rewrite clippy suggests is refused.
-#[allow(clippy::match_like_matches_macro)]
+/// history surface needs before dispatch). A read is exactly an `Op` the
+/// change feed has nothing to record: one table decides both, so an `Op`
+/// admitted to history can never be one that commits.
 fn op_is_read(op: &Op) -> bool {
-    match op {
-        Op::NextAccountPrefix { .. }
-        | Op::PrincipalPrefix { .. }
-        | Op::ReadLink { .. }
-        | Op::FollowLink { .. }
-        | Op::RetrieveV { .. }
-        | Op::RetrieveDocVSpan { .. }
-        | Op::RetrieveDocVSpanSet { .. }
-        | Op::ShowOrigin { .. }
-        | Op::ShowDeletions { .. }
-        | Op::Compare { .. }
-        | Op::FindDocsContaining { .. }
-        | Op::Image { .. }
-        | Op::FindLinksV { .. }
-        | Op::FindLinksFtt { .. }
-        | Op::CountV { .. }
-        | Op::CountFtt { .. }
-        | Op::WindowV { .. }
-        | Op::WindowFtt { .. }
-        | Op::RetrieveEndsets { .. }
-        | Op::Project { .. }
-        | Op::DiscoverableFrom { .. }
-        | Op::DeleteOrphans { .. }
-        | Op::InClaims { .. }
-        | Op::OutClaims { .. } => true,
-        Op::CreateNewDocument { .. }
-        | Op::Delegate { .. }
-        | Op::RegisterNode { .. }
-        | Op::Fork
-        | Op::Insert { .. }
-        | Op::Delete { .. }
-        | Op::Copy { .. }
-        | Op::Rearrange { .. }
-        | Op::Version { .. }
-        | Op::MakeLink { .. }
-        | Op::Emit { .. }
-        | Op::Nullify { .. }
-        | Op::AssertSup { .. }
-        | Op::EditLink { .. } => false,
-    }
+    write_meta(op).is_none()
 }
 
 // ── the commit feed (wire v4) ────────────────────────────────────────────
@@ -1186,7 +1124,10 @@ impl Skepd {
         self.port
     }
 
-    pub fn daemon(&self) -> &Arc<Daemon> {
+    /// The served daemon, borrowed for the server's lifetime — long enough
+    /// to ask it anything, and not long enough to outlive [`Skepd::shutdown`],
+    /// whose last act releases the kernel's journal-directory lock.
+    pub fn daemon(&self) -> &Daemon {
         &self.daemon
     }
 
@@ -1250,13 +1191,13 @@ fn serve_connection(
         Err(refusal) => {
             let reply = match refusal {
                 ReadError::Malformed(detail) => {
-                    Reply::json(400, err_body("malformed_http", Some(&detail)))
+                    Reply::json(400, err_body(TransportError::MalformedHttp, Some(&detail)))
                 }
                 ReadError::BodyTooLarge(declared) => {
                     let detail = format!(
                         "Content-Length {declared} exceeds the {MAX_REQUEST_BODY}-byte body cap"
                     );
-                    Reply::json(413, err_body("payload_too_large", Some(&detail)))
+                    Reply::json(413, err_body(TransportError::PayloadTooLarge, Some(&detail)))
                 }
             };
             let _ = write_reply(&mut stream, &reply);
@@ -1273,7 +1214,7 @@ fn serve_connection(
         )
     })) {
         Ok(r) => r,
-        Err(_) => Routed::Reply(Reply::json(500, err_body("internal_panic", None))),
+        Err(_) => Routed::Reply(Reply::json(500, err_body(TransportError::InternalPanic, None))),
     };
     match routed {
         Routed::Reply(reply) => {
@@ -1526,50 +1467,97 @@ fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    /// The counter is exact: [`OPAT_MAX_CONCURRENT`] acquires succeed, the
-    /// next fails, and a drop returns exactly one slot.
+    /// Every path the router serves. The list is the test's own — an
+    /// independent restatement, so a route added to [`known_path`] alone
+    /// (with no dispatch arm) is caught here rather than answering 405 for
+    /// every method.
+    const ROUTES: &[&str] = &[
+        "/session",
+        "/op",
+        "/op-at",
+        "/health",
+        "/events",
+        "/changes",
+        #[cfg(feature = "observe")]
+        "/dump",
+        #[cfg(feature = "client")]
+        "/",
+    ];
+
+    /// One route set, three consequences: a known path preflights, refuses
+    /// an unsupported method with `405`, and dispatches at least one real
+    /// method; an unknown path is `404` for every method including
+    /// `OPTIONS`. This is the invariant [`known_path`] exists to keep — a
+    /// route stated in one table and forgotten in another breaks exactly
+    /// one of these.
     #[test]
-    fn reconstruct_permits_account_exactly() {
-        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
-        let first = permits.try_acquire().expect("permit 1 of 2");
-        let second = permits.try_acquire().expect("permit 2 of 2");
-        assert!(permits.try_acquire().is_none(), "the cap is exactly {OPAT_MAX_CONCURRENT}");
-        drop(first);
-        let third = permits.try_acquire().expect("a dropped permit reopens its slot");
-        assert!(permits.try_acquire().is_none(), "still exactly one slot came back");
-        drop(second);
-        drop(third);
-        let a = permits.try_acquire().expect("all slots return");
-        let b = permits.try_acquire().expect("all slots return");
-        drop((a, b));
+    fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let status = |method: &str, path: &str| match daemon.handle(method, path, None, None, b"")
+        {
+            Routed::Reply(r) => r.status,
+            // The one non-reply route; reached only by GET /events, which
+            // this test never asks for.
+            Routed::EventStream => 200,
+        };
+        for path in ROUTES {
+            assert!(known_path(path), "{path} is served but not known");
+            assert_eq!(status("OPTIONS", path), 204, "{path} must answer the CORS preflight");
+            assert_eq!(status("PUT", path), 405, "{path} must refuse an unsupported method");
+            let served = ["GET", "POST"].iter().any(|m| {
+                let s = status(m, path);
+                s != 404 && s != 405
+            });
+            assert!(served, "{path} is known but no method dispatches");
+        }
+        for unknown in ["/nope", "/op/", "/Health"] {
+            assert!(!known_path(unknown), "{unknown} must not be known");
+            assert_eq!(status("GET", unknown), 404, "{unknown}");
+            assert_eq!(status("OPTIONS", unknown), 404, "an unknown path preflights nothing");
+        }
     }
 
-    /// Under real threads, at most [`OPAT_MAX_CONCURRENT`] holders exist at
-    /// any instant — the invariant is asserted inside the hold, so any
-    /// overshoot fails loudly regardless of scheduling.
+    /// The guest policy in one place: an absent or unrecognized token is
+    /// the guest (M10 then serves reads and refuses writes), a bound token
+    /// is its own session, and two binds never collide.
     #[test]
-    fn reconstruct_permits_bound_concurrent_holders() {
-        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
-        let holding = AtomicUsize::new(0);
-        let granted = AtomicUsize::new(0);
-        thread::scope(|s| {
-            for _ in 0..8 {
-                s.spawn(|| {
-                    for _ in 0..200 {
-                        let Some(permit) = permits.try_acquire() else { continue };
-                        let now = holding.fetch_add(1, Ordering::AcqRel) + 1;
-                        assert!(
-                            now <= OPAT_MAX_CONCURRENT,
-                            "{now} concurrent holders exceeds the permit of {OPAT_MAX_CONCURRENT}"
-                        );
-                        granted.fetch_add(1, Ordering::Relaxed);
-                        std::hint::spin_loop();
-                        holding.fetch_sub(1, Ordering::AcqRel);
-                        drop(permit);
-                    }
-                });
-            }
-        });
-        assert!(granted.load(Ordering::Relaxed) > 0, "some acquires must have succeeded");
+    fn sessions_resolve_unknown_tokens_to_the_guest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let guest = daemon.sessions.resolve(None);
+        assert_eq!(
+            daemon.sessions.resolve(Some("no-such-token")),
+            guest,
+            "an unknown token is the guest, not an error"
+        );
+        let sid = daemon.op.open_session(PrincipalId(7));
+        let token = daemon.sessions.bind(sid);
+        assert_eq!(daemon.sessions.resolve(Some(&token)), sid, "a bound token is its session");
+        let other = daemon.sessions.bind(daemon.op.open_session(PrincipalId(8)));
+        assert_ne!(token, other, "each binding gets its own token");
+    }
+
+    /// The partition is one table's two faces: reads are exactly the ops
+    /// the change feed records nothing for.
+    #[test]
+    fn reads_are_exactly_the_ops_with_no_feed_entry() {
+        let read = Op::Fork;
+        assert!(!op_is_read(&read), "fork commits");
+        assert!(write_meta(&read).is_some());
+        let query = Op::PrincipalPrefix { id: PrincipalId(1) };
+        assert!(op_is_read(&query), "principal_prefix reads");
+        assert!(write_meta(&query).is_none());
+    }
+
+    /// Transport-error bodies are built through the codec's sorting device,
+    /// so they are byte-deterministic whatever backs serde_json's map.
+    #[test]
+    fn error_bodies_are_key_sorted() {
+        let v = err_body(TransportError::PayloadTooLarge, Some("too big"));
+        assert_eq!(
+            serde_json::to_string(&v).expect("json"),
+            r#"{"detail":"too big","error":"payload_too_large"}"#
+        );
     }
 }

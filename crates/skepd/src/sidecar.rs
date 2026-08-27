@@ -40,9 +40,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use skep_engine::{Engine, HistoryError};
 use skep_kernel::Seq;
+
+use crate::codec::obj;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
@@ -282,30 +284,28 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
 }
 
 /// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"op":"…","time":T}`
-/// for a recorded one. Keys sort (serde_json's map), so lines are
-/// deterministic.
+/// for a recorded one. Built through the codec's key-sorting device, so a
+/// line is the same bytes whatever backs serde_json's map — which is what
+/// lets `GET /changes` answer byte-identically across a restart.
 fn entry_line(at: u64, meta: &Meta) -> Vec<u8> {
-    let mut m = Map::new();
-    m.insert("at".into(), Value::Number(at.into()));
+    let mut pairs = vec![("at", Value::Number(at.into()))];
     if let Some(op) = &meta.op {
-        m.insert("op".into(), Value::String(op.clone()));
+        pairs.push(("op", Value::String(op.clone())));
     }
     if let Some(docs) = &meta.docs {
-        m.insert(
-            "docs".into(),
+        pairs.push((
+            "docs",
             Value::Array(docs.iter().map(|d| Value::String(d.clone())).collect()),
-        );
+        ));
     }
     if let Some(t) = meta.time {
-        m.insert("time".into(), Value::Number(t.into()));
+        pairs.push(("time", Value::Number(t.into())));
     }
-    line_bytes(Value::Object(m))
+    line_bytes(obj(pairs))
 }
 
 fn floor_line(floor: u64) -> Vec<u8> {
-    let mut m = Map::new();
-    m.insert("floor".into(), Value::Number(floor.into()));
-    line_bytes(Value::Object(m))
+    line_bytes(obj(vec![("floor", Value::Number(floor.into()))]))
 }
 
 fn line_bytes(v: Value) -> Vec<u8> {
@@ -313,4 +313,52 @@ fn line_bytes(v: Value) -> Vec<u8> {
         serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail");
     b.push(b'\n');
     b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A line's bytes are fixed, key order included — the determinism
+    /// `/changes` inherits — and every line round-trips through the reader
+    /// that will replay it.
+    #[test]
+    fn lines_are_key_sorted_and_replay_as_written() {
+        let meta = Meta {
+            op: Some("insert".into()),
+            docs: Some(vec!["1.0.1.0.1".into()]),
+            time: Some(1_700_000_000_000),
+        };
+        assert_eq!(
+            entry_line(8, &meta),
+            b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000000}\n"
+        );
+        assert_eq!(entry_line(3, &Meta::bare()), b"{\"at\":3}\n");
+        assert_eq!(floor_line(2048), b"{\"floor\":2048}\n");
+
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(&entry_line(8, &meta));
+        file.extend_from_slice(&entry_line(3, &Meta::bare()));
+        file.extend_from_slice(&floor_line(2048));
+        let (recs, end) = parse_records(&file);
+        assert_eq!(end, file.len(), "every whole line is trusted");
+        assert_eq!(recs.len(), 3);
+        match &recs[0] {
+            Rec::Entry(at, m) => {
+                assert_eq!((*at, m.op.as_deref(), m.time), (8, Some("insert"), meta.time));
+                assert_eq!(m.docs.as_deref(), Some(&["1.0.1.0.1".to_string()][..]));
+            }
+            Rec::Floor(_) => panic!("first line is an entry"),
+        }
+        match recs[1] {
+            Rec::Entry(at, ref m) => {
+                assert!(at == 3 && m.op.is_none() && m.docs.is_none() && m.time.is_none())
+            }
+            Rec::Floor(_) => panic!("second line is a bare entry"),
+        }
+        match recs[2] {
+            Rec::Floor(f) => assert_eq!(f, 2048),
+            Rec::Entry(..) => panic!("third line is a floor"),
+        }
+    }
 }

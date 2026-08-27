@@ -67,6 +67,11 @@ pub const RESP_SHAPES: &[&str] = &[
 /// (wire.md §HTTP status codes, §Reading history, §The change feed). A
 /// non-2xx body naming anything else is a never-silent violation: an
 /// undocumented failure a client cannot interpret.
+///
+/// Transcribed from wire.md by hand and deliberately NOT derived from the
+/// daemon's own error table: the oracle asks whether the daemon answers
+/// what the DOCUMENT promises, and a list read out of the code under test
+/// would agree with any name that code invented.
 pub const TRANSPORT_ERRORS: &[&str] = &[
     "malformed_session_request",
     "malformed_op_at",

@@ -106,10 +106,11 @@ fn to_bytes(v: Value) -> Vec<u8> {
     serde_json::to_vec(&v).expect("serializing a serde_json::Value with string keys cannot fail")
 }
 
-/// Build a JSON object with keys sorted — THE determinism device. Marshal
-/// paths construct objects only through this, so canonical output is
-/// alphabetical-by-key under any serde_json map backend.
-fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
+/// Build a JSON object with keys sorted — THE determinism device. Every
+/// JSON object this crate emits is constructed through it — wire responses,
+/// transport-error bodies, and the sidecar's own file lines — so canonical
+/// output is alphabetical-by-key under any serde_json map backend.
+pub(crate) fn obj(pairs: Vec<(&'static str, Value)>) -> Value {
     let mut pairs = pairs;
     pairs.sort_by(|a, b| a.0.cmp(b.0));
     let mut m = Map::new();
@@ -407,12 +408,19 @@ fn p_addr(v: &Value) -> PResult<Address> {
 /// fields do.
 fn p_obj<'a>(v: &'a Value, allowed: &[&str]) -> PResult<&'a Map<String, Value>> {
     let m = v.as_object().ok_or_else(|| PErr("expected a JSON object".into()))?;
-    for k in m.keys() {
-        if !allowed.contains(&k.as_str()) {
-            return Err(PErr(format!("unknown field '{k}'")));
-        }
-    }
+    check_keys(m, allowed).map_err(PErr)?;
     Ok(m)
+}
+
+/// Refuse any key outside `allowed` — THE never-silent device, applied
+/// wherever this crate accepts a JSON object: a client's typo is a named
+/// failure, never a field quietly ignored. Errors as a bare `String` so the
+/// transport envelopes (whose faults are not `ParseError`s) share it.
+pub(crate) fn check_keys(m: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
+    match m.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(k) => Err(format!("unknown field '{k}'")),
+        None => Ok(()),
+    }
 }
 
 fn need<'a>(m: &'a Map<String, Value>, k: &'static str) -> PResult<&'a Value> {

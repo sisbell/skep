@@ -324,7 +324,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
          bounded rollback is not acceptable for an acked write"
     );
     for &at in &acks {
-        d.engine().world_at(Seq(at)).unwrap_or_else(|e| {
+        d.world_at(Seq(at)).unwrap_or_else(|e| {
             panic!("FINDING (E, {ctx}): acked position {at} unanswerable after SIGKILL: {e}")
         });
     }
@@ -741,7 +741,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         d.log_position().0
     );
     for &at in &acks {
-        d.engine().world_at(Seq(at)).unwrap_or_else(|e| {
+        d.world_at(Seq(at)).unwrap_or_else(|e| {
             panic!("FINDING (G): acked position {at} unanswerable after remount: {e}")
         });
     }

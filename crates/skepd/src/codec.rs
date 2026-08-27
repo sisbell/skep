@@ -1385,6 +1385,32 @@ mod tests {
         }
     }
 
+    /// Span parse edges — every span on the wire goes through M1's
+    /// `Span::new`, so no zero-width span and no ill-shaped object survives
+    /// the trust boundary (wire.md §Value encodings).
+    #[test]
+    fn span_parse_edges() {
+        let span = |s: &str| p_span(&serde_json::from_str::<Value>(s).expect("test JSON"));
+        let ok = span(r#"{"start":"1.1","width":"0.5"}"#).expect("a depth-2 content span parses");
+        assert_eq!(
+            (ok.start().to_string(), ok.width().to_string()),
+            ("1.1".to_string(), "0.5".to_string())
+        );
+        for bad in [
+            r#"{"start":"1.1","width":"0.0"}"#, // zero width (T12)
+            r#"{"start":"1.1","width":"0"}"#,   // zero width, another depth
+            r#"{"start":"1.1","width":"0.0.1"}"#, // action point past #start
+            r#"{"start":"1.1"}"#,               // missing width
+            r#"{"width":"0.5"}"#,               // missing start
+            r#"{"start":"1.1","width":"0.5","extra":1}"#, // unknown key
+            r#"{"start":"1.1","width":"0.5x"}"#, // not a dotted decimal
+            r#"["1.1","0.5"]"#,                 // not an object
+            r#""1.1+0.5""#,                     // not an object
+        ] {
+            assert!(span(bad).is_err(), "{bad} must not parse as a span");
+        }
+    }
+
     /// Value granularity at the leaf: per-byte forms mint one single-byte
     /// value per byte, atom forms one composite value; the canonical marshal
     /// coalesces maximal per-byte runs (UTF-8 judged on the whole run) and
@@ -1429,5 +1455,16 @@ mod tests {
         let a = obj(vec![("b", j_u64(2)), ("a", j_u64(1))]);
         let b = obj(vec![("a", j_u64(1)), ("b", j_u64(2))]);
         assert_eq!(to_bytes(a), to_bytes(b));
+    }
+
+    /// The duplicate-key rule [`obj`] states and `refuse_with` leans on: the
+    /// LAST pair given wins, which is what lets `refuse_with` append `error`
+    /// behind a caller's fields and be sure the field list cannot displace
+    /// it.
+    #[test]
+    fn obj_keeps_the_last_of_duplicate_keys() {
+        let v = obj(vec![("k", j_u64(1)), ("a", j_u64(9)), ("k", j_u64(2))]);
+        assert_eq!(v["k"], j_u64(2), "the last pair given wins");
+        assert_eq!(to_bytes(v), br#"{"a":9,"k":2}"#.to_vec(), "and the keys still sort");
     }
 }

@@ -2,6 +2,12 @@
 //! HTTP/1.1 to it over a plain TcpStream (`Connection: close`, read to EOF)
 //! — the transport is the thing under test, so no client library sits in
 //! the middle.
+//!
+//! [`http_full`] speaks exactly one well-formed request shape, which is what
+//! every suite about the daemon's SEMANTICS wants. A suite about the
+//! TRANSPORT itself needs bytes outside that shape — a `Transfer-Encoding`
+//! header, a truncated body, a version that is not 1.1 — and reaches for
+//! [`raw_exchange`], which writes what it is given.
 
 #![allow(dead_code)]
 
@@ -53,10 +59,16 @@ pub fn http_full(
     stream
         .read_to_end(&mut raw)
         .unwrap_or_else(|e| panic!("{}: {e}", ctx("read response")));
-    let sep = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .unwrap_or_else(|| panic!("{}", ctx("no header/body separator in response")));
+    parse_response(&raw, &ctx("response"))
+}
+
+/// Parse one HTTP response's bytes into (status, headers, body) — the one
+/// response reader these tests use, so [`http_full`] and [`raw_exchange`]
+/// cannot disagree about what a header is.
+pub fn parse_response(raw: &[u8], ctx: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or_else(|| {
+        panic!("{ctx}: no header/body separator: {:?}", String::from_utf8_lossy(raw))
+    });
     let head = std::str::from_utf8(&raw[..sep]).expect("ascii response head");
     let mut lines = head.split("\r\n");
     let status: u16 = lines
@@ -64,14 +76,33 @@ pub fn http_full(
         .expect("status line")
         .split_whitespace()
         .nth(1)
-        .expect("status code in the status line")
+        .unwrap_or_else(|| panic!("{ctx}: no status code in {head:?}"))
         .parse()
-        .expect("numeric status");
+        .unwrap_or_else(|_| panic!("{ctx}: non-numeric status in {head:?}"));
     let headers = lines
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .collect();
     (status, headers, raw[sep + 4..].to_vec())
+}
+
+/// One exchange whose request bytes are written VERBATIM — the transport
+/// itself is what these callers test, so nothing here builds a head for
+/// them. Half-closes the write side (the daemon sees EOF and cannot wait on
+/// a body that will never arrive), then reads to close.
+///
+/// Write errors are deliberately ignored: the daemon may already have
+/// answered and closed (an oversized declared length, a refused method)
+/// while we were still writing. The response is the judge.
+pub fn raw_exchange(port: u16, raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let bytes = skepd::fuzz_support::http_raw_exchange(port, raw)
+        .unwrap_or_else(|e| panic!("connect to skepd: {e}"));
+    assert!(
+        !bytes.is_empty(),
+        "the daemon closed without answering: {:?}",
+        String::from_utf8_lossy(raw)
+    );
+    parse_response(&bytes, "raw exchange")
 }
 
 /// One HTTP exchange; returns (status, body bytes).
@@ -138,6 +169,11 @@ pub fn acked_addr(v: &Value) -> String {
 /// ~250 ms bound).
 const SSE_DEADLINE: Duration = Duration::from_secs(5);
 
+/// The deadline a keepalive assertion runs under. The daemon's cadence is
+/// 15 s of silence (wire.md §The commit stream), so this necessarily waits
+/// past it — generous, since arriving late is still arriving.
+const SSE_KEEPALIVE_DEADLINE: Duration = Duration::from_secs(40);
+
 /// A raw `GET /events` subscriber: reads the SSE framing off the socket,
 /// skipping `:ka` keepalive comments.
 pub struct Sse {
@@ -170,13 +206,23 @@ impl Sse {
             lower.contains("access-control-allow-origin: *"),
             "the event stream carries the CORS header: {head}"
         );
+        assert!(
+            lower.contains("connection: close"),
+            "the event stream declares Connection: close (wire.md §Transport): {head}"
+        );
         sse
     }
 
     /// Read (appending to the persistent buffer) until `delim`; returns the
     /// bytes before it and consumes through it.
     fn read_until(&mut self, delim: &[u8]) -> Vec<u8> {
-        let deadline = Instant::now() + SSE_DEADLINE;
+        self.read_until_within(delim, SSE_DEADLINE)
+    }
+
+    /// [`Sse::read_until`] under a caller-chosen deadline — the keepalive
+    /// assertion necessarily waits longer than a commit ever should.
+    fn read_until_within(&mut self, delim: &[u8], within: Duration) -> Vec<u8> {
+        let deadline = Instant::now() + within;
         loop {
             if let Some(i) = self.buf.windows(delim.len()).position(|w| w == delim) {
                 let mut taken: Vec<u8> = self.buf.drain(..i + delim.len()).collect();
@@ -185,7 +231,7 @@ impl Sse {
             }
             assert!(
                 Instant::now() < deadline,
-                "no stream data within {SSE_DEADLINE:?}; buffered: {:?}",
+                "no stream data within {within:?}; buffered: {:?}",
                 String::from_utf8_lossy(&self.buf)
             );
             let mut chunk = [0u8; 4096];
@@ -219,6 +265,16 @@ impl Sse {
             assert_eq!(obj.len(), 1, "v1 payload is the position alone: {data}");
             return obj["log_position"].as_u64().expect("log_position number");
         }
+    }
+
+    /// The documented keepalive (wire.md §The commit stream): after each
+    /// silent interval the daemon writes the comment line `:ka` and a blank
+    /// line, which is how a client tells a live stream from a dead peer.
+    /// Necessarily slow — it waits out the daemon's 15 s cadence.
+    pub fn expect_keepalive(&mut self) {
+        let block = self.read_until_within(b"\n\n", SSE_KEEPALIVE_DEADLINE);
+        let text = String::from_utf8(block).expect("utf-8 stream block");
+        assert_eq!(text, ":ka", "a silent stream's next block is the documented keepalive");
     }
 
     /// Assert the daemon closes the stream (draining any trailing events).

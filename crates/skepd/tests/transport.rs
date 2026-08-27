@@ -1,0 +1,268 @@
+//! wire.md §Transport — the HTTP/1.1 subset skepd speaks, asserted over a
+//! real socket.
+//!
+//! These claims are invisible to every other suite: `tests/common`'s
+//! `http_full` sends one well-formed 1.1 head with `Connection: close` and
+//! an exact `Content-Length`, then reads to EOF — so it can neither observe
+//! the daemon's own framing headers nor produce a request outside the
+//! subset. Every test here writes request bytes verbatim.
+
+mod common;
+
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream};
+use std::time::Duration;
+
+use common::*;
+
+/// Client-side deadline for the hand-rolled exchange below. Well under the
+/// daemon's own 30 s request read timeout, so a daemon that fails to answer
+/// fails this test rather than the gate's patience.
+const DEADLINE: Duration = Duration::from_secs(10);
+
+/// A complete, well-formed request with a JSON body.
+fn post(path: &str, body: &str) -> Vec<u8> {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// Every response the daemon writes declares `Connection: close` — wire.md
+/// §Transport's "one request per connection", which is how a client knows
+/// not to hold the socket for a second exchange. Both branches of the reply
+/// writer are covered (a bodied answer and the bodiless 204), and both
+/// paths that write one: routed replies, and the refusals answered before
+/// routing ever happens.
+#[test]
+fn every_response_declares_connection_close() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let cases: Vec<(&str, Vec<u8>, u16)> = vec![
+        ("a bodied 200", b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_vec(), 200),
+        (
+            "the bodiless 204 preflight",
+            b"OPTIONS /op HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_vec(),
+            204,
+        ),
+        ("an unknown path", b"GET /nope HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_vec(), 404),
+        ("a refused method", b"PUT /op HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".to_vec(), 405),
+        ("a routed transport error", post("/session", r#"{"user":"alice"}"#), 400),
+        (
+            "a refusal answered before routing",
+            b"POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec(),
+            400,
+        ),
+        (
+            "the body-cap refusal",
+            format!(
+                "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n",
+                8 * 1024 * 1024 + 1
+            )
+            .into_bytes(),
+            413,
+        ),
+    ];
+    for (what, raw, expect) in cases {
+        let (status, headers, _) = raw_exchange(port, &raw);
+        assert_eq!(status, expect, "{what}");
+        assert_eq!(
+            header(&headers, "Connection"),
+            Some("close"),
+            "{what} ({status}) must declare Connection: close"
+        );
+    }
+
+    sd.shutdown();
+}
+
+/// The accepted protocol versions are exactly `HTTP/1.1` and `HTTP/1.0`
+/// (wire.md §Transport); anything else is outside the subset and gets the
+/// documented `400 malformed_http`, never a silent best effort.
+#[test]
+fn the_accepted_http_versions_are_exactly_1_1_and_1_0() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    for version in ["HTTP/1.1", "HTTP/1.0"] {
+        let raw = format!("GET /health {version}\r\nHost: 127.0.0.1\r\n\r\n").into_bytes();
+        let (status, _, body) = raw_exchange(port, &raw);
+        assert_eq!(status, 200, "{version} is accepted: {}", String::from_utf8_lossy(&body));
+        assert_eq!(json(&body)["ok"].as_bool(), Some(true), "{version}");
+    }
+    for version in ["HTTP/0.9", "HTTP/2.0", "HTTP/1.2", "ICY/1.0", ""] {
+        let raw = format!("GET /health {version}\r\nHost: 127.0.0.1\r\n\r\n").into_bytes();
+        let (status, _, body) = raw_exchange(port, &raw);
+        assert_eq!(status, 400, "{version:?} is outside the subset");
+        assert_eq!(json(&body)["error"].as_str(), Some("malformed_http"), "{version:?}");
+    }
+
+    sd.shutdown();
+}
+
+/// A `Transfer-Encoding` request body is REFUSED, not read (wire.md
+/// §Transport). The fear is a wrong diagnosis: a daemon that ignored the
+/// header would frame the body by the absent `Content-Length`, read
+/// nothing, and answer a well-formed chunked request with `unparseable` —
+/// telling the client its JSON was bad when the framing was unsupported.
+#[test]
+fn a_chunked_request_body_is_refused_rather_than_read() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let frame = r#"{"op":"next_account_prefix","parent":"1"}"#;
+    let raw = format!(
+        "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Transfer-Encoding: chunked\r\n\r\n{:x}\r\n{frame}\r\n0\r\n\r\n",
+        frame.len()
+    )
+    .into_bytes();
+    let (status, _, body) = raw_exchange(port, &raw);
+    assert_eq!(status, 400, "chunked framing is refused: {}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    assert_eq!(v["error"].as_str(), Some("malformed_http"));
+    assert!(v["detail"].is_string(), "the refusal names what was unsupported: {v}");
+
+    sd.shutdown();
+}
+
+/// Everything else outside the subset is the same honest refusal — `400
+/// malformed_http` with a detail (wire.md §HTTP status codes: "bad head,
+/// chunked body, a body cut short") — and a pre-routing refusal still
+/// carries the universal CORS header, since it is written before
+/// `Daemon::handle` ever runs.
+#[test]
+fn requests_outside_the_http_subset_are_refused_malformed_http() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let cut_short =
+        format!("POST /op HTTP/1.1\r\nContent-Length: 100\r\n\r\n{}", r#"{"op":"fork"}"#);
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("a request line with no version", b"GET /health\r\nHost: 127.0.0.1\r\n\r\n".to_vec()),
+        ("a request line with no target", b"GET\r\nHost: 127.0.0.1\r\n\r\n".to_vec()),
+        ("a request line with a stray field", b"GET /health HTTP/1.1 extra\r\n\r\n".to_vec()),
+        ("a lowercase method token", b"get /health HTTP/1.1\r\n\r\n".to_vec()),
+        (
+            "a header line with no colon",
+            b"GET /health HTTP/1.1\r\nHost 127.0.0.1\r\n\r\n".to_vec(),
+        ),
+        (
+            "a non-numeric Content-Length",
+            b"POST /op HTTP/1.1\r\nContent-Length: ten\r\n\r\n".to_vec(),
+        ),
+        ("a body cut short of its declared length", cut_short.into_bytes()),
+    ];
+    for (what, raw) in cases {
+        let (status, headers, body) = raw_exchange(port, &raw);
+        assert_eq!(status, 400, "{what}: {}", String::from_utf8_lossy(&body));
+        let v = json(&body);
+        assert_eq!(v["error"].as_str(), Some("malformed_http"), "{what}");
+        assert!(v["detail"].is_string(), "{what}: the refusal says what failed: {v}");
+        assert_eq!(
+            header(&headers, "Access-Control-Allow-Origin"),
+            Some("*"),
+            "{what}: a pre-routing refusal still carries the universal CORS header"
+        );
+    }
+
+    sd.shutdown();
+}
+
+/// An absent `Content-Length` is an EMPTY body, not a body read to EOF
+/// (wire.md §Transport) — the shape every browser `fetch` GET takes. A
+/// `POST /op` so framed carries no frame, so it gets the never-silent
+/// answer: one `unparseable` rejection on the operation channel, at 200.
+#[test]
+fn an_absent_content_length_is_an_empty_body() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let (status, _, body) =
+        raw_exchange(port, b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    assert_eq!(status, 200, "a bodyless GET is served: {}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+
+    let (status, _, body) = raw_exchange(port, b"POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    assert_eq!(status, 200, "an empty frame is an operation answer, not a transport error");
+    assert_eq!(expect_resp(&json(&body), "rejected")["op"].as_str(), Some("unparseable"));
+
+    sd.shutdown();
+}
+
+/// Read from `s` until the buffer holds a CRLFCRLF; returns its index.
+/// Panics rather than hanging — a daemon that never answers must name
+/// itself in the failure, not stall the gate.
+fn read_head(s: &mut TcpStream, buf: &mut Vec<u8>, what: &str) -> usize {
+    loop {
+        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            return i;
+        }
+        let mut chunk = [0u8; 4096];
+        match s.read(&mut chunk) {
+            Ok(0) => panic!(
+                "{what}: the daemon closed without a complete head; got {:?}",
+                String::from_utf8_lossy(buf)
+            ),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(e) => panic!(
+                "{what}: nothing within {DEADLINE:?} ({e}); got {:?}",
+                String::from_utf8_lossy(buf)
+            ),
+        }
+    }
+}
+
+/// `Expect: 100-continue` is honored (wire.md §Transport): a client that
+/// withholds its body until invited gets the interim `100 Continue` BEFORE
+/// it sends a byte, then the ordinary answer. curl does this for large
+/// payloads; a daemon that ignored the header would sit waiting for a body
+/// the client is waiting to be asked for, and this read would time out.
+#[test]
+fn expect_100_continue_is_answered_before_the_body_is_sent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let frame = br#"{"op":"next_account_prefix","parent":"1"}"#;
+    let head = format!(
+        "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Expect: 100-continue\r\nContent-Length: {}\r\n\r\n",
+        frame.len()
+    );
+
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    s.set_read_timeout(Some(DEADLINE)).expect("read timeout");
+    s.set_write_timeout(Some(DEADLINE)).expect("write timeout");
+    // The head alone — the body is withheld exactly as curl withholds it.
+    s.write_all(head.as_bytes()).expect("write the request head");
+
+    let mut buf: Vec<u8> = Vec::new();
+    let end = read_head(&mut s, &mut buf, "the 100-continue invitation");
+    assert_eq!(
+        &buf[..end + 4],
+        b"HTTP/1.1 100 Continue\r\n\r\n",
+        "the interim answer must invite the body: {:?}",
+        String::from_utf8_lossy(&buf[..end + 4])
+    );
+    buf.drain(..end + 4);
+
+    // Invited, the body goes; the ordinary answer follows it.
+    s.write_all(frame).expect("write the withheld body");
+    s.shutdown(Shutdown::Write).expect("half-close");
+    s.read_to_end(&mut buf).expect("read the final response");
+    let (status, headers, body) = parse_response(&buf, "the answer behind 100-continue");
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(header(&headers, "Connection"), Some("close"));
+    assert_eq!(json(&body)["resp"].as_str(), Some("maybe_addr"));
+
+    sd.shutdown();
+}

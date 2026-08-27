@@ -784,6 +784,36 @@ fn delivery_runs_coalesce_and_split() {
     assert_eq!(items_of(&mixed), expect);
 }
 
+/// wire.md §Value encodings: a zero-width span is "rejected at parse" — so
+/// a frame carrying one is answered on the PARSE channel, with a detail
+/// naming the span, never admitted for a store to judge later under some
+/// other code. Every op shape that carries a span is checked, since each
+/// reaches `p_span` by its own path.
+#[test]
+fn a_zero_width_span_is_refused_at_parse() {
+    let codec = JsonCodec;
+    let frames: [&[u8]; 4] = [
+        br#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.0"}}]}"#,
+        br#"{"op":"show_origin","doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.0"}}"#,
+        br#"{"op":"image","d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.0"}]}"#,
+        br#"{"op":"emit","home":"1.0.1.0.1","from":"1.0.1.0.1","to":[],"ty":[{"start":"1.1","width":"0.0"}]}"#,
+    ];
+    for frame in frames {
+        // `ParseError` derives no Debug upstream, so unwrap by hand.
+        let err = match codec.parse(frame) {
+            Err(e) => e,
+            Ok(_) => {
+                panic!("a zero-width span must not parse: {}", String::from_utf8_lossy(frame))
+            }
+        };
+        let detail = err.detail.expect("a parse failure names what failed");
+        assert!(
+            detail.contains("ill-formed span"),
+            "the detail must localize the span, not something else: {detail}"
+        );
+    }
+}
+
 /// Never-silent applied to typos: unknown ops, unknown fields, missing
 /// fields, malformed addresses, and non-object frames all fail parse with a
 /// detail message. The make_link slot grammar is exactly two forms: the

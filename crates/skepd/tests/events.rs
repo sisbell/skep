@@ -126,3 +126,32 @@ fn shutdown_with_open_streams_is_bounded_and_closes_them() {
     a.expect_eof();
     b.expect_eof();
 }
+
+/// A stream with nothing to report is kept alive by the documented `:ka`
+/// comment, and still works afterwards. Nothing watched this — the helper's
+/// `expect_commit` SKIPS any block beginning with `:`, so a daemon emitting
+/// the wrong bytes, or none, looked exactly like one behaving. Deliberately
+/// slow: it waits out the daemon's 15 s cadence.
+#[test]
+fn a_silent_stream_is_kept_alive_by_the_documented_ka_comment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let mut s = Sse::connect(port);
+    let initial = s.expect_commit();
+    // Nothing commits from here, so the next thing on the wire is the
+    // keepalive or nothing at all.
+    s.expect_keepalive();
+
+    // Alive, not merely noisy: a commit still reaches the subscriber.
+    let _ = delegate_first_principal(port);
+    let after = s.expect_commit();
+    assert!(
+        after > initial,
+        "the stream still delivers commits past a keepalive: {after} > {initial}"
+    );
+
+    sd.shutdown();
+    s.expect_eof();
+}

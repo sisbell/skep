@@ -277,6 +277,36 @@ fn historical_reads_answer_every_earlier_state() {
     sd.shutdown();
 }
 
+/// wire.md §Reading history: an `id` in a historical frame is accepted and
+/// ignored. A client replaying a frame it stored from `/op` must get the
+/// ordinary answer — and, since reads are never memoized, the same `id` at
+/// a different position must answer THAT position, never replay the first.
+#[test]
+fn op_at_accepts_and_ignores_a_frame_id() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let h = seed(port);
+
+    let with_id = format!(
+        r#"{{"op":"retrieve_v","id":"stored-key-1","specs":[{{"doc":"{}","span":{{"start":"1.1","width":"0.5"}}}}]}}"#,
+        h.doc1
+    );
+    let (st_plain, plain) = op_at_raw(port, h.at_i1, &retrieve(&h.doc1, 5));
+    let (st_id, id_body) = op_at_raw(port, h.at_i1, &with_id);
+    assert_eq!((st_plain, st_id), (200, 200), "{}", String::from_utf8_lossy(&id_body));
+    assert_eq!(id_body, plain, "an id in a historical frame changes nothing about the answer");
+
+    let (st, later) = op_at_raw(port, h.at_del, &with_id);
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&later));
+    assert_ne!(
+        later, id_body,
+        "a read is never memoized, so an id cannot replay an earlier position's answer"
+    );
+
+    sd.shutdown();
+}
+
 #[test]
 fn history_answers_survive_restart() {
     let dir = tempfile::tempdir().expect("tempdir");

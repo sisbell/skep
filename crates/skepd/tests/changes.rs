@@ -279,6 +279,35 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     sd.shutdown();
 }
 
+/// The `limit` range is exactly `1..=4096` (wire.md §The change feed) —
+/// both ends of the comparison, in and out. The maximum itself must be
+/// ACCEPTED, which nothing watched: a `>` quietly become `>=` refuses the
+/// very page size the document invites a client to ask for.
+#[test]
+fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    seed_flow(port); // four committed writes: 2, 3, 8, 11
+
+    for limit in [1usize, 2, 4095, 4096] {
+        let (st, body) = changes_raw(port, &format!("since=0&limit={limit}"));
+        assert_eq!(st, 200, "limit={limit} is in range: {}", String::from_utf8_lossy(&body));
+        assert_eq!(
+            entry_ats(&json(&body)).len(),
+            limit.min(4),
+            "limit={limit} caps the page at min(limit, the four committed writes)"
+        );
+    }
+    for limit in ["0", "4097", "18446744073709551616"] {
+        let (st, body) = changes_raw(port, &format!("since=0&limit={limit}"));
+        assert_eq!(st, 400, "limit={limit} is out of range: refused, never clamped");
+        assert_eq!(json(&body)["error"].as_str(), Some("malformed_changes"), "limit={limit}");
+    }
+
+    sd.shutdown();
+}
+
 #[test]
 fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     let dir = tempfile::tempdir().expect("tempdir");

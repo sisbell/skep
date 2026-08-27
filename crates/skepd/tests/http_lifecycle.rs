@@ -352,6 +352,39 @@ fn idempotent_retry_replays_the_ack() {
     sd.shutdown();
 }
 
+/// wire.md §Sessions: the answer carries exactly the token and the echoed
+/// principal — the echo being the only place a client learns which
+/// principal its opaque token was bound to. Every helper in this suite
+/// reads `session` and drops the rest, so nothing watched it.
+#[test]
+fn session_open_echoes_the_principal_it_bound() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // 0 is the bootstrap principal; 4294967296 is past u32, where a
+    // narrowed echo would wrap rather than merely differ.
+    for principal in [0u64, 1, 7, 4_294_967_296] {
+        let body = format!(r#"{{"principal":{principal}}}"#);
+        let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+        assert_eq!(st, 200, "principal {principal}: {}", String::from_utf8_lossy(&resp));
+        let v = json(&resp);
+        assert_eq!(
+            v["principal"].as_u64(),
+            Some(principal),
+            "the answer echoes the principal it bound: {v}"
+        );
+        assert!(v["session"].is_string(), "and the opaque token beside it: {v}");
+        assert_eq!(
+            v.as_object().expect("a JSON object").len(),
+            2,
+            "exactly the two documented fields, nothing else: {v}"
+        );
+    }
+
+    sd.shutdown();
+}
+
 #[test]
 fn guest_requests_read_but_cannot_write() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -392,6 +425,10 @@ fn unparseable_frames_get_the_unparseable_rejection() {
         br#"{"op":"frobnicate"}"#,
         br#"{"op":"fork","stray":true}"#,
         br#"{"op":"version","d_src":"not-an-address"}"#,
+        // A zero-width span is rejected at PARSE (wire.md §Value
+        // encodings), so it reaches the client on the operation channel as
+        // `unparseable` — never as a store's verdict about the world.
+        br#"{"op":"show_origin","doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.0"}}"#,
     ] {
         let (st, body) = http(port, "POST", "/op", None, frame);
         assert_eq!(st, 200, "unparseable frames still get a marshaled response");

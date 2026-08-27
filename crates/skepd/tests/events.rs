@@ -6,9 +6,17 @@
 
 mod common;
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 use common::*;
+
+/// The daemon's live-stream budget (its `MAX_SUBSCRIBERS`), restated here
+/// on purpose — the same discipline `http_lifecycle.rs` applies to the body
+/// cap. A restatement is what makes the constant moving a visible event
+/// rather than a test that quietly exercises less than it says.
+const SUBSCRIBER_CAP: usize = 64;
 
 /// Bootstrap one delegated principal: π₀ session → next prefix under node
 /// [1] → delegate → (session, account). Two ops, one commit (the delegate).
@@ -154,4 +162,84 @@ fn a_silent_stream_is_kept_alive_by_the_documented_ka_comment() {
 
     sd.shutdown();
     s.expect_eof();
+}
+
+/// One raw `GET /events` connection, returning the first bytes the daemon
+/// sends. A served stream opens with its `200` head; a refused one is a
+/// clean close with nothing at all, which is the same end a subscriber
+/// meets at shutdown and the one a reconnecting client already handles.
+fn raw_events(port: u16) -> (TcpStream, Vec<u8>) {
+    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect /events");
+    s.set_read_timeout(Some(Duration::from_secs(10))).expect("read timeout");
+    s.write_all(b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").expect("write request");
+    let mut head = [0u8; 256];
+    // A read error counts as a refusal: a reset means the daemon dropped
+    // the socket, which is the same answer as a clean close with no head.
+    let n: usize = s.read(&mut head).unwrap_or_default();
+    (s, head[..n].to_vec())
+}
+
+/// Live streams are budgeted, and the surplus is refused rather than
+/// spawned. The assertion that matters most is the last one: the spawn a
+/// stream needs sits OUTSIDE the handler's `catch_unwind`, so a worker that
+/// died refusing one would leave the daemon bound, up, and permanently
+/// unable to answer — a failure `/health` is the only witness to.
+#[test]
+fn live_streams_are_budgeted_and_the_surplus_is_refused_cleanly() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let held: Vec<(TcpStream, Vec<u8>)> = (0..SUBSCRIBER_CAP).map(|_| raw_events(port)).collect();
+    for (i, (_, head)) in held.iter().enumerate() {
+        assert!(
+            head.starts_with(b"HTTP/1.1 200 "),
+            "stream {i} of the budget must be served: {:?}",
+            String::from_utf8_lossy(head)
+        );
+    }
+
+    // One past the budget: refused with a clean close, no stream head.
+    let (_surplus, head) = raw_events(port);
+    assert!(
+        head.is_empty(),
+        "a stream past the budget is refused, not served: {:?}",
+        String::from_utf8_lossy(&head)
+    );
+
+    // The refusal cost one stream and nothing else: the op surface still
+    // answers, which is what a retired worker would break.
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "the daemon survives a refused stream");
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+    let v = op(port, None, r#"{"op":"next_account_prefix","parent":"1"}"#);
+    expect_resp(&v, "maybe_addr");
+
+    // A departed subscriber's slot returns to the budget by the mechanism
+    // the daemon documents rather than at the moment the client walks away:
+    // a parked subscriber is woken by a commit and learns its peer is gone
+    // from the failed write. ONE commit does not settle it — a write to a
+    // peer that closed with nothing left unread still succeeds, and only the
+    // reset behind it fails the write after — so the loop commits as it
+    // polls, driving that mechanism instead of racing the kernel for which
+    // of the two closes each client happened to make. `register_node` is
+    // the commit: it needs a bound session and nothing else, so it can be
+    // repeated with a fresh node address as many times as the poll needs.
+    drop(held);
+    let boot = open_session(port, 0);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut node = 1_000u64;
+    let mut reclaimed = Vec::new();
+    while reclaimed.is_empty() && Instant::now() < deadline {
+        node += 1;
+        let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"1.{node}"}}"#));
+        assert!(v["at"].is_u64(), "the poll's commit must actually commit: {v}");
+        reclaimed = raw_events(port).1;
+    }
+    assert!(
+        reclaimed.starts_with(b"HTTP/1.1 200 "),
+        "slots freed by departed subscribers must return to the budget"
+    );
+
+    sd.shutdown();
 }

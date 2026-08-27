@@ -90,12 +90,12 @@
 //! is the safe state; the feature's note in `Cargo.toml` carries the
 //! ruling. A build without the feature has no `/` route (404).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -130,6 +130,23 @@ const RETAINED_CHECKPOINTS: usize = 2;
 /// dead subscriber by the failed write within one interval.
 const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
 
+/// Live `GET /events` streams served at once. Each costs one OS thread and
+/// holds one descriptor for as long as its client keeps reading, so without
+/// a bound a caller opening streams consumes both until one runs out — and
+/// the two run out differently. At the descriptor wall `accept` degrades
+/// gracefully (the worker loop pauses and retries); a refused thread does
+/// not degrade at all, which is why the spawn below is fallible and why
+/// this cap exists above it.
+///
+/// The number reserves the rest of the process's descriptors for the work
+/// the daemon exists to do: against the 256 soft limit still common on the
+/// platforms this ships to, 64 streams leave the listener and the op pool
+/// three quarters of the table. It is an order of magnitude above what a
+/// browser will hold against one origin (~6 connections) and above any
+/// plausible fleet of local subscribers, so a client reaches it only by
+/// trying to.
+const MAX_SUBSCRIBERS: usize = 64;
+
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -149,6 +166,14 @@ const HEAD_MAX: usize = 64 * 1024;
 
 /// Request-body cap, enforced on the declared `Content-Length` before any
 /// body byte is read or allocated. Pre-media value — wire frames are small.
+///
+/// This bounds the REQUEST, not the allocation it commands, and the ratio
+/// between them is what anyone raising it must price: the per-byte write
+/// discipline mints one `Val` per input byte, each its own allocation, so
+/// an `insert` body buys roughly forty times its size in live heap. The
+/// codec's own `MAX_INSERT_VALUES` is what bounds that multiplier; raising
+/// this number alone raises the amplified cost with it.
+///
 /// REVISIT at the media round: blob upload will raise this for its route
 /// only (a route-scoped cap, not a bigger global one).
 const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
@@ -444,6 +469,22 @@ fn known_path(path: &str) -> bool {
         || (cfg!(feature = "client") && path == "/")
 }
 
+/// Live token bindings retained, oldest evicted first. `POST /session` is
+/// unauthenticated and costs a client ~90 wire bytes, so an unbounded map
+/// would let any local process (or any page the browser loads) retain
+/// memory here and in M10 without limit and without ever writing —
+/// unlike the CPU costs elsewhere on this surface, retention does not
+/// clear when the caller stops.
+///
+/// Eviction is inside the documented session model rather than a
+/// narrowing of it: wire.md already says a token may simply miss and
+/// resolve to the guest, which is what an evicted one now does. The number
+/// is M10's own idempotency capacity (1024), which is the commensurate
+/// scale because [`Operation::close_session`] purges exactly one session's
+/// idempotency entries — the two ephemeral tables are sized by the same
+/// argument and are retired together.
+const MAX_LIVE_SESSIONS: usize = 1024;
+
 /// Identity as local trust: the token ↔ `SessionId` binding, and the one
 /// policy over it. Clients name their own principal at `POST /session` and
 /// get an opaque token back; a `SessionId` never rides the wire (M10's
@@ -451,8 +492,15 @@ fn known_path(path: &str) -> bool {
 /// from a previous run misses the map, and a miss is not an error: it
 /// resolves to the guest, under which M10 itself serves reads and rejects
 /// writes `Unauthenticated`, so the daemon holds no auth policy of its own.
+///
+/// The binding table is bounded at [`MAX_LIVE_SESSIONS`], so retention is
+/// a function of the daemon's own budget rather than of how many sessions
+/// a caller chose to open. Retiring a binding is this transport's to do —
+/// nothing else in M10 retires one — and [`Sessions::bind`] hands back
+/// what it evicted so `POST /session` can discharge that obligation
+/// against M10 as well as against this map.
 struct Sessions {
-    map: Mutex<HashMap<String, SessionId>>,
+    map: Mutex<Bindings>,
     /// A session opened and immediately closed at startup: permanently
     /// unbound, never reissued (M10 §6) — what an absent or unknown token
     /// resolves to.
@@ -460,32 +508,65 @@ struct Sessions {
     /// Per-uptime random token prefix: a stale token from a previous run
     /// misses instead of silently aliasing onto a fresh session.
     seed: u64,
-    counter: AtomicU64,
+}
+
+/// The bounded token table: the map, plus the mint order eviction reads.
+/// One value under one lock, so the queue cannot describe a token the map
+/// has lost or vice versa. Insertion order and not recency — a token's
+/// worth to a client does not grow with use, and mint order needs no
+/// bookkeeping on the read path, which is every request.
+#[derive(Default)]
+struct Bindings {
+    map: HashMap<String, SessionId>,
+    order: VecDeque<String>,
 }
 
 impl Sessions {
     fn new(guest: SessionId) -> Sessions {
-        let seed = {
-            use std::collections::hash_map::RandomState;
-            use std::hash::{BuildHasher, Hasher};
-            RandomState::new().build_hasher().finish()
-        };
-        Sessions { map: Mutex::new(HashMap::new()), guest, seed, counter: AtomicU64::new(1) }
+        Sessions { map: Mutex::new(Bindings::default()), guest, seed: fresh_u64() }
     }
 
-    /// Mint the opaque token naming `sid`, and remember the binding.
-    fn bind(&self, sid: SessionId) -> String {
-        let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        let token = format!("{:016x}.{:x}", self.seed, n);
-        self.map.lock().insert(token.clone(), sid);
-        token
+    /// Mint the opaque token naming `sid`, remember the binding, and hand
+    /// back every session the insertion evicted — which the caller owes to
+    /// [`Operation::close_session`], since a binding this map has dropped
+    /// is one nothing can reach again.
+    ///
+    /// The suffix is drawn fresh per token rather than counted, so no
+    /// issued token names any other: a counter would let one client that
+    /// holds a token enumerate every live token of the same uptime, and
+    /// the day `POST /session` gains a credential that enumeration is
+    /// session hijacking. Today it is narrower — a guessed token replays
+    /// another session's cached acks — and closing it now costs one draw
+    /// per session.
+    fn bind(&self, sid: SessionId) -> (String, Vec<SessionId>) {
+        let token = format!("{:016x}.{:016x}", self.seed, fresh_u64());
+        let mut g = self.map.lock();
+        g.map.insert(token.clone(), sid);
+        g.order.push_back(token.clone());
+        let mut evicted = Vec::new();
+        while g.order.len() > MAX_LIVE_SESSIONS {
+            if let Some(old) = g.order.pop_front() {
+                if let Some(sid) = g.map.remove(&old) {
+                    evicted.push(sid);
+                }
+            }
+        }
+        (token, evicted)
     }
 
     /// The session a request runs under: its token's, or the guest for a
-    /// token that is absent or unknown.
+    /// token that is absent, unknown, or evicted.
     fn resolve(&self, token: Option<&str>) -> SessionId {
-        token.and_then(|t| self.map.lock().get(t).copied()).unwrap_or(self.guest)
+        token.and_then(|t| self.map.lock().map.get(t).copied()).unwrap_or(self.guest)
     }
+}
+
+/// One unpredictable `u64` from the standard library's own entropy — the
+/// source both halves of a token draw from, and no new dependency.
+fn fresh_u64() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    RandomState::new().build_hasher().finish()
 }
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
@@ -633,7 +714,13 @@ impl Daemon {
             }
         };
         let sid = self.febe.open_session(PrincipalId(principal));
-        let token = self.sessions.bind(sid);
+        let (token, evicted) = self.sessions.bind(sid);
+        // The transport obligation M10 names: nothing else retires a
+        // binding, and an evicted token can never be presented again, so
+        // its session and its idempotency entries go with it.
+        for dead in evicted {
+            self.febe.close_session(dead);
+        }
         Reply::json(
             200,
             obj(vec![
@@ -1340,7 +1427,24 @@ fn serve_connection(
             // Reap finished subscriber threads so the registry tracks live
             // streams, not history.
             subs.retain(|h| !h.is_finished());
-            subs.push(thread::spawn(move || serve_events(&daemon, stream)));
+            if subs.len() >= MAX_SUBSCRIBERS {
+                // At the budget: drop the socket. The client sees a clean
+                // close before any stream head — the same end a subscriber
+                // meets at shutdown, and the one a reconnecting client
+                // already handles.
+                return;
+            }
+            // Spawn FALLIBLY. `thread::spawn` panics when the OS refuses a
+            // thread, and this call sits outside the handler's
+            // `catch_unwind` — a panic here would unwind the worker's accept
+            // loop and retire the worker for the life of the process, so a
+            // transient resource condition would become a permanent, silent
+            // loss of capacity with the listener still bound. A refusal must
+            // cost one stream, never a worker; the failed spawn drops the
+            // closure and with it the socket, which is the clean close above.
+            if let Ok(h) = thread::Builder::new().spawn(move || serve_events(&daemon, stream)) {
+                subs.push(h);
+            }
         }
     }
 }
@@ -1482,27 +1586,34 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 /// `Connection: close` (one request per connection). A bodiless reply
 /// carries no content headers (RFC 7230's 204).
 fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
-    let mut out = Vec::with_capacity(reply.body().len() + 256);
-    out.extend_from_slice(
+    let mut head = Vec::with_capacity(256);
+    head.extend_from_slice(
         format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
     );
-    out.extend_from_slice(b"Access-Control-Allow-Origin: *\r\n");
+    head.extend_from_slice(b"Access-Control-Allow-Origin: *\r\n");
     for (name, value) in &reply.headers {
-        out.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+        head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
     }
     // The body and the headers describing it come from one value, so the
     // two cannot disagree about whether there is one.
     if let Some(c) = &reply.content {
-        out.extend_from_slice(
+        head.extend_from_slice(
             format!("Content-Type: {}\r\nContent-Length: {}\r\n", c.content_type, c.bytes.len())
                 .as_bytes(),
         );
-        out.extend_from_slice(b"Connection: close\r\n\r\n");
-        out.extend_from_slice(&c.bytes);
+        head.extend_from_slice(b"Connection: close\r\n\r\n");
+        // The body is written FROM the reply rather than copied into this
+        // buffer first. The largest answer this daemon serves is a whole
+        // world dump, and assembling one buffer would hold two copies of
+        // it at once — per in-flight request, on a route that needs no
+        // session. `set_nodelay` is on, so the cost is the second write
+        // call and nothing else.
+        stream.write_all(&head)?;
+        stream.write_all(&c.bytes)
     } else {
-        out.extend_from_slice(b"Connection: close\r\n\r\n");
+        head.extend_from_slice(b"Connection: close\r\n\r\n");
+        stream.write_all(&head)
     }
-    stream.write_all(&out)
 }
 
 /// The subset's reason phrases — informational only; clients dispatch on
@@ -1641,10 +1752,81 @@ mod tests {
             "an unknown token is the guest, not an error"
         );
         let sid = daemon.febe.open_session(PrincipalId(7));
-        let token = daemon.sessions.bind(sid);
+        let (token, evicted) = daemon.sessions.bind(sid);
+        assert!(evicted.is_empty(), "an unfilled table evicts nothing");
         assert_eq!(daemon.sessions.resolve(Some(&token)), sid, "a bound token is its session");
-        let other = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(8)));
+        let (other, _) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(8)));
         assert_ne!(token, other, "each binding gets its own token");
+    }
+
+    /// The binding table is bounded, and what falls out of it is retired
+    /// rather than merely forgotten: `POST /session` is unauthenticated, so
+    /// an unbounded map is memory any caller can retain — here and in M10 —
+    /// without ever writing. The evicted token resolves to the guest, which
+    /// is a state wire.md already documents (an unknown token is not an
+    /// error), so the bound narrows retention without narrowing the wire.
+    #[test]
+    fn the_session_table_is_bounded_and_evicts_oldest_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let guest = daemon.sessions.resolve(None);
+
+        let mut tokens = Vec::new();
+        for _ in 0..MAX_LIVE_SESSIONS {
+            let (t, evicted) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(1)));
+            assert!(evicted.is_empty(), "nothing is evicted up to the bound");
+            tokens.push(t);
+        }
+        assert_eq!(daemon.sessions.map.lock().map.len(), MAX_LIVE_SESSIONS);
+        assert_ne!(daemon.sessions.resolve(Some(&tokens[0])), guest, "all still live");
+
+        // One past the bound evicts exactly the oldest, and hands it back
+        // so the caller can retire it in M10 too.
+        let (newest, evicted) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(2)));
+        assert_eq!(evicted.len(), 1, "one in, one out");
+        assert_eq!(
+            daemon.sessions.resolve(Some(&tokens[0])),
+            guest,
+            "the oldest token now resolves to the guest, as an unknown token does"
+        );
+        assert_ne!(
+            daemon.sessions.resolve(Some(&tokens[1])),
+            guest,
+            "and only the oldest went"
+        );
+        assert_ne!(daemon.sessions.resolve(Some(&newest)), guest, "the newest is live");
+        assert_eq!(
+            daemon.sessions.map.lock().map.len(),
+            MAX_LIVE_SESSIONS,
+            "the table stays at its bound however many sessions are opened"
+        );
+    }
+
+    /// A token names no other token: the suffix is drawn fresh per binding,
+    /// not counted, so holding one gives a client no way to enumerate the
+    /// rest. Nothing on the wire reveals the draw, which is what keeps the
+    /// property true when `POST /session` gains a credential.
+    #[test]
+    fn one_token_does_not_name_the_next() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let mint = || daemon.sessions.bind(daemon.febe.open_session(PrincipalId(1))).0;
+        let first = mint();
+        let rest: Vec<String> = (0..64).map(|_| mint()).collect();
+        let (prefix, suffix) =
+            first.split_once('.').expect("a token is <uptime prefix>.<per-token draw>");
+        assert!(
+            rest.iter().all(|t| t.starts_with(&format!("{prefix}."))),
+            "the uptime prefix is shared, so a stale token still misses"
+        );
+        let next = u64::from_str_radix(suffix, 16).expect("hex suffix").wrapping_add(1);
+        let guessed = format!("{prefix}.{next:016x}");
+        assert!(
+            !rest.contains(&guessed),
+            "the token after one you hold is not the one adjacent to it"
+        );
+        let uniq: std::collections::HashSet<&String> = rest.iter().collect();
+        assert_eq!(uniq.len(), rest.len(), "and no two bindings collide");
     }
 
     /// The partition is one table's two faces: reads are exactly the ops

@@ -27,6 +27,15 @@
 //!   to the file, so the walk runs once per uncovered region, not once per
 //!   open.
 //!
+//! The file — and the map replayed from it — is bounded by the journal's
+//! own retention, not by the world's age. Positions the journal has
+//! reclaimed are unanswerable across the whole history surface, so at open
+//! the sidecar drops its entries below that floor and rewrites itself
+//! around them (see [`Sidecar::open`]). Without that the feed's memory
+//! would be the only structure in the daemon that grows with total commits
+//! ever made rather than with commits still reachable, and it is fully
+//! resident.
+//!
 //! The sidecar is written under the daemon's write-serialization lock, so
 //! file order is position order and recorded times are monotone
 //! non-decreasing in position (wall-clock reads are additionally clamped
@@ -159,6 +168,22 @@ impl Sidecar {
     /// `CHECKPOINT_EVERY_COMMITS × RETAINED_CHECKPOINTS` commits. The
     /// walk's findings are appended here, so a covered region is walked
     /// once ever rather than once per open.
+    ///
+    /// COMPACTION runs at the other end, and is what bounds the file and
+    /// the resident map: positions the journal has reclaimed are refused by
+    /// `/op-at` and `/dump?at` alike, so an entry naming one describes a
+    /// commit no client can reach by any route. Those entries are dropped
+    /// and the file rewritten around them, leaving retention exactly where
+    /// wire.md puts it — the feed's memory is the sidecar plus what the
+    /// journal can still reconstruct, and below that the same `410
+    /// history_reclaimed` discipline `/op-at` answers with.
+    ///
+    /// The floor is learned by probing position 0, which costs nothing:
+    /// genesis is its own base, so a healthy store folds no journal to
+    /// answer, and a reclaimed one refuses from the checkpoint listing
+    /// alone. The rewrite goes to a temp file and is renamed over the
+    /// original, so a crash mid-compaction leaves the whole old file or
+    /// the whole new one — never a half of either.
     pub fn open(dir: &Path, engine: &Engine) -> io::Result<Sidecar> {
         let path = dir.join(SIDECAR_FILE);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
@@ -198,6 +223,22 @@ impl Sidecar {
                 min_since = min_since.max(s);
                 file.write_all(&min_since_line(s))?;
             }
+        }
+        // Compaction: everything the journal has reclaimed leaves the feed
+        // with it. The probe answers the oldest position still answerable,
+        // so the smallest admissible `since` is the fence just under it —
+        // asking `since = F - 1` still yields the whole surviving feed. A
+        // reclaimed journal that can name no floor at all leaves this at 0
+        // and prunes nothing: the sidecar's own testimony is the half of
+        // the feed's memory that does not depend on the journal, and
+        // discarding it over a floor nobody can locate would lose the only
+        // record of those commits that still exists.
+        if let Some(f) = reclaimed_below(engine) {
+            min_since = min_since.max(f.saturating_sub(1));
+        }
+        if map.keys().next().is_some_and(|&oldest| oldest <= min_since) {
+            map = map.split_off(&min_since.saturating_add(1));
+            file = rewrite(dir, &map, min_since)?;
         }
         let last_time = map.values().filter_map(Meta::time).max().unwrap_or(0);
         Ok(Sidecar {
@@ -258,6 +299,50 @@ impl Sidecar {
     }
 }
 
+/// The oldest position the journal can still answer, or `None` when it can
+/// still answer genesis (nothing has been reclaimed) — the bound the feed's
+/// retention follows.
+///
+/// Asked by probing position 0 through the same public replay everything
+/// else here uses. The probe is free either way: genesis IS the base a
+/// position-0 question selects, so a healthy store folds no journal to
+/// answer it, and a reclaimed store refuses from the checkpoint listing
+/// before touching a segment. Every other refusal — corrupt, I/O,
+/// unjournaled — reports no floor, so the feed keeps what it has rather
+/// than discarding entries over a fault that may be transient.
+fn reclaimed_below(engine: &Engine) -> Option<u64> {
+    match engine.world_at(Seq(0)) {
+        Err(HistoryError::Reclaimed { floor }) => Some(floor.map(|f| f.0).unwrap_or(0)),
+        _ => None,
+    }
+}
+
+/// Rewrite `commits.log` as the surviving entries behind one `min_since`
+/// record, and hand back the reopened append handle.
+///
+/// Written to a temp file and renamed over the original, which is what
+/// makes compaction crash-honest in the same sense the rest of this file
+/// is: a reader only ever sees the whole old file or the whole new one.
+/// The alternative — truncating in place — has a window in which the file
+/// says the feed remembers nothing, and a crash there would cost the
+/// surviving metadata for no reason, since it is exactly the metadata the
+/// journal can no longer reconstruct.
+fn rewrite(dir: &Path, map: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<File> {
+    let path = dir.join(SIDECAR_FILE);
+    let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
+    let mut out = Vec::new();
+    out.extend_from_slice(&min_since_line(min_since));
+    for (at, meta) in map {
+        out.extend_from_slice(&entry_line(*at, meta));
+    }
+    let mut f = File::create(&tmp)?;
+    f.write_all(&out)?;
+    f.sync_all()?;
+    drop(f);
+    std::fs::rename(&tmp, &path)?;
+    OpenOptions::new().create(true).read(true).append(true).open(&path)
+}
+
 /// Enumerate the committed boundaries in `(low, head]`, newest first, via
 /// the engine's public bounded replay: `head` is a boundary by definition;
 /// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
@@ -268,10 +353,14 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
     let mut found = vec![head];
     let mut b = head;
     let mut stop = None;
-    while b - 1 > low {
-        match engine.world_at(Seq(b - 1)) {
+    // The descent's own guard: `probe` exists only when there is a
+    // position below `b` and it is still above `low`, so the step down
+    // cannot leave `u64` — a premise this loop holds rather than one it
+    // inherits from a caller's range check.
+    while let Some(probe) = b.checked_sub(1).filter(|p| *p > low) {
+        match engine.world_at(Seq(probe)) {
             Ok(_) => {
-                b -= 1;
+                b = probe;
                 found.push(b);
             }
             Err(HistoryError::NotABoundary { nearest }) => {
@@ -282,7 +371,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
                 found.push(b);
             }
             Err(_) => {
-                stop = Some(b - 1);
+                stop = Some(probe);
                 break;
             }
         }
@@ -326,17 +415,25 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
         return Some(Rec::MinSince(s.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;
-    let present = |k: &str| !matches!(m.get(k), None | Some(Value::Null));
-    let meta = match (present("op"), present("docs"), present("time")) {
-        (false, false, false) => Meta::Bare,
-        (true, true, true) => Meta::Recorded {
-            op: m["op"].as_str()?.to_string(),
-            docs: m["docs"]
+    // Each field is read THROUGH the same lookup that decides it is
+    // present — `serde_json::Map` panics on a missing key, and an
+    // indexing read here would rest on a separate presence test agreeing
+    // with it about what "present" means. `?` is the torn verdict a
+    // half-written line is owed, so the two cannot come apart.
+    let field = |k: &str| match m.get(k) {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v),
+    };
+    let meta = match (field("op"), field("docs"), field("time")) {
+        (None, None, None) => Meta::Bare,
+        (Some(op), Some(docs), Some(time)) => Meta::Recorded {
+            op: op.as_str()?.to_string(),
+            docs: docs
                 .as_array()?
                 .iter()
                 .map(|d| d.as_str().map(str::to_string))
                 .collect::<Option<Vec<String>>>()?,
-            time: m["time"].as_u64()?,
+            time: time.as_u64()?,
         },
         _ => return None,
     };

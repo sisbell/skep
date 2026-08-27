@@ -51,9 +51,88 @@ use skep_febe::{
     Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
-use skep_links::{Endset, Link, View};
+use skep_links::{Endset, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{CorrPair, DeliveryItem, Operand, Region, Spec, SpecFault};
+
+/// The most elements one wire array may carry, applied at [`p_list`] — so
+/// every attacker-sized list on the request surface (span regions, spec and
+/// region lists, address lists, v-spec lists, `rearrange` cuts, and the
+/// query endsets of the ftt family) meets it at one door.
+///
+/// NOT a round number: it is M7's published per-slot budget
+/// ([`MAX_SLOT_SPANS`]), whose argument transfers verbatim. That argument
+/// is that a span's LIVE cost is not bounded by the wire bytes that carry
+/// it — an address is ~19 wire bytes and the span it becomes is two
+/// multi-component `BigUint` tumblers, order half a kilobyte — so a list
+/// bounded only by the request body names hundreds of thousands of spans.
+/// A QUERY endset is built the same way and then costs more, not less: M8
+/// answers the ftt family by scanning the link store and testing every
+/// query span against every slot span of every link, so a query's span
+/// count multiplies the whole store rather than one stored value.
+///
+/// Reading the two budgets as one number is the point: a query slot larger
+/// than the largest slot that can be STORED cannot discriminate anything a
+/// smaller one does not, so the cap costs no expressible question. The
+/// refusal rides the ordinary parse channel — an over-cap frame is
+/// `unparseable`/`malformed` with the count named, exactly as any other
+/// malformed frame is, rather than a new wire vocabulary.
+const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
+
+/// The most values one `insert` frame may mint. Denominated in VALUES and
+/// not in wire bytes, because the per-byte write discipline mints one
+/// [`Val`] per input byte: each is its own `Arc<[u8]>` allocation — order
+/// 32 live bytes after allocator rounding, plus 16 for the fat pointer the
+/// vector holds — so the daemon's 8 MiB body cap bounds the request at
+/// roughly one part in forty of the allocation it commands. That ratio, not
+/// the body size, is what this cap exists to bound.
+///
+/// The number is M2's transaction budget divided by what one value costs
+/// inside it. An `insert` of N values commits 2N + 1 records (a mint and a
+/// content write per value, plus one placement), and a content record
+/// carries a multi-component address, so a value's encoded share of the
+/// transaction runs to order a hundred bytes: [`skep_kernel::MAX_TXN_BYTES`]
+/// (64 MiB) therefore admits a few hundred thousand values and no more.
+/// Rounding down to a power of two leaves the cap comfortably inside a
+/// budget M2 would enforce anyway — the point being WHEN it is enforced.
+/// Without this the refusal arrives from M2 after the codec has allocated
+/// and M5 has staged; with it, a frame that cannot commit is refused
+/// before either.
+const MAX_INSERT_VALUES: usize = 1 << 18;
+
+/// The most decimal digits one tumbler component may carry on the wire.
+/// M1 leaves component magnitude unbounded (T0(a)) and this does not narrow
+/// that: the carrier stays a `BigUint`, and M3 — which owns the one door by
+/// which caller-chosen component values enter the permanent name space —
+/// records that a magnitude bound, should a deployment want one, "belongs
+/// where the codec parses a tumbler". This is that place.
+///
+/// The budget is the read path's, not storage's. A stored magnitude costs
+/// once; a magnitude in a QUERY span is cloned on every comparison M8's
+/// scan performs — `classify_spans` derives both operands' endpoints, which
+/// copies the start tumbler and computes its reach — so one span carrying a
+/// D-digit component costs order D bytes of allocator traffic per link in
+/// the store, per query span. That is the amplification a digit cap closes.
+///
+/// 4096 digits is far above anything the substrate can mint: every ordinal
+/// M3 allocates is bounded by the commit count, and every address under a
+/// node inherits that node's magnitudes, so a component naming a real
+/// entity is a handful of digits. It is chosen to leave the T0(a) carrier
+/// visibly unbounded in kind while removing the per-comparison multiplier —
+/// a component that would take 10^4000 commits to reach cannot be one a
+/// caller needs to name.
+const MAX_NAT_DIGITS: usize = 4096;
+
+/// The most components one tumbler may carry on the wire. The same budget
+/// as [`MAX_NAT_DIGITS`] on the other axis: a tumbler's components are
+/// cloned together on every comparison, so depth multiplies exactly as
+/// magnitude does. M3 caps a registered node at 32 components and every
+/// other address is a registered parent extended by separators, a subspace
+/// identifier and an ordinal — four fields at most — so a deep-node
+/// element address is under forty components. 256 leaves that room over
+/// several times without admitting a tumbler whose depth is the request's
+/// only real content.
+const MAX_TUMBLER_COMPONENTS: usize = 256;
 
 /// The daemon's JSON codec — stateless; one instance serves every client.
 #[derive(Clone, Copy, Debug, Default)]
@@ -403,15 +482,34 @@ fn p_nat(v: &Value) -> PResult<Nat> {
     }
 }
 
+/// One decimal component. The [`MAX_NAT_DIGITS`] refusal comes BEFORE the
+/// radix conversion, so a hostile digit run is never converted — the
+/// conversion is the expensive half, and refusing after it would pay
+/// exactly the cost the cap exists to avoid.
 fn p_nat_str(s: &str) -> PResult<Nat> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(PErr(format!("'{s}' is not a decimal natural")));
     }
+    if s.len() > MAX_NAT_DIGITS {
+        return Err(PErr(format!(
+            "component has {} digits, past the {MAX_NAT_DIGITS}-digit wire cap",
+            s.len()
+        )));
+    }
     Nat::from_str(s).map_err(|e| PErr(format!("'{s}': {e}")))
 }
 
+/// A dotted-decimal tumbler, depth-capped at [`MAX_TUMBLER_COMPONENTS`]
+/// before any component is converted.
 fn p_tum(v: &Value) -> PResult<Tumbler> {
     let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
+    let depth = s.split('.').count();
+    if depth > MAX_TUMBLER_COMPONENTS {
+        return Err(PErr(format!(
+            "tumbler has {depth} components, past the \
+             {MAX_TUMBLER_COMPONENTS}-component wire cap"
+        )));
+    }
     let comps = s.split('.').map(p_nat_str).collect::<PResult<Vec<Nat>>>()?;
     Tumbler::new(comps).map_err(|e| PErr(format!("'{s}': {e}")))
 }
@@ -447,8 +545,17 @@ fn sub<T>(m: &Map<String, Value>, k: &'static str, f: impl Fn(&Value) -> PResult
     f(need(m, k)?).map_err(|e| PErr(format!("{k}: {e}")))
 }
 
+/// Every list on the request surface, and THE place [`MAX_WIRE_LIST`] is
+/// enforced: the elements are counted before any is parsed, so an
+/// over-length array is refused without building what it asked for.
 fn p_list<T>(v: &Value, f: impl Fn(&Value) -> PResult<T>) -> PResult<Vec<T>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
+    if arr.len() > MAX_WIRE_LIST {
+        return Err(PErr(format!(
+            "array has {} elements, past the {MAX_WIRE_LIST}-element wire cap",
+            arr.len()
+        )));
+    }
     arr.iter()
         .enumerate()
         .map(|(i, x)| f(x).map_err(|e| PErr(format!("[{i}]: {e}"))))
@@ -500,11 +607,23 @@ fn p_region(v: &Value) -> PResult<Region> {
 /// The `values` array of `insert`: each element is one of the four write
 /// forms (wire.md §Content values), contributing zero or more values that
 /// concatenate in order.
+///
+/// THE place [`MAX_INSERT_VALUES`] is enforced, and it is checked on the
+/// running total rather than per element, because an element's own length
+/// bounds nothing: one per-byte string mints one value per byte, so the
+/// array's element count and the values it commands are different numbers.
+/// The total is tested after each element, so an over-budget array stops
+/// accumulating instead of being built whole and then measured.
 fn p_val_forms(v: &Value) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
     for (i, x) in arr.iter().enumerate() {
         p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {e}")))?;
+        if out.len() > MAX_INSERT_VALUES {
+            return Err(PErr(format!(
+                "[{i}]: values mint more than the {MAX_INSERT_VALUES}-value cap on one insert"
+            )));
+        }
     }
     Ok(out)
 }
@@ -1371,7 +1490,9 @@ mod tests {
     use super::*;
 
     /// Leaf strictness: the dotted-decimal grammar admits exactly nonempty
-    /// runs of digits joined by single dots; magnitude is unbounded.
+    /// runs of digits joined by single dots. Magnitude is unbounded in kind
+    /// — the carrier is a `BigUint` and a beyond-u64 component round-trips —
+    /// with only the wire ENCODING capped (see [`tumbler_wire_caps`]).
     #[test]
     fn tumbler_parse_edges() {
         let ok = p_tum(&Value::String("1.0.1".into())).map(|t| t.to_string());
@@ -1383,6 +1504,95 @@ mod tests {
         for bad in ["", ".", "1..2", "1.", ".1", "1.-2", "1.+2", "1.a", "1 .2"] {
             assert!(p_tum(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
         }
+    }
+
+    /// Both ends of both tumbler wire caps. A component's digit run and a
+    /// tumbler's depth each multiply against the whole link store on the
+    /// query path — M8 clones both operands' endpoints per overlap test —
+    /// so each is capped at the encoding, and each cap is checked at the
+    /// value it admits as well as the one past it: a `>` that became a `>=`
+    /// would refuse a tumbler the substrate can legitimately carry.
+    #[test]
+    fn tumbler_wire_caps() {
+        let tum = |s: String| p_tum(&Value::String(s));
+        // Magnitude: the longest admitted digit run parses and renders back
+        // whole; one digit more is refused with the count named.
+        let at_cap = "9".repeat(MAX_NAT_DIGITS);
+        let t = tum(at_cap.clone()).expect("a component at the digit cap parses");
+        assert_eq!(t.to_string(), at_cap, "and survives the round trip");
+        let over = "9".repeat(MAX_NAT_DIGITS + 1);
+        let e = tum(over).expect_err("one digit past the cap must not parse");
+        assert!(e.0.contains("digit"), "the refusal names the digit cap: {e}");
+        // The cap is per COMPONENT, so a tumbler of admitted components is
+        // admitted whatever its total length.
+        assert!(tum(format!("{at_cap}.{at_cap}")).is_ok(), "the cap is per component");
+
+        // Depth: the same treatment on the other axis.
+        let deep = vec!["1"; MAX_TUMBLER_COMPONENTS].join(".");
+        assert_eq!(
+            tum(deep).expect("a tumbler at the depth cap parses").len(),
+            MAX_TUMBLER_COMPONENTS
+        );
+        let deeper = vec!["1"; MAX_TUMBLER_COMPONENTS + 1].join(".");
+        let e = tum(deeper).expect_err("one component past the cap must not parse");
+        assert!(e.0.contains("component"), "the refusal names the depth cap: {e}");
+    }
+
+    /// Both ends of the wire-list cap, at [`p_list`] — the one door every
+    /// attacker-sized array on the request surface passes through. The
+    /// at-cap case is the load-bearing half: the cap IS M7's stored-slot
+    /// budget, so refusing at it would refuse a query exactly as large as a
+    /// slot that can be stored.
+    #[test]
+    fn wire_list_cap() {
+        let spans = |n: usize| {
+            Value::Array(
+                (0..n)
+                    .map(|_| {
+                        obj(vec![
+                            ("start", Value::String("1.1".into())),
+                            ("width", Value::String("0.1".into())),
+                        ])
+                    })
+                    .collect(),
+            )
+        };
+        assert_eq!(
+            p_list(&spans(MAX_WIRE_LIST), p_span).expect("a list at the cap parses").len(),
+            MAX_WIRE_LIST
+        );
+        let e = p_list(&spans(MAX_WIRE_LIST + 1), p_span)
+            .expect_err("one element past the cap must not parse");
+        assert!(e.0.contains("wire cap"), "the refusal names the cap: {e}");
+    }
+
+    /// Both ends of the insert-value cap, counted in VALUES rather than
+    /// elements: one per-byte string mints one value per byte, so a single
+    /// element can cross the cap on its own and an element-count check
+    /// would not see it.
+    #[test]
+    fn insert_value_cap_counts_values_not_elements() {
+        let forms = |n: usize| Value::Array(vec![Value::String("a".repeat(n))]);
+        // `Val` derives no Debug upstream, so unwrap the failure by hand.
+        let refusal = |v: &Value| match p_val_forms(v) {
+            Err(e) => e,
+            Ok(vals) => panic!("{} values must not parse", vals.len()),
+        };
+        assert_eq!(
+            p_val_forms(&forms(MAX_INSERT_VALUES))
+                .unwrap_or_else(|e| panic!("at the cap: {e}"))
+                .len(),
+            MAX_INSERT_VALUES
+        );
+        let e = refusal(&forms(MAX_INSERT_VALUES + 1));
+        assert!(e.0.contains("cap on one insert"), "the refusal names the cap: {e}");
+        // Split across two elements, the running total still sees it — the
+        // reason the check is on the accumulator and not per element.
+        let split = Value::Array(vec![
+            Value::String("a".repeat(MAX_INSERT_VALUES)),
+            Value::String("b".into()),
+        ]);
+        assert!(p_val_forms(&split).is_err(), "the total is what is capped, not one element");
     }
 
     /// Span parse edges — every span on the wire goes through M1's

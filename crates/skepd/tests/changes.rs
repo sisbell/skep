@@ -494,3 +494,119 @@ fn pre_feature_positions_answer_bare_entries() {
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     sd.shutdown();
 }
+
+/// Compaction: the feed's memory is bounded by the journal's retention,
+/// not by the world's age. Positions the journal has reclaimed are refused
+/// by `/op-at` and `/dump?at`, so an entry naming one describes a commit no
+/// client can reach — the sidecar drops those entries and rewrites itself
+/// around them, and `/changes` answers below the new fence with exactly the
+/// `410 history_reclaimed` discipline wire.md gives the rest of history.
+///
+/// Reclamation is reached honestly rather than simulated, and the daemon
+/// makes every commit itself, so the sidecar has FULL coverage when it
+/// reopens: the reconstruction walk has nothing to do and cannot be what
+/// advances the fence. Only the retention probe can, which is what makes
+/// this a test of compaction rather than of the walk.
+#[test]
+fn the_sidecar_compacts_to_the_journals_retention() {
+    use skep_engine::{Engine, GenesisConfig, KernelConfig};
+    use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Seq};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // Phase 1 — the daemon writes everything, so every position it will
+    // later serve is one it recorded. Bulk inserts, because reclamation is
+    // at SEGMENT granularity and a segment has to rotate before anything
+    // below it can be reclaimed at all.
+    let (early, head) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let doc = seed_flow(port);
+        let v = changes_ok(port, "since=0");
+        assert_eq!(entry_ats(&v), vec![2, 3, 8, 11], "the feed starts with every position");
+        assert!(v["changes"][0]["op"].is_string(), "and with real metadata");
+        let s1 = open_session(port, 1);
+        let bulk = "z".repeat(8192);
+        for _ in 0..6 {
+            // Prepends, so every ordinal is in bounds whatever the doc holds.
+            let v = op(
+                port,
+                Some(&s1),
+                &format!(
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["{bulk}"]}}"#
+                ),
+            );
+            expect_resp(&v, "ack_addr");
+        }
+        let (st, body) = get(port, "/health");
+        assert_eq!(st, 200);
+        let head = json(&body)["log_position"].as_u64().expect("log_position");
+        let ats = entry_ats(&changes_ok(port, "since=0"));
+        assert_eq!(ats.last(), Some(&head), "the feed covers every position through the head");
+        sd.shutdown();
+        (ats, head)
+    };
+
+    // Phase 2 — reclaim WITHOUT committing anything: one checkpoint at the
+    // current head, retaining one, drops the segments wholly below it. No
+    // new position appears, so the sidecar's coverage stays complete.
+    {
+        let cfg = KernelConfig {
+            durability: Durability::Fsync {
+                journal_path: dir.path().to_path_buf(),
+                retain_checkpoints: 1,
+                burned_seq: BurnedSeqPolicy::Rollback,
+            },
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine = Engine::open(cfg, GenesisConfig::standard()).expect("engine recover");
+        engine.kernel().checkpoint().expect("checkpoint reclaims below itself");
+        assert_eq!(engine.kernel().current_seq().0, head, "no new commit was made");
+        assert!(
+            engine.world_at(Seq(0)).is_err(),
+            "the journal must actually have reclaimed for this test to mean anything"
+        );
+        drop(engine);
+    }
+
+    // Phase 3 — reopening compacts. The oldest entries are gone from the
+    // file and from the feed, and the feed refuses below its new fence.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let contents = std::fs::read_to_string(dir.path().join("commits.log")).expect("commits.log");
+    assert!(
+        contents.contains("min_since"),
+        "compaction records the fence it compacted to: {contents}"
+    );
+    assert!(
+        !contents.contains(r#"{"at":2,"#),
+        "a reclaimed position's entry does not survive compaction: {contents}"
+    );
+
+    let (st, body) = changes_raw(port, "since=0");
+    assert_eq!(st, 410, "below the fence is the reclaimed discipline: {}", text(&body));
+    let v = json(&body);
+    assert_eq!(v["error"].as_str(), Some("history_reclaimed"));
+    let floor = v["floor"].as_u64().expect("the refusal names the oldest surviving position");
+    assert!(floor > early[0], "the fence advanced past the oldest recorded position");
+
+    // At and above the fence the feed answers normally and still reaches
+    // the head — compaction dropped what was unreachable and nothing else.
+    let v = changes_ok(port, &format!("since={}", floor - 1));
+    let ats = entry_ats(&v);
+    assert!(ats.contains(&floor), "the floor itself is served: {ats:?}");
+    assert_eq!(ats.last(), Some(&head), "and the feed still runs to the head");
+
+    // The dropped positions are unreachable by every other route too,
+    // which is what makes dropping them honest rather than lossy.
+    let env = format!(r#"{{"at":{},"frame":{{"op":"read_link","a":"1.0.1.0.1"}}}}"#, early[0]);
+    let (st, _) = http(port, "POST", "/op-at", None, env.as_bytes());
+    assert_ne!(st, 200, "a reclaimed position is not answerable at /op-at either");
+
+    sd.shutdown();
+}
+
+fn text(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
+}

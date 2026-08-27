@@ -515,8 +515,9 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// The most spans ONE slot may carry — the budget every caller-shaped slot
 /// is held to, whichever form built it: MAKELINK's [`SlotArg::Resolve`] and
 /// [`SlotArg::Addrs`] slots ([`MakeLinkError::SlotTooLarge`]), an `editlink`
-/// successor's slots ([`EditLinkError::SlotTooLarge`]), and
-/// [`emit`](LinkWriter::emit)'s `to` ([`EmitError::SlotTooLarge`]).
+/// successor's slots ([`EditLinkError::SlotTooLarge`]), and BOTH of
+/// [`emit`](LinkWriter::emit)'s caller-sized slots — `to` and `ty`
+/// ([`EmitError::SlotTooLarge`]).
 ///
 /// Both slot forms amplify, and differently. A `Resolve` slot's span count is
 /// not the request's size at all: `resolve` yields one run per contiguous
@@ -529,15 +530,17 @@ fn is_wf_content_spec(m3: &M3State, spec: &VSpec) -> bool {
 /// order half a kilobyte live — so a slot bounded only by the request body
 /// would name hundreds of thousands of spans.
 ///
-/// The budget is live memory inside the transact. All three slots are built
-/// and held under M2's applier lock before any record is encoded, so
-/// `MAX_TXN_BYTES` — charged against the ENCODED transaction after the
-/// closure returns — bounds what the store keeps and not what the closure
-/// allocates. At order half a kilobyte per element-level span this bound is
-/// ~2 MB a slot and ~6 MB across a three-slot MAKELINK: the order of the
-/// request body a caller is allowed to send in the first place. It is not a
-/// bound on `resolve`'s own per-spec run vector, which is M5's allocation and
-/// one source document's fragmentation.
+/// The budget is per-slot live memory and per-slot permanent store.
+/// `MAX_TXN_BYTES` bounds neither: it is charged against the ENCODED
+/// transaction after the closure returns, and the encoded form of a span is a
+/// small fraction of the live one. At order half a kilobyte per element-level
+/// span this bound is ~2 MB a slot and ~6 MB across a three-slot MAKELINK:
+/// the order of the request body a caller is allowed to send in the first
+/// place. MAKELINK's three slots are additionally built and held under M2's
+/// applier lock; `emit` builds its value before the transact, and an
+/// `editlink` successor is built entirely by its caller. It is not a bound on
+/// `resolve`'s own per-spec run vector, which is M5's allocation and one
+/// source document's fragmentation.
 pub const MAX_SLOT_SPANS: usize = 4096;
 
 /// One MAKELINK slot's endset, read off the txn base — `None` iff the slot
@@ -670,10 +673,15 @@ where
     W::Record: From<LinkRec> + From<M3Rec>,
 {
     /// Emit_K (ASN-0086/0126/0128): gated typed-relation emission —
-    /// `value = Link[enc({from}), enc(to), ty]` (`|F| = 1` forced, `to`
-    /// cardinality shape-checked, `ty` stored verbatim as e₃). Does NOT
+    /// `value = Link[enc({from}), enc(to), ty]` (`|F| = 1` forced, `to`'s
+    /// SPAN COUNT shape-checked, `ty` stored verbatim as e₃). Does NOT
     /// seat. idem⊤ ⇒ dedup against the ACTIVE view; a hit returns the
     /// incumbent with the base `Seq` and commits NOTHING.
+    ///
+    /// The shape gate counts spans, not distinct addresses: `enc(to)` yields
+    /// one span per element, so `to = [x, x]` carries `|G| = 2` here and is
+    /// refused under Binary, where ASN-0126's set-valued `|G|` admits it
+    /// ([`Shape`](crate::Shape)).
     ///
     /// WHAT A HIT RETURNS: the T1-LEAST ACTIVE tuple of the I0 class, which
     /// is the class's incumbent and not a tuple this call admitted. The gate
@@ -689,10 +697,11 @@ where
     /// computation, keeping `coverage_class` on the safe denoted path); `ty ~
     /// [K_sup]` (`SupersessionClass` — assert_sup/editlink are the sole
     /// `[K_sup]`-writers, the parallel of the `[R]` fence; Conflicts §10);
-    /// and `to` past [`MAX_SLOT_SPANS`] addresses (`SlotTooLarge` — the same
-    /// per-slot span budget MAKELINK's slots carry, on the one managed slot
-    /// whose cardinality the caller chooses, and ahead of `ShapeViolation`,
-    /// which an over-budget `to` also satisfies under every shape but Multi).
+    /// and either caller-sized slot past [`MAX_SLOT_SPANS`] spans —
+    /// `to`'s addresses or `ty`'s own spans (`SlotTooLarge`, the same
+    /// per-slot budget MAKELINK's slots carry). Ahead of `ShapeViolation`,
+    /// which an over-budget `to` also satisfies under every shape but Multi,
+    /// and which no `ty` can reach: the shape gate never reads e₃'s count.
     /// The lock set is `[dedup_key, link_lock_key(home)]` for a
     /// registered idem⊤ `ty`, else `[link_lock_key(home)]` — the
     /// registration read comes from the construction-time cache, race-free
@@ -715,11 +724,13 @@ where
         if class == *self.registry.shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
-        // The one managed slot a caller sizes. `enc({from})` is one span and
-        // `ty` is a registered class's key, so `to` is where the span budget
-        // bites; ahead of the shape gate, which admits any finite `|G|` under
-        // Multi and so cannot bound it.
-        if to.len() > MAX_SLOT_SPANS {
+        // The two managed slots a caller sizes: `enc({from})` is one span,
+        // and `to` and `ty` are the caller's. `ty` is stored VERBATIM as e₃
+        // and its class collapses repeats, so a registered class is no bound
+        // on the slot that carries it. Ahead of the shape gate, which reads
+        // neither count — it admits any finite `|G|` under Multi and never
+        // looks at e₃ at all.
+        if to.len() > MAX_SLOT_SPANS || ty.len() > MAX_SLOT_SPANS {
             return Err(TxnError::Rejected(EmitError::SlotTooLarge));
         }
         let value = Link::triple(enc([from]), enc(to), ty.clone());

@@ -2802,9 +2802,9 @@ fn an_addrs_slot_past_the_span_budget_is_refused() {
 
 #[test]
 fn emit_rejects_a_to_list_past_the_span_budget() {
-    // `to` is the one managed slot a caller sizes — `enc({from})` is one span
-    // and `ty` is a registered class's key — and the shape gate cannot bound
-    // it: Multi admits any finite `|G|`. So the same per-slot span budget
+    // `to` is one of the two managed slots a caller sizes (`ty` is the other,
+    // and `enc({from})` is one span), and the shape gate cannot bound it:
+    // Multi admits any finite `|G|`. So the same per-slot span budget
     // MAKELINK's slots carry sits here, pre-transact.
     let k = kernel();
     let w = writer(&k);
@@ -2842,6 +2842,58 @@ fn emit_rejects_a_to_list_past_the_span_budget() {
         w.emit(P1, &doc1(), &idem_top_ty(), &ca(3), &[ca(4), ca(5)]),
         Err(TxnError::Rejected(EmitError::ShapeViolation))
     ));
+}
+
+#[test]
+fn emit_rejects_a_ty_endset_past_the_span_budget() {
+    // `ty` is the OTHER managed slot a caller sizes, and it is stored VERBATIM
+    // as e₃. Its CLASS collapses repeated addresses, so a registered class is
+    // no bound on the slot naming it — and no gate reads e₃'s span count:
+    // `is_address_denoting` admits any number of unit-depth spans, and
+    // `sh_conf` reads the FROM and TO counts only. So the budget is the whole
+    // of what stands between a request and an arbitrarily wide permanent slot.
+    let k = kernel();
+    let w = writer(&k);
+    let budget = skep_links::MAX_SLOT_SPANS as u32;
+    // One distinct denoted address, repeated: the class is `idem_top_ty`'s —
+    // registered Binary, idem⊤ — whatever the span count.
+    let wide_ty = |n: u32| -> Endset { enc(&vec![ra(10); n as usize]) };
+    assert_eq!(
+        skep_links::coverage_class(&wide_ty(budget)),
+        skep_links::coverage_class(&idem_top_ty()),
+        "the span count does not change the class, which is why it needs its own bound"
+    );
+
+    let (at_budget, _) = w
+        .emit(P1, &doc1(), &wide_ty(budget), &ca(1), &[ca(2)])
+        .expect("exactly the budget is admitted");
+    {
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert_eq!(
+            links.readlink(&at_budget).expect("resident").type_slot().len(),
+            skep_links::MAX_SLOT_SPANS,
+            "the admitted slot really is stored verbatim at the whole budget"
+        );
+    }
+
+    let before = k.current_seq();
+    assert!(matches!(
+        w.emit(P1, &doc1(), &wide_ty(budget + 1), &ca(3), &[ca(4)]),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
+    ));
+    assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
+    // Reachable under EVERY shape, unlike the `to` cause: this class is Multi,
+    // so `|G| = 2` conforms and nothing but the ty slot can refuse it.
+    let wide_multi: Endset = enc(&vec![ra(11); budget as usize + 1]);
+    assert!(matches!(
+        w.emit(P1, &doc1(), &wide_multi, &ca(5), &[ca(6), ca(7)]),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
+    ));
+    // The control: the same shape and the same class at an in-budget width
+    // deposits, so the refusals above are the slot and not the class.
+    w.emit(P1, &doc1(), &multi_ty(), &ca(5), &[ca(6), ca(7)])
+        .expect("a narrow ty of the same class is admitted");
 }
 
 #[test]

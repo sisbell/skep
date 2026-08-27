@@ -489,10 +489,16 @@ impl LinkState {
             .type_slice_class(&class, View::Active)
             .filter_map(|t| {
                 let a = lift(t);
-                match self.age(&a) {
-                    Some(age) if age > horizon => Some(a),
-                    _ => None,
-                }
+                // A typed-slice key is a key of `links`, so `age` is `Some`.
+                // `None` there means NON-RESIDENCE and nothing else, which for
+                // an index key is corruption — fail-stop rather than read it
+                // as freshness and silently shrink the batch `retract_stale`
+                // builds from this list.
+                let age = self.age(&a).expect(
+                    "a typed-slice key names a resident link: the fold indexes only what \
+                     it inserts",
+                );
+                (age > horizon).then_some(a)
             })
             .collect())
     }

@@ -233,6 +233,13 @@ impl LinkState {
     /// against. Published so an assembler SHARES this instance rather than
     /// building a second one from the same configuration and then owing an
     /// agreement check between the two.
+    ///
+    /// PRECONDITION: `self` has passed [`LinkState::rebuild_derived`], which
+    /// M2 runs at load ahead of replay. On a RAW-deserialized state the field
+    /// is still serde's seed, which registers nothing, reports every shipped
+    /// endset as `⟨⟩` and holds none of [`TypeRegistry`]'s invariant — so a
+    /// caller reading a registry out of a checkpoint reads it after the
+    /// rebuild, never before.
     pub fn registry(&self) -> &Arc<TypeRegistry> {
         &self.registry
     }

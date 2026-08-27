@@ -236,12 +236,19 @@ pub enum ShippedType {
 /// serializable [`TypeConfig`] it was built from is the authoritative state
 /// and `LinkState::rebuild_derived` reconstructs this before replay.
 ///
-/// INVARIANT, established by [`TypeRegistry::build`], its sole constructor:
-/// the five shipped classes are pairwise distinct (`KeyCollision` refuses a
-/// duplicate reserved address), each is registered, and `shipped_class(t)` is
-/// the class of `reserved_type(t)`. Every guard that recognizes a deposit by
-/// its class, and every read that compares one against a shipped class,
-/// leans on all three.
+/// INVARIANT, established by [`TypeRegistry::build`], its sole VALIDATING
+/// constructor: the five shipped classes are pairwise distinct
+/// (`KeyCollision` refuses a duplicate reserved address), each is registered,
+/// and `shipped_class(t)` is the class of `reserved_type(t)`. Every guard
+/// that recognizes a deposit by its class, and every read that compares one
+/// against a shipped class, leans on all three.
+///
+/// ONE value holds none of it, and it is crate-private and unreachable live:
+/// `placeholder_registry` is the serde seed for
+/// [`crate::LinkState`]'s skipped field, which
+/// [`LinkState::rebuild_derived`](crate::LinkState::rebuild_derived) replaces
+/// from the sealed [`TypeConfig`] BEFORE replay. So every registry a caller
+/// can reach through the published surface is one `build` validated.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     registrations: im::HashMap<CoverageClass, Registration>,

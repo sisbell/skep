@@ -100,12 +100,20 @@ pub enum EmitError {
     /// `ty` is not address-denoting — rejected before any class computation
     /// (§Core data model totality). Pre-transact.
     NonAddressDenotingType,
-    /// `to` names more than [`crate::MAX_SLOT_SPANS`] addresses — the
-    /// per-slot span budget on the one managed slot whose cardinality the
-    /// caller chooses. Pre-transact, and so ahead of `ShapeViolation`, which
-    /// an over-budget `to` also satisfies under Unary and Binary. Reachable
-    /// only where an app registers a `Multi` type: the five shipped classes
-    /// are Unary or Binary, so the shape gate holds `|G| ≤ 1` without it.
+    /// One of the two caller-sized slots is over the per-slot span budget
+    /// [`crate::MAX_SLOT_SPANS`] — `to`'s address count or `ty`'s own span
+    /// count. `ty` earns the bound as squarely as `to`: it is stored VERBATIM
+    /// as e₃, and its class collapses repeated addresses, so a registered
+    /// class is no bound on the slot naming it. (`enc({from})` is one span,
+    /// so `from` needs no clause.) Pre-transact, and so ahead of
+    /// `ShapeViolation`.
+    ///
+    /// The two causes differ in reach. An over-budget `to` also violates the
+    /// shape under Unary and Binary, so that cause is reachable only where an
+    /// app registers a `Multi` type — the five shipped classes are Unary or
+    /// Binary, and the shape gate holds `|G| ≤ 1` for them without this. An
+    /// over-budget `ty` is reachable under EVERY shape, no gate anywhere
+    /// reading e₃'s span count.
     SlotTooLarge,
     /// M3's mint failed structurally.
     Mint(MintError),
@@ -281,7 +289,7 @@ impl fmt::Display for EmitError {
             }
             EmitError::SlotTooLarge => write!(
                 f,
-                "emit: to names more than {} addresses",
+                "emit: to or ty carries more than {} spans",
                 crate::MAX_SLOT_SPANS
             ),
             EmitError::Mint(e) => write!(f, "emit: mint failed: {e}"),

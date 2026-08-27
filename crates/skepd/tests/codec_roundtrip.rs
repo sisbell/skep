@@ -672,27 +672,27 @@ fn value_write_forms_round_trip() {
 
     // "str": one single-byte value per UTF-8 byte ("hé" = 'h' + 2 bytes of 'é').
     let parsed = parse_ok(&codec, frame(r#"["hé"]"#).as_bytes());
-    let vs = vals(&parsed);
-    assert_eq!(vs.len(), 3);
-    assert!(vs.iter().all(|v| v.as_bytes().len() == 1));
+    let values = vals(&parsed);
+    assert_eq!(values.len(), 3);
+    assert!(values.iter().all(|v| v.as_bytes().len() == 1));
     assert_eq!(canon(&parsed), jv(r#"["hé"]"#));
 
     // {"hex"}: per-byte as well; a non-UTF-8 run re-marshals on the hex path.
     let parsed = parse_ok(&codec, frame(r#"[{"hex":"00ff"}]"#).as_bytes());
-    let vs = vals(&parsed);
-    assert_eq!(vs.len(), 2);
+    let values = vals(&parsed);
+    assert_eq!(values.len(), 2);
     assert_eq!(canon(&parsed), jv(r#"[{"hex":"00ff"}]"#));
 
     // {"atom"}: ONE composite value; {"atom_hex"}: one composite of raw bytes.
     let parsed = parse_ok(&codec, frame(r#"[{"atom":"hello"}]"#).as_bytes());
-    let vs = vals(&parsed);
-    assert_eq!(vs.len(), 1);
-    assert_eq!(vs[0].as_bytes(), b"hello");
+    let values = vals(&parsed);
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].as_bytes(), b"hello");
     assert_eq!(canon(&parsed), jv(r#"[{"atom":"hello"}]"#));
     let parsed = parse_ok(&codec, frame(r#"[{"atom_hex":"00ff"}]"#).as_bytes());
-    let vs = vals(&parsed);
-    assert_eq!(vs.len(), 1);
-    assert_eq!(vs[0].as_bytes(), &[0x00, 0xff]);
+    let values = vals(&parsed);
+    assert_eq!(values.len(), 1);
+    assert_eq!(values[0].as_bytes(), &[0x00, 0xff]);
     assert_eq!(canon(&parsed), jv(r#"[{"atom_hex":"00ff"}]"#));
 
     // Mixed arrays concatenate in order and are canonical as given.
@@ -820,7 +820,7 @@ fn a_zero_width_span_is_refused_at_parse() {
 /// tagged `{"resolve"}` object belongs to edit_link's successor `ty` alone,
 /// and addrs names must be T4-valid addresses.
 #[test]
-fn strict_parse_failures() {
+fn every_malformed_frame_fails_parse_with_a_detail() {
     let codec = JsonCodec;
     let bad: [&[u8]; 9] = [
         b"not json at all",

@@ -116,7 +116,7 @@ impl Counters {
 }
 
 /// The persistent fixture — addresses survive restarts; tokens do not.
-struct Fx {
+struct Fixture {
     acc_x: String,
     /// One document owned by each caller, indexed like the first four
     /// columns: [owner, sibling, child, parent].
@@ -136,13 +136,13 @@ struct Fx {
 }
 
 /// Per-life session tokens, [owner, sibling, child, parent] + bootstrap.
-struct Toks {
+struct Tokens {
     by_col: [String; 4],
     x: String,
 }
 
-fn open_toks(port: u16) -> Toks {
-    Toks {
+fn open_tokens(port: u16) -> Tokens {
+    Tokens {
         by_col: [
             open_session(port, P_OWNER),
             open_session(port, P_SIBLING),
@@ -189,8 +189,8 @@ fn seed_text(port: u16, session: &str, doc: &str, text: &str) {
 }
 
 /// Mint an addrs-form link (empty from/to, fresh ghost type) in `home`.
-fn mint_link(port: u16, session: &str, home: &str, n: &Counters) -> String {
-    let ghost = format!("{home}.0.3.6.{}", Counters::next(&n.ghost));
+fn mint_link(port: u16, session: &str, home: &str, counters: &Counters) -> String {
+    let ghost = format!("{home}.0.3.6.{}", Counters::next(&counters.ghost));
     let v = op(
         port,
         Some(session),
@@ -201,20 +201,20 @@ fn mint_link(port: u16, session: &str, home: &str, n: &Counters) -> String {
     acked_addr(&v)
 }
 
-fn build_fixture(port: u16, boot: &str, toks: &Toks, n: &Counters) -> Fx {
+fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) -> Fixture {
     // Relationships: boot → P under node [1]; P → X and S under Ap
     // (siblings); X → C under Ax (sub-delegation).
     let acc_p = delegate(port, boot, "1", P_PARENT);
-    let p = &toks.by_col[3];
+    let p = &tokens.by_col[3];
     let acc_x = delegate(port, p, &acc_p, P_OWNER);
     let acc_s = delegate(port, p, &acc_p, P_SIBLING);
-    let x = &toks.x;
+    let x = &tokens.x;
     let acc_c = delegate(port, x, &acc_x, P_CHILD);
 
     let own_doc = [
         create_doc(port, x, &acc_x),
-        create_doc(port, &toks.by_col[1], &acc_s),
-        create_doc(port, &toks.by_col[2], &acc_c),
+        create_doc(port, &tokens.by_col[1], &acc_s),
+        create_doc(port, &tokens.by_col[2], &acc_c),
         create_doc(port, p, &acc_p),
     ];
 
@@ -228,9 +228,9 @@ fn build_fixture(port: u16, boot: &str, toks: &Toks, n: &Counters) -> Fx {
     seed_text(port, x, &copy_src, "source");
     let link_home = create_doc(port, x, &acc_x);
     let edit_home = create_doc(port, x, &acc_x);
-    let anchor = [mint_link(port, x, &link_home, n), mint_link(port, x, &link_home, n)];
+    let anchor = [mint_link(port, x, &link_home, counters), mint_link(port, x, &link_home, counters)];
 
-    Fx {
+    Fixture {
         acc_x,
         own_doc,
         insert_doc,
@@ -258,10 +258,10 @@ fn verdict(v: &Value) -> String {
 /// resources where the row consumes them), send it, return the verdict.
 fn run_cell(
     port: u16,
-    fx: &Fx,
-    toks: &Toks,
+    fixture: &Fixture,
+    tokens: &Tokens,
     stale: &str,
-    n: &Counters,
+    counters: &Counters,
     row: &str,
     col: usize,
 ) -> String {
@@ -269,52 +269,52 @@ fn run_cell(
     // owns. Guest and stale cells name X's resources — M10's session gate
     // fires before any store sees the frame.
     let token: Option<&str> = match col {
-        0..=3 => Some(toks.by_col[col].as_str()),
+        0..=3 => Some(tokens.by_col[col].as_str()),
         4 => None,
         _ => Some(stale),
     };
-    let own_doc: &str = if col <= 3 { &fx.own_doc[col] } else { &fx.own_doc[0] };
+    let own_doc: &str = if col <= 3 { &fixture.own_doc[col] } else { &fixture.own_doc[0] };
     let authed = col <= 3;
 
     let frame = match row {
         "create_new_document" => {
-            format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fx.acc_x)
+            format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fixture.acc_x)
         }
         "delegate" => {
-            let prefix = next_prefix(port, &fx.acc_x);
-            let id = Counters::next(&n.principal);
+            let prefix = next_prefix(port, &fixture.acc_x);
+            let id = Counters::next(&counters.principal);
             format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{id}}}"#)
         }
         "register_node" => {
-            format!(r#"{{"op":"register_node","addr":"1.{}"}}"#, Counters::next(&n.node))
+            format!(r#"{{"op":"register_node","addr":"1.{}"}}"#, Counters::next(&counters.node))
         }
         "fork" => r#"{"op":"fork"}"#.to_string(),
         "insert" => format!(
             r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
-            fx.insert_doc
+            fixture.insert_doc
         ),
         "delete" => format!(
             r#"{{"op":"delete","doc":"{}","p":{{"subspace":"1","ordinal":"1"}},"width":"1"}}"#,
-            fx.delete_doc
+            fixture.delete_doc
         ),
         "rearrange" => format!(
             r#"{{"op":"rearrange","doc":"{}","cuts":[{{"subspace":"1","ordinal":"1"}},{{"subspace":"1","ordinal":"2"}},{{"subspace":"1","ordinal":"3"}}]}}"#,
-            fx.rearr_doc
+            fixture.rearr_doc
         ),
         "copy (foreign dest)" => format!(
             r#"{{"op":"copy","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"specs":[{{"source":"{}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#,
-            fx.copy_dst, fx.copy_src
+            fixture.copy_dst, fixture.copy_src
         ),
         "copy (foreign source)" => format!(
             r#"{{"op":"copy","doc":"{own_doc}","at":{{"subspace":"1","ordinal":"1"}},"specs":[{{"source":"{}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#,
-            fx.copy_src
+            fixture.copy_src
         ),
-        "version (foreign src)" => format!(r#"{{"op":"version","d_src":"{}"}}"#, fx.copy_src),
+        "version (foreign src)" => format!(r#"{{"op":"version","d_src":"{}"}}"#, fixture.copy_src),
         "make_link" => {
-            let ghost = format!("{}.0.3.6.{}", fx.link_home, Counters::next(&n.ghost));
+            let ghost = format!("{}.0.3.6.{}", fixture.link_home, Counters::next(&counters.ghost));
             format!(
                 r#"{{"op":"make_link","home":"{}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{ghost}"]}}}}"#,
-                fx.link_home
+                fixture.link_home
             )
         }
         // A retired-class unary tuple over a ghost root: the one shipped
@@ -323,50 +323,50 @@ fn run_cell(
         // walk-2 re-emit dedups to the incumbent ack (idem⊤), still `ok`.
         "emit" => format!(
             r#"{{"op":"emit","home":"{home}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{home}.0.3.9.1","to":[]}}"#,
-            home = fx.link_home
+            home = fixture.link_home
         ),
         "assert_sup" => format!(
             r#"{{"op":"assert_sup","home":"{}","old":"{}","new":"{}"}}"#,
-            fx.link_home, fx.anchor[0], fx.anchor[1]
+            fixture.link_home, fixture.anchor[0], fixture.anchor[1]
         ),
         "nullify (home)" => {
             // Isolate the HOME check: the target belongs to the caller
             // (minted per cell), so only ω(home) differs across columns.
             let target = if !authed {
-                fx.anchor[0].clone() // never reached: unauthenticated first
+                fixture.anchor[0].clone() // never reached: unauthenticated first
             } else if col == 0 {
-                mint_link(port, &toks.x, &fx.link_home, n)
+                mint_link(port, &tokens.x, &fixture.link_home, counters)
             } else {
-                mint_link(port, token.expect("authed"), own_doc, n)
+                mint_link(port, token.expect("authed"), own_doc, counters)
             };
-            format!(r#"{{"op":"nullify","home":"{}","target":"{target}"}}"#, fx.link_home)
+            format!(r#"{{"op":"nullify","home":"{}","target":"{target}"}}"#, fixture.link_home)
         }
         "nullify (target)" => {
             // Isolate the TARGET check: the home is the caller's own; the
             // target is a fresh X-owned link (v1 self-retraction policy).
             let target =
-                if authed { mint_link(port, &toks.x, &fx.link_home, n) } else { fx.anchor[0].clone() };
+                if authed { mint_link(port, &tokens.x, &fixture.link_home, counters) } else { fixture.anchor[0].clone() };
             format!(r#"{{"op":"nullify","home":"{own_doc}","target":"{target}"}}"#)
         }
         "edit_link (d_s)" => {
-            let ghost = format!("{}.0.3.6.{}", fx.edit_home, Counters::next(&n.ghost));
+            let ghost = format!("{}.0.3.6.{}", fixture.edit_home, Counters::next(&counters.ghost));
             format!(
                 r#"{{"op":"edit_link","original":"{}","d_s":"{}","d_a":"{own_doc}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{ghost}"]}}}}}}"#,
-                fx.anchor[0], fx.edit_home
+                fixture.anchor[0], fixture.edit_home
             )
         }
         "edit_link (d_a)" => {
-            let ghost = format!("{}.0.3.6.{}", fx.edit_home, Counters::next(&n.ghost));
+            let ghost = format!("{}.0.3.6.{}", fixture.edit_home, Counters::next(&counters.ghost));
             format!(
                 r#"{{"op":"edit_link","original":"{}","d_s":"{own_doc}","d_a":"{}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{ghost}"]}}}}}}"#,
-                fx.anchor[0], fx.edit_home
+                fixture.anchor[0], fixture.edit_home
             )
         }
         "edit_link (foreign original)" => {
-            let ghost = format!("{}.0.3.6.{}", fx.edit_home, Counters::next(&n.ghost));
+            let ghost = format!("{}.0.3.6.{}", fixture.edit_home, Counters::next(&counters.ghost));
             format!(
                 r#"{{"op":"edit_link","original":"{}","d_s":"{own_doc}","d_a":"{own_doc}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{ghost}"]}}}}}}"#,
-                fx.anchor[1]
+                fixture.anchor[1]
             )
         }
         other => panic!("matrix row with no frame builder: {other}"),
@@ -376,12 +376,19 @@ fn run_cell(
 }
 
 /// Walk every cell; collect mismatches so one report names them all.
-fn walk_matrix(port: u16, fx: &Fx, toks: &Toks, stale: &str, n: &Counters, walk: &str) {
+fn walk_matrix(
+    port: u16,
+    fixture: &Fixture,
+    tokens: &Tokens,
+    stale: &str,
+    counters: &Counters,
+    walk: &str,
+) {
     let mut mismatches: Vec<String> = Vec::new();
     let mut cells = 0usize;
     for row in MATRIX {
         for (col, expected) in row.expect.iter().enumerate() {
-            let got = run_cell(port, fx, toks, stale, n, row.op, col);
+            let got = run_cell(port, fixture, tokens, stale, counters, row.op, col);
             cells += 1;
             if got != *expected {
                 mismatches.push(format!(
@@ -411,7 +418,7 @@ fn walk_matrix(port: u16, fx: &Fx, toks: &Toks, stale: &str, n: &Counters, walk:
 #[test]
 fn authorization_matrix_holds_and_survives_restart() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let n = Counters::new();
+    let counters = Counters::new();
 
     // Life 0: mint the first stale token (bound to the future owner id).
     let stale0 = {
@@ -422,16 +429,16 @@ fn authorization_matrix_holds_and_survives_restart() {
     };
 
     // Life 1: fixture + first walk.
-    let (fx, stale1) = {
+    let (fixture, stale1) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let boot = open_session(port, 0);
-        let toks = open_toks(port);
-        let fx = build_fixture(port, &boot, &toks, &n);
-        walk_matrix(port, &fx, &toks, &stale0, &n, "walk 1");
-        let stale1 = toks.x.clone();
+        let tokens = open_tokens(port);
+        let fixture = build_fixture(port, &boot, &tokens, &counters);
+        walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
+        let stale1 = tokens.x.clone();
         sd.shutdown();
-        (fx, stale1)
+        (fixture, stale1)
     };
 
     // Life 2: recovery, fresh sessions, full re-walk. The stale column now
@@ -439,8 +446,8 @@ fn authorization_matrix_holds_and_survives_restart() {
     {
         let sd = spawn(dir.path());
         let port = sd.port();
-        let toks = open_toks(port);
-        walk_matrix(port, &fx, &toks, &stale1, &n, "walk 2 (post-restart)");
+        let tokens = open_tokens(port);
+        walk_matrix(port, &fixture, &tokens, &stale1, &counters, "walk 2 (post-restart)");
         sd.shutdown();
     }
 }

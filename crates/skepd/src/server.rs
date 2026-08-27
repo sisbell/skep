@@ -162,7 +162,7 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
 /// body, capped separately by [`MAX_REQUEST_BODY`].
-const HEAD_MAX: usize = 64 * 1024;
+const MAX_REQUEST_HEAD: usize = 64 * 1024;
 
 /// Request-body cap, enforced on the declared `Content-Length` before any
 /// body byte is read or allocated. Pre-media value — wire frames are small.
@@ -319,7 +319,7 @@ pub enum Routed {
     EventStream,
 }
 
-/// One request, as [`Daemon::handle`] receives it and as the socket reader
+/// One request, as [`Daemon::route`] receives it and as the socket reader
 /// builds it — one value rather than a list of arguments, so the two
 /// `Option<String>`s cannot be handed over in the wrong order.
 pub struct HttpRequest {
@@ -463,7 +463,7 @@ fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply
 /// preflight, method refusal and dispatch cannot disagree about what exists.
 /// A known path answers `OPTIONS` with a preflight and a wrong method with
 /// `405`; everything else is the ordinary `404`.
-fn known_path(path: &str) -> bool {
+fn path_is_known(path: &str) -> bool {
     matches!(path, "/session" | "/op" | "/op-at" | "/health" | "/events" | "/changes")
         || (cfg!(feature = "observe") && path == "/dump")
         || (cfg!(feature = "client") && path == "/")
@@ -500,7 +500,8 @@ const MAX_LIVE_SESSIONS: usize = 1024;
 /// what it evicted so `POST /session` can discharge that obligation
 /// against M10 as well as against this map.
 struct Sessions {
-    map: Mutex<Bindings>,
+    /// The token table and its mint order, under one lock.
+    bindings: Mutex<Bindings>,
     /// A session opened and immediately closed at startup: permanently
     /// unbound, never reissued (M10 §6) — what an absent or unknown token
     /// resolves to.
@@ -523,7 +524,7 @@ struct Bindings {
 
 impl Sessions {
     fn new(guest: SessionId) -> Sessions {
-        Sessions { map: Mutex::new(Bindings::default()), guest, seed: fresh_u64() }
+        Sessions { bindings: Mutex::new(Bindings::default()), guest, seed: unpredictable_u64() }
     }
 
     /// Mint the opaque token naming `sid`, remember the binding, and hand
@@ -539,14 +540,14 @@ impl Sessions {
     /// another session's cached acks — and closing it now costs one draw
     /// per session.
     fn bind(&self, sid: SessionId) -> (String, Vec<SessionId>) {
-        let token = format!("{:016x}.{:016x}", self.seed, fresh_u64());
-        let mut g = self.map.lock();
-        g.map.insert(token.clone(), sid);
-        g.order.push_back(token.clone());
+        let token = format!("{:016x}.{:016x}", self.seed, unpredictable_u64());
+        let mut bindings = self.bindings.lock();
+        bindings.map.insert(token.clone(), sid);
+        bindings.order.push_back(token.clone());
         let mut evicted = Vec::new();
-        while g.order.len() > MAX_LIVE_SESSIONS {
-            if let Some(old) = g.order.pop_front() {
-                if let Some(sid) = g.map.remove(&old) {
+        while bindings.order.len() > MAX_LIVE_SESSIONS {
+            if let Some(old) = bindings.order.pop_front() {
+                if let Some(sid) = bindings.map.remove(&old) {
                     evicted.push(sid);
                 }
             }
@@ -557,20 +558,20 @@ impl Sessions {
     /// The session a request runs under: its token's, or the guest for a
     /// token that is absent, unknown, or evicted.
     fn resolve(&self, token: Option<&str>) -> SessionId {
-        token.and_then(|t| self.map.lock().map.get(t).copied()).unwrap_or(self.guest)
+        token.and_then(|t| self.bindings.lock().map.get(t).copied()).unwrap_or(self.guest)
     }
 }
 
 /// One unpredictable `u64` from the standard library's own entropy — the
 /// source both halves of a token draw from, and no new dependency.
-fn fresh_u64() -> u64 {
+fn unpredictable_u64() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     RandomState::new().build_hasher().finish()
 }
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
-/// and the token → session binding. Socket-free — [`Daemon::handle`] is the
+/// and the token → session binding. Socket-free — [`Daemon::route`] is the
 /// entire HTTP surface as a pure request→reply function over this state.
 pub struct Daemon {
     engine: Engine,
@@ -671,12 +672,12 @@ impl Daemon {
     /// route that cannot be a request/response `Reply` (`GET /events`, an
     /// unbounded response) is returned as its own [`Routed`] variant, and
     /// the accept path owns the socket from there.
-    pub fn handle(&self, req: &HttpRequest) -> Routed {
+    pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404.
-            ("OPTIONS", p) if known_path(p) => Routed::Reply(Reply::preflight()),
+            ("OPTIONS", p) if path_is_known(p) => Routed::Reply(Reply::preflight()),
             _ => Routed::Reply(self.reply(req)),
         }
     }
@@ -695,7 +696,7 @@ impl Daemon {
             ("GET", "/") => {
                 Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
             }
-            (_, p) if known_path(p) => refuse(
+            (_, p) if path_is_known(p) => refuse(
                 TransportError::MethodNotAllowed,
                 Some("see wire.md for the endpoint list"),
             ),
@@ -1413,7 +1414,7 @@ fn serve_connection(
             return;
         }
     };
-    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.handle(&req))) {
+    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route(&req))) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
     };
@@ -1485,8 +1486,8 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
         if let Some(i) = find_head_end(&buf) {
             break i;
         }
-        if buf.len() > HEAD_MAX {
-            return Err(format!("request head exceeds the {HEAD_MAX}-byte cap").into());
+        if buf.len() > MAX_REQUEST_HEAD {
+            return Err(format!("request head exceeds the {MAX_REQUEST_HEAD}-byte cap").into());
         }
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
@@ -1547,22 +1548,22 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
         None => (target, None),
     };
     let mut body = buf[head_end + 4..].to_vec();
-    let want = content_length.unwrap_or(0);
+    let declared = content_length.unwrap_or(0);
     // The one unbounded-allocation vector: refuse on the declared length
     // alone, before 100-continue invites the body and before the loop reads
     // (and allocates) a single byte of it. The media round's blob upload
     // will raise this for its route only.
-    if want > MAX_REQUEST_BODY {
-        return Err(ReadError::BodyTooLarge(want));
+    if declared > MAX_REQUEST_BODY {
+        return Err(ReadError::BodyTooLarge(declared));
     }
-    if expects_continue && body.len() < want {
+    if expects_continue && body.len() < declared {
         // The client is holding the body until told to send it (curl does
         // this for large payloads).
         if stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").is_err() {
             return Err("client went away at 100-continue".into());
         }
     }
-    while body.len() < want {
+    while body.len() < declared {
         let mut chunk = [0u8; 8192];
         match stream.read(&mut chunk) {
             Ok(0) => return Err("connection closed inside the request body".into()),
@@ -1572,7 +1573,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     }
     // A byte past Content-Length would be a pipelined second request; this
     // connection answers one and closes, so it is dropped unread.
-    body.truncate(want);
+    body.truncate(declared);
     Ok(Some(HttpRequest { method, path, query, session_token, body }))
 }
 
@@ -1682,7 +1683,7 @@ mod tests {
     use super::*;
 
     /// Every path the router serves. The list is the test's own — an
-    /// independent restatement, so a route added to [`known_path`] alone
+    /// independent restatement, so a route added to [`path_is_known`] alone
     /// (with no dispatch arm) is caught here rather than answering 405 for
     /// every method.
     const ROUTES: &[&str] = &[
@@ -1701,7 +1702,7 @@ mod tests {
     /// One route set, three consequences: a known path preflights, refuses
     /// an unsupported method with `405`, and dispatches at least one real
     /// method; an unknown path is `404` for every method including
-    /// `OPTIONS`. This is the invariant [`known_path`] exists to keep — a
+    /// `OPTIONS`. This is the invariant [`path_is_known`] exists to keep — a
     /// route stated in one table and forgotten in another breaks exactly
     /// one of these.
     #[test]
@@ -1715,14 +1716,14 @@ mod tests {
             session_token: None,
             body: Vec::new(),
         };
-        let status = |method: &str, path: &str| match daemon.handle(&bare(method, path)) {
+        let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
             Routed::Reply(r) => r.status,
             // The one non-reply route; reached only by GET /events, which
             // this test never asks for.
             Routed::EventStream => 200,
         };
         for path in ROUTES {
-            assert!(known_path(path), "{path} is served but not known");
+            assert!(path_is_known(path), "{path} is served but not known");
             assert_eq!(status("OPTIONS", path), 204, "{path} must answer the CORS preflight");
             assert_eq!(status("PUT", path), 405, "{path} must refuse an unsupported method");
             let served = ["GET", "POST"].iter().any(|m| {
@@ -1732,7 +1733,7 @@ mod tests {
             assert!(served, "{path} is known but no method dispatches");
         }
         for unknown in ["/nope", "/op/", "/Health"] {
-            assert!(!known_path(unknown), "{unknown} must not be known");
+            assert!(!path_is_known(unknown), "{unknown} must not be known");
             assert_eq!(status("GET", unknown), 404, "{unknown}");
             assert_eq!(status("OPTIONS", unknown), 404, "an unknown path preflights nothing");
         }
@@ -1777,7 +1778,7 @@ mod tests {
             assert!(evicted.is_empty(), "nothing is evicted up to the bound");
             tokens.push(t);
         }
-        assert_eq!(daemon.sessions.map.lock().map.len(), MAX_LIVE_SESSIONS);
+        assert_eq!(daemon.sessions.bindings.lock().map.len(), MAX_LIVE_SESSIONS);
         assert_ne!(daemon.sessions.resolve(Some(&tokens[0])), guest, "all still live");
 
         // One past the bound evicts exactly the oldest, and hands it back
@@ -1796,7 +1797,7 @@ mod tests {
         );
         assert_ne!(daemon.sessions.resolve(Some(&newest)), guest, "the newest is live");
         assert_eq!(
-            daemon.sessions.map.lock().map.len(),
+            daemon.sessions.bindings.lock().map.len(),
             MAX_LIVE_SESSIONS,
             "the table stays at its bound however many sessions are opened"
         );

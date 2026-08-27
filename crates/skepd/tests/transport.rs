@@ -136,7 +136,7 @@ fn a_chunked_request_body_is_refused_rather_than_read() {
 /// malformed_http` with a detail (wire.md §HTTP status codes: "bad head,
 /// chunked body, a body cut short") — and a pre-routing refusal still
 /// carries the universal CORS header, since it is written before
-/// `Daemon::handle` ever runs.
+/// `Daemon::route` ever runs.
 #[test]
 fn requests_outside_the_http_subset_are_refused_malformed_http() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -198,16 +198,16 @@ fn an_absent_content_length_is_an_empty_body() {
     sd.shutdown();
 }
 
-/// Read from `s` until the buffer holds a CRLFCRLF; returns its index.
+/// Read from `stream` until the buffer holds a CRLFCRLF; returns its index.
 /// Panics rather than hanging — a daemon that never answers must name
 /// itself in the failure, not stall the gate.
-fn read_head(s: &mut TcpStream, buf: &mut Vec<u8>, what: &str) -> usize {
+fn read_head(stream: &mut TcpStream, buf: &mut Vec<u8>, what: &str) -> usize {
     loop {
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             return i;
         }
         let mut chunk = [0u8; 4096];
-        match s.read(&mut chunk) {
+        match stream.read(&mut chunk) {
             Ok(0) => panic!(
                 "{what}: the daemon closed without a complete head; got {:?}",
                 String::from_utf8_lossy(buf)
@@ -239,14 +239,14 @@ fn expect_100_continue_is_answered_before_the_body_is_sent() {
         frame.len()
     );
 
-    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
-    s.set_read_timeout(Some(DEADLINE)).expect("read timeout");
-    s.set_write_timeout(Some(DEADLINE)).expect("write timeout");
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
+    stream.set_read_timeout(Some(DEADLINE)).expect("read timeout");
+    stream.set_write_timeout(Some(DEADLINE)).expect("write timeout");
     // The head alone — the body is withheld exactly as curl withholds it.
-    s.write_all(head.as_bytes()).expect("write the request head");
+    stream.write_all(head.as_bytes()).expect("write the request head");
 
     let mut buf: Vec<u8> = Vec::new();
-    let end = read_head(&mut s, &mut buf, "the 100-continue invitation");
+    let end = read_head(&mut stream, &mut buf, "the 100-continue invitation");
     assert_eq!(
         &buf[..end + 4],
         b"HTTP/1.1 100 Continue\r\n\r\n",
@@ -256,9 +256,9 @@ fn expect_100_continue_is_answered_before_the_body_is_sent() {
     buf.drain(..end + 4);
 
     // Invited, the body goes; the ordinary answer follows it.
-    s.write_all(frame).expect("write the withheld body");
-    s.shutdown(Shutdown::Write).expect("half-close");
-    s.read_to_end(&mut buf).expect("read the final response");
+    stream.write_all(frame).expect("write the withheld body");
+    stream.shutdown(Shutdown::Write).expect("half-close");
+    stream.read_to_end(&mut buf).expect("read the final response");
     let (status, headers, body) = parse_response(&buf, "the answer behind 100-continue");
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
     assert_eq!(header(&headers, "Connection"), Some("close"));

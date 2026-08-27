@@ -33,7 +33,7 @@ fn seed_flow(port: u16) -> String {
         Some(&boot),
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
     );
-    assert_eq!(acked(&v), 2, "delegate is a 2-record commit (Allocate + RegisterPrincipal)");
+    assert_eq!(acked_at(&v), 2, "delegate is a 2-record commit (Allocate + RegisterPrincipal)");
     let s1 = open_session(port, 1);
     let v = op(
         port,
@@ -42,7 +42,7 @@ fn seed_flow(port: u16) -> String {
     );
     let doc = acked_addr(&v);
     assert_eq!(doc, "1.0.1.0.1", "first document address drifted; re-pin wire.md");
-    assert_eq!(acked(&v), 3, "create_new_document is a 1-record commit");
+    assert_eq!(acked_at(&v), 3, "create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -50,7 +50,7 @@ fn seed_flow(port: u16) -> String {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
         ),
     );
-    assert_eq!(acked(&v), 8, "a 2-value insert is a 5-record commit");
+    assert_eq!(acked_at(&v), 8, "a 2-value insert is a 5-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -63,11 +63,11 @@ fn seed_flow(port: u16) -> String {
             d = doc
         ),
     );
-    assert_eq!(acked(&v), 11, "make_link is a 3-record commit (mint + link + seat)");
+    assert_eq!(acked_at(&v), 11, "make_link is a 3-record commit (mint + link + seat)");
     doc
 }
 
-fn acked(v: &Value) -> u64 {
+fn acked_at(v: &Value) -> u64 {
     v["at"].as_u64().unwrap_or_else(|| panic!("no committed at in {v}"))
 }
 
@@ -270,9 +270,9 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
         r#"{{"op":"insert","doc":"{doc}","id":"dup-1","at":{{"subspace":"1","ordinal":"3"}},"values":["x"]}}"#
     );
     let first = op(port, Some(&s1), &frame);
-    let at5 = acked(&first);
+    let at5 = acked_at(&first);
     let second = op(port, Some(&s1), &frame);
-    assert_eq!(acked(&second), at5, "the retry re-acks the original commit");
+    assert_eq!(acked_at(&second), at5, "the retry re-acks the original commit");
     let v = changes_ok(port, "since=0");
     assert_eq!(entry_ats(&v), vec![2, 3, 8, 11, at5], "one entry per commit, retries excluded");
 

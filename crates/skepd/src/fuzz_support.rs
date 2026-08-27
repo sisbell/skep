@@ -30,9 +30,9 @@ use crate::JsonCodec;
 
 /// SplitMix64 — the deterministic seed source the whole H-suite uses (H3's
 /// pattern); the seed is the entire reproduction.
-pub fn splitmix64(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
+pub fn splitmix64(rng: &mut u64) -> u64 {
+    *rng = rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *rng;
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
@@ -151,18 +151,18 @@ pub fn hex(bytes: &[u8]) -> String {
 /// deadline and returns what has arrived so far. Only a failed *connect* is
 /// an `Err` (the daemon is gone).
 pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
-    let mut s = TcpStream::connect(("127.0.0.1", port))?;
-    s.set_nodelay(true).ok();
-    s.set_read_timeout(Some(Duration::from_secs(5)))?;
-    s.set_write_timeout(Some(Duration::from_secs(5)))?;
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.set_nodelay(true).ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     // A write may fail if the daemon already answered and closed (an
     // oversized head, a refused method) — fine; still read what it sent.
-    let _ = s.write_all(raw);
-    let _ = s.shutdown(Shutdown::Write);
+    let _ = stream.write_all(raw);
+    let _ = stream.shutdown(Shutdown::Write);
     let mut out = Vec::new();
     let mut chunk = [0u8; 8192];
     loop {
-        match s.read(&mut chunk) {
+        match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&chunk[..n]),
             // ANY read end — EOF, a deadline (a kept-open stream or a
@@ -319,23 +319,23 @@ pub fn mutate(seed: u64, corpus: &[Vec<u8>]) -> Vec<u8> {
     if corpus.is_empty() {
         return Vec::new();
     }
-    let mut st = seed ^ 0x243F_6A88_85A3_08D3;
-    let base = &corpus[(splitmix64(&mut st) as usize) % corpus.len()];
-    let recipe = splitmix64(&mut st) % 10;
+    let mut rng = seed ^ 0x243F_6A88_85A3_08D3;
+    let base = &corpus[(splitmix64(&mut rng) as usize) % corpus.len()];
+    let recipe = splitmix64(&mut rng) % 10;
 
     // Byte-level recipes need no valid JSON.
     if recipe == 8 {
         let mut v = base.clone();
         if !v.is_empty() {
-            let cut = (splitmix64(&mut st) as usize) % v.len();
+            let cut = (splitmix64(&mut rng) as usize) % v.len();
             v.truncate(cut);
         }
         return v;
     }
     if recipe == 9 {
-        let other = &corpus[(splitmix64(&mut st) as usize) % corpus.len()];
-        let a = if base.is_empty() { 0 } else { (splitmix64(&mut st) as usize) % base.len() };
-        let b = if other.is_empty() { 0 } else { (splitmix64(&mut st) as usize) % other.len() };
+        let other = &corpus[(splitmix64(&mut rng) as usize) % corpus.len()];
+        let a = if base.is_empty() { 0 } else { (splitmix64(&mut rng) as usize) % base.len() };
+        let b = if other.is_empty() { 0 } else { (splitmix64(&mut rng) as usize) % other.len() };
         let mut v = base[..a].to_vec();
         v.extend_from_slice(&other[b..]);
         return v;
@@ -348,13 +348,13 @@ pub fn mutate(seed: u64, corpus: &[Vec<u8>]) -> Vec<u8> {
     };
     match recipe {
         5 => {
-            junk_first_tumbler(&mut val, &mut st);
+            junk_first_tumbler(&mut val, &mut rng);
         }
-        6 => deep_nest_a_field(&mut val, &mut st),
-        7 => splice_merge(&mut val, corpus, &mut st),
+        6 => deep_nest_a_field(&mut val, &mut rng),
+        7 => splice_merge(&mut val, corpus, &mut rng),
         r => {
             if let Value::Object(m) = &mut val {
-                object_edit(m, r, &mut st);
+                object_edit(m, r, &mut rng);
             }
         }
     }
@@ -362,12 +362,12 @@ pub fn mutate(seed: u64, corpus: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Recipes 0–4: structural edits over one object's fields.
-fn object_edit(m: &mut Map<String, Value>, recipe: u64, st: &mut u64) {
+fn object_edit(m: &mut Map<String, Value>, recipe: u64, rng: &mut u64) {
     let keys: Vec<String> = m.keys().cloned().collect();
     if keys.is_empty() {
         return;
     }
-    let k = keys[(splitmix64(st) as usize) % keys.len()].clone();
+    let k = keys[(splitmix64(rng) as usize) % keys.len()].clone();
     match recipe {
         0 => {
             m.remove(&k);
@@ -381,17 +381,17 @@ fn object_edit(m: &mut Map<String, Value>, recipe: u64, st: &mut u64) {
         }
         2 => {
             if let Some(v) = m.remove(&k) {
-                m.insert(edit_one_char(&k, st), v);
+                m.insert(edit_one_char(&k, rng), v);
             }
         }
         3 => {
             if let Some(slot) = m.get_mut(&k) {
-                *slot = retype(slot, st);
+                *slot = retype(slot, rng);
             }
         }
         4 => {
             if keys.len() >= 2 {
-                let k2 = keys[(splitmix64(st) as usize) % keys.len()].clone();
+                let k2 = keys[(splitmix64(rng) as usize) % keys.len()].clone();
                 if k2 != k {
                     let a = m.get(&k).cloned();
                     let b = m.get(&k2).cloned();
@@ -408,12 +408,12 @@ fn object_edit(m: &mut Map<String, Value>, recipe: u64, st: &mut u64) {
 
 /// Retype a value across the JSON type lattice (string↔number↔object↔array↔
 /// null↔bool).
-fn retype(v: &Value, st: &mut u64) -> Value {
-    match splitmix64(st) % 6 {
+fn retype(v: &Value, rng: &mut u64) -> Value {
+    match splitmix64(rng) % 6 {
         0 => Value::Null,
-        1 => Value::Bool((splitmix64(st) & 1) == 0),
-        2 => Value::Number(Number::from(splitmix64(st) as i64)),
-        3 => Value::String(format!("mut{}", splitmix64(st) % 100_000)),
+        1 => Value::Bool((splitmix64(rng) & 1) == 0),
+        2 => Value::Number(Number::from(splitmix64(rng) as i64)),
+        3 => Value::String(format!("mut{}", splitmix64(rng) % 100_000)),
         4 => Value::Array(vec![v.clone()]),
         _ => {
             let mut m = Map::new();
@@ -425,12 +425,12 @@ fn retype(v: &Value, st: &mut u64) -> Value {
 
 /// Flip one byte of a key to a different ASCII letter — turns a known field
 /// name into an unknown one (the never-silent-on-typos probe).
-fn edit_one_char(k: &str, st: &mut u64) -> String {
+fn edit_one_char(k: &str, rng: &mut u64) -> String {
     if k.is_empty() {
         return "x".into();
     }
     let mut bytes = k.as_bytes().to_vec();
-    let i = (splitmix64(st) as usize) % bytes.len();
+    let i = (splitmix64(rng) as usize) % bytes.len();
     bytes[i] = b'a' + (bytes[i].wrapping_add(1) % 26);
     String::from_utf8_lossy(&bytes).into_owned()
 }
@@ -438,10 +438,10 @@ fn edit_one_char(k: &str, st: &mut u64) -> String {
 /// Junk the first tumbler-shaped string in the tree: empty components, a
 /// huge natural, adjacent zeros, or a minus sign — the address-grammar
 /// hostilities the leaf parsers must reject cleanly.
-fn junk_first_tumbler(v: &mut Value, st: &mut u64) -> bool {
+fn junk_first_tumbler(v: &mut Value, rng: &mut u64) -> bool {
     match v {
         Value::String(s) if looks_like_tumbler(s) => {
-            *s = match splitmix64(st) % 5 {
+            *s = match splitmix64(rng) % 5 {
                 0 => format!("{s}."),               // trailing dot ⇒ empty component
                 1 => format!("{s}.{}", "9".repeat(40)), // huge natural
                 2 => format!("{s}.0.0.1"),          // adjacent zeros
@@ -450,8 +450,8 @@ fn junk_first_tumbler(v: &mut Value, st: &mut u64) -> bool {
             };
             true
         }
-        Value::Array(a) => a.iter_mut().any(|x| junk_first_tumbler(x, st)),
-        Value::Object(m) => m.values_mut().any(|x| junk_first_tumbler(x, st)),
+        Value::Array(a) => a.iter_mut().any(|x| junk_first_tumbler(x, rng)),
+        Value::Object(m) => m.values_mut().any(|x| junk_first_tumbler(x, rng)),
         _ => false,
     }
 }
@@ -466,15 +466,15 @@ fn looks_like_tumbler(s: &str) -> bool {
 
 /// Deep-nest one field's value inside a seeded number of array wrappers — a
 /// recursion-depth probe for the parsers.
-fn deep_nest_a_field(v: &mut Value, st: &mut u64) {
+fn deep_nest_a_field(v: &mut Value, rng: &mut u64) {
     let Value::Object(m) = v else { return };
     let keys: Vec<String> = m.keys().cloned().collect();
     if keys.is_empty() {
         return;
     }
-    let k = &keys[(splitmix64(st) as usize) % keys.len()];
+    let k = &keys[(splitmix64(rng) as usize) % keys.len()];
     if let Some(slot) = m.get_mut(k) {
-        let depth = 1 + splitmix64(st) % 8;
+        let depth = 1 + splitmix64(rng) % 8;
         for _ in 0..depth {
             *slot = Value::Array(vec![std::mem::replace(slot, Value::Null)]);
         }
@@ -483,9 +483,9 @@ fn deep_nest_a_field(v: &mut Value, st: &mut u64) {
 
 /// Splice two examples: merge another example's top-level fields into this
 /// object, colliding keys and mixing operation shapes.
-fn splice_merge(v: &mut Value, corpus: &[Vec<u8>], st: &mut u64) {
+fn splice_merge(v: &mut Value, corpus: &[Vec<u8>], rng: &mut u64) {
     let Value::Object(m) = v else { return };
-    let other = &corpus[(splitmix64(st) as usize) % corpus.len()];
+    let other = &corpus[(splitmix64(rng) as usize) % corpus.len()];
     if let Ok(Value::Object(om)) = serde_json::from_slice::<Value>(other) {
         for (k, val) in om {
             m.insert(k, val);

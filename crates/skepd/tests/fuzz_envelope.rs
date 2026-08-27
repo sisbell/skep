@@ -48,14 +48,14 @@ fn envelope_parsers_answer_documented_shapes() {
         b"at=1".to_vec(),
     ];
 
-    let mut st = 0x454E_5650_0000_0001; // "ENVP\0\0\0\1"
+    let mut rng = 0x454E_5650_0000_0001; // "ENVP\0\0\0\1"
     for i in 0..iters(1_500) {
-        let sel = (splitmix64(&mut st) % 4) as u8;
+        let sel = (splitmix64(&mut rng) % 4) as u8;
         let payload = match sel {
-            0 => mutate(splitmix64(&mut st), &session_bodies),
-            1 => mutate(splitmix64(&mut st), &op_ats),
-            2 => mutate_or_random(&mut st, &queries),
-            _ => mutate_or_random(&mut st, &queries),
+            0 => mutate(splitmix64(&mut rng), &session_bodies),
+            1 => mutate(splitmix64(&mut rng), &op_ats),
+            2 => mutate_or_random(&mut rng, &queries),
+            _ => mutate_or_random(&mut rng, &queries),
         };
         let mut data = Vec::with_capacity(payload.len() + 1);
         data.push(sel);
@@ -75,11 +75,11 @@ fn envelope_parsers_answer_documented_shapes() {
 
 /// Half the time mutate the query corpus (structured), half arbitrary bytes
 /// (queries are not JSON, so raw byte fuzz is apt).
-fn mutate_or_random(st: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
-    if splitmix64(st) & 1 == 0 {
-        mutate(splitmix64(st), corpus)
+fn mutate_or_random(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
+    if splitmix64(rng) & 1 == 0 {
+        mutate(splitmix64(rng), corpus)
     } else {
-        random_bytes(st, 48)
+        random_bytes(rng, 48)
     }
 }
 

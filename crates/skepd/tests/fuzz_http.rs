@@ -73,28 +73,28 @@ fn valid_op_request() -> Vec<u8> {
 /// One hostile request, seeded. Every arm is a complete byte string ready to
 /// write to a socket; the daemon must answer each with exactly one
 /// well-formed response.
-fn hostile_request(st: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
-    match splitmix64(st) % 8 {
+fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
+    match splitmix64(rng) % 8 {
         // Pure garbage — no HTTP shape at all.
-        0 => random_bytes(st, 300),
+        0 => random_bytes(rng, 300),
         // A random method/path/version request line, empty body.
         1 => {
-            let m = random_token(st, 8);
-            let p = format!("/{}", random_token(st, 12));
+            let m = random_token(rng, 8);
+            let p = format!("/{}", random_token(rng, 12));
             req(&m, &p, "", b"")
         }
         // A valid /op line with a mutated frame body and a correct length.
         2 => {
-            let body = mutate(splitmix64(st), corpus);
+            let body = mutate(splitmix64(rng), corpus);
             req("POST", "/op", "Content-Type: application/json\r\n", &body)
         }
         // A body with a Content-Length that overstates it: half-close makes
         // the daemon see EOF mid-body → one 400, never a hang.
         3 => {
-            let body = mutate(splitmix64(st), corpus);
+            let body = mutate(splitmix64(rng), corpus);
             let mut v = format!(
                 "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n",
-                body.len() + 1 + (splitmix64(st) as usize % 4096)
+                body.len() + 1 + (splitmix64(rng) as usize % 4096)
             )
             .into_bytes();
             v.extend_from_slice(&body);
@@ -104,26 +104,26 @@ fn hostile_request(st: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
         // rest dropped on close.
         4 => {
             let mut v = valid_op_request();
-            v.extend_from_slice(&random_bytes(st, 200));
+            v.extend_from_slice(&random_bytes(rng, 200));
             v
         }
         // A header flood within the 64 KiB head cap.
         5 => {
-            let count = 20 + splitmix64(st) as usize % 200;
+            let count = 20 + splitmix64(rng) as usize % 200;
             let mut headers = String::new();
             for k in 0..count {
-                headers.push_str(&format!("X-Fuzz-{k}: {}\r\n", random_token(st, 6)));
+                headers.push_str(&format!("X-Fuzz-{k}: {}\r\n", random_token(rng, 6)));
             }
             req("GET", "/health", &headers, b"")
         }
         // A mutated /session body.
         6 => {
-            let body = mutate(splitmix64(st), corpus);
+            let body = mutate(splitmix64(rng), corpus);
             req("POST", "/session", "Content-Type: application/json\r\n", &body)
         }
         // A junk query on a real GET route.
         _ => {
-            let q: String = String::from_utf8_lossy(&random_bytes(st, 40))
+            let q: String = String::from_utf8_lossy(&random_bytes(rng, 40))
                 .chars()
                 .filter(|c| !c.is_control())
                 .collect();
@@ -133,10 +133,10 @@ fn hostile_request(st: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// A short random ASCII token (letters/digits) for methods, paths, headers.
-fn random_token(st: &mut u64, maxlen: usize) -> String {
+fn random_token(rng: &mut u64, maxlen: usize) -> String {
     let alpha = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    let len = 1 + splitmix64(st) as usize % maxlen;
-    (0..len).map(|_| alpha[splitmix64(st) as usize % alpha.len()] as char).collect()
+    let len = 1 + splitmix64(rng) as usize % maxlen;
+    (0..len).map(|_| alpha[splitmix64(rng) as usize % alpha.len()] as char).collect()
 }
 
 #[test]
@@ -146,10 +146,10 @@ fn http_hostile_bytes_single_response_daemon_survives() {
     let sd = spawn(dir.path());
     let port = sd.port();
 
-    let mut st = 0x4854_5450_0000_0001; // "HTTP\0\0\0\1"
+    let mut rng = 0x4854_5450_0000_0001; // "HTTP\0\0\0\1"
     let n = iters(2_000);
     for i in 0..n {
-        let raw = hostile_request(&mut st, &corpus);
+        let raw = hostile_request(&mut rng, &corpus);
         let resp = http_raw_exchange(port, &raw).expect("daemon reachable");
         if !resp.is_empty() {
             check_http_response(&resp).unwrap_or_else(|e| {
@@ -185,16 +185,16 @@ fn http_hostile_bytes_single_response_daemon_survives() {
 /// Write `raw` in `chunk`-sized pieces with a flush and a tiny pause between
 /// them, half-close, and read the one response.
 fn split_write_exchange(port: u16, raw: &[u8], chunk: usize) -> Vec<u8> {
-    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
     for piece in raw.chunks(chunk.max(1)) {
-        s.write_all(piece).expect("write chunk");
-        s.flush().ok();
+        stream.write_all(piece).expect("write chunk");
+        stream.flush().ok();
         thread::sleep(Duration::from_millis(1));
     }
-    s.shutdown(Shutdown::Write).ok();
+    stream.shutdown(Shutdown::Write).ok();
     let mut out = Vec::new();
-    s.read_to_end(&mut out).expect("read response");
+    stream.read_to_end(&mut out).expect("read response");
     out
 }
 
@@ -211,17 +211,17 @@ fn http_slow_loris_read_timeout_fires() {
     let sd = spawn(dir.path());
     let port = sd.port();
 
-    let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     // A request line but no terminating CRLFCRLF, and we never send more.
-    s.write_all(b"POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\n").expect("write partial head");
-    s.flush().ok();
+    stream.write_all(b"POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\n").expect("write partial head");
+    stream.flush().ok();
     // Generous client deadline past the server's 30 s read timeout.
-    s.set_read_timeout(Some(Duration::from_secs(45))).expect("timeout");
+    stream.set_read_timeout(Some(Duration::from_secs(45))).expect("timeout");
     let start = Instant::now();
     let mut buf = [0u8; 1024];
     // The server times out its read, answers 400 (or closes) — either way the
     // client's blocking read returns within the window rather than hanging.
-    let outcome = s.read(&mut buf);
+    let outcome = stream.read(&mut buf);
     assert!(
         start.elapsed() < Duration::from_secs(44),
         "the server did not release a stalled connection within its read timeout"

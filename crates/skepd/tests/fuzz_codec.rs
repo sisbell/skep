@@ -55,9 +55,9 @@ fn codec_parse_arbitrary_bytes_never_panics_and_roundtrips() {
 
     // Storm: arbitrary bytes never panic the parser (returning is the
     // property); the seed is the reproduction.
-    let mut st = 0xF17E_C0DE_0000_0001;
+    let mut rng = 0xF17E_C0DE_0000_0001;
     for i in 0..iters(30_000) {
-        let bytes = random_bytes(&mut st, 512);
+        let bytes = random_bytes(&mut rng, 512);
         let res = catch_unwind(AssertUnwindSafe(|| codec_roundtrip_oracle(&bytes)));
         if let Err(e) = res {
             panic!(

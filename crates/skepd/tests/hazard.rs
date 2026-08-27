@@ -42,11 +42,11 @@ fn exhaustive() -> bool {
 }
 
 /// SplitMix64 — deterministic; the trial index is the whole reproduction.
-struct Lcg(u64);
+struct SplitMix64(u64);
 
-impl Lcg {
-    fn new(seed: u64) -> Lcg {
-        Lcg(seed ^ 0x9E37_79B9_7F4A_7C15)
+impl SplitMix64 {
+    fn new(seed: u64) -> SplitMix64 {
+        SplitMix64(seed ^ 0x9E37_79B9_7F4A_7C15)
     }
 
     fn next_range(&mut self, n: u64) -> u64 {
@@ -94,7 +94,7 @@ fn spawn_skepd(dir: &Path) -> (Child, u16) {
 /// One `/op` exchange that treats every transport mishap — refused connect,
 /// reset, partial response — as "no ack": the honest client view while the
 /// daemon is being killed. A parsed 200 body comes back whole.
-fn try_op(port: u16, session: Option<&str>, frame: &str) -> Option<Value> {
+fn try_op(port: u16, token: Option<&str>, frame: &str) -> Option<Value> {
     let mut s = TcpStream::connect(("127.0.0.1", port)).ok()?;
     let _ = s.set_nodelay(true);
     // Bounded like every judge: a wedged daemon becomes "no ack" (an honest
@@ -105,8 +105,8 @@ fn try_op(port: u16, session: Option<&str>, frame: &str) -> Option<Value> {
         "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
         frame.len()
     );
-    if let Some(tok) = session {
-        head.push_str(&format!("Skepd-Session: {tok}\r\n"));
+    if let Some(token) = token {
+        head.push_str(&format!("Skepd-Session: {token}\r\n"));
     }
     head.push_str("Content-Type: application/json\r\n\r\n");
     s.write_all(head.as_bytes()).ok()?;
@@ -145,7 +145,7 @@ fn timed_daemon_open(dir: &Path, ctx: &str) -> Daemon {
 
 /// Route one request through the socket-free router; the event stream is
 /// unreachable from these paths.
-fn handle_raw(
+fn route_raw(
     d: &Daemon,
     method: &str,
     path: &str,
@@ -160,7 +160,7 @@ fn handle_raw(
         session_token: token.map(str::to_string),
         body: body.to_vec(),
     };
-    match d.handle(&req) {
+    match d.route(&req) {
         Routed::Reply(r) => r,
         Routed::EventStream => unreachable!("no test route resolves to the event stream"),
     }
@@ -168,14 +168,14 @@ fn handle_raw(
 
 /// `POST /op` via the router; transport must be 200 (the returned document
 /// may still be a rejection — callers decide).
-fn handle_op(d: &Daemon, session: Option<&str>, frame: &str) -> Value {
-    let r = handle_raw(d, "POST", "/op", None, session, frame.as_bytes());
+fn route_op(d: &Daemon, token: Option<&str>, frame: &str) -> Value {
+    let r = route_raw(d, "POST", "/op", None, token, frame.as_bytes());
     assert_eq!(r.status, 200, "op transport failed: {}", String::from_utf8_lossy(r.body()));
     json(r.body())
 }
 
-fn handle_session(d: &Daemon, principal: u64) -> String {
-    let r = handle_raw(
+fn route_session(d: &Daemon, principal: u64) -> String {
+    let r = route_raw(
         d,
         "POST",
         "/session",
@@ -195,7 +195,7 @@ fn retrieve_frame(doc: &str, width: u64) -> String {
 
 /// Concatenated delivery text via the router (panics on a rejection).
 fn read_text(d: &Daemon, doc: &str, width: u64) -> String {
-    let v = handle_op(d, None, &retrieve_frame(doc, width));
+    let v = route_op(d, None, &retrieve_frame(doc, width));
     expect_resp(&v, "delivery")["items"]
         .as_array()
         .expect("delivery items")
@@ -206,7 +206,7 @@ fn read_text(d: &Daemon, doc: &str, width: u64) -> String {
 
 /// `GET /changes?since=0` entries as `(at, entry)` pairs.
 fn changes_entries(d: &Daemon) -> Vec<(u64, Value)> {
-    let r = handle_raw(d, "GET", "/changes", Some("since=0"), None, b"");
+    let r = route_raw(d, "GET", "/changes", Some("since=0"), None, b"");
     assert_eq!(r.status, 200, "/changes failed: {}", String::from_utf8_lossy(r.body()));
     let v = json(r.body());
     assert_eq!(v["more"], Value::Bool(false), "one page covers the fixture: {v}");
@@ -280,7 +280,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
         let child = Arc::clone(&child);
         thread::spawn(move || {
             let _ = go_rx.recv();
-            let mut rng = Lcg::new(0xE000 + trial);
+            let mut rng = SplitMix64::new(0xE000 + trial);
             thread::sleep(Duration::from_millis(25 + rng.next_range(275)));
             let _ = child.lock().expect("child lock").kill();
         })
@@ -350,7 +350,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
     // of k chars (no in-flight write survived) or k+1 (the single
     // in-flight write committed before the kill). Either is legal; the
     // bytes must be exactly what the client sent.
-    let probe = handle_op(&d, None, &retrieve_frame(&doc, k + 1));
+    let probe = route_op(&d, None, &retrieve_frame(&doc, k + 1));
     assert_eq!(
         probe["resp"].as_str(),
         Some("delivery"),
@@ -377,7 +377,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
     // present prefix. Phantom check = the delivered text may extend at
     // most one char (the single possible in-flight write) past the acks,
     // and that char must be the one the client sent.
-    let beyond = handle_op(&d, None, &retrieve_frame(&doc, k + 2));
+    let beyond = route_op(&d, None, &retrieve_frame(&doc, k + 2));
     let btext: String = beyond["items"]
         .as_array()
         .map(|a| a.iter().map(|i| i["content"].as_str().unwrap_or("")).collect())
@@ -409,18 +409,18 @@ fn f_sidecar_mutilation_never_touches_the_world() {
     let pre_retrieve: Vec<u8>;
     {
         let d = Daemon::open(&fixture).expect("genesis open");
-        let boot = handle_session(&d, 0);
-        let v = handle_op(&d, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let boot = route_session(&d, 0);
+        let v = route_op(&d, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
         let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
-        let v = handle_op(
+        let v = route_op(
             &d,
             Some(&boot),
             &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
         );
         acks.push(v["at"].as_u64().expect("delegate at"));
         let account = acked_addr(&v);
-        let s1 = handle_session(&d, 1);
-        let v = handle_op(
+        let s1 = route_session(&d, 1);
+        let v = route_op(
             &d,
             Some(&s1),
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
@@ -429,7 +429,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         acks.push(v["at"].as_u64().expect("create at"));
         for i in 1..=5u64 {
             let ch = char::from(b'a' + (i - 1) as u8);
-            let v = handle_op(
+            let v = route_op(
                 &d,
                 Some(&s1),
                 &format!(
@@ -438,7 +438,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
             );
             acks.push(v["at"].as_u64().expect("insert at"));
         }
-        let r = handle_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
+        let r = route_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
         assert_eq!(r.status, 200);
         pre_retrieve = r.body().to_vec();
     }
@@ -451,7 +451,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
     let judge_world_intact = |dir: &Path, ctx: &str| -> Daemon {
         let d = timed_daemon_open(dir, ctx);
         assert_eq!(d.log_position().0, head, "{ctx}: the head must be untouched");
-        let r = handle_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
+        let r = route_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
         assert_eq!(r.status, 200);
         assert_eq!(
             r.body(), pre_retrieve,
@@ -474,7 +474,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         for (at, e) in changes_entries(&d) {
             assert!(e["op"].is_string(), "control: entry {at} lost its metadata: {e}");
         }
-        let h = handle_raw(&d, "GET", "/health", None, None, b"");
+        let h = route_raw(&d, "GET", "/health", None, None, b"");
         assert!(!json(h.body())["head_time"].is_null(), "control: head_time is recorded");
     }
 
@@ -525,7 +525,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
                 "garbage: entry {at} must be bare, never invented: {e}"
             );
         }
-        let h = handle_raw(&d, "GET", "/health", None, None, b"");
+        let h = route_raw(&d, "GET", "/health", None, None, b"");
         assert!(
             json(h.body())["head_time"].is_null(),
             "garbage: head_time must be null, never invented"
@@ -676,18 +676,18 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
     let doc: String;
     {
         let d = Daemon::open(&data).expect("open on the tiny volume");
-        let boot = handle_session(&d, 0);
-        let v = handle_op(&d, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let boot = route_session(&d, 0);
+        let v = route_op(&d, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
         let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
-        let v = handle_op(
+        let v = route_op(
             &d,
             Some(&boot),
             &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
         );
         acks.push(v["at"].as_u64().expect("delegate at"));
         let account = acked_addr(&v);
-        let s1 = handle_session(&d, 1);
-        let v = handle_op(
+        let s1 = route_session(&d, 1);
+        let v = route_op(
             &d,
             Some(&s1),
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
@@ -705,7 +705,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
             let frame = format!(
                 r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"]}}"#
             );
-            let v = handle_op(&d, Some(&s1), &frame);
+            let v = route_op(&d, Some(&s1), &frame);
             match v["resp"].as_str() {
                 Some("ack_addr") => {
                     acks.push(v["at"].as_u64().expect("insert at"));
@@ -729,7 +729,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         };
 
         // Reads keep being served while the write path refuses.
-        let h = handle_raw(&d, "GET", "/health", None, None, b"");
+        let h = route_raw(&d, "GET", "/health", None, None, b"");
         assert_eq!(h.status, 200, "reads must survive disk exhaustion");
         assert_eq!(read_text(&d, &doc, 1), "x", "content reads survive disk exhaustion");
     }

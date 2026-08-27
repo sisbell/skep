@@ -112,28 +112,28 @@ pub fn op_at_envelopes() -> Vec<Vec<u8>> {
 }
 
 /// A seeded arbitrary byte string of length `0..=maxlen`.
-pub fn random_bytes(st: &mut u64, maxlen: usize) -> Vec<u8> {
-    let len = (splitmix64(st) as usize) % (maxlen + 1);
-    (0..len).map(|_| (splitmix64(st) & 0xff) as u8).collect()
+pub fn random_bytes(rng: &mut u64, maxlen: usize) -> Vec<u8> {
+    let len = (splitmix64(rng) as usize) % (maxlen + 1);
+    (0..len).map(|_| (splitmix64(rng) & 0xff) as u8).collect()
 }
 
 /// A seeded arbitrary *UTF-8* line (no newline) — for line protocols where
 /// non-UTF-8 or an embedded newline changes the framing rather than the
 /// payload.
-pub fn random_utf8_line(st: &mut u64, maxlen: usize) -> String {
-    let len = (splitmix64(st) as usize) % (maxlen + 1);
+pub fn random_utf8_line(rng: &mut u64, maxlen: usize) -> String {
+    let len = (splitmix64(rng) as usize) % (maxlen + 1);
     let mut s = String::with_capacity(len);
     for _ in 0..len {
         // Bias toward JSON-ish punctuation and ASCII so the parser is
         // actually exercised, with the occasional wider scalar.
-        let pick = splitmix64(st) % 32;
+        let pick = splitmix64(rng) % 32;
         let ch = match pick {
             0..=20 => {
                 let ascii = b" {}[]\":,0123456789tfnul-.abcxyz";
-                ascii[(splitmix64(st) as usize) % ascii.len()] as char
+                ascii[(splitmix64(rng) as usize) % ascii.len()] as char
             }
-            21..=28 => char::from_u32(0x20 + (splitmix64(st) as u32 % 0x5e)).unwrap_or('?'),
-            _ => char::from_u32(0x100 + (splitmix64(st) as u32 % 0x2000)).unwrap_or('?'),
+            21..=28 => char::from_u32(0x20 + (splitmix64(rng) as u32 % 0x5e)).unwrap_or('?'),
+            _ => char::from_u32(0x100 + (splitmix64(rng) as u32 % 0x2000)).unwrap_or('?'),
         };
         if ch != '\n' && ch != '\r' {
             s.push(ch);

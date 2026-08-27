@@ -27,8 +27,8 @@
 //!   to the file, so the walk runs once per uncovered region, not once per
 //!   open.
 //!
-//! The file — and the map replayed from it — is bounded by the journal's
-//! own retention, not by the world's age. Positions the journal has
+//! The file — and the entries replayed from it — are bounded by the
+//! journal's own retention, not by the world's age. Positions the journal has
 //! reclaimed are unanswerable across the whole history surface, so at open
 //! the sidecar drops its entries below that floor and rewrites itself
 //! around them (see [`Sidecar::open`]). Without that the feed's memory
@@ -136,7 +136,7 @@ pub(crate) struct Sidecar {
 struct Inner {
     file: File,
     /// Every enumerable position above `min_since`, in order.
-    map: BTreeMap<u64, Meta>,
+    entries: BTreeMap<u64, Meta>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or
     /// unreadable journal) and `/changes` answers 410. Deliberately not
@@ -170,7 +170,7 @@ impl Sidecar {
     /// once ever rather than once per open.
     ///
     /// COMPACTION runs at the other end, and is what bounds the file and
-    /// the resident map: positions the journal has reclaimed are refused by
+    /// the resident entries: positions the journal has reclaimed are refused by
     /// `/op-at` and `/dump?at` alike, so an entry naming one describes a
     /// commit no client can reach by any route. Those entries are dropped
     /// and the file rewritten around them, leaving retention exactly where
@@ -196,12 +196,12 @@ impl Sidecar {
             // positions by the walk below.
             file.set_len(valid_end as u64)?;
         }
-        let mut map = BTreeMap::new();
+        let mut entries = BTreeMap::new();
         let mut min_since = 0u64;
         for rec in records {
             match rec {
                 Rec::Entry(at, meta) => {
-                    map.insert(at, meta);
+                    entries.insert(at, meta);
                 }
                 Rec::MinSince(s) => min_since = min_since.max(s),
             }
@@ -210,13 +210,13 @@ impl Sidecar {
         // Entries beyond this journal's head describe a different journal
         // (an operator swapped files under the sidecar); never serve them.
         if head < u64::MAX {
-            let _ = map.split_off(&(head + 1));
+            let _ = entries.split_off(&(head + 1));
         }
-        let low = map.keys().next_back().copied().unwrap_or(0).max(min_since);
+        let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
         if head > low {
             let (bare, stop) = reconstruct(engine, low, head);
             for &at in &bare {
-                map.insert(at, Meta::Bare);
+                entries.insert(at, Meta::Bare);
                 file.write_all(&entry_line(at, &Meta::Bare))?;
             }
             if let Some(s) = stop {
@@ -236,13 +236,13 @@ impl Sidecar {
         if let Some(f) = reclaimed_below(engine) {
             min_since = min_since.max(f.saturating_sub(1));
         }
-        if map.keys().next().is_some_and(|&oldest| oldest <= min_since) {
-            map = map.split_off(&min_since.saturating_add(1));
-            file = rewrite(dir, &map, min_since)?;
+        if entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
+            entries = entries.split_off(&min_since.saturating_add(1));
+            file = rewrite(dir, &entries, min_since)?;
         }
-        let last_time = map.values().filter_map(Meta::time).max().unwrap_or(0);
+        let last_time = entries.values().filter_map(Meta::time).max().unwrap_or(0);
         Ok(Sidecar {
-            inner: Mutex::new(Inner { file, map, min_since, open_head: head, last_time }),
+            inner: Mutex::new(Inner { file, entries, min_since, open_head: head, last_time }),
         })
     }
 
@@ -251,42 +251,43 @@ impl Sidecar {
     /// recorded this uptime, is an ack for an OLD commit (idempotency-cache
     /// hit, `emit` incumbent) — re-recording it would invent a time.
     pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>) {
-        let mut g = self.inner.lock();
-        if at <= g.open_head || g.map.contains_key(&at) {
+        let mut inner = self.inner.lock();
+        if at <= inner.open_head || inner.entries.contains_key(&at) {
             return;
         }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let time = now.max(g.last_time);
-        g.last_time = time;
+        let time = now.max(inner.last_time);
+        inner.last_time = time;
         let meta = Meta::Recorded { op: op.to_string(), docs, time };
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
-        if let Err(e) = g.file.write_all(&entry_line(at, &meta)) {
+        if let Err(e) = inner.file.write_all(&entry_line(at, &meta)) {
             eprintln!("skepd: commits.log append failed at position {at}: {e}");
         }
-        g.map.insert(at, meta);
+        inner.entries.insert(at, meta);
     }
 
     /// The data behind `GET /changes?since=N&limit=K`.
     pub fn changes(&self, since: u64, limit: usize) -> ChangesAnswer {
-        let g = self.inner.lock();
-        if since < g.min_since {
+        let inner = self.inner.lock();
+        if since < inner.min_since {
             // The wire's `floor`: the oldest position still answerable,
             // which is the first entry ABOVE the smallest admissible since.
-            let floor = g.map.range(g.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
+            let floor =
+                inner.entries.range(inner.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
             return ChangesAnswer::Reclaimed { floor };
         }
         let entries: Vec<(u64, Meta)> = match since.checked_add(1) {
             Some(start) => {
-                g.map.range(start..).take(limit).map(|(k, v)| (*k, v.clone())).collect()
+                inner.entries.range(start..).take(limit).map(|(k, v)| (*k, v.clone())).collect()
             }
             None => Vec::new(),
         };
         let (last, more) = match entries.last() {
-            Some(&(k, _)) => (k, g.map.range(k.saturating_add(1)..).next().is_some()),
+            Some(&(k, _)) => (k, inner.entries.range(k.saturating_add(1)..).next().is_some()),
             None => (since, false),
         };
         ChangesAnswer::Page { entries, last, more }
@@ -295,7 +296,7 @@ impl Sidecar {
     /// The newest recorded commit's wall-clock time — `null` when the head
     /// position's record is bare or nothing is recorded (never invented).
     pub fn head_time(&self) -> Option<u64> {
-        self.inner.lock().map.values().next_back().and_then(Meta::time)
+        self.inner.lock().entries.values().next_back().and_then(Meta::time)
     }
 }
 
@@ -327,12 +328,12 @@ fn reclaimed_below(engine: &Engine) -> Option<u64> {
 /// says the feed remembers nothing, and a crash there would cost the
 /// surviving metadata for no reason, since it is exactly the metadata the
 /// journal can no longer reconstruct.
-fn rewrite(dir: &Path, map: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<File> {
+fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<File> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut out = Vec::new();
     out.extend_from_slice(&min_since_line(min_since));
-    for (at, meta) in map {
+    for (at, meta) in entries {
         out.extend_from_slice(&entry_line(*at, meta));
     }
     let mut f = File::create(&tmp)?;
@@ -351,24 +352,24 @@ fn rewrite(dir: &Path, map: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<
 /// feed can honor from there on.
 fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
     let mut found = vec![head];
-    let mut b = head;
+    let mut boundary = head;
     let mut stop = None;
-    // The descent's own guard: `probe` exists only when there is a
-    // position below `b` and it is still above `low`, so the step down
-    // cannot leave `u64` — a premise this loop holds rather than one it
-    // inherits from a caller's range check.
-    while let Some(probe) = b.checked_sub(1).filter(|p| *p > low) {
+    // The descent's own guard: `probe` exists only when there is a position
+    // below `boundary` and it is still above `low`, so the step down cannot
+    // leave `u64` — a premise this loop holds rather than one it inherits
+    // from a caller's range check.
+    while let Some(probe) = boundary.checked_sub(1).filter(|p| *p > low) {
         match engine.world_at(Seq(probe)) {
             Ok(_) => {
-                b = probe;
-                found.push(b);
+                boundary = probe;
+                found.push(boundary);
             }
             Err(HistoryError::NotABoundary { nearest }) => {
                 if nearest.0 <= low {
                     break;
                 }
-                b = nearest.0;
-                found.push(b);
+                boundary = nearest.0;
+                found.push(boundary);
             }
             Err(_) => {
                 stop = Some(probe);

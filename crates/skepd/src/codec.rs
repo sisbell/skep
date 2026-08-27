@@ -236,11 +236,11 @@ fn parse_value(v: Value) -> PResult<Request> {
     let Value::Object(m) = v else {
         return Err(PErr("request frame must be a JSON object".into()));
     };
-    let mut o = Obj(m);
-    let name = o.string("op")?;
-    let id = o.opt_string("id")?.map(|s| ReqId(s.into_bytes()));
-    let op = parse_op(&name, &mut o)?;
-    o.finish()?;
+    let mut fields = Fields(m);
+    let name = fields.string("op")?;
+    let id = fields.opt_string("id")?.map(|s| ReqId(s.into_bytes()));
+    let op = parse_op(&name, &mut fields)?;
+    fields.finish()?;
     Ok(Request { id, op })
 }
 
@@ -248,94 +248,110 @@ fn parse_value(v: Value) -> PResult<Request> {
 /// contract (wire.md §Operations); the one Rust-name departure is
 /// `principal_prefix`, whose argument rides as `"principal"` because the
 /// envelope key `"id"` is the idempotency slot.
-fn parse_op(name: &str, o: &mut Obj) -> PResult<Op> {
+fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
     Ok(match name {
-        "create_new_document" => Op::CreateNewDocument { account: o.addr("account")? },
+        "create_new_document" => Op::CreateNewDocument { account: fields.addr("account")? },
         "delegate" => Op::Delegate {
-            new_prefix: o.tum("new_prefix")?,
-            new_id: PrincipalId(o.u64("new_id")?),
+            new_prefix: fields.tum("new_prefix")?,
+            new_id: PrincipalId(fields.u64("new_id")?),
         },
-        "register_node" => Op::RegisterNode { addr: o.tum("addr")? },
+        "register_node" => Op::RegisterNode { addr: fields.tum("addr")? },
         "fork" => Op::Fork,
-        "next_account_prefix" => Op::NextAccountPrefix { parent: o.addr("parent")? },
-        "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(o.u64("principal")?) },
+        "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
+        "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "insert" => Op::Insert {
-            doc: o.addr("doc")?,
-            at: o.vpos("at")?,
-            values: o.vals("values")?,
+            doc: fields.addr("doc")?,
+            at: fields.vpos("at")?,
+            values: fields.vals("values")?,
         },
-        "delete" => Op::Delete { doc: o.addr("doc")?, p: o.vpos("p")?, width: o.nat("width")? },
-        "copy" => Op::Copy { doc: o.addr("doc")?, at: o.vpos("at")?, specs: o.vspecs("specs")? },
-        "rearrange" => Op::Rearrange { doc: o.addr("doc")?, cuts: o.vposes("cuts")? },
-        "version" => Op::Version { d_src: o.addr("d_src")? },
+        "delete" => Op::Delete {
+            doc: fields.addr("doc")?,
+            p: fields.vpos("p")?,
+            width: fields.nat("width")?,
+        },
+        "copy" => Op::Copy {
+            doc: fields.addr("doc")?,
+            at: fields.vpos("at")?,
+            specs: fields.vspecs("specs")?,
+        },
+        "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
+        "version" => Op::Version { d_src: fields.addr("d_src")? },
         "make_link" => Op::MakeLink {
-            home: o.addr("home")?,
-            from: o.slotarg("from")?,
-            to: o.slotarg("to")?,
-            ty: o.slotarg("ty")?,
+            home: fields.addr("home")?,
+            from: fields.slotarg("from")?,
+            to: fields.slotarg("to")?,
+            ty: fields.slotarg("ty")?,
         },
         "emit" => Op::Emit {
-            home: o.addr("home")?,
-            ty: o.endset("ty")?,
-            from: o.addr("from")?,
-            to: o.addrs("to")?,
+            home: fields.addr("home")?,
+            ty: fields.endset("ty")?,
+            from: fields.addr("from")?,
+            to: fields.addrs("to")?,
         },
-        "nullify" => Op::Nullify { home: o.addr("home")?, target: o.addr("target")? },
+        "nullify" => Op::Nullify { home: fields.addr("home")?, target: fields.addr("target")? },
         "assert_sup" => Op::AssertSup {
-            home: o.addr("home")?,
-            old: o.addr("old")?,
-            new: o.addr("new")?,
+            home: fields.addr("home")?,
+            old: fields.addr("old")?,
+            new: fields.addr("new")?,
         },
         "edit_link" => Op::EditLink {
-            original: o.addr("original")?,
-            successor: o.successor("successor")?,
-            d_s: o.addr("d_s")?,
-            d_a: o.addr("d_a")?,
+            original: fields.addr("original")?,
+            successor: fields.successor("successor")?,
+            d_s: fields.addr("d_s")?,
+            d_a: fields.addr("d_a")?,
         },
-        "read_link" => Op::ReadLink { a: o.addr("a")? },
-        "follow_link" => Op::FollowLink { a: o.addr("a")?, slot: o.usize_("slot")? },
-        "retrieve_v" => Op::RetrieveV { specs: o.specs("specs")? },
-        "retrieve_doc_v_span" => Op::RetrieveDocVSpan { doc: o.addr("doc")? },
-        "retrieve_doc_v_span_set" => Op::RetrieveDocVSpanSet { doc: o.addr("doc")? },
-        "show_origin" => Op::ShowOrigin { doc: o.addr("doc")?, span: o.span("span")? },
-        "show_deletions" => Op::ShowDeletions { d_a: o.addr("d_a")?, d_b: o.addr("d_b")? },
-        "compare" => Op::Compare { rho1: o.regions("rho1")?, rho2: o.regions("rho2")? },
-        "find_docs_containing" => Op::FindDocsContaining { regions: o.regions("regions")? },
-        "image" => Op::Image { d: o.addr("d")?, region: o.spans("region")? },
-        "find_links_v" => Op::FindLinksV { d: o.addr("d")?, region: o.spans("region")? },
-        "find_links_ftt" => Op::FindLinksFtt { q: o.fourset("q")? },
-        "count_v" => Op::CountV { d: o.addr("d")?, region: o.spans("region")? },
-        "count_ftt" => Op::CountFtt { q: o.fourset("q")? },
+        "read_link" => Op::ReadLink { a: fields.addr("a")? },
+        "follow_link" => Op::FollowLink { a: fields.addr("a")?, slot: fields.usize("slot")? },
+        "retrieve_v" => Op::RetrieveV { specs: fields.specs("specs")? },
+        "retrieve_doc_v_span" => Op::RetrieveDocVSpan { doc: fields.addr("doc")? },
+        "retrieve_doc_v_span_set" => Op::RetrieveDocVSpanSet { doc: fields.addr("doc")? },
+        "show_origin" => Op::ShowOrigin { doc: fields.addr("doc")?, span: fields.span("span")? },
+        "show_deletions" => {
+            Op::ShowDeletions { d_a: fields.addr("d_a")?, d_b: fields.addr("d_b")? }
+        }
+        "compare" => Op::Compare { rho1: fields.regions("rho1")?, rho2: fields.regions("rho2")? },
+        "find_docs_containing" => Op::FindDocsContaining { regions: fields.regions("regions")? },
+        "image" => Op::Image { d: fields.addr("d")?, region: fields.spans("region")? },
+        "find_links_v" => Op::FindLinksV { d: fields.addr("d")?, region: fields.spans("region")? },
+        "find_links_ftt" => Op::FindLinksFtt { q: fields.fourset("q")? },
+        "count_v" => Op::CountV { d: fields.addr("d")?, region: fields.spans("region")? },
+        "count_ftt" => Op::CountFtt { q: fields.fourset("q")? },
         "window_v" => Op::WindowV {
-            d: o.addr("d")?,
-            region: o.spans("region")?,
-            cur: o.cursor("cur")?,
-            n: o.usize_("n")?,
+            d: fields.addr("d")?,
+            region: fields.spans("region")?,
+            cur: fields.cursor("cur")?,
+            n: fields.usize("n")?,
         },
         "window_ftt" => Op::WindowFtt {
-            q: o.fourset("q")?,
-            cur: o.cursor("cur")?,
-            n: o.usize_("n")?,
+            q: fields.fourset("q")?,
+            cur: fields.cursor("cur")?,
+            n: fields.usize("n")?,
         },
-        "retrieve_endsets" => Op::RetrieveEndsets { d: o.addr("d")?, region: o.spans("region")? },
-        "project" => Op::Project { a: o.addr("a")?, slot: o.usize_("slot")?, d: o.addr("d")? },
-        "discoverable_from" => Op::DiscoverableFrom { a: o.addr("a")?, d: o.addr("d")? },
+        "retrieve_endsets" => {
+            Op::RetrieveEndsets { d: fields.addr("d")?, region: fields.spans("region")? }
+        }
+        "project" => Op::Project {
+            a: fields.addr("a")?,
+            slot: fields.usize("slot")?,
+            d: fields.addr("d")?,
+        },
+        "discoverable_from" => Op::DiscoverableFrom { a: fields.addr("a")?, d: fields.addr("d")? },
         "delete_orphans" => Op::DeleteOrphans {
-            d: o.addr("d")?,
-            p: o.vpos("p")?,
-            width: o.nat("width")?,
+            d: fields.addr("d")?,
+            p: fields.vpos("p")?,
+            width: fields.nat("width")?,
         },
-        "in_claims" => Op::InClaims { y: o.addr("y")?, view: o.view("view")? },
-        "out_claims" => Op::OutClaims { x: o.addr("x")?, view: o.view("view")? },
+        "in_claims" => Op::InClaims { y: fields.addr("y")?, view: fields.view("view")? },
+        "out_claims" => Op::OutClaims { x: fields.addr("x")?, view: fields.view("view")? },
         other => return Err(PErr(format!("unknown op '{other}'"))),
     })
 }
 
 /// The request object being consumed: known fields are taken out; anything
-/// left at [`Obj::finish`] is an unknown field and fails the parse.
-struct Obj(Map<String, Value>);
+/// left at [`Fields::finish`] is an unknown field and fails the parse.
+struct Fields(Map<String, Value>);
 
-impl Obj {
+impl Fields {
     fn take(&mut self, k: &'static str) -> PResult<Value> {
         self.0.remove(k).ok_or_else(|| PErr(format!("missing field '{k}'")))
     }
@@ -375,7 +391,7 @@ impl Obj {
         self.field(k, p_u64)
     }
 
-    fn usize_(&mut self, k: &'static str) -> PResult<usize> {
+    fn usize(&mut self, k: &'static str) -> PResult<usize> {
         self.field(k, p_usize)
     }
 
@@ -428,7 +444,7 @@ impl Obj {
     }
 
     fn vals(&mut self, k: &'static str) -> PResult<Vec<Val>> {
-        self.field(k, p_val_forms)
+        self.field(k, p_values)
     }
 
     fn endset(&mut self, k: &'static str) -> PResult<Endset> {
@@ -541,7 +557,11 @@ fn need<'a>(m: &'a Map<String, Value>, k: &'static str) -> PResult<&'a Value> {
     m.get(k).ok_or_else(|| PErr(format!("missing field '{k}'")))
 }
 
-fn sub<T>(m: &Map<String, Value>, k: &'static str, f: impl Fn(&Value) -> PResult<T>) -> PResult<T> {
+fn field<T>(
+    m: &Map<String, Value>,
+    k: &'static str,
+    f: impl Fn(&Value) -> PResult<T>,
+) -> PResult<T> {
     f(need(m, k)?).map_err(|e| PErr(format!("{k}: {e}")))
 }
 
@@ -564,19 +584,19 @@ fn p_list<T>(v: &Value, f: impl Fn(&Value) -> PResult<T>) -> PResult<Vec<T>> {
 
 fn p_span(v: &Value) -> PResult<Span> {
     let m = p_obj(v, &["start", "width"])?;
-    let start = sub(m, "start", p_tum)?;
-    let width = sub(m, "width", p_tum)?;
+    let start = field(m, "start", p_tum)?;
+    let width = field(m, "width", p_tum)?;
     Span::new(start, width).map_err(|e| PErr(format!("ill-formed span: {e}")))
 }
 
 fn p_vpos(v: &Value) -> PResult<VPos> {
     let m = p_obj(v, &["ordinal", "subspace"])?;
-    Ok(VPos { subspace: sub(m, "subspace", p_nat)?, ordinal: sub(m, "ordinal", p_nat)? })
+    Ok(VPos { subspace: field(m, "subspace", p_nat)?, ordinal: field(m, "ordinal", p_nat)? })
 }
 
 fn p_vspec(v: &Value) -> PResult<VSpec> {
     let m = p_obj(v, &["source", "span"])?;
-    Ok(VSpec { source: sub(m, "source", p_addr)?, span: sub(m, "span", p_span)? })
+    Ok(VSpec { source: field(m, "source", p_addr)?, span: field(m, "span", p_span)? })
 }
 
 /// A `make_link` endset slot (wire v5): a V-spec array (content-resolved,
@@ -588,7 +608,7 @@ fn p_slotarg(v: &Value) -> PResult<SlotArg> {
         Value::Array(_) => Ok(SlotArg::Resolve(p_list(v, p_vspec)?)),
         Value::Object(_) => {
             let m = p_obj(v, &["addrs"])?;
-            Ok(SlotArg::Addrs(sub(m, "addrs", |v| p_list(v, p_addr))?))
+            Ok(SlotArg::Addrs(field(m, "addrs", |v| p_list(v, p_addr))?))
         }
         _ => Err(PErr("expected a v-spec array or {\"addrs\": [addresses…]}".into())),
     }
@@ -596,12 +616,12 @@ fn p_slotarg(v: &Value) -> PResult<SlotArg> {
 
 fn p_spec(v: &Value) -> PResult<Spec> {
     let m = p_obj(v, &["doc", "span"])?;
-    Ok(Spec { doc: sub(m, "doc", p_addr)?, span: sub(m, "span", p_span)? })
+    Ok(Spec { doc: field(m, "doc", p_addr)?, span: field(m, "span", p_span)? })
 }
 
 fn p_region(v: &Value) -> PResult<Region> {
     let m = p_obj(v, &["doc", "spans"])?;
-    Ok(Region { doc: sub(m, "doc", p_addr)?, spans: sub(m, "spans", |v| p_list(v, p_span))? })
+    Ok(Region { doc: field(m, "doc", p_addr)?, spans: field(m, "spans", |v| p_list(v, p_span))? })
 }
 
 /// The `values` array of `insert`: each element is one of the four write
@@ -614,7 +634,7 @@ fn p_region(v: &Value) -> PResult<Region> {
 /// array's element count and the values it commands are different numbers.
 /// The total is tested after each element, so an over-budget array stops
 /// accumulating instead of being built whole and then measured.
-fn p_val_forms(v: &Value) -> PResult<Vec<Val>> {
+fn p_values(v: &Value) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
     for (i, x) in arr.iter().enumerate() {
@@ -651,16 +671,16 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
         return Err(PErr("expected exactly one of 'hex', 'atom', or 'atom_hex'".into()));
     }
     if m.contains_key("hex") {
-        let bytes = sub(m, "hex", |v| p_hex(&p_string(v)?))?;
+        let bytes = field(m, "hex", |v| p_hex(&p_string(v)?))?;
         out.extend(bytes.into_iter().map(|b| Val::new(vec![b])));
     } else if m.contains_key("atom") {
-        let s = sub(m, "atom", p_string)?;
+        let s = field(m, "atom", p_string)?;
         if s.is_empty() {
             return Err(PErr("atom: a zero-byte atom is not expressible".into()));
         }
         out.push(Val::new(s.into_bytes()));
     } else {
-        let bytes = sub(m, "atom_hex", |v| p_hex(&p_string(v)?))?;
+        let bytes = field(m, "atom_hex", |v| p_hex(&p_string(v)?))?;
         if bytes.is_empty() {
             return Err(PErr("atom_hex: a zero-byte atom is not expressible".into()));
         }
@@ -728,10 +748,10 @@ fn p_slotspec(v: &Value) -> PResult<SlotSpec> {
 fn p_fourset(v: &Value) -> PResult<FourSet> {
     let m = p_obj(v, &["from", "home", "to", "ty"])?;
     Ok(FourSet {
-        home: sub(m, "home", p_slotspec)?,
-        from: sub(m, "from", p_slotspec)?,
-        to: sub(m, "to", p_slotspec)?,
-        ty: sub(m, "ty", p_slotspec)?,
+        home: field(m, "home", p_slotspec)?,
+        from: field(m, "from", p_slotspec)?,
+        to: field(m, "to", p_slotspec)?,
+        ty: field(m, "ty", p_slotspec)?,
     })
 }
 
@@ -742,9 +762,9 @@ fn p_fourset(v: &Value) -> PResult<FourSet> {
 fn p_successor(v: &Value) -> PResult<SuccessorSpec> {
     let m = p_obj(v, &["from", "to", "ty"])?;
     Ok(SuccessorSpec {
-        from: sub(m, "from", |v| p_list(v, p_vspec))?,
-        to: sub(m, "to", |v| p_list(v, p_vspec))?,
-        ty: sub(m, "ty", p_successor_ty)?,
+        from: field(m, "from", |v| p_list(v, p_vspec))?,
+        to: field(m, "to", |v| p_list(v, p_vspec))?,
+        ty: field(m, "ty", p_successor_ty)?,
     })
 }
 
@@ -784,7 +804,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         }
         Op::Insert { doc, at, values } => (
             op_name(OpKind::Insert),
-            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_val_forms(values))],
+            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))],
         ),
         Op::Delete { doc, p, width } => (
             op_name(OpKind::Delete),
@@ -862,22 +882,22 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             (op_name(OpKind::FindDocsContaining), vec![("regions", j_regions(regions))])
         }
         Op::Image { d, region } => {
-            (op_name(OpKind::Image), vec![("d", j_addr(d)), ("region", j_span_list(region))])
+            (op_name(OpKind::Image), vec![("d", j_addr(d)), ("region", j_spans(region))])
         }
         Op::FindLinksV { d, region } => (
             op_name(OpKind::FindLinksV),
-            vec![("d", j_addr(d)), ("region", j_span_list(region))],
+            vec![("d", j_addr(d)), ("region", j_spans(region))],
         ),
         Op::FindLinksFtt { q } => (op_name(OpKind::FindLinksFtt), vec![("q", j_fourset(q))]),
         Op::CountV { d, region } => {
-            (op_name(OpKind::CountV), vec![("d", j_addr(d)), ("region", j_span_list(region))])
+            (op_name(OpKind::CountV), vec![("d", j_addr(d)), ("region", j_spans(region))])
         }
         Op::CountFtt { q } => (op_name(OpKind::CountFtt), vec![("q", j_fourset(q))]),
         Op::WindowV { d, region, cur, n } => (
             op_name(OpKind::WindowV),
             vec![
                 ("d", j_addr(d)),
-                ("region", j_span_list(region)),
+                ("region", j_spans(region)),
                 ("cur", j_cursor(cur)),
                 ("n", j_usize(*n)),
             ],
@@ -888,7 +908,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         ),
         Op::RetrieveEndsets { d, region } => (
             op_name(OpKind::RetrieveEndsets),
-            vec![("d", j_addr(d)), ("region", j_span_list(region))],
+            vec![("d", j_addr(d)), ("region", j_spans(region))],
         ),
         Op::Project { a, slot, d } => (
             op_name(OpKind::Project),
@@ -1109,7 +1129,7 @@ fn j_span(s: &Span) -> Value {
     obj(vec![("start", j_tum(s.start())), ("width", j_tum(s.width()))])
 }
 
-fn j_span_list(spans: &[Span]) -> Value {
+fn j_spans(spans: &[Span]) -> Value {
     Value::Array(spans.iter().map(j_span).collect())
 }
 
@@ -1147,7 +1167,7 @@ fn j_spec(s: &Spec) -> Value {
 }
 
 fn j_region(r: &Region) -> Value {
-    obj(vec![("doc", j_addr(&r.doc)), ("spans", j_span_list(&r.spans))])
+    obj(vec![("doc", j_addr(&r.doc)), ("spans", j_spans(&r.spans))])
 }
 
 fn j_regions(rs: &[Region]) -> Value {
@@ -1216,14 +1236,14 @@ impl ValueItems {
     }
 }
 
-/// The canonical `values` encoding — [`p_val_forms`]'s inverse, under
+/// The canonical `values` encoding — [`p_values`]'s inverse, under
 /// [`ValueItems`]' rule with the bare-string run form.
-fn j_val_forms(vs: &[Val]) -> Value {
-    let mut items = ValueItems::new(Value::String);
+fn j_values(vs: &[Val]) -> Value {
+    let mut out = ValueItems::new(Value::String);
     for v in vs {
-        items.value(v);
+        out.value(v);
     }
-    items.finish()
+    out.finish()
 }
 
 /// One composite value as its atom item: `{"atom"}` when its bytes are
@@ -1291,15 +1311,15 @@ fn j_window(w: &Window) -> Value {
 /// Delivery items — [`ValueItems`]' rule with the `{"content"}` run form,
 /// plus link positions as `{"ref"}`. The item key names the granularity, so
 /// a client always knows which world it is looking at.
-fn j_items(deliveries: &[DeliveryItem]) -> Value {
-    let mut items = ValueItems::new(|s| obj(vec![("content", Value::String(s))]));
-    for it in deliveries {
+fn j_items(items: &[DeliveryItem]) -> Value {
+    let mut out = ValueItems::new(|s| obj(vec![("content", Value::String(s))]));
+    for it in items {
         match it {
-            DeliveryItem::Content(v) => items.value(v),
-            DeliveryItem::Ref(a) => items.item(obj(vec![("ref", j_addr(a))])),
+            DeliveryItem::Content(v) => out.value(v),
+            DeliveryItem::Ref(a) => out.item(obj(vec![("ref", j_addr(a))])),
         }
     }
-    items.finish()
+    out.finish()
 }
 
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,
@@ -1492,9 +1512,10 @@ mod tests {
     /// Leaf strictness: the dotted-decimal grammar admits exactly nonempty
     /// runs of digits joined by single dots. Magnitude is unbounded in kind
     /// — the carrier is a `BigUint` and a beyond-u64 component round-trips —
-    /// with only the wire ENCODING capped (see [`tumbler_wire_caps`]).
+    /// with only the wire ENCODING capped (see
+    /// [`tumbler_digit_and_depth_caps_admit_their_maximum`]).
     #[test]
-    fn tumbler_parse_edges() {
+    fn only_dot_joined_digit_runs_parse_as_tumblers() {
         let ok = p_tum(&Value::String("1.0.1".into())).map(|t| t.to_string());
         assert_eq!(ok.expect("'1.0.1' parses"), "1.0.1");
         // Beyond u64: parses through the BigUint path and renders back.
@@ -1513,7 +1534,7 @@ mod tests {
     /// value it admits as well as the one past it: a `>` that became a `>=`
     /// would refuse a tumbler the substrate can legitimately carry.
     #[test]
-    fn tumbler_wire_caps() {
+    fn tumbler_digit_and_depth_caps_admit_their_maximum() {
         let tum = |s: String| p_tum(&Value::String(s));
         // Magnitude: the longest admitted digit run parses and renders back
         // whole; one digit more is refused with the count named.
@@ -1544,7 +1565,7 @@ mod tests {
     /// budget, so refusing at it would refuse a query exactly as large as a
     /// slot that can be stored.
     #[test]
-    fn wire_list_cap() {
+    fn a_wire_list_at_the_cap_parses_and_one_past_it_does_not() {
         let spans = |n: usize| {
             Value::Array(
                 (0..n)
@@ -1574,12 +1595,12 @@ mod tests {
     fn insert_value_cap_counts_values_not_elements() {
         let forms = |n: usize| Value::Array(vec![Value::String("a".repeat(n))]);
         // `Val` derives no Debug upstream, so unwrap the failure by hand.
-        let refusal = |v: &Value| match p_val_forms(v) {
+        let refusal = |v: &Value| match p_values(v) {
             Err(e) => e,
             Ok(vals) => panic!("{} values must not parse", vals.len()),
         };
         assert_eq!(
-            p_val_forms(&forms(MAX_INSERT_VALUES))
+            p_values(&forms(MAX_INSERT_VALUES))
                 .unwrap_or_else(|e| panic!("at the cap: {e}"))
                 .len(),
             MAX_INSERT_VALUES
@@ -1592,14 +1613,14 @@ mod tests {
             Value::String("a".repeat(MAX_INSERT_VALUES)),
             Value::String("b".into()),
         ]);
-        assert!(p_val_forms(&split).is_err(), "the total is what is capped, not one element");
+        assert!(p_values(&split).is_err(), "the total is what is capped, not one element");
     }
 
     /// Span parse edges — every span on the wire goes through M1's
     /// `Span::new`, so no zero-width span and no ill-shaped object survives
     /// the trust boundary (wire.md §Value encodings).
     #[test]
-    fn span_parse_edges() {
+    fn no_zero_width_or_ill_shaped_span_parses() {
         let span = |s: &str| p_span(&serde_json::from_str::<Value>(s).expect("test JSON"));
         let ok = span(r#"{"start":"1.1","width":"0.5"}"#).expect("a depth-2 content span parses");
         assert_eq!(
@@ -1636,7 +1657,7 @@ mod tests {
         assert_eq!(vs.len(), 4);
         assert_eq!(vs[3].as_bytes(), "hé".as_bytes());
         // Canonical inverse: the run reassembles, the atom stays its own form.
-        let canon = j_val_forms(&vs);
+        let canon = j_values(&vs);
         let expect: Value = serde_json::from_str(r#"["hé",{"atom":"hé"}]"#).unwrap();
         assert_eq!(canon, expect);
         // Empty per-byte forms are vacuous; empty atoms are inexpressible;

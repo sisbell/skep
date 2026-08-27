@@ -30,7 +30,7 @@ struct Hist {
     at_null: u64,
 }
 
-fn committed_at(v: &Value) -> u64 {
+fn acked_at(v: &Value) -> u64 {
     let resp = v["resp"].as_str().unwrap_or("");
     assert!(
         resp == "ack" || resp == "ack_addr" || resp == "ack_edit",
@@ -58,7 +58,7 @@ fn seed(port: u16) -> Hist {
             Some(&s1),
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
         );
-        (acked_addr(&v), committed_at(&v))
+        (acked_addr(&v), acked_at(&v))
     };
     let insert = |doc: &str, ordinal: u64, text: &str| {
         let v = op(
@@ -68,7 +68,7 @@ fn seed(port: u16) -> Hist {
                 r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["{text}"]}}"#
             ),
         );
-        (acked_addr(&v), committed_at(&v))
+        (acked_addr(&v), acked_at(&v))
     };
 
     let (doc1, at_c1) = create(&account);
@@ -82,7 +82,7 @@ fn seed(port: u16) -> Hist {
             r#"{{"op":"delete","doc":"{doc1}","p":{{"subspace":"1","ordinal":"2"}},"width":"2"}}"#
         ),
     );
-    let at_del = committed_at(&v);
+    let at_del = acked_at(&v);
     let (tdoc, _) = create(&account);
     insert(&tdoc, 1, "T");
     let v = op(
@@ -101,14 +101,14 @@ fn seed(port: u16) -> Hist {
         ),
     );
     let link = acked_addr(&v);
-    let at_link = committed_at(&v);
+    let at_link = acked_at(&v);
     let v = op(
         port,
         Some(&s1),
         &format!(r#"{{"op":"nullify","home":"{doc1}","target":"{link}"}}"#),
     );
     let nul = acked_addr(&v);
-    let at_null = committed_at(&v);
+    let at_null = acked_at(&v);
 
     Hist { doc1, doc2, link, nul, at_c1, at_i1, at_c2, at_i2, at_del, at_link, at_null }
 }

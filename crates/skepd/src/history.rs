@@ -142,7 +142,7 @@ fn execute_read_on(world: World, req: Request) -> Response {
     };
     let kernel =
         Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));
-    let febe = Operation::new(Box::new(HistStores { kernel }));
+    let febe = Operation::new(Box::new(HistoryStores { kernel }));
     let sid = febe.open_session(PrincipalId(u64::MAX));
     febe.close_session(sid);
     febe.execute(sid, req)
@@ -151,11 +151,11 @@ fn execute_read_on(world: World, req: Request) -> Response {
 /// `Stores<World>` over the throwaway historical kernel — the same shape as
 /// the engine's `EngineStores`, which is constructible only over the live
 /// recovered kernel and so cannot serve here.
-struct HistStores {
+struct HistoryStores {
     kernel: Arc<Kernel<World>>,
 }
 
-impl Stores<World> for HistStores {
+impl Stores<World> for HistoryStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
     }
@@ -243,10 +243,10 @@ mod tests {
                 s.spawn(|| {
                     for _ in 0..200 {
                         let Some(permit) = permits.try_acquire() else { continue };
-                        let now = holding.fetch_add(1, Ordering::AcqRel) + 1;
+                        let holders = holding.fetch_add(1, Ordering::AcqRel) + 1;
                         assert!(
-                            now <= MAX_CONCURRENT_RECONSTRUCTIONS,
-                            "{now} concurrent holders exceeds the budget of \
+                            holders <= MAX_CONCURRENT_RECONSTRUCTIONS,
+                            "{holders} concurrent holders exceeds the budget of \
                              {MAX_CONCURRENT_RECONSTRUCTIONS}"
                         );
                         granted.fetch_add(1, Ordering::Relaxed);

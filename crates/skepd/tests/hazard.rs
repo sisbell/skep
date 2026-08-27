@@ -150,14 +150,14 @@ fn handle_raw(
     method: &str,
     path: &str,
     query: Option<&str>,
-    session: Option<&str>,
+    token: Option<&str>,
     body: &[u8],
 ) -> Reply {
     let req = HttpRequest {
         method: method.to_string(),
         path: path.to_string(),
         query: query.map(str::to_string),
-        session: session.map(str::to_string),
+        session_token: token.map(str::to_string),
         body: body.to_vec(),
     };
     match d.handle(&req) {

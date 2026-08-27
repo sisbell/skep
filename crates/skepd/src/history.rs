@@ -6,7 +6,7 @@
 //! The mechanism is the engine's bounded replay (`Engine::world_at`):
 //! checkpoint-or-genesis base plus journal fold, per call, uncached. That
 //! is core-bound work, so [`History`] admits at most
-//! [`OPAT_MAX_CONCURRENT`] reconstructions at once and refuses the surplus
+//! [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and refuses the surplus
 //! outright ([`Unavailable::Busy`]) rather than queueing — a worker parked
 //! behind a replay is a worker lost to live traffic. The permit spans the
 //! engine call alone: the read that follows runs on a detached `World` and
@@ -31,7 +31,7 @@ use skep_namespace::{Namespace, PrincipalId};
 /// deserialize plus journal fold, per call, uncached — two keeps history
 /// panes serviceable without letting core-bound replay occupy the whole
 /// worker pool.
-pub(crate) const OPAT_MAX_CONCURRENT: usize = 2;
+pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
 /// Why a historical answer is unavailable — the daemon's momentary
 /// saturation, or the journal's own verdict on the position. Deliberately
@@ -53,7 +53,7 @@ pub(crate) struct History {
 
 impl History {
     pub fn new() -> History {
-        History { permits: ReconstructPermits::new(OPAT_MAX_CONCURRENT) }
+        History { permits: ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
     }
 
     /// The world as of `at`, under one reconstruction permit — held across
@@ -83,15 +83,15 @@ impl History {
 
     /// TEST HOOK (the `fuzz_support` standing: not a stable API): hold one
     /// permit exactly as an in-flight reconstruction does, or `None` when
-    /// all [`OPAT_MAX_CONCURRENT`] are taken. Real reconstructions finish
-    /// in milliseconds, so the integration tests pin the counter through
-    /// this instead of racing the engine.
+    /// all [`MAX_CONCURRENT_RECONSTRUCTIONS`] are taken. Real
+    /// reconstructions finish in milliseconds, so the integration tests pin
+    /// the counter through this instead of racing the engine.
     pub fn try_hold_permit(&self) -> Option<ReconstructPermit<'_>> {
         self.permits.try_acquire()
     }
 }
 
-/// The reconstruction bound behind [`OPAT_MAX_CONCURRENT`]: a counting
+/// The bound behind [`MAX_CONCURRENT_RECONSTRUCTIONS`]: a counting
 /// try-acquire with no queue and no blocking — plain atomics, no new
 /// dependency. The guard returns its permit on drop, early returns and
 /// panics included.
@@ -137,10 +137,10 @@ fn execute_read_on(world: World, req: Request) -> Response {
     };
     let kernel =
         Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));
-    let op = Operation::new(Box::new(HistStores { kernel }));
-    let sid = op.open_session(PrincipalId(u64::MAX));
-    op.close_session(sid);
-    op.execute(sid, req)
+    let febe = Operation::new(Box::new(HistStores { kernel }));
+    let sid = febe.open_session(PrincipalId(u64::MAX));
+    febe.close_session(sid);
+    febe.execute(sid, req)
 }
 
 /// `Stores<World>` over the throwaway historical kernel — the same shape as
@@ -204,14 +204,17 @@ mod tests {
 
     use super::*;
 
-    /// The counter is exact: [`OPAT_MAX_CONCURRENT`] acquires succeed, the
-    /// next fails, and a drop returns exactly one slot.
+    /// The counter is exact: [`MAX_CONCURRENT_RECONSTRUCTIONS`] acquires
+    /// succeed, the next fails, and a drop returns exactly one slot.
     #[test]
     fn reconstruct_permits_account_exactly() {
-        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
+        let permits = ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let first = permits.try_acquire().expect("permit 1 of 2");
         let second = permits.try_acquire().expect("permit 2 of 2");
-        assert!(permits.try_acquire().is_none(), "the cap is exactly {OPAT_MAX_CONCURRENT}");
+        assert!(
+            permits.try_acquire().is_none(),
+            "the cap is exactly {MAX_CONCURRENT_RECONSTRUCTIONS} reconstructions"
+        );
         drop(first);
         let third = permits.try_acquire().expect("a dropped permit reopens its slot");
         assert!(permits.try_acquire().is_none(), "still exactly one slot came back");
@@ -222,12 +225,12 @@ mod tests {
         drop((a, b));
     }
 
-    /// Under real threads, at most [`OPAT_MAX_CONCURRENT`] holders exist at
-    /// any instant — the invariant is asserted inside the hold, so any
-    /// overshoot fails loudly regardless of scheduling.
+    /// Under real threads, at most [`MAX_CONCURRENT_RECONSTRUCTIONS`]
+    /// holders exist at any instant — the invariant is asserted inside the
+    /// hold, so any overshoot fails loudly regardless of scheduling.
     #[test]
     fn reconstruct_permits_bound_concurrent_holders() {
-        let permits = ReconstructPermits::new(OPAT_MAX_CONCURRENT);
+        let permits = ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let holding = AtomicUsize::new(0);
         let granted = AtomicUsize::new(0);
         thread::scope(|s| {
@@ -237,8 +240,9 @@ mod tests {
                         let Some(permit) = permits.try_acquire() else { continue };
                         let now = holding.fetch_add(1, Ordering::AcqRel) + 1;
                         assert!(
-                            now <= OPAT_MAX_CONCURRENT,
-                            "{now} concurrent holders exceeds the permit of {OPAT_MAX_CONCURRENT}"
+                            now <= MAX_CONCURRENT_RECONSTRUCTIONS,
+                            "{now} concurrent holders exceeds the budget of \
+                             {MAX_CONCURRENT_RECONSTRUCTIONS}"
                         );
                         granted.fetch_add(1, Ordering::Relaxed);
                         std::hint::spin_loop();
@@ -257,9 +261,13 @@ mod tests {
     #[test]
     fn history_hands_out_exactly_the_reconstruction_budget() {
         let history = History::new();
-        let held: Vec<_> =
-            (0..OPAT_MAX_CONCURRENT).map(|_| history.try_hold_permit().expect("a permit")).collect();
-        assert!(history.try_hold_permit().is_none(), "the budget is exactly {OPAT_MAX_CONCURRENT}");
+        let held: Vec<_> = (0..MAX_CONCURRENT_RECONSTRUCTIONS)
+            .map(|_| history.try_hold_permit().expect("a permit"))
+            .collect();
+        assert!(
+            history.try_hold_permit().is_none(),
+            "the budget is exactly {MAX_CONCURRENT_RECONSTRUCTIONS} reconstructions"
+        );
         drop(held);
         assert!(history.try_hold_permit().is_some(), "released permits return to the budget");
     }

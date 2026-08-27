@@ -29,7 +29,7 @@ pub fn http_full(
     port: u16,
     method: &str,
     path: &str,
-    session: Option<&str>,
+    token: Option<&str>,
     body: &[u8],
 ) -> (u16, Vec<(String, String)>, Vec<u8>) {
     let ctx = |what: &str| format!("{what} ({method} {path})");
@@ -41,7 +41,7 @@ pub fn http_full(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {}\r\n",
         body.len()
     );
-    if let Some(tok) = session {
+    if let Some(tok) = token {
         head.push_str(&format!("Skepd-Session: {tok}\r\n"));
     }
     head.push_str("Content-Type: application/json\r\n\r\n");
@@ -79,10 +79,10 @@ pub fn http(
     port: u16,
     method: &str,
     path: &str,
-    session: Option<&str>,
+    token: Option<&str>,
     body: &[u8],
 ) -> (u16, Vec<u8>) {
-    let (status, _headers, body) = http_full(port, method, path, session, body);
+    let (status, _headers, body) = http_full(port, method, path, token, body);
     (status, body)
 }
 
@@ -116,8 +116,8 @@ pub fn open_session(port: u16, principal: u64) -> String {
 
 /// POST one op frame; transport must succeed (200) — the returned document
 /// may still be a rejection, which callers assert on.
-pub fn op(port: u16, session: Option<&str>, frame: &str) -> Value {
-    let (st, body) = http(port, "POST", "/op", session, frame.as_bytes());
+pub fn op(port: u16, token: Option<&str>, frame: &str) -> Value {
+    let (st, body) = http(port, "POST", "/op", token, frame.as_bytes());
     assert_eq!(st, 200, "op transport failed: {}", String::from_utf8_lossy(&body));
     json(&body)
 }

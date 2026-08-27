@@ -385,19 +385,19 @@ fn pre_feature_positions_answer_bare_entries() {
             checkpoint: CheckpointPolicy::EveryN(1024),
         };
         let engine = Engine::open(cfg, GenesisConfig::standard()).expect("engine genesis");
-        let op = Operation::new(Box::new(engine.stores()));
+        let febe = Operation::new(Box::new(engine.stores()));
         let codec = JsonCodec;
         let exec = |sid: SessionId, frame: &str| {
             let req = codec
                 .parse(frame.as_bytes())
                 .unwrap_or_else(|e| panic!("test frame does not parse: {:?}", e.detail));
-            op.execute(sid, req)
+            febe.execute(sid, req)
         };
         let unexpected = |r: &Response| -> String {
             String::from_utf8_lossy(&codec.marshal(r)).into_owned()
         };
 
-        let boot = op.bootstrap_session();
+        let boot = febe.bootstrap_session();
         let prefix = match exec(boot, r#"{"op":"next_account_prefix","parent":"1"}"#) {
             Response::MaybeAddr { addr: Some(a), .. } => tumbler_string(a.tumbler()),
             other => panic!("next_account_prefix: {}", unexpected(&other)),
@@ -412,7 +412,7 @@ fn pre_feature_positions_answer_bare_entries() {
             }
             other => panic!("delegate: {}", unexpected(&other)),
         };
-        let s1 = op.open_session(PrincipalId(1));
+        let s1 = febe.open_session(PrincipalId(1));
         let doc = match exec(
             s1,
             &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
@@ -434,7 +434,7 @@ fn pre_feature_positions_answer_bare_entries() {
             }
             other => panic!("insert: {}", unexpected(&other)),
         }
-        drop(op);
+        drop(febe);
         drop(engine); // releases the journal-directory lock for the daemon
     }
     assert!(

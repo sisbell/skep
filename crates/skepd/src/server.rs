@@ -58,7 +58,7 @@
 //! load: a subscriber sees a strictly increasing sequence converging on the
 //! true head). The mechanism is write-path notification: `/op` — the
 //! daemon's only live write path — publishes its post-execute position into
-//! the condvar-backed `EventFeed`, and each subscriber thread blocks there;
+//! the condvar-backed `CommitFeed`, and each subscriber thread blocks there;
 //! no polling anywhere, so a commit reaches subscribers at thread-wake
 //! speed. Subscribers are dedicated spawned threads, never workers: the
 //! accepting worker hands the socket off and returns to `accept`, so open
@@ -256,9 +256,9 @@ pub struct HttpRequest {
     /// The raw query string, if the target carried one. Meaningful on
     /// `/changes` and `/dump`; ignored elsewhere.
     pub query: Option<String>,
-    /// The `Skepd-Session` header's value, if present — the opaque token,
-    /// never a `SessionId`. Absent or unknown resolves to the guest.
-    pub session: Option<String>,
+    /// The `Skepd-Session` header's value, if present: the opaque token a
+    /// session was bound to. Absent or unknown resolves to the guest.
+    pub session_token: Option<String>,
     /// The body, exactly `Content-Length` bytes (empty when absent).
     pub body: Vec<u8>,
 }
@@ -429,13 +429,17 @@ impl Sessions {
 /// entire HTTP surface as a pure request→reply function over this state.
 pub struct Daemon {
     engine: Engine,
-    op: Operation<World>,
+    /// M10's front door — the operation surface every frame executes
+    /// against. `op` throughout this crate names an operation or its kind
+    /// (`Op`, `OpKind`, `op_name`, the wire's own `"op"` field), so the
+    /// boundary takes the boundary's name.
+    febe: Operation<World>,
     codec: JsonCodec,
     /// The token ↔ session binding and the guest policy over it.
     sessions: Sessions,
     /// The commit feed behind `GET /events` (wire v4): `/op` publishes its
     /// post-execute log position, subscriber threads block on the condvar.
-    feed: EventFeed,
+    commit_feed: CommitFeed,
     /// The commit-metadata sidecar behind `GET /changes` and `head_time`
     /// (wire v6) — the daemon's testimony about its own write path.
     sidecar: Sidecar,
@@ -477,18 +481,18 @@ impl Daemon {
         };
         let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
         let sidecar = Sidecar::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
-        let op = Operation::new(Box::new(engine.stores()));
+        let febe = Operation::new(Box::new(engine.stores()));
         // Mint-and-retire the guest binding; the principal value never
         // reaches a store (the binding is dropped before any request runs).
-        let guest = op.open_session(PrincipalId(u64::MAX));
-        op.close_session(guest);
-        let feed = EventFeed::at(op.log_position());
+        let guest = febe.open_session(PrincipalId(u64::MAX));
+        febe.close_session(guest);
+        let commit_feed = CommitFeed::at(febe.log_position());
         Ok(Daemon {
             engine,
-            op,
+            febe,
             codec: JsonCodec,
             sessions: Sessions::new(guest),
-            feed,
+            commit_feed,
             sidecar,
             write_serial: Mutex::new(()),
             history: History::new(),
@@ -506,7 +510,7 @@ impl Daemon {
 
     /// Current log position (M10's `log_position`; never regresses).
     pub fn log_position(&self) -> Seq {
-        self.op.log_position()
+        self.febe.log_position()
     }
 
     /// The router — the whole HTTP surface, still socket-free: the one
@@ -527,7 +531,7 @@ impl Daemon {
     fn reply(&self, req: &HttpRequest) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
             ("POST", "/session") => self.post_session(&req.body),
-            ("POST", "/op") => self.post_op(req.session.as_deref(), &req.body),
+            ("POST", "/op") => self.post_op(req.session_token.as_deref(), &req.body),
             ("POST", "/op-at") => self.post_op_at(&req.body),
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => self.get_changes(req.query.as_deref()),
@@ -558,7 +562,7 @@ impl Daemon {
                 return refuse(TransportError::MalformedSessionRequest, Some(&detail))
             }
         };
-        let sid = self.op.open_session(PrincipalId(principal));
+        let sid = self.febe.open_session(PrincipalId(principal));
         let token = self.sessions.bind(sid);
         Reply::json(
             200,
@@ -578,14 +582,14 @@ impl Daemon {
     /// the sidecar append is atomic with its own commit — M2's applier
     /// already serializes the commits themselves, so this costs nothing it
     /// wasn't already paying. Reads bypass the lock entirely.
-    fn post_op(&self, session: Option<&str>, body: &[u8]) -> Reply {
-        let sid = self.sessions.resolve(session);
+    fn post_op(&self, token: Option<&str>, body: &[u8]) -> Reply {
+        let sid = self.sessions.resolve(token);
         let resp = match self.codec.parse(body) {
             Ok(req) => match write_meta(&req.op) {
-                None => self.op.execute(sid, req),
+                None => self.febe.execute(sid, req),
                 Some((kind, docs)) => {
                     let _serial = self.write_serial.lock();
-                    let resp = self.op.execute(sid, req);
+                    let resp = self.febe.execute(sid, req);
                     self.observe_commit(kind, docs, &resp);
                     resp
                 }
@@ -598,7 +602,7 @@ impl Daemon {
         // feed keeps the sequence monotone. Published after the sidecar
         // append (above), so a subscriber waking on the event already finds
         // the position in `/changes`.
-        self.feed.publish(self.op.log_position());
+        self.commit_feed.publish(self.febe.log_position());
         self.op_reply(&resp)
     }
 
@@ -620,7 +624,7 @@ impl Daemon {
     /// `Response` walks here: a new answer shape carrying a committed
     /// position must decide whether the change feed reports it, and fails
     /// to compile until it does.
-    fn observe_commit(&self, kind: OpKind, docs: DocsSrc, resp: &Response) {
+    fn observe_commit(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) {
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -643,8 +647,8 @@ impl Daemon {
             | Response::Rejected(_) => return,
         };
         let docs = match docs {
-            DocsSrc::These(v) => v.iter().map(|a| tumbler_string(a.tumbler())).collect(),
-            DocsSrc::Minted => match minted {
+            AffectedDocs::Named(v) => v.iter().map(|a| tumbler_string(a.tumbler())).collect(),
+            AffectedDocs::Minted => match minted {
                 Some(a) => vec![tumbler_string(a.tumbler())],
                 None => Vec::new(),
             },
@@ -697,7 +701,7 @@ impl Daemon {
             200,
             obj(vec![
                 ("head_time", head_time),
-                ("log_position", Value::Number(self.op.log_position().0.into())),
+                ("log_position", Value::Number(self.febe.log_position().0.into())),
                 ("ok", Value::Bool(true)),
             ]),
         )
@@ -824,8 +828,10 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
 /// target doc; a link write names its home (`edit_link` both homes); the
 /// MINTED document for create/fork/version (known only from the ack);
 /// delegate/register_node touch no document.
-enum DocsSrc {
-    These(Vec<Address>),
+enum AffectedDocs {
+    /// The documents the frame itself names.
+    Named(Vec<Address>),
+    /// The document the write mints, known only from its ack.
     Minted,
 }
 
@@ -835,18 +841,18 @@ enum DocsSrc {
 /// `_` arm: a new `Op` fails to compile here until its feed entry is
 /// decided, and that one decision classifies it for the history surface
 /// too.
-fn write_meta(op: &Op) -> Option<(OpKind, DocsSrc)> {
-    let one = |a: &Address| DocsSrc::These(vec![a.clone()]);
+fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
+    let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
     match op {
-        Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, DocsSrc::Minted)),
-        Op::Delegate { .. } => Some((OpKind::Delegate, DocsSrc::These(Vec::new()))),
-        Op::RegisterNode { .. } => Some((OpKind::RegisterNode, DocsSrc::These(Vec::new()))),
-        Op::Fork => Some((OpKind::Fork, DocsSrc::Minted)),
+        Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, AffectedDocs::Minted)),
+        Op::Delegate { .. } => Some((OpKind::Delegate, AffectedDocs::Named(Vec::new()))),
+        Op::RegisterNode { .. } => Some((OpKind::RegisterNode, AffectedDocs::Named(Vec::new()))),
+        Op::Fork => Some((OpKind::Fork, AffectedDocs::Minted)),
         Op::Insert { doc, .. } => Some((OpKind::Insert, one(doc))),
         Op::Delete { doc, .. } => Some((OpKind::Delete, one(doc))),
         Op::Copy { doc, .. } => Some((OpKind::Copy, one(doc))),
         Op::Rearrange { doc, .. } => Some((OpKind::Rearrange, one(doc))),
-        Op::Version { .. } => Some((OpKind::Version, DocsSrc::Minted)),
+        Op::Version { .. } => Some((OpKind::Version, AffectedDocs::Minted)),
         Op::MakeLink { home, .. } => Some((OpKind::MakeLink, one(home))),
         Op::Emit { home, .. } => Some((OpKind::Emit, one(home))),
         Op::Nullify { home, .. } => Some((OpKind::Nullify, one(home))),
@@ -856,7 +862,7 @@ fn write_meta(op: &Op) -> Option<(OpKind, DocsSrc)> {
             if d_a != d_s {
                 docs.push(d_a.clone());
             }
-            Some((OpKind::EditLink, DocsSrc::These(docs)))
+            Some((OpKind::EditLink, AffectedDocs::Named(docs)))
         }
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
@@ -1005,10 +1011,10 @@ fn op_is_read(op: &Op) -> bool {
 /// One head + shutdown flag under a mutex, one condvar. `/op` publishes
 /// after execute (write-path notification — the only live write path, so
 /// no head advance can be missed); each subscriber blocks in
-/// [`EventFeed::next`] with the keepalive interval as its wait bound.
+/// [`CommitFeed::next`] with the keepalive interval as its wait bound.
 /// Shutdown broadcasts on the same condvar, which is what makes closing
 /// open streams immediate rather than a poll away.
-struct EventFeed {
+struct CommitFeed {
     state: Mutex<FeedState>,
     cond: Condvar,
 }
@@ -1028,9 +1034,9 @@ enum FeedStep {
     Shutdown,
 }
 
-impl EventFeed {
-    fn at(head: Seq) -> EventFeed {
-        EventFeed {
+impl CommitFeed {
+    fn at(head: Seq) -> CommitFeed {
+        CommitFeed {
             state: Mutex::new(FeedState { head, shutdown: false }),
             cond: Condvar::new(),
         }
@@ -1176,7 +1182,7 @@ impl Skepd {
             let _ = h.join();
         }
         // The workers are gone, so no new subscriber can appear past here.
-        daemon.feed.shutdown();
+        daemon.commit_feed.shutdown();
         let subs = std::mem::take(&mut *subscribers.lock());
         for h in subs {
             let _ = h.join();
@@ -1311,7 +1317,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     }
     // The headers this daemon acts on; everything else passes unread.
     let mut content_length: Option<usize> = None;
-    let mut session: Option<String> = None;
+    let mut session_token: Option<String> = None;
     let mut expects_continue = false;
     for line in lines {
         if line.is_empty() {
@@ -1325,7 +1331,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
             content_length =
                 Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
         } else if name.eq_ignore_ascii_case("Skepd-Session") {
-            session = Some(value.to_string());
+            session_token = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Expect") {
             expects_continue = value.eq_ignore_ascii_case("100-continue");
         } else if name.eq_ignore_ascii_case("Transfer-Encoding") {
@@ -1363,7 +1369,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     // A byte past Content-Length would be a pipelined second request; this
     // connection answers one and closes, so it is dropped unread.
     body.truncate(want);
-    Ok(Some(HttpRequest { method, path, query, session, body }))
+    Ok(Some(HttpRequest { method, path, query, session_token, body }))
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {
@@ -1438,7 +1444,7 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
         return;
     }
     loop {
-        match daemon.feed.next(last) {
+        match daemon.commit_feed.next(last) {
             FeedStep::Shutdown => return,
             FeedStep::Commit(at) => {
                 last = at;
@@ -1497,7 +1503,7 @@ mod tests {
             method: method.to_string(),
             path: path.to_string(),
             query: None,
-            session: None,
+            session_token: None,
             body: Vec::new(),
         };
         let status = |method: &str, path: &str| match daemon.handle(&bare(method, path)) {
@@ -1536,10 +1542,10 @@ mod tests {
             guest,
             "an unknown token is the guest, not an error"
         );
-        let sid = daemon.op.open_session(PrincipalId(7));
+        let sid = daemon.febe.open_session(PrincipalId(7));
         let token = daemon.sessions.bind(sid);
         assert_eq!(daemon.sessions.resolve(Some(&token)), sid, "a bound token is its session");
-        let other = daemon.sessions.bind(daemon.op.open_session(PrincipalId(8)));
+        let other = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(8)));
         assert_ne!(token, other, "each binding gets its own token");
     }
 

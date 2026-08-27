@@ -21,10 +21,11 @@
 //!   walking down from the head, an `Ok` probe proves a boundary, a
 //!   `NotABoundary { nearest }` names the next one below, and any other
 //!   error (reclaimed, corrupt, I/O) honestly ends the feed's reach there —
-//!   recorded as a floor, below which `/changes` answers the same 410
-//!   discipline as `/op-at`. The kernel's own journal reader stays closed.
-//!   Reconstructed positions are appended to the file, so the walk runs
-//!   once per uncovered region, not once per open.
+//!   recorded as the smallest `since` this feed can honor, under which
+//!   `/changes` answers the same 410 discipline as `/op-at`. The kernel's
+//!   own journal reader stays closed. Reconstructed positions are appended
+//!   to the file, so the walk runs once per uncovered region, not once per
+//!   open.
 //!
 //! The sidecar is written under the daemon's write-serialization lock, so
 //! file order is position order and recorded times are monotone
@@ -104,13 +105,16 @@ impl Meta {
 /// One replayed file record.
 enum Rec {
     Entry(u64, Meta),
-    Floor(u64),
+    /// The smallest `since` this feed can honor — see [`Inner::min_since`].
+    MinSince(u64),
 }
 
 /// The answer `GET /changes` marshals.
 pub(crate) enum ChangesAnswer {
     /// `since` reaches below what the feed can enumerate; `floor` is the
-    /// oldest position that still has an entry, when one exists.
+    /// oldest position that still has an entry, when one exists — the
+    /// wire's sense of the word (wire.md §Reading history: the oldest
+    /// position still answerable), which is NOT [`Inner::min_since`].
     Reclaimed { floor: Option<u64> },
     /// The entries in `(since, head]`, oldest first, capped at `limit`;
     /// `last` is the final entry's position (or `since` echoed when the
@@ -124,12 +128,14 @@ pub(crate) struct Sidecar {
 
 struct Inner {
     file: File,
-    /// Every enumerable position above `floor_since`, in order.
+    /// Every enumerable position above `min_since`, in order.
     map: BTreeMap<u64, Meta>,
     /// The smallest admissible `since`: coverage is complete over
-    /// `(floor_since, head]`; below it the walk was stopped (reclaimed or
-    /// unreadable journal) and `/changes` answers 410.
-    floor_since: u64,
+    /// `(min_since, head]`; below it the walk was stopped (reclaimed or
+    /// unreadable journal) and `/changes` answers 410. Deliberately not
+    /// called a floor — the wire's `floor` is the oldest position still
+    /// ANSWERABLE, whereas this is the highest one that is not.
+    min_since: u64,
     /// The journal head at open — the fence between replayed history and
     /// this uptime's commits. An ack carrying a position at or below it
     /// (an idempotency-cache replay, `emit`'s incumbent ack) is never a
@@ -168,13 +174,13 @@ impl Sidecar {
             file.set_len(valid_end as u64)?;
         }
         let mut map = BTreeMap::new();
-        let mut floor_since = 0u64;
+        let mut min_since = 0u64;
         for rec in records {
             match rec {
                 Rec::Entry(at, meta) => {
                     map.insert(at, meta);
                 }
-                Rec::Floor(f) => floor_since = floor_since.max(f),
+                Rec::MinSince(s) => min_since = min_since.max(s),
             }
         }
         let head = engine.kernel().current_seq().0;
@@ -183,21 +189,21 @@ impl Sidecar {
         if head < u64::MAX {
             let _ = map.split_off(&(head + 1));
         }
-        let low = map.keys().next_back().copied().unwrap_or(0).max(floor_since);
+        let low = map.keys().next_back().copied().unwrap_or(0).max(min_since);
         if head > low {
             let (bare, stop) = reconstruct(engine, low, head);
             for &at in &bare {
                 map.insert(at, Meta::bare());
                 file.write_all(&entry_line(at, &Meta::bare()))?;
             }
-            if let Some(f) = stop {
-                floor_since = floor_since.max(f);
-                file.write_all(&floor_line(f))?;
+            if let Some(s) = stop {
+                min_since = min_since.max(s);
+                file.write_all(&min_since_line(s))?;
             }
         }
         let last_time = map.values().filter_map(|m| m.time).max().unwrap_or(0);
         Ok(Sidecar {
-            inner: Mutex::new(Inner { file, map, floor_since, open_head: head, last_time }),
+            inner: Mutex::new(Inner { file, map, min_since, open_head: head, last_time }),
         })
     }
 
@@ -228,8 +234,10 @@ impl Sidecar {
     /// The data behind `GET /changes?since=N&limit=K`.
     pub fn changes(&self, since: u64, limit: usize) -> ChangesAnswer {
         let g = self.inner.lock();
-        if since < g.floor_since {
-            let floor = g.map.range(g.floor_since.saturating_add(1)..).next().map(|(k, _)| *k);
+        if since < g.min_since {
+            // The wire's `floor`: the oldest position still answerable,
+            // which is the first entry ABOVE the smallest admissible since.
+            let floor = g.map.range(g.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
             return ChangesAnswer::Reclaimed { floor };
         }
         let entries: Vec<(u64, Meta)> = match since.checked_add(1) {
@@ -256,8 +264,8 @@ impl Sidecar {
 /// the engine's public bounded replay: `head` is a boundary by definition;
 /// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
 /// `nearest`. Returns the boundaries (ascending) and, when the journal
-/// stopped answering (reclaimed / corrupt / I/O), the floor fence below
-/// which nothing further is enumerable.
+/// stopped answering (reclaimed / corrupt / I/O), the smallest `since` the
+/// feed can honor from there on.
 fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
     let mut found = vec![head];
     let mut b = head;
@@ -304,11 +312,14 @@ fn parse_records(bytes: &[u8]) -> (Vec<Rec>, usize) {
 
 /// One file line. The file is daemon-private; unknown keys are ignored (a
 /// newer daemon's extension), malformed known fields are torn-treatment.
+/// The min-since record has two spellings in the field — `min_since` and
+/// `floor` — and both read, because an unparseable line ends trust in
+/// everything after it.
 fn parse_line(line: &[u8]) -> Option<Rec> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
-    if let Some(f) = m.get("floor") {
-        return Some(Rec::Floor(f.as_u64()?));
+    if let Some(s) = m.get("min_since").or_else(|| m.get("floor")) {
+        return Some(Rec::MinSince(s.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;
     let op = match m.get("op") {
@@ -352,8 +363,12 @@ fn entry_line(at: u64, meta: &Meta) -> Vec<u8> {
     line_bytes(obj(pairs))
 }
 
-fn floor_line(floor: u64) -> Vec<u8> {
-    line_bytes(obj(vec![("floor", Value::Number(floor.into()))]))
+/// `{"min_since":N}` — the smallest `since` the feed can honor from here
+/// on. The key is deliberately not `floor`, which on the wire names the
+/// oldest position still ANSWERABLE — a different number, and one an
+/// operator reading this file beside a `410` body would otherwise conflate.
+fn min_since_line(min_since: u64) -> Vec<u8> {
+    line_bytes(obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
 fn line_bytes(v: Value) -> Vec<u8> {
@@ -382,12 +397,12 @@ mod tests {
             b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000000}\n"
         );
         assert_eq!(entry_line(3, &Meta::bare()), b"{\"at\":3}\n");
-        assert_eq!(floor_line(2048), b"{\"floor\":2048}\n");
+        assert_eq!(min_since_line(2048), b"{\"min_since\":2048}\n");
 
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(&entry_line(8, &meta));
         file.extend_from_slice(&entry_line(3, &Meta::bare()));
-        file.extend_from_slice(&floor_line(2048));
+        file.extend_from_slice(&min_since_line(2048));
         let (recs, end) = parse_records(&file);
         assert_eq!(end, file.len(), "every whole line is trusted");
         assert_eq!(recs.len(), 3);
@@ -396,17 +411,37 @@ mod tests {
                 assert_eq!((*at, m.op.as_deref(), m.time), (8, Some("insert"), meta.time));
                 assert_eq!(m.docs.as_deref(), Some(&["1.0.1.0.1".to_string()][..]));
             }
-            Rec::Floor(_) => panic!("first line is an entry"),
+            Rec::MinSince(_) => panic!("first line is an entry"),
         }
         match recs[1] {
             Rec::Entry(at, ref m) => {
                 assert!(at == 3 && m.op.is_none() && m.docs.is_none() && m.time.is_none())
             }
-            Rec::Floor(_) => panic!("second line is a bare entry"),
+            Rec::MinSince(_) => panic!("second line is a bare entry"),
         }
         match recs[2] {
-            Rec::Floor(f) => assert_eq!(f, 2048),
-            Rec::Entry(..) => panic!("third line is a floor"),
+            Rec::MinSince(s) => assert_eq!(s, 2048),
+            Rec::Entry(..) => panic!("third line names the smallest admissible since"),
+        }
+    }
+
+    /// Both spellings of the min-since record read, and reading one does
+    /// not end trust in the lines behind it — a data dir carrying the
+    /// `floor` spelling replays whole rather than truncating there.
+    #[test]
+    fn both_spellings_of_the_min_since_record_replay() {
+        let mut file: Vec<u8> = Vec::new();
+        file.extend_from_slice(b"{\"floor\":2048}\n");
+        file.extend_from_slice(&entry_line(2049, &Meta::bare()));
+        let (recs, end) = parse_records(&file);
+        assert_eq!(end, file.len(), "the `floor` spelling does not end trust");
+        match recs[0] {
+            Rec::MinSince(s) => assert_eq!(s, 2048),
+            Rec::Entry(..) => panic!("a `floor` line is a min-since record"),
+        }
+        match recs[1] {
+            Rec::Entry(at, _) => assert_eq!(at, 2049),
+            Rec::MinSince(_) => panic!("the line behind it still replays"),
         }
     }
 

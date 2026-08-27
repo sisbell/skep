@@ -1022,35 +1022,36 @@ fn j_regions(rs: &[Region]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
 }
 
-/// The canonical rendering of a position-value sequence, and the one place
-/// its rule lives: consecutive single-byte values accumulate into a run
-/// rendered as ONE item (UTF-8 judged on the whole run, else `{"hex"}`); a
-/// composite value flushes the run and renders as its own atom item, never
-/// coalesced with a neighbor. Maximal runs are what make the rendering
-/// injective — two distinct position-value sequences never render alike —
-/// and what re-canonicalize the parse-side normalizations (element
-/// boundaries between adjacent per-byte forms, one-byte atoms), so
-/// `parse(marshal_request(r))` reproduces `r`.
+/// The canonical rendering of a position-value sequence into wire items —
+/// a request's `values` array or a delivery's `items` array — and the one
+/// place its rule lives: consecutive single-byte values accumulate into a
+/// run rendered as ONE item (UTF-8 judged on the whole run, else
+/// `{"hex"}`); a composite value flushes the run and renders as its own
+/// atom item, never coalesced with a neighbor. Maximal runs are what make
+/// the rendering injective — two distinct position-value sequences never
+/// render alike — and what re-canonicalize the parse-side normalizations
+/// (element boundaries between adjacent per-byte forms, one-byte atoms),
+/// so `parse(marshal_request(r))` reproduces `r`.
 ///
 /// `utf8` is the ONLY thing the two renderings differ by: a request
 /// `values` element is the bare string, a delivery item is
 /// `{"content": …}`.
-struct Runs {
+struct ValueItems {
     out: Vec<Value>,
-    run: Vec<u8>,
+    byte_run: Vec<u8>,
     utf8: fn(String) -> Value,
 }
 
-impl Runs {
-    fn new(utf8: fn(String) -> Value) -> Runs {
-        Runs { out: Vec::new(), run: Vec::new(), utf8 }
+impl ValueItems {
+    fn new(utf8: fn(String) -> Value) -> ValueItems {
+        ValueItems { out: Vec::new(), byte_run: Vec::new(), utf8 }
     }
 
     /// One position's value: a single-byte value joins the pending run, a
     /// composite one breaks it and becomes its own atom item.
     fn value(&mut self, v: &Val) {
         if let [b] = v.as_bytes() {
-            self.run.push(*b);
+            self.byte_run.push(*b);
         } else {
             self.flush();
             self.out.push(j_atom(v));
@@ -1067,10 +1068,10 @@ impl Runs {
     /// Emit the pending run, if any: `utf8`'s form when the whole run
     /// decodes, else `{"hex"}` over its raw bytes.
     fn flush(&mut self) {
-        if self.run.is_empty() {
+        if self.byte_run.is_empty() {
             return;
         }
-        let item = match String::from_utf8(std::mem::take(&mut self.run)) {
+        let item = match String::from_utf8(std::mem::take(&mut self.byte_run)) {
             Ok(s) => (self.utf8)(s),
             Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
         };
@@ -1084,13 +1085,13 @@ impl Runs {
 }
 
 /// The canonical `values` encoding — [`p_val_forms`]'s inverse, under
-/// [`Runs`]' rule with the bare-string run form.
+/// [`ValueItems`]' rule with the bare-string run form.
 fn j_val_forms(vs: &[Val]) -> Value {
-    let mut runs = Runs::new(Value::String);
+    let mut items = ValueItems::new(Value::String);
     for v in vs {
-        runs.value(v);
+        items.value(v);
     }
-    runs.finish()
+    items.finish()
 }
 
 /// One composite value as its atom item: `{"atom"}` when its bytes are
@@ -1151,18 +1152,18 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
-/// Delivery items — [`Runs`]' rule with the `{"content"}` run form, plus
-/// link positions as `{"ref"}`. The item key names the granularity, so a
-/// client always knows which world it is looking at.
-fn j_items(items: &[DeliveryItem]) -> Value {
-    let mut runs = Runs::new(|s| obj(vec![("content", Value::String(s))]));
-    for it in items {
+/// Delivery items — [`ValueItems`]' rule with the `{"content"}` run form,
+/// plus link positions as `{"ref"}`. The item key names the granularity, so
+/// a client always knows which world it is looking at.
+fn j_items(deliveries: &[DeliveryItem]) -> Value {
+    let mut items = ValueItems::new(|s| obj(vec![("content", Value::String(s))]));
+    for it in deliveries {
         match it {
-            DeliveryItem::Content(v) => runs.value(v),
-            DeliveryItem::Ref(a) => runs.item(obj(vec![("ref", j_addr(a))])),
+            DeliveryItem::Content(v) => items.value(v),
+            DeliveryItem::Ref(a) => items.item(obj(vec![("ref", j_addr(a))])),
         }
     }
-    runs.finish()
+    items.finish()
 }
 
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,

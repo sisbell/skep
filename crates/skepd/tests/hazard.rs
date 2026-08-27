@@ -34,7 +34,7 @@ use std::time::Duration;
 use common::{acked_addr, expect_resp, json, op, open_session};
 use serde_json::Value;
 use skep_kernel::Seq;
-use skepd::{Daemon, Reply, Routed};
+use skepd::{Daemon, HttpRequest, Reply, Routed};
 
 /// `HAZARD_EXHAUSTIVE=1` widens the trial counts.
 fn exhaustive() -> bool {
@@ -153,7 +153,14 @@ fn handle_raw(
     session: Option<&str>,
     body: &[u8],
 ) -> Reply {
-    match d.handle(method, path, query, session, body) {
+    let req = HttpRequest {
+        method: method.to_string(),
+        path: path.to_string(),
+        query: query.map(str::to_string),
+        session: session.map(str::to_string),
+        body: body.to_vec(),
+    };
+    match d.handle(&req) {
         Routed::Reply(r) => r,
         Routed::EventStream => unreachable!("no test route resolves to the event stream"),
     }

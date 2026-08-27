@@ -3,9 +3,8 @@
 //! parse/marshal/dispatch/configure; every decision lives in a store.
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
-//! `(method, path, query, session, body) → Routed` with no socket anywhere;
-//! [`serve`]/[`Skepd`] wrap it in a synchronous accept loop over a plain
-//! `TcpListener`. The HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS,
+//! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
+//! wrap it in a synchronous accept loop over a plain `TcpListener`. The HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS,
 //! `Content-Length` bodies, one request per connection, `Connection: close`
 //! on every response) is written out here rather than taken from a server
 //! library, because the commit stream needs two things a pull-based library
@@ -45,10 +44,13 @@
 //! `Access-Control-Allow-Origin: *`, added at the one place responses are
 //! written so no reply can miss it, and `OPTIONS` on any known path answers
 //! a 204 preflight naming the allowed methods and headers. The `*` is a
-//! scope decision, not an accident: the daemon is loopback-only local
-//! trust, so any local page may read what any local process may read;
-//! writes still require the session token, which is not a browser
-//! credential. Revisited when authentication lands.
+//! scope decision, not an accident — but the session token is not what
+//! bounds it: `POST /session` is itself unauthenticated and cross-origin
+//! reachable, so a page that wants a token mints one, naming any principal
+//! it likes. What `*` grants any page the browser loads is exactly what
+//! this daemon already grants any local process: the whole surface, reads
+//! and writes alike. That equivalence is the decision. Revisited when
+//! authentication lands.
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the current head on
@@ -79,11 +81,14 @@
 //! reconstructed as a bare position, never an invented value. `/health`
 //! additionally reports `head_time`, the newest recorded commit's time.
 //!
-//! **The served client (wire v6, `client` feature, default on)**: `GET /`
+//! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
 //! `include_str!` at build — the binary is self-contained), `text/html`,
 //! same CORS posture as everything else. One file by design; there is no
-//! asset pipeline. A build without the feature has no `/` route (404).
+//! asset pipeline. The client ACTS — it generates keys and opens signed
+//! sessions — so it is opted into rather than opted out of, and abstention
+//! is the safe state; the feature's note in `Cargo.toml` carries the
+//! ruling. A build without the feature has no `/` route (404).
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -99,7 +104,7 @@ use parking_lot::{Condvar, Mutex};
 use serde_json::Value;
 use skep_address::Address;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
-use skep_febe::{Codec, Op, OpKind, Operation, Request, Response, SessionId};
+use skep_febe::{Codec, Op, OpKind, Operation, Response, SessionId};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
 
@@ -108,11 +113,16 @@ use crate::history::{History, Unavailable};
 use crate::sidecar::{ChangesAnswer, Sidecar};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
-/// timer thread exists anywhere in this daemon).
+/// timer thread exists anywhere in this daemon). Together with
+/// [`RETAINED_CHECKPOINTS`] this sets the sidecar's reconstruction ceiling
+/// at open (see `Sidecar::open`): raising either lengthens startup on a
+/// data dir whose commit metadata is missing.
 const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 
 /// Retained checkpoints: two, so `BadCheckpoint` recovery can fall back to
-/// the older base instead of a full-journal replay from genesis.
+/// the older base instead of a full-journal replay from genesis. The other
+/// factor of the sidecar's reconstruction ceiling — see
+/// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
 
 /// SSE keepalive cadence: a `:ka` comment after each interval of silence,
@@ -195,6 +205,9 @@ pub struct Reply {
 }
 
 impl Reply {
+    /// A JSON reply at `status` — the success answers, which each name
+    /// their own code. A refusal names a [`TransportError`] instead and
+    /// takes its status from there.
     fn json(status: u16, v: Value) -> Reply {
         Reply {
             status,
@@ -230,6 +243,24 @@ pub enum Routed {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
     EventStream,
+}
+
+/// One request, as [`Daemon::handle`] receives it and as the socket reader
+/// builds it — one value rather than a list of arguments, so the two
+/// `Option<String>`s cannot be handed over in the wrong order.
+pub struct HttpRequest {
+    /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
+    pub method: String,
+    /// The request target with any query stripped — `/op`, `/changes`.
+    pub path: String,
+    /// The raw query string, if the target carried one. Meaningful on
+    /// `/changes` and `/dump`; ignored elsewhere.
+    pub query: Option<String>,
+    /// The `Skepd-Session` header's value, if present — the opaque token,
+    /// never a `SessionId`. Absent or unknown resolves to the guest.
+    pub session: Option<String>,
+    /// The body, exactly `Content-Length` bytes (empty when absent).
+    pub body: Vec<u8>,
 }
 
 /// The transport's whole error vocabulary — every `{"error": …}` name this
@@ -286,16 +317,57 @@ impl TransportError {
             TransportError::InternalPanic => "internal_panic",
         }
     }
+
+    /// The status this failure is answered with — the second column of the
+    /// same table [`TransportError::name`] transcribes (wire.md §HTTP
+    /// status codes). Clients dispatch on the status, so the pairing is
+    /// contract; stating it here is what keeps one name from arriving under
+    /// two statuses depending on which handler refused.
+    fn status(self) -> u16 {
+        match self {
+            TransportError::MalformedSessionRequest
+            | TransportError::MalformedOpAt
+            | TransportError::MalformedChanges
+            | TransportError::WriteAtHistory
+            | TransportError::BeyondHead
+            | TransportError::NotAPosition
+            | TransportError::MalformedHttp => 400,
+            #[cfg(feature = "observe")]
+            TransportError::MalformedAt => 400,
+            TransportError::NoSuchEndpoint => 404,
+            TransportError::MethodNotAllowed => 405,
+            TransportError::HistoryReclaimed => 410,
+            TransportError::PayloadTooLarge => 413,
+            TransportError::NoJournal
+            | TransportError::HistoryIo
+            | TransportError::HistoryCorrupt
+            | TransportError::InternalPanic => 500,
+            TransportError::HistoryBusy => 503,
+        }
+    }
 }
 
-/// A transport-level error body: `{"error": name}` plus an optional detail.
-/// Deliberately NOT the `{"resp": "rejected"}` shape — no `Op` was involved.
-fn err_body(err: TransportError, detail: Option<&str>) -> Value {
-    let mut pairs = vec![("error", Value::String(err.name().into()))];
-    if let Some(d) = detail {
-        pairs.push(("detail", Value::String(d.into())));
-    }
-    obj(pairs)
+/// A transport-level refusal, whole: the status and the `{"error": name}`
+/// body wire.md pairs with `err`, plus an optional detail. Deliberately NOT
+/// the `{"resp": "rejected"}` shape — no `Op` was involved. Every non-2xx
+/// this daemon answers is built here or by [`refuse_with`], so no handler
+/// chooses a status of its own.
+fn refuse(err: TransportError, detail: Option<&str>) -> Reply {
+    let fields = match detail {
+        Some(d) => vec![("detail", Value::String(d.into()))],
+        None => Vec::new(),
+    };
+    refuse_with(err, fields)
+}
+
+/// The same refusal carrying the diagnostic fields a few errors name —
+/// `head`, `nearest`, `floor` — the coordinate a caller needs to ask a
+/// better question. `error` is appended here, so a field list can never
+/// omit it.
+fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply {
+    let mut pairs = fields;
+    pairs.push(("error", Value::String(err.name().into())));
+    Reply::json(err.status(), obj(pairs))
 }
 
 /// The paths this daemon serves — the one place the route set is stated, so
@@ -388,6 +460,12 @@ impl Daemon {
     /// commit-metadata sidecar, and assemble the operation surface. Every
     /// [`DaemonError`] is an operator-intervention condition — surface it
     /// and exit, never retry.
+    ///
+    /// The sidecar replay is the one step here whose cost is not O(1) in
+    /// the data dir: where commit metadata is missing it reconstructs the
+    /// uncovered positions from the journal, one whole-world replay each,
+    /// up to the retained window (`CHECKPOINT_EVERY_COMMITS` ×
+    /// `RETAINED_CHECKPOINTS`). `Sidecar::open` states the bound.
     pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -434,43 +512,27 @@ impl Daemon {
     /// The router — the whole HTTP surface, still socket-free: the one
     /// route that cannot be a request/response `Reply` (`GET /events`, an
     /// unbounded response) is returned as its own [`Routed`] variant, and
-    /// the accept path owns the socket from there. `query` is the raw query
-    /// string (meaningful on `/changes` and `/dump`, ignored elsewhere);
-    /// `session` is the value of the `Skepd-Session` header, if any.
-    pub fn handle(
-        &self,
-        method: &str,
-        path: &str,
-        query: Option<&str>,
-        session: Option<&str>,
-        body: &[u8],
-    ) -> Routed {
-        match (method, path) {
+    /// the accept path owns the socket from there.
+    pub fn handle(&self, req: &HttpRequest) -> Routed {
+        match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404.
             ("OPTIONS", p) if known_path(p) => Routed::Reply(Reply::preflight()),
-            _ => Routed::Reply(self.reply(method, path, query, session, body)),
+            _ => Routed::Reply(self.reply(req)),
         }
     }
 
     /// The request/response routes.
-    fn reply(
-        &self,
-        method: &str,
-        path: &str,
-        query: Option<&str>,
-        session: Option<&str>,
-        body: &[u8],
-    ) -> Reply {
-        match (method, path) {
-            ("POST", "/session") => self.post_session(body),
-            ("POST", "/op") => self.post_op(session, body),
-            ("POST", "/op-at") => self.post_op_at(body),
+    fn reply(&self, req: &HttpRequest) -> Reply {
+        match (req.method.as_str(), req.path.as_str()) {
+            ("POST", "/session") => self.post_session(&req.body),
+            ("POST", "/op") => self.post_op(req.session.as_deref(), &req.body),
+            ("POST", "/op-at") => self.post_op_at(&req.body),
             ("GET", "/health") => self.get_health(),
-            ("GET", "/changes") => self.get_changes(query),
+            ("GET", "/changes") => self.get_changes(req.query.as_deref()),
             #[cfg(feature = "observe")]
-            ("GET", "/dump") => self.get_dump(query),
+            ("GET", "/dump") => self.get_dump(req.query.as_deref()),
             #[cfg(feature = "client")]
             ("GET", "/") => Reply {
                 status: 200,
@@ -478,14 +540,11 @@ impl Daemon {
                 body: BOARD_HTML.as_bytes().to_vec(),
                 headers: Vec::new(),
             },
-            (_, p) if known_path(p) => Reply::json(
-                405,
-                err_body(
-                    TransportError::MethodNotAllowed,
-                    Some("see wire.md for the endpoint list"),
-                ),
+            (_, p) if known_path(p) => refuse(
+                TransportError::MethodNotAllowed,
+                Some("see wire.md for the endpoint list"),
             ),
-            _ => Reply::json(404, err_body(TransportError::NoSuchEndpoint, Some(path))),
+            _ => refuse(TransportError::NoSuchEndpoint, Some(&req.path)),
         }
     }
 
@@ -496,10 +555,7 @@ impl Daemon {
         let principal = match session_principal(body) {
             Ok(p) => p,
             Err(detail) => {
-                return Reply::json(
-                    400,
-                    err_body(TransportError::MalformedSessionRequest, Some(&detail)),
-                )
+                return refuse(TransportError::MalformedSessionRequest, Some(&detail))
             }
         };
         let sid = self.op.open_session(PrincipalId(principal));
@@ -526,10 +582,10 @@ impl Daemon {
         let sid = self.sessions.resolve(session);
         let resp = match self.codec.parse(body) {
             Ok(req) => match write_meta(&req.op) {
-                None => self.execute(sid, req),
+                None => self.op.execute(sid, req),
                 Some((kind, docs)) => {
                     let _serial = self.write_serial.lock();
-                    let resp = self.execute(sid, req);
+                    let resp = self.op.execute(sid, req);
                     self.observe_commit(kind, docs, &resp);
                     resp
                 }
@@ -596,10 +652,6 @@ impl Daemon {
         self.sidecar.record(at.0, op_name(kind), docs);
     }
 
-    fn execute(&self, sid: SessionId, req: Request) -> skep_febe::Response {
-        self.op.execute(sid, req)
-    }
-
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
     /// stable API): hold one reconstruction permit exactly as an in-flight
     /// reconstruction does, or `None` when the whole budget is taken. Real
@@ -619,17 +671,15 @@ impl Daemon {
     fn post_op_at(&self, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
-            Err(detail) => {
-                return Reply::json(400, err_body(TransportError::MalformedOpAt, Some(&detail)))
-            }
+            Err(detail) => return refuse(TransportError::MalformedOpAt, Some(&detail)),
         };
-        let req = match self.codec.parse(&frame) {
+        let req = match self.codec.parse_frame(frame) {
             Ok(r) => r,
             Err(e) => return self.op_reply(&self.codec.unparseable(e)),
         };
         if !op_is_read(&req.op) {
             // The ruling-fixed body, exactly: {"error": "write_at_history"}.
-            return Reply::json(400, err_body(TransportError::WriteAtHistory, None));
+            return refuse(TransportError::WriteAtHistory, None);
         }
         match self.history.read_at(&self.engine, at, req) {
             Ok(resp) => self.op_reply(&resp),
@@ -660,55 +710,21 @@ impl Daemon {
     fn get_changes(&self, query: Option<&str>) -> Reply {
         let (since, limit) = match changes_params(query) {
             Ok(x) => x,
-            Err(detail) => {
-                return Reply::json(
-                    400,
-                    err_body(TransportError::MalformedChanges, Some(&detail)),
-                )
-            }
+            Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
         match self.sidecar.changes(since, limit) {
             ChangesAnswer::Reclaimed { floor } => reclaimed_reply(floor),
-            ChangesAnswer::Page { entries, last, more } => {
-                let list: Vec<Value> = entries
-                    .iter()
-                    .map(|(at, meta)| {
-                        obj(vec![
-                            ("at", Value::Number((*at).into())),
-                            (
-                                "docs",
-                                meta.docs
-                                    .as_ref()
-                                    .map(|d| {
-                                        Value::Array(
-                                            d.iter().map(|s| Value::String(s.clone())).collect(),
-                                        )
-                                    })
-                                    .unwrap_or(Value::Null),
-                            ),
-                            (
-                                "op",
-                                meta.op
-                                    .as_ref()
-                                    .map(|s| Value::String(s.clone()))
-                                    .unwrap_or(Value::Null),
-                            ),
-                            (
-                                "time",
-                                meta.time.map(|t| Value::Number(t.into())).unwrap_or(Value::Null),
-                            ),
-                        ])
-                    })
-                    .collect();
-                Reply::json(
-                    200,
-                    obj(vec![
-                        ("changes", Value::Array(list)),
-                        ("last", Value::Number(last.into())),
-                        ("more", Value::Bool(more)),
-                    ]),
-                )
-            }
+            ChangesAnswer::Page { entries, last, more } => Reply::json(
+                200,
+                obj(vec![
+                    (
+                        "changes",
+                        Value::Array(entries.iter().map(|(at, meta)| meta.entry(*at)).collect()),
+                    ),
+                    ("last", Value::Number(last.into())),
+                    ("more", Value::Bool(more)),
+                ]),
+            ),
         }
     }
 
@@ -720,9 +736,7 @@ impl Daemon {
     fn get_dump(&self, query: Option<&str>) -> Reply {
         let at = match dump_at_param(query) {
             Ok(x) => x,
-            Err(detail) => {
-                return Reply::json(400, err_body(TransportError::MalformedAt, Some(&detail)))
-            }
+            Err(detail) => return refuse(TransportError::MalformedAt, Some(&detail)),
         };
         let dump = match at {
             None => self.engine.world_dump(),
@@ -755,9 +769,19 @@ fn session_principal(body: &[u8]) -> Result<u64, String> {
 
 // ── the change feed (wire v6) ────────────────────────────────────────────
 
+/// A query string as its parameter list — `k=v` pairs split on `&`, shape
+/// checked and nothing else. Every query this daemon reads walks this, so
+/// one discipline covers them all and each parser adds only its own
+/// vocabulary: an unknown or repeated parameter is a named refusal, which
+/// is the wire's never-silent posture applied to queries.
+fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
+    q.split('&')
+        .map(|pair| pair.split_once('=').ok_or_else(|| format!("malformed parameter '{pair}'")))
+        .collect()
+}
+
 /// The `/changes` query: `since=<position>` (required) plus optional
-/// `limit=<1..=4096>`. Unknown or repeated parameters are refused — the
-/// wire's never-silent posture applied to queries.
+/// `limit=<1..=4096>`.
 fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
     let q = match query {
         None | Some("") => {
@@ -767,10 +791,7 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
     };
     let mut since: Option<u64> = None;
     let mut limit: Option<usize> = None;
-    for pair in q.split('&') {
-        let Some((k, v)) = pair.split_once('=') else {
-            return Err(format!("malformed parameter '{pair}'"));
-        };
+    for (k, v) in query_pairs(q)? {
         match k {
             "since" => {
                 if since.is_some() {
@@ -867,11 +888,14 @@ fn write_meta(op: &Op) -> Option<(OpKind, DocsSrc)> {
 // ── the history surface (wire v3) ────────────────────────────────────────
 
 /// Strictly `{"at": <non-negative integer>, "frame": <object>}`; returns the
-/// position and the frame re-serialized for the codec.
-fn op_at_envelope(body: &[u8]) -> Result<(Seq, Vec<u8>), String> {
+/// position and the frame, which the codec parses from here. The
+/// object-ness check is a decision, not duplicated validation: a non-object
+/// `frame` is a malformed ENVELOPE (a transport fault), where the same
+/// value reaching the codec would be an operation-channel rejection.
+fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
     let v: Value =
         serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
-    let Value::Object(m) = v else {
+    let Value::Object(mut m) = v else {
         return Err("op-at envelope must be a JSON object".into());
     };
     check_keys(&m, &["at", "frame"])?;
@@ -879,13 +903,11 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Vec<u8>), String> {
         .get("at")
         .and_then(Value::as_u64)
         .ok_or_else(|| String::from("missing or non-integer field 'at'"))?;
-    let frame = m.get("frame").ok_or_else(|| String::from("missing field 'frame'"))?;
+    let frame = m.remove("frame").ok_or_else(|| String::from("missing field 'frame'"))?;
     if !frame.is_object() {
         return Err("field 'frame' must be a JSON object (an /op frame)".into());
     }
-    let bytes =
-        serde_json::to_vec(frame).expect("re-serializing a serde_json::Value cannot fail");
-    Ok((Seq(at), bytes))
+    Ok((Seq(at), frame))
 }
 
 /// The `/dump` query: nothing, or exactly `at=<decimal position>`.
@@ -895,12 +917,25 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
         None | Some("") => return Ok(None),
         Some(q) => q,
     };
-    let Some(v) = q.strip_prefix("at=") else {
-        return Err(format!("unknown query '{q}'; the one /dump parameter is at=<position>"));
-    };
-    v.parse::<u64>()
-        .map(|n| Some(Seq(n)))
-        .map_err(|_| format!("at: '{v}' is not a position (a non-negative integer)"))
+    let mut at: Option<Seq> = None;
+    for (k, v) in query_pairs(q)? {
+        match k {
+            "at" => {
+                if at.is_some() {
+                    return Err("duplicate parameter 'at'".into());
+                }
+                at = Some(Seq(v.parse().map_err(|_| {
+                    format!("at: '{v}' is not a position (a non-negative integer)")
+                })?));
+            }
+            other => {
+                return Err(format!(
+                    "unknown parameter '{other}'; the one /dump parameter is at=<position>"
+                ))
+            }
+        }
+    }
+    Ok(at)
 }
 
 /// The `410 history_reclaimed` refusal: the position asked for is older
@@ -909,12 +944,11 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
 /// the change feed, so the two cannot describe the same condition
 /// differently.
 fn reclaimed_reply(floor: Option<u64>) -> Reply {
-    let mut pairs =
-        vec![("error", Value::String(TransportError::HistoryReclaimed.name().into()))];
-    if let Some(f) = floor {
-        pairs.push(("floor", Value::Number(f.into())));
-    }
-    Reply::json(410, obj(pairs))
+    let fields = match floor {
+        Some(f) => vec![("floor", Value::Number(f.into()))],
+        None => Vec::new(),
+    };
+    refuse_with(TransportError::HistoryReclaimed, fields)
 }
 
 /// Map an unavailable historical answer onto the wire's transport errors —
@@ -926,53 +960,35 @@ fn reclaimed_reply(floor: Option<u64>) -> Reply {
 fn unavailable_reply(e: Unavailable) -> Reply {
     let journal = match e {
         Unavailable::Busy => {
-            return Reply::json(
-                503,
-                err_body(
-                    TransportError::HistoryBusy,
-                    Some("all reconstruction permits are in use; retry shortly"),
-                ),
+            return refuse(
+                TransportError::HistoryBusy,
+                Some("all reconstruction permits are in use; retry shortly"),
             )
         }
         Unavailable::Journal(e) => e,
     };
-    let mut pairs: Vec<(&'static str, Value)> = Vec::new();
-    let (status, err) = match journal {
-        HistoryError::BeyondHead { head } => {
-            pairs.push(("head", Value::Number(head.0.into())));
-            (400, TransportError::BeyondHead)
-        }
-        HistoryError::NotABoundary { nearest } => {
-            pairs.push(("nearest", Value::Number(nearest.0.into())));
-            (400, TransportError::NotAPosition)
-        }
-        HistoryError::Reclaimed { floor } => return reclaimed_reply(floor.map(|f| f.0)),
+    match journal {
+        HistoryError::BeyondHead { head } => refuse_with(
+            TransportError::BeyondHead,
+            vec![("head", Value::Number(head.0.into()))],
+        ),
+        HistoryError::NotABoundary { nearest } => refuse_with(
+            TransportError::NotAPosition,
+            vec![("nearest", Value::Number(nearest.0.into()))],
+        ),
+        HistoryError::Reclaimed { floor } => reclaimed_reply(floor.map(|f| f.0)),
         // Unreachable under this daemon's Fsync configuration; mapped so the
         // surface stays total over the engine's error type.
-        HistoryError::Unjournaled => {
-            pairs.push((
-                "detail",
-                Value::String("this daemon holds no journal; history is unavailable".into()),
-            ));
-            (500, TransportError::NoJournal)
-        }
-        HistoryError::Io(err) => {
-            pairs.push(("detail", Value::String(err.to_string())));
-            (500, TransportError::HistoryIo)
-        }
-        HistoryError::Corruption { at, .. } => {
-            pairs.push((
-                "detail",
-                Value::String(format!(
-                    "journal corrupt at rest; next intact frame at {}",
-                    at.0
-                )),
-            ));
-            (500, TransportError::HistoryCorrupt)
-        }
-    };
-    pairs.push(("error", Value::String(err.name().into())));
-    Reply::json(status, obj(pairs))
+        HistoryError::Unjournaled => refuse(
+            TransportError::NoJournal,
+            Some("this daemon holds no journal; history is unavailable"),
+        ),
+        HistoryError::Io(err) => refuse(TransportError::HistoryIo, Some(&err.to_string())),
+        HistoryError::Corruption { at, .. } => refuse(
+            TransportError::HistoryCorrupt,
+            Some(&format!("journal corrupt at rest; next intact frame at {}", at.0)),
+        ),
+    }
 }
 
 /// The wire's read/write partition, mirroring M10's own `Op::is_read`
@@ -1191,30 +1207,22 @@ fn serve_connection(
         Err(refusal) => {
             let reply = match refusal {
                 ReadError::Malformed(detail) => {
-                    Reply::json(400, err_body(TransportError::MalformedHttp, Some(&detail)))
+                    refuse(TransportError::MalformedHttp, Some(&detail))
                 }
                 ReadError::BodyTooLarge(declared) => {
                     let detail = format!(
                         "Content-Length {declared} exceeds the {MAX_REQUEST_BODY}-byte body cap"
                     );
-                    Reply::json(413, err_body(TransportError::PayloadTooLarge, Some(&detail)))
+                    refuse(TransportError::PayloadTooLarge, Some(&detail))
                 }
             };
             let _ = write_reply(&mut stream, &reply);
             return;
         }
     };
-    let routed = match catch_unwind(AssertUnwindSafe(|| {
-        daemon.handle(
-            &req.method,
-            &req.path,
-            req.query.as_deref(),
-            req.session.as_deref(),
-            &req.body,
-        )
-    })) {
+    let routed = match catch_unwind(AssertUnwindSafe(|| daemon.handle(&req))) {
         Ok(r) => r,
-        Err(_) => Routed::Reply(Reply::json(500, err_body(TransportError::InternalPanic, None))),
+        Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
     };
     match routed {
         Routed::Reply(reply) => {
@@ -1254,15 +1262,6 @@ impl From<&str> for ReadError {
     }
 }
 
-/// One parsed request. `body` is exactly `Content-Length` bytes.
-struct HttpRequest {
-    method: String,
-    path: String,
-    query: Option<String>,
-    session: Option<String>,
-    body: Vec<u8>,
-}
-
 /// Read one request off the socket. `Ok(None)` = clean close before any
 /// byte; `Err(_)` = the request is refused (the caller answers the
 /// [`ReadError`]'s reply and closes). The subset: one request per
@@ -1277,7 +1276,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
             break i;
         }
         if buf.len() > HEAD_MAX {
-            return Err("request head exceeds 64 KiB".into());
+            return Err(format!("request head exceeds the {HEAD_MAX}-byte cap").into());
         }
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
@@ -1494,8 +1493,14 @@ mod tests {
     fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = Daemon::open(dir.path()).expect("genesis open");
-        let status = |method: &str, path: &str| match daemon.handle(method, path, None, None, b"")
-        {
+        let bare = |method: &str, path: &str| HttpRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            query: None,
+            session: None,
+            body: Vec::new(),
+        };
+        let status = |method: &str, path: &str| match daemon.handle(&bare(method, path)) {
             Routed::Reply(r) => r.status,
             // The one non-reply route; reached only by GET /events, which
             // this test never asks for.
@@ -1550,14 +1555,26 @@ mod tests {
         assert!(write_meta(&query).is_none());
     }
 
-    /// Transport-error bodies are built through the codec's sorting device,
-    /// so they are byte-deterministic whatever backs serde_json's map.
+    /// A refusal is a status AND a name together: the body is built through
+    /// the codec's sorting device (byte-deterministic whatever backs
+    /// serde_json's map) and the status comes from the same table the name
+    /// does, so the wire.md pairing is checked rather than repeated.
     #[test]
-    fn error_bodies_are_key_sorted() {
-        let v = err_body(TransportError::PayloadTooLarge, Some("too big"));
+    fn refusals_pair_their_status_with_their_name() {
+        let r = refuse(TransportError::PayloadTooLarge, Some("too big"));
+        assert_eq!(r.status, 413);
         assert_eq!(
-            serde_json::to_string(&v).expect("json"),
+            String::from_utf8(r.body).expect("json"),
             r#"{"detail":"too big","error":"payload_too_large"}"#
+        );
+        let r = refuse_with(
+            TransportError::BeyondHead,
+            vec![("head", Value::Number(12u64.into()))],
+        );
+        assert_eq!(r.status, 400);
+        assert_eq!(
+            String::from_utf8(r.body).expect("json"),
+            r#"{"error":"beyond_head","head":12}"#
         );
     }
 }

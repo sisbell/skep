@@ -10,17 +10,25 @@ use skepd::{serve, Daemon};
 const DEFAULT_PORT: u16 = 8642;
 const DEFAULT_WORKERS: usize = 4;
 
-const USAGE: &str = "\
+/// The help text, with each default read from the constant that supplies
+/// it — so the program cannot describe a default it does not use.
+fn usage() -> String {
+    format!(
+        "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
-  --port <PORT>      TCP port on 127.0.0.1 (env: SKEPD_PORT; default 8642;
+  --port <PORT>      TCP port on 127.0.0.1 (env: SKEPD_PORT; default \
+{DEFAULT_PORT};
                      0 picks an ephemeral port)
-  --workers <N>      request worker threads (env: SKEPD_WORKERS; default 4)
+  --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
+{DEFAULT_WORKERS})
   --help             this text
 
-The wire protocol is specified in skep/docs/wire.md.";
+The wire protocol is specified in skep/docs/wire.md."
+    )
+}
 
 struct Args {
     data_dir: PathBuf,
@@ -78,11 +86,11 @@ fn main() {
     let args = match parse_args(std::env::args().skip(1)) {
         Ok(Some(a)) => a,
         Ok(None) => {
-            println!("{USAGE}");
+            println!("{}", usage());
             exit(0);
         }
         Err(e) => {
-            eprintln!("skepd: {e}\n\n{USAGE}");
+            eprintln!("skepd: {e}\n\n{}", usage());
             exit(2);
         }
     };

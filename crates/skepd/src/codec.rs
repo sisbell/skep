@@ -85,6 +85,16 @@ impl JsonCodec {
         to_bytes(obj(pairs))
     }
 
+    /// Parse a frame that arrived already decoded — the `/op-at` envelope
+    /// carries its frame as a JSON value, so this is the same parse
+    /// [`Codec::parse`] performs, entered one step later. Identical
+    /// verdicts: the envelope reader does no parsing of its own beyond
+    /// deciding that a non-object `frame` is a transport fault rather than
+    /// an operation rejection.
+    pub(crate) fn parse_frame(&self, frame: Value) -> Result<Request, ParseError> {
+        parse_value(frame).map_err(|e| ParseError { detail: Some(e.0) })
+    }
+
     /// The transport's one never-silent obligation outside M10's dispatch
     /// (M10 §Codec): a frame that failed to parse still gets exactly one
     /// response — the `Unparseable` rejection, built HERE and marshaled like
@@ -138,6 +148,12 @@ type PResult<T> = Result<T, PErr>;
 fn parse_request(frame: &[u8]) -> PResult<Request> {
     let v: Value =
         serde_json::from_slice(frame).map_err(|e| PErr(format!("invalid JSON: {e}")))?;
+    parse_value(v)
+}
+
+/// The frame grammar over a decoded value — everything past `from_slice`,
+/// so a frame that arrives already decoded meets the identical rules.
+fn parse_value(v: Value) -> PResult<Request> {
     let Value::Object(m) = v else {
         return Err(PErr("request frame must be a JSON object".into()));
     };
@@ -1006,50 +1022,75 @@ fn j_regions(rs: &[Region]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
 }
 
-/// The canonical `values` encoding — [`p_val_forms`]'s inverse: maximal runs
-/// of consecutive single-byte values coalesce into one per-byte element (a
-/// bare string when the run's concatenated bytes are UTF-8 — judged on the
-/// whole run — else `{"hex"}`); every multi-byte value is its own atom form.
-/// `parse(marshal_request(r))` reproduces `r`; the parse-side normalizations
-/// (element boundaries between adjacent per-byte forms, one-byte atoms) are
-/// exactly what maximal-run coalescing re-canonicalizes.
-fn j_val_forms(vs: &[Val]) -> Value {
-    let mut items: Vec<Value> = Vec::new();
-    let mut run: Vec<u8> = Vec::new();
-    for v in vs {
+/// The canonical rendering of a position-value sequence, and the one place
+/// its rule lives: consecutive single-byte values accumulate into a run
+/// rendered as ONE item (UTF-8 judged on the whole run, else `{"hex"}`); a
+/// composite value flushes the run and renders as its own atom item, never
+/// coalesced with a neighbor. Maximal runs are what make the rendering
+/// injective — two distinct position-value sequences never render alike —
+/// and what re-canonicalize the parse-side normalizations (element
+/// boundaries between adjacent per-byte forms, one-byte atoms), so
+/// `parse(marshal_request(r))` reproduces `r`.
+///
+/// `utf8` is the ONLY thing the two renderings differ by: a request
+/// `values` element is the bare string, a delivery item is
+/// `{"content": …}`.
+struct Runs {
+    out: Vec<Value>,
+    run: Vec<u8>,
+    utf8: fn(String) -> Value,
+}
+
+impl Runs {
+    fn new(utf8: fn(String) -> Value) -> Runs {
+        Runs { out: Vec::new(), run: Vec::new(), utf8 }
+    }
+
+    /// One position's value: a single-byte value joins the pending run, a
+    /// composite one breaks it and becomes its own atom item.
+    fn value(&mut self, v: &Val) {
         if let [b] = v.as_bytes() {
-            run.push(*b);
+            self.run.push(*b);
         } else {
-            flush_run_str(&mut run, &mut items);
-            items.push(j_atom(v));
+            self.flush();
+            self.out.push(j_atom(v));
         }
     }
-    flush_run_str(&mut run, &mut items);
-    Value::Array(items)
+
+    /// A rendered item that is not a content value (a delivery `{"ref"}`):
+    /// it breaks the run, since a run is consecutive by definition.
+    fn item(&mut self, v: Value) {
+        self.flush();
+        self.out.push(v);
+    }
+
+    /// Emit the pending run, if any: `utf8`'s form when the whole run
+    /// decodes, else `{"hex"}` over its raw bytes.
+    fn flush(&mut self) {
+        if self.run.is_empty() {
+            return;
+        }
+        let item = match String::from_utf8(std::mem::take(&mut self.run)) {
+            Ok(s) => (self.utf8)(s),
+            Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
+        };
+        self.out.push(item);
+    }
+
+    fn finish(mut self) -> Value {
+        self.flush();
+        Value::Array(self.out)
+    }
 }
 
-/// Flush a pending per-byte run as a request-side `values` element: a bare
-/// JSON string when the whole run is UTF-8, else `{"hex": …}`.
-fn flush_run_str(run: &mut Vec<u8>, items: &mut Vec<Value>) {
-    if run.is_empty() {
-        return;
+/// The canonical `values` encoding — [`p_val_forms`]'s inverse, under
+/// [`Runs`]' rule with the bare-string run form.
+fn j_val_forms(vs: &[Val]) -> Value {
+    let mut runs = Runs::new(Value::String);
+    for v in vs {
+        runs.value(v);
     }
-    items.push(match String::from_utf8(std::mem::take(run)) {
-        Ok(s) => Value::String(s),
-        Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
-    });
-}
-
-/// Flush a pending per-byte run as a delivery item: `{"content": …}` when
-/// the whole run is UTF-8, else `{"hex": …}`.
-fn flush_run_content(run: &mut Vec<u8>, items: &mut Vec<Value>) {
-    if run.is_empty() {
-        return;
-    }
-    items.push(match String::from_utf8(std::mem::take(run)) {
-        Ok(s) => obj(vec![("content", Value::String(s))]),
-        Err(e) => obj(vec![("hex", Value::String(hex_string(e.as_bytes())))]),
-    });
+    runs.finish()
 }
 
 /// One composite value as its atom item: `{"atom"}` when its bytes are
@@ -1110,33 +1151,18 @@ fn j_window(w: &Window) -> Value {
     ])
 }
 
-/// Delivery items, injectively: maximal runs of consecutive single-byte
-/// content values coalesce into ONE `{"content"}`/`{"hex"}` item, every
-/// multi-byte value is its own `{"atom"}`/`{"atom_hex"}` item, and link
-/// positions stay `{"ref"}`. The item key names the granularity and
-/// maximal-run coalescing keeps the rendering canonical, so two distinct
-/// position-value sequences never marshal to the same items array.
+/// Delivery items — [`Runs`]' rule with the `{"content"}` run form, plus
+/// link positions as `{"ref"}`. The item key names the granularity, so a
+/// client always knows which world it is looking at.
 fn j_items(items: &[DeliveryItem]) -> Value {
-    let mut out: Vec<Value> = Vec::new();
-    let mut run: Vec<u8> = Vec::new();
+    let mut runs = Runs::new(|s| obj(vec![("content", Value::String(s))]));
     for it in items {
         match it {
-            DeliveryItem::Content(v) => {
-                if let [b] = v.as_bytes() {
-                    run.push(*b);
-                } else {
-                    flush_run_content(&mut run, &mut out);
-                    out.push(j_atom(v));
-                }
-            }
-            DeliveryItem::Ref(a) => {
-                flush_run_content(&mut run, &mut out);
-                out.push(obj(vec![("ref", j_addr(a))]));
-            }
+            DeliveryItem::Content(v) => runs.value(v),
+            DeliveryItem::Ref(a) => runs.item(obj(vec![("ref", j_addr(a))])),
         }
     }
-    flush_run_content(&mut run, &mut out);
-    Value::Array(out)
+    runs.finish()
 }
 
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,

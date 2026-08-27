@@ -63,6 +63,42 @@ impl Meta {
     fn bare() -> Meta {
         Meta { op: None, docs: None, time: None }
     }
+
+    /// One `GET /changes` entry: the position and all three fields, a bare
+    /// position's rendering as explicit `null`s — the crash-honesty rule of
+    /// this file, expressed where the rule is stated rather than at the
+    /// handler. Deliberately NOT [`entry_line`]'s convention, which omits
+    /// absent fields: the file is daemon-private and [`parse_line`] reads
+    /// absent and null alike, so the shorter line costs nothing there,
+    /// while a client reading the wire is owed the field it asked about.
+    pub fn entry(&self, at: u64) -> Value {
+        obj(vec![
+            ("at", Value::Number(at.into())),
+            (
+                "docs",
+                match &self.docs {
+                    Some(d) => {
+                        Value::Array(d.iter().map(|s| Value::String(s.clone())).collect())
+                    }
+                    None => Value::Null,
+                },
+            ),
+            (
+                "op",
+                match &self.op {
+                    Some(s) => Value::String(s.clone()),
+                    None => Value::Null,
+                },
+            ),
+            (
+                "time",
+                match self.time {
+                    Some(t) => Value::Number(t.into()),
+                    None => Value::Null,
+                },
+            ),
+        ])
+    }
 }
 
 /// One replayed file record.
@@ -107,6 +143,18 @@ impl Sidecar {
     /// Replay (truncating a torn tail), drop entries beyond this journal's
     /// head, reconstruct any uncovered `(last recorded, head]` region as
     /// bare positions, and persist what the reconstruction learned.
+    ///
+    /// COST, and the only step of daemon startup that is not O(1) in the
+    /// data dir: reconstruction spends one whole-world `Engine::world_at`
+    /// per uncovered boundary — a checkpoint deserialize plus a journal
+    /// fold each — so a dir with NO coverage (a sidecar deleted, arrived
+    /// corrupt, or written before this feature) pays that for every
+    /// boundary the journal still holds, before `open` returns. The region
+    /// is bounded below by journal reclamation, so the ceiling is the
+    /// retained window, which `server.rs` chooses as
+    /// `CHECKPOINT_EVERY_COMMITS × RETAINED_CHECKPOINTS` commits. The
+    /// walk's findings are appended here, so a covered region is walked
+    /// once ever rather than once per open.
     pub fn open(dir: &Path, engine: &Engine) -> io::Result<Sidecar> {
         let path = dir.join(SIDECAR_FILE);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
@@ -360,5 +408,26 @@ mod tests {
             Rec::Floor(f) => assert_eq!(f, 2048),
             Rec::Entry(..) => panic!("third line is a floor"),
         }
+    }
+
+    /// The wire entry names every field, a bare position's as explicit
+    /// `null` — never invented, and never merely absent, which a client
+    /// could not tell from a field this daemon does not know about. The
+    /// file line omits what the wire nulls; both are deliberate.
+    #[test]
+    fn wire_entries_null_what_the_file_line_omits() {
+        let meta = Meta {
+            op: Some("insert".into()),
+            docs: Some(vec!["1.0.1.0.1".into()]),
+            time: Some(1_700_000_000_000),
+        };
+        assert_eq!(
+            serde_json::to_string(&meta.entry(8)).expect("json"),
+            r#"{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1700000000000}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Meta::bare().entry(3)).expect("json"),
+            r#"{"at":3,"docs":null,"op":null,"time":null}"#
+        );
     }
 }

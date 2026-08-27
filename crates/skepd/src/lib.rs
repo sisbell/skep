@@ -18,10 +18,11 @@
 //!   `GET /events` (the server-sent commit stream, wire v4),
 //!   `GET /changes` (the pull delta feed of committed writes, wire v6, fed
 //!   by the daemon's own commit-metadata sidecar `commits.log`), `GET /`
-//!   (the embedded authoring client, `client` feature, default on), the
-//!   CORS preflight on every known path, and (behind the `observe`
-//!   feature) `GET /dump`, with `?at=N` for the dump of a historical
-//!   position.
+//!   (the embedded authoring client, `client` feature, default OFF — the
+//!   client acts, so serving it is opted into; see the feature's note in
+//!   `Cargo.toml`), the CORS preflight on every known path, and (behind
+//!   the `observe` feature) `GET /dump`, with `?at=N` for the dump of a
+//!   historical position.
 //! * [`serve`]/[`Skepd`] — the synchronous accept loop: worker threads over
 //!   one owned `TcpListener` speaking a written-out HTTP/1.1 subset (one
 //!   request per connection, `Connection: close` and
@@ -55,4 +56,4 @@ mod sidecar;
 pub mod fuzz_support;
 
 pub use codec::{tumbler_string, JsonCodec};
-pub use server::{serve, Daemon, DaemonError, Reply, Routed, Skepd};
+pub use server::{serve, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};

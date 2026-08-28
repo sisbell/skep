@@ -30,7 +30,7 @@ acknowledged only after it is durable on disk.
 | `GET /health`    | Liveness, current log position, and the head commit's time. |
 | `GET /events`    | Server-sent stream of committed positions (§The commit stream). |
 | `GET /changes`   | The pull delta feed of committed writes (§The change feed). |
-| `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the default). |
+| `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the feature is default-off). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
 There are no other routes; every known path additionally answers `OPTIONS`
@@ -177,6 +177,17 @@ Request parsing is lenient about field order and accepts the documented
 lenient forms (numbers for naturals, uppercase hex); the daemon's own output
 always uses the canonical forms.
 
+One pin rides beside the marshal: the **base determinism conditioning**
+of the positioned reads. The byte-identity promises this document makes
+— `/op-at` (same `at`, same frame), `GET /dump?at` (same `at`),
+`GET /changes` (same `since`, same `limit`) — hold across repeats and
+across daemon restarts **while the position, or the history behind the
+fence, remains within retained history**. The reclaim floor advances
+between repeats; a position that has aged out answers
+`410 history_reclaimed`, never different bytes. That conditioning is the
+wire's own base; rounds that widen this surface state any further
+conditioning terms of theirs on top of it.
+
 ## Value encodings
 
 **Tumblers and addresses** are dotted-decimal strings — `"1.1.0.1.0.2"` —
@@ -257,6 +268,13 @@ position-value sequences never render alike.
   its bytes are valid UTF-8, else `{"atom_hex": "<hex>"}` — exactly one
   value per item, never coalesced.
 * A **link position** renders `{"ref": "<address>"}`.
+
+(Routed, not yet in the protocol: the publication rounds add a fourth
+item — `{"withheld": {"origin": "<address>", "width": "<nat>"}}`, a run
+the reader may not read, emitted at its own position rather than
+dropped. Its rendering is pinned now, beside the rules above: one item
+per withheld RUN — two non-contiguous withheld runs, even from one
+origin, are two items, never one coalesced item of the summed width.)
 
 Count positions, not items: `{"content": "hello"}` spans five positions,
 `{"atom": "hello"}` spans one.
@@ -511,7 +529,11 @@ Fields:
   that failed the ownership check. Span faults: `not_ordinal_level`,
   `not_level_uniform`, `start_not_zero_free`, `start_too_shallow`.
 * `detail` — optional human-readable message (always present on
-  `unparseable`, where it says what failed to parse).
+  `unparseable`, where it says what failed to parse). One exclusion is
+  pinned ahead of its code: the publication rounds' planned `withheld`
+  rejection carries no `detail`, ever — its whole diagnosis is `code`
+  plus `site.addr` — so no daemon drifts into describing, one field
+  over, the extent that code exists to withhold.
 
 <!-- wire: response rejected_site -->
 ```json
@@ -556,6 +578,12 @@ Content/provenance reads: `no_such_subspace`, `empty_subspace`,
 `depth_incompatible`, `range_not_present`, `malformed_span`.
 
 Link-discovery reads: `not_a_link`, `bad_region`.
+
+Routed, not yet in the protocol: the links family as built in M7's
+third round also rejects an over-large slot (`SlotTooLarge`, its
+MAX_SLOT_SPANS bound) and refuses through the supersession-class fence.
+Neither has a wire code — the list above deliberately carries none;
+codes are to be assigned when that links family ships on the wire.
 
 ## Operations
 
@@ -708,6 +736,11 @@ target in `site.addr`.
   contents at the addresses are never examined, exactly as Literary
   Machines specifies for link types. Any T4-valid address may be named —
   a link, a document, or a *ghost* position that nothing will ever occupy.
+
+The declared slot order — here and in `edit_link`'s successor — is
+`from`, `to`, `ty`: the same positional order links read back in
+(slot 1 = FROM, 2 = TO, 3 = TYPE). A pin or diagnostic that speaks of a
+link write's slots "in declared order" means this order.
 
 The type slot must be nonempty **as given** (an empty `addrs` list, like a
 V-spec set resolving to nothing, rejects `empty_type_resolution`);
@@ -874,6 +907,16 @@ at those positions). → `runs`.
 ```json
 {"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}}
 ```
+
+Routed, not yet in the protocol: a POSITION FENCE on this query —
+answer only records committed past a caller-supplied position, so a
+polling consumer fetches only what is new to it — is reserved as a
+later round's delta. Its composition note is pinned with it: a fenced
+read must be composed with a client-held honored set, held whole from
+unfenced reads, since a record LEAVING that set appears in no fenced
+answer — without the held set the departure face is underivable. No
+fence field exists today (an unknown field is a parse failure, as
+everywhere).
 
 **`count_v`** / **`count_ftt`** — the census forms of the two queries.
 → `count`.
@@ -1085,7 +1128,12 @@ Rules:
   into one event: the promise is a strictly increasing sequence of
   positions whose last value converges on the true head — not one event
   per commit. A commit is reflected promptly (the daemon notifies on the
-  write path rather than polling — well inside 250 ms).
+  write path rather than polling — well inside 250 ms). Coalescing is
+  also the stream's stated wake-rate mitigation: every subscriber wakes
+  on every event, board-wide, so a daemon may deliberately coalesce a
+  burst to one wake per quiet interval rather than one per commit — an
+  allowance this contract already grants (promptness as stated above),
+  not a mechanism the current daemon adds.
 * **No payload beyond the position in v1**: no op kinds, no document
   addresses, no per-document filtering. React to movement by re-querying
   what you care about — reads are cheap and principal-free.
@@ -1178,11 +1226,16 @@ parameter) is `400 {"error": "malformed_changes", "detail": …}`.
 milliseconds (§The change feed's timestamp scope: transport metadata) —
 `null` on a fresh world or when the head position's record is bare.
 
-**`GET /`** (only in builds with the `client` feature — the default) →
-`200 text/html`: the authoring client, one self-contained HTML file
-embedded in the binary at build. There are no other static routes and no
-asset pipeline — the client is one file by design. Without the feature,
-`/` is an unknown path (the usual 404 shape).
+**`GET /`** (only in builds with the `client` feature — **default-off**,
+the 2026-08-22 ruling (AUTH-4.57(e); R89, the client rule): the served
+page ACTS — it generates keys and opens sessions — so the safe failure
+is a notebook build that forgot the flag serving no UI, never a hosted
+image serving a key-generating page by omission; notebook packagings
+opt in deliberately) → `200 text/html`: the authoring client, one
+self-contained HTML file embedded in the binary at build. There are no
+other static routes and no asset pipeline — the client is one file by
+design. Without the feature, `/` is an unknown path (the usual 404
+shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
@@ -1208,6 +1261,46 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v6.1 (routed documentation pins — the PUB sweeps' wire routes, landed
+2026-08-28; no encoding, surface, or behavior change):
+
+* The publication rounds' planned `withheld` rejection is pinned, ahead
+  of its code, to carry NO `detail` — its whole diagnosis is `code`
+  plus `site.addr` — so no conforming daemon grows an extent-describing
+  payload before the code ships. [PUB sweep-10 pub-leak]
+* The V-spec slot order for `make_link`/`edit_link` declared: `from`,
+  `to`, `ty` — the read-back positional order (1/2/3), now stated for
+  the write surface so ordering-consuming pins (`site.addr`'s "first …
+  in declared order") have their order. [PUB sweep-9 pub-leak]
+* The future `delivery` withheld item
+  (`{"withheld": {"origin", "width"}}`) is pinned per-RUN: two
+  non-contiguous withheld runs, one origin or not, are two items, never
+  one coalesced item of the summed width. [PUB sweep-9 pub-leak]
+* `/events` coalescing is named the stream's wake-rate mitigation — one
+  wake per quiet interval rather than one per commit, an allowance the
+  v4 contract already grants; no new mechanism claimed. [PUB sweep-9
+  pub-performance]
+* The base determinism conditioning stated as the wire's own pin: the
+  positioned-read byte-identity promises hold while the position (or
+  the history behind the fence) remains within RETENTION — reclaim
+  answers `history_reclaimed`, never different bytes; later rounds
+  state their own further terms on top. [PUB sweep-11 pub-permanence]
+* Roadmap: a position fence on `find_links_ftt` (records past a
+  caller-held position) is reserved for a later round, pinned beside
+  its composition note (a fenced read composes with a client-held
+  honored set or the departure face is underivable). Not in the
+  protocol. [PUB sweep-11 pub-performance]
+* Corrected: the `client` feature is DEFAULT-OFF (the 2026-08-22
+  default-off ruling, AUTH-4.57(e); R89, the client rule) — v6's
+  "default on" was true when v6 landed and is superseded; the endpoint
+  descriptions now say so. [AUTH sessions sweeps 5 and 7,
+  auth-substrate]
+* Roadmap: M7's round-3 links family rejects an over-large slot
+  (`SlotTooLarge`, MAX_SLOT_SPANS) and refuses through the
+  supersession-class fence; the wire's code list carries no codes for
+  either — to be assigned when that links family ships on the wire.
+  [the M7 interface reconcile, 2026-08-28]
 
 v6 (browser enablement: change feed, commit timestamps, served client —
 the 2026-08-16 ruling):
@@ -1236,7 +1329,8 @@ the 2026-08-16 ruling):
   invention, always. Surfaced in `/changes` and as `/health`'s new
   `head_time`; deliberately NOT added to op responses (the live surface is
   unchanged).
-* New `GET /` (feature `client`, default on): the authoring client served
+* New `GET /` (feature `client`, default on — since ruled default-OFF,
+  2026-08-22; see v6.1): the authoring client served
   as one embedded HTML file, `text/html`, same CORS posture as everything
   else; no other static routes, no asset pipeline. Without the feature,
   `/` stays a 404.

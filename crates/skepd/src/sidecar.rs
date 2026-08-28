@@ -218,14 +218,16 @@ impl Sidecar {
         }
         let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
         if head > low {
-            let (bare, stop) = reconstruct(engine, low, head);
+            // The walk's own fence, qualified because the accumulator it
+            // folds into holds the plain name.
+            let (bare, walk_min_since) = reconstruct(engine, low, head);
             for &at in &bare {
                 entries.insert(at, Meta::Bare);
                 file.write_all(&entry_line(at, &Meta::Bare))?;
             }
-            if let Some(s) = stop {
-                min_since = min_since.max(s);
-                file.write_all(&min_since_line(s))?;
+            if let Some(walked) = walk_min_since {
+                min_since = min_since.max(walked);
+                file.write_all(&min_since_line(walked))?;
             }
         }
         // Compaction: everything the journal has reclaimed leaves the feed
@@ -375,11 +377,12 @@ fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Res
 /// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
 /// `nearest`. Returns the boundaries (ascending) and, when the journal
 /// stopped answering (reclaimed / corrupt / I/O), the smallest `since` the
-/// feed can honor from there on.
+/// feed can honor from there on — [`Inner::min_since`]'s number, not the
+/// wire's `floor`.
 fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
     let mut found = vec![head];
     let mut boundary = head;
-    let mut stop = None;
+    let mut min_since = None;
     // The descent's own guard: `probe` exists only when there is a position
     // below `boundary` and it is still above `low`, so the step down cannot
     // leave `u64` — a premise this loop holds rather than one it inherits
@@ -398,13 +401,13 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
                 found.push(boundary);
             }
             Err(_) => {
-                stop = Some(probe);
+                min_since = Some(probe);
                 break;
             }
         }
     }
     found.reverse();
-    (found, stop)
+    (found, min_since)
 }
 
 /// Parse whole newline-terminated records; trust ends at the first line

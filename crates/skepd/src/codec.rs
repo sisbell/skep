@@ -408,7 +408,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         },
         "in_claims" => Op::InClaims { y: fields.addr("y")?, view: fields.view("view")? },
         "out_claims" => Op::OutClaims { x: fields.addr("x")?, view: fields.view("view")? },
-        other => return Err(PErr(format!("unknown op '{}'", shown(other)))),
+        other => return Err(PErr(format!("unknown op '{}'", bounded(other)))),
     })
 }
 
@@ -432,7 +432,7 @@ impl Fields {
 
     fn finish(self) -> PResult<()> {
         match self.0.keys().next() {
-            Some(k) => Err(PErr(format!("unknown field '{}'", shown(k)))),
+            Some(k) => Err(PErr(format!("unknown field '{}'", bounded(k)))),
             None => Ok(()),
         }
     }
@@ -553,7 +553,7 @@ impl Fields {
 /// the echoed value is wire-supplied and unbounded; the transport's own
 /// echoes (a path, a query parameter, a header line) are already bounded by
 /// the request-head cap and are left as they are.
-fn shown(s: &str) -> String {
+fn bounded(s: &str) -> String {
     const MAX: usize = 64;
     match s.char_indices().nth(MAX) {
         None => s.to_string(),
@@ -589,7 +589,7 @@ fn p_nat(v: &Value) -> PResult<Nat> {
 /// exactly the cost the cap exists to avoid.
 fn p_nat_str(s: &str) -> PResult<Nat> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(PErr(format!("'{}' is not a decimal natural", shown(s))));
+        return Err(PErr(format!("'{}' is not a decimal natural", bounded(s))));
     }
     if s.len() > MAX_NAT_DIGITS {
         return Err(PErr(format!(
@@ -597,7 +597,7 @@ fn p_nat_str(s: &str) -> PResult<Nat> {
             s.len()
         )));
     }
-    Nat::from_str(s).map_err(|e| PErr(format!("'{}': {e}", shown(s))))
+    Nat::from_str(s).map_err(|e| PErr(format!("'{}': {e}", bounded(s))))
 }
 
 /// A dotted-decimal tumbler, depth-capped at [`MAX_TUMBLER_COMPONENTS`]
@@ -612,7 +612,7 @@ fn p_tum(v: &Value) -> PResult<Tumbler> {
         )));
     }
     let comps = s.split('.').map(p_nat_str).collect::<PResult<Vec<Nat>>>()?;
-    Tumbler::new(comps).map_err(|e| PErr(format!("'{}': {e}", shown(s))))
+    Tumbler::new(comps).map_err(|e| PErr(format!("'{}': {e}", bounded(s))))
 }
 
 fn p_addr(v: &Value) -> PResult<Address> {
@@ -633,7 +633,7 @@ fn p_obj<'a>(v: &'a Value, allowed: &[&str]) -> PResult<&'a Map<String, Value>> 
 /// transport envelopes (whose faults are not `ParseError`s) share it.
 pub(crate) fn check_keys(m: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
     match m.keys().find(|k| !allowed.contains(&k.as_str())) {
-        Some(k) => Err(format!("unknown field '{}'", shown(k))),
+        Some(k) => Err(format!("unknown field '{}'", bounded(k))),
         None => Ok(()),
     }
 }

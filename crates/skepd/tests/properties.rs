@@ -200,12 +200,13 @@ struct Capture {
 struct RunState {
     port: u16,
     head: u64,
-    writes: u64,
     id_seq: u64,
     ghost_seq: u64,
     captures: Vec<Capture>,
     memo: Option<Memo>,
     link_cursor: usize,
+    /// Committed writes so far — the oracle cadence and the report both
+    /// read it, so there is exactly one number to keep true.
     n_writes: usize,
     n_doc_checks: usize,
     n_link_checks: usize,
@@ -334,7 +335,6 @@ fn commit(shadow: &Shadow, state: &mut RunState, pi: usize, frame: String, i: us
     let at = v["at"].as_u64().expect("a committed write carries at");
     assert!(at >= state.head, "op {i}: committed at {at} regressed below head {}", state.head);
     state.head = at;
-    state.writes += 1;
     state.n_writes += 1;
     state.memo = Some(Memo { frame, token, body });
     v
@@ -894,7 +894,6 @@ fn run_case(plan: &[PlanOp]) {
     let mut state = RunState {
         port: srv.as_ref().expect("live").port(),
         head: 0,
-        writes: 0,
         id_seq: 0,
         ghost_seq: 0,
         captures: Vec::new(),
@@ -910,9 +909,9 @@ fn run_case(plan: &[PlanOp]) {
     state.head = health_pos(state.port);
 
     for (i, planned) in plan.iter().enumerate() {
-        let writes_before = state.writes;
+        let writes_before = state.n_writes;
         step(i, planned, &mut shadow, &mut state);
-        if state.writes > writes_before && state.writes % CADENCE as u64 == 0 {
+        if state.n_writes > writes_before && state.n_writes % CADENCE == 0 {
             capture_position(&shadow, &mut state);
         }
         if (i + 1) % CADENCE == 0 {

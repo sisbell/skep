@@ -117,7 +117,9 @@ impl Counters {
 
 /// The persistent fixture — addresses survive restarts; tokens do not.
 struct Fixture {
-    acc_x: String,
+    /// The owner's account — the one every `create_new_document` and
+    /// `delegate` cell aims at, whoever the calling column is.
+    owner_account: String,
     /// One document owned by each caller, indexed like the first four
     /// columns: [owner, sibling, child, parent].
     own_doc: [String; 4],
@@ -135,10 +137,13 @@ struct Fixture {
     anchor: [String; 2],
 }
 
-/// Per-life session tokens, [owner, sibling, child, parent] + bootstrap.
+/// Per-life session tokens: one per matrix column — [owner, sibling,
+/// child, parent] — plus a second owner session the fixture is built and
+/// extended through. The bootstrap session is not here; it is opened
+/// separately, for the one delegation that seats the parent.
 struct Tokens {
     by_col: [String; 4],
-    x: String,
+    owner: String,
 }
 
 fn open_tokens(port: u16) -> Tokens {
@@ -149,7 +154,7 @@ fn open_tokens(port: u16) -> Tokens {
             open_session(port, P_CHILD),
             open_session(port, P_PARENT),
         ],
-        x: open_session(port, P_OWNER),
+        owner: open_session(port, P_OWNER),
     }
 }
 
@@ -208,7 +213,7 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
     let p = &tokens.by_col[3];
     let acc_x = delegate(port, p, &acc_p, P_OWNER);
     let acc_s = delegate(port, p, &acc_p, P_SIBLING);
-    let x = &tokens.x;
+    let x = &tokens.owner;
     let acc_c = delegate(port, x, &acc_x, P_CHILD);
 
     let own_doc = [
@@ -231,7 +236,7 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
     let anchor = [mint_link(port, x, &link_home, counters), mint_link(port, x, &link_home, counters)];
 
     Fixture {
-        acc_x,
+        owner_account: acc_x,
         own_doc,
         insert_doc,
         delete_doc,
@@ -278,10 +283,10 @@ fn run_cell(
 
     let frame = match row {
         "create_new_document" => {
-            format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fixture.acc_x)
+            format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fixture.owner_account)
         }
         "delegate" => {
-            let prefix = next_prefix(port, &fixture.acc_x);
+            let prefix = next_prefix(port, &fixture.owner_account);
             let id = Counters::next(&counters.principal);
             format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{id}}}"#)
         }
@@ -335,7 +340,7 @@ fn run_cell(
             let target = if !authed {
                 fixture.anchor[0].clone() // never reached: unauthenticated first
             } else if col == 0 {
-                mint_link(port, &tokens.x, &fixture.link_home, counters)
+                mint_link(port, &tokens.owner, &fixture.link_home, counters)
             } else {
                 mint_link(port, token.expect("authed"), own_doc, counters)
             };
@@ -345,7 +350,7 @@ fn run_cell(
             // Isolate the TARGET check: the home is the caller's own; the
             // target is a fresh X-owned link (v1 self-retraction policy).
             let target =
-                if authed { mint_link(port, &tokens.x, &fixture.link_home, counters) } else { fixture.anchor[0].clone() };
+                if authed { mint_link(port, &tokens.owner, &fixture.link_home, counters) } else { fixture.anchor[0].clone() };
             format!(r#"{{"op":"nullify","home":"{own_doc}","target":"{target}"}}"#)
         }
         "edit_link (d_s)" => {
@@ -436,7 +441,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let tokens = open_tokens(port);
         let fixture = build_fixture(port, &boot, &tokens, &counters);
         walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
-        let stale1 = tokens.x.clone();
+        let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
     };

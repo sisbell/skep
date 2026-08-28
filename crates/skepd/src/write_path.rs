@@ -91,7 +91,7 @@ impl WritePath {
     ) -> Response {
         let _serial = self.serial.lock();
         let resp = execute();
-        if let Some(at) = self.observe(kind, docs, &resp) {
+        if let Some(at) = self.record(kind, docs, &resp) {
             self.commit_stream.publish(at);
         }
         resp
@@ -128,12 +128,14 @@ impl WritePath {
         self.commit_stream.state.lock().head
     }
 
-    /// Feed the sidecar from a write's answer: an ack carries the committed
-    /// position; a rejection committed nothing and records nothing. Runs
-    /// under the serialization lock. EXHAUSTIVE with no `_` arm, like the
-    /// other `Response` walks in this crate: a new answer shape carrying a
-    /// committed position must decide whether the change feed reports it,
-    /// and fails to compile until it does.
+    /// Record one write's answer in the sidecar. What this layer decides,
+    /// over [`Sidecar::record`]'s own job of appending a line, is WHETHER
+    /// there is anything to record: an ack carries the committed position,
+    /// while a rejection committed nothing. Runs under the serialization
+    /// lock. EXHAUSTIVE with no `_` arm, like the other `Response` walks in
+    /// this crate: a new answer shape carrying a committed position must
+    /// decide whether the change feed reports it, and fails to compile
+    /// until it does.
     ///
     /// Returns the position [`WritePath::commit`] announces, which is
     /// exactly the position whose record this call just made — so an
@@ -141,7 +143,7 @@ impl WritePath {
     /// re-acks an OLD position, which the sidecar declines to re-record and
     /// the monotone commit stream ignores, since that position was
     /// announced when it was first committed.
-    fn observe(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) -> Option<Seq> {
+    fn record(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) -> Option<Seq> {
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -294,9 +296,9 @@ impl CommitStream {
     }
 
     fn publish(&self, seq: Seq) {
-        let mut st = self.state.lock();
-        if seq.0 > st.head.0 {
-            st.head = seq;
+        let mut state = self.state.lock();
+        if seq.0 > state.head.0 {
+            state.head = seq;
             self.cond.notify_all();
         }
     }
@@ -312,15 +314,15 @@ impl CommitStream {
     /// commits between wakes is one step.
     fn next(&self, last: Seq) -> StreamStep {
         let deadline = Instant::now() + SSE_KEEPALIVE;
-        let mut st = self.state.lock();
+        let mut state = self.state.lock();
         loop {
-            if st.shutdown {
+            if state.shutdown {
                 return StreamStep::Shutdown;
             }
-            if st.head.0 > last.0 {
-                return StreamStep::Commit(st.head);
+            if state.head.0 > last.0 {
+                return StreamStep::Commit(state.head);
             }
-            if self.cond.wait_until(&mut st, deadline).timed_out() {
+            if self.cond.wait_until(&mut state, deadline).timed_out() {
                 return StreamStep::Keepalive;
             }
         }
@@ -335,7 +337,7 @@ mod tests {
     /// The partition is one table's two faces: reads are exactly the ops
     /// the change feed records nothing for.
     #[test]
-    fn reads_are_exactly_the_ops_with_no_feed_entry() {
+    fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
         let read = Op::Fork;
         assert!(!op_is_read(&read), "fork commits");
         assert!(write_meta(&read).is_some());

@@ -367,7 +367,7 @@ fn a_paced_peer_is_refused_at_the_transfer_deadline() {
             Ok(0) => break,
             Ok(n) => {
                 raw.extend_from_slice(&chunk[..n]);
-                if find_head_end(&raw) {
+                if head_is_complete(&raw) {
                     break;
                 }
             }
@@ -404,6 +404,6 @@ fn a_paced_peer_is_refused_at_the_transfer_deadline() {
 }
 
 /// Whether `raw` holds a complete response head yet.
-fn find_head_end(raw: &[u8]) -> bool {
+fn head_is_complete(raw: &[u8]) -> bool {
     raw.windows(4).any(|w| w == b"\r\n\r\n")
 }

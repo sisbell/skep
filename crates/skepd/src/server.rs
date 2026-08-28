@@ -544,8 +544,9 @@ struct Sessions {
     /// resolves to.
     guest: SessionId,
     /// Per-uptime random token prefix: a stale token from a previous run
-    /// misses instead of silently aliasing onto a fresh session.
-    seed: u64,
+    /// misses instead of silently aliasing onto a fresh session. Drawn
+    /// independently of every suffix — no token is derived from it.
+    token_prefix: u64,
 }
 
 /// The bounded token table: the map, plus the mint order eviction reads.
@@ -561,7 +562,11 @@ struct Bindings {
 
 impl Sessions {
     fn new(guest: SessionId) -> Sessions {
-        Sessions { bindings: Mutex::new(Bindings::default()), guest, seed: unpredictable_u64() }
+        Sessions {
+            bindings: Mutex::new(Bindings::default()),
+            guest,
+            token_prefix: unpredictable_u64(),
+        }
     }
 
     /// Mint the opaque token naming `sid`, remember the binding, and hand
@@ -577,7 +582,7 @@ impl Sessions {
     /// another session's cached acks — and closing it now costs one draw
     /// per session.
     fn bind(&self, sid: SessionId) -> (String, Vec<SessionId>) {
-        let token = format!("{:016x}.{:016x}", self.seed, unpredictable_u64());
+        let token = format!("{:016x}.{:016x}", self.token_prefix, unpredictable_u64());
         let mut bindings = self.bindings.lock();
         let mut evicted = Vec::new();
         match bindings.map.insert(token.clone(), sid) {

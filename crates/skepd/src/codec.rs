@@ -51,9 +51,9 @@ use skep_febe::{
     Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
-use skep_links::{Endset, Link, View, MAX_SLOT_SPANS};
+use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{CorrPair, DeliveryItem, Operand, Region, Spec, SpecFault};
+use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, Region, Spec, SpecFault};
 
 /// The most elements one wire array may carry, applied at [`p_list`] — so
 /// every attacker-sized list on the request surface (span regions, spec and
@@ -835,10 +835,9 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             op_name(OpKind::Copy),
             vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("specs", j_vspecs(specs))],
         ),
-        Op::Rearrange { doc, cuts } => (
-            op_name(OpKind::Rearrange),
-            vec![("doc", j_addr(doc)), ("cuts", Value::Array(cuts.iter().map(j_vpos).collect()))],
-        ),
+        Op::Rearrange { doc, cuts } => {
+            (op_name(OpKind::Rearrange), vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts))])
+        }
         Op::Version { d_src } => (op_name(OpKind::Version), vec![("d_src", j_addr(d_src))]),
         Op::MakeLink { home, from, to, ty } => (
             op_name(OpKind::MakeLink),
@@ -879,10 +878,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::FollowLink { a, slot } => {
             (op_name(OpKind::FollowLink), vec![("a", j_addr(a)), ("slot", j_usize(*slot))])
         }
-        Op::RetrieveV { specs } => (
-            op_name(OpKind::RetrieveV),
-            vec![("specs", Value::Array(specs.iter().map(j_spec).collect()))],
-        ),
+        Op::RetrieveV { specs } => (op_name(OpKind::RetrieveV), vec![("specs", j_specs(specs))]),
         Op::RetrieveDocVSpan { doc } => {
             (op_name(OpKind::RetrieveDocVSpan), vec![("doc", j_addr(doc))])
         }
@@ -986,29 +982,12 @@ fn j_response(r: &Response) -> Value {
         Response::Page { window, as_of } => {
             ("page", vec![("window", j_window(window)), ("as_of", j_seq(*as_of))])
         }
-        Response::Endsets { pairs: ps, as_of } => (
-            "endsets",
-            vec![
-                (
-                    "pairs",
-                    Value::Array(
-                        ps.iter()
-                            .map(|(slot, e)| {
-                                obj(vec![("slot", j_usize(*slot)), ("endset", j_endset(e))])
-                            })
-                            .collect(),
-                    ),
-                ),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
-        Response::Runs { runs, as_of } => (
-            "runs",
-            vec![
-                ("runs", Value::Array(runs.iter().map(j_run).collect())),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
+        Response::Endsets { pairs: ps, as_of } => {
+            ("endsets", vec![("pairs", j_endset_pairs(ps)), ("as_of", j_seq(*as_of))])
+        }
+        Response::Runs { runs, as_of } => {
+            ("runs", vec![("runs", j_runs(runs)), ("as_of", j_seq(*as_of))])
+        }
         Response::Bool { val, as_of } => {
             ("bool", vec![("val", Value::Bool(*val)), ("as_of", j_seq(*as_of))])
         }
@@ -1020,51 +999,22 @@ fn j_response(r: &Response) -> Value {
                 ("as_of", j_seq(*as_of)),
             ],
         ),
-        // The in-band Result (⟨⟩ ≠ ⊥ is a defined FOLLOWLINK answer).
-        Response::Follow { result, as_of } => (
-            "follow",
-            vec![
-                (
-                    "result",
-                    match result {
-                        Ok(set) => obj(vec![("ok", j_spanset(set))]),
-                        Err(_) => obj(vec![("err", Value::String("invalid".into()))]),
-                    },
-                ),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
-        Response::Deletions { rep, as_of } => (
-            "deletions",
-            vec![
-                (
-                    "rep",
-                    obj(vec![
-                        ("a_with_b", j_addrs(&rep.a_with_b)),
-                        ("b_with_a", j_addrs(&rep.b_with_a)),
-                    ]),
-                ),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
-        Response::Compare { rep, as_of } => (
-            "compare",
-            vec![
-                ("pairs", Value::Array(rep.0.iter().map(j_corr).collect())),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
+        Response::Follow { result, as_of } => {
+            ("follow", vec![("result", j_follow_result(result)), ("as_of", j_seq(*as_of))])
+        }
+        Response::Deletions { rep, as_of } => {
+            ("deletions", vec![("rep", j_deletions(rep)), ("as_of", j_seq(*as_of))])
+        }
+        Response::Compare { rep, as_of } => {
+            ("compare", vec![("pairs", j_corrs(&rep.0)), ("as_of", j_seq(*as_of))])
+        }
         Response::Orphans { report, as_of } => (
             "orphans",
             vec![("orphaned", j_addrs(&report.orphaned)), ("as_of", j_seq(*as_of))],
         ),
-        Response::Claims { claims, as_of } => (
-            "claims",
-            vec![
-                ("claims", Value::Array(claims.iter().map(j_claim).collect())),
-                ("as_of", j_seq(*as_of)),
-            ],
-        ),
+        Response::Claims { claims, as_of } => {
+            ("claims", vec![("claims", j_claims(claims)), ("as_of", j_seq(*as_of))])
+        }
         Response::Rejected(rej) => return j_rejection(rej),
     };
     pairs.push(("resp", Value::String(name.into())));
@@ -1166,6 +1116,10 @@ fn j_vpos(u: &VPos) -> Value {
     obj(vec![("subspace", j_nat(&u.subspace)), ("ordinal", j_nat(&u.ordinal))])
 }
 
+fn j_vposes(us: &[VPos]) -> Value {
+    Value::Array(us.iter().map(j_vpos).collect())
+}
+
 fn j_vspec(v: &VSpec) -> Value {
     obj(vec![("source", j_addr(&v.source)), ("span", j_span(&v.span))])
 }
@@ -1185,6 +1139,10 @@ fn j_slotarg(s: &SlotArg) -> Value {
 
 fn j_spec(s: &Spec) -> Value {
     obj(vec![("doc", j_addr(&s.doc)), ("span", j_span(&s.span))])
+}
+
+fn j_specs(ss: &[Spec]) -> Value {
+    Value::Array(ss.iter().map(j_spec).collect())
 }
 
 fn j_region(r: &Region) -> Value {
@@ -1279,7 +1237,9 @@ fn j_atom(v: &Val) -> Value {
 
 /// Lowercase hex — the encoding behind `{"hex"}`, `{"atom_hex"}`, and the
 /// fuzz harness's reproduction form, so all three read the same bytes back.
-pub(crate) fn hex_string(b: &[u8]) -> String {
+/// `pub` because [`crate::fuzz_support`] re-exports it as its `hex`: this
+/// module is private, so that re-export stays the only public path to it.
+pub fn hex_string(b: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);
     for &byte in b {
@@ -1356,6 +1316,10 @@ fn j_run(r: &Run) -> Value {
     obj(vec![("i_start", j_addr(r.i_start())), ("width", j_nat(r.width()))])
 }
 
+fn j_runs(rs: &[Run]) -> Value {
+    Value::Array(rs.iter().map(j_run).collect())
+}
+
 fn j_corr(p: &CorrPair) -> Value {
     obj(vec![
         ("d1", j_addr(&p.d1)),
@@ -1366,6 +1330,10 @@ fn j_corr(p: &CorrPair) -> Value {
     ])
 }
 
+fn j_corrs(ps: &[CorrPair]) -> Value {
+    Value::Array(ps.iter().map(j_corr).collect())
+}
+
 fn j_claim(c: &SupClaim) -> Value {
     obj(vec![
         ("claim", j_addr(&c.claim)),
@@ -1374,6 +1342,33 @@ fn j_claim(c: &SupClaim) -> Value {
         ("home", j_addr(&c.home)),
         ("active", Value::Bool(c.active)),
     ])
+}
+
+fn j_claims(cs: &[SupClaim]) -> Value {
+    Value::Array(cs.iter().map(j_claim).collect())
+}
+
+/// One `retrieve_endsets` pair: the 1-based slot and its endset.
+fn j_endset_pair(slot: usize, e: &Endset) -> Value {
+    obj(vec![("slot", j_usize(slot)), ("endset", j_endset(e))])
+}
+
+fn j_endset_pairs(ps: &[(usize, Endset)]) -> Value {
+    Value::Array(ps.iter().map(|(slot, e)| j_endset_pair(*slot, e)).collect())
+}
+
+/// SHOWDELETIONS' two directions, each an address list.
+fn j_deletions(d: &Deletions) -> Value {
+    obj(vec![("a_with_b", j_addrs(&d.a_with_b)), ("b_with_a", j_addrs(&d.b_with_a))])
+}
+
+/// FOLLOWLINK's in-band `Result`: the empty span set is a defined answer,
+/// so ⟨⟩ and ⊥ are distinct wire shapes rather than one nullable field.
+fn j_follow_result(r: &Result<SpanSet, Invalid>) -> Value {
+    match r {
+        Ok(set) => obj(vec![("ok", j_spanset(set))]),
+        Err(_) => obj(vec![("err", Value::String("invalid".into()))]),
+    }
 }
 
 fn j_successor(s: &SuccessorSpec) -> Value {

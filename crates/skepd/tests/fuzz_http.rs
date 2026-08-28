@@ -37,11 +37,10 @@ use fuzz_common::{exhaustive, iters, random_bytes, request_frames};
 fn assert_health(port: u16) {
     let resp = http_raw_exchange(port, &get_request("/health"))
         .expect("daemon reachable for /health");
-    let status = check_http_response(&resp)
+    let (status, body) = check_http_response(&resp)
         .unwrap_or_else(|e| panic!("FINDING (http): /health response malformed: {e}"));
     assert_eq!(status, 200, "the daemon must stay up: /health answered {status}");
-    let sep = resp.windows(4).position(|w| w == b"\r\n\r\n").expect("terminator");
-    let v: Value = serde_json::from_slice(&resp[sep + 4..]).expect("/health body is JSON");
+    let v: Value = serde_json::from_slice(body).expect("/health body is JSON");
     assert_eq!(v["ok"], Value::Bool(true), "the daemon must stay up: {v}");
 }
 
@@ -152,7 +151,7 @@ fn http_hostile_bytes_single_response_daemon_survives() {
         let raw = hostile_request(&mut rng, &corpus);
         let resp = http_raw_exchange(port, &raw).expect("daemon reachable");
         if !resp.is_empty() {
-            check_http_response(&resp).unwrap_or_else(|e| {
+            let _ = check_http_response(&resp).unwrap_or_else(|e| {
                 panic!(
                     "FINDING (fuzz_http): i={i} malformed response: {e}\n  \
                      request: {}\n  response: {}",
@@ -173,7 +172,7 @@ fn http_hostile_bytes_single_response_daemon_survives() {
     for boundary in [1usize, 2, 7, 40] {
         let raw = valid_op_request();
         let resp = split_write_exchange(port, &raw, boundary);
-        check_http_response(&resp).unwrap_or_else(|e| {
+        let _ = check_http_response(&resp).unwrap_or_else(|e| {
             panic!("FINDING (fuzz_http): split-write at {boundary} gave a malformed response: {e}")
         });
     }

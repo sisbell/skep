@@ -62,32 +62,22 @@
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the current head on
-//! connect, then an event whenever the head advances (coalescing under
-//! load: a subscriber sees a strictly increasing sequence converging on the
-//! true head). Each subscriber thread blocks on the write path's condvar,
-//! so there is no polling anywhere and a commit reaches subscribers at
-//! thread-wake speed. Subscribers are dedicated spawned threads, never
-//! workers: the accepting worker hands the socket off and returns to
-//! `accept`, so open streams cannot starve `/op`. A `:ka` keepalive comment
-//! flows after each silent interval so both sides can detect a dead peer;
-//! shutdown broadcasts on the same condvar and joins every subscriber, so
-//! open streams end in bounded time with a clean close the client sees.
+//! connect, then an event whenever the head advances. `write_path.rs` owns
+//! the feed: what a subscriber is told next, and the coalescing that falls
+//! out of asking "anything past what I last sent"; [`Subscribers`] below
+//! owns the budget, the admission, and the join at shutdown. What this file
+//! adds is the SSE framing (`serve_events`) and the hand-off that keeps an
+//! open stream off the op pool — the accepting worker gives the socket to a
+//! dedicated thread and returns to `accept`.
 //!
 //! **The change feed (wire v6)**: `GET /changes?since=N` answers the
 //! committed positions in `(N, head]`, oldest first, each with its op kind,
 //! affected document(s), and commit wall-clock time — so clients refresh
 //! what they display instead of re-walking the world on every SSE tick.
-//! The source is the commit-metadata sidecar (`commits.log`, see
-//! `sidecar.rs`): the daemon's own testimony, appended in position order
-//! because the write path holds its lock across the commit that produced
-//! it. Writes only; reads never appear. Timestamps are transport metadata,
-//! never substrate state: two daemons replaying one journal still converge
-//! on byte-identical worlds, and a position whose record was lost (or
-//! predates the feature) answers `null` fields — reconstructed as a bare
-//! position, never an invented value. `/health` additionally reports
-//! `head_time`, the HEAD position's own recorded commit time — `null` when
-//! that position's record is bare, rather than an older position's time
-//! standing in for it.
+//! `sidecar.rs` owns `commits.log`: its crash honesty, its retention, and
+//! what a position whose record was lost answers; `write_path.rs` owns the
+//! ordering that makes the sidecar's invariants true. What this file adds
+//! is the query's parse, the marshal, and `/health`'s `head_time`.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
@@ -145,6 +135,14 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
+
+/// The one request header this daemon reads beyond HTTP's own framing: the
+/// opaque session token. Named once because the CORS preflight must
+/// advertise exactly the header the reader consults — a header the
+/// preflight omits is one the browser will not send, so the two must agree
+/// or every cross-origin write fails at a layer this crate's own suite,
+/// which writes the header straight onto a socket, never reaches.
+const SESSION_HEADER: &str = "Skepd-Session";
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
 /// body, capped separately by [`MAX_REQUEST_BODY`].
@@ -1073,8 +1071,8 @@ impl std::fmt::Debug for Skepd {
 /// stops here loudly instead of being repaired into a one-worker server —
 /// the same posture `CHANGES_LIMIT_MAX` takes on the wire, where an
 /// out-of-range page size is refused and never clamped. `main.rs`
-/// establishes it where the flag is read, which is also what makes its
-/// startup line's worker count honest.
+/// establishes it by refusing a zero count where the flag is read, which is
+/// also what makes its startup line's worker count honest.
 ///
 /// Failure is exactly the socket's: binding the address, or reading back
 /// the port it bound. Naming `io::Error` rather than boxing it is what lets
@@ -1401,7 +1399,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
             once(&content_length, name)?;
             content_length =
                 Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
-        } else if name.eq_ignore_ascii_case("Skepd-Session") {
+        } else if name.eq_ignore_ascii_case(SESSION_HEADER) {
             once(&session_token, name)?;
             session_token = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Expect") {
@@ -1745,6 +1743,24 @@ mod tests {
         let c = json.content.as_ref().expect("a JSON reply names its body");
         assert_eq!(c.content_type, "application/json");
         assert_eq!(c.bytes, br#"{"ok":true}"#);
+    }
+
+    /// The preflight advertises exactly the header [`read_request`] reads.
+    /// The allow-list is one joined `&'static str`, so the header's name
+    /// necessarily appears in it as text rather than as the constant; this
+    /// is what keeps the two one decision. A header the preflight omits is
+    /// one a browser will not send, and that failure appears only
+    /// cross-origin, where this suite's own TCP clients never look.
+    #[test]
+    fn the_preflight_advertises_the_session_header_the_reader_reads() {
+        let pre = Reply::preflight();
+        let allow = pre
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Access-Control-Allow-Headers")
+            .map(|&(_, v)| v)
+            .expect("the preflight names its allowed headers");
+        assert!(allow.contains(SESSION_HEADER), "{allow} must name {SESSION_HEADER}");
     }
 
     /// A server with no workers serves nothing, so asking for one is the

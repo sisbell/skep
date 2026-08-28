@@ -36,6 +36,15 @@ const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
 
 /// The write path: the serialization point, the commit-metadata sidecar
 /// behind it, and the commit feed in front of it.
+///
+/// Four of the methods below are one-line delegations to the sidecar or the
+/// feed, deliberately: what this card buys over holding the two side by
+/// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and `CommitFeed::publish`
+/// are reachable only from [`WritePath::commit`], which is what makes the
+/// ordering above a property of this type rather than a rule each handler
+/// remembers — `Sidecar::record`'s caller contract is discharged by there
+/// being nowhere else to fail it. Reaching the two through here is what
+/// that costs.
 pub(crate) struct WritePath {
     /// The serialization point. M2's applier serializes the commits
     /// themselves anyway, so this only moves that point up — and buys the

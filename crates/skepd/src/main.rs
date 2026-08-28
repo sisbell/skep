@@ -23,7 +23,8 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
 {DEFAULT_PORT};
                      0 picks an ephemeral port)
   --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
-{DEFAULT_WORKERS})
+{DEFAULT_WORKERS};
+                     minimum 1)
   --help             this text
 
 The wire protocol is specified in skep/docs/wire.md."
@@ -75,10 +76,19 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
+    // Refused, never repaired. `serve` states `workers >= 1` as a
+    // precondition and asserts it, and the wire surface refuses an
+    // out-of-range page size rather than clamping it; a count silently
+    // raised to one here would be the third answer to that one question,
+    // and the one that teaches a caller its zero was fine.
+    let workers = workers.unwrap_or(DEFAULT_WORKERS);
+    if workers == 0 {
+        return Err("--workers: a server with no workers serves nothing".into());
+    }
     Ok(Some(Args {
         data_dir: data_dir.ok_or("--data-dir (or SKEPD_DATA_DIR) is required")?,
         port: port.unwrap_or(DEFAULT_PORT),
-        workers: workers.unwrap_or(DEFAULT_WORKERS).max(1),
+        workers,
     }))
 }
 
@@ -154,6 +164,18 @@ mod tests {
         assert!(
             parse_args(argv(&["--data-dir", "/tmp/x", "--port", "notaport"])).is_err(),
             "a non-numeric port is refused"
+        );
+        assert!(
+            parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "0"])).is_err(),
+            "a zero worker count is refused, not repaired into a one-worker server"
+        );
+        assert_eq!(
+            parse_args(argv(&["--data-dir", "/tmp/x", "--workers", "2"]))
+                .expect("a count of two is in range")
+                .expect("a run, not usage")
+                .workers,
+            2,
+            "and a count in range is read as given"
         );
     }
 }

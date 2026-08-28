@@ -138,11 +138,11 @@ pub fn codec_roundtrip_oracle(frame: &[u8]) -> bool {
 }
 
 /// Lowercase hex of a byte slice — the reproduction form findings record,
-/// and the codec's own hex encoding, so a finding's bytes read back through
-/// the `{"hex"}` form they may have come from.
-pub fn hex(bytes: &[u8]) -> String {
-    crate::codec::hex_string(bytes)
-}
+/// and the codec's own encoding, so a finding's bytes read back through the
+/// `{"hex"}` form they may have come from. Re-exported rather than wrapped:
+/// it IS that function, and the fuzz tier is external to this library, so
+/// this is the path by which it reaches it.
+pub use crate::codec::hex_string as hex;
 
 // ── the HTTP oracle ──────────────────────────────────────────────────────
 
@@ -185,15 +185,21 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
 /// The well-formedness oracle for one HTTP response: a parseable
 /// `HTTP/1.1 <code>` status line, a header block of `Name: value` lines, the
 /// universal `Access-Control-Allow-Origin` (wire v4), and a body whose
-/// length agrees with `Content-Length` — except a `204` carries none and a
-/// `text/event-stream` is an unbounded stream with no declared length.
-/// Returns the status code.
+/// length agrees with `Content-Length`.
+///
+/// Returns the status AND the body, because a caller that judges the body
+/// (an error name, a success shape) would otherwise re-find the header
+/// terminator this function has already located — a second split whose only
+/// proof of soundness is that this one returned `Ok`. The two cases where
+/// the body's length is not `Content-Length`'s to check are stated here so
+/// that caller need not re-derive them: a `204` carries no body, and a
+/// `text/event-stream` body is a prefix of an unbounded stream.
 ///
 /// TOTAL over any bytes, including none: an empty response is reported as
 /// an `Err` naming a close with no answer. Whether that is a fault belongs
 /// to the caller's context — [`envelope_oracle`] decides it is not, and a
 /// probe that expects a clean close checks emptiness itself before asking.
-pub fn check_http_response(bytes: &[u8]) -> Result<u16, String> {
+pub fn check_http_response(bytes: &[u8]) -> Result<(u16, &[u8]), String> {
     if bytes.is_empty() {
         return Err("no response bytes (server closed without answering)".into());
     }
@@ -241,16 +247,16 @@ pub fn check_http_response(bytes: &[u8]) -> Result<u16, String> {
     let body = &bytes[sep + 4..];
     if content_type.contains("text/event-stream") {
         // An unbounded stream: no declared length, body is a prefix.
-        return Ok(status);
+        return Ok((status, body));
     }
     if status == 204 {
         if !body.is_empty() {
             return Err("204 response carried a body".into());
         }
-        return Ok(status);
+        return Ok((status, body));
     }
     match content_length {
-        Some(n) if n == body.len() => Ok(status),
+        Some(n) if n == body.len() => Ok((status, body)),
         Some(n) => Err(format!("Content-Length {n} disagrees with body length {}", body.len())),
         None => Err("non-204 response without Content-Length".into()),
     }
@@ -282,10 +288,8 @@ pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
     if resp.is_empty() {
         return Ok(());
     }
-    let status = check_http_response(&resp)?;
+    let (status, body) = check_http_response(&resp)?;
     if status >= 400 {
-        let sep = resp.windows(4).position(|w| w == b"\r\n\r\n").expect("header terminator");
-        let body = &resp[sep + 4..];
         let v: Value =
             serde_json::from_slice(body).map_err(|e| format!("error body is not JSON: {e}"))?;
         let name = v

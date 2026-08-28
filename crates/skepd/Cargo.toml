@@ -58,13 +58,11 @@ skep-discovery = { path = "../skep-discovery" }
 # helper, so marshal determinism never depends on serde_json's map backend.
 serde_json.workspace = true
 # No HTTP server dependency, deliberately (wire v4): the daemon speaks a
-# written-out HTTP/1.1 subset over std's TcpListener — the commit stream
-# needs event bytes flushed at commit time and a server-initiated close at
-# shutdown, and a pull-based server library's response reader (tiny_http's
-# included: end-of-response flush, connection pump owning the socket) can
-# give neither. No async runtime either: M2's single applier already
-# serializes writes and Operation::execute is Sync, so worker threads are
-# the whole concurrency story.
+# written-out HTTP/1.1 subset over std's TcpListener; server.rs's module doc
+# carries why a pull-based server library cannot serve the commit stream.
+# No async runtime either: M2's single applier already serializes writes and
+# Operation::execute is Sync, so worker threads are the whole concurrency
+# story.
 #
 # Non-poisoning locks: the session map, the subscriber registry, and the
 # commit-feed condvar behind GET /events (the same totality argument M10 §7

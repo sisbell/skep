@@ -41,7 +41,7 @@ const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
 /// The write path: the serialization point, the commit-metadata sidecar
 /// behind it, and the commit stream in front of it.
 ///
-/// Four of the methods below are one-line delegations to the sidecar or the
+/// The delegating methods below are one-line calls into the sidecar or the
 /// stream, deliberately: what this card buys over holding the two side by
 /// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and
 /// `CommitStream::publish` are reachable only from [`WritePath::commit`],

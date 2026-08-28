@@ -57,7 +57,9 @@ mod write_path;
 pub mod fuzz_support;
 
 pub use codec::JsonCodec;
-pub use server::{serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
+pub use server::{
+    serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd, UNIVERSAL_HEADERS,
+};
 
 /// The engine types this crate's public surface hands out: the world
 /// [`Daemon::world_at`] answers with, why it refused, and the failure

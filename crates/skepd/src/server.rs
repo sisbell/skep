@@ -4,12 +4,13 @@
 //!
 //! Split for testability: [`Daemon`] holds the state and routes
 //! `&HttpRequest → Routed` with no socket anywhere; [`serve`]/[`Skepd`]
-//! wrap it in a synchronous accept loop over a plain `TcpListener`. The HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS,
-//! `Content-Length` bodies, one request per connection, `Connection: close`
-//! on every response) is written out here rather than taken from a server
-//! library, because the commit stream needs two things a pull-based library
-//! response cannot give: event bytes flushed to the socket at commit time,
-//! and a server-initiated close at shutdown. Owning the socket makes both
+//! wrap it in a synchronous accept loop over a plain `TcpListener`. The
+//! HTTP/1.1 subset this daemon speaks (GET/POST/OPTIONS, `Content-Length`
+//! bodies, one request per connection, `Connection: close` on every
+//! response) is written out here rather than taken from a server library,
+//! because the commit stream needs two things a pull-based library response
+//! cannot give: event bytes flushed to the socket at commit time, and a
+//! server-initiated close at shutdown. Owning the socket makes both
 //! one-line facts.
 //!
 //! **History is served from the journal** (wire v3): `POST /op-at` answers
@@ -138,9 +139,12 @@ const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// peer.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The deadline for one transfer — the request in, or the answer out. A
-/// connection performs at most one of each, so it is bounded at twice this
-/// however its peer paces the bytes.
+/// The deadline for one transfer — the request in, or the answer out. It is
+/// checked BETWEEN socket calls, so a call already in flight when it passes
+/// runs to its own socket timeout: each direction is bounded at this plus
+/// [`REQUEST_READ_TIMEOUT`] or [`WRITE_TIMEOUT`], and a connection — which
+/// performs at most one of each — at twice that, plus whatever its handler
+/// is doing.
 ///
 /// [`REQUEST_READ_TIMEOUT`] and [`WRITE_TIMEOUT`] bound SILENCE — each is a
 /// per-call socket deadline, renewed by any byte — so only this bounds
@@ -170,7 +174,13 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 /// the event stream's head is composed outside [`write_reply`] — a stream is
 /// not a request/response reply — so a change to either must reach both
 /// writers or reach neither.
-const UNIVERSAL_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nConnection: close\r\n";
+///
+/// These are the exact HTTP/1.1 bytes both writers emit, exported because
+/// [`Reply`] names them as a caller's obligation: a caller serving replies
+/// over a transport of its own supplies the same two headers, however that
+/// transport spells them, and can read the current posture from here rather
+/// than transcribing it from prose.
+pub const UNIVERSAL_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nConnection: close\r\n";
 
 /// The one request header this daemon reads beyond HTTP's own framing: the
 /// opaque session token. Named once because the CORS preflight must
@@ -295,20 +305,22 @@ pub struct Body {
 /// built with bytes would drop them in silence.
 ///
 /// A HANDLER'S ANSWER, not a complete HTTP response. The four universal
-/// headers — `Content-Type`, `Content-Length`,
-/// `Access-Control-Allow-Origin: *`, `Connection: close` — are written by
-/// [`write_reply`] at the one place every response is written, so they
-/// appear in no `Reply` value. wire.md §Transport and §Cross-origin access
-/// promise the last two on EVERY response, so a caller serving these over
-/// a transport of its own owes both.
+/// headers are written by [`write_reply`] at the one place every response is
+/// written, so they appear in no `Reply` value: `Content-Type` and
+/// `Content-Length` come from the `body` field below, and the other two are
+/// [`UNIVERSAL_HEADERS`]. wire.md §Transport and §Cross-origin access
+/// promise those two on EVERY response, so a caller serving these over a
+/// transport of its own owes both — and takes them from that constant
+/// rather than transcribing them, so the day the cross-origin posture is
+/// revisited it moves for them too.
 #[non_exhaustive]
 pub struct Reply {
     pub status: u16,
     pub body: Option<Body>,
     /// Extra response headers beyond the universal set (`Content-Type`,
-    /// `Content-Length`, `Access-Control-Allow-Origin`, `Connection`) —
-    /// the preflight trio rides here. That set is [`write_reply`]'s to
-    /// supply, not this list's.
+    /// `Content-Length`, and [`UNIVERSAL_HEADERS`]' two) — the preflight
+    /// trio rides here. That set is [`write_reply`]'s to supply, not this
+    /// list's.
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
@@ -351,6 +363,15 @@ impl Reply {
     /// The CORS preflight answer (wire v4): 204, no body, the fixed method
     /// and header lists. `Access-Control-Allow-Origin: *` is universal and
     /// added where every response is written, so it is not repeated here.
+    ///
+    /// The method list must name every method [`Daemon::reply`] dispatches,
+    /// for the same reason [`SESSION_HEADER`] is a constant: a method the
+    /// preflight omits is one the browser will not send, and that failure
+    /// appears only cross-origin, where this suite's own TCP clients never
+    /// look. The list is a joined `&'static str` and so cannot be built
+    /// from the router's arms; the coupling is held by
+    /// `the_route_set_agrees_across_preflight_dispatch_and_refusal`, which
+    /// discovers the dispatched set rather than restating it.
     fn preflight() -> Reply {
         Reply {
             status: 204,
@@ -1307,11 +1328,13 @@ impl Skepd {
         &self.daemon
     }
 
-    /// Block until the workers exit — the binary's foreground call, which
-    /// returns when something else stops the server. Crash-stop is the
-    /// shutdown story: M2's WAL makes recovery the clean path, so no signal
-    /// machinery. Returning ends every event stream too, since the server
-    /// is dropped here.
+    /// Block until the workers exit — the binary's foreground call. In
+    /// practice that is until the process ends: `wait` consumes the server,
+    /// so nothing is left to set the stop flag, and crash-stop is the
+    /// shutdown story (M2's WAL makes recovery the clean path, so there is
+    /// no signal machinery). An embedder that wants to stop a running server
+    /// keeps the [`Skepd`] and calls [`Skepd::shutdown`] instead. Returning
+    /// would end every event stream too, since the server is dropped here.
     pub fn wait(mut self) {
         for h in self.workers.drain(..) {
             let _ = h.join();
@@ -1323,9 +1346,18 @@ impl Skepd {
     /// wakes each subscriber, which drops its socket (the client sees a
     /// clean close) and exits — and join those threads too. Returning
     /// releases the kernel's journal-directory lock, so the same data dir
-    /// can be reopened. Bounded by [`TRANSFER_DEADLINE`]: a worker mid-request
-    /// finishes or times out, and no subscriber is waited on beyond the
-    /// broadcast that wakes it — so no join here waits on a client.
+    /// can be reopened.
+    ///
+    /// Bounded, and by more than one number: a worker mid-request runs to at
+    /// most one [`TRANSFER_DEADLINE`] plus one socket timeout in each
+    /// direction, plus its handler's own time; then every subscriber is woken
+    /// by the commit stream's broadcast, and one blocked writing to a peer
+    /// that stopped draining is joined only when its socket's
+    /// [`WRITE_TIMEOUT`] fires — `serve_events` writes without a deadline by
+    /// design (see [`write_bounded`]). So this stop does wait on a client,
+    /// for at most that timeout. Interrupting it would mean holding a second
+    /// descriptor per live stream, against the budget [`MAX_SUBSCRIBERS`]
+    /// exists to keep.
     ///
     /// Calling it is how a caller learns the stop *finished*; a server that
     /// is merely dropped stops the same way, so a panic between [`serve`]
@@ -1679,7 +1711,9 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
 /// worker's socket, so a slow reader here costs one of `workers` threads —
 /// which is why the reply path takes the deadline and `serve_events` does
 /// not: a subscriber runs on its own thread against a slot [`Subscribers`]
-/// already budgets.
+/// already budgets. That exemption is what makes [`Skepd::shutdown`]'s
+/// bound include one write timeout — the stop joins a subscriber that may
+/// be blocked writing to a peer that stopped draining.
 fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
     while !bytes.is_empty() {
         if Instant::now() >= deadline {
@@ -1835,12 +1869,31 @@ mod tests {
         "/",
     ];
 
-    /// One route set, three consequences: a known path preflights, refuses
-    /// an unsupported method with `405`, and dispatches at least one real
-    /// method; an unknown path is `404` for every method including
-    /// `OPTIONS`. This is the invariant [`path_is_known`] exists to keep — a
-    /// route stated in one table and forgotten in another breaks exactly
-    /// one of these.
+    /// The methods this test asks every route about. Deliberately wider than
+    /// the set the daemon serves: the point is to DISCOVER which methods
+    /// dispatch rather than to restate them, so a method added to
+    /// [`Daemon::reply`] is caught here without anyone remembering to add it.
+    const PROBE_METHODS: &[&str] =
+        &["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+
+    /// One route set, five consequences. A known path preflights `204`;
+    /// refuses an unsupported method with `405` and never `404`; dispatches
+    /// at least one method; refuses at least one, so the `405` arm is
+    /// exercised somewhere; and has every method it dispatches named by the
+    /// CORS preflight. An unknown path is `404` for every method including
+    /// `OPTIONS`.
+    ///
+    /// The first four are the invariant [`path_is_known`] exists to keep — a
+    /// route stated in one table and forgotten in another breaks exactly one
+    /// of them. The last is [`Reply::preflight`]'s: a method the preflight
+    /// omits is one a browser will not send, which fails only cross-origin,
+    /// where every client in this suite writes onto a socket directly and so
+    /// never looks.
+    ///
+    /// Every method is DISCOVERED rather than restated, so a route that
+    /// starts serving one — the blob upload [`MAX_REQUEST_BODY`] already
+    /// anticipates — is caught by the preflight check rather than by a
+    /// hardcoded expectation that the method is unsupported.
     #[test]
     fn the_route_set_agrees_across_preflight_dispatch_and_refusal() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1858,15 +1911,38 @@ mod tests {
             // this test never asks for.
             Routed::EventStream => 200,
         };
+        let allow = Reply::preflight()
+            .headers
+            .iter()
+            .find(|(k, _)| *k == "Access-Control-Allow-Methods")
+            .map(|&(_, v)| v)
+            .expect("the preflight names its allowed methods");
         for path in ROUTES {
             assert!(path_is_known(path), "{path} is served but not known");
             assert_eq!(status("OPTIONS", path), 204, "{path} must answer the CORS preflight");
-            assert_eq!(status("PUT", path), 405, "{path} must refuse an unsupported method");
-            let served = ["GET", "POST"].iter().any(|m| {
-                let s = status(m, path);
-                s != 404 && s != 405
-            });
+            let mut served = false;
+            let mut refused = false;
+            for method in PROBE_METHODS {
+                let answered = status(method, path);
+                assert_ne!(
+                    answered, 404,
+                    "{path} is known, so {method} must be refused with 405, not 404"
+                );
+                // 405 is the daemon saying it does not serve this method
+                // here; anything else is a dispatch, which the preflight
+                // owes a name.
+                if answered == 405 {
+                    refused = true;
+                    continue;
+                }
+                served = true;
+                assert!(
+                    allow.split(',').any(|a| a.trim() == *method),
+                    "{path} dispatches {method}, which the preflight does not allow ({allow})"
+                );
+            }
             assert!(served, "{path} is known but no method dispatches");
+            assert!(refused, "{path} serves every probed method; none exercises the 405 arm");
         }
         for unknown in ["/nope", "/op/", "/Health"] {
             assert!(!path_is_known(unknown), "{unknown} must not be known");

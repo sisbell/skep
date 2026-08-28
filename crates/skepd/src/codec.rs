@@ -78,6 +78,15 @@ use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, Region, Spec, S
 /// refusal rides the ordinary parse channel — an over-cap frame is
 /// `unparseable`/`malformed` with the count named, exactly as any other
 /// malformed frame is, rather than a new wire vocabulary.
+///
+/// Applied at [`p_list`], so the cap is per ARRAY. Two ops nest —
+/// `compare`'s two operands and `find_docs_containing`'s `regions` are
+/// lists of regions, each carrying its own span list — so a frame's TOTAL
+/// span count is the product of two caps and is bounded by
+/// [`crate::server`]'s request-body cap alone. The budget argument above
+/// transfers to one query slot; it does not price a region set, whose cost
+/// model is M6's rather than M8's. Anyone raising the body cap for a route
+/// that carries these ops owes that number.
 const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 
 /// The most values one `insert` frame may mint. Denominated in VALUES and
@@ -135,6 +144,24 @@ const MAX_NAT_DIGITS: usize = 4096;
 /// only real content.
 const MAX_TUMBLER_COMPONENTS: usize = 256;
 
+/// The most bytes one frame's idempotency `id` may carry. This daemon never
+/// interprets the id — but M10 RETAINS it: the idempotency cache is keyed
+/// `(SessionId, ReqId)`, so a committed write's key stays resident until its
+/// entry is evicted or its session is closed
+/// ([`skep_febe::Operation::close_session`] purges exactly one session's
+/// entries). Retention is therefore (cache capacity) × (this cap), and with
+/// the second factor uncapped the first would be the daemon's 8 MiB body
+/// cap: one session's worth of committed writes retains gigabytes that do
+/// not clear when the caller stops, unlike every CPU cost on this surface.
+///
+/// 256 bytes is far above any key a client needs — a UUID is 36 characters,
+/// a hex-encoded 256-bit value 64, and this suite's own keys are `"retry-1"`,
+/// `"k1"`, `"w17"` — and puts the retained bill at a quarter megabyte
+/// against M10's 1024 cache entries, commensurate with the session table's
+/// own bounded retention ([`crate::server`]'s `MAX_LIVE_SESSIONS`) rather
+/// than four orders above it.
+const MAX_REQ_ID_BYTES: usize = 256;
+
 /// The daemon's JSON codec — stateless; one instance serves every client.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct JsonCodec;
@@ -157,18 +184,22 @@ impl JsonCodec {
     /// PRECONDITION: `req` is within the wire caps this codec enforces on
     /// parse — [`MAX_WIRE_LIST`] elements per array, [`MAX_INSERT_VALUES`]
     /// minted values per `insert`, [`MAX_NAT_DIGITS`] per tumbler
-    /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler. Under it,
-    /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the
-    /// parse is byte-identical.
+    /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler,
+    /// [`MAX_REQ_ID_BYTES`] per idempotency id — and carries no zero-byte
+    /// `Val`, which [`j_atom`] renders as `{"atom": ""}` and [`p_val_form`]
+    /// refuses by design (coarse granularity must be said, and a zero-byte
+    /// atom says nothing). Under all of that, `parse(marshal_request(r))`
+    /// reproduces `r` and re-marshaling the parse is byte-identical.
     ///
     /// Outside it, marshaling SUCCEEDS and yields a frame `parse` refuses:
-    /// the caps are the parse side's trust-boundary obligation and this
-    /// direction does not re-check them (one check, one owner). The upstream
-    /// value types admit over-cap requests — `Endset::from_spans` takes any
-    /// span count and T0(a) leaves a component's magnitude unbounded by
-    /// design — so a caller assembling a `Request` by hand owes the caps.
-    /// A `Request` this codec produced is inside them by construction, which
-    /// is what makes the round-trip oracle sound.
+    /// this is the parse side's trust-boundary obligation and this direction
+    /// does not re-check it (one check, one owner). The upstream value types
+    /// admit every violation — `Endset::from_spans` takes any span count,
+    /// T0(a) leaves a component's magnitude unbounded by design, and
+    /// `Val::new` takes any bytes — so a caller assembling a `Request` by
+    /// hand owes the whole precondition. A `Request` this codec produced
+    /// satisfies it by construction, which is what makes the round-trip
+    /// oracle sound.
     ///
     /// Wire invariant: a `ReqId` is the UTF-8 bytes of the frame's `id`
     /// string (parse can produce nothing else); an off-wire non-UTF-8 id is
@@ -260,7 +291,19 @@ fn parse_value(v: Value) -> PResult<Request> {
     };
     let mut fields = Fields(m);
     let name = fields.string("op")?;
-    let id = fields.opt_string("id")?.map(|s| ReqId(s.into_bytes()));
+    // The id is capped where it is minted: M10 retains it for the life of a
+    // cached write, so its LENGTH is the second factor in a retention bill
+    // nothing downstream bounds (see [`MAX_REQ_ID_BYTES`]).
+    let id = match fields.opt_string("id")? {
+        None => None,
+        Some(s) if s.len() > MAX_REQ_ID_BYTES => {
+            return Err(PErr(format!(
+                "id is {} bytes, past the {MAX_REQ_ID_BYTES}-byte wire cap",
+                s.len()
+            )))
+        }
+        Some(s) => Some(ReqId(s.into_bytes())),
+    };
     let op = parse_op(&name, &mut fields)?;
     fields.finish()?;
     Ok(Request { id, op })
@@ -365,7 +408,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         },
         "in_claims" => Op::InClaims { y: fields.addr("y")?, view: fields.view("view")? },
         "out_claims" => Op::OutClaims { x: fields.addr("x")?, view: fields.view("view")? },
-        other => return Err(PErr(format!("unknown op '{other}'"))),
+        other => return Err(PErr(format!("unknown op '{}'", shown(other)))),
     })
 }
 
@@ -389,7 +432,7 @@ impl Fields {
 
     fn finish(self) -> PResult<()> {
         match self.0.keys().next() {
-            Some(k) => Err(PErr(format!("unknown field '{k}'"))),
+            Some(k) => Err(PErr(format!("unknown field '{}'", shown(k)))),
             None => Ok(()),
         }
     }
@@ -499,6 +542,25 @@ impl Fields {
 
 // ── leaf parsers, each through M1's validating constructors ──
 
+/// The offending text, bounded — a refusal must not be a copy of the input
+/// it refuses. The wire-supplied strings echoed below are bounded only by
+/// the request body, and a parse fault is wrapped by each enclosing field,
+/// element and region on the way out, so an unbounded echo is copied once
+/// per level and then again into the response.
+///
+/// The cut is on a CHARACTER boundary: the argument is arbitrary UTF-8 from
+/// the wire, and a byte-index slice would panic on one. Applied only where
+/// the echoed value is wire-supplied and unbounded; the transport's own
+/// echoes (a path, a query parameter, a header line) are already bounded by
+/// the request-head cap and are left as they are.
+fn shown(s: &str) -> String {
+    const MAX: usize = 64;
+    match s.char_indices().nth(MAX) {
+        None => s.to_string(),
+        Some((i, _)) => format!("{}… ({} bytes)", &s[..i], s.len()),
+    }
+}
+
 fn p_string(v: &Value) -> PResult<String> {
     v.as_str().map(str::to_owned).ok_or_else(|| PErr("expected a JSON string".into()))
 }
@@ -527,7 +589,7 @@ fn p_nat(v: &Value) -> PResult<Nat> {
 /// exactly the cost the cap exists to avoid.
 fn p_nat_str(s: &str) -> PResult<Nat> {
     if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(PErr(format!("'{s}' is not a decimal natural")));
+        return Err(PErr(format!("'{}' is not a decimal natural", shown(s))));
     }
     if s.len() > MAX_NAT_DIGITS {
         return Err(PErr(format!(
@@ -535,7 +597,7 @@ fn p_nat_str(s: &str) -> PResult<Nat> {
             s.len()
         )));
     }
-    Nat::from_str(s).map_err(|e| PErr(format!("'{s}': {e}")))
+    Nat::from_str(s).map_err(|e| PErr(format!("'{}': {e}", shown(s))))
 }
 
 /// A dotted-decimal tumbler, depth-capped at [`MAX_TUMBLER_COMPONENTS`]
@@ -550,7 +612,7 @@ fn p_tum(v: &Value) -> PResult<Tumbler> {
         )));
     }
     let comps = s.split('.').map(p_nat_str).collect::<PResult<Vec<Nat>>>()?;
-    Tumbler::new(comps).map_err(|e| PErr(format!("'{s}': {e}")))
+    Tumbler::new(comps).map_err(|e| PErr(format!("'{}': {e}", shown(s))))
 }
 
 fn p_addr(v: &Value) -> PResult<Address> {
@@ -571,7 +633,7 @@ fn p_obj<'a>(v: &'a Value, allowed: &[&str]) -> PResult<&'a Map<String, Value>> 
 /// transport envelopes (whose faults are not `ParseError`s) share it.
 pub(crate) fn check_keys(m: &Map<String, Value>, allowed: &[&str]) -> Result<(), String> {
     match m.keys().find(|k| !allowed.contains(&k.as_str())) {
-        Some(k) => Err(format!("unknown field '{k}'")),
+        Some(k) => Err(format!("unknown field '{}'", shown(k))),
         None => Ok(()),
     }
 }
@@ -1546,6 +1608,24 @@ mod tests {
         }
     }
 
+    /// A refusal names the offending text without copying it: the echoed
+    /// value is wire-supplied and bounded only by the request body, and it
+    /// is copied again by every field, element and region wrapper on the way
+    /// out, so an unbounded echo makes a malformed frame cost a multiple of
+    /// itself. The multi-byte case is the load-bearing one — the cut is on a
+    /// character boundary, and a byte-index slice would panic here.
+    #[test]
+    fn a_refusal_names_the_offending_text_without_copying_it() {
+        let long = "é".repeat(4096); // not digits, and not ASCII
+        let e = p_tum(&Value::String(long.clone())).expect_err("not a dotted decimal");
+        assert!(e.0.len() < 300, "the refusal is bounded, not a copy of the input: {}", e.0.len());
+        assert!(e.0.contains("ééé"), "and still shows what it refused: {e}");
+        assert!(e.0.contains(&long.len().to_string()), "naming the length it elided: {e}");
+        // Short values are shown whole, so ordinary diagnostics are intact.
+        let e = p_tum(&Value::String("1.a".into())).expect_err("not a decimal natural");
+        assert!(e.0.contains("'a'"), "a short value is named in full: {e}");
+    }
+
     /// Both ends of both tumbler wire caps. A component's digit run and a
     /// tumbler's depth each multiply against the whole link store on the
     /// query path — M8 clones both operands' endpoints per overlap test —
@@ -1576,6 +1656,26 @@ mod tests {
         let deeper = vec!["1"; MAX_TUMBLER_COMPONENTS + 1].join(".");
         let e = tum(deeper).expect_err("one component past the cap must not parse");
         assert!(e.0.contains("component"), "the refusal names the depth cap: {e}");
+    }
+
+    /// Both ends of the id cap. The id is the one frame field this daemon
+    /// never interprets and M10 nonetheless RETAINS — the idempotency cache
+    /// is keyed by it — so its length is the second factor in a retention
+    /// bill nothing downstream bounds. The at-cap case is load-bearing: a
+    /// `>` that became a `>=` would refuse a key a client legitimately sent.
+    #[test]
+    fn the_idempotency_id_meets_its_cap_at_both_ends() {
+        let frame = |id: &str| format!(r#"{{"op":"fork","id":"{id}"}}"#).into_bytes();
+        let at_cap = "k".repeat(MAX_REQ_ID_BYTES);
+        let req = parse_request(&frame(&at_cap)).expect("an id at the cap parses");
+        assert_eq!(req.id.map(|ReqId(b)| b.len()), Some(MAX_REQ_ID_BYTES));
+        let over = "k".repeat(MAX_REQ_ID_BYTES + 1);
+        // `Request` derives no Debug upstream, so unwrap the failure by hand.
+        let e = match parse_request(&frame(&over)) {
+            Err(e) => e,
+            Ok(_) => panic!("one byte past the cap must not parse"),
+        };
+        assert!(e.0.contains("wire cap"), "the refusal names the cap: {e}");
     }
 
     /// Both ends of the wire-list cap, at [`p_list`] — the one door every

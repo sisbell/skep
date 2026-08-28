@@ -96,7 +96,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -133,6 +133,30 @@ const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// peer.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The deadline for one transfer — the request in, or the answer out. A
+/// connection performs at most one of each, so it is bounded at twice this
+/// however its peer paces the bytes.
+///
+/// [`REQUEST_READ_TIMEOUT`] and [`WRITE_TIMEOUT`] bound SILENCE — each is a
+/// per-call socket deadline, renewed by any byte — so only this bounds
+/// SLOWNESS. Without it a peer sending (or draining) one byte per interval
+/// renews the socket deadline indefinitely and holds its worker for as long
+/// as it cares to: [`MAX_REQUEST_BODY`] at one byte per interval is years,
+/// and `workers` such peers occupy the whole pool, leaving the daemon
+/// answering nothing with every structure inside it healthy. It is also
+/// what makes [`Skepd::shutdown`]'s bound true, since that stop joins a
+/// worker that may be mid-request.
+///
+/// The two halves are bounded SEPARATELY and not as one window, so that a
+/// request refused for exhausting its own deadline still has a deadline in
+/// which to be told so: a single shared window would make the refusal
+/// undeliverable by construction, which is the never-silent contract lost
+/// at the one place it is hardest to notice.
+///
+/// Loopback delivers the largest admissible body in milliseconds, so 30 s
+/// is four orders of magnitude of headroom over any honest client.
+const TRANSFER_DEADLINE: Duration = Duration::from_secs(30);
+
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
 
@@ -145,22 +169,45 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 const SESSION_HEADER: &str = "Skepd-Session";
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
-/// body, capped separately by [`MAX_REQUEST_BODY`].
+/// body, capped separately by the route's [`body_cap`].
 const MAX_REQUEST_HEAD: usize = 64 * 1024;
 
-/// Request-body cap, enforced on the declared `Content-Length` before any
-/// body byte is read or allocated. Pre-media value — wire frames are small.
+/// Request-body cap for the two frame-carrying routes, enforced on the
+/// declared `Content-Length` before any body byte is read or allocated.
+/// Pre-media value — wire frames are small.
 ///
 /// This bounds the REQUEST, not the allocation it commands, and the ratio
-/// between them is what anyone raising it must price: the per-byte write
-/// discipline mints one `Val` per input byte, each its own allocation, so
-/// an `insert` body buys roughly forty times its size in live heap. The
-/// codec's own `MAX_INSERT_VALUES` is what bounds that multiplier; raising
-/// this number alone raises the amplified cost with it.
+/// between them is what anyone raising it must price. The FLOOR under every
+/// JSON-carrying route is `serde_json`'s: the whole `Value` tree is built
+/// before any codec cap runs, and a `Value` is order 32 bytes against as
+/// little as two wire bytes of dense array, so a body of arbitrary shape
+/// buys roughly twenty times its size in transient heap — for a frame the
+/// codec is then about to refuse. Above that floor the per-byte write
+/// discipline adds the `insert` path's own multiplier, minting one `Val`
+/// per input byte, each its own allocation, for roughly forty times the
+/// body in live heap; the codec's `MAX_INSERT_VALUES` is what bounds that
+/// one. Raising this number alone raises both amplified costs with it.
 ///
-/// REVISIT at the media round: blob upload will raise this for its route
-/// only (a route-scoped cap, not a bigger global one).
+/// REVISIT at the media round: blob upload raises this for its route only,
+/// which is the shape [`body_cap`] already has.
 const MAX_REQUEST_BODY: usize = 8 * 1024 * 1024;
+
+/// Request-body cap for every route that carries no frame. `POST /session`
+/// carries `{"principal": n}`; a body posted to `/health`, `/changes`,
+/// `/dump` or an unknown path is read whole and then never looked at. Those
+/// routes have no use for the ceiling above, and offering it to them offers
+/// the `Value` tree that rides on it.
+const MAX_SMALL_BODY: usize = 8 * 1024;
+
+/// The body cap for a path — checked on the declared `Content-Length`
+/// before a byte is read, so a route that cannot use a large body is never
+/// asked to allocate for one.
+fn body_cap(path: &str) -> usize {
+    match path {
+        "/op" | "/op-at" => MAX_REQUEST_BODY,
+        _ => MAX_SMALL_BODY,
+    }
+}
 
 /// `/changes` page size when `limit` is absent.
 const CHANGES_LIMIT_DEFAULT: usize = 256;
@@ -326,9 +373,9 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
 }
 
-/// The body's LENGTH and the token's PRESENCE: the body runs to the 8 MiB
-/// cap, and the token names a live session, which is not a thing to leave
-/// in a log line.
+/// The body's LENGTH and the token's PRESENCE: the body runs to the route's
+/// [`body_cap`], and the token names a live session, which is not a thing to
+/// leave in a log line.
 impl std::fmt::Debug for HttpRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpRequest")
@@ -563,6 +610,17 @@ impl Sessions {
 
 /// One unpredictable `u64` from the standard library's own entropy — the
 /// source both halves of a token draw from, and no new dependency.
+///
+/// The source is `RandomState`'s per-thread key, which std seeds randomly
+/// and does NOT promise to keep unrelated across calls: today consecutive
+/// draws on one thread are SipHash-1-3 of the empty message under a
+/// counter-incremented key. That is enough for the property
+/// [`Sessions::bind`] needs today — a guessed token replays another
+/// session's cached acks and nothing more, since `POST /session` is itself
+/// unauthenticated and mints a token for any principal a caller names — and
+/// it is NOT enough for a token that is a credential. When `POST /session`
+/// gains one, this draw must come from the OS, which std does not expose;
+/// the dependency that decision buys is the daemon's to take.
 fn unpredictable_u64() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
@@ -1182,7 +1240,9 @@ impl Skepd {
     /// wakes each subscriber, which drops its socket (the client sees a
     /// clean close) and exits — and join those threads too. Returning
     /// releases the kernel's journal-directory lock, so the same data dir
-    /// can be reopened. Bounded: nothing here waits on a client.
+    /// can be reopened. Bounded by [`TRANSFER_DEADLINE`]: a worker mid-request
+    /// finishes or times out, and no subscriber is waited on beyond the
+    /// broadcast that wakes it — so no join here waits on a client.
     ///
     /// Calling it is how a caller learns the stop *finished*; a server that
     /// is merely dropped stops the same way, so a panic between [`serve`]
@@ -1235,7 +1295,12 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
-    let req = match read_request(&mut stream) {
+    // One deadline per transfer: the socket's own timeouts bound silence and
+    // are renewed by any byte, so this is what bounds a peer that is slow
+    // rather than quiet. The reply gets its own below, which is what keeps a
+    // request refused AT its deadline still answerable.
+    let deadline = Instant::now() + TRANSFER_DEADLINE;
+    let req = match read_request(&mut stream, deadline) {
         Ok(Some(r)) => r,
         // Clean close before any byte (a port probe, shutdown's wake
         // connect): no request, so no reply owed.
@@ -1245,14 +1310,13 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
                 RequestRefusal::Malformed(detail) => {
                     refuse(TransportError::MalformedHttp, Some(&detail))
                 }
-                RequestRefusal::BodyTooLarge(declared) => {
-                    let detail = format!(
-                        "Content-Length {declared} exceeds the {MAX_REQUEST_BODY}-byte body cap"
-                    );
+                RequestRefusal::BodyTooLarge { declared, cap } => {
+                    let detail =
+                        format!("Content-Length {declared} exceeds the {cap}-byte body cap");
                     refuse(TransportError::PayloadTooLarge, Some(&detail))
                 }
             };
-            let _ = write_reply(&mut stream, &reply);
+            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
             return;
         }
     };
@@ -1272,7 +1336,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     };
     match routed {
         Routed::Reply(reply) => {
-            let _ = write_reply(&mut stream, &reply);
+            let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
         }
         Routed::EventStream => subscribers.admit(Arc::clone(daemon), stream),
     }
@@ -1355,9 +1419,11 @@ impl Subscribers {
 enum RequestRefusal {
     /// Not the HTTP subset this daemon speaks → `400 malformed_http`.
     Malformed(String),
-    /// The declared `Content-Length` exceeds [`MAX_REQUEST_BODY`] →
-    /// `413 payload_too_large`. Raised before any body byte is read.
-    BodyTooLarge(usize),
+    /// The declared `Content-Length` exceeds the route's [`body_cap`] →
+    /// `413 payload_too_large`. Raised before any body byte is read, and
+    /// carrying the cap it exceeded so the refusal names the number that
+    /// actually bound it rather than the largest one the daemon has.
+    BodyTooLarge { declared: usize, cap: usize },
 }
 
 impl From<String> for RequestRefusal {
@@ -1376,7 +1442,7 @@ impl From<&str> for RequestRefusal {
 /// byte; `Err(_)` = the request is refused (the caller answers the
 /// [`RequestRefusal`]'s reply and closes). The subset: one request per
 /// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
-/// empty, capped at [`MAX_REQUEST_BODY`]), `Expect: 100-continue`
+/// empty, capped at the route's [`body_cap`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
 ///
 /// Each header this daemon READS — `Content-Length`, `Skepd-Session`,
@@ -1384,7 +1450,16 @@ impl From<&str> for RequestRefusal {
 /// same never-silent treatment a duplicate query parameter and an unknown
 /// frame field already get. Headers this daemon does not read pass unread
 /// however often they appear.
-fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, RequestRefusal> {
+///
+/// Both loops below are bounded in bytes AND in time: `deadline` bounds
+/// this whole transfer, so a peer that paces its bytes to renew the
+/// socket's per-call deadline is refused rather than served for as long as
+/// it likes (see [`TRANSFER_DEADLINE`]). The refusal rides `malformed_http`,
+/// which is where a timed-out read already lands.
+fn read_request(
+    stream: &mut TcpStream,
+    deadline: Instant,
+) -> Result<Option<HttpRequest>, RequestRefusal> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let head_end = loop {
@@ -1393,6 +1468,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, RequestRe
         }
         if buf.len() > MAX_REQUEST_HEAD {
             return Err(format!("request head exceeds the {MAX_REQUEST_HEAD}-byte cap").into());
+        }
+        if Instant::now() >= deadline {
+            return Err("request head not delivered within the exchange deadline".into());
         }
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
@@ -1471,10 +1549,11 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, RequestRe
     let declared = content_length.unwrap_or(0);
     // The one unbounded-allocation vector: refuse on the declared length
     // alone, before 100-continue invites the body and before the loop reads
-    // (and allocates) a single byte of it. The media round's blob upload
-    // will raise this for its route only.
-    if declared > MAX_REQUEST_BODY {
-        return Err(RequestRefusal::BodyTooLarge(declared));
+    // (and allocates) a single byte of it. The cap is the ROUTE's, so a
+    // route that carries no frame is never asked to allocate for one.
+    let cap = body_cap(&path);
+    if declared > cap {
+        return Err(RequestRefusal::BodyTooLarge { declared, cap });
     }
     if expects_continue && body.len() < declared {
         // The client is holding the body until told to send it (curl does
@@ -1484,6 +1563,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, RequestRe
         }
     }
     while body.len() < declared {
+        if Instant::now() >= deadline {
+            return Err("request body not delivered within the exchange deadline".into());
+        }
         let mut chunk = [0u8; 8192];
         match stream.read(&mut chunk) {
             Ok(0) => return Err("connection closed inside the request body".into()),
@@ -1501,12 +1583,37 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
+/// `write_all` under a deadline. The socket's write timeout bounds a peer
+/// that stops draining; only the deadline bounds one that drains slowly,
+/// since each accepted byte renews that timeout. A reply is written to a
+/// worker's socket, so a slow reader here costs one of `workers` threads —
+/// which is why the reply path takes the deadline and `serve_events` does
+/// not: a subscriber runs on its own thread against a slot [`Subscribers`]
+/// already budgets.
+fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    while !bytes.is_empty() {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "response not taken within the exchange deadline",
+            ));
+        }
+        match stream.write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(n) => bytes = &bytes[n..],
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// Write one complete reply; the connection closes behind it. Every
 /// response carries `Access-Control-Allow-Origin: *` — wire v4's CORS
 /// posture, enforced at this one choke point so no reply can miss it — and
 /// `Connection: close` (one request per connection). A bodiless reply
 /// carries no content headers (RFC 7230's 204).
-fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
+fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::Result<()> {
     let mut head = Vec::with_capacity(256);
     head.extend_from_slice(
         format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
@@ -1533,11 +1640,11 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
         // it at once — per in-flight request, on a route that needs no
         // session. `set_nodelay` is on, so the cost is the second write
         // call and nothing else.
-        stream.write_all(&head)?;
-        stream.write_all(&body.bytes)
+        write_bounded(stream, &head, deadline)?;
+        write_bounded(stream, &body.bytes, deadline)
     } else {
         head.extend_from_slice(b"Connection: close\r\n\r\n");
-        stream.write_all(&head)
+        write_bounded(stream, &head, deadline)
     }
 }
 

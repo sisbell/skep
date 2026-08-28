@@ -5,12 +5,15 @@
 //!
 //! The mechanism is the engine's bounded replay (`Engine::world_at`):
 //! checkpoint-or-genesis base plus journal fold, per call, uncached. That
-//! is core-bound work, so [`History`] admits at most
-//! [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and refuses the surplus
-//! outright ([`Unavailable::Busy`]) rather than queueing — a worker parked
-//! behind a replay is a worker lost to live traffic. The permit spans the
-//! engine call alone: the read that follows runs on a detached `World` and
-//! competes with nobody.
+//! is core-bound work AND a whole second copy of the world, so [`History`]
+//! admits at most [`MAX_CONCURRENT_RECONSTRUCTIONS`] at once and refuses
+//! the surplus outright ([`Unavailable::Busy`]) rather than queueing — a
+//! worker parked behind a replay is a worker lost to live traffic, and a
+//! reconstructed world left resident is memory nothing else accounts for.
+//! The permit therefore spans the whole answer, not the engine call alone:
+//! a detached `World` competes with the live one for no CPU and for a full
+//! copy of its memory, so the budget bounds live reconstructions rather
+//! than concurrent replays.
 //!
 //! [`Unavailable`] says why an answer cannot be given without knowing what
 //! an HTTP status is; `server.rs` owns the one mapping onto the wire's
@@ -30,9 +33,11 @@ use skep_namespace::{Namespace, PrincipalId};
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
-/// deserialize plus journal fold, per call, uncached — two keeps history
-/// panes serviceable without letting core-bound replay occupy the whole
-/// worker pool.
+/// deserialize plus journal fold, per call, uncached, and each leaves a
+/// whole second world resident for as long as its answer is being built —
+/// two keeps history panes serviceable without letting core-bound replay
+/// occupy the worker pool or letting reconstructed worlds accumulate one
+/// per worker.
 pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 
 /// Why a historical answer is unavailable — the daemon's momentary
@@ -68,15 +73,29 @@ impl History {
         History { permits: ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
     }
 
-    /// The world as of `at`, under one reconstruction permit — held across
-    /// the engine call and released before the caller reads the world it
-    /// gets back. `at` is not examined until a permit is in hand, so
+    /// One reconstruction and the permit that licenses it. The guard is
+    /// handed back rather than dropped here, so the budget bounds LIVE
+    /// reconstructed worlds and not merely concurrent replays: a detached
+    /// world competes with the live one for no CPU and for a full copy of
+    /// its memory, so a permit released at the engine call would leave one
+    /// world resident per worker against a budget of
+    /// [`MAX_CONCURRENT_RECONSTRUCTIONS`]. The permit therefore spans the
+    /// read (or the dump) the world was reconstructed for, which is the
+    /// same trade [`MAX_CONCURRENT_RECONSTRUCTIONS`] already makes for the
+    /// replay: two slow historical answers make a third `Busy`.
+    ///
+    /// `at` is not examined until a permit is in hand, so
     /// [`Unavailable::Busy`] precedes every journal verdict about it.
-    pub fn world_at(&self, engine: &Engine, at: Seq) -> Result<World, Unavailable> {
-        let Some(_permit) = self.permits.try_acquire() else {
+    fn reconstruct(
+        &self,
+        engine: &Engine,
+        at: Seq,
+    ) -> Result<(ReconstructPermit<'_>, World), Unavailable> {
+        let Some(permit) = self.permits.try_acquire() else {
             return Err(Unavailable::Busy);
         };
-        engine.world_at(at).map_err(Unavailable::Journal)
+        let world = engine.world_at(at).map_err(Unavailable::Journal)?;
+        Ok((permit, world))
     }
 
     /// The `WorldDump` of the world as of `at` — the same bounded replay
@@ -85,24 +104,30 @@ impl History {
     /// config it must be read against lives here, with the reconstruction:
     /// it is a fact about how a historical world is read, not about HTTP,
     /// so `/dump`'s two arms each simply ask a collaborator for a dump.
+    ///
+    /// The permit is held across the render, which is where this route's
+    /// peak sits: the dump is a second whole-world materialization beside
+    /// the world it renders.
     #[cfg(feature = "observe")]
     pub fn dump_at(&self, engine: &Engine, at: Seq) -> Result<WorldDump, Unavailable> {
-        let world = self.world_at(engine, at)?;
+        let (_permit, world) = self.reconstruct(engine, at)?;
         Ok(skep_engine::observe::dump(&world, engine.genesis_config()))
     }
 
     /// One already-classified READ frame answered as of `at`: reconstruct
     /// the world, run the frame against a throwaway M10 over it, and stamp
     /// the position the answer is OF. The world comes from
-    /// [`History::world_at`] here and nowhere else, which is what
-    /// discharges [`execute_read_on`]'s precondition on it.
+    /// [`History::reconstruct`] here and nowhere else, which is what
+    /// discharges [`execute_read_on`]'s precondition on it — and the permit
+    /// that call hands back is held across the read, so the world is
+    /// accounted for as long as it is resident.
     pub fn read_at(
         &self,
         engine: &Engine,
         at: Seq,
         req: Request,
     ) -> Result<Response, Unavailable> {
-        let world = self.world_at(engine, at)?;
+        let (_permit, world) = self.reconstruct(engine, at)?;
         let mut resp = execute_read_on(world, req);
         stamp_as_of(&mut resp, at);
         Ok(resp)

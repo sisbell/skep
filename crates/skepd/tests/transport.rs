@@ -9,9 +9,9 @@
 
 mod common;
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
 
@@ -280,4 +280,130 @@ fn expect_100_continue_is_answered_before_the_body_is_sent() {
     assert_eq!(json(&body)["resp"].as_str(), Some("maybe_addr"));
 
     sd.shutdown();
+}
+
+/// The body cap for a route that carries no frame — the daemon's own
+/// `MAX_SMALL_BODY`, restated so that moving it is a visible decision.
+const SMALL_BODY_CAP: usize = 8 * 1024;
+
+/// The body cap is the ROUTE's, not the daemon's: only `/op` and `/op-at`
+/// carry a frame, and every other route's body is read whole and then never
+/// looked at — so offering them the frame ceiling offers the `serde_json`
+/// tree that rides on it, for bytes nothing will read.
+#[test]
+fn the_body_cap_is_scoped_to_the_routes_that_carry_frames() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // Declared, never sent: the refusal must arrive on the declared length
+    // alone, so nothing here depends on writing a megabyte.
+    let declare = |path: &str, n: usize| {
+        let raw =
+            format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {n}\r\n\r\n")
+                .into_bytes();
+        raw_exchange(port, &raw)
+    };
+
+    // A route that carries no frame is held to the small cap. The number is
+    // restated here rather than read from the daemon, the same discipline
+    // `http_lifecycle.rs` applies to the frame cap: it moving is a decision,
+    // and a decision should fail a test rather than pass one silently.
+    for path in ["/session", "/health", "/changes", "/nope"] {
+        let (status, _, body) = declare(path, 1024 * 1024);
+        assert_eq!(status, 413, "{path}: {}", String::from_utf8_lossy(&body));
+        let v = json(&body);
+        assert_eq!(v["error"].as_str(), Some("payload_too_large"), "{path}");
+        assert!(
+            v["detail"].as_str().is_some_and(|d| d.contains(&SMALL_BODY_CAP.to_string())),
+            "{path}: the refusal names the cap that actually bound it: {v}"
+        );
+    }
+    // …and still admits what it legitimately carries.
+    let (status, _, body) = raw_exchange(port, &post("/session", r#"{"principal":3}"#));
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    assert!(json(&body)["session"].is_string());
+
+    // A frame route keeps the frame ceiling: a megabyte is admitted, and
+    // this exchange ends on the body it never received, not on the cap.
+    let (status, _, body) = declare("/op", 1024 * 1024);
+    assert_eq!(status, 400, "a frame route admits a megabyte: {}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("malformed_http"));
+
+    sd.shutdown();
+}
+
+/// A peer that PACES its bytes is refused at the transfer deadline. The
+/// socket's own read timeout bounds SILENCE and is renewed by every byte,
+/// so without a deadline this connection holds its worker for as long as it
+/// cares to drip — and `workers` such peers retire the daemon with nothing
+/// inside it wrong and `/health` unreachable, since reaching it needs a
+/// worker. Necessarily slow: it waits the deadline out.
+#[test]
+fn a_paced_peer_is_refused_at_the_transfer_deadline() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    // The read timeout doubles as the pacing interval: each attempt either
+    // collects the daemon's answer or times out and drips one more byte.
+    // Reading between writes is what keeps this honest — the moment an
+    // answer arrives we stop writing, so a write to a closed socket can
+    // never reset the connection and discard the response we are judging.
+    stream.set_read_timeout(Some(Duration::from_millis(500))).expect("read timeout");
+    stream
+        .write_all(b"POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+        .expect("the partial head is accepted");
+
+    let start = Instant::now();
+    let mut raw = Vec::new();
+    let mut paced: usize = 0;
+    // Generously past the daemon's 30 s deadline: arriving late is still
+    // arriving, and the assertion below is what judges the timing.
+    while start.elapsed() < Duration::from_secs(90) {
+        let mut chunk = [0u8; 4096];
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&chunk[..n]);
+                if find_head_end(&raw) {
+                    break;
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                // Never silent, never finished: one more header byte, which
+                // renews the socket's own deadline and nothing else.
+                if stream.write_all(b"X").is_err() {
+                    break;
+                }
+                paced += 1;
+            }
+            Err(_) => break,
+        }
+    }
+    let held = start.elapsed();
+    assert!(
+        paced > 4,
+        "the peer must actually have paced its bytes rather than stalled: {paced} sent"
+    );
+    assert!(
+        held < Duration::from_secs(75),
+        "a paced peer must be released at the deadline, not served indefinitely (held {held:?})"
+    );
+    let (status, _, body) = parse_response(&raw, "the paced peer's refusal");
+    assert_eq!(status, 400, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("malformed_http"));
+
+    // The refusal cost one connection and nothing else.
+    let (status, body) = get(port, "/health");
+    assert_eq!(status, 200, "the daemon still serves");
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+
+    sd.shutdown();
+}
+
+/// Whether `raw` holds a complete response head yet.
+fn find_head_end(raw: &[u8]) -> bool {
+    raw.windows(4).any(|w| w == b"\r\n\r\n")
 }

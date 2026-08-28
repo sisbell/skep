@@ -56,15 +56,15 @@
 //! daemon's only live write path — hands each write to `WritePath::commit`,
 //! which commits it, records its change-feed entry, and announces its
 //! position, in that order and under one lock. What this file adds is the
-//! frame's parse and its classification; the ordering the two feeds below
-//! rest on is not a thing a handler here can take apart. Reads execute
-//! directly and take no lock.
+//! frame's parse and its classification; the ordering the commit stream and
+//! the change feed below rest on is not a thing a handler here can take
+//! apart. Reads execute directly and take no lock.
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the current head on
 //! connect, then an event whenever the head advances. `write_path.rs` owns
-//! the feed: what a subscriber is told next, and the coalescing that falls
-//! out of asking "anything past what I last sent"; [`Subscribers`] below
+//! the stream: what a subscriber is told next, and the coalescing that
+//! falls out of asking "anything past what I last sent"; [`Subscribers`] below
 //! owns the budget, the admission, and the join at shutdown. What this file
 //! adds is the SSE framing (`serve_events`) and the hand-off that keeps an
 //! open stream off the op pool — the accepting worker gives the socket to a
@@ -108,7 +108,7 @@ use skep_namespace::PrincipalId;
 use crate::codec::{check_keys, obj, to_bytes, JsonCodec};
 use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::ChangesAnswer;
-use crate::write_path::{op_is_read, write_meta, FeedStep, WritePath};
+use crate::write_path::{op_is_read, write_meta, StreamStep, WritePath};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon). Together with
@@ -211,9 +211,15 @@ impl std::error::Error for DaemonError {
 
 /// A response body and the media type naming it — one value, because a
 /// reply may neither carry bytes it does not name nor name a type it has no
-/// bytes for.
+/// bytes for. `content_type` names the `Content-Type` header verbatim,
+/// which is HTTP's word and not the substrate's.
+///
+/// A REQUEST's body is bare bytes ([`HttpRequest::body`]) because this
+/// daemon does not read the type a client declares, while every response it
+/// writes must declare one. That is one concept in two shapes, not two
+/// concepts.
 #[derive(Debug)]
-pub struct Content {
+pub struct Body {
     pub content_type: &'static str,
     pub bytes: Vec<u8>,
 }
@@ -224,14 +230,14 @@ pub struct Content {
 /// protocol. Non-200 codes are transport-level only (`{"error": …}` bodies,
 /// wire.md §Transport errors).
 ///
-/// `content: None` is the bodiless answer, written with no content headers
+/// `body: None` is the bodiless answer, written with no content headers
 /// at all (the 204 preflight). Making bodilessness the body's own absence
 /// is what keeps the writer from inferring it from the status, where a 204
 /// built with bytes would drop them in silence.
 #[non_exhaustive]
 pub struct Reply {
     pub status: u16,
-    pub content: Option<Content>,
+    pub body: Option<Body>,
     /// Extra response headers beyond the universal set (`Content-Type`,
     /// `Content-Length`, `Access-Control-Allow-Origin`, `Connection`) —
     /// the preflight trio rides here.
@@ -245,8 +251,8 @@ impl std::fmt::Debug for Reply {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Reply")
             .field("status", &self.status)
-            .field("content_type", &self.content.as_ref().map(|c| c.content_type))
-            .field("body_len", &self.body().len())
+            .field("content_type", &self.body.as_ref().map(|b| b.content_type))
+            .field("body_len", &self.bytes().len())
             .field("headers", &self.headers)
             .finish()
     }
@@ -254,15 +260,15 @@ impl std::fmt::Debug for Reply {
 
 impl Reply {
     /// The body bytes; empty for a bodiless reply.
-    pub fn body(&self) -> &[u8] {
-        self.content.as_ref().map_or(&[], |c| c.bytes.as_slice())
+    pub fn bytes(&self) -> &[u8] {
+        self.body.as_ref().map_or(&[], |b| b.bytes.as_slice())
     }
 
     /// A reply carrying `bytes` under `content_type`.
     fn bodied(status: u16, content_type: &'static str, bytes: Vec<u8>) -> Reply {
         Reply {
             status,
-            content: Some(Content { content_type, bytes }),
+            body: Some(Body { content_type, bytes }),
             headers: Vec::new(),
         }
     }
@@ -280,7 +286,7 @@ impl Reply {
     fn preflight() -> Reply {
         Reply {
             status: 204,
-            content: None,
+            body: None,
             headers: vec![
                 ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
                 ("Access-Control-Allow-Headers", "Content-Type, Skepd-Session"),
@@ -577,9 +583,10 @@ pub struct Daemon {
     /// The token ↔ session binding and the guest policy over it.
     sessions: Sessions,
     /// The write path: the serialization point, the commit-metadata sidecar
-    /// behind `GET /changes` and `head_time` (wire v6), and the commit feed
-    /// behind `GET /events` (wire v4). One field because the three are one
-    /// ordering — commit, record, announce — that no handler may take apart.
+    /// behind `GET /changes` and `head_time` (wire v6), and the commit
+    /// stream behind `GET /events` (wire v4). One field because the three
+    /// are one ordering — commit, record, announce — that no handler may
+    /// take apart.
     writes: WritePath,
     /// The history surface behind `/op-at` and `/dump?at`, holding its own
     /// reconstruction budget: neither route needs a session and replay is
@@ -783,7 +790,7 @@ impl Daemon {
         }
         match self.history.read_at(&self.engine, at, req) {
             Ok(resp) => self.op_reply(&resp),
-            Err(e) => unavailable_reply(e),
+            Err(e) => refuse_unavailable(e),
         }
     }
 
@@ -814,7 +821,7 @@ impl Daemon {
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
         match self.writes.changes(since, limit) {
-            ChangesAnswer::Reclaimed { floor } => reclaimed_reply(floor),
+            ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
                 obj(vec![
@@ -843,7 +850,7 @@ impl Daemon {
             None => self.engine.world_dump(),
             Some(at) => match self.history.dump_at(&self.engine, at) {
                 Ok(d) => d,
-                Err(e) => return unavailable_reply(e),
+                Err(e) => return refuse_unavailable(e),
             },
         };
         Reply::bodied(200, "text/plain; charset=utf-8", dump.into_string().into_bytes())
@@ -974,7 +981,7 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
 /// the oldest that can. One construction, shared by the history surface and
 /// the change feed, so the two cannot describe the same condition
 /// differently.
-fn reclaimed_reply(floor: Option<u64>) -> Reply {
+fn refuse_reclaimed(floor: Option<u64>) -> Reply {
     let fields = match floor {
         Some(f) => vec![("floor", Value::Number(f.into()))],
         None => Vec::new(),
@@ -995,7 +1002,7 @@ fn reclaimed_reply(floor: Option<u64>) -> Reply {
 /// advice for a fault that is permanent. The retry is what learns
 /// otherwise; nothing here can say so sooner without re-deriving a bound
 /// the engine owns.
-fn unavailable_reply(e: Unavailable) -> Reply {
+fn refuse_unavailable(e: Unavailable) -> Reply {
     let journal = match e {
         Unavailable::Busy => {
             return refuse(
@@ -1014,7 +1021,7 @@ fn unavailable_reply(e: Unavailable) -> Reply {
             TransportError::NotAPosition,
             vec![("nearest", Value::Number(nearest.0.into()))],
         ),
-        HistoryError::Reclaimed { floor } => reclaimed_reply(floor.map(|f| f.0)),
+        HistoryError::Reclaimed { floor } => refuse_reclaimed(floor.map(|f| f.0)),
         // Unreachable under this daemon's Fsync configuration; mapped so the
         // surface stays total over the engine's error type.
         HistoryError::Unjournaled => refuse(
@@ -1141,11 +1148,11 @@ impl Skepd {
     }
 
     /// Orderly stop for embedders and tests: release and join the op
-    /// workers, then end every event stream — the feed broadcast wakes each
-    /// subscriber, which drops its socket (the client sees a clean close)
-    /// and exits — and join those threads too. Returning releases the
-    /// kernel's journal-directory lock, so the same data dir can be
-    /// reopened. Bounded: nothing here waits on a client.
+    /// workers, then end every event stream — the commit stream's broadcast
+    /// wakes each subscriber, which drops its socket (the client sees a
+    /// clean close) and exits — and join those threads too. Returning
+    /// releases the kernel's journal-directory lock, so the same data dir
+    /// can be reopened. Bounded: nothing here waits on a client.
     ///
     /// Calling it is how a caller learns the stop *finished*; a server that
     /// is merely dropped stops the same way, so a panic between [`serve`]
@@ -1205,10 +1212,10 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
         Ok(None) => return,
         Err(refusal) => {
             let reply = match refusal {
-                ReadError::Malformed(detail) => {
+                RequestRefusal::Malformed(detail) => {
                     refuse(TransportError::MalformedHttp, Some(&detail))
                 }
-                ReadError::BodyTooLarge(declared) => {
+                RequestRefusal::BodyTooLarge(declared) => {
                     let detail = format!(
                         "Content-Length {declared} exceeds the {MAX_REQUEST_BODY}-byte body cap"
                     );
@@ -1286,9 +1293,9 @@ impl Subscribers {
         }
     }
 
-    /// Join every live subscriber. Called after the feed has broadcast its
-    /// shutdown, so each is already awake and on its way out — which is what
-    /// keeps this bounded rather than a wait on a client.
+    /// Join every live subscriber. Called after the commit stream has
+    /// broadcast its shutdown, so each is already awake and on its way out
+    /// — which is what keeps this bounded rather than a wait on a client.
     fn join_all(&self) {
         for h in std::mem::take(&mut *self.live.lock()) {
             let _ = h.join();
@@ -1296,10 +1303,11 @@ impl Subscribers {
     }
 }
 
-/// A refused request read: which transport-error reply the connection is
-/// owed. Everything malformed is one bucket; the body cap gets its own
-/// honest disposition (`413 payload_too_large`), not a generic parse error.
-enum ReadError {
+/// A request refused at the HTTP layer: which transport-error reply the
+/// connection is owed. Everything outside the subset this daemon speaks is
+/// one bucket; the body cap gets its own honest disposition
+/// (`413 payload_too_large`), not a generic parse error.
+enum RequestRefusal {
     /// Not the HTTP subset this daemon speaks → `400 malformed_http`.
     Malformed(String),
     /// The declared `Content-Length` exceeds [`MAX_REQUEST_BODY`] →
@@ -1307,21 +1315,21 @@ enum ReadError {
     BodyTooLarge(usize),
 }
 
-impl From<String> for ReadError {
-    fn from(detail: String) -> ReadError {
-        ReadError::Malformed(detail)
+impl From<String> for RequestRefusal {
+    fn from(detail: String) -> RequestRefusal {
+        RequestRefusal::Malformed(detail)
     }
 }
 
-impl From<&str> for ReadError {
-    fn from(detail: &str) -> ReadError {
-        ReadError::Malformed(detail.into())
+impl From<&str> for RequestRefusal {
+    fn from(detail: &str) -> RequestRefusal {
+        RequestRefusal::Malformed(detail.into())
     }
 }
 
 /// Read one request off the socket. `Ok(None)` = clean close before any
 /// byte; `Err(_)` = the request is refused (the caller answers the
-/// [`ReadError`]'s reply and closes). The subset: one request per
+/// [`RequestRefusal`]'s reply and closes). The subset: one request per
 /// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
 /// empty, capped at [`MAX_REQUEST_BODY`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
@@ -1331,7 +1339,7 @@ impl From<&str> for ReadError {
 /// same never-silent treatment a duplicate query parameter and an unknown
 /// frame field already get. Headers this daemon does not read pass unread
 /// however often they appear.
-fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError> {
+fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, RequestRefusal> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let head_end = loop {
@@ -1381,7 +1389,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     let mut content_length: Option<usize> = None;
     let mut session_token: Option<String> = None;
     let mut expects_continue: Option<bool> = None;
-    fn once<T>(slot: &Option<T>, name: &str) -> Result<(), ReadError> {
+    fn once<T>(slot: &Option<T>, name: &str) -> Result<(), RequestRefusal> {
         match slot {
             Some(_) => Err(format!("duplicate header '{name}'").into()),
             None => Ok(()),
@@ -1421,7 +1429,7 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     // (and allocates) a single byte of it. The media round's blob upload
     // will raise this for its route only.
     if declared > MAX_REQUEST_BODY {
-        return Err(ReadError::BodyTooLarge(declared));
+        return Err(RequestRefusal::BodyTooLarge(declared));
     }
     if expects_continue && body.len() < declared {
         // The client is holding the body until told to send it (curl does
@@ -1464,10 +1472,14 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
     }
     // The body and the headers describing it come from one value, so the
     // two cannot disagree about whether there is one.
-    if let Some(c) = &reply.content {
+    if let Some(body) = &reply.body {
         head.extend_from_slice(
-            format!("Content-Type: {}\r\nContent-Length: {}\r\n", c.content_type, c.bytes.len())
-                .as_bytes(),
+            format!(
+                "Content-Type: {}\r\nContent-Length: {}\r\n",
+                body.content_type,
+                body.bytes.len()
+            )
+            .as_bytes(),
         );
         head.extend_from_slice(b"Connection: close\r\n\r\n");
         // The body is written FROM the reply rather than copied into this
@@ -1477,7 +1489,7 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply) -> io::Result<()> {
         // session. `set_nodelay` is on, so the cost is the second write
         // call and nothing else.
         stream.write_all(&head)?;
-        stream.write_all(&c.bytes)
+        stream.write_all(&body.bytes)
     } else {
         head.extend_from_slice(b"Connection: close\r\n\r\n");
         stream.write_all(&head)
@@ -1502,11 +1514,12 @@ fn reason(status: u16) -> &'static str {
 }
 
 /// One subscriber (wire v4): write the stream head and the initial event
-/// carrying the current head, then follow the feed — a `commit` event when
-/// the head advances, a `:ka` comment on silence — until shutdown or the
-/// first failed write (a gone subscriber). Exiting drops the socket, which
-/// is the client's end-of-stream. Coalescing is inherent: the feed answers
-/// "anything past what I last sent", so a burst of commits is one event.
+/// carrying the current head, then follow the commit stream — a `commit`
+/// event when the head advances, a `:ka` comment on silence — until
+/// shutdown or the first failed write (a gone subscriber). Exiting drops
+/// the socket, which is the client's end-of-stream. Coalescing is inherent:
+/// the stream answers "anything past what I last sent", so a burst of
+/// commits is one event.
 fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
     let head = "HTTP/1.1 200 OK\r\n\
                 Access-Control-Allow-Origin: *\r\n\
@@ -1522,14 +1535,14 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
     }
     loop {
         match daemon.writes.next(last) {
-            FeedStep::Shutdown => return,
-            FeedStep::Commit(at) => {
+            StreamStep::Shutdown => return,
+            StreamStep::Commit(at) => {
                 last = at;
                 if write_commit_event(&mut stream, at).is_err() {
                     return;
                 }
             }
-            FeedStep::Keepalive => {
+            StreamStep::Keepalive => {
                 if stream.write_all(b":ka\n\n").is_err() {
                     return;
                 }
@@ -1715,7 +1728,7 @@ mod tests {
         let r = refuse(TransportError::PayloadTooLarge, Some("too big"));
         assert_eq!(r.status, 413);
         assert_eq!(
-            String::from_utf8(r.body().to_vec()).expect("json"),
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
             r#"{"detail":"too big","error":"payload_too_large"}"#
         );
         let r = refuse_with(
@@ -1724,7 +1737,7 @@ mod tests {
         );
         assert_eq!(r.status, 400);
         assert_eq!(
-            String::from_utf8(r.body().to_vec()).expect("json"),
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
             r#"{"error":"beyond_head","head":12}"#
         );
     }
@@ -1737,12 +1750,12 @@ mod tests {
     #[test]
     fn a_bodiless_reply_writes_no_content_headers() {
         let pre = Reply::preflight();
-        assert!(pre.content.is_none(), "the preflight names no body");
-        assert!(pre.body().is_empty());
+        assert!(pre.body.is_none(), "the preflight names no body");
+        assert!(pre.bytes().is_empty());
         let json = Reply::json(200, obj(vec![("ok", Value::Bool(true))]));
-        let c = json.content.as_ref().expect("a JSON reply names its body");
-        assert_eq!(c.content_type, "application/json");
-        assert_eq!(c.bytes, br#"{"ok":true}"#);
+        let body = json.body.as_ref().expect("a JSON reply names its body");
+        assert_eq!(body.content_type, "application/json");
+        assert_eq!(body.bytes, br#"{"ok":true}"#);
     }
 
     /// The preflight advertises exactly the header [`read_request`] reads.
@@ -1775,12 +1788,12 @@ mod tests {
         let _ = serve(daemon, 0, 0);
     }
 
-    /// The commit feed announces a position only from the section that
+    /// The commit stream announces a position only from the section that
     /// recorded it: a committing write publishes ITS OWN position, and
     /// nothing else publishes at all.
     ///
     /// The read is the load-bearing half, and the head is deliberately
-    /// pushed ahead of the feed first — through `febe` directly, the one
+    /// pushed ahead of the stream first — through `febe` directly, the one
     /// path that commits without announcing — because a daemon that
     /// announced the CURRENT HEAD from any `/op` request would look
     /// correct on a quiet socket and wrong under concurrency, leaking a
@@ -1799,11 +1812,11 @@ mod tests {
             session_token: Some(token.clone()),
             body: body.as_bytes().to_vec(),
         }) {
-            Routed::Reply(r) => serde_json::from_slice::<Value>(r.body()).expect("json"),
+            Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
             Routed::EventStream => panic!("POST /op is not the event stream"),
         };
 
-        // Commit past the feed without announcing: this is the state a
+        // Commit past the stream without announcing: this is the state a
         // concurrent write leaves behind between its commit and its record.
         let frame = br#"{"op":"register_node","addr":"1.9001"}"#;
         let req = daemon.codec.parse(frame).unwrap_or_else(|_| panic!("test frame parses"));
@@ -1816,7 +1829,7 @@ mod tests {
                 String::from_utf8_lossy(&daemon.codec.marshal(&other))
             ),
         };
-        assert!(ahead.0 > announced().0, "the head is now ahead of the feed");
+        assert!(ahead.0 > announced().0, "the head is now ahead of the commit stream");
 
         let read = post(r#"{"op":"next_account_prefix","parent":"1"}"#);
         assert_eq!(read["resp"].as_str(), Some("maybe_addr"), "a read was served: {read}");

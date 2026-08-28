@@ -11,8 +11,9 @@
 //! Reads never come here and never take the lock.
 //!
 //! [`write_meta`] is also THE read/write partition — a read is exactly an
-//! `Op` this feed has nothing to record — so the history surface and the
-//! change feed decide from one table and cannot disagree about a variant.
+//! `Op` the change feed has nothing to record — so the history surface and
+//! the change feed decide from one table and cannot disagree about a
+//! variant.
 
 use std::io;
 use std::path::Path;
@@ -27,24 +28,24 @@ use skep_kernel::Seq;
 use crate::codec::op_name;
 use crate::sidecar::{ChangesAnswer, Sidecar};
 
-/// SSE keepalive cadence, and so the feed's wait bound: a subscriber that
-/// has heard nothing for this long is answered [`FeedStep::Keepalive`] and
-/// writes its `:ka` comment, so proxies and clients can detect liveness —
-/// and the daemon detects a dead subscriber by the failed write within one
-/// interval.
+/// SSE keepalive cadence, and so the commit stream's wait bound: a
+/// subscriber that has heard nothing for this long is answered
+/// [`StreamStep::Keepalive`] and writes its `:ka` comment, so proxies and
+/// clients can detect liveness — and the daemon detects a dead subscriber
+/// by the failed write within one interval.
 const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
 
 /// The write path: the serialization point, the commit-metadata sidecar
-/// behind it, and the commit feed in front of it.
+/// behind it, and the commit stream in front of it.
 ///
 /// Four of the methods below are one-line delegations to the sidecar or the
-/// feed, deliberately: what this card buys over holding the two side by
-/// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and `CommitFeed::publish`
-/// are reachable only from [`WritePath::commit`], which is what makes the
-/// ordering above a property of this type rather than a rule each handler
-/// remembers — `Sidecar::record`'s caller contract is discharged by there
-/// being nowhere else to fail it. Reaching the two through here is what
-/// that costs.
+/// stream, deliberately: what this card buys over holding the two side by
+/// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and
+/// `CommitStream::publish` are reachable only from [`WritePath::commit`],
+/// which is what makes the ordering above a property of this type rather
+/// than a rule each handler remembers — `Sidecar::record`'s caller contract
+/// is discharged by there being nowhere else to fail it. Reaching the two
+/// through here is what that costs.
 pub(crate) struct WritePath {
     /// The serialization point. M2's applier serializes the commits
     /// themselves anyway, so this only moves that point up — and buys the
@@ -57,20 +58,20 @@ pub(crate) struct WritePath {
     /// The commit-metadata sidecar behind `GET /changes` and `/health`'s
     /// `head_time` (wire v6) — the daemon's testimony about its own writes.
     sidecar: Sidecar,
-    /// The commit feed behind `GET /events` (wire v4).
-    feed: CommitFeed,
+    /// The commit stream behind `GET /events` (wire v4).
+    commit_stream: CommitStream,
 }
 
 impl WritePath {
-    /// Replay the commit-metadata sidecar in `data_dir` and open the feed at
-    /// the journal's committed head. Fallible only in the sidecar — the lock
-    /// and the feed are memory — so the caller's error type need name only
-    /// that.
+    /// Replay the commit-metadata sidecar in `data_dir` and open the commit
+    /// stream at the journal's committed head. Fallible only in the sidecar
+    /// — the lock and the stream are memory — so the caller's error type
+    /// need name only that.
     pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
         Ok(WritePath {
             serial: Mutex::new(()),
             sidecar: Sidecar::open(data_dir, engine)?,
-            feed: CommitFeed::at(engine.kernel().current_seq()),
+            commit_stream: CommitStream::at(engine.kernel().current_seq()),
         })
     }
 
@@ -91,7 +92,7 @@ impl WritePath {
         let _serial = self.serial.lock();
         let resp = execute();
         if let Some(at) = self.observe(kind, docs, &resp) {
-            self.feed.publish(at);
+            self.commit_stream.publish(at);
         }
         resp
     }
@@ -107,15 +108,15 @@ impl WritePath {
         self.sidecar.head_time()
     }
 
-    /// What one subscriber does next — see [`CommitFeed::next`].
-    pub fn next(&self, last: Seq) -> FeedStep {
-        self.feed.next(last)
+    /// What one subscriber does next — see [`CommitStream::next`].
+    pub fn next(&self, last: Seq) -> StreamStep {
+        self.commit_stream.next(last)
     }
 
     /// End every open stream: each subscriber wakes on the broadcast and
-    /// returns [`FeedStep::Shutdown`].
+    /// returns [`StreamStep::Shutdown`].
     pub fn shutdown(&self) {
-        self.feed.shutdown();
+        self.commit_stream.shutdown();
     }
 
     /// The position last announced — what a subscriber connecting now would
@@ -124,7 +125,7 @@ impl WritePath {
     /// on the serving path has a reason to ask.
     #[cfg(test)]
     pub fn announced(&self) -> Seq {
-        self.feed.state.lock().head
+        self.commit_stream.state.lock().head
     }
 
     /// Feed the sidecar from a write's answer: an ack carries the committed
@@ -138,8 +139,8 @@ impl WritePath {
     /// exactly the position whose record this call just made — so an
     /// announcement can never outrun `/changes`. An idempotency replay
     /// re-acks an OLD position, which the sidecar declines to re-record and
-    /// the monotone feed ignores, since that position was announced when it
-    /// was first committed.
+    /// the monotone commit stream ignores, since that position was
+    /// announced when it was first committed.
     fn observe(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) -> Option<Seq> {
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
@@ -191,7 +192,7 @@ pub(crate) enum AffectedDocs {
 /// The sidecar metadata of a write `Op` — `None` for reads, which is also
 /// THE read/write partition: [`op_is_read`] is defined as this answer's
 /// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
-/// `_` arm: a new `Op` fails to compile here until its feed entry is
+/// `_` arm: a new `Op` fails to compile here until its change-feed entry is
 /// decided, and that one decision classifies it for the history surface
 /// too.
 pub(crate) fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
@@ -253,27 +254,27 @@ pub(crate) fn op_is_read(op: &Op) -> bool {
     write_meta(op).is_none()
 }
 
-// ── the commit feed (wire v4) ────────────────────────────────────────────
+// ── the commit stream (wire v4) ──────────────────────────────────────────
 
 /// One head + shutdown flag under a mutex, one condvar. Every committing
 /// write publishes the position it committed (write-path notification —
 /// `/op` is the only live write path, so no head advance can be missed);
-/// each subscriber blocks in [`CommitFeed::next`] with the keepalive
+/// each subscriber blocks in [`CommitStream::next`] with the keepalive
 /// interval as its wait bound. Shutdown broadcasts on the same condvar,
 /// which is what makes closing open streams immediate rather than a poll
 /// away.
-struct CommitFeed {
-    state: Mutex<FeedState>,
+struct CommitStream {
+    state: Mutex<StreamState>,
     cond: Condvar,
 }
 
-struct FeedState {
+struct StreamState {
     head: Seq,
     shutdown: bool,
 }
 
 /// What a subscriber does next.
-pub(crate) enum FeedStep {
+pub(crate) enum StreamStep {
     /// The head advanced past the subscriber's last-sent position.
     Commit(Seq),
     /// Nothing moved for one keepalive interval.
@@ -282,10 +283,10 @@ pub(crate) enum FeedStep {
     Shutdown,
 }
 
-impl CommitFeed {
-    fn at(head: Seq) -> CommitFeed {
-        CommitFeed {
-            state: Mutex::new(FeedState { head, shutdown: false }),
+impl CommitStream {
+    fn at(head: Seq) -> CommitStream {
+        CommitStream {
+            state: Mutex::new(StreamState { head, shutdown: false }),
             cond: Condvar::new(),
         }
     }
@@ -307,18 +308,18 @@ impl CommitFeed {
     /// keepalive interval elapses — whichever comes first. Returning the
     /// current head (not a queue of commits) is the coalescing: a burst of
     /// commits between wakes is one step.
-    fn next(&self, last: Seq) -> FeedStep {
+    fn next(&self, last: Seq) -> StreamStep {
         let deadline = Instant::now() + SSE_KEEPALIVE;
         let mut st = self.state.lock();
         loop {
             if st.shutdown {
-                return FeedStep::Shutdown;
+                return StreamStep::Shutdown;
             }
             if st.head.0 > last.0 {
-                return FeedStep::Commit(st.head);
+                return StreamStep::Commit(st.head);
             }
             if self.cond.wait_until(&mut st, deadline).timed_out() {
-                return FeedStep::Keepalive;
+                return StreamStep::Keepalive;
             }
         }
     }
@@ -341,20 +342,23 @@ mod tests {
         assert!(write_meta(&query).is_none());
     }
 
-    /// The feed only ever moves forward, and a burst between wakes
+    /// The commit stream only ever moves forward, and a burst between wakes
     /// coalesces onto one step — the property `next` answers "anything past
     /// what I last sent" for, rather than queueing.
     #[test]
-    fn the_feed_is_monotone_and_coalesces() {
-        let feed = CommitFeed::at(Seq(4));
-        assert!(matches!(feed.next(Seq(3)), FeedStep::Commit(Seq(4))));
-        feed.publish(Seq(9));
-        feed.publish(Seq(7)); // an idempotency replay's older position
+    fn the_commit_stream_is_monotone_and_coalesces() {
+        let stream = CommitStream::at(Seq(4));
+        assert!(matches!(stream.next(Seq(3)), StreamStep::Commit(Seq(4))));
+        stream.publish(Seq(9));
+        stream.publish(Seq(7)); // an idempotency replay's older position
         assert!(
-            matches!(feed.next(Seq(4)), FeedStep::Commit(Seq(9))),
+            matches!(stream.next(Seq(4)), StreamStep::Commit(Seq(9))),
             "an older position never displaces the head, and the burst is one step"
         );
-        feed.shutdown();
-        assert!(matches!(feed.next(Seq(0)), FeedStep::Shutdown), "shutdown outranks a commit");
+        stream.shutdown();
+        assert!(
+            matches!(stream.next(Seq(0)), StreamStep::Shutdown),
+            "shutdown outranks a commit"
+        );
     }
 }

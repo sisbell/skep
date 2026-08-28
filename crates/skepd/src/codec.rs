@@ -10,7 +10,8 @@
 //!   are parse failures, never ignored (the never-silent contract applied to
 //!   client typos).
 //! * `make_link`'s three endset slots are two-form (wire v5): a V-spec array
-//!   (content-resolved, the v1 meaning byte-for-byte) or
+//!   (content-resolved, byte-identical to v4 — existing frames mean exactly
+//!   what they meant) or
 //!   `{"addrs": [addresses…]}` — the names recorded verbatim, no resolution;
 //!   the addrs-object encoding is identical to `edit_link`'s successor `ty`
 //!   addrs form.
@@ -621,7 +622,7 @@ fn p_vspec(v: &Value) -> PResult<VSpec> {
 }
 
 /// A `make_link` endset slot (wire v5): a V-spec array (content-resolved,
-/// the v1 form, unchanged meaning) or `{"addrs": [addresses…]}` — the names
+/// byte-identical to v4) or `{"addrs": [addresses…]}` — the names
 /// recorded verbatim, the same addrs-object encoding as `edit_link`'s
 /// successor `ty`.
 fn p_slotarg(v: &Value) -> PResult<SlotArg> {
@@ -1128,8 +1129,8 @@ fn j_vspecs(vs: &[VSpec]) -> Value {
     Value::Array(vs.iter().map(j_vspec).collect())
 }
 
-/// [`p_slotarg`]'s inverse: the Resolve form is the bare v-spec array (v4
-/// bytes unchanged), the Addrs form the tagged object.
+/// [`p_slotarg`]'s inverse: the Resolve form is the bare v-spec array
+/// (byte-identical to v4), the Addrs form the tagged object.
 fn j_slotarg(s: &SlotArg) -> Value {
     match s {
         SlotArg::Resolve(v) => j_vspecs(v),

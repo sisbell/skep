@@ -1,12 +1,13 @@
 //! The commit-metadata sidecar (wire v6): `commits.log` in the data dir —
 //! one JSON line per committed write `(position, op kind, affected docs,
 //! unix millis)`, appended by the write path at ack time and replayed on
-//! reopen. This is daemon-owned OBSERVATION metadata, exempt from the
+//! reopen. This is daemon-owned TRANSPORT METADATA, never substrate state
+//! (wire.md §The change feed) — exempt from the
 //! no-second-persistence-layer rule for the same reason as the kernel's
-//! journal-lock file: it persists nothing about the WORLD — two daemons
-//! replaying one journal still converge on byte-identical worlds; the
-//! sidecar is the daemon's testimony about its own service, and it feeds
-//! `GET /changes` and `/health`'s `head_time`.
+//! journal-lock file: it persists nothing about the WORLD, since two
+//! daemons replaying one journal still converge on byte-identical worlds.
+//! The sidecar is the daemon's testimony about its own service, and it
+//! feeds `GET /changes` and `/health`'s `head_time`.
 //!
 //! Crash honesty is the contract:
 //!

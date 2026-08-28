@@ -170,8 +170,8 @@ fn route_raw(
 /// may still be a rejection — callers decide).
 fn route_op(d: &Daemon, token: Option<&str>, frame: &str) -> Value {
     let r = route_raw(d, "POST", "/op", None, token, frame.as_bytes());
-    assert_eq!(r.status, 200, "op transport failed: {}", String::from_utf8_lossy(r.body()));
-    json(r.body())
+    assert_eq!(r.status, 200, "op transport failed: {}", String::from_utf8_lossy(r.bytes()));
+    json(r.bytes())
 }
 
 fn route_session(d: &Daemon, principal: u64) -> String {
@@ -183,8 +183,8 @@ fn route_session(d: &Daemon, principal: u64) -> String {
         None,
         format!("{{\"principal\":{principal}}}").as_bytes(),
     );
-    assert_eq!(r.status, 200, "session open failed: {}", String::from_utf8_lossy(r.body()));
-    json(r.body())["session"].as_str().expect("session token").to_string()
+    assert_eq!(r.status, 200, "session open failed: {}", String::from_utf8_lossy(r.bytes()));
+    json(r.bytes())["session"].as_str().expect("session token").to_string()
 }
 
 fn retrieve_frame(doc: &str, width: u64) -> String {
@@ -207,8 +207,8 @@ fn read_text(d: &Daemon, doc: &str, width: u64) -> String {
 /// `GET /changes?since=0` entries as `(at, entry)` pairs.
 fn changes_entries(d: &Daemon) -> Vec<(u64, Value)> {
     let r = route_raw(d, "GET", "/changes", Some("since=0"), None, b"");
-    assert_eq!(r.status, 200, "/changes failed: {}", String::from_utf8_lossy(r.body()));
-    let v = json(r.body());
+    assert_eq!(r.status, 200, "/changes failed: {}", String::from_utf8_lossy(r.bytes()));
+    let v = json(r.bytes());
     assert_eq!(v["more"], Value::Bool(false), "one page covers the fixture: {v}");
     v["changes"]
         .as_array()
@@ -440,7 +440,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         }
         let r = route_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
         assert_eq!(r.status, 200);
-        pre_retrieve = r.body().to_vec();
+        pre_retrieve = r.bytes().to_vec();
     }
     let head = *acks.last().expect("acks");
     let sidecar = |dir: &Path| dir.join("commits.log");
@@ -454,7 +454,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         let r = route_raw(&d, "POST", "/op", None, None, retrieve_frame(&doc, 5).as_bytes());
         assert_eq!(r.status, 200);
         assert_eq!(
-            r.body(), pre_retrieve,
+            r.bytes(), pre_retrieve,
             "FINDING (F, {ctx}): the WORLD changed under a sidecar-only mutation"
         );
         let entries = changes_entries(&d);
@@ -475,7 +475,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
             assert!(e["op"].is_string(), "control: entry {at} lost its metadata: {e}");
         }
         let h = route_raw(&d, "GET", "/health", None, None, b"");
-        assert!(!json(h.body())["head_time"].is_null(), "control: head_time is recorded");
+        assert!(!json(h.bytes())["head_time"].is_null(), "control: head_time is recorded");
     }
 
     // Torn tail (3 bytes off the final line): only the newest entry
@@ -527,7 +527,7 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         }
         let h = route_raw(&d, "GET", "/health", None, None, b"");
         assert!(
-            json(h.body())["head_time"].is_null(),
+            json(h.bytes())["head_time"].is_null(),
             "garbage: head_time must be null, never invented"
         );
     }

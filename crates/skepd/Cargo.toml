@@ -65,7 +65,7 @@ serde_json.workspace = true
 # story.
 #
 # Non-poisoning locks: the session map, the subscriber registry, and the
-# commit-feed condvar behind GET /events (the same totality argument M10 §7
+# commit-stream condvar behind GET /events (the same totality argument M10 §7
 # makes).
 parking_lot.workspace = true
 

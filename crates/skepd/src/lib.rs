@@ -57,7 +57,7 @@ mod write_path;
 pub mod fuzz_support;
 
 pub use codec::JsonCodec;
-pub use server::{serve, Content, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
+pub use server::{serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
 
 /// The reconstruction permit the daemon's test hook hands out — public only
 /// because that hook's return type must be nameable; not a stable API.

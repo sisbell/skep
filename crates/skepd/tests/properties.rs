@@ -13,9 +13,9 @@
 //!
 //! The oracles:
 //!  1. Prefix-replay equivalence — the observe dump captured live at every
-//!     k-th committed boundary must be byte-equal to `GET /dump?at=p` at
+//!     k-th committed position must be byte-equal to `GET /dump?at=p` at
 //!     sequence end (journal + fold + checkpoint + hints in one oracle).
-//!  2. Permanence — every boundary's live `retrieve_v` bodies (the content
+//!  2. Permanence — every captured position's live `retrieve_v` bodies (the content
 //!     bytes acked by then, including bytes later deleted) answer
 //!     byte-identically via `POST /op-at` at sequence end and after
 //!     restart: history never mutates, deletion only edits arrangements.
@@ -184,7 +184,12 @@ struct Memo {
     body: Vec<u8>,
 }
 
-struct Boundary {
+/// One committed POSITION and what the daemon answered there. Every value
+/// captured below comes from `/dump?at`, `/op-at` or `/health`, so this
+/// file speaks the wire's word throughout — wire.md: "Those numbers are
+/// positions" — and never the kernel's `boundary`, which `sidecar.rs`
+/// earns by probing the kernel and no test here does.
+struct Capture {
     at: u64,
     /// `None` when built without the `observe` feature.
     dump: Option<Vec<u8>>,
@@ -198,7 +203,7 @@ struct RunState {
     writes: u64,
     id_seq: u64,
     ghost_seq: u64,
-    boundaries: Vec<Boundary>,
+    captures: Vec<Capture>,
     memo: Option<Memo>,
     link_cursor: usize,
     n_writes: usize,
@@ -834,10 +839,10 @@ fn check_links(shadow: &Shadow, state: &mut RunState, all: bool) {
     }
 }
 
-/// Capture the current committed boundary: the live dump and every
+/// Capture the current committed position: the live dump and every
 /// non-empty document's live read body (with its frame, for /op-at replay).
-fn capture_boundary(shadow: &Shadow, state: &mut RunState) {
-    if state.boundaries.last().is_some_and(|b| b.at == state.head) {
+fn capture_position(shadow: &Shadow, state: &mut RunState) {
+    if state.captures.last().is_some_and(|c| c.at == state.head) {
         return;
     }
     let dump = live_dump(state.port);
@@ -852,30 +857,30 @@ fn capture_boundary(shadow: &Shadow, state: &mut RunState) {
             d.content.len()
         );
         let (st, body) = http(state.port, "POST", "/op", None, frame.as_bytes());
-        assert_eq!(st, 200, "boundary read failed");
+        assert_eq!(st, 200, "the captured position's read failed");
         reads.push((frame, body));
     }
-    state.boundaries.push(Boundary { at: state.head, dump, reads });
+    state.captures.push(Capture { at: state.head, dump, reads });
 }
 
-/// Oracles 1 + 2: every captured boundary must answer byte-identically from
+/// Oracles 1 + 2: every captured position must answer byte-identically from
 /// history — the dump via `/dump?at`, the reads via `/op-at`.
-fn replay_boundaries(state: &RunState) {
-    for b in &state.boundaries {
+fn replay_captures(state: &RunState) {
+    for c in &state.captures {
         assert_eq!(
-            dump_at(state.port, b.at),
-            b.dump,
+            dump_at(state.port, c.at),
+            c.dump,
             "FINDING: /dump?at={} is not byte-equal to the dump captured live there",
-            b.at
+            c.at
         );
-        for (frame, body) in &b.reads {
-            let env = format!(r#"{{"at":{},"frame":{frame}}}"#, b.at);
+        for (frame, body) in &c.reads {
+            let env = format!(r#"{{"at":{},"frame":{frame}}}"#, c.at);
             let (st, got) = http(state.port, "POST", "/op-at", None, env.as_bytes());
-            assert_eq!(st, 200, "/op-at at={} failed: {}", b.at, String::from_utf8_lossy(&got));
+            assert_eq!(st, 200, "/op-at at={} failed: {}", c.at, String::from_utf8_lossy(&got));
             assert_eq!(
                 &got, body,
                 "FINDING: historical read at {} diverges from the live body\n frame: {frame}",
-                b.at
+                c.at
             );
         }
     }
@@ -892,7 +897,7 @@ fn run_case(plan: &[PlanOp]) {
         writes: 0,
         id_seq: 0,
         ghost_seq: 0,
-        boundaries: Vec::new(),
+        captures: Vec::new(),
         memo: None,
         link_cursor: 0,
         n_writes: 0,
@@ -908,7 +913,7 @@ fn run_case(plan: &[PlanOp]) {
         let writes_before = state.writes;
         step(i, planned, &mut shadow, &mut state);
         if state.writes > writes_before && state.writes % CADENCE as u64 == 0 {
-            capture_boundary(&shadow, &mut state);
+            capture_position(&shadow, &mut state);
         }
         if (i + 1) % CADENCE == 0 {
             check_all_docs(&shadow, &mut state);
@@ -916,12 +921,12 @@ fn run_case(plan: &[PlanOp]) {
         }
     }
 
-    // Sequence end: the full oracle pass, the final boundary, and the
+    // Sequence end: the full oracle pass, the final position, and the
     // whole-history replay.
     check_all_docs(&shadow, &mut state);
     check_links(&shadow, &mut state, true);
-    capture_boundary(&shadow, &mut state);
-    replay_boundaries(&state);
+    capture_position(&shadow, &mut state);
+    replay_captures(&state);
 
     // Oracle 6 — restart equivalence: reopen the same store; the head, the
     // head dump, a historical dump, a historical read, and the full oracle
@@ -941,22 +946,22 @@ fn run_case(plan: &[PlanOp]) {
         final_dump,
         "FINDING: the recovered head dump is not byte-equal to the pre-shutdown dump"
     );
-    if !state.boundaries.is_empty() {
-        let b = &state.boundaries[state.boundaries.len() / 2];
+    if !state.captures.is_empty() {
+        let c = &state.captures[state.captures.len() / 2];
         assert_eq!(
-            dump_at(state.port, b.at),
-            b.dump,
+            dump_at(state.port, c.at),
+            c.dump,
             "FINDING: /dump?at={} diverges after restart",
-            b.at
+            c.at
         );
-        if let Some((frame, body)) = b.reads.first() {
-            let env = format!(r#"{{"at":{},"frame":{frame}}}"#, b.at);
+        if let Some((frame, body)) = c.reads.first() {
+            let env = format!(r#"{{"at":{},"frame":{frame}}}"#, c.at);
             let (st, got) = http(state.port, "POST", "/op-at", None, env.as_bytes());
             assert_eq!(st, 200);
             assert_eq!(
                 &got, body,
                 "FINDING: historical read at {} diverges after restart\n frame: {frame}",
-                b.at
+                c.at
             );
         }
     }
@@ -965,13 +970,13 @@ fn run_case(plan: &[PlanOp]) {
     sd2.shutdown();
 
     println!(
-        "props case: {} ops ({} writes, {} retries, {} forbidden), {} boundaries, \
+        "props case: {} ops ({} writes, {} retries, {} forbidden), {} captured positions, \
          {} doc checks, {} link checks, head {}",
         plan.len(),
         state.n_writes,
         state.n_retries,
         state.n_forbidden,
-        state.boundaries.len(),
+        state.captures.len(),
         state.n_doc_checks,
         state.n_link_checks,
         final_head

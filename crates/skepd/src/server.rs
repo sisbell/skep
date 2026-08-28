@@ -281,13 +281,22 @@ pub struct Body {
 /// at all (the 204 preflight). Making bodilessness the body's own absence
 /// is what keeps the writer from inferring it from the status, where a 204
 /// built with bytes would drop them in silence.
+///
+/// A HANDLER'S ANSWER, not a complete HTTP response. The four universal
+/// headers — `Content-Type`, `Content-Length`,
+/// `Access-Control-Allow-Origin: *`, `Connection: close` — are written by
+/// [`write_reply`] at the one place every response is written, so they
+/// appear in no `Reply` value. wire.md §Transport and §Cross-origin access
+/// promise the last two on EVERY response, so a caller serving these over
+/// a transport of its own owes both.
 #[non_exhaustive]
 pub struct Reply {
     pub status: u16,
     pub body: Option<Body>,
     /// Extra response headers beyond the universal set (`Content-Type`,
     /// `Content-Length`, `Access-Control-Allow-Origin`, `Connection`) —
-    /// the preflight trio rides here.
+    /// the preflight trio rides here. That set is [`write_reply`]'s to
+    /// supply, not this list's.
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
@@ -352,19 +361,36 @@ impl Reply {
 pub enum Routed {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
+    ///
+    /// Serviceable only through [`serve`]: following the stream is
+    /// `write_path.rs`'s and crate-private, so a caller routing by hand can
+    /// answer this variant only by refusing the route. It is the one
+    /// endpoint the socket-free surface names and cannot serve.
     EventStream,
 }
 
 /// One request, as [`Daemon::route`] receives it and as the socket reader
 /// builds it — one value rather than a list of arguments, so the two
 /// `Option<String>`s cannot be handed over in the wrong order.
+///
+/// PRECONDITION on every field, established by [`read_request`] and owed by
+/// any other caller of [`Daemon::route`]: `method` is the uppercase token;
+/// `path` is the request target with its query AND its `?` removed; `query`
+/// is what followed that `?`, without it; `body` is exactly the declared
+/// `Content-Length` bytes. Routing does not re-check them — it cannot tell
+/// a caller's mistake from a client's request — so a violation is answered
+/// honestly for the request as given and misleadingly for the one intended:
+/// a `path` still carrying its query is an unknown path (`404`), a
+/// lowercase `method` matches no arm (`405`), and a `query` still carrying
+/// its `?` names a parameter called `?since`.
 pub struct HttpRequest {
     /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
     pub method: String,
     /// The request target with any query stripped — `/op`, `/changes`.
     pub path: String,
-    /// The raw query string, if the target carried one. Meaningful on
-    /// `/changes` and `/dump`; ignored elsewhere.
+    /// The raw query string, if the target carried one, without the `?` that
+    /// introduced it. Meaningful on `/changes` and `/dump`; ignored
+    /// elsewhere.
     pub query: Option<String>,
     /// The `Skepd-Session` header's value, if present: the opaque token a
     /// session was bound to. Absent or unknown resolves to the guest.
@@ -670,9 +696,17 @@ impl std::fmt::Debug for Daemon {
 
 impl Daemon {
     /// Open (genesis or recover) the one world at `data_dir`, replay the
-    /// commit-metadata sidecar, and assemble the operation surface. Every
-    /// [`DaemonError`] is an operator-intervention condition — surface it
-    /// and exit, never retry.
+    /// commit-metadata sidecar, and assemble the operation surface.
+    ///
+    /// PRECONDITION: no other live kernel holds `data_dir`. M2 takes an
+    /// exclusive lock on the journal directory, and a second open fails on
+    /// it — the one [`DaemonError`] a retry can clear, and so the one
+    /// exception to the disposition below. [`Skepd::shutdown`] and `Skepd`'s
+    /// `Drop` both release that lock before returning, which is what closes
+    /// the race with a stopping server. Every other variant is an
+    /// operator-intervention condition (corrupt journal, bad checkpoint,
+    /// drifted genesis, a data dir refusing I/O the kernel just performed):
+    /// surface it and exit, never retry.
     ///
     /// The sidecar replay is the one step here whose cost is not O(1) in
     /// the data dir: where commit metadata is missing it reconstructs the
@@ -731,6 +765,11 @@ impl Daemon {
     /// idempotency `id` (wire.md §Correlation and idempotency) — a
     /// speculative retry after a timeout duplicates the insert or mints a
     /// second document. The remaining routes are queries.
+    ///
+    /// What the caller owes on the way in is [`HttpRequest`]'s field
+    /// precondition, which routing cannot check; what a [`Reply`] is not on
+    /// the way out is the four universal headers, which [`write_reply`]
+    /// supplies and two of which wire.md promises on every response.
     pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,

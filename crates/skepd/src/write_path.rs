@@ -83,6 +83,16 @@ impl WritePath {
     /// `execute` is a closure so this card stays free of M10's session and
     /// request types: what belongs here is the ordering, not the dispatch.
     /// It runs exactly once, inside the lock.
+    ///
+    /// PRECONDITION: `kind` and `docs` are [`write_meta`]'s answer for the
+    /// `Op` that `execute` runs. Nothing here can check it — the closure is
+    /// opaque by design, which is what keeps this card free of M10 — and a
+    /// mismatch is not a fault but a silent lie: the change feed reports
+    /// that position under the wrong op kind, or names a document the write
+    /// did not touch, permanently, since nothing re-derives an entry the
+    /// sidecar already holds. `Daemon::post_op` establishes it by deriving
+    /// both from one [`write_meta`] call on the frame it is about to
+    /// execute, and is the only caller.
     pub fn commit(
         &self,
         kind: OpKind,
@@ -104,6 +114,11 @@ impl WritePath {
 
     /// The HEAD position's recorded wall-clock time (`/health`'s
     /// `head_time`), or `None` when that position's record is bare.
+    ///
+    /// The sidecar answers for the head by answering for its last recorded
+    /// position, which is the same position because [`WritePath::commit`]
+    /// records every commit under the lock it commits under. That premise
+    /// is kept HERE; `Sidecar::head_time` states what relying on it costs.
     pub fn head_time(&self) -> Option<u64> {
         self.sidecar.head_time()
     }
@@ -165,6 +180,16 @@ impl WritePath {
             | Response::Claims { .. }
             | Response::Rejected(_) => return None,
         };
+        // [`AffectedDocs::Minted`] and this arm are one decision in two
+        // tables: a `Minted` op must answer `AckAddr`, the one ack whose
+        // address is the document the write minted. `Ack` carries none, and
+        // `AckEdit`'s two are a successor link and its supersession claim —
+        // link addresses, not a minted document — so neither binds `minted`
+        // above. A `Minted` op answering either would render `docs: []`,
+        // indistinguishable on the wire from `delegate`'s legitimate empty
+        // list, on the field wire.md tells clients to dispatch on. The
+        // fallback below is therefore what keeps this walk total, not a case
+        // with a meaning of its own.
         let docs = match docs {
             AffectedDocs::Named(v) => v,
             AffectedDocs::Minted => {
@@ -189,6 +214,10 @@ pub(crate) enum AffectedDocs {
     /// no address is cloned here to be rendered and dropped a moment later.
     Named(Vec<String>),
     /// The document the write mints, known only from its ack.
+    ///
+    /// An op classified `Minted` must answer `AckAddr`, the one ack whose
+    /// address is the minted document — see [`WritePath::record`]'s `Minted`
+    /// arm, which is the other half of this decision.
     Minted,
 }
 

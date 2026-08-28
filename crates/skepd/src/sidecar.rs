@@ -323,6 +323,16 @@ impl Sidecar {
     /// this answers FOR THE HEAD, so an older surviving record is not
     /// offered in its place, any more than a bare position's fields are
     /// invented.
+    ///
+    /// What it reads is the LAST RECORDED position's time, which IS the
+    /// head's because every commit is recorded: `WritePath::commit` records
+    /// under the lock it commits under, and `/op` is the only live write
+    /// path. That premise is this file's RELIANCE, not its check — a
+    /// `Sidecar` never learns the live head. In the one state that breaks it
+    /// (a panic between M10's commit and this file's append, which
+    /// `serve_connection`'s unwind note names) `/health` reports the
+    /// previous position's time as the head's until the reopen walk covers
+    /// the gap as a bare entry, after which this honestly answers `None`.
     pub fn head_time(&self) -> Option<u64> {
         self.inner.lock().entries.values().next_back().and_then(Meta::time)
     }

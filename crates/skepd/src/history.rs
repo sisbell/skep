@@ -29,7 +29,9 @@ use skep_engine::{Engine, HistoryError, World};
 use skep_febe::{Operation, Request, Response, Stores};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
 use skep_links::LinkWriter;
-use skep_namespace::{Namespace, PrincipalId};
+use skep_namespace::Namespace;
+
+use crate::server::open_guest_session;
 
 /// Concurrent historical reconstructions (`Engine::world_at` behind
 /// `/op-at` and `/dump?at`) allowed at once: each is a whole-checkpoint
@@ -206,9 +208,7 @@ fn execute_read_on(world: World, req: Request) -> Response {
     let kernel =
         Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));
     let febe = Operation::new(Box::new(HistoryStores { kernel }));
-    let sid = febe.open_session(PrincipalId(u64::MAX));
-    febe.close_session(sid);
-    febe.execute(sid, req)
+    febe.execute(open_guest_session(&febe), req)
 }
 
 /// `Stores<World>` over the throwaway historical kernel — the same shape as

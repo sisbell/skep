@@ -240,20 +240,21 @@ impl JsonCodec {
 
 /// Serialize a finished `Value` tree — the one place this crate turns a
 /// `Value` into bytes, so the proof that it cannot fail is written once and
-/// holds everywhere it is used: wire responses, transport-error bodies, and
-/// the sidecar's own file lines are all trees built HERE, out of [`obj`] and
-/// the leaf marshalers, which means string keys only and no foreign
-/// `Serialize` impl to fault.
+/// holds everywhere it is used: wire responses, transport-error bodies, the
+/// commit stream's event payloads, and the sidecar's own file lines are all
+/// trees built HERE, out of [`obj`] and the leaf marshalers, which means
+/// string keys only and no foreign `Serialize` impl to fault.
 pub(crate) fn to_bytes(v: Value) -> Vec<u8> {
     serde_json::to_vec(&v).expect("serializing a serde_json::Value with string keys cannot fail")
 }
 
 /// Build a JSON object with keys sorted — THE determinism device. Every
 /// JSON object this crate emits is constructed through it — wire responses,
-/// transport-error bodies, and the sidecar's own file lines — so canonical
-/// output is alphabetical-by-key under any serde_json map backend. The sort
-/// is STABLE, which is what makes "the last pair given wins" a fact about
-/// duplicate keys rather than an accident of the sort.
+/// transport-error bodies, the commit stream's event payloads, and the
+/// sidecar's own file lines — so canonical output is alphabetical-by-key
+/// under any serde_json map backend. The sort is STABLE, which is what
+/// makes "the last pair given wins" a fact about duplicate keys rather than
+/// an accident of the sort.
 pub(crate) fn obj(mut pairs: Vec<(&'static str, Value)>) -> Value {
     pairs.sort_by_key(|&(k, _)| k);
     let mut m = Map::new();

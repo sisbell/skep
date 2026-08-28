@@ -7,8 +7,11 @@
 //! appended in position order with monotone times, which is the premise
 //! `sidecar.rs` states its invariants on; and every position a `GET /events`
 //! subscriber is told about is one `GET /changes` already carries, because
-//! the announcement happens behind the record that made it answerable.
-//! Reads never come here and never take the lock.
+//! the announcement happens behind the record that made it answerable. That
+//! second guarantee covers a stream's FIRST event too: a connecting
+//! subscriber is told [`WritePath::announced`], not the kernel's head, so
+//! the two can never come apart in the window between a commit and its
+//! record. Reads never come here and never take the lock.
 //!
 //! [`write_meta`] is also THE read/write partition — a read is exactly an
 //! `Op` the change feed has nothing to record — so the history surface and
@@ -134,13 +137,19 @@ impl WritePath {
         self.commit_stream.shutdown();
     }
 
-    /// The position last announced — what a subscriber connecting now would
-    /// be told. TEST HOOK, and compiled only for tests: it exists so a test
-    /// can witness the announcement without opening a socket, and nothing
-    /// on the serving path has a reason to ask.
-    #[cfg(test)]
+    /// The last position ANNOUNCED: what a subscriber connecting now is told
+    /// first, and what a test can witness without opening a socket.
+    ///
+    /// Deliberately not the kernel's committed head. Between a write's
+    /// commit and its change-feed record — [`WritePath::commit`] holds the
+    /// lock across both — the head names a position `/changes` cannot yet
+    /// answer, and a subscriber told that number reads an empty delta and
+    /// shows a stale view until the next commit. Announced positions sit
+    /// behind their own records by construction, which is what makes this
+    /// card's guarantee hold for a stream's FIRST event as well as its
+    /// later ones.
     pub fn announced(&self) -> Seq {
-        self.commit_stream.state.lock().head
+        self.commit_stream.head()
     }
 
     /// Record one write's answer in the sidecar. What this layer decides,
@@ -335,6 +344,11 @@ impl CommitStream {
     fn shutdown(&self) {
         self.state.lock().shutdown = true;
         self.cond.notify_all();
+    }
+
+    /// The position last announced.
+    fn head(&self) -> Seq {
+        self.state.lock().head
     }
 
     /// Block until the head passes `last`, the daemon stops, or the

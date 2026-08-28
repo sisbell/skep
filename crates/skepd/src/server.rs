@@ -27,7 +27,11 @@
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
 //! policy), an every-1024-commits checkpoint cadence, and two retained
 //! checkpoints — genesis on a fresh store, recovery on an existing one, both
-//! inside `Engine::open`. Nothing here writes any file of its own.
+//! inside `Engine::open`. The one file this crate writes itself is the
+//! commit-metadata sidecar `commits.log`, opened here through
+//! `WritePath::open` and owned by `sidecar.rs`; nothing here writes any
+//! file of the WORLD's, which is why two daemons replaying one journal
+//! still converge byte-identically.
 //!
 //! **Identity is local trust**: clients name their own principal at
 //! `POST /session` and get an opaque token; the daemon maps token →
@@ -61,14 +65,15 @@
 //! apart. Reads execute directly and take no lock.
 //!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
-//! of committed log positions — one event carrying the current head on
-//! connect, then an event whenever the head advances. `write_path.rs` owns
-//! the stream: what a subscriber is told next, and the coalescing that
-//! falls out of asking "anything past what I last sent"; [`Subscribers`] below
-//! owns the budget, the admission, and the join at shutdown. What this file
-//! adds is the SSE framing (`serve_events`) and the hand-off that keeps an
-//! open stream off the op pool — the accepting worker gives the socket to a
-//! dedicated thread and returns to `accept`.
+//! of committed log positions — one event carrying the last announced
+//! position on connect, then an event whenever the head advances.
+//! `write_path.rs` owns the stream: what a subscriber is told first and
+//! next, and the coalescing that falls out of asking "anything past what I
+//! last sent"; [`Subscribers`] below owns the budget, the admission, and
+//! the join at shutdown. What this file adds is the SSE framing
+//! (`serve_events`) and the hand-off that keeps an open stream off the op
+//! pool — the accepting worker gives the socket to a dedicated thread and
+//! returns to `accept`.
 //!
 //! **The change feed (wire v6)**: `GET /changes?since=N` answers the
 //! committed positions in `(N, head]`, oldest first, each with its op kind,
@@ -159,6 +164,13 @@ const TRANSFER_DEADLINE: Duration = Duration::from_secs(30);
 
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
+
+/// The two headers wire.md promises on EVERY response: the cross-origin
+/// posture and the one-request-per-connection framing. Written once because
+/// the event stream's head is composed outside [`write_reply`] — a stream is
+/// not a request/response reply — so a change to either must reach both
+/// writers or reach neither.
+const UNIVERSAL_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nConnection: close\r\n";
 
 /// The one request header this daemon reads beyond HTTP's own framing: the
 /// opaque session token. Named once because the CORS preflight must
@@ -547,6 +559,29 @@ fn path_is_known(path: &str) -> bool {
 /// argument and are retired together.
 const MAX_LIVE_SESSIONS: usize = 1024;
 
+/// The principal a guest session is minted under. Arbitrary by
+/// construction: the session is retired before any request runs, so the
+/// value never reaches a store — what makes a guest a guest is the retired
+/// binding, not the principal it named. Named once so the two places that
+/// mint one cannot drift, and so a reader meeting `u64::MAX` in either is
+/// not left asking whether the number is significant to M3 or M10.
+pub(crate) const GUEST_PRINCIPAL: PrincipalId = PrincipalId(u64::MAX);
+
+/// Mint one session and retire it at once — THE guest pattern, and the one
+/// obligation both the live surface and the history surface need: under a
+/// retired session M10 serves reads (which are principal-free) and refuses
+/// writes with its own `Unauthenticated`, which is how this daemon holds no
+/// authorization policy of its own.
+///
+/// The retirement is what does the work, so it happens here rather than
+/// being left to a caller to remember: a session that stayed open would
+/// carry [`GUEST_PRINCIPAL`] into every unauthenticated write.
+pub(crate) fn open_guest_session(febe: &Operation<World>) -> SessionId {
+    let guest = febe.open_session(GUEST_PRINCIPAL);
+    febe.close_session(guest);
+    guest
+}
+
 /// Identity as local trust: the token ↔ `SessionId` binding, and the one
 /// policy over it. Clients name their own principal at `POST /session` and
 /// get an opaque token back; a `SessionId` never rides the wire (M10's
@@ -725,10 +760,7 @@ impl Daemon {
         let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         let febe = Operation::new(Box::new(engine.stores()));
-        // Mint-and-retire the guest binding; the principal value never
-        // reaches a store (the binding is dropped before any request runs).
-        let guest = febe.open_session(PrincipalId(u64::MAX));
-        febe.close_session(guest);
+        let guest = open_guest_session(&febe);
         Ok(Daemon {
             engine,
             febe,
@@ -900,8 +932,15 @@ impl Daemon {
     fn get_health(&self) -> Reply {
         // The head position's recorded wall-clock time (wire v6) — null
         // when the head's own record is bare or nothing is recorded at all
-        // (a fresh world): transport metadata, never invented, and never
-        // an older position's time standing in for the head's.
+        // (a fresh world): transport metadata, never invented, and never an
+        // older position's time offered in the head's place.
+        //
+        // The two fields are read independently and under no lock, so the
+        // PAIR may straddle one in-flight commit: a `head_time` correct for
+        // the position the sidecar last recorded, beside a `log_position`
+        // one commit newer. Taking the write lock here would serialize a
+        // liveness probe behind writes, which is the worse trade;
+        // `Sidecar::head_time` states what each field is true of.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         Reply::json(
@@ -1350,16 +1389,7 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
         // connect): no request, so no reply owed.
         Ok(None) => return,
         Err(refusal) => {
-            let reply = match refusal {
-                RequestRefusal::Malformed(detail) => {
-                    refuse(TransportError::MalformedHttp, Some(&detail))
-                }
-                RequestRefusal::BodyTooLarge { declared, cap } => {
-                    let detail =
-                        format!("Content-Length {declared} exceeds the {cap}-byte body cap");
-                    refuse(TransportError::PayloadTooLarge, Some(&detail))
-                }
-            };
+            let reply = refuse_request(refusal);
             let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
             return;
         }
@@ -1479,6 +1509,22 @@ impl From<String> for RequestRefusal {
 impl From<&str> for RequestRefusal {
     fn from(detail: &str) -> RequestRefusal {
         RequestRefusal::Malformed(detail.into())
+    }
+}
+
+/// Map a request refused at the HTTP layer onto the wire's transport
+/// errors — the one place a [`RequestRefusal`] becomes HTTP, as
+/// [`refuse_unavailable`] is for the history surface's `Unavailable`. The
+/// body cap's diagnostic names the cap that actually bound this route, so
+/// the number in the refusal is the one the request met rather than the
+/// largest the daemon has.
+fn refuse_request(refusal: RequestRefusal) -> Reply {
+    match refusal {
+        RequestRefusal::Malformed(detail) => refuse(TransportError::MalformedHttp, Some(&detail)),
+        RequestRefusal::BodyTooLarge { declared, cap } => refuse(
+            TransportError::PayloadTooLarge,
+            Some(&format!("Content-Length {declared} exceeds the {cap}-byte body cap")),
+        ),
     }
 }
 
@@ -1652,17 +1698,18 @@ fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) ->
     Ok(())
 }
 
-/// Write one complete reply; the connection closes behind it. Every
-/// response carries `Access-Control-Allow-Origin: *` — wire v4's CORS
-/// posture, enforced at this one choke point so no reply can miss it — and
-/// `Connection: close` (one request per connection). A bodiless reply
-/// carries no content headers (RFC 7230's 204).
+/// Write one complete reply; the connection closes behind it. Every reply
+/// carries [`UNIVERSAL_HEADERS`] — wire v4's CORS posture and the
+/// one-request-per-connection framing — supplied at this one choke point so
+/// no reply can miss them, and shared with `serve_events`, which composes
+/// its own head because a stream is not a reply. A bodiless reply carries
+/// no content headers (RFC 7230's 204).
 fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::Result<()> {
     let mut head = Vec::with_capacity(256);
     head.extend_from_slice(
         format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
     );
-    head.extend_from_slice(b"Access-Control-Allow-Origin: *\r\n");
+    head.extend_from_slice(UNIVERSAL_HEADERS.as_bytes());
     for (name, value) in &reply.headers {
         head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
     }
@@ -1677,7 +1724,7 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::
             )
             .as_bytes(),
         );
-        head.extend_from_slice(b"Connection: close\r\n\r\n");
+        head.extend_from_slice(b"\r\n");
         // The body is written FROM the reply rather than copied into this
         // buffer first. The largest answer this daemon serves is a whole
         // world dump, and assembling one buffer would hold two copies of
@@ -1687,7 +1734,7 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::
         write_bounded(stream, &head, deadline)?;
         write_bounded(stream, &body.bytes, deadline)
     } else {
-        head.extend_from_slice(b"Connection: close\r\n\r\n");
+        head.extend_from_slice(b"\r\n");
         write_bounded(stream, &head, deadline)
     }
 }
@@ -1710,22 +1757,27 @@ fn reason(status: u16) -> &'static str {
 }
 
 /// One subscriber (wire v4): write the stream head and the initial event
-/// carrying the current head, then follow the commit stream — a `commit`
-/// event when the head advances, a `:ka` comment on silence — until
-/// shutdown or the first failed write (a gone subscriber). Exiting drops
-/// the socket, which is the client's end-of-stream. Coalescing is inherent:
-/// the stream answers "anything past what I last sent", so a burst of
-/// commits is one event.
+/// carrying the last announced position, then follow the commit stream — a
+/// `commit` event when the head advances, a `:ka` comment on silence —
+/// until shutdown or the first failed write (a gone subscriber). Exiting
+/// drops the socket, which is the client's end-of-stream. Coalescing is
+/// inherent: the stream answers "anything past what I last sent", so a
+/// burst of commits is one event.
+///
+/// The initial position comes from [`WritePath::announced`] and not from
+/// the kernel, which is what keeps every announced position one
+/// `GET /changes` already carries — see that method for the window the
+/// distinction closes.
 fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
-    let head = "HTTP/1.1 200 OK\r\n\
-                Access-Control-Allow-Origin: *\r\n\
-                Content-Type: text/event-stream\r\n\
-                Cache-Control: no-cache\r\n\
-                Connection: close\r\n\r\n";
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n{UNIVERSAL_HEADERS}\
+         Content-Type: text/event-stream\r\n\
+         Cache-Control: no-cache\r\n\r\n"
+    );
     if stream.write_all(head.as_bytes()).is_err() {
         return;
     }
-    let mut last = daemon.log_position();
+    let mut last = daemon.writes.announced();
     if write_commit_event(&mut stream, last).is_err() {
         return;
     }
@@ -1750,8 +1802,16 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
 /// `event: commit` / `data: {"log_position":N}` / blank — the wire v4
 /// event framing, byte-for-byte what wire.md documents (compact JSON, the
 /// position alone).
+///
+/// The payload is built through the codec's key-sorting device like every
+/// other JSON object this crate emits, so the day the stream carries a
+/// second field its canonical form is the one already in force everywhere
+/// else rather than whatever a format string happened to spell.
 fn write_commit_event(stream: &mut TcpStream, at: Seq) -> std::io::Result<()> {
-    stream.write_all(format!("event: commit\ndata: {{\"log_position\":{}}}\n\n", at.0).as_bytes())
+    let mut event = b"event: commit\ndata: ".to_vec();
+    event.extend_from_slice(&to_bytes(obj(vec![("log_position", Value::Number(at.0.into()))])));
+    event.extend_from_slice(b"\n\n");
+    stream.write_all(&event)
 }
 
 #[cfg(test)]

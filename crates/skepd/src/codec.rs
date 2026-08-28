@@ -1698,6 +1698,44 @@ mod tests {
         assert!(p_hex("zz").is_err());
     }
 
+    /// All three documented view values (wire.md §Value encodings:
+    /// `"audit"`, `"active"`, `"default"`). The request fixtures carry only
+    /// two, so the third's parse arm and its marshal arm are watched by
+    /// nothing — and a typo in either makes a frame the document offers a
+    /// client come back `unparseable`, which tells them their frame is
+    /// malformed when the value is one wire.md invited.
+    #[test]
+    fn every_documented_view_value_round_trips() {
+        for name in ["audit", "active", "default"] {
+            let v = p_view(&Value::String(name.into()))
+                .unwrap_or_else(|e| panic!("'{name}' is a documented view: {e}"));
+            assert_eq!(j_view(v), Value::String(name.into()), "'{name}' must be its own inverse");
+        }
+        for bad in ["Audit", "", "all", "actives"] {
+            assert!(p_view(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
+        }
+    }
+
+    /// "Non-negative" is the word the wire uses (wire.md §Value encodings)
+    /// and the word these parsers' own error messages use; a signed or
+    /// fractional number is neither a natural nor a bounded integer. The
+    /// failure this guards is not a refusal but a WRAP: the tempting fix
+    /// when a client sends a signed value is `as_i64() as u64`, under
+    /// which `-1` becomes 2^64-1 everywhere naturals and bounded integers
+    /// are read — a `delete` of 2^64-1 positions, a slot index no link
+    /// has, a principal that is the guest's own id.
+    #[test]
+    fn negative_and_fractional_numbers_are_not_integers() {
+        let n = |s: &str| serde_json::from_str::<Value>(s).expect("test JSON");
+        for bad in ["-1", "-7", "1.5", "-0.5", "1e3"] {
+            assert!(p_u64(&n(bad)).is_err(), "{bad} is not a non-negative integer");
+            assert!(p_usize(&n(bad)).is_err(), "{bad} is not a count");
+            assert!(p_nat(&n(bad)).is_err(), "{bad} is not a natural");
+        }
+        assert_eq!(p_u64(&n("0")).expect("zero is non-negative"), 0);
+        assert_eq!(p_nat(&n("7")).expect("the lenient integer form").to_string(), "7");
+    }
+
     /// Marshal determinism in miniature: obj() sorts, so construction order
     /// cannot leak into bytes.
     #[test]

@@ -6,6 +6,7 @@
 mod common;
 
 use common::*;
+use serde_json::Value;
 
 #[test]
 fn world_survives_a_restart() {
@@ -132,4 +133,65 @@ fn world_survives_a_restart() {
 
         sd.shutdown();
     }
+}
+
+/// The stop that runs when nobody asks for it. `Skepd`'s `Drop` exists so
+/// an unwinding test or an early return cannot strand the kernel's
+/// journal-directory lock — but every other test in this suite calls
+/// `shutdown()`, so the one path that mechanism exists for is the one path
+/// nothing walks. Without the `Drop` the workers hold their `Arc<Daemon>`
+/// clones and loop in `accept` forever, the kernel is never dropped, and
+/// this reopen fails with a lock error naming nothing about the cause.
+#[test]
+fn a_dropped_server_releases_the_journal_lock() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let doc = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let boot = open_session(port, 0);
+        let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+        let v = op(
+            port,
+            Some(&boot),
+            &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
+        );
+        let account = acked_addr(&v);
+        let s1 = open_session(port, 1);
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+        );
+        let doc = acked_addr(&v);
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["dropped"]}}"#
+            ),
+        );
+        expect_resp(&v, "ack_addr");
+        doc
+        // NO shutdown(): the server falls out of scope here, which is the
+        // whole point — this is what an unwinding test leaves behind.
+    };
+
+    // Reopening the same dir is the proof the lock was released.
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let v = op(
+        port,
+        None,
+        &format!(
+            r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.7"}}}}]}}"#
+        ),
+    );
+    let expect: Value = serde_json::from_str(r#"[{"content":"dropped"}]"#).expect("json");
+    assert_eq!(
+        expect_resp(&v, "delivery")["items"],
+        expect,
+        "a dropped server stops cleanly, so the world recovers as after any other stop"
+    );
+    sd.shutdown();
 }

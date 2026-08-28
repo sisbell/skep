@@ -236,6 +236,9 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::DeleteOrphans { d: d1(), p: vp(1, 3), width: n(2) }),
         rq(None, Op::InClaims { y: link1(), view: View::Active }),
         rq(None, Op::OutClaims { x: link2(), view: View::Audit }),
+        // The third documented view (wire.md §Value encodings), so all
+        // three ride the canonical round trip and not just two.
+        rq(None, Op::InClaims { y: link2(), view: View::Default }),
     ]
 }
 
@@ -617,6 +620,29 @@ fn rejection_dispositions_and_optional_fields() {
     assert_eq!(v["detail"].as_str(), Some("d2 not registered"));
 }
 
+/// wire.md §Value encodings: "Span sets and endsets are JSON arrays of
+/// spans, ORDER PRESERVED VERBATIM" — the rule `Endset::from_spans` states
+/// upstream too ("stored exactly as given, never canonicalized at rest").
+/// Every endset fixture in this suite carries exactly one span, so nothing
+/// watched the sequence: a sort, a merge of the two adjacent spans, or a
+/// dedup of the repeated one would pass every test and silently change
+/// what a client reads back from `read_link` and what an addrs-form `ty`
+/// denotes.
+#[test]
+fn an_endset_round_trips_its_spans_in_the_order_given() {
+    let codec = JsonCodec;
+    // Descending, then two adjacent (mergeable), then a repeat: the three
+    // shapes a canonicalizer touches.
+    let frame = br#"{"op":"emit","home":"1.0.1.0.1","from":"1.0.1.0.1","to":[],"ty":[{"start":"1.9","width":"0.1"},{"start":"1.1","width":"0.1"},{"start":"1.2","width":"0.1"},{"start":"1.1","width":"0.1"}]}"#;
+    let canon: Value =
+        serde_json::from_slice(&codec.marshal_request(&parse_ok(&codec, frame))).expect("json");
+    let expect: Value = serde_json::from_str(
+        r#"[{"start":"1.9","width":"0.1"},{"start":"1.1","width":"0.1"},{"start":"1.2","width":"0.1"},{"start":"1.1","width":"0.1"}]"#,
+    )
+    .expect("json");
+    assert_eq!(canon["ty"], expect, "an endset keeps the order and the multiplicity given");
+}
+
 /// Lenient parse, canonical emit: integer naturals, uppercase hex, shuffled
 /// field order, and the empty slot-constraint normalization all read; the
 /// canonical form is what comes back out.
@@ -644,6 +670,17 @@ fn lenient_parse_canonical_emit() {
     let parsed = parse_ok(&codec, wide);
     let canon: Value = serde_json::from_slice(&codec.marshal_request(&parsed)).expect("json");
     assert_eq!(canon["width"].as_str(), Some("18446744073709551616"));
+    // An absent `cur` is ⊥, exactly as an explicit null is (wire.md §Value
+    // encodings: "An absent `cur` field means `null`") — the one accessor
+    // whose absence is not a missing field. Both doc examples spell it out,
+    // so no frame in this suite had ever omitted it.
+    let bare = br#"{"op":"window_v","d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.5"}],"n":16}"#;
+    let with_null = br#"{"op":"window_v","cur":null,"d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.5"}],"n":16}"#;
+    assert_eq!(
+        codec.marshal_request(&parse_ok(&codec, bare)),
+        codec.marshal_request(&parse_ok(&codec, with_null)),
+        "an absent cursor is the same request as an explicit null one"
+    );
 }
 
 /// Wire v2 write forms: `"str"`/`{"hex"}` mint one single-byte value per
@@ -822,7 +859,7 @@ fn a_zero_width_span_is_refused_at_parse() {
 #[test]
 fn every_malformed_frame_fails_parse_with_a_detail() {
     let codec = JsonCodec;
-    let bad: [&[u8]; 9] = [
+    let bad: [&[u8]; 12] = [
         b"not json at all",
         br#"["op","fork"]"#,
         br#"{"op":"frobnicate"}"#,
@@ -832,6 +869,13 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         br#"{"op":"insert","doc":"1.0.1.0.1","at":{"subspace":"1","ordinal":"1"},"values":[true]}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"resolve":[]}}"#,
         br#"{"op":"make_link","home":"1.0.1.0.1","from":[],"to":[],"ty":{"addrs":["0.1"]}}"#,
+        // Signed and fractional numbers where the wire says "non-negative
+        // integer": a slot index, a natural width, and a page size. Each
+        // wraps rather than merely differing if the parse is ever widened
+        // to `as_i64()`.
+        br#"{"op":"follow_link","a":"1.0.1.0.1.0.2.1","slot":-1}"#,
+        br#"{"op":"delete","doc":"1.0.1.0.1","p":{"subspace":"1","ordinal":"1"},"width":-1}"#,
+        br#"{"op":"window_v","d":"1.0.1.0.1","region":[{"start":"1.1","width":"0.5"}],"cur":null,"n":2.5}"#,
     ];
     for frame in bad {
         let err = match codec.parse(frame) {

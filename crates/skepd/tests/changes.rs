@@ -308,6 +308,179 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
     sd.shutdown();
 }
 
+/// The committed head, from the daemon's own `/health`.
+fn head(port: u16) -> u64 {
+    let (st, body) = get(port, "/health");
+    assert_eq!(st, 200, "/health: {}", String::from_utf8_lossy(&body));
+    json(&body)["log_position"].as_u64().expect("log_position")
+}
+
+/// One write, its ack, and exactly the one feed entry it produced — the
+/// page is taken from the head as it stood before the write, so nothing
+/// earlier can be mistaken for this write's entry.
+fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value) {
+    let before = head(port);
+    let ack = op(port, Some(token), frame);
+    assert!(ack["at"].is_u64(), "{what} must commit: {ack}");
+    let page = changes_ok(port, &format!("since={before}"));
+    let entries = page["changes"].as_array().expect("changes");
+    assert_eq!(entries.len(), 1, "{what}: one write, one entry: {page}");
+    (ack, entries[0].clone())
+}
+
+/// wire.md §The change feed fixes `docs` as a table: the target doc for
+/// arrangement writes; a link write's HOME (`edit_link` both its homes,
+/// successor's first); the MINTED document for create/fork/version; `[]`
+/// for `delegate` and `register_node`. Four of the fourteen rows were
+/// watched, and `edit_link` — the one row with an order to get wrong — was
+/// not: `docs` is the field a client dispatches on to decide what to
+/// refresh, so a wrong or missing address is a pane that never updates,
+/// with a well-formed feed and no error anywhere.
+#[test]
+fn the_affected_docs_convention_holds_for_every_write_kind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // One account, so principal 1 owns every document below — which is what
+    // `edit_link`'s both-homes gate needs, and what lets `version`/`fork`
+    // mint into a known place.
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
+    );
+    let account = acked_addr(&v);
+    let s1 = open_session(port, 1);
+    let create = || {
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+        );
+        acked_addr(&v)
+    };
+    let doc_a = create();
+    let doc_b = create();
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"insert","doc":"{doc_a}","at":{{"subspace":"1","ordinal":"1"}},"values":["abcdefgh"]}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    // Three ghost-typed links in doc_a, for the link-write rows.
+    let mint_link = |n: u64| {
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(
+                r#"{{"op":"make_link","home":"{doc_a}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{doc_a}.0.3.6.{n}"]}}}}"#
+            ),
+        );
+        acked_addr(&v)
+    };
+    let (l1, l2, l3) = (mint_link(1), mint_link(2), mint_link(3));
+
+    // (what, frame, expected docs) — one row per convention. Each row's
+    // `docs` is stated here, not read from the daemon.
+    let mut rows: Vec<(&str, String, Value)> = vec![
+        (
+            "delete",
+            format!(
+                r#"{{"op":"delete","doc":"{doc_a}","p":{{"subspace":"1","ordinal":"1"}},"width":"1"}}"#
+            ),
+            serde_json::json!([doc_a]),
+        ),
+        (
+            // The DESTINATION, never the source.
+            "copy",
+            format!(
+                r#"{{"op":"copy","doc":"{doc_b}","at":{{"subspace":"1","ordinal":"1"}},"specs":[{{"source":"{doc_a}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#
+            ),
+            serde_json::json!([doc_b]),
+        ),
+        (
+            "rearrange",
+            format!(
+                r#"{{"op":"rearrange","doc":"{doc_a}","cuts":[{{"subspace":"1","ordinal":"1"}},{{"subspace":"1","ordinal":"2"}},{{"subspace":"1","ordinal":"3"}}]}}"#
+            ),
+            serde_json::json!([doc_a]),
+        ),
+        (
+            "register_node",
+            r#"{"op":"register_node","addr":"1.9001"}"#.to_string(),
+            serde_json::json!([]),
+        ),
+        (
+            "emit",
+            format!(
+                r#"{{"op":"emit","home":"{doc_a}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{doc_a}.0.3.9.1","to":[]}}"#
+            ),
+            serde_json::json!([doc_a]),
+        ),
+        (
+            "nullify",
+            format!(r#"{{"op":"nullify","home":"{doc_a}","target":"{l3}"}}"#),
+            serde_json::json!([doc_a]),
+        ),
+        (
+            "assert_sup",
+            format!(r#"{{"op":"assert_sup","home":"{doc_a}","old":"{l1}","new":"{l2}"}}"#),
+            serde_json::json!([doc_a]),
+        ),
+        (
+            // Both homes, successor's (d_s) FIRST — the one row where the
+            // order can be reversed and still compile.
+            "edit_link (two homes)",
+            format!(
+                r#"{{"op":"edit_link","original":"{l1}","d_s":"{doc_b}","d_a":"{doc_a}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{doc_b}.0.3.6.1"]}}}}}}"#
+            ),
+            serde_json::json!([doc_b, doc_a]),
+        ),
+        (
+            // One home named twice is one document: the dedup write_meta
+            // performs when d_a == d_s.
+            "edit_link (one home)",
+            format!(
+                r#"{{"op":"edit_link","original":"{l2}","d_s":"{doc_a}","d_a":"{doc_a}","successor":{{"from":[],"to":[],"ty":{{"addrs":["{doc_a}.0.3.6.2"]}}}}}}"#
+            ),
+            serde_json::json!([doc_a]),
+        ),
+    ];
+    // The two minting rows name a document known only from the ack, so
+    // their expectation is built from it rather than stated up front.
+    let minting = [
+        ("version", format!(r#"{{"op":"version","d_src":"{doc_a}"}}"#)),
+        ("fork", r#"{"op":"fork"}"#.to_string()),
+    ];
+
+    fn op_of(what: &str) -> &str {
+        what.split_whitespace().next().expect("row names its op")
+    }
+    for (what, frame, docs) in rows.drain(..) {
+        let (_, entry) = feed_entry(port, &s1, what, &frame);
+        assert_eq!(entry["op"].as_str(), Some(op_of(what)), "{what}: the entry's op kind");
+        assert_eq!(entry["docs"], docs, "{what}: the affected-docs convention");
+    }
+    for (what, frame) in minting {
+        let (ack, entry) = feed_entry(port, &s1, what, &frame);
+        let minted = ack["addr"].as_str().expect("a minting write acks its address");
+        assert_eq!(entry["op"].as_str(), Some(what), "{what}: the entry's op kind");
+        assert_eq!(
+            entry["docs"],
+            serde_json::json!([minted]),
+            "{what}: names the document it minted, which is knowable only from the ack"
+        );
+    }
+
+    sd.shutdown();
+}
+
 #[test]
 fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -600,9 +773,24 @@ fn the_sidecar_compacts_to_the_journals_retention() {
 
     // The dropped positions are unreachable by every other route too,
     // which is what makes dropping them honest rather than lossy.
+    // Not merely "not 200": this test's whole argument is that dropping
+    // those entries is honest BECAUSE every route refuses them the same
+    // documented way, and a 500 or a 503 would satisfy an inequality while
+    // meaning the opposite.
     let env = format!(r#"{{"at":{},"frame":{{"op":"read_link","a":"1.0.1.0.1"}}}}"#, early[0]);
-    let (st, _) = http(port, "POST", "/op-at", None, env.as_bytes());
-    assert_ne!(st, 200, "a reclaimed position is not answerable at /op-at either");
+    let (st, body) = http(port, "POST", "/op-at", None, env.as_bytes());
+    assert_eq!(
+        st,
+        410,
+        "a reclaimed position gets /op-at's own reclaimed discipline: {}",
+        text(&body)
+    );
+    let v = json(&body);
+    assert_eq!(v["error"].as_str(), Some("history_reclaimed"));
+    assert!(
+        v["floor"].is_u64() || v.get("floor").is_none(),
+        "floor is named when known and omitted otherwise, never something else: {v}"
+    );
 
     sd.shutdown();
 }

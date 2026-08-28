@@ -265,6 +265,31 @@ fn addrs_form_endsets_and_ghost_types() {
     expect_resp(&v, "addrs");
     assert!(has(&v, &l1) && has(&v, &l2) && has(&v, &l3), "the prefix subtree finds all three");
 
+    // Order is verbatim on the store side too (wire.md §Links): the recorded
+    // endset is one unit span per address IN THE ORDER GIVEN. The descending
+    // pair below is what a canonicalizer would reorder, and every other
+    // endset in this suite is a single span, where order is invisible.
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(
+            r#"{{"op":"make_link","home":"{doc}","from":{{"addrs":[]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{name2}","{name1}"]}}}}"#
+        ),
+    );
+    let l4 = acked_addr(&v);
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l4}"}}"#));
+    let expect: Value = serde_json::from_str(&format!(
+        r#"[{{"start":"{name2}","width":"{}"}},{{"start":"{name1}","width":"{}"}}]"#,
+        unit_w(&name2),
+        unit_w(&name1)
+    ))
+    .expect("json");
+    assert_eq!(
+        expect_resp(&v, "link_value")["link"]["slots"][2],
+        expect,
+        "an addrs endset records one unit span per address in the order given"
+    );
+
     // The type floor is as-given: an empty addrs TY rejects exactly as an
     // empty resolution does.
     let v = op(
@@ -352,6 +377,61 @@ fn idempotent_retry_replays_the_ack() {
     sd.shutdown();
 }
 
+/// wire.md §Correlation and idempotency: the `id` hint "is never applied
+/// to reads". A client that stamps an id on every frame it sends — a
+/// reasonable reading of "any string, unique within your session" — must
+/// still see the world move; a memoized read would replay a frozen
+/// snapshot, `as_of` and all, under a key the client believes is only a
+/// retry hint. `authz.rs` covers the rejection half of that sentence at
+/// the wire and `history.rs` covers `/op-at`; this is the read half on
+/// `/op`.
+#[test]
+fn an_id_on_a_read_frame_never_memoizes_the_answer() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (s1, account1) = delegate_first_principal(port);
+    let doc = create_doc(port, &s1, &account1);
+    expect_resp(&insert_at(port, &s1, &doc, 1, r#""alpha""#), "ack_addr");
+
+    // Read as TEXT, so a replayed answer names itself in the failure
+    // rather than arriving as two identical byte arrays.
+    let read_frame = format!(r#"{{"op":"retrieve_doc_v_span_set","id":"k","doc":"{doc}"}}"#);
+    let span_set = |body: &[u8]| {
+        let v = json(body);
+        expect_resp(&v, "span_set");
+        String::from_utf8(body.to_vec()).expect("utf-8 body")
+    };
+    let (st, body) = http(port, "POST", "/op", Some(&s1), read_frame.as_bytes());
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let first = span_set(&body);
+
+    expect_resp(&insert_at(port, &s1, &doc, 6, r#""beta""#), "ack_addr");
+
+    let (st, body) = http(port, "POST", "/op", Some(&s1), read_frame.as_bytes());
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    let second = span_set(&body);
+    assert_ne!(
+        first, second,
+        "a read under an id must answer the current world, never replay an earlier one"
+    );
+    // And it is the CURRENT answer, not merely a different one: nine
+    // positions after the second insert, where the first read saw five.
+    let width = |answer: &str| {
+        json(answer.as_bytes())["set"][0]["width"]
+            .as_str()
+            .expect("an extent names its width")
+            .rsplit('.')
+            .next()
+            .expect("component")
+            .to_string()
+    };
+    assert_eq!(width(&first), "5", "the first read saw \"alpha\": {first}");
+    assert_eq!(width(&second), "9", "the second sees \"alpha\" + \"beta\": {second}");
+
+    sd.shutdown();
+}
+
 /// wire.md §Sessions: the answer carries exactly the token and the echoed
 /// principal — the echo being the only place a client learns which
 /// principal its opaque token was bound to. Every helper in this suite
@@ -409,6 +489,12 @@ fn guest_requests_read_but_cannot_write() {
     // Malformed session bodies are transport errors, not op responses.
     let (st, body) = http(port, "POST", "/session", None, br#"{"user":"alice"}"#);
     assert_eq!(st, 400);
+    assert_eq!(json(&body)["error"].as_str(), Some("malformed_session_request"));
+    // A negative principal is not a principal (wire.md: a non-negative
+    // integer). Read as signed it would wrap onto u64::MAX — which is the
+    // id the guest session itself is minted with.
+    let (st, body) = http(port, "POST", "/session", None, br#"{"principal":-1}"#);
+    assert_eq!(st, 400, "{}", String::from_utf8_lossy(&body));
     assert_eq!(json(&body)["error"].as_str(), Some("malformed_session_request"));
 
     sd.shutdown();

@@ -1787,6 +1787,79 @@ mod tests {
         );
     }
 
+    /// The `observe`-only row of the table below, in the one shape that
+    /// compiles under either feature setting.
+    #[cfg(feature = "observe")]
+    fn observe_rows() -> Vec<(TransportError, &'static str, u16)> {
+        vec![(TransportError::MalformedAt, "malformed_at", 400)]
+    }
+
+    #[cfg(not(feature = "observe"))]
+    fn observe_rows() -> Vec<(TransportError, &'static str, u16)> {
+        Vec::new()
+    }
+
+    /// wire.md §HTTP status codes, BOTH columns — the discipline
+    /// [`code_name`](crate::codec) already gives M10's sixty rejection
+    /// codes. The table is transcribed by hand for the reason
+    /// [`crate::fuzz_support::TRANSPORT_ERRORS`] is: one read out of the
+    /// code under test would agree with whatever that code says.
+    ///
+    /// Four of these — `internal_panic`, `history_io`, `history_corrupt`,
+    /// `no_journal` — are reachable from no test in the tree (three need
+    /// at-rest journal damage, one cannot arise under this daemon's
+    /// `Fsync` configuration), so their spelling and their status are
+    /// watched here and nowhere else.
+    #[test]
+    fn every_transport_error_pairs_its_documented_name_with_its_documented_status() {
+        let mut table: Vec<(TransportError, &'static str, u16)> = vec![
+            (TransportError::MalformedSessionRequest, "malformed_session_request", 400),
+            (TransportError::MalformedOpAt, "malformed_op_at", 400),
+            (TransportError::WriteAtHistory, "write_at_history", 400),
+            (TransportError::BeyondHead, "beyond_head", 400),
+            (TransportError::NotAPosition, "not_a_position", 400),
+            (TransportError::MalformedChanges, "malformed_changes", 400),
+            (TransportError::MalformedHttp, "malformed_http", 400),
+            (TransportError::NoSuchEndpoint, "no_such_endpoint", 404),
+            (TransportError::MethodNotAllowed, "method_not_allowed", 405),
+            (TransportError::HistoryReclaimed, "history_reclaimed", 410),
+            (TransportError::PayloadTooLarge, "payload_too_large", 413),
+            (TransportError::InternalPanic, "internal_panic", 500),
+            (TransportError::HistoryIo, "history_io", 500),
+            (TransportError::HistoryCorrupt, "history_corrupt", 500),
+            (TransportError::NoJournal, "no_journal", 500),
+            (TransportError::HistoryBusy, "history_busy", 503),
+        ];
+        table.extend(observe_rows());
+        for &(err, name, status) in &table {
+            assert_eq!(err.name(), name, "wire name drifted for {err:?}");
+            assert_eq!(err.status(), status, "{name} must be answered with {status}");
+            // The one builder every refusal goes through takes both from
+            // the error, so the pairing a client dispatches on is checked
+            // where it is produced rather than only where it is declared.
+            let r = refuse(err, None);
+            assert_eq!(r.status, status, "{name}: the reply's status");
+            let body: Value = serde_json::from_slice(r.bytes()).expect("json");
+            assert_eq!(body["error"].as_str(), Some(name), "{name}: the reply's body");
+            // The fuzz oracle's list is the other hand transcription of
+            // this column; a name in one and not the other is a drift.
+            assert!(
+                crate::fuzz_support::TRANSPORT_ERRORS.contains(&name),
+                "{name} is answerable but absent from the fuzz oracle's list"
+            );
+        }
+        // Both transcriptions of wire.md's error column, measured against
+        // each other. A NEW variant is caught by the compiler at `name`
+        // and `status`; this catches one that reaches the wire without
+        // reaching either list.
+        #[cfg(feature = "observe")]
+        assert_eq!(
+            table.len(),
+            crate::fuzz_support::TRANSPORT_ERRORS.len(),
+            "the two hand transcriptions of wire.md's error column disagree in length"
+        );
+    }
+
     /// The body and the type naming it travel together: a bodiless reply
     /// writes no content headers at all, and a bodied one writes both —
     /// which is what makes "a 204 that silently drops its bytes" and
@@ -1801,6 +1874,60 @@ mod tests {
         let body = json.body.as_ref().expect("a JSON reply names its body");
         assert_eq!(body.content_type, "application/json");
         assert_eq!(body.bytes, br#"{"ok":true}"#);
+    }
+
+    /// The `/changes` query's accepted forms, and the page size the wire
+    /// promises when `limit` is absent (wire.md §The change feed: "default
+    /// 256, maximum 4096"). Every other test drives this parser through
+    /// its refusals; the seeded feeds are four writes long, so a default
+    /// silently changed to 4 — or to 4096 — produces an identical wire
+    /// answer in all of them.
+    #[test]
+    fn the_changes_query_defaults_to_the_documented_page_size() {
+        assert_eq!(
+            changes_params(Some("since=0")).expect("since alone is enough"),
+            (0, 256),
+            "an absent limit is the documented default"
+        );
+        assert_eq!(changes_params(Some("since=7&limit=10")).expect("both"), (7, 10));
+        assert_eq!(
+            changes_params(Some("limit=10&since=7")).expect("order-free"),
+            (7, 10),
+            "parameters are a set, not a sequence"
+        );
+        assert_eq!(
+            changes_params(Some("since=0&limit=4096")).expect("the maximum is in range").1,
+            4096
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("limit=2"),
+            Some("since=abc"),
+            Some("since=0&limit=0"),
+            Some("since=0&limit=4097"),
+            Some("since=0&since=1"),
+            Some("since=0&nope=1"),
+            Some("since"),
+        ] {
+            assert!(changes_params(bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+
+    /// The `/dump` query is absent or exactly one position — the accepted
+    /// half of the parser `tests/history.rs` exercises only through its
+    /// refusals.
+    #[cfg(feature = "observe")]
+    #[test]
+    fn the_dump_query_is_absent_or_exactly_one_position() {
+        let at = |q| dump_at_param(q).map(|o| o.map(|s| s.0));
+        assert_eq!(at(None).expect("no query"), None);
+        assert_eq!(at(Some("")).expect("empty query"), None);
+        assert_eq!(at(Some("at=9")).expect("a position"), Some(9));
+        assert_eq!(at(Some("at=0")).expect("genesis is a position"), Some(0));
+        for bad in [Some("at=abc"), Some("at=1&at=2"), Some("position=3"), Some("at")] {
+            assert!(dump_at_param(bad).is_err(), "{bad:?} must be refused");
+        }
     }
 
     /// The preflight advertises exactly the header [`read_request`] reads.

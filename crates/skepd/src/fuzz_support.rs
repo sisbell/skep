@@ -9,9 +9,13 @@
 //!
 //! Every function serves one contract: **any bytes in → exactly one
 //! well-formed answer out, never a panic, never a hang, never silence.** The
-//! oracle functions PANIC on a violation (that is the finding); the exchange
-//! helper never hangs (bounded socket deadlines); the mutation engine is a
-//! pure, deterministic `(seed, corpus) → bytes`.
+//! oracle functions report a violation — that is the finding — either by
+//! panicking with it ([`codec_roundtrip_oracle`]) or by returning it as an
+//! `Err` the calling test panics on ([`check_http_response`],
+//! [`envelope_oracle`]), which is the shape used where the reproduction is
+//! the caller's seed rather than the oracle's input. The exchange helper
+//! never hangs (bounded socket deadlines); the mutation engine is a pure,
+//! deterministic `(seed, corpus) → bytes`.
 //!
 //! Dependency posture: std plus this crate's own `serde_json`/codec only —
 //! no `tempfile`, no server library — so exposing it adds nothing to a
@@ -183,8 +187,12 @@ pub fn http_raw_exchange(port: u16, raw: &[u8]) -> std::io::Result<Vec<u8>> {
 /// universal `Access-Control-Allow-Origin` (wire v4), and a body whose
 /// length agrees with `Content-Length` — except a `204` carries none and a
 /// `text/event-stream` is an unbounded stream with no declared length.
-/// Returns the status code. Callers gate on non-empty input first (an empty
-/// response is a clean close, judged by the caller's own context).
+/// Returns the status code.
+///
+/// TOTAL over any bytes, including none: an empty response is reported as
+/// an `Err` naming a close with no answer. Whether that is a fault belongs
+/// to the caller's context — [`envelope_oracle`] decides it is not, and a
+/// probe that expects a clean close checks emptiness itself before asking.
 pub fn check_http_response(bytes: &[u8]) -> Result<u16, String> {
     if bytes.is_empty() {
         return Err("no response bytes (server closed without answering)".into());
@@ -253,9 +261,12 @@ pub fn check_http_response(bytes: &[u8]) -> Result<u16, String> {
 /// endpoints, exchange, and demand a well-formed HTTP response whose error
 /// name — on any non-2xx — is one wire.md documents. A 2xx is any documented
 /// success. An empty answer (clean close) is accepted; the endpoint-specific
-/// success shapes are asserted more tightly in the tier-1 tests. **Panics on
-/// an undocumented error name or a malformed response** via the returned
-/// `Err`, which callers surface.
+/// success shapes are asserted more tightly in the tier-1 tests.
+///
+/// Reports a violation — an undocumented error name, or a malformed
+/// response — as an `Err`, which the calling test surfaces as its own
+/// panic naming the seed. The one oracle here that does not panic itself:
+/// it is driven in a loop where only the caller knows the reproduction.
 pub fn envelope_oracle(port: u16, data: &[u8]) -> Result<(), String> {
     if data.is_empty() {
         return Ok(());

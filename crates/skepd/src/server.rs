@@ -56,14 +56,17 @@
 //! of committed log positions — one event carrying the current head on
 //! connect, then an event whenever the head advances (coalescing under
 //! load: a subscriber sees a strictly increasing sequence converging on the
-//! true head). The mechanism is write-path notification: `/op` — the
-//! daemon's only live write path — publishes its post-execute position into
-//! the condvar-backed `CommitFeed`, and each subscriber thread blocks there;
-//! no polling anywhere, so a commit reaches subscribers at thread-wake
-//! speed. Subscribers are dedicated spawned threads, never workers: the
-//! accepting worker hands the socket off and returns to `accept`, so open
-//! streams cannot starve `/op`. A `:ka` keepalive comment flows after each
-//! silent interval so both sides can detect a dead peer; shutdown
+//! true head). The mechanism is write-path notification: on `/op` — the
+//! daemon's only live write path — each committing write publishes the
+//! position IT committed into the condvar-backed `CommitFeed`, still
+//! holding the write-serialization lock that recorded it, so an announced
+//! position is always one `/changes` already carries; each subscriber
+//! thread blocks on the condvar, so no polling anywhere and a commit
+//! reaches subscribers at thread-wake speed. Subscribers are dedicated
+//! spawned threads, never workers: the accepting worker hands the socket
+//! off and returns to `accept`, so open streams cannot starve `/op`. A
+//! `:ka` keepalive comment flows after each silent interval so both sides
+//! can detect a dead peer; shutdown
 //! broadcasts on the same condvar and joins every subscriber, so open
 //! streams end in bounded time with a clean close the client sees.
 //!
@@ -79,7 +82,9 @@
 //! journal still converge on byte-identical worlds, and a position whose
 //! record was lost (or predates the feature) answers `null` fields —
 //! reconstructed as a bare position, never an invented value. `/health`
-//! additionally reports `head_time`, the newest recorded commit's time.
+//! additionally reports `head_time`, the HEAD position's own recorded
+//! commit time — `null` when that position's record is bare, rather than
+//! an older position's time standing in for it.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
@@ -542,9 +547,18 @@ impl Sessions {
     fn bind(&self, sid: SessionId) -> (String, Vec<SessionId>) {
         let token = format!("{:016x}.{:016x}", self.seed, unpredictable_u64());
         let mut bindings = self.bindings.lock();
-        bindings.map.insert(token.clone(), sid);
-        bindings.order.push_back(token.clone());
         let mut evicted = Vec::new();
+        match bindings.map.insert(token.clone(), sid) {
+            // Fresh: the token takes its place in the mint order.
+            None => bindings.order.push_back(token.clone()),
+            // A repeated draw. The token keeps its ONE place in the order,
+            // and the binding it displaced is unreachable, so it is retired
+            // like any evicted one. This is what keeps map and order in
+            // exact step without the invariant resting on the draw never
+            // repeating — a queue naming one token twice would evict the
+            // map entry belonging to the LIVE binding.
+            Some(displaced) => evicted.push(displaced),
+        }
         while bindings.order.len() > MAX_LIVE_SESSIONS {
             if let Some(old) = bindings.order.pop_front() {
                 if let Some(sid) = bindings.map.remove(&old) {
@@ -572,7 +586,8 @@ fn unpredictable_u64() -> u64 {
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
 /// and the token → session binding. Socket-free — [`Daemon::route`] is the
-/// entire HTTP surface as a pure request→reply function over this state.
+/// entire HTTP surface as a request→reply function over this state, with no
+/// socket in its signature. Not a PURE one: see [`Daemon::route`].
 pub struct Daemon {
     engine: Engine,
     /// M10's front door — the operation surface every frame executes
@@ -583,8 +598,9 @@ pub struct Daemon {
     codec: JsonCodec,
     /// The token ↔ session binding and the guest policy over it.
     sessions: Sessions,
-    /// The commit feed behind `GET /events` (wire v4): `/op` publishes its
-    /// post-execute log position, subscriber threads block on the condvar.
+    /// The commit feed behind `GET /events` (wire v4): each committing
+    /// write on `/op` publishes the position it committed, subscriber
+    /// threads block on the condvar.
     commit_feed: CommitFeed,
     /// The commit-metadata sidecar behind `GET /changes` and `head_time`
     /// (wire v6) — the daemon's testimony about its own write path.
@@ -672,6 +688,14 @@ impl Daemon {
     /// route that cannot be a request/response `Reply` (`GET /events`, an
     /// unbounded response) is returned as its own [`Routed`] variant, and
     /// the accept path owns the socket from there.
+    ///
+    /// A COMMAND, not a query. `POST /op` commits to the journal, records
+    /// the change-feed entry, and announces the commit; `POST /session`
+    /// mints an M10 session and may retire an evicted one. So routing one
+    /// write frame twice COMMITS TWICE unless the frame carries an
+    /// idempotency `id` (wire.md §Correlation and idempotency) — a
+    /// speculative retry after a timeout duplicates the insert or mints a
+    /// second document. The remaining routes are queries.
     pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
@@ -740,6 +764,15 @@ impl Daemon {
     /// the sidecar append is atomic with its own commit — M2's applier
     /// already serializes the commits themselves, so this costs nothing it
     /// wasn't already paying. Reads bypass the lock entirely.
+    ///
+    /// Write-path notification (wire v4) rides the same section: a
+    /// committing write announces THE POSITION IT COMMITTED, still holding
+    /// `write_serial`, so every position a subscriber is told about is one
+    /// `/changes` already carries. Nothing else announces — a read has no
+    /// position of its own, and announcing the current head from a read
+    /// would name a write another thread has committed but not yet
+    /// recorded. `/op` is the daemon's only live write path, so this is
+    /// complete: no head advance goes unannounced.
     fn post_op(&self, token: Option<&str>, body: &[u8]) -> Reply {
         let sid = self.sessions.resolve(token);
         let resp = match self.codec.parse(body) {
@@ -748,19 +781,14 @@ impl Daemon {
                 Some((kind, docs)) => {
                     let _serial = self.write_serial.lock();
                     let resp = self.febe.execute(sid, req);
-                    self.observe_commit(kind, docs, &resp);
+                    if let Some(at) = self.observe_commit(kind, docs, &resp) {
+                        self.commit_feed.publish(at);
+                    }
                     resp
                 }
             },
             Err(e) => self.codec.unparseable(e),
         };
-        // Write-path notification (wire v4): `/op` is the daemon's only
-        // live write path, so publishing the post-execute head here is
-        // complete. Reads publish a no-op; concurrent writes coalesce; the
-        // feed keeps the sequence monotone. Published after the sidecar
-        // append (above), so a subscriber waking on the event already finds
-        // the position in `/changes`.
-        self.commit_feed.publish(self.febe.log_position());
         self.op_reply(&resp)
     }
 
@@ -777,7 +805,19 @@ impl Daemon {
     /// `Response` walks here: a new answer shape carrying a committed
     /// position must decide whether the change feed reports it, and fails
     /// to compile until it does.
-    fn observe_commit(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) {
+    ///
+    /// Returns the position the commit feed announces, which is exactly the
+    /// position whose record this call just made — so an announcement can
+    /// never outrun `/changes`. An idempotency replay re-acks an OLD
+    /// position, which the sidecar declines to re-record and the monotone
+    /// feed ignores, since that position was announced when it was first
+    /// committed.
+    fn observe_commit(
+        &self,
+        kind: OpKind,
+        docs: AffectedDocs,
+        resp: &Response,
+    ) -> Option<Seq> {
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -797,7 +837,7 @@ impl Daemon {
             | Response::Compare { .. }
             | Response::Orphans { .. }
             | Response::Claims { .. }
-            | Response::Rejected(_) => return,
+            | Response::Rejected(_) => return None,
         };
         let docs = match docs {
             AffectedDocs::Named(v) => v,
@@ -806,6 +846,7 @@ impl Daemon {
             }
         };
         self.sidecar.record(at.0, op_name(kind), docs);
+        Some(at)
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
@@ -844,9 +885,10 @@ impl Daemon {
     }
 
     fn get_health(&self) -> Reply {
-        // The newest recorded commit's wall-clock time (wire v6) — null
-        // when unrecorded (fresh world, bare head): transport metadata,
-        // never invented.
+        // The head position's recorded wall-clock time (wire v6) — null
+        // when the head's own record is bare or nothing is recorded at all
+        // (a fresh world): transport metadata, never invented, and never
+        // an older position's time standing in for the head's.
         let head_time =
             self.sidecar.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         Reply::json(
@@ -1112,6 +1154,13 @@ fn reclaimed_reply(floor: Option<u64>) -> Reply {
 /// rest are this daemon's own wire decisions, documented in wire.md
 /// §Reading history. `history_busy` is the one retry-class error: the
 /// position may be perfectly good and the daemon momentarily saturated.
+///
+/// It is also the FIRST refusal: the reconstruction permit is taken before
+/// the journal sees `at`, so under saturation a position beyond the head,
+/// between commits, or long reclaimed is answered `history_busy` — retry
+/// advice for a fault that is permanent. The retry is what learns
+/// otherwise; nothing here can say so sooner without re-deriving a bound
+/// the engine owns.
 fn unavailable_reply(e: Unavailable) -> Reply {
     let journal = match e {
         Unavailable::Busy => {
@@ -1157,9 +1206,10 @@ fn op_is_read(op: &Op) -> bool {
 
 // ── the commit feed (wire v4) ────────────────────────────────────────────
 
-/// One head + shutdown flag under a mutex, one condvar. `/op` publishes
-/// after execute (write-path notification — the only live write path, so
-/// no head advance can be missed); each subscriber blocks in
+/// One head + shutdown flag under a mutex, one condvar. Every committing
+/// write on `/op` publishes the position it committed (write-path
+/// notification — the only live write path, so no head advance can be
+/// missed); each subscriber blocks in
 /// [`CommitFeed::next`] with the keepalive interval as its wait bound.
 /// Shutdown broadcasts on the same condvar, which is what makes closing
 /// open streams immediate rather than a poll away.
@@ -1262,17 +1312,25 @@ impl std::fmt::Debug for Skepd {
 /// subscriber thread and returns to `accept` at once, so open streams never
 /// occupy the op pool.
 ///
+/// PRECONDITION: `workers >= 1`. A count of zero asks for a server that
+/// serves nothing, which is a caller's bug rather than an outcome, so it
+/// stops here loudly instead of being repaired into a one-worker server —
+/// the same posture `CHANGES_LIMIT_MAX` takes on the wire, where an
+/// out-of-range page size is refused and never clamped. `main.rs`
+/// establishes it where the flag is read, which is also what makes its
+/// startup line's worker count honest.
+///
 /// Failure is exactly the socket's: binding the address, or reading back
 /// the port it bound. Naming `io::Error` rather than boxing it is what lets
 /// a caller dispatch on `ErrorKind` — `AddrInUse` to try the next port,
 /// `PermissionDenied` for a privileged one — without a downcast.
 pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
+    assert!(workers >= 1, "serve requires at least one worker thread (workers = 0)");
     let daemon = Arc::new(daemon);
     let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
     let port = listener.local_addr()?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
-    let workers = workers.max(1);
     let handles = (0..workers)
         .map(|_| {
             let daemon = Arc::clone(&daemon);
@@ -1479,6 +1537,12 @@ impl From<&str> for ReadError {
 /// connection, HTTP/1.0 or 1.1, bodies by `Content-Length` (absent =
 /// empty, capped at [`MAX_REQUEST_BODY`]), `Expect: 100-continue`
 /// honored, `Transfer-Encoding` refused.
+///
+/// Each header this daemon READS — `Content-Length`, `Skepd-Session`,
+/// `Expect` — may appear at most once; a repeat is `malformed_http`, the
+/// same never-silent treatment a duplicate query parameter and an unknown
+/// frame field already get. Headers this daemon does not read pass unread
+/// however often they appear.
 fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
@@ -1520,10 +1584,21 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
     if method.is_empty() || !method.bytes().all(|b| b.is_ascii_uppercase()) {
         return Err("malformed method token".into());
     }
-    // The headers this daemon acts on; everything else passes unread.
+    // The headers this daemon acts on; everything else passes unread, as
+    // HTTP requires. Each of the three is read through `once`, so a repeat
+    // is a named refusal rather than a silent last-wins — two conflicting
+    // `Content-Length`s otherwise pick between a stalled read and a
+    // truncated frame by which line came last, and answer the same
+    // malformed head with two different diagnoses.
     let mut content_length: Option<usize> = None;
     let mut session_token: Option<String> = None;
-    let mut expects_continue = false;
+    let mut expects_continue: Option<bool> = None;
+    fn once<T>(slot: &Option<T>, name: &str) -> Result<(), ReadError> {
+        match slot {
+            Some(_) => Err(format!("duplicate header '{name}'").into()),
+            None => Ok(()),
+        }
+    }
     for line in lines {
         if line.is_empty() {
             continue;
@@ -1533,16 +1608,20 @@ fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>, ReadError
             .ok_or_else(|| format!("malformed header line '{line}'"))?;
         let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("Content-Length") {
+            once(&content_length, name)?;
             content_length =
                 Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
         } else if name.eq_ignore_ascii_case("Skepd-Session") {
+            once(&session_token, name)?;
             session_token = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Expect") {
-            expects_continue = value.eq_ignore_ascii_case("100-continue");
+            once(&expects_continue, name)?;
+            expects_continue = Some(value.eq_ignore_ascii_case("100-continue"));
         } else if name.eq_ignore_ascii_case("Transfer-Encoding") {
             return Err("chunked request bodies are unsupported; send Content-Length".into());
         }
     }
+    let expects_continue = expects_continue.unwrap_or(false);
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_string(), Some(q.to_string())),
         None => (target, None),
@@ -1828,6 +1907,15 @@ mod tests {
         );
         let uniq: std::collections::HashSet<&String> = rest.iter().collect();
         assert_eq!(uniq.len(), rest.len(), "and no two bindings collide");
+        // The invariant `Bindings` claims, checked rather than argued: the
+        // queue describes exactly the tokens the map holds. Insertion, not
+        // the draw, is what keeps the two in step.
+        let bindings = daemon.sessions.bindings.lock();
+        assert_eq!(
+            bindings.map.len(),
+            bindings.order.len(),
+            "the mint order names each live token exactly once"
+        );
     }
 
     /// The partition is one table's two faces: reads are exactly the ops
@@ -1879,5 +1967,81 @@ mod tests {
         let c = json.content.as_ref().expect("a JSON reply names its body");
         assert_eq!(c.content_type, "application/json");
         assert_eq!(c.bytes, br#"{"ok":true}"#);
+    }
+
+    /// A server with no workers serves nothing, so asking for one is the
+    /// caller's bug and stops here — never a silent repair into a
+    /// one-worker server, which would teach callers that the stated
+    /// precondition is not the real one.
+    #[test]
+    #[should_panic(expected = "at least one worker")]
+    fn zero_workers_is_a_callers_bug() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let _ = serve(daemon, 0, 0);
+    }
+
+    /// The commit feed announces a position only from the section that
+    /// recorded it: a committing write publishes ITS OWN position, and
+    /// nothing else publishes at all.
+    ///
+    /// The read is the load-bearing half, and the head is deliberately
+    /// pushed ahead of the feed first — through `febe` directly, the one
+    /// path that commits without announcing — because a daemon that
+    /// announced the CURRENT HEAD from any `/op` request would look
+    /// correct on a quiet socket and wrong under concurrency, leaking a
+    /// write another thread had committed but not yet recorded. Here that
+    /// gap is opened deliberately instead of raced for.
+    #[test]
+    fn only_a_committing_write_announces_and_only_its_own_position() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let (token, _) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(0)));
+        let announced = || daemon.commit_feed.state.lock().head;
+        let post = |body: &str| match daemon.route(&HttpRequest {
+            method: "POST".to_string(),
+            path: "/op".to_string(),
+            query: None,
+            session_token: Some(token.clone()),
+            body: body.as_bytes().to_vec(),
+        }) {
+            Routed::Reply(r) => serde_json::from_slice::<Value>(r.body()).expect("json"),
+            Routed::EventStream => panic!("POST /op is not the event stream"),
+        };
+
+        // Commit past the feed without announcing: this is the state a
+        // concurrent write leaves behind between its commit and its record.
+        let frame = br#"{"op":"register_node","addr":"1.9001"}"#;
+        let req = daemon.codec.parse(frame).unwrap_or_else(|_| panic!("test frame parses"));
+        let sid = daemon.sessions.resolve(Some(&token));
+        let ahead = match daemon.febe.execute(sid, req) {
+            Response::AckAddr { at, .. } => at,
+            // `Response` derives no Debug upstream; marshal to say what came back.
+            other => panic!(
+                "register_node acks an address: {}",
+                String::from_utf8_lossy(&daemon.codec.marshal(&other))
+            ),
+        };
+        assert!(ahead.0 > announced().0, "the head is now ahead of the feed");
+
+        let read = post(r#"{"op":"next_account_prefix","parent":"1"}"#);
+        assert_eq!(read["resp"].as_str(), Some("maybe_addr"), "a read was served: {read}");
+        assert!(
+            announced().0 < ahead.0,
+            "a read commits nothing and must announce nothing — announcing the current \
+             head would name a commit whose change-feed entry may not exist yet"
+        );
+
+        let bad = post(r#"{"op":"frobnicate"}"#);
+        assert_eq!(bad["op"].as_str(), Some("unparseable"));
+        assert!(announced().0 < ahead.0, "an unparseable frame announces nothing either");
+
+        let write = post(r#"{"op":"register_node","addr":"1.9002"}"#);
+        let at = write["at"].as_u64().expect("register_node commits: {write}");
+        assert_eq!(
+            announced().0,
+            at,
+            "a committing write announces the position it committed, not the head"
+        );
     }
 }

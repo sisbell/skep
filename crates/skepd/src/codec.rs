@@ -151,10 +151,27 @@ impl Codec for JsonCodec {
 impl JsonCodec {
     /// The canonical request encoding — the inverse seam `Codec` itself does
     /// not name (M10 fixes parse only). Clients and the round-trip tests use
-    /// it: `parse(marshal_request(r))` reproduces `r`, and re-marshaling the
-    /// parse is byte-identical. Wire invariant: a `ReqId` is the UTF-8 bytes
-    /// of the frame's `id` string (parse can produce nothing else); an
-    /// off-wire non-UTF-8 id is rendered lossily rather than panicking.
+    /// it.
+    ///
+    /// PRECONDITION: `req` is within the wire caps this codec enforces on
+    /// parse — [`MAX_WIRE_LIST`] elements per array, [`MAX_INSERT_VALUES`]
+    /// minted values per `insert`, [`MAX_NAT_DIGITS`] per tumbler
+    /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler. Under it,
+    /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the
+    /// parse is byte-identical.
+    ///
+    /// Outside it, marshaling SUCCEEDS and yields a frame `parse` refuses:
+    /// the caps are the parse side's trust-boundary obligation and this
+    /// direction does not re-check them (one check, one owner). The upstream
+    /// value types admit over-cap requests — `Endset::from_spans` takes any
+    /// span count and T0(a) leaves a component's magnitude unbounded by
+    /// design — so a caller assembling a `Request` by hand owes the caps.
+    /// A `Request` this codec produced is inside them by construction, which
+    /// is what makes the round-trip oracle sound.
+    ///
+    /// Wire invariant: a `ReqId` is the UTF-8 bytes of the frame's `id`
+    /// string (parse can produce nothing else); an off-wire non-UTF-8 id is
+    /// rendered lossily rather than panicking.
     pub fn marshal_request(&self, req: &Request) -> Vec<u8> {
         let (name, mut pairs) = req_pairs(&req.op);
         if let Some(ReqId(bytes)) = &req.id {

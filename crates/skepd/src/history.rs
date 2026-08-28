@@ -39,9 +39,17 @@ pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 pub(crate) enum Unavailable {
     /// Every reconstruction permit is in use; the position may be perfectly
     /// good. Retryable, and the only variant that is.
+    ///
+    /// PRECEDENCE: the permit is taken before the journal is consulted, so
+    /// this precedes every [`HistoryError`] — including M2's own published
+    /// refusal order. A `Busy` answer therefore says NOTHING about whether
+    /// `at` is a good position: a request naming one long past the head is
+    /// told to retry, and only a retry that finds a free permit learns
+    /// otherwise.
     Busy,
     /// The bounded replay refused: beyond the head, not a boundary,
-    /// reclaimed, or the journal is unreadable.
+    /// reclaimed, or the journal is unreadable. M2 fixes the order among
+    /// these; [`Unavailable::Busy`] sits ahead of all of them.
     Journal(HistoryError),
 }
 
@@ -58,7 +66,8 @@ impl History {
 
     /// The world as of `at`, under one reconstruction permit — held across
     /// the engine call and released before the caller reads the world it
-    /// gets back.
+    /// gets back. `at` is not examined until a permit is in hand, so
+    /// [`Unavailable::Busy`] precedes every journal verdict about it.
     pub fn world_at(&self, engine: &Engine, at: Seq) -> Result<World, Unavailable> {
         let Some(_permit) = self.permits.try_acquire() else {
             return Err(Unavailable::Busy);
@@ -68,7 +77,9 @@ impl History {
 
     /// One already-classified READ frame answered as of `at`: reconstruct
     /// the world, run the frame against a throwaway M10 over it, and stamp
-    /// the position the answer is OF.
+    /// the position the answer is OF. The world comes from
+    /// [`History::world_at`] here and nowhere else, which is what
+    /// discharges [`execute_read_on`]'s precondition on it.
     pub fn read_at(
         &self,
         engine: &Engine,
@@ -135,6 +146,15 @@ impl Drop for ReconstructPermit<'_> {
 /// the daemon only assembles. The session is minted and retired up front
 /// (the guest pattern): reads are principal-free, and even a misclassified
 /// write would meet M10's own `Unauthenticated` wall rather than a store.
+///
+/// PRECONDITION: `world` is one `Engine::world_at` produced. That is what
+/// discharges `Durability::InMemory`'s genesis obligation — this mode does
+/// not LOAD, so `WorldState::rebuild_derived` never runs on the root, and
+/// the world arrives with whatever derived hints it already carries. The
+/// bounded replay has seeded its base through `rebuild_derived` and
+/// maintained the hints across the fold, so the premise holds. A world
+/// assembled any other way would be read through stale hints, and nothing
+/// about the answer would look wrong.
 fn execute_read_on(world: World, req: Request) -> Response {
     let cfg = KernelConfig {
         durability: Durability::InMemory,

@@ -250,6 +250,20 @@ impl Sidecar {
     /// acks: a position at or below the open-time head, or one already
     /// recorded this uptime, is an ack for an OLD commit (idempotency-cache
     /// hit, `emit` incumbent) — re-recording it would invent a time.
+    ///
+    /// CALLER CONTRACT — call only while holding the daemon's
+    /// write-serialization lock, between a commit and its ack. That is what
+    /// makes this file's two invariants true: file order is position order,
+    /// and recorded times are monotone non-decreasing in position. The lock
+    /// inside guards `Inner` and nothing more, so calls arriving out of
+    /// position order would append out of order and stamp a later position
+    /// with an earlier time — both silent, both permanent, and both
+    /// load-bearing for [`Sidecar::changes`] and [`Sidecar::head_time`].
+    /// Nothing here can check it.
+    ///
+    /// The clamp against `last_time` below covers the other half of the
+    /// monotonicity — a wall clock that steps backwards — and that one IS
+    /// this file's own obligation rather than the caller's.
     pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>) {
         let mut inner = self.inner.lock();
         if at <= inner.open_head || inner.entries.contains_key(&at) {
@@ -293,8 +307,14 @@ impl Sidecar {
         ChangesAnswer::Page { entries, last, more }
     }
 
-    /// The newest recorded commit's wall-clock time — `null` when the head
-    /// position's record is bare or nothing is recorded (never invented).
+    /// The HEAD POSITION's recorded wall-clock time — `None` when the head's
+    /// record is bare (lost, or written before the feature) or nothing is
+    /// recorded at all.
+    ///
+    /// Deliberately not "the newest recorded time anywhere in the feed":
+    /// this answers FOR THE HEAD, so an older surviving record is not
+    /// offered in its place, any more than a bare position's fields are
+    /// invented.
     pub fn head_time(&self) -> Option<u64> {
         self.inner.lock().entries.values().next_back().and_then(Meta::time)
     }

@@ -159,6 +159,21 @@ fn requests_outside_the_http_subset_are_refused_malformed_http() {
             b"POST /op HTTP/1.1\r\nContent-Length: ten\r\n\r\n".to_vec(),
         ),
         ("a body cut short of its declared length", cut_short.into_bytes()),
+        // A header this daemon READS, twice. Silently taking the last would
+        // pick between a stalled read and a truncated frame by which line
+        // came last, and answer one malformed head with two diagnoses.
+        (
+            "two Content-Length headers",
+            b"POST /op HTTP/1.1\r\nContent-Length: 4\r\nContent-Length: 9\r\n\r\n".to_vec(),
+        ),
+        (
+            "two Skepd-Session headers",
+            b"POST /op HTTP/1.1\r\nSkepd-Session: a\r\nskepd-session: b\r\n\r\n".to_vec(),
+        ),
+        (
+            "two Expect headers",
+            b"POST /op HTTP/1.1\r\nExpect: 100-continue\r\nExpect: nonsense\r\n\r\n".to_vec(),
+        ),
     ];
     for (what, raw) in cases {
         let (status, headers, body) = raw_exchange(port, &raw);

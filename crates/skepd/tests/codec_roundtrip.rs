@@ -13,7 +13,7 @@ use skep_febe::{
     Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
-use skep_links::{Endset, Invalid, Link, View};
+use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{
     CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Region, Spec, SpecFault,
@@ -840,4 +840,57 @@ fn every_malformed_frame_fails_parse_with_a_detail() {
         };
         assert!(err.detail.is_some(), "parse failure must carry a detail");
     }
+}
+
+/// `marshal_request`'s stated precondition, at the boundary: a `Request`
+/// past the wire caps marshals fine and produces a frame `parse` refuses.
+///
+/// The caps are the parse side's trust-boundary obligation and this
+/// direction does not re-check them — one check, one owner — so the
+/// round-trip promise is conditional, and this is where that condition is
+/// a fact rather than a sentence. `MAX_SLOT_SPANS` is M7's published
+/// per-slot budget, which the codec adopts verbatim as its list cap.
+#[test]
+fn an_over_cap_request_marshals_to_a_frame_parse_refuses() {
+    let codec = JsonCodec;
+    let spans = |n: usize| Endset::from_spans((0..n).map(|_| ispan()));
+
+    // At the cap the promise holds in full.
+    let at_cap = rq(
+        None,
+        Op::FindLinksFtt {
+            q: FourSet {
+                home: SlotSpec::Any,
+                from: SlotSpec::Spans(spans(MAX_SLOT_SPANS)),
+                to: SlotSpec::Any,
+                ty: SlotSpec::Any,
+            },
+        },
+    );
+    let bytes = codec.marshal_request(&at_cap);
+    assert_eq!(
+        codec.marshal_request(&parse_ok(&codec, &bytes)),
+        bytes,
+        "a request at the cap round-trips"
+    );
+
+    // One past it, the marshal still succeeds — and the parse refuses it.
+    let over = rq(
+        None,
+        Op::FindLinksFtt {
+            q: FourSet {
+                home: SlotSpec::Any,
+                from: SlotSpec::Spans(spans(MAX_SLOT_SPANS + 1)),
+                to: SlotSpec::Any,
+                ty: SlotSpec::Any,
+            },
+        },
+    );
+    let bytes = codec.marshal_request(&over);
+    let err = match codec.parse(&bytes) {
+        Err(e) => e,
+        Ok(_) => panic!("an over-cap frame must not parse"),
+    };
+    let detail = err.detail.expect("a parse failure names what failed");
+    assert!(detail.contains("wire cap"), "the refusal names the cap: {detail}");
 }

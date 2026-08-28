@@ -44,7 +44,7 @@ const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
 /// The delegating methods below are one-line calls into the sidecar or the
 /// stream, deliberately: what this card buys over holding the two side by
 /// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and
-/// `CommitStream::publish` are reachable only from [`WritePath::commit`],
+/// `CommitStream::announce` are reachable only from [`WritePath::commit`],
 /// which is what makes the ordering above a property of this type rather
 /// than a rule each handler remembers — `Sidecar::record`'s caller contract
 /// is discharged by there being nowhere else to fail it. Reaching the two
@@ -87,25 +87,19 @@ impl WritePath {
     /// request types: what belongs here is the ordering, not the dispatch.
     /// It runs exactly once, inside the lock.
     ///
-    /// PRECONDITION: `kind` and `docs` are [`write_meta`]'s answer for the
-    /// `Op` that `execute` runs. Nothing here can check it — the closure is
-    /// opaque by design, which is what keeps this card free of M10 — and a
-    /// mismatch is not a fault but a silent lie: the change feed reports
-    /// that position under the wrong op kind, or names a document the write
-    /// did not touch, permanently, since nothing re-derives an entry the
-    /// sidecar already holds. `Daemon::post_op` establishes it by deriving
-    /// both from one [`write_meta`] call on the frame it is about to
-    /// execute, and is the only caller.
-    pub fn commit(
-        &self,
-        kind: OpKind,
-        docs: AffectedDocs,
-        execute: impl FnOnce() -> Response,
-    ) -> Response {
+    /// PRECONDITION: `meta` is [`write_meta`]'s answer for the `Op` that
+    /// `execute` runs. Nothing here can check it — the closure is opaque by
+    /// design, which is what keeps this card free of M10 — and a mismatch is
+    /// not a fault but a silent lie: the change feed reports that position
+    /// under the wrong op kind, or names a document the write did not touch,
+    /// permanently, since nothing re-derives an entry the sidecar already
+    /// holds. `Daemon::post_op` establishes it by deriving `meta` from the
+    /// frame it is about to execute, and is the only caller.
+    pub fn commit(&self, meta: WriteMeta, execute: impl FnOnce() -> Response) -> Response {
         let _serial = self.serial.lock();
         let resp = execute();
-        if let Some(at) = self.record(kind, docs, &resp) {
-            self.commit_stream.publish(at);
+        if let Some(at) = self.record(meta, &resp) {
+            self.commit_stream.announce(at);
         }
         resp
     }
@@ -167,7 +161,8 @@ impl WritePath {
     /// re-acks an OLD position, which the sidecar declines to re-record and
     /// the monotone commit stream ignores, since that position was
     /// announced when it was first committed.
-    fn record(&self, kind: OpKind, docs: AffectedDocs, resp: &Response) -> Option<Seq> {
+    fn record(&self, meta: WriteMeta, resp: &Response) -> Option<Seq> {
+        let WriteMeta { kind, docs } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -212,10 +207,24 @@ impl WritePath {
 
 // ── the read/write partition, and what a write records ───────────────────
 
-/// A write's affected document(s) for the sidecar (ruling §0): the write's
-/// target doc; a link write names its home (`edit_link` both homes); the
-/// MINTED document for create/fork/version (known only from the ack);
-/// delegate/register_node touch no document.
+/// What the change feed will say about one write, as far as the frame can
+/// tell: the op kind and the affected documents. The frame-derived stage of
+/// a `commits.log` entry — [`crate::sidecar::Meta`] is the next one,
+/// completed at record time with the committed position and the wall-clock
+/// time. Produced by [`write_meta`] and by nothing else, which is what lets
+/// [`WritePath::commit`] state its precondition about one value rather than
+/// about the correspondence between three arguments.
+#[derive(Debug)]
+pub(crate) struct WriteMeta {
+    pub kind: OpKind,
+    pub docs: AffectedDocs,
+}
+
+/// A write's affected document(s) for the sidecar (wire.md §The change
+/// feed): the write's target doc; a link write names its home (`edit_link`
+/// both its homes, the successor's `d_s` first); the MINTED document for
+/// create/fork/version (known only from the ack); delegate/register_node
+/// touch no document.
 #[derive(Debug)]
 pub(crate) enum AffectedDocs {
     /// The documents the frame itself names, already in the sidecar's
@@ -230,34 +239,38 @@ pub(crate) enum AffectedDocs {
     Minted,
 }
 
-/// The sidecar metadata of a write `Op` — `None` for reads, which is also
+/// The [`WriteMeta`] of a write `Op` — `None` for reads, which is also
 /// THE read/write partition: [`op_is_read`] is defined as this answer's
 /// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
 /// decided, and that one decision classifies it for the history surface
 /// too.
-pub(crate) fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
+pub(crate) fn write_meta(op: &Op) -> Option<WriteMeta> {
+    let meta = |kind, docs| Some(WriteMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
     match op {
-        Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, AffectedDocs::Minted)),
-        Op::Delegate { .. } => Some((OpKind::Delegate, AffectedDocs::Named(Vec::new()))),
-        Op::RegisterNode { .. } => Some((OpKind::RegisterNode, AffectedDocs::Named(Vec::new()))),
-        Op::Fork => Some((OpKind::Fork, AffectedDocs::Minted)),
-        Op::Insert { doc, .. } => Some((OpKind::Insert, one(doc))),
-        Op::Delete { doc, .. } => Some((OpKind::Delete, one(doc))),
-        Op::Copy { doc, .. } => Some((OpKind::Copy, one(doc))),
-        Op::Rearrange { doc, .. } => Some((OpKind::Rearrange, one(doc))),
-        Op::Version { .. } => Some((OpKind::Version, AffectedDocs::Minted)),
-        Op::MakeLink { home, .. } => Some((OpKind::MakeLink, one(home))),
-        Op::Emit { home, .. } => Some((OpKind::Emit, one(home))),
-        Op::Nullify { home, .. } => Some((OpKind::Nullify, one(home))),
-        Op::AssertSup { home, .. } => Some((OpKind::AssertSup, one(home))),
+        Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
+        Op::Delegate { .. } => meta(OpKind::Delegate, AffectedDocs::Named(Vec::new())),
+        Op::RegisterNode { .. } => meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new())),
+        Op::Fork => meta(OpKind::Fork, AffectedDocs::Minted),
+        Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc)),
+        Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc)),
+        Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc)),
+        Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc)),
+        Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted),
+        Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home)),
+        Op::Emit { home, .. } => meta(OpKind::Emit, one(home)),
+        Op::Nullify { home, .. } => meta(OpKind::Nullify, one(home)),
+        Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home)),
         Op::EditLink { d_s, d_a, .. } => {
+            // The successor's home leads (wire.md: "both its homes,
+            // successor's first"), and the claim's home is appended only
+            // when it differs — one home named twice is one document.
             let mut docs = vec![d_s.tumbler().to_string()];
             if d_a != d_s {
                 docs.push(d_a.tumbler().to_string());
             }
-            Some((OpKind::EditLink, AffectedDocs::Named(docs)))
+            meta(OpKind::EditLink, AffectedDocs::Named(docs))
         }
         Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
@@ -298,7 +311,7 @@ pub(crate) fn op_is_read(op: &Op) -> bool {
 // ── the commit stream (wire v4) ──────────────────────────────────────────
 
 /// One head + shutdown flag under a mutex, one condvar. Every committing
-/// write publishes the position it committed (write-path notification —
+/// write announces the position it committed (write-path notification —
 /// `/op` is the only live write path, so no head advance can be missed);
 /// each subscriber blocks in [`CommitStream::next`] with the keepalive
 /// interval as its wait bound. Shutdown broadcasts on the same condvar,
@@ -333,7 +346,7 @@ impl CommitStream {
         }
     }
 
-    fn publish(&self, seq: Seq) {
+    fn announce(&self, seq: Seq) {
         let mut state = self.state.lock();
         if seq.0 > state.head.0 {
             state.head = seq;
@@ -397,8 +410,8 @@ mod tests {
         let stream = CommitStream::at(Seq(4));
         let step = stream.next(Seq(3));
         assert!(matches!(step, StreamStep::Commit(Seq(4))), "the head on connect: {step:?}");
-        stream.publish(Seq(9));
-        stream.publish(Seq(7)); // an idempotency replay's older position
+        stream.announce(Seq(9));
+        stream.announce(Seq(7)); // an idempotency replay's older position
         let step = stream.next(Seq(4));
         assert!(
             matches!(step, StreamStep::Commit(Seq(9))),

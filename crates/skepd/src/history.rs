@@ -57,9 +57,10 @@ pub(crate) enum Unavailable {
     /// told to retry, and only a retry that finds a free permit learns
     /// otherwise.
     Busy,
-    /// The bounded replay refused: beyond the head, not a boundary,
-    /// reclaimed, or the journal is unreadable. M2 fixes the order among
-    /// these; [`Unavailable::Busy`] sits ahead of all of them.
+    /// The bounded replay refused: beyond the head, not a position (M2's
+    /// `NotABoundary` — a number inside a multi-record commit), reclaimed,
+    /// or the journal is unreadable. M2 fixes the order among these;
+    /// [`Unavailable::Busy`] sits ahead of all of them.
     Journal(HistoryError),
 }
 

@@ -46,16 +46,17 @@
 //! survive a network.
 //!
 //! **Cross-origin posture (wire v4)**: every response carries
-//! `Access-Control-Allow-Origin: *`, added at the one place responses are
-//! written so no reply can miss it, and `OPTIONS` on any known path answers
-//! a 204 preflight naming the allowed methods and headers. The `*` is a
-//! scope decision, not an accident — but the session token is not what
-//! bounds it: `POST /session` is itself unauthenticated and cross-origin
-//! reachable, so a page that wants a token mints one, naming any principal
-//! it likes. What `*` grants any page the browser loads is exactly what
-//! this daemon already grants any local process: the whole surface, reads
-//! and writes alike. That equivalence is the decision. Revisited when
-//! authentication lands.
+//! `Access-Control-Allow-Origin: *`, written from one constant
+//! ([`UNIVERSAL_HEADERS`]) by both response writers — the reply path and
+//! the event stream — so nothing this daemon answers can miss it, and
+//! `OPTIONS` on any known path answers a 204 preflight naming the allowed
+//! methods and headers. The `*` is a scope decision, not an accident — but
+//! the session token is not what bounds it: `POST /session` is itself
+//! unauthenticated and cross-origin reachable, so a page that wants a token
+//! mints one, naming any principal it likes. What `*` grants any page the
+//! browser loads is exactly what this daemon already grants any local
+//! process: the whole surface, reads and writes alike. That equivalence is
+//! the decision. Revisited when authentication lands.
 //!
 //! **Writes go through one card** (`write_path.rs`): `POST /op` — the
 //! daemon's only live write path — hands each write to `WritePath::commit`,
@@ -304,23 +305,22 @@ pub struct Body {
 /// is what keeps the writer from inferring it from the status, where a 204
 /// built with bytes would drop them in silence.
 ///
-/// A HANDLER'S ANSWER, not a complete HTTP response. The four universal
-/// headers are written by [`write_reply`] at the one place every response is
-/// written, so they appear in no `Reply` value: `Content-Type` and
-/// `Content-Length` come from the `body` field below, and the other two are
-/// [`UNIVERSAL_HEADERS`]. wire.md §Transport and §Cross-origin access
-/// promise those two on EVERY response, so a caller serving these over a
-/// transport of its own owes both — and takes them from that constant
-/// rather than transcribing them, so the day the cross-origin posture is
-/// revisited it moves for them too.
+/// A HANDLER'S ANSWER, not a complete HTTP response. Four headers come from
+/// [`write_reply`] rather than from any `Reply` value: `Content-Type` and
+/// `Content-Length`, which it derives from the `body` field below and omits
+/// entirely when there is none, and [`UNIVERSAL_HEADERS`]' two, which
+/// wire.md §Transport and §Cross-origin access promise on EVERY response.
+/// A caller serving these over a transport of its own owes the last two —
+/// and takes them from that constant rather than transcribing them, so the
+/// day the cross-origin posture is revisited it moves for them too.
 #[non_exhaustive]
 pub struct Reply {
     pub status: u16,
     pub body: Option<Body>,
-    /// Extra response headers beyond the universal set (`Content-Type`,
-    /// `Content-Length`, and [`UNIVERSAL_HEADERS`]' two) — the preflight
-    /// trio rides here. That set is [`write_reply`]'s to supply, not this
-    /// list's.
+    /// Extra response headers beyond what [`write_reply`] supplies —
+    /// `Content-Type` and `Content-Length` from the body, and
+    /// [`UNIVERSAL_HEADERS`]' two always. The preflight trio rides here;
+    /// that set is `write_reply`'s to supply, not this list's.
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
@@ -361,8 +361,9 @@ impl Reply {
     }
 
     /// The CORS preflight answer (wire v4): 204, no body, the fixed method
-    /// and header lists. `Access-Control-Allow-Origin: *` is universal and
-    /// added where every response is written, so it is not repeated here.
+    /// and header lists. `Access-Control-Allow-Origin: *` is in
+    /// [`UNIVERSAL_HEADERS`], which both response writers emit, so it is not
+    /// repeated here.
     ///
     /// The method list must name every method [`Daemon::reply`] dispatches,
     /// for the same reason [`SESSION_HEADER`] is a constant: a method the
@@ -821,8 +822,8 @@ impl Daemon {
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
-    /// the way out is the four universal headers, which [`write_reply`]
-    /// supplies and two of which wire.md promises on every response.
+    /// the way out is the headers [`write_reply`] supplies, two of which
+    /// wire.md promises on every response.
     pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
@@ -899,9 +900,7 @@ impl Daemon {
         let resp = match self.codec.parse(body) {
             Ok(req) => match write_meta(&req.op) {
                 None => self.febe.execute(sid, req),
-                Some((kind, docs)) => {
-                    self.writes.commit(kind, docs, || self.febe.execute(sid, req))
-                }
+                Some(meta) => self.writes.commit(meta, || self.febe.execute(sid, req)),
             },
             Err(e) => self.codec.unparseable(e),
         };
@@ -2248,8 +2247,8 @@ mod tests {
     }
 
     /// The commit stream announces a position only from the section that
-    /// recorded it: a committing write publishes ITS OWN position, and
-    /// nothing else publishes at all.
+    /// recorded it: a committing write announces ITS OWN position, and
+    /// nothing else announces at all.
     ///
     /// The read is the load-bearing half, and the head is deliberately
     /// pushed ahead of the stream first — through `febe` directly, the one

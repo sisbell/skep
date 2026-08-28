@@ -52,39 +52,42 @@
 //! and writes alike. That equivalence is the decision. Revisited when
 //! authentication lands.
 //!
+//! **Writes go through one card** (`write_path.rs`): `POST /op` — the
+//! daemon's only live write path — hands each write to `WritePath::commit`,
+//! which commits it, records its change-feed entry, and announces its
+//! position, in that order and under one lock. What this file adds is the
+//! frame's parse and its classification; the ordering the two feeds below
+//! rest on is not a thing a handler here can take apart. Reads execute
+//! directly and take no lock.
+//!
 //! **The commit stream (wire v4)**: `GET /events` is a `text/event-stream`
 //! of committed log positions — one event carrying the current head on
 //! connect, then an event whenever the head advances (coalescing under
 //! load: a subscriber sees a strictly increasing sequence converging on the
-//! true head). The mechanism is write-path notification: on `/op` — the
-//! daemon's only live write path — each committing write publishes the
-//! position IT committed into the condvar-backed `CommitFeed`, still
-//! holding the write-serialization lock that recorded it, so an announced
-//! position is always one `/changes` already carries; each subscriber
-//! thread blocks on the condvar, so no polling anywhere and a commit
-//! reaches subscribers at thread-wake speed. Subscribers are dedicated
-//! spawned threads, never workers: the accepting worker hands the socket
-//! off and returns to `accept`, so open streams cannot starve `/op`. A
-//! `:ka` keepalive comment flows after each silent interval so both sides
-//! can detect a dead peer; shutdown
-//! broadcasts on the same condvar and joins every subscriber, so open
-//! streams end in bounded time with a clean close the client sees.
+//! true head). Each subscriber thread blocks on the write path's condvar,
+//! so there is no polling anywhere and a commit reaches subscribers at
+//! thread-wake speed. Subscribers are dedicated spawned threads, never
+//! workers: the accepting worker hands the socket off and returns to
+//! `accept`, so open streams cannot starve `/op`. A `:ka` keepalive comment
+//! flows after each silent interval so both sides can detect a dead peer;
+//! shutdown broadcasts on the same condvar and joins every subscriber, so
+//! open streams end in bounded time with a clean close the client sees.
 //!
 //! **The change feed (wire v6)**: `GET /changes?since=N` answers the
 //! committed positions in `(N, head]`, oldest first, each with its op kind,
 //! affected document(s), and commit wall-clock time — so clients refresh
 //! what they display instead of re-walking the world on every SSE tick.
 //! The source is the commit-metadata sidecar (`commits.log`, see
-//! `sidecar.rs`): the daemon observing its own write path — `/op` is the
-//! only live write path — under the write-serialization lock, so sidecar
-//! order is commit order. Writes only; reads never appear. Timestamps are
-//! transport metadata, never substrate state: two daemons replaying one
-//! journal still converge on byte-identical worlds, and a position whose
-//! record was lost (or predates the feature) answers `null` fields —
-//! reconstructed as a bare position, never an invented value. `/health`
-//! additionally reports `head_time`, the HEAD position's own recorded
-//! commit time — `null` when that position's record is bare, rather than
-//! an older position's time standing in for it.
+//! `sidecar.rs`): the daemon's own testimony, appended in position order
+//! because the write path holds its lock across the commit that produced
+//! it. Writes only; reads never appear. Timestamps are transport metadata,
+//! never substrate state: two daemons replaying one journal still converge
+//! on byte-identical worlds, and a position whose record was lost (or
+//! predates the feature) answers `null` fields — reconstructed as a bare
+//! position, never an invented value. `/health` additionally reports
+//! `head_time`, the HEAD position's own recorded commit time — `null` when
+//! that position's record is bare, rather than an older position's time
+//! standing in for it.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
@@ -103,19 +106,19 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 use serde_json::Value;
-use skep_address::Address;
 use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
-use skep_febe::{Codec, Op, OpKind, Operation, Response, SessionId};
+use skep_febe::{Codec, Operation, Response, SessionId};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
 
-use crate::codec::{check_keys, obj, op_name, JsonCodec};
+use crate::codec::{check_keys, obj, to_bytes, JsonCodec};
 use crate::history::{History, ReconstructPermit, Unavailable};
-use crate::sidecar::{ChangesAnswer, Sidecar};
+use crate::sidecar::ChangesAnswer;
+use crate::write_path::{op_is_read, write_meta, FeedStep, WritePath};
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon). Together with
@@ -129,28 +132,6 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 /// factor of the sidecar's reconstruction ceiling — see
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
-
-/// SSE keepalive cadence: a `:ka` comment after each interval of silence,
-/// so proxies and clients can detect liveness — and the daemon detects a
-/// dead subscriber by the failed write within one interval.
-const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
-
-/// Live `GET /events` streams served at once. Each costs one OS thread and
-/// holds one descriptor for as long as its client keeps reading, so without
-/// a bound a caller opening streams consumes both until one runs out — and
-/// the two run out differently. At the descriptor wall `accept` degrades
-/// gracefully (the worker loop pauses and retries); a refused thread does
-/// not degrade at all, which is why the spawn below is fallible and why
-/// this cap exists above it.
-///
-/// The number reserves the rest of the process's descriptors for the work
-/// the daemon exists to do: against the 256 soft limit still common on the
-/// platforms this ships to, 64 streams leave the listener and the op pool
-/// three quarters of the table. It is an order of magnitude above what a
-/// browser will hold against one origin (~6 connections) and above any
-/// plausible fleet of local subscribers, so a client reaches it only by
-/// trying to.
-const MAX_SUBSCRIBERS: usize = 64;
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -292,8 +273,7 @@ impl Reply {
     /// their own code. A refusal names a [`TransportError`] instead and
     /// takes its status from there.
     fn json(status: u16, v: Value) -> Reply {
-        let bytes = serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail");
-        Reply::bodied(status, "application/json", bytes)
+        Reply::bodied(status, "application/json", to_bytes(v))
     }
 
     /// The CORS preflight answer (wire v4): 204, no body, the fixed method
@@ -598,22 +578,11 @@ pub struct Daemon {
     codec: JsonCodec,
     /// The token ↔ session binding and the guest policy over it.
     sessions: Sessions,
-    /// The commit feed behind `GET /events` (wire v4): each committing
-    /// write on `/op` publishes the position it committed, subscriber
-    /// threads block on the condvar.
-    commit_feed: CommitFeed,
-    /// The commit-metadata sidecar behind `GET /changes` and `head_time`
-    /// (wire v6) — the daemon's testimony about its own write path.
-    sidecar: Sidecar,
-    /// Serializes the daemon's write path (M2's applier serializes commits
-    /// anyway; this only moves the serialization point up) so the sidecar
-    /// append rides atomically behind its own commit: file order is
-    /// position order and recorded times are monotone. A process crash can
-    /// lose at most the one in-flight record (the append is flushed before
-    /// the lock releases); an OS crash can lose more of the un-fsynced
-    /// tail — either way the reopen walk re-covers the gap as bare
-    /// entries. Reads never take this lock.
-    write_serial: Mutex<()>,
+    /// The write path: the serialization point, the commit-metadata sidecar
+    /// behind `GET /changes` and `head_time` (wire v6), and the commit feed
+    /// behind `GET /events` (wire v4). One field because the three are one
+    /// ordering — commit, record, announce — that no handler may take apart.
+    writes: WritePath,
     /// The history surface behind `/op-at` and `/dump?at`, holding its own
     /// reconstruction budget: neither route needs a session and replay is
     /// per-call uncached, so without that budget any local caller could pin
@@ -651,21 +620,18 @@ impl Daemon {
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
         };
         let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
-        let sidecar = Sidecar::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
+        let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         let febe = Operation::new(Box::new(engine.stores()));
         // Mint-and-retire the guest binding; the principal value never
         // reaches a store (the binding is dropped before any request runs).
         let guest = febe.open_session(PrincipalId(u64::MAX));
         febe.close_session(guest);
-        let commit_feed = CommitFeed::at(febe.log_position());
         Ok(Daemon {
             engine,
             febe,
             codec: JsonCodec,
             sessions: Sessions::new(guest),
-            commit_feed,
-            sidecar,
-            write_serial: Mutex::new(()),
+            writes,
             history: History::new(),
         })
     }
@@ -699,16 +665,17 @@ impl Daemon {
     pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
-            // CORS preflight (wire v4): 204 on any known path; an unknown
-            // path falls through to the ordinary 404.
-            ("OPTIONS", p) if path_is_known(p) => Routed::Reply(Reply::preflight()),
             _ => Routed::Reply(self.reply(req)),
         }
     }
 
-    /// The request/response routes.
+    /// The request/response routes — every method/path pair but the event
+    /// stream, decided in one match.
     fn reply(&self, req: &HttpRequest) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
+            // CORS preflight (wire v4): 204 on any known path; an unknown
+            // path falls through to the ordinary 404 below.
+            ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
             ("POST", "/session") => self.post_session(&req.body),
             ("POST", "/op") => self.post_op(req.session_token.as_deref(), &req.body),
             ("POST", "/op-at") => self.post_op_at(&req.body),
@@ -760,18 +727,11 @@ impl Daemon {
     /// exactly one response: parsed → `execute`'s answer; unparseable → the
     /// `Unparseable` rejection, marshaled the same way.
     ///
-    /// Writes additionally serialize through `write_serial` (wire v6) so
-    /// the sidecar append is atomic with its own commit — M2's applier
-    /// already serializes the commits themselves, so this costs nothing it
-    /// wasn't already paying. Reads bypass the lock entirely.
-    ///
-    /// Write-path notification (wire v4) rides the same section: a
-    /// committing write announces THE POSITION IT COMMITTED, still holding
-    /// `write_serial`, so every position a subscriber is told about is one
-    /// `/changes` already carries. Nothing else announces — a read has no
-    /// position of its own, and announcing the current head from a read
-    /// would name a write another thread has committed but not yet
-    /// recorded. `/op` is the daemon's only live write path, so this is
+    /// A write additionally goes through [`WritePath::commit`], which owns
+    /// the ordering the change feed and the commit stream both rest on:
+    /// commit, record, announce, under one lock. Reads execute directly and
+    /// take no lock — a read has no position of its own to record or
+    /// announce. `/op` is the daemon's only live write path, so this is
     /// complete: no head advance goes unannounced.
     fn post_op(&self, token: Option<&str>, body: &[u8]) -> Reply {
         let sid = self.sessions.resolve(token);
@@ -779,12 +739,7 @@ impl Daemon {
             Ok(req) => match write_meta(&req.op) {
                 None => self.febe.execute(sid, req),
                 Some((kind, docs)) => {
-                    let _serial = self.write_serial.lock();
-                    let resp = self.febe.execute(sid, req);
-                    if let Some(at) = self.observe_commit(kind, docs, &resp) {
-                        self.commit_feed.publish(at);
-                    }
-                    resp
+                    self.writes.commit(kind, docs, || self.febe.execute(sid, req))
                 }
             },
             Err(e) => self.codec.unparseable(e),
@@ -797,56 +752,6 @@ impl Daemon {
     /// operation protocol.
     fn op_reply(&self, resp: &Response) -> Reply {
         Reply::bodied(200, "application/json", self.codec.marshal(resp))
-    }
-
-    /// Feed the sidecar from a write's answer: an ack carries the committed
-    /// position; a rejection committed nothing and records nothing. Runs
-    /// under `write_serial`. EXHAUSTIVE with no `_` arm, like the other
-    /// `Response` walks here: a new answer shape carrying a committed
-    /// position must decide whether the change feed reports it, and fails
-    /// to compile until it does.
-    ///
-    /// Returns the position the commit feed announces, which is exactly the
-    /// position whose record this call just made — so an announcement can
-    /// never outrun `/changes`. An idempotency replay re-acks an OLD
-    /// position, which the sidecar declines to re-record and the monotone
-    /// feed ignores, since that position was announced when it was first
-    /// committed.
-    fn observe_commit(
-        &self,
-        kind: OpKind,
-        docs: AffectedDocs,
-        resp: &Response,
-    ) -> Option<Seq> {
-        let (at, minted) = match resp {
-            Response::Ack { at } => (*at, None),
-            Response::AckAddr { addr, at } => (*at, Some(addr)),
-            Response::AckEdit { at, .. } => (*at, None),
-            Response::Delivery { .. }
-            | Response::SpanSet { .. }
-            | Response::Addrs { .. }
-            | Response::MaybeAddr { .. }
-            | Response::Count { .. }
-            | Response::Page { .. }
-            | Response::Endsets { .. }
-            | Response::Runs { .. }
-            | Response::Bool { .. }
-            | Response::LinkValue { .. }
-            | Response::Follow { .. }
-            | Response::Deletions { .. }
-            | Response::Compare { .. }
-            | Response::Orphans { .. }
-            | Response::Claims { .. }
-            | Response::Rejected(_) => return None,
-        };
-        let docs = match docs {
-            AffectedDocs::Named(v) => v,
-            AffectedDocs::Minted => {
-                minted.map(|a| vec![a.tumbler().to_string()]).unwrap_or_default()
-            }
-        };
-        self.sidecar.record(at.0, op_name(kind), docs);
-        Some(at)
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
@@ -890,7 +795,7 @@ impl Daemon {
         // (a fresh world): transport metadata, never invented, and never
         // an older position's time standing in for the head's.
         let head_time =
-            self.sidecar.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
+            self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         Reply::json(
             200,
             obj(vec![
@@ -910,7 +815,7 @@ impl Daemon {
             Ok(x) => x,
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
-        match self.sidecar.changes(since, limit) {
+        match self.writes.changes(since, limit) {
             ChangesAnswer::Reclaimed { floor } => reclaimed_reply(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
@@ -938,8 +843,8 @@ impl Daemon {
         };
         let dump = match at {
             None => self.engine.world_dump(),
-            Some(at) => match self.history.world_at(&self.engine, at) {
-                Ok(w) => skep_engine::observe::dump(&w, self.engine.genesis_config()),
+            Some(at) => match self.history.dump_at(&self.engine, at) {
+                Ok(d) => d,
                 Err(e) => return unavailable_reply(e),
             },
         };
@@ -1011,75 +916,6 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
     }
     let since = since.ok_or_else(|| String::from("the required parameter is since=<position>"))?;
     Ok((since, limit.unwrap_or(CHANGES_LIMIT_DEFAULT)))
-}
-
-/// A write's affected document(s) for the sidecar (ruling §0): the write's
-/// target doc; a link write names its home (`edit_link` both homes); the
-/// MINTED document for create/fork/version (known only from the ack);
-/// delegate/register_node touch no document.
-enum AffectedDocs {
-    /// The documents the frame itself names, already in the sidecar's
-    /// dotted-decimal form — the only form anything downstream wants, so
-    /// no address is cloned here to be rendered and dropped a moment later.
-    Named(Vec<String>),
-    /// The document the write mints, known only from its ack.
-    Minted,
-}
-
-/// The sidecar metadata of a write `Op` — `None` for reads, which is also
-/// THE read/write partition: [`op_is_read`] is defined as this answer's
-/// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
-/// `_` arm: a new `Op` fails to compile here until its feed entry is
-/// decided, and that one decision classifies it for the history surface
-/// too.
-fn write_meta(op: &Op) -> Option<(OpKind, AffectedDocs)> {
-    let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
-    match op {
-        Op::CreateNewDocument { .. } => Some((OpKind::CreateNewDocument, AffectedDocs::Minted)),
-        Op::Delegate { .. } => Some((OpKind::Delegate, AffectedDocs::Named(Vec::new()))),
-        Op::RegisterNode { .. } => Some((OpKind::RegisterNode, AffectedDocs::Named(Vec::new()))),
-        Op::Fork => Some((OpKind::Fork, AffectedDocs::Minted)),
-        Op::Insert { doc, .. } => Some((OpKind::Insert, one(doc))),
-        Op::Delete { doc, .. } => Some((OpKind::Delete, one(doc))),
-        Op::Copy { doc, .. } => Some((OpKind::Copy, one(doc))),
-        Op::Rearrange { doc, .. } => Some((OpKind::Rearrange, one(doc))),
-        Op::Version { .. } => Some((OpKind::Version, AffectedDocs::Minted)),
-        Op::MakeLink { home, .. } => Some((OpKind::MakeLink, one(home))),
-        Op::Emit { home, .. } => Some((OpKind::Emit, one(home))),
-        Op::Nullify { home, .. } => Some((OpKind::Nullify, one(home))),
-        Op::AssertSup { home, .. } => Some((OpKind::AssertSup, one(home))),
-        Op::EditLink { d_s, d_a, .. } => {
-            let mut docs = vec![d_s.tumbler().to_string()];
-            if d_a != d_s {
-                docs.push(d_a.tumbler().to_string());
-            }
-            Some((OpKind::EditLink, AffectedDocs::Named(docs)))
-        }
-        Op::NextAccountPrefix { .. }
-        | Op::PrincipalPrefix { .. }
-        | Op::ReadLink { .. }
-        | Op::FollowLink { .. }
-        | Op::RetrieveV { .. }
-        | Op::RetrieveDocVSpan { .. }
-        | Op::RetrieveDocVSpanSet { .. }
-        | Op::ShowOrigin { .. }
-        | Op::ShowDeletions { .. }
-        | Op::Compare { .. }
-        | Op::FindDocsContaining { .. }
-        | Op::Image { .. }
-        | Op::FindLinksV { .. }
-        | Op::FindLinksFtt { .. }
-        | Op::CountV { .. }
-        | Op::CountFtt { .. }
-        | Op::WindowV { .. }
-        | Op::WindowFtt { .. }
-        | Op::RetrieveEndsets { .. }
-        | Op::Project { .. }
-        | Op::DiscoverableFrom { .. }
-        | Op::DeleteOrphans { .. }
-        | Op::InClaims { .. }
-        | Op::OutClaims { .. } => None,
-    }
 }
 
 // ── the history surface (wire v3) ────────────────────────────────────────
@@ -1195,86 +1031,6 @@ fn unavailable_reply(e: Unavailable) -> Reply {
     }
 }
 
-/// The wire's read/write partition, mirroring M10's own `Op::is_read`
-/// (crate-private there, so restated here — the one classification the
-/// history surface needs before dispatch). A read is exactly an `Op` the
-/// change feed has nothing to record: one table decides both, so an `Op`
-/// admitted to history can never be one that commits.
-fn op_is_read(op: &Op) -> bool {
-    write_meta(op).is_none()
-}
-
-// ── the commit feed (wire v4) ────────────────────────────────────────────
-
-/// One head + shutdown flag under a mutex, one condvar. Every committing
-/// write on `/op` publishes the position it committed (write-path
-/// notification — the only live write path, so no head advance can be
-/// missed); each subscriber blocks in
-/// [`CommitFeed::next`] with the keepalive interval as its wait bound.
-/// Shutdown broadcasts on the same condvar, which is what makes closing
-/// open streams immediate rather than a poll away.
-struct CommitFeed {
-    state: Mutex<FeedState>,
-    cond: Condvar,
-}
-
-struct FeedState {
-    head: Seq,
-    shutdown: bool,
-}
-
-/// What a subscriber does next.
-enum FeedStep {
-    /// The head advanced past the subscriber's last-sent position.
-    Commit(Seq),
-    /// Nothing moved for one keepalive interval.
-    Keepalive,
-    /// The daemon is stopping; end the stream.
-    Shutdown,
-}
-
-impl CommitFeed {
-    fn at(head: Seq) -> CommitFeed {
-        CommitFeed {
-            state: Mutex::new(FeedState { head, shutdown: false }),
-            cond: Condvar::new(),
-        }
-    }
-
-    fn publish(&self, seq: Seq) {
-        let mut st = self.state.lock();
-        if seq.0 > st.head.0 {
-            st.head = seq;
-            self.cond.notify_all();
-        }
-    }
-
-    fn shutdown(&self) {
-        self.state.lock().shutdown = true;
-        self.cond.notify_all();
-    }
-
-    /// Block until the head passes `last`, the daemon stops, or the
-    /// keepalive interval elapses — whichever comes first. Returning the
-    /// current head (not a queue of commits) is the coalescing: a burst of
-    /// commits between wakes is one step.
-    fn next(&self, last: Seq) -> FeedStep {
-        let deadline = Instant::now() + SSE_KEEPALIVE;
-        let mut st = self.state.lock();
-        loop {
-            if st.shutdown {
-                return FeedStep::Shutdown;
-            }
-            if st.head.0 > last.0 {
-                return FeedStep::Commit(st.head);
-            }
-            if self.cond.wait_until(&mut st, deadline).timed_out() {
-                return FeedStep::Keepalive;
-            }
-        }
-    }
-}
-
 // ── the wire loop ────────────────────────────────────────────────────────
 
 /// The running server: the listener, the op workers, the daemon, and the
@@ -1286,7 +1042,7 @@ pub struct Skepd {
     /// exists rather than only while a worker survives.
     _listener: Arc<TcpListener>,
     workers: Vec<JoinHandle<()>>,
-    subscribers: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    subscribers: Arc<Subscribers>,
     stop: Arc<AtomicBool>,
     port: u16,
 }
@@ -1330,7 +1086,7 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
     let port = listener.local_addr()?.port();
     let stop = Arc::new(AtomicBool::new(false));
-    let subscribers: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+    let subscribers = Arc::new(Subscribers::new());
     let handles = (0..workers)
         .map(|_| {
             let daemon = Arc::clone(&daemon);
@@ -1419,11 +1175,8 @@ impl Skepd {
             let _ = h.join();
         }
         // The workers are gone, so no new subscriber can appear past here.
-        self.daemon.commit_feed.shutdown();
-        let subs = std::mem::take(&mut *self.subscribers.lock());
-        for h in subs {
-            let _ = h.join();
-        }
+        self.daemon.writes.shutdown();
+        self.subscribers.join_all();
     }
 }
 
@@ -1443,11 +1196,7 @@ impl Drop for Skepd {
 /// subscriber thread and return at once. A handler panic is contained to a
 /// 500 so one bad request cannot take a worker down; the panic still prints
 /// to stderr for the operator.
-fn serve_connection(
-    daemon: &Arc<Daemon>,
-    subscribers: &Mutex<Vec<JoinHandle<()>>>,
-    mut stream: TcpStream,
-) {
+fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream: TcpStream) {
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
@@ -1480,30 +1229,71 @@ fn serve_connection(
         Routed::Reply(reply) => {
             let _ = write_reply(&mut stream, &reply);
         }
-        Routed::EventStream => {
-            let daemon = Arc::clone(daemon);
-            let mut subs = subscribers.lock();
-            // Reap finished subscriber threads so the registry tracks live
-            // streams, not history.
-            subs.retain(|h| !h.is_finished());
-            if subs.len() >= MAX_SUBSCRIBERS {
-                // At the budget: drop the socket. The client sees a clean
-                // close before any stream head — the same end a subscriber
-                // meets at shutdown, and the one a reconnecting client
-                // already handles.
-                return;
-            }
-            // Spawn FALLIBLY. `thread::spawn` panics when the OS refuses a
-            // thread, and this call sits outside the handler's
-            // `catch_unwind` — a panic here would unwind the worker's accept
-            // loop and retire the worker for the life of the process, so a
-            // transient resource condition would become a permanent, silent
-            // loss of capacity with the listener still bound. A refusal must
-            // cost one stream, never a worker; the failed spawn drops the
-            // closure and with it the socket, which is the clean close above.
-            if let Ok(h) = thread::Builder::new().spawn(move || serve_events(&daemon, stream)) {
-                subs.push(h);
-            }
+        Routed::EventStream => subscribers.admit(Arc::clone(daemon), stream),
+    }
+}
+
+/// Live `GET /events` streams served at once. Each costs one OS thread and
+/// holds one descriptor for as long as its client keeps reading, so without
+/// a bound a caller opening streams consumes both until one runs out — and
+/// the two run out differently. At the descriptor wall `accept` degrades
+/// gracefully (the worker loop pauses and retries); a refused thread does
+/// not degrade at all, which is why the spawn in [`Subscribers::admit`] is
+/// fallible and why this cap sits above it.
+///
+/// The number reserves the rest of the process's descriptors for the work
+/// the daemon exists to do: against the 256 soft limit still common on the
+/// platforms this ships to, 64 streams leave the listener and the op pool
+/// three quarters of the table. It is an order of magnitude above what a
+/// browser will hold against one origin (~6 connections) and above any
+/// plausible fleet of local subscribers, so a client reaches it only by
+/// trying to.
+const MAX_SUBSCRIBERS: usize = 64;
+
+/// The live event streams: the budget, the admission, and the retirement.
+/// One card, because a stream admitted here is one shutdown must join, and
+/// a slot is free only once the thread that held it has finished — two
+/// facts about one set that a bare handle vector states neither of.
+struct Subscribers {
+    live: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl Subscribers {
+    fn new() -> Subscribers {
+        Subscribers { live: Mutex::new(Vec::new()) }
+    }
+
+    /// Admit one stream and give it its own thread, or refuse it by dropping
+    /// the socket — a clean close before any stream head, which is the same
+    /// end a subscriber meets at shutdown and the one a reconnecting client
+    /// already handles.
+    fn admit(&self, daemon: Arc<Daemon>, stream: TcpStream) {
+        let mut live = self.live.lock();
+        // Reap finished threads so the registry tracks live streams, not
+        // history — which is also what returns a departed subscriber's slot.
+        live.retain(|h| !h.is_finished());
+        if live.len() >= MAX_SUBSCRIBERS {
+            return;
+        }
+        // Spawn FALLIBLY. `thread::spawn` panics when the OS refuses a
+        // thread, and this call sits outside the handler's `catch_unwind` —
+        // a panic here would unwind the worker's accept loop and retire the
+        // worker for the life of the process, so a transient resource
+        // condition would become a permanent, silent loss of capacity with
+        // the listener still bound. A refusal must cost one stream, never a
+        // worker; the failed spawn drops the closure and with it the socket,
+        // which is the clean close above.
+        if let Ok(h) = thread::Builder::new().spawn(move || serve_events(&daemon, stream)) {
+            live.push(h);
+        }
+    }
+
+    /// Join every live subscriber. Called after the feed has broadcast its
+    /// shutdown, so each is already awake and on its way out — which is what
+    /// keeps this bounded rather than a wait on a client.
+    fn join_all(&self) {
+        for h in std::mem::take(&mut *self.live.lock()) {
+            let _ = h.join();
         }
     }
 }
@@ -1733,7 +1523,7 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
         return;
     }
     loop {
-        match daemon.commit_feed.next(last) {
+        match daemon.writes.next(last) {
             FeedStep::Shutdown => return,
             FeedStep::Commit(at) => {
                 last = at;
@@ -1918,18 +1708,6 @@ mod tests {
         );
     }
 
-    /// The partition is one table's two faces: reads are exactly the ops
-    /// the change feed records nothing for.
-    #[test]
-    fn reads_are_exactly_the_ops_with_no_feed_entry() {
-        let read = Op::Fork;
-        assert!(!op_is_read(&read), "fork commits");
-        assert!(write_meta(&read).is_some());
-        let query = Op::PrincipalPrefix { id: PrincipalId(1) };
-        assert!(op_is_read(&query), "principal_prefix reads");
-        assert!(write_meta(&query).is_none());
-    }
-
     /// A refusal is a status AND a name together: the body is built through
     /// the codec's sorting device (byte-deterministic whatever backs
     /// serde_json's map) and the status comes from the same table the name
@@ -1997,7 +1775,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = Daemon::open(dir.path()).expect("genesis open");
         let (token, _) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(0)));
-        let announced = || daemon.commit_feed.state.lock().head;
+        let announced = || daemon.writes.announced();
         let post = |body: &str| match daemon.route(&HttpRequest {
             method: "POST".to_string(),
             path: "/op".to_string(),

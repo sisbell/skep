@@ -206,9 +206,13 @@ impl JsonCodec {
     }
 }
 
-/// Serialize a finished `Value` tree. Infallible for trees this module
-/// builds: string keys only, no foreign `Serialize` impls.
-fn to_bytes(v: Value) -> Vec<u8> {
+/// Serialize a finished `Value` tree — the one place this crate turns a
+/// `Value` into bytes, so the proof that it cannot fail is written once and
+/// holds everywhere it is used: wire responses, transport-error bodies, and
+/// the sidecar's own file lines are all trees built HERE, out of [`obj`] and
+/// the leaf marshalers, which means string keys only and no foreign
+/// `Serialize` impl to fault.
+pub(crate) fn to_bytes(v: Value) -> Vec<u8> {
     serde_json::to_vec(&v).expect("serializing a serde_json::Value with string keys cannot fail")
 }
 

@@ -36,12 +36,13 @@
 //! ever made rather than with commits still reachable, and it is fully
 //! resident.
 //!
-//! The sidecar is written under the daemon's write-serialization lock, so
-//! file order is position order and recorded times are monotone
-//! non-decreasing in position (wall-clock reads are additionally clamped
-//! against the last recorded time). Appends are flushed to the OS but not
-//! fsynced — a lost tail answers bare, which is the honest trade for not
-//! doubling every write's fsync cost on testimony.
+//! The sidecar is written under the write path's serialization lock — held
+//! by `write_path.rs`, which takes that lock and calls [`Sidecar::record`]
+//! in one operation — so file order is position order and recorded times
+//! are monotone non-decreasing in position (wall-clock reads are
+//! additionally clamped against the last recorded time). Appends are
+//! flushed to the OS but not fsynced — a lost tail answers bare, which is
+//! the honest trade for not doubling every write's fsync cost on testimony.
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -54,7 +55,7 @@ use serde_json::Value;
 use skep_engine::{Engine, HistoryError};
 use skep_kernel::Seq;
 
-use crate::codec::obj;
+use crate::codec::{obj, to_bytes};
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
@@ -233,7 +234,7 @@ impl Sidecar {
         // the feed's memory that does not depend on the journal, and
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
-        if let Some(f) = reclaimed_below(engine) {
+        if let Some(f) = retention_floor(engine) {
             min_since = min_since.max(f.saturating_sub(1));
         }
         if entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
@@ -259,7 +260,9 @@ impl Sidecar {
     /// position order would append out of order and stamp a later position
     /// with an earlier time — both silent, both permanent, and both
     /// load-bearing for [`Sidecar::changes`] and [`Sidecar::head_time`].
-    /// Nothing here can check it.
+    /// Nothing here can check it, which is why `write_path.rs` holds the
+    /// lock and this call in ONE operation and is the only caller: the
+    /// obligation is discharged by there being nowhere else to fail it.
     ///
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
@@ -331,7 +334,7 @@ impl Sidecar {
 /// before touching a segment. Every other refusal — corrupt, I/O,
 /// unjournaled — reports no floor, so the feed keeps what it has rather
 /// than discarding entries over a fault that may be transient.
-fn reclaimed_below(engine: &Engine) -> Option<u64> {
+fn retention_floor(engine: &Engine) -> Option<u64> {
     match engine.world_at(Seq(0)) {
         Err(HistoryError::Reclaimed { floor }) => Some(floor.map(|f| f.0).unwrap_or(0)),
         _ => None,
@@ -486,9 +489,11 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
     line_bytes(obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
+/// One newline-terminated file line — the codec's serializer, so a line is
+/// the same bytes whatever backs serde_json's map and the "cannot fail"
+/// argument is the one written there rather than a second copy of it.
 fn line_bytes(v: Value) -> Vec<u8> {
-    let mut b =
-        serde_json::to_vec(&v).expect("serializing a serde_json::Value cannot fail");
+    let mut b = to_bytes(v);
     b.push(b'\n');
     b
 }

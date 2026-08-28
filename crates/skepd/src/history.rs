@@ -20,6 +20,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use skep_arrangement::Vstream;
+#[cfg(feature = "observe")]
+use skep_engine::observe::WorldDump;
 use skep_engine::{Engine, HistoryError, World};
 use skep_febe::{Operation, Request, Response, Stores};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
@@ -73,6 +75,18 @@ impl History {
             return Err(Unavailable::Busy);
         };
         engine.world_at(at).map_err(Unavailable::Journal)
+    }
+
+    /// The `WorldDump` of the world as of `at` — the same bounded replay
+    /// [`History::read_at`] answers from, rendered as the engine renders its
+    /// live dump. The pairing of a reconstructed world with the genesis
+    /// config it must be read against lives here, with the reconstruction:
+    /// it is a fact about how a historical world is read, not about HTTP,
+    /// so `/dump`'s two arms each simply ask a collaborator for a dump.
+    #[cfg(feature = "observe")]
+    pub fn dump_at(&self, engine: &Engine, at: Seq) -> Result<WorldDump, Unavailable> {
+        let world = self.world_at(engine, at)?;
+        Ok(skep_engine::observe::dump(&world, engine.genesis_config()))
     }
 
     /// One already-classified READ frame answered as of `at`: reconstruct

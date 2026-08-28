@@ -45,6 +45,7 @@ mod codec;
 mod history;
 mod server;
 mod sidecar;
+mod write_path;
 
 /// The shared fuzzing harness (hardening H2): the pure oracle and mutation
 /// logic the tier-1 `#[test]`s and the nightly libFuzzer targets both drive.

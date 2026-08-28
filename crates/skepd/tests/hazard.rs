@@ -33,8 +33,7 @@ use std::time::Duration;
 
 use common::{acked_addr, expect_resp, json, op, open_session};
 use serde_json::Value;
-use skep_kernel::Seq;
-use skepd::{Daemon, HttpRequest, Reply, Routed};
+use skepd::{Daemon, HttpRequest, Reply, Routed, Seq};
 
 /// `HAZARD_EXHAUSTIVE=1` widens the trial counts.
 fn exhaustive() -> bool {

@@ -180,6 +180,7 @@ impl WritePath {
 /// target doc; a link write names its home (`edit_link` both homes); the
 /// MINTED document for create/fork/version (known only from the ack);
 /// delegate/register_node touch no document.
+#[derive(Debug)]
 pub(crate) enum AffectedDocs {
     /// The documents the frame itself names, already in the sidecar's
     /// dotted-decimal form — the only form anything downstream wants, so
@@ -274,6 +275,7 @@ struct StreamState {
 }
 
 /// What a subscriber does next.
+#[derive(Debug)]
 pub(crate) enum StreamStep {
     /// The head advanced past the subscriber's last-sent position.
     Commit(Seq),
@@ -348,17 +350,20 @@ mod tests {
     #[test]
     fn the_commit_stream_is_monotone_and_coalesces() {
         let stream = CommitStream::at(Seq(4));
-        assert!(matches!(stream.next(Seq(3)), StreamStep::Commit(Seq(4))));
+        let step = stream.next(Seq(3));
+        assert!(matches!(step, StreamStep::Commit(Seq(4))), "the head on connect: {step:?}");
         stream.publish(Seq(9));
         stream.publish(Seq(7)); // an idempotency replay's older position
+        let step = stream.next(Seq(4));
         assert!(
-            matches!(stream.next(Seq(4)), StreamStep::Commit(Seq(9))),
-            "an older position never displaces the head, and the burst is one step"
+            matches!(step, StreamStep::Commit(Seq(9))),
+            "an older position never displaces the head, and the burst is one step: {step:?}"
         );
         stream.shutdown();
+        let step = stream.next(Seq(0));
         assert!(
-            matches!(stream.next(Seq(0)), StreamStep::Shutdown),
-            "shutdown outranks a commit"
+            matches!(step, StreamStep::Shutdown),
+            "shutdown outranks a commit: {step:?}"
         );
     }
 }

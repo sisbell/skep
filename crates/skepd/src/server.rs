@@ -218,7 +218,7 @@ impl std::error::Error for DaemonError {
 /// daemon does not read the type a client declares, while every response it
 /// writes must declare one. That is one concept in two shapes, not two
 /// concepts.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Body {
     pub content_type: &'static str,
     pub bytes: Vec<u8>,
@@ -346,7 +346,7 @@ impl std::fmt::Debug for HttpRequest {
 /// wire's transport-error table (wire.md §Transport errors, §Reading
 /// history, §The change feed), so a new failure cannot ship without a
 /// documented name, exactly as `code_name` guarantees for M10's rejections.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum TransportError {
     // The envelope and query parsers.
     MalformedSessionRequest,
@@ -488,6 +488,7 @@ const MAX_LIVE_SESSIONS: usize = 1024;
 /// nothing else in M10 retires one — and [`Sessions::bind`] hands back
 /// what it evicted so `POST /session` can discharge that obligation
 /// against M10 as well as against this map.
+#[derive(Debug)]
 struct Sessions {
     /// The token table and its mint order, under one lock.
     bindings: Mutex<Bindings>,
@@ -505,7 +506,7 @@ struct Sessions {
 /// has lost or vice versa. Insertion order and not recency — a token's
 /// worth to a client does not grow with use, and mint order needs no
 /// bookkeeping on the read path, which is every request.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Bindings {
     map: HashMap<String, SessionId>,
     order: VecDeque<String>,
@@ -827,7 +828,9 @@ impl Daemon {
                 obj(vec![
                     (
                         "changes",
-                        Value::Array(entries.iter().map(|(at, meta)| meta.entry(*at)).collect()),
+                        Value::Array(
+                            entries.into_iter().map(|(at, meta)| meta.into_entry(at)).collect(),
+                        ),
                     ),
                     ("last", Value::Number(last.into())),
                     ("more", Value::Bool(more)),
@@ -1081,10 +1084,13 @@ impl std::fmt::Debug for Skepd {
 /// establishes it by refusing a zero count where the flag is read, which is
 /// also what makes its startup line's worker count honest.
 ///
-/// Failure is exactly the socket's: binding the address, or reading back
-/// the port it bound. Naming `io::Error` rather than boxing it is what lets
-/// a caller dispatch on `ErrorKind` — `AddrInUse` to try the next port,
-/// `PermissionDenied` for a privileged one — without a downcast.
+/// Failure is the socket's or the OS's: binding the address, reading back
+/// the port it bound, or a refused worker thread — all three `io::Error`,
+/// which is what lets a caller dispatch on `ErrorKind` — `AddrInUse` to try
+/// the next port, `PermissionDenied` for a privileged one — without a
+/// downcast. A refused thread retires whatever has already started before
+/// returning, so the port and the journal-directory lock are free for that
+/// retry.
 pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     assert!(workers >= 1, "serve requires at least one worker thread (workers = 0)");
     let daemon = Arc::new(daemon);
@@ -1092,35 +1098,59 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let port = listener.local_addr()?.port();
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
-    let handles = (0..workers)
-        .map(|_| {
-            let daemon = Arc::clone(&daemon);
-            let listener = Arc::clone(&listener);
-            let stop = Arc::clone(&stop);
-            let subscribers = Arc::clone(&subscribers);
-            thread::spawn(move || loop {
-                if stop.load(Ordering::Acquire) {
-                    break;
+    // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS
+    // refuses a thread, and a panic here would unwind out of a half-built
+    // handle vector — detaching the workers that did start, with the
+    // listener still bound, the journal-directory lock still held, and no
+    // `Skepd` in existence for the settled stop to run against.
+    let mut handles = Vec::with_capacity(workers);
+    let mut refused = None;
+    for _ in 0..workers {
+        let daemon = Arc::clone(&daemon);
+        let listener = Arc::clone(&listener);
+        let stop = Arc::clone(&stop);
+        let subscribers = Arc::clone(&subscribers);
+        let spawned = thread::Builder::new().name("skepd-worker".into()).spawn(move || loop {
+            if stop.load(Ordering::Acquire) {
+                break;
+            }
+            let stream = match listener.accept() {
+                Ok((s, _)) => s,
+                Err(_) => {
+                    // Transient accept failure (EMFILE and kin): brief
+                    // pause instead of a spin, then re-check stop.
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
-                let stream = match listener.accept() {
-                    Ok((s, _)) => s,
-                    Err(_) => {
-                        // Transient accept failure (EMFILE and kin): brief
-                        // pause instead of a spin, then re-check stop.
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    }
-                };
-                // Shutdown's wake connect lands here: the flag, not the
-                // connection, is the signal.
-                if stop.load(Ordering::Acquire) {
-                    break;
-                }
-                serve_connection(&daemon, &subscribers, stream);
-            })
-        })
-        .collect();
-    Ok(Skepd { daemon, _listener: listener, workers: handles, subscribers, stop, port })
+            };
+            // Shutdown's wake connect lands here: the flag, not the
+            // connection, is the signal.
+            if stop.load(Ordering::Acquire) {
+                break;
+            }
+            serve_connection(&daemon, &subscribers, stream);
+        });
+        match spawned {
+            Ok(h) => handles.push(h),
+            Err(e) => {
+                refused = Some(e);
+                break;
+            }
+        }
+    }
+    let server = Skepd { daemon, _listener: listener, workers: handles, subscribers, stop, port };
+    match refused {
+        // A refused thread costs the whole start, never a half-started
+        // server: the stop joins the workers that did start, ends any
+        // stream they already admitted, and releases the listener and the
+        // journal-directory lock — so the port this caller is about to
+        // retry on is free before it sees the error.
+        Some(e) => {
+            server.shutdown();
+            Err(e)
+        }
+        None => Ok(server),
+    }
 }
 
 impl Skepd {
@@ -1226,6 +1256,16 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             return;
         }
     };
+    // The unwind-safety assertion is sound rather than convenient:
+    // `parking_lot`'s locks do not poison, so a panic under one releases it
+    // with the data as it stands, and no structure this daemon guards is
+    // mutated across a point that can unwind — the session table's map and
+    // queue move together under one lock, and the sidecar appends before it
+    // inserts. The one thing a panic can cost is the tail of one write:
+    // `WritePath::commit` runs `execute` under the serialization lock, so a
+    // panic inside M10 after its commit leaves that position unrecorded and
+    // unannounced. The reopen walk re-covers it as a bare entry, and the
+    // next commit's announcement carries the stream past it.
     let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route(&req))) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
@@ -1259,6 +1299,7 @@ const MAX_SUBSCRIBERS: usize = 64;
 /// One card, because a stream admitted here is one shutdown must join, and
 /// a slot is free only once the thread that held it has finished — two
 /// facts about one set that a bare handle vector states neither of.
+#[derive(Debug)]
 struct Subscribers {
     live: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -1288,7 +1329,10 @@ impl Subscribers {
         // the listener still bound. A refusal must cost one stream, never a
         // worker; the failed spawn drops the closure and with it the socket,
         // which is the clean close above.
-        if let Ok(h) = thread::Builder::new().spawn(move || serve_events(&daemon, stream)) {
+        let spawned = thread::Builder::new()
+            .name("skepd-events".into())
+            .spawn(move || serve_events(&daemon, stream));
+        if let Ok(h) = spawned {
             live.push(h);
         }
     }
@@ -1307,6 +1351,7 @@ impl Subscribers {
 /// connection is owed. Everything outside the subset this daemon speaks is
 /// one bucket; the body cap gets its own honest disposition
 /// (`413 payload_too_large`), not a generic parse error.
+#[derive(Debug)]
 enum RequestRefusal {
     /// Not the HTTP subset this daemon speaks → `400 malformed_http`.
     Malformed(String),

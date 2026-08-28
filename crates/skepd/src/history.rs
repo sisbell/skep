@@ -38,6 +38,7 @@ pub(crate) const MAX_CONCURRENT_RECONSTRUCTIONS: usize = 2;
 /// Why a historical answer is unavailable — the daemon's momentary
 /// saturation, or the journal's own verdict on the position. Deliberately
 /// free of HTTP: what a caller is owed for each is a wire decision.
+#[derive(Debug)]
 pub(crate) enum Unavailable {
     /// Every reconstruction permit is in use; the position may be perfectly
     /// good. Retryable, and the only variant that is.
@@ -57,6 +58,7 @@ pub(crate) enum Unavailable {
 
 /// The history surface: the reconstruction budget, and the two questions
 /// asked of it.
+#[derive(Debug)]
 pub(crate) struct History {
     permits: ReconstructPermits,
 }
@@ -120,6 +122,7 @@ impl History {
 /// try-acquire with no queue and no blocking — plain atomics, no new
 /// dependency. The guard returns its permit on drop, early returns and
 /// panics included.
+#[derive(Debug)]
 struct ReconstructPermits {
     available: AtomicUsize,
 }
@@ -130,6 +133,7 @@ struct ReconstructPermits {
 /// only to be the return type of the daemon's test hook, and
 /// `#[doc(hidden)]` for the same reason.
 #[doc(hidden)]
+#[derive(Debug)]
 pub struct ReconstructPermit<'a> {
     permits: &'a ReconstructPermits,
 }

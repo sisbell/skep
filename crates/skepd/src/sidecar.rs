@@ -68,7 +68,7 @@ const SIDECAR_FILE: &str = "commits.log";
 /// journal, carrying none of them. Three independent `Option`s would admit
 /// six more combinations, and this file has a meaning for neither the
 /// half-recorded position nor the record that remembers when but not what.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Meta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
     /// an invented value.
@@ -85,13 +85,13 @@ impl Meta {
     /// absent fields: the file is daemon-private and [`parse_line`] reads
     /// absent and null alike, so the shorter line costs nothing there,
     /// while a client reading the wire is owed the field it asked about.
-    pub fn entry(&self, at: u64) -> Value {
+    pub fn into_entry(self, at: u64) -> Value {
         let (docs, op, time) = match self {
             Meta::Bare => (Value::Null, Value::Null, Value::Null),
             Meta::Recorded { op, docs, time } => (
-                Value::Array(docs.iter().map(|s| Value::String(s.clone())).collect()),
-                Value::String(op.clone()),
-                Value::Number((*time).into()),
+                Value::Array(docs.into_iter().map(Value::String).collect()),
+                Value::String(op),
+                Value::Number(time.into()),
             ),
         };
         obj(vec![
@@ -112,6 +112,7 @@ impl Meta {
 }
 
 /// One replayed file record.
+#[derive(Debug)]
 enum Rec {
     Entry(u64, Meta),
     /// The smallest `since` this feed can honor — see [`Inner::min_since`].
@@ -119,6 +120,7 @@ enum Rec {
 }
 
 /// The answer `GET /changes` marshals.
+#[derive(Debug)]
 pub(crate) enum ChangesAnswer {
     /// `since` reaches below what the feed can enumerate; `floor` is the
     /// oldest position that still has an entry, when one exists — the
@@ -532,16 +534,18 @@ mod tests {
                 assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
                 assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
             }
-            _ => panic!("first line is a recorded entry"),
+            other => panic!("first line is a recorded entry: {other:?}"),
         }
-        match recs[1] {
-            Rec::Entry(at, Meta::Bare) => assert_eq!(at, 3),
-            _ => panic!("second line is a bare entry"),
-        }
-        match recs[2] {
-            Rec::MinSince(s) => assert_eq!(s, 2048),
-            Rec::Entry(..) => panic!("third line names the smallest admissible since"),
-        }
+        assert!(
+            matches!(recs[1], Rec::Entry(3, Meta::Bare)),
+            "second line is a bare entry: {:?}",
+            recs[1]
+        );
+        assert!(
+            matches!(recs[2], Rec::MinSince(2048)),
+            "third line names the smallest admissible since: {:?}",
+            recs[2]
+        );
     }
 
     /// Both spellings of the min-since record read, and reading one does
@@ -554,14 +558,16 @@ mod tests {
         file.extend_from_slice(&entry_line(2049, &Meta::Bare));
         let (recs, end) = parse_records(&file);
         assert_eq!(end, file.len(), "the `floor` spelling does not end trust");
-        match recs[0] {
-            Rec::MinSince(s) => assert_eq!(s, 2048),
-            Rec::Entry(..) => panic!("a `floor` line is a min-since record"),
-        }
-        match recs[1] {
-            Rec::Entry(at, _) => assert_eq!(at, 2049),
-            Rec::MinSince(_) => panic!("the line behind it still replays"),
-        }
+        assert!(
+            matches!(recs[0], Rec::MinSince(2048)),
+            "a `floor` line is a min-since record: {:?}",
+            recs[0]
+        );
+        assert!(
+            matches!(recs[1], Rec::Entry(2049, _)),
+            "the line behind it still replays: {:?}",
+            recs[1]
+        );
     }
 
     /// A position is recorded or it is bare; a line naming some of the
@@ -594,11 +600,11 @@ mod tests {
             time: 1_700_000_000_000,
         };
         assert_eq!(
-            serde_json::to_string(&meta.entry(8)).expect("json"),
+            serde_json::to_string(&meta.into_entry(8)).expect("json"),
             r#"{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1700000000000}"#
         );
         assert_eq!(
-            serde_json::to_string(&Meta::Bare.entry(3)).expect("json"),
+            serde_json::to_string(&Meta::Bare.into_entry(3)).expect("json"),
             r#"{"at":3,"docs":null,"op":null,"time":null}"#
         );
     }

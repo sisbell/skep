@@ -59,7 +59,41 @@ pub mod fuzz_support;
 pub use codec::JsonCodec;
 pub use server::{serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd};
 
+/// The engine types this crate's public surface hands out: the world
+/// [`Daemon::world_at`] answers with, why it refused, and the failure
+/// [`Daemon::open`] reports. Re-exported because skepd is the one thing
+/// permitted to depend on the engine (Engine Composition Contract) — a
+/// caller that must name any of the three would otherwise have to take that
+/// dependency itself, the one dependency this crate exists to hold alone.
+///
+/// M10's operation vocabulary is deliberately NOT re-exported: `Request`,
+/// `Response`, `Op` and the `Codec` trait belong to `skep-febe`, which any
+/// client author already depends on to build an operation at all.
+pub use skep_engine::{EngineError, HistoryError, World};
+
+/// A committed log position — what [`Daemon::log_position`] answers and what
+/// [`Daemon::world_at`] takes, re-exported for the same reason the engine
+/// types above are.
+pub use skep_kernel::Seq;
+
 /// The reconstruction permit the daemon's test hook hands out — public only
 /// because that hook's return type must be nameable; not a stable API.
 #[doc(hidden)]
 pub use history::ReconstructPermit;
+
+/// The auto-traits this crate promises without saying so. A caller running
+/// the server on a thread it owns depends on `Skepd: Send`, and no signature
+/// states it — so a private field that is not `Send` would revoke it with no
+/// public name changing. This is where that fails to compile instead.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Skepd>();
+    assert_send_sync::<Daemon>();
+    assert_send_sync::<DaemonError>();
+    assert_send_sync::<JsonCodec>();
+    assert_send_sync::<Reply>();
+    assert_send_sync::<Body>();
+    assert_send_sync::<HttpRequest>();
+    assert_send_sync::<Routed>();
+    assert_send_sync::<ReconstructPermit<'static>>();
+};

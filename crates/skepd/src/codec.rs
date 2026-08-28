@@ -136,7 +136,7 @@ const MAX_NAT_DIGITS: usize = 4096;
 const MAX_TUMBLER_COMPONENTS: usize = 256;
 
 /// The daemon's JSON codec — stateless; one instance serves every client.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct JsonCodec;
 
 impl Codec for JsonCodec {
@@ -371,6 +371,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
 
 /// The request object being consumed: known fields are taken out; anything
 /// left at [`Fields::finish`] is an unknown field and fails the parse.
+#[derive(Debug)]
 struct Fields(Map<String, Value>);
 
 impl Fields {
@@ -393,7 +394,7 @@ impl Fields {
         }
     }
 
-    fn field<T>(&mut self, k: &'static str, f: impl Fn(&Value) -> PResult<T>) -> PResult<T> {
+    fn field<T>(&mut self, k: &'static str, f: impl FnOnce(&Value) -> PResult<T>) -> PResult<T> {
         let v = self.take(k)?;
         f(&v).map_err(|e| PErr(format!("field '{k}': {e}")))
     }
@@ -582,7 +583,7 @@ fn need<'a>(m: &'a Map<String, Value>, k: &'static str) -> PResult<&'a Value> {
 fn field<T>(
     m: &Map<String, Value>,
     k: &'static str,
-    f: impl Fn(&Value) -> PResult<T>,
+    f: impl FnOnce(&Value) -> PResult<T>,
 ) -> PResult<T> {
     f(need(m, k)?).map_err(|e| PErr(format!("{k}: {e}")))
 }
@@ -1168,6 +1169,7 @@ fn j_regions(rs: &[Region]) -> Value {
 /// `utf8` is the ONLY thing the two renderings differ by: a request
 /// `values` element is the bare string, a delivery item is
 /// `{"content": …}`.
+#[derive(Debug)]
 struct ValueItems {
     out: Vec<Value>,
     byte_run: Vec<u8>,

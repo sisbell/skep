@@ -125,7 +125,7 @@ struct Fixture {
     own_doc: [String; 4],
     insert_doc: String,
     delete_doc: String,
-    rearr_doc: String,
+    rearrange_doc: String,
     copy_dst: String,
     copy_src: String,
     /// Home of the anchor links and every link-write row.
@@ -226,8 +226,8 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
     let insert_doc = create_doc(port, x, &acc_x);
     let delete_doc = create_doc(port, x, &acc_x);
     seed_text(port, x, &delete_doc, "abcdefgh");
-    let rearr_doc = create_doc(port, x, &acc_x);
-    seed_text(port, x, &rearr_doc, "abcdef");
+    let rearrange_doc = create_doc(port, x, &acc_x);
+    seed_text(port, x, &rearrange_doc, "abcdef");
     let copy_dst = create_doc(port, x, &acc_x);
     let copy_src = create_doc(port, x, &acc_x);
     seed_text(port, x, &copy_src, "source");
@@ -240,7 +240,7 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
         own_doc,
         insert_doc,
         delete_doc,
-        rearr_doc,
+        rearrange_doc,
         copy_dst,
         copy_src,
         link_home,
@@ -265,7 +265,7 @@ fn run_cell(
     port: u16,
     fixture: &Fixture,
     tokens: &Tokens,
-    stale: &str,
+    stale_token: &str,
     counters: &Counters,
     row: &str,
     col: usize,
@@ -276,7 +276,7 @@ fn run_cell(
     let token: Option<&str> = match col {
         0..=3 => Some(tokens.by_col[col].as_str()),
         4 => None,
-        _ => Some(stale),
+        _ => Some(stale_token),
     };
     let own_doc: &str = if col <= 3 { &fixture.own_doc[col] } else { &fixture.own_doc[0] };
     let authed = col <= 3;
@@ -304,7 +304,7 @@ fn run_cell(
         ),
         "rearrange" => format!(
             r#"{{"op":"rearrange","doc":"{}","cuts":[{{"subspace":"1","ordinal":"1"}},{{"subspace":"1","ordinal":"2"}},{{"subspace":"1","ordinal":"3"}}]}}"#,
-            fixture.rearr_doc
+            fixture.rearrange_doc
         ),
         "copy (foreign dest)" => format!(
             r#"{{"op":"copy","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"specs":[{{"source":"{}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#,
@@ -385,7 +385,7 @@ fn walk_matrix(
     port: u16,
     fixture: &Fixture,
     tokens: &Tokens,
-    stale: &str,
+    stale_token: &str,
     counters: &Counters,
     walk: &str,
 ) {
@@ -393,7 +393,7 @@ fn walk_matrix(
     let mut cells = 0usize;
     for row in MATRIX {
         for (col, expected) in row.expect.iter().enumerate() {
-            let got = run_cell(port, fixture, tokens, stale, counters, row.op, col);
+            let got = run_cell(port, fixture, tokens, stale_token, counters, row.op, col);
             cells += 1;
             if got != *expected {
                 mismatches.push(format!(

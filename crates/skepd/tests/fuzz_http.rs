@@ -35,7 +35,7 @@ use fuzz_common::{exhaustive, iters, random_bytes, request_frames};
 /// `/health` answers 200 `ok:true` — the liveness + no-thread-leak check the
 /// batches lean on.
 fn assert_health(port: u16) {
-    let resp = http_raw_exchange(port, &get_request("/health"))
+    let resp = http_raw_exchange(port, &build_get("/health"))
         .expect("daemon reachable for /health");
     let (status, body) = check_http_response(&resp)
         .unwrap_or_else(|e| panic!("FINDING (http): /health response malformed: {e}"));
@@ -44,14 +44,15 @@ fn assert_health(port: u16) {
     assert_eq!(v["ok"], Value::Bool(true), "the daemon must stay up: {v}");
 }
 
-/// A local `GET` builder (mirrors `fuzz_support::build_get`, kept here so the
-/// liveness path is obviously independent of the code under test).
-fn get_request(path: &str) -> Vec<u8> {
+/// A local `GET` builder — deliberately a second copy of
+/// `fuzz_support::build_get`, under the same name, so the liveness path is
+/// obviously independent of the code under test.
+fn build_get(path: &str) -> Vec<u8> {
     format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").into_bytes()
 }
 
 /// Assemble a raw request from parts.
-fn req(method: &str, path: &str, extra_headers: &str, body: &[u8]) -> Vec<u8> {
+fn build_request(method: &str, path: &str, extra_headers: &str, body: &[u8]) -> Vec<u8> {
     let mut v = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Content-Length: {}\r\n\r\n",
         body.len()
@@ -66,7 +67,7 @@ fn req(method: &str, path: &str, extra_headers: &str, body: &[u8]) -> Vec<u8> {
 /// pipelined-garbage and split-write scenarios.
 fn valid_op_request() -> Vec<u8> {
     let body = br#"{"op":"retrieve_v","specs":[{"doc":"1.0.9.0.1","span":{"start":"1.1","width":"0.1"}}]}"#;
-    req("POST", "/op", "Content-Type: application/json\r\n", body)
+    build_request("POST", "/op", "Content-Type: application/json\r\n", body)
 }
 
 /// One hostile request, seeded. Every arm is a complete byte string ready to
@@ -80,12 +81,12 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
         1 => {
             let m = random_token(rng, 8);
             let p = format!("/{}", random_token(rng, 12));
-            req(&m, &p, "", b"")
+            build_request(&m, &p, "", b"")
         }
         // A valid /op line with a mutated frame body and a correct length.
         2 => {
             let body = mutate(splitmix64(rng), corpus);
-            req("POST", "/op", "Content-Type: application/json\r\n", &body)
+            build_request("POST", "/op", "Content-Type: application/json\r\n", &body)
         }
         // A body with a Content-Length that overstates it: half-close makes
         // the daemon see EOF mid-body → one 400, never a hang.
@@ -113,12 +114,12 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
             for k in 0..count {
                 headers.push_str(&format!("X-Fuzz-{k}: {}\r\n", random_token(rng, 6)));
             }
-            req("GET", "/health", &headers, b"")
+            build_request("GET", "/health", &headers, b"")
         }
         // A mutated /session body.
         6 => {
             let body = mutate(splitmix64(rng), corpus);
-            req("POST", "/session", "Content-Type: application/json\r\n", &body)
+            build_request("POST", "/session", "Content-Type: application/json\r\n", &body)
         }
         // A junk query on a real GET route.
         _ => {
@@ -126,7 +127,7 @@ fn hostile_request(rng: &mut u64, corpus: &[Vec<u8>]) -> Vec<u8> {
                 .chars()
                 .filter(|c| !c.is_control())
                 .collect();
-            get_request(&format!("/changes?{q}"))
+            build_get(&format!("/changes?{q}"))
         }
     }
 }

@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 
 use common::*;
 
-/// Client-side deadline for the hand-rolled exchange below. Well under the
-/// daemon's own 30 s request read timeout, so a daemon that fails to answer
-/// fails this test rather than the gate's patience.
-const DEADLINE: Duration = Duration::from_secs(10);
+/// Client-side socket timeout for the hand-rolled exchange below. Well under
+/// the daemon's own 30 s request read timeout, so a daemon that fails to
+/// answer fails this test rather than the gate's patience.
+const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A complete, well-formed request with a JSON body.
 fn post(path: &str, body: &str) -> Vec<u8> {
@@ -229,7 +229,7 @@ fn read_head(stream: &mut TcpStream, buf: &mut Vec<u8>, what: &str) -> usize {
             ),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
             Err(e) => panic!(
-                "{what}: nothing within {DEADLINE:?} ({e}); got {:?}",
+                "{what}: nothing within {CLIENT_TIMEOUT:?} ({e}); got {:?}",
                 String::from_utf8_lossy(buf)
             ),
         }
@@ -255,8 +255,8 @@ fn expect_100_continue_is_answered_before_the_body_is_sent() {
     );
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to skepd");
-    stream.set_read_timeout(Some(DEADLINE)).expect("read timeout");
-    stream.set_write_timeout(Some(DEADLINE)).expect("write timeout");
+    stream.set_read_timeout(Some(CLIENT_TIMEOUT)).expect("read timeout");
+    stream.set_write_timeout(Some(CLIENT_TIMEOUT)).expect("write timeout");
     // The head alone — the body is withheld exactly as curl withholds it.
     stream.write_all(head.as_bytes()).expect("write the request head");
 

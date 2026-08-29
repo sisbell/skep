@@ -748,7 +748,7 @@ fn room(out: &[Val], adding: usize) -> PResult<()> {
 /// The values one hex field will mint, read from the ENCODED text without
 /// copying or decoding it, so [`room`] can refuse before either. A
 /// non-string field needs no room; `field` below reports its own fault.
-fn hex_len(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
+fn hex_values(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
     Ok(need(m, k)?.as_str().map_or(0, |s| s.len() / 2))
 }
 
@@ -781,7 +781,7 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
         return Err(PErr("expected exactly one of 'hex', 'atom', or 'atom_hex'".into()));
     }
     if m.contains_key("hex") {
-        room(out, hex_len(m, "hex")?)?;
+        room(out, hex_values(m, "hex")?)?;
         let bytes = field(m, "hex", |v| p_hex(&p_string(v)?))?;
         out.extend(bytes.into_iter().map(|b| Val::new(vec![b])));
     } else if m.contains_key("atom") {

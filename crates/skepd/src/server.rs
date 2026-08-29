@@ -1853,7 +1853,7 @@ fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
         return;
     }
     loop {
-        match daemon.writes.next(last) {
+        match daemon.writes.next_step(last) {
             StreamStep::Shutdown => return,
             StreamStep::Commit(at) => {
                 last = at;

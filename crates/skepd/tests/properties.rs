@@ -321,19 +321,29 @@ fn setup(port: u16) -> Shadow {
 
 /// Send a valid-by-construction write and require its ack; records the
 /// committed head and the idempotent-retry memo.
-fn commit(shadow: &Shadow, state: &mut RunState, pi: usize, frame: String, i: usize) -> Value {
+fn commit(
+    shadow: &Shadow,
+    state: &mut RunState,
+    pi: usize,
+    frame: String,
+    op_index: usize,
+) -> Value {
     let token = shadow.principals[pi].token.clone();
     let (st, body) = http(state.port, "POST", "/op", Some(&token), frame.as_bytes());
-    assert_eq!(st, 200, "op {i}: transport failed: {}", String::from_utf8_lossy(&body));
+    assert_eq!(st, 200, "op {op_index}: transport failed: {}", String::from_utf8_lossy(&body));
     let v = json(&body);
     match v["resp"].as_str() {
         Some("ack") | Some("ack_addr") | Some("ack_edit") => {}
         _ => panic!(
-            "FINDING: op {i} was valid-by-construction yet did not ack\n frame: {frame}\n resp:  {v}"
+            "FINDING: op {op_index} was valid-by-construction yet did not ack\n frame: {frame}\n resp:  {v}"
         ),
     }
     let at = v["at"].as_u64().expect("a committed write carries at");
-    assert!(at >= state.head, "op {i}: committed at {at} regressed below head {}", state.head);
+    assert!(
+        at >= state.head,
+        "op {op_index}: committed at {at} regressed below head {}",
+        state.head
+    );
     state.head = at;
     state.n_writes += 1;
     state.memo = Some(Memo { frame, token, body });
@@ -347,7 +357,7 @@ fn own_doc(shadow: &Shadow, pi: usize, sel: u8) -> usize {
 
 /// The deterministic degradation target: one byte prepended to the caller's
 /// first document. Total, so every plan item executes something.
-fn fallback_insert(shadow: &mut Shadow, state: &mut RunState, pi: usize, i: usize) {
+fn fallback_insert(shadow: &mut Shadow, state: &mut RunState, pi: usize, op_index: usize) {
     let di = shadow.principals[pi].docs[0];
     let b = shadow.principals[pi].alphabet[0];
     let id = state.next_id();
@@ -356,11 +366,11 @@ fn fallback_insert(shadow: &mut Shadow, state: &mut RunState, pi: usize, i: usiz
         shadow.docs[di].addr,
         char::from(b)
     );
-    commit(shadow, state, pi, frame, i);
+    commit(shadow, state, pi, frame, op_index);
     shadow.docs[di].content.insert(0, ContentItem::Byte(b));
 }
 
-fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
+fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
     match planned {
         PlanOp::Insert { p, d, at, s, atom } => {
             let pi = *p as usize % 3;
@@ -375,7 +385,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"insert","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"values":[{val}]}}"#,
                 shadow.docs[di].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
             let at0 = (pos - 1) as usize;
             if *atom && bytes.len() > 1 {
                 shadow.docs[di].content.insert(at0, ContentItem::Atom(bytes));
@@ -393,7 +403,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             let di = own_doc(shadow, pi, *d);
             let len = shadow.docs[di].content.len() as u64;
             if len == 0 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let pos = 1 + (*at as u64) % len;
             let maxw = (len - pos + 1).min(8);
@@ -403,7 +413,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"delete","id":"{id}","doc":"{}","p":{{"subspace":"1","ordinal":"{pos}"}},"width":"{width}"}}"#,
                 shadow.docs[di].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
             let p0 = (pos - 1) as usize;
             shadow.docs[di].content.drain(p0..p0 + width as usize);
         }
@@ -413,7 +423,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             let si = *sd as usize % shadow.docs.len();
             let srclen = shadow.docs[si].content.len() as u64;
             if srclen == 0 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let from = 1 + (*f as u64) % srclen;
             let maxw = (srclen - from + 1).min(6);
@@ -425,7 +435,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"copy","id":"{id}","doc":"{}","at":{{"subspace":"1","ordinal":"{pos}"}},"specs":[{{"source":"{}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]}}"#,
                 shadow.docs[di].addr, shadow.docs[si].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
             // Resolution precedes staging (a self-copy sees the pre-edit
             // arrangement), so clone the items first.
             let f0 = (from - 1) as usize;
@@ -440,7 +450,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             let di = own_doc(shadow, pi, *d);
             let len = shadow.docs[di].content.len() as u64;
             if len < 2 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             // Three strictly ascending cuts in [1, len+1]: swap the two
             // adjacent regions [c1,c2) and [c2,c3).
@@ -452,7 +462,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"rearrange","id":"{id}","doc":"{}","cuts":[{{"subspace":"1","ordinal":"{c1}"}},{{"subspace":"1","ordinal":"{c2}"}},{{"subspace":"1","ordinal":"{c3}"}}]}}"#,
                 shadow.docs[di].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
             // Swapping the adjacent regions [c1,c2) and [c2,c3) is a left
             // rotation of the combined region by |α| (the store's own test:
             // cuts [2,4,6] over a..e tile to a,d,e,b,c).
@@ -462,13 +472,13 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
         PlanOp::Version { p, sd } => {
             let pi = *p as usize % 3;
             if shadow.principals[pi].docs.len() >= 6 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let si = *sd as usize % shadow.docs.len();
             let id = state.next_id();
             let frame =
                 format!(r#"{{"op":"version","id":"{id}","d_src":"{}"}}"#, shadow.docs[si].addr);
-            let v = commit(shadow, state, pi, frame, i);
+            let v = commit(shadow, state, pi, frame, op_index);
             let addr = v["addr"].as_str().expect("version acks the new address").to_string();
             // Content-sharing fork: the content subspace is snapshotted,
             // the link subspace is not.
@@ -480,14 +490,14 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
         PlanOp::CreateDoc { p } => {
             let pi = *p as usize % 3;
             if shadow.principals[pi].docs.len() >= 6 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let id = state.next_id();
             let frame = format!(
                 r#"{{"op":"create_new_document","id":"{id}","account":"{}"}}"#,
                 shadow.principals[pi].account
             );
-            let v = commit(shadow, state, pi, frame, i);
+            let v = commit(shadow, state, pi, frame, op_index);
             let addr = v["addr"].as_str().expect("create acks the address").to_string();
             shadow.docs.push(DocShadow { addr, content: Vec::new(), seats: 0, owner: pi });
             let di = shadow.docs.len() - 1;
@@ -521,7 +531,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             let frame = format!(
                 r#"{{"op":"make_link","id":"{id}","home":"{home}","from":{from},"to":{{"addrs":[]}},"ty":{ty_arg}}}"#
             );
-            let v = commit(shadow, state, pi, frame, i);
+            let v = commit(shadow, state, pi, frame, op_index);
             let addr = v["addr"].as_str().expect("make_link acks the link address").to_string();
             shadow.links.push(LinkShadow { addr, ty: ty_key, home_doc: di, owner: pi, nullified: false });
             shadow.docs[di].seats += 1; // make_link is the one seating write
@@ -539,12 +549,12 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             let frame = format!(
                 r#"{{"op":"emit","id":"{id}","home":"{home}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{ghost_root}","to":[]}}"#
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
         }
         PlanOp::AssertSup { p, d, x, y } => {
             let pi = *p as usize % 3;
             if shadow.links.len() < 2 {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let xi = *x as usize % shadow.links.len();
             let mut yi = *y as usize % shadow.links.len();
@@ -557,7 +567,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"assert_sup","id":"{id}","home":"{}","old":"{}","new":"{}"}}"#,
                 shadow.docs[di].addr, shadow.links[xi].addr, shadow.links[yi].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
         }
         PlanOp::Nullify { p, l } => {
             let pi = *p as usize % 3;
@@ -565,7 +575,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 .filter(|&k| shadow.links[k].owner == pi && !shadow.links[k].nullified)
                 .collect();
             if candidates.is_empty() {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let li = candidates[*l as usize % candidates.len()];
             let home = shadow.docs[shadow.links[li].home_doc].addr.clone();
@@ -574,13 +584,13 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"nullify","id":"{id}","home":"{home}","target":"{}"}}"#,
                 shadow.links[li].addr
             );
-            commit(shadow, state, pi, frame, i);
+            commit(shadow, state, pi, frame, op_index);
             shadow.links[li].nullified = true;
         }
         PlanOp::EditLink { p, d, l, resolve } => {
             let pi = *p as usize % 3;
             if shadow.links.is_empty() {
-                return fallback_insert(shadow, state, pi, i);
+                return fallback_insert(shadow, state, pi, op_index);
             }
             let oi = *l as usize % shadow.links.len();
             let di = own_doc(shadow, pi, *d);
@@ -596,7 +606,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
                 r#"{{"op":"edit_link","id":"{id}","original":"{}","d_s":"{home}","d_a":"{home}","successor":{{"from":{from},"to":[],"ty":{{"addrs":["{ghost}"]}}}}}}"#,
                 shadow.links[oi].addr
             );
-            let v = commit(shadow, state, pi, frame, i);
+            let v = commit(shadow, state, pi, frame, op_index);
             let succ = v["successor"].as_str().expect("ack_edit carries successor").to_string();
             // The successor is an ordinary open link in the caller's home
             // (born unseated — no seat count change); the claim is a
@@ -625,7 +635,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
             }
         }
         PlanOp::Forbidden { p, kind } => {
-            forbidden(shadow, state, *p as usize % 3, *kind % 6, i);
+            forbidden(shadow, state, *p as usize % 3, *kind % 6, op_index);
         }
     }
 }
@@ -633,7 +643,7 @@ fn step(i: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunState) {
 /// Oracle 5 — a foreign write per the H1 table: must reject with the
 /// table's code and move nothing (log position unchanged, shadow
 /// untouched; the surrounding oracles then prove nothing else moved).
-fn forbidden(shadow: &Shadow, state: &mut RunState, pi: usize, kind: u8, i: usize) {
+fn forbidden(shadow: &Shadow, state: &mut RunState, pi: usize, kind: u8, op_index: usize) {
     let foreign_doc = shadow
         .docs
         .iter()
@@ -692,12 +702,12 @@ fn forbidden(shadow: &Shadow, state: &mut RunState, pi: usize, kind: u8, i: usiz
     assert_eq!(
         rej["code"].as_str(),
         Some(code),
-        "FINDING: op {i}: forbidden write (kind {kind}) rejected with the wrong code\n frame: {frame}\n resp:  {v}"
+        "FINDING: op {op_index}: forbidden write (kind {kind}) rejected with the wrong code\n frame: {frame}\n resp:  {v}"
     );
     let after = health_pos(state.port);
     assert_eq!(
         before, after,
-        "FINDING: op {i}: a rejected write moved the log ({before} → {after})\n frame: {frame}"
+        "FINDING: op {op_index}: a rejected write moved the log ({before} → {after})\n frame: {frame}"
     );
     state.n_forbidden += 1;
 }
@@ -924,13 +934,13 @@ fn run_case(plan: &[PlanOp]) {
     let mut shadow = setup(state.port);
     state.head = health_pos(state.port);
 
-    for (i, planned) in plan.iter().enumerate() {
+    for (op_index, planned) in plan.iter().enumerate() {
         let writes_before = state.n_writes;
-        step(i, planned, &mut shadow, &mut state);
+        step(op_index, planned, &mut shadow, &mut state);
         if state.n_writes > writes_before && state.n_writes % CADENCE == 0 {
             capture_position(&shadow, &mut state);
         }
-        if (i + 1) % CADENCE == 0 {
+        if (op_index + 1) % CADENCE == 0 {
             check_all_docs(&shadow, &mut state);
             check_links(&shadow, &mut state, LinkScope::Sample);
         }

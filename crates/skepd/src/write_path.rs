@@ -31,12 +31,12 @@ use skep_kernel::Seq;
 use crate::codec::op_name;
 use crate::sidecar::{ChangesAnswer, Sidecar};
 
-/// SSE keepalive cadence, and so the commit stream's wait bound: a
-/// subscriber that has heard nothing for this long is answered
-/// [`StreamStep::Keepalive`] and writes its `:ka` comment, so proxies and
-/// clients can detect liveness — and the daemon detects a dead subscriber
-/// by the failed write within one interval.
-const SSE_KEEPALIVE: Duration = Duration::from_secs(15);
+/// The commit stream's wait bound: a subscriber that has heard nothing for
+/// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
+/// as the wire's `:ka` comment, so proxies and clients can detect liveness —
+/// and the daemon detects a dead subscriber by the failed write within one
+/// interval.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
 /// The write path: the serialization point, the commit-metadata sidecar
 /// behind it, and the commit stream in front of it.
@@ -120,8 +120,9 @@ impl WritePath {
         self.sidecar.head_time()
     }
 
-    /// What one subscriber does next — see [`CommitStream::next`].
-    pub fn next(&self, last: Seq) -> StreamStep {
+    /// What one subscriber does next — see [`CommitStream::next`], where the
+    /// receiver names the stream and the bare word is complete.
+    pub fn next_step(&self, last: Seq) -> StreamStep {
         self.commit_stream.next(last)
     }
 
@@ -369,7 +370,7 @@ impl CommitStream {
     /// current head (not a queue of commits) is the coalescing: a burst of
     /// commits between wakes is one step.
     fn next(&self, last: Seq) -> StreamStep {
-        let deadline = Instant::now() + SSE_KEEPALIVE;
+        let deadline = Instant::now() + KEEPALIVE_INTERVAL;
         let mut state = self.state.lock();
         loop {
             if state.shutdown {

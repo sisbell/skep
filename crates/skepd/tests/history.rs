@@ -14,20 +14,21 @@ use serde_json::Value;
 
 /// One scenario with its positions: doc1 gets "alpha" then loses "lp"
 /// (leaving "aha"), doc2 gets "beta", and one link doc1→doc2 is made and
-/// then nullified (`nul` is the retraction's own minted address). Every
-/// field's `at_*` is the committed position the corresponding ack carried.
+/// then nullified (`retraction` is the retraction link's own minted
+/// address). Every field's `at_*` is the committed position the
+/// corresponding ack carried.
 struct Scenario {
     doc1: String,
     doc2: String,
     link: String,
-    nul: String,
+    retraction: String,
     at_c1: u64,
     at_i1: u64,
     at_c2: u64,
     at_i2: u64,
     at_del: u64,
     at_link: u64,
-    at_null: u64,
+    at_nullify: u64,
 }
 
 fn acked_at(v: &Value) -> u64 {
@@ -107,10 +108,22 @@ fn seed(port: u16) -> Scenario {
         Some(&s1),
         &format!(r#"{{"op":"nullify","home":"{doc1}","target":"{link}"}}"#),
     );
-    let nul = acked_addr(&v);
-    let at_null = acked_at(&v);
+    let retraction = acked_addr(&v);
+    let at_nullify = acked_at(&v);
 
-    Scenario { doc1, doc2, link, nul, at_c1, at_i1, at_c2, at_i2, at_del, at_link, at_null }
+    Scenario {
+        doc1,
+        doc2,
+        link,
+        retraction,
+        at_c1,
+        at_i1,
+        at_c2,
+        at_i2,
+        at_del,
+        at_link,
+        at_nullify,
+    }
 }
 
 fn head_of(port: u16) -> u64 {
@@ -163,7 +176,7 @@ fn historical_reads_answer_every_earlier_state() {
     let port = sd.port();
     let scenario = seed(port);
     let head = head_of(port);
-    assert_eq!(head, scenario.at_null, "the last write's at is the head");
+    assert_eq!(head, scenario.at_nullify, "the last write's at is the head");
 
     // ── content history: the text at each position, as_of = the position ──
     let v = op_at_ok(port, scenario.at_i1, &retrieve(&scenario.doc1, 5));
@@ -213,7 +226,7 @@ fn historical_reads_answer_every_earlier_state() {
     let addrs = expect_resp(&v, "addrs")["addrs"].as_array().expect("addrs").clone();
     assert!(addrs.iter().any(|a| a.as_str() == Some(scenario.link.as_str())));
 
-    let v = op_at_ok(port, scenario.at_null, &read_link(&scenario.link));
+    let v = op_at_ok(port, scenario.at_nullify, &read_link(&scenario.link));
     assert!(
         v["link"]["slots"].is_array(),
         "a nullified link still reads back (audit permanence): {v}"
@@ -222,10 +235,10 @@ fn historical_reads_answer_every_earlier_state() {
     // place (a retraction is itself an active link whose document-homed FROM
     // covers every content extent of doc1 — M7's contract, replayed here as
     // the state a live client saw at that position).
-    let v = op_at_ok(port, scenario.at_null, &find_links(&scenario.doc1));
+    let v = op_at_ok(port, scenario.at_nullify, &find_links(&scenario.doc1));
     assert_eq!(
         expect_resp(&v, "addrs")["addrs"],
-        Value::Array(vec![Value::String(scenario.nul.clone())]),
+        Value::Array(vec![Value::String(scenario.retraction.clone())]),
         "at the nullify position, active discovery holds exactly the retraction"
     );
 
@@ -330,9 +343,9 @@ fn history_answers_survive_restart() {
             (scenario.at_i1, spanset(&scenario.doc2)), // a rejection is history too
             (0, spanset(&scenario.doc1)),
             (scenario.at_i2, read_link(&scenario.link)),
-            (scenario.at_null, read_link(&scenario.link)),
+            (scenario.at_nullify, read_link(&scenario.link)),
             (scenario.at_link, find_links(&scenario.doc1)),
-            (scenario.at_null, find_links(&scenario.doc1)),
+            (scenario.at_nullify, find_links(&scenario.doc1)),
         ];
         before = probes
             .iter()

@@ -421,4 +421,17 @@ fn doc_response_examples_match_the_codec() {
             "response shape '{required}' has no documented example"
         );
     }
+    // The other hand transcription of this list is the fuzz oracle's, which
+    // judges what the DAEMON answers where this judges what wire.md
+    // documents. A shape in one and not the other is a drift — and adding
+    // one to the oracle is exactly what an author does to quiet it, after
+    // which the shape ships undocumented and both lists pass. (A new
+    // `Response` VARIANT is caught by the compiler at `j_response`, not by
+    // either list; this catches a shape that reaches the wire without
+    // reaching both.)
+    let mut oracle: Vec<&str> = skepd::fuzz_support::RESP_SHAPES.to_vec();
+    let mut required: Vec<&str> = REQUIRED_SHAPES.to_vec();
+    oracle.sort();
+    required.sort();
+    assert_eq!(oracle, required, "the two transcriptions of wire.md's response shapes disagree");
 }

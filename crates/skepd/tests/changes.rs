@@ -792,6 +792,17 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         "floor is named when known and omitted otherwise, never something else: {v}"
     );
 
+    // …and by the third positioned route, which this test's own preamble
+    // names. `/dump?at` shares `/op-at`'s refusal mapping, so what this
+    // pins is the ROUTE: `get_dump`'s own error arm answering the same
+    // documented discipline.
+    #[cfg(feature = "observe")]
+    {
+        let (st, body) = get(port, &format!("/dump?at={}", early[0]));
+        assert_eq!(st, 410, "a reclaimed position is /dump?at's 410 too: {}", text(&body));
+        assert_eq!(json(&body)["error"].as_str(), Some("history_reclaimed"));
+    }
+
     sd.shutdown();
 }
 

@@ -2320,4 +2320,79 @@ mod tests {
             "a committing write announces the position it committed, not the head"
         );
     }
+
+    /// A connecting subscriber is told the last ANNOUNCED position, not the
+    /// kernel's head — `write_path.rs`'s guarantee (every position a
+    /// subscriber hears is one `/changes` already carries) applied to the
+    /// connect event.
+    ///
+    /// The two differ only between a write's commit and its change-feed
+    /// record, so the gap is opened deliberately rather than raced for: a
+    /// direct `febe.execute` is the one path that commits without
+    /// announcing, and nothing announces afterwards, so the state holds.
+    /// Told the head there, a client would ask `/changes` for a delta not
+    /// yet containing the position it was handed and show a stale view
+    /// until the next write.
+    #[test]
+    fn a_connecting_subscriber_is_told_the_announced_position_not_the_head() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let daemon = Daemon::open(dir.path()).expect("genesis open");
+        let server = serve(daemon, 0, 1).expect("bind an ephemeral port");
+        let port = server.port();
+
+        let (announced, ahead) = {
+            let d = server.daemon();
+            let (token, _) = d.sessions.bind(d.febe.open_session(PrincipalId(0)));
+            let sid = d.sessions.resolve(Some(&token));
+            let req = d
+                .codec
+                .parse(br#"{"op":"register_node","addr":"1.9001"}"#)
+                .unwrap_or_else(|_| panic!("test frame parses"));
+            let ahead = match d.febe.execute(sid, req) {
+                Response::AckAddr { at, .. } => at,
+                // `Response` derives no Debug upstream; marshal to say what came back.
+                other => panic!(
+                    "register_node acks an address: {}",
+                    String::from_utf8_lossy(&d.codec.marshal(&other))
+                ),
+            };
+            (d.writes.announced(), ahead)
+        };
+        assert!(announced.0 < ahead.0, "the head is now ahead of the commit stream");
+
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect /events");
+        stream.set_read_timeout(Some(Duration::from_secs(5))).expect("read timeout");
+        stream
+            .write_all(b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            .expect("write the stream request");
+        let mut buf: Vec<u8> = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let first = loop {
+            if let Some(i) = buf.windows(6).position(|w| w == b"data: ") {
+                if let Some(nl) = buf[i..].iter().position(|&b| b == b'\n') {
+                    let v: Value =
+                        serde_json::from_slice(&buf[i + 6..i + nl]).expect("event data is JSON");
+                    break v["log_position"].as_u64().expect("log_position");
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no initial event: {:?}",
+                String::from_utf8_lossy(&buf)
+            );
+            let mut chunk = [0u8; 1024];
+            match stream.read(&mut chunk) {
+                Ok(0) => panic!("the stream closed before its first event"),
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(_) => {}
+            }
+        };
+        assert_eq!(
+            first, announced.0,
+            "the connect event carries the announced position, which `/changes` already covers"
+        );
+        assert!(first < ahead.0, "and NOT the head, whose change-feed record does not exist yet");
+
+        server.shutdown();
+    }
 }

@@ -42,8 +42,13 @@ fn commit_stream_pushes_the_head_to_every_subscriber() {
     let sd = spawn(dir.path());
     let port = sd.port();
 
-    // On connect: one event carrying the current committed head, agreeing
-    // with /health.
+    // On connect: one event carrying the last ANNOUNCED position, which on
+    // a quiescent daemon IS the committed head — that equality is what
+    // makes the /health comparison legitimate here. The two differ only
+    // between a write's commit and its change-feed record, which
+    // `server.rs`'s
+    // `a_connecting_subscriber_is_told_the_announced_position_not_the_head`
+    // opens deliberately rather than racing for.
     let mut a = Sse::connect(port);
     let initial = a.expect_commit();
     let (st, body) = get(port, "/health");
@@ -51,7 +56,7 @@ fn commit_stream_pushes_the_head_to_every_subscriber() {
     assert_eq!(
         json(&body)["log_position"].as_u64().expect("health log_position"),
         initial,
-        "the initial event is the committed head"
+        "with nothing in flight, the announced position is the committed head"
     );
 
     let mut b = Sse::connect(port);

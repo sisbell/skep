@@ -367,7 +367,15 @@ fn a_paced_peer_is_refused_at_the_transfer_deadline() {
             Ok(0) => break,
             Ok(n) => {
                 raw.extend_from_slice(&chunk[..n]);
-                if head_is_complete(&raw) {
+                // The refusal is complete only when its BODY has landed too:
+                // `write_reply` writes the head and the body as two separate
+                // calls, so any scheduling delay between them puts the head
+                // in one read and the body in the next. Stopping at the
+                // header terminator would judge a body still in flight, and
+                // the pacing above must stop the moment the head arrives —
+                // a further write to the closed socket would reset the
+                // connection and discard the answer under test.
+                if response_is_complete(&raw) {
                     break;
                 }
             }
@@ -403,7 +411,21 @@ fn a_paced_peer_is_refused_at_the_transfer_deadline() {
     sd.shutdown();
 }
 
-/// Whether `raw` holds a complete response head yet.
-fn head_is_complete(raw: &[u8]) -> bool {
-    raw.windows(4).any(|w| w == b"\r\n\r\n")
+/// Whether `raw` holds a complete response — the head AND the body its
+/// `Content-Length` declares. The daemon writes the two separately, so a
+/// caller that stops at the header terminator can be judging a body that
+/// has not arrived; the length is what says when there is nothing more to
+/// wait for.
+fn response_is_complete(raw: &[u8]) -> bool {
+    let Some(sep) = raw.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+    let Ok(head) = std::str::from_utf8(&raw[..sep]) else { return false };
+    let declared: usize = head
+        .split("\r\n")
+        .filter_map(|l| l.split_once(':'))
+        .find(|(name, _)| name.trim().eq_ignore_ascii_case("Content-Length"))
+        .and_then(|(_, v)| v.trim().parse().ok())
+        // A refusal always declares its length; anything that does not is
+        // complete at its head, which is what a bodiless answer is.
+        .unwrap_or(0);
+    raw.len() - (sep + 4) >= declared
 }

@@ -3,6 +3,8 @@
 //! deterministically, and the wire name tables (op names, rejection codes)
 //! are pinned so a rename upstream cannot silently change the protocol.
 
+use std::path::Path;
+
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{Run, VPos, VSpec};
@@ -494,10 +496,47 @@ fn every_response_shape_marshals_deterministically() {
     }
 }
 
-/// The full `RejectCode` wire-name table — all 60 codes, pinned.
+/// The rejection codes wire.md documents: every backtick-quoted
+/// snake_case token in §Rejection codes. Harvested from the arbiter rather
+/// than restated, because a third hand transcription would drift the same
+/// way the table below already did.
+fn documented_reject_codes() -> Vec<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let section = text
+        .split_once("### Rejection codes")
+        .expect("wire.md names its rejection-code section")
+        .1
+        .split_once("\n## ")
+        .expect("the section ends at the next top-level heading")
+        .0;
+    let mut out: Vec<String> = section
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|t| {
+            !t.is_empty()
+                && t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        })
+        .map(str::to_string)
+        .collect();
+    out.sort();
+    out.dedup();
+    // The harvest must not go vacuous if the section's prose is reshaped:
+    // an empty list would make the check below pass by finding nothing.
+    assert!(out.len() > 50, "harvested only {} codes; wire.md's section shape changed", out.len());
+    out
+}
+
+/// The full `RejectCode` wire-name table — all 62 codes, pinned.
+/// `code_name` is exhaustive over the enum, so the compiler forces a new
+/// variant to be NAMED; this forces the name to be the one wire.md
+/// publishes, and the harvest above forces the table to hold every code
+/// the document lists.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 60] = [
+    let table: [(RejectCode, &str); 62] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -522,6 +561,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::NotNextForm, "not_next_form"),
         (RejectCode::NotValid, "not_valid"),
         (RejectCode::NotNode, "not_node"),
+        (RejectCode::TooDeep, "too_deep"),
         (RejectCode::NotDescendantOfBootstrap, "not_descendant_of_bootstrap"),
         (RejectCode::NotFresh, "not_fresh"),
         (RejectCode::BadPosition, "bad_position"),
@@ -543,6 +583,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::AlreadySeated, "already_seated"),
         (RejectCode::NotContentSubspace, "not_content_subspace"),
         (RejectCode::IllFormedSpec, "ill_formed_spec"),
+        (RejectCode::SlotTooLarge, "slot_too_large"),
         (RejectCode::EmptyTypeResolution, "empty_type_resolution"),
         (RejectCode::ShapeViolation, "shape_violation"),
         (RejectCode::RetractionClass, "retraction_class"),
@@ -570,6 +611,17 @@ fn reject_code_names_are_pinned() {
         });
         let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
         assert_eq!(v["code"].as_str(), Some(name), "wire name drifted for {code:?}");
+    }
+    // Every code the document lists must be pinned here. The reverse is
+    // deliberately NOT asserted: `slot_too_large` is a name `code_name` can
+    // emit that wire.md v6.1 assigns no code to — a guarantee question, not
+    // a table error (see the boundary note).
+    let pinned: std::collections::HashSet<&str> = table.iter().map(|&(_, n)| n).collect();
+    for name in documented_reject_codes() {
+        assert!(
+            pinned.contains(name.as_str()),
+            "wire.md documents rejection code '{name}', which this table does not pin"
+        );
     }
 }
 

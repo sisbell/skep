@@ -205,6 +205,32 @@ fn addrs_form_endsets_and_ghost_types() {
     let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{l1}","slot":3}}"#));
     assert_eq!(expect_resp(&v, "follow")["result"]["ok"], ty_endset);
 
+    // The two answers wire.md keeps apart, PRODUCED here rather than only
+    // marshaled from a fixture: an empty endset is a DEFINED success (l1's
+    // addrs-form TO is empty), and an absent link or slot is the other
+    // answer. M7 calls the distinction unforgeable and M10 declines to
+    // lower it to a rejection; nothing in this suite had ever seen either
+    // shape, since every live follow returns a non-empty `ok` and every
+    // fixture carries exactly one span.
+    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{l1}","slot":2}}"#));
+    assert_eq!(
+        expect_resp(&v, "follow")["result"],
+        serde_json::json!({"ok": []}),
+        "an empty endset is a defined answer, not an error: {v}"
+    );
+    for (what, frame) in [
+        ("a slot no link has", format!(r#"{{"op":"follow_link","a":"{l1}","slot":4}}"#)),
+        ("slot 0 — the wire is 1-based", format!(r#"{{"op":"follow_link","a":"{l1}","slot":0}}"#)),
+        ("an address holding no link", format!(r#"{{"op":"follow_link","a":"{doc}","slot":1}}"#)),
+    ] {
+        let v = op(port, None, &frame);
+        assert_eq!(
+            expect_resp(&v, "follow")["result"],
+            serde_json::json!({"err": "invalid"}),
+            "{what} is ⊥, distinct from the empty answer above: {v}"
+        );
+    }
+
     // Link 2 shares name1 and points TO l1 by address (link-to-link).
     let v = op(
         port,
@@ -428,6 +454,30 @@ fn an_id_on_a_read_frame_never_memoizes_the_answer() {
     };
     assert_eq!(width(&first), "5", "the first read saw \"alpha\": {first}");
     assert_eq!(width(&second), "9", "the second sees \"alpha\" + \"beta\": {second}");
+
+    sd.shutdown();
+}
+
+/// wire.md §Operations: a node address "is capped at 32 components —
+/// deeper is `too_deep`". Both ends of that comparison at the wire, and
+/// the only place in this crate that produces the code at all — its wire
+/// name is otherwise emitted by `code_name` and read back by nothing.
+#[test]
+fn the_node_depth_cap_is_exactly_32_components_on_the_wire() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    let node = |n: usize| vec!["1"; n].join(".");
+
+    let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(32)));
+    assert_eq!(acked_addr(&v), node(32), "a node AT the depth cap registers");
+
+    let v = op(port, Some(&boot), &format!(r#"{{"op":"register_node","addr":"{}"}}"#, node(33)));
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(rej["op"].as_str(), Some("register_node"));
+    assert_eq!(rej["code"].as_str(), Some("too_deep"), "the documented code: {v}");
+    assert_eq!(rej["disposition"].as_str(), Some("permanent"));
 
     sd.shutdown();
 }

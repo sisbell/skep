@@ -23,6 +23,11 @@ fn preflight_answers_204_with_the_fixed_headers() {
         let (st, headers, body) = options(port, path);
         assert_eq!(st, 204, "OPTIONS {path} answers 204");
         assert!(body.is_empty(), "a 204 carries no body ({path})");
+        // The absence is the claim: a 204 that declares a length or names a
+        // type is the shape `Reply`'s `Option<Body>` makes unconstructible
+        // in the value, asserted here where the bytes are decided.
+        assert_eq!(header(&headers, "Content-Length"), None, "a 204 declares no length ({path})");
+        assert_eq!(header(&headers, "Content-Type"), None, "and names no type ({path})");
         assert_eq!(header(&headers, "Access-Control-Allow-Origin"), Some("*"), "{path}");
         assert_eq!(
             header(&headers, "Access-Control-Allow-Methods"),

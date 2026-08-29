@@ -458,6 +458,65 @@ fn op_at_reconstruction_is_permit_bounded() {
     sd.shutdown();
 }
 
+/// The reconstruction permit is taken AFTER the frame is classified and
+/// BEFORE the journal sees `at` — `Unavailable::Busy`, `History::reconstruct`
+/// and `refuse_unavailable` each say so, and the order decides what
+/// disposition a client is handed.
+///
+/// The fear is the tidy inversion: pre-checking `at` against the head before
+/// taking a permit answers `beyond_head` here, turning a documented
+/// retry-class refusal into a permanent one with nothing to notice. The
+/// write probe is the same seam from the other side.
+#[test]
+fn saturation_precedes_the_journals_verdict_and_not_the_write_refusal() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    let head = head_of(port);
+
+    // With a permit free, the journal's own verdict answers. `at_c1 + 1` is
+    // inside the insert's commit — a coordinate, not a position.
+    let bad: [(&str, u64, &str); 2] = [
+        ("beyond the head", head + 7, "beyond_head"),
+        ("between commits", scenario.at_c1 + 1, "not_a_position"),
+    ];
+    for (what, at, err) in bad {
+        let (st, v) = op_at(port, at, &retrieve(&scenario.doc1, 3));
+        assert_eq!(st, 400, "{what}: {v}");
+        assert_eq!(v["error"].as_str(), Some(err), "{what}: the journal's verdict");
+    }
+
+    // Exhaust the budget through the hook rather than racing a
+    // millisecond-long reconstruction.
+    let daemon = sd.daemon();
+    let mut held = Vec::new();
+    while let Some(p) = daemon.try_hold_reconstruction_permit() {
+        held.push(p);
+    }
+    assert!(!held.is_empty(), "the daemon has a reconstruction budget to exhaust");
+
+    for (what, at, _) in bad {
+        let (st, v) = op_at(port, at, &retrieve(&scenario.doc1, 3));
+        assert_eq!(st, 503, "{what} under saturation: {v}");
+        assert_eq!(
+            v["error"].as_str(),
+            Some("history_busy"),
+            "{what}: saturation masks the journal's verdict, which is why a Busy \
+             answer says nothing about whether `at` is a good position"
+        );
+    }
+
+    // …and does NOT mask what is decided before the permit: the frame is
+    // classified first, so a write is still refused at the transport.
+    let (st, v) = op_at(port, head, r#"{"op":"fork"}"#);
+    assert_eq!(st, 400, "{v}");
+    assert_eq!(v, serde_json::json!({"error": "write_at_history"}));
+
+    drop(held);
+    sd.shutdown();
+}
+
 #[cfg(feature = "observe")]
 #[test]
 fn dump_at_is_deterministic_and_head_matches_live() {

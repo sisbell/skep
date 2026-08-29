@@ -210,6 +210,12 @@ impl Sse {
             lower.contains("connection: close"),
             "the event stream declares Connection: close (wire.md §Transport): {head}"
         );
+        assert!(
+            lower.contains("cache-control: no-cache"),
+            "the event stream forbids caching — an intermediary that buffers it \
+             delivers nothing until close, so the stream looks dead while the \
+             daemon is healthy: {head}"
+        );
         sse
     }
 

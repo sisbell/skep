@@ -163,6 +163,15 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(st, 200);
     assert!(json(&body)["head_time"].is_null(), "fresh world: head_time null");
 
+    // …and the feed answers the empty page, not a refusal: this is every
+    // client's first poll, and a 410 here would break it before the world
+    // has anything in it to be wrong about.
+    let (st, body) = changes_raw(port, "since=0");
+    assert_eq!(st, 200, "a fresh world's feed: {}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    assert_eq!(entry_ats(&v), Vec::<u64>::new());
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(0), Some(false)));
+
     let doc = seed_flow(port);
 
     // Reads and rejected writes are not in the feed: issue both, then

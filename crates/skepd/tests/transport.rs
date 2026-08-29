@@ -429,3 +429,130 @@ fn response_is_complete(raw: &[u8]) -> bool {
         .unwrap_or(0);
     raw.len() - (sep + 4) >= declared
 }
+
+/// The daemon's own request-head cap, restated so that moving it is a
+/// visible decision — the discipline `SMALL_BODY_CAP` above already gets.
+const HEAD_CAP: usize = 64 * 1024;
+
+/// The head cap is the only bound on what one connection's headers may
+/// allocate: the socket timeouts bound silence, the transfer deadline
+/// bounds slowness, and loopback delivers gigabytes inside thirty seconds
+/// — so `workers` peers against an uncapped reader is the whole memory of
+/// the process.
+///
+/// The refusal must NAME the cap, because the connection-closed path
+/// answers the same `malformed_http`: a daemon that had lost the cap would
+/// still 400 here, on the EOF, after buffering everything first. A
+/// status-only assertion cannot tell the two apart.
+#[test]
+fn a_head_at_the_cap_is_read_and_one_byte_past_it_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // Far past any ordinary request and well under the cap: served.
+    let mut head = String::from("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+    while head.len() < HEAD_CAP / 2 {
+        head.push_str(&format!("X-Fill-{:05}: {}\r\n", head.len(), "f".repeat(64)));
+    }
+    head.push_str("\r\n");
+    let (status, _, body) = raw_exchange(port, head.as_bytes());
+    assert_eq!(
+        status,
+        200,
+        "a large admissible head is served: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+
+    // Exactly the cap, and not a byte more, with no terminator: the daemon
+    // is still waiting for one, so nothing has come back. This is the
+    // load-bearing half — a `>` that became a `>=` refuses a head the
+    // daemon is documented to read.
+    let mut head = String::from("POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Fill: ");
+    while head.len() < HEAD_CAP {
+        head.push('f');
+    }
+    assert_eq!(head.len(), HEAD_CAP, "the first write is exactly the cap");
+
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream.set_read_timeout(Some(Duration::from_millis(200))).expect("read timeout");
+    stream.set_write_timeout(Some(CLIENT_TIMEOUT)).expect("write timeout");
+    stream.write_all(head.as_bytes()).expect("a head at the cap is accepted");
+    // Long enough for the daemon to drain 64 KiB of loopback and block on
+    // its next read, which is what leaves its receive queue empty below.
+    std::thread::sleep(Duration::from_millis(250));
+    let mut probe = [0u8; 512];
+    match stream.read(&mut probe) {
+        Ok(0) => panic!("the daemon closed on a head that is only AT the cap"),
+        Ok(n) => panic!(
+            "a head at the cap was refused: {:?}",
+            String::from_utf8_lossy(&probe[..n])
+        ),
+        Err(_) => {} // nothing came back, which is the claim
+    }
+
+    // One byte more crosses it. The daemon has already consumed everything
+    // we sent, so it refuses with an empty receive queue and closes
+    // cleanly — no reset, so the refusal reaches us intact.
+    stream.write_all(b"f").expect("write the byte past the cap");
+    stream.shutdown(Shutdown::Write).expect("half-close");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("read the refusal");
+    let (status, _, body) = parse_response(&raw, "the over-cap head's refusal");
+    assert_eq!(status, 400, "{}", String::from_utf8_lossy(&body));
+    let v = json(&body);
+    assert_eq!(v["error"].as_str(), Some("malformed_http"));
+    let detail = v["detail"].as_str().expect("the refusal says what failed");
+    assert!(
+        detail.contains(&HEAD_CAP.to_string()),
+        "the refusal names the cap it met, not the close it never reached: {detail}"
+    );
+
+    // The refusal cost one connection and nothing else.
+    let (status, body) = get(port, "/health");
+    assert_eq!(status, 200, "the daemon still serves");
+    assert_eq!(json(&body)["ok"].as_bool(), Some(true));
+
+    sd.shutdown();
+}
+
+/// A body is framed by `Content-Length` and whatever follows is dropped
+/// unread. A daemon that read to the head/body boundary instead would hand
+/// the codec `{…}XXXX` and answer `unparseable`, telling a client that
+/// appended a byte — or a proxy that coalesced — that its JSON was bad when
+/// its framing was merely generous.
+///
+/// The one test that sends such bytes (`fuzz_http`'s pipelined recipe)
+/// judges only that the answer is well formed, which a wrong `unparseable`
+/// is.
+#[test]
+fn bytes_past_content_length_are_dropped_rather_than_read_as_body() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    let frame = r#"{"op":"next_account_prefix","parent":"1"}"#;
+    for (what, trailing) in [
+        ("trailing junk", "XXXXXXXX"),
+        ("a pipelined second request", "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+    ] {
+        let raw = format!(
+            "POST /op HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{frame}{trailing}",
+            frame.len()
+        )
+        .into_bytes();
+        let (status, _, body) = raw_exchange(port, &raw);
+        assert_eq!(status, 200, "{what}: {}", String::from_utf8_lossy(&body));
+        // Non-JSON here is either the codec having been handed the extra
+        // bytes, or a second answer appended to the first.
+        assert_eq!(
+            json(&body)["resp"].as_str(),
+            Some("maybe_addr"),
+            "{what}: the declared body is the frame, and this connection answers once"
+        );
+    }
+
+    sd.shutdown();
+}

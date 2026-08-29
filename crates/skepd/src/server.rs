@@ -176,12 +176,15 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 /// not a request/response reply — so a change to either must reach both
 /// writers or reach neither.
 ///
-/// These are the exact HTTP/1.1 bytes both writers emit, exported because
-/// [`Reply`] names them as a caller's obligation: a caller serving replies
-/// over a transport of its own supplies the same two headers, however that
-/// transport spells them, and can read the current posture from here rather
-/// than transcribing it from prose.
-pub const UNIVERSAL_HEADERS: &str = "Access-Control-Allow-Origin: *\r\nConnection: close\r\n";
+/// Exported because [`Reply`] names them as a caller's obligation. They are
+/// name/value pairs — the same shape [`Reply::headers`] carries — rather
+/// than this daemon's own CRLF bytes, so a caller serving replies over a
+/// transport of its own supplies them however that transport spells a
+/// header instead of parsing a framing only this crate's writer can use.
+pub const UNIVERSAL_HEADERS: [(&str, &str); 2] = [
+    ("Access-Control-Allow-Origin", "*"),
+    ("Connection", "close"),
+];
 
 /// The one request header this daemon reads beyond HTTP's own framing: the
 /// opaque session token. Named once because the CORS preflight must
@@ -313,6 +316,7 @@ pub struct Body {
 /// A caller serving these over a transport of its own owes the last two —
 /// and takes them from that constant rather than transcribing them, so the
 /// day the cross-origin posture is revisited it moves for them too.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Reply {
     pub status: u16,
@@ -391,7 +395,7 @@ impl Reply {
 /// the accept path spawns a subscriber thread that owns the socket
 /// (`serve_events`), and the type makes reaching it through the plain reply
 /// path unrepresentable.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Routed {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
@@ -1731,6 +1735,12 @@ fn write_bounded(stream: &mut TcpStream, mut bytes: &[u8], deadline: Instant) ->
     Ok(())
 }
 
+/// Append one `Name: value` line in this daemon's framing — the one place a
+/// header becomes bytes, shared by the reply path and the event stream.
+fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
+    head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+}
+
 /// Write one complete reply; the connection closes behind it. Every reply
 /// carries [`UNIVERSAL_HEADERS`] — wire v4's CORS posture and the
 /// one-request-per-connection framing — supplied at this one choke point so
@@ -1742,9 +1752,8 @@ fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::
     head.extend_from_slice(
         format!("HTTP/1.1 {} {}\r\n", reply.status, reason(reply.status)).as_bytes(),
     );
-    head.extend_from_slice(UNIVERSAL_HEADERS.as_bytes());
-    for (name, value) in &reply.headers {
-        head.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
+    for (name, value) in UNIVERSAL_HEADERS.iter().chain(&reply.headers) {
+        push_header(&mut head, name, value);
     }
     // The body and the headers describing it come from one value, so the
     // two cannot disagree about whether there is one.
@@ -1802,12 +1811,14 @@ fn reason(status: u16) -> &'static str {
 /// `GET /changes` already carries — see that method for the window the
 /// distinction closes.
 fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
-    let head = format!(
-        "HTTP/1.1 200 OK\r\n{UNIVERSAL_HEADERS}\
-         Content-Type: text/event-stream\r\n\
-         Cache-Control: no-cache\r\n\r\n"
-    );
-    if stream.write_all(head.as_bytes()).is_err() {
+    let mut head = b"HTTP/1.1 200 OK\r\n".to_vec();
+    for (name, value) in UNIVERSAL_HEADERS {
+        push_header(&mut head, name, value);
+    }
+    push_header(&mut head, "Content-Type", "text/event-stream");
+    push_header(&mut head, "Cache-Control", "no-cache");
+    head.extend_from_slice(b"\r\n");
+    if stream.write_all(&head).is_err() {
         return;
     }
     let mut last = daemon.writes.announced();

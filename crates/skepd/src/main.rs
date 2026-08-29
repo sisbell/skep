@@ -10,6 +10,19 @@ use skepd::{serve, Daemon};
 const DEFAULT_PORT: u16 = 8642;
 const DEFAULT_WORKERS: usize = 4;
 
+/// One environment setting: the variable's name and what its value must be,
+/// paired so the two cannot be handed over in the wrong order — the same
+/// reason [`skepd::HttpRequest`] is one value rather than five arguments. A
+/// swap reads an unset variable, answers `None`, and silently falls back to
+/// the default, so the setting stops working with no message anywhere.
+struct EnvSetting {
+    var: &'static str,
+    what: &'static str,
+}
+
+const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", what: "a port" };
+const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", what: "a count" };
+
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
 fn usage() -> String {
@@ -40,13 +53,12 @@ struct Args {
 /// Read one setting from the environment, or `None` when it is unset. Each
 /// setting is seeded from its variable before the flag loop, so a flag
 /// always wins over a variable and the precedence is stated once.
-fn from_env<T: std::str::FromStr>(var: &str, what: &str) -> Result<Option<T>, String> {
-    match std::env::var(var) {
+fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, String> {
+    match std::env::var(setting.var) {
         Err(_) => Ok(None),
-        Ok(v) => v
-            .parse()
-            .map(Some)
-            .map_err(|_| format!("{var}: '{v}' is not {what}")),
+        Ok(v) => v.parse().map(Some).map_err(|_| {
+            format!("{}: '{v}' is not {}", setting.var, setting.what)
+        }),
     }
 }
 
@@ -54,8 +66,8 @@ fn from_env<T: std::str::FromStr>(var: &str, what: &str) -> Result<Option<T>, St
 /// Parsing decides what was asked for; ending the process is [`main`]'s.
 fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
     let mut data_dir = std::env::var_os("SKEPD_DATA_DIR").map(PathBuf::from);
-    let mut port: Option<u16> = from_env("SKEPD_PORT", "a port")?;
-    let mut workers: Option<usize> = from_env("SKEPD_WORKERS", "a count")?;
+    let mut port: Option<u16> = from_env(SKEPD_PORT)?;
+    let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {

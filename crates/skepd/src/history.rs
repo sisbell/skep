@@ -20,7 +20,6 @@
 //! transport errors.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use skep_arrangement::Vstream;
 #[cfg(feature = "observe")]
@@ -207,7 +206,7 @@ fn execute_read_on(world: World, req: Request) -> Response {
         checkpoint: CheckpointPolicy::Manual,
     };
     let kernel =
-        Arc::new(Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail"));
+        Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
     let febe = Operation::new(Box::new(HistoryStores { kernel }));
     febe.execute(open_guest_session(&febe), req)
 }
@@ -216,7 +215,7 @@ fn execute_read_on(world: World, req: Request) -> Response {
 /// the engine's `EngineStores`, which is constructible only over the live
 /// recovered kernel and so cannot serve here.
 struct HistoryStores {
-    kernel: Arc<Kernel<World>>,
+    kernel: Kernel<World>,
 }
 
 impl Stores<World> for HistoryStores {

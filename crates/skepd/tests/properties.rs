@@ -824,17 +824,33 @@ fn check_link(shadow: &Shadow, state: &mut RunState, li: usize) {
     state.n_link_checks += 1;
 }
 
-/// Sampled: a rotating window of up to 8 links; `all`: every link.
-fn check_links(shadow: &Shadow, state: &mut RunState, all: bool) {
+/// Which links one pass checks: the rotating window the per-cadence sample
+/// walks, or every link — the sequence-end and post-restart passes, where a
+/// narrowed scope would weaken the oracle in silence.
+#[derive(Clone, Copy)]
+enum LinkScope {
+    Sample,
+    All,
+}
+
+/// One link-oracle pass: a rotating window of up to 8 links under
+/// [`LinkScope::Sample`], every link under [`LinkScope::All`].
+fn check_links(shadow: &Shadow, state: &mut RunState, scope: LinkScope) {
     if shadow.links.is_empty() {
         return;
     }
-    let count = if all { shadow.links.len() } else { shadow.links.len().min(8) };
+    let count = match scope {
+        LinkScope::All => shadow.links.len(),
+        LinkScope::Sample => shadow.links.len().min(8),
+    };
     for k in 0..count {
-        let li = if all { k } else { (state.link_cursor + k) % shadow.links.len() };
+        let li = match scope {
+            LinkScope::All => k,
+            LinkScope::Sample => (state.link_cursor + k) % shadow.links.len(),
+        };
         check_link(shadow, state, li);
     }
-    if !all {
+    if matches!(scope, LinkScope::Sample) {
         state.link_cursor = (state.link_cursor + count) % shadow.links.len();
     }
 }
@@ -890,9 +906,9 @@ fn replay_captures(state: &RunState) {
 
 fn run_case(plan: &[PlanOp]) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut srv = Some(spawn(dir.path()));
+    let srv = spawn(dir.path());
     let mut state = RunState {
-        port: srv.as_ref().expect("live").port(),
+        port: srv.port(),
         head: 0,
         id_seq: 0,
         ghost_seq: 0,
@@ -916,14 +932,14 @@ fn run_case(plan: &[PlanOp]) {
         }
         if (i + 1) % CADENCE == 0 {
             check_all_docs(&shadow, &mut state);
-            check_links(&shadow, &mut state, false);
+            check_links(&shadow, &mut state, LinkScope::Sample);
         }
     }
 
     // Sequence end: the full oracle pass, the final position, and the
     // whole-history replay.
     check_all_docs(&shadow, &mut state);
-    check_links(&shadow, &mut state, true);
+    check_links(&shadow, &mut state, LinkScope::All);
     capture_position(&shadow, &mut state);
     replay_captures(&state);
 
@@ -932,7 +948,7 @@ fn run_case(plan: &[PlanOp]) {
     // pass must all agree with the pre-shutdown run.
     let final_dump = live_dump(state.port);
     let final_head = state.head;
-    srv.take().expect("live daemon").shutdown();
+    srv.shutdown();
     let sd2 = spawn(dir.path());
     state.port = sd2.port();
     assert_eq!(
@@ -965,7 +981,7 @@ fn run_case(plan: &[PlanOp]) {
         }
     }
     check_all_docs(&shadow, &mut state);
-    check_links(&shadow, &mut state, true);
+    check_links(&shadow, &mut state, LinkScope::All);
     sd2.shutdown();
 
     println!(

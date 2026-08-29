@@ -201,6 +201,14 @@ impl JsonCodec {
     /// satisfies it by construction, which is what makes the round-trip
     /// oracle sound.
     ///
+    /// One normalization survives the precondition rather than being
+    /// excluded by it: `SlotSpec::Spans` over an EMPTY endset marshals as
+    /// `[]`, which [`p_slotspec`] deliberately reads back as
+    /// `SlotSpec::Empty` — M8's same constraint under its canonical name. So
+    /// for such an `r` the round trip is EQUAL and not identical, and
+    /// re-marshaling gives `"empty"`. `parse` cannot mint that value, so a
+    /// `Request` this codec produced is again unaffected.
+    ///
     /// Wire invariant: a `ReqId` is the UTF-8 bytes of the frame's `id`
     /// string (parse can produce nothing else); an off-wire non-UTF-8 id is
     /// rendered lossily rather than panicking.
@@ -1874,6 +1882,26 @@ mod tests {
         for bad in ["Audit", "", "all", "actives"] {
             assert!(p_view(&Value::String(bad.into())).is_err(), "'{bad}' must not parse");
         }
+    }
+
+    /// The one parse-side normalization [`JsonCodec::marshal_request`]'s
+    /// precondition names rather than excludes: an empty span array IS the
+    /// empty constraint (M8 documents the empty endset as exactly that
+    /// zero), so it reads back under the canonical name and a
+    /// `SlotSpec::Spans` over an empty endset round-trips EQUAL rather than
+    /// identical. Nothing else pins that the two spellings meet.
+    #[test]
+    fn an_empty_slot_constraint_normalizes_onto_its_canonical_name() {
+        assert!(
+            matches!(p_slotspec(&Value::Array(vec![])), Ok(SlotSpec::Empty)),
+            "an empty span array is the empty constraint, not an empty span list"
+        );
+        assert_eq!(
+            j_slotspec(&SlotSpec::Spans(Endset::from_spans([]))),
+            Value::Array(vec![]),
+            "which is the form an empty Spans marshals as"
+        );
+        assert_eq!(j_slotspec(&SlotSpec::Empty), Value::String("empty".into()));
     }
 
     /// "Non-negative" is the word the wire uses (wire.md §Value encodings)

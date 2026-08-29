@@ -50,12 +50,21 @@ struct Args {
     workers: usize,
 }
 
-/// Read one setting from the environment, or `None` when it is unset. Each
+/// Read one setting from the environment, or `None` when it is UNSET. Each
 /// setting is seeded from its variable before the flag loop, so a flag
 /// always wins over a variable and the precedence is stated once.
 fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, String> {
+    use std::env::VarError;
     match std::env::var(setting.var) {
-        Err(_) => Ok(None),
+        Err(VarError::NotPresent) => Ok(None),
+        // Set, and not readable as text. Refused rather than treated as
+        // absent: silently falling back to the default is the one failure
+        // [`EnvSetting`] exists to prevent, and it does not become
+        // acceptable because the bad value is bytes rather than the wrong
+        // word.
+        Err(VarError::NotUnicode(_)) => {
+            Err(format!("{}: the value is not UTF-8 text", setting.var))
+        }
         Ok(v) => v.parse().map(Some).map_err(|_| {
             format!("{}: '{v}' is not {}", setting.var, setting.what)
         }),

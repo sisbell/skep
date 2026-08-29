@@ -563,6 +563,77 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 }
 
+/// A `min_since` fence describing a journal other than this one — an
+/// operator restoring a data dir, or copying one whose journal was later
+/// replaced by a shorter one, which is the case the entry clamp beside it
+/// already defends against. It is discarded at open, exactly as an entry
+/// above the head is.
+///
+/// Left standing, it makes `(min_since, head]` empty and the feed answers
+/// `410` — with no `floor`, since none survives above the fence — for every
+/// position this journal HAS, while `/op-at` serves those positions and
+/// `/events` announces them. And it is PERMANENT: the file still carries
+/// the number, so every restart reproduces it, on a daemon whose `/health`
+/// reports `ok` throughout.
+#[test]
+fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sidecar_path = dir.path().join("commits.log");
+
+    let before: Vec<u8>;
+    {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        seed_flow(port);
+        let (st, body) = changes_raw(port, "since=0");
+        assert_eq!(st, 200);
+        before = body;
+        sd.shutdown();
+    }
+
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&sidecar_path)
+            .expect("append to commits.log");
+        f.write_all(b"{\"min_since\":999999}\n").expect("write the foreign fence");
+    }
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let (st, body) = changes_raw(port, "since=0");
+    assert_eq!(
+        st,
+        200,
+        "a fence past the head must not refuse the positions this journal holds: {}",
+        text(&body)
+    );
+    assert_eq!(
+        entry_ats(&json(&body)),
+        vec![2, 3, 8, 11],
+        "and the feed still enumerates every committed write"
+    );
+    // The metadata survives too: the walk re-covers only what is uncovered,
+    // and the entries were never the foreign fence's to drop.
+    assert_eq!(body, before, "/changes drifted under a fence that was not this journal's");
+
+    // Not merely repaired in memory — the file no longer carries the number,
+    // so a second restart cannot reintroduce it.
+    let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
+    assert!(
+        !contents.contains("999999"),
+        "the foreign fence must not survive the rewrite: {contents}"
+    );
+    sd.shutdown();
+
+    let sd = spawn(dir.path());
+    let (st, body) = changes_raw(sd.port(), "since=0");
+    assert_eq!(st, 200, "and the second restart is clean too: {}", text(&body));
+    assert_eq!(body, before);
+    sd.shutdown();
+}
+
 /// A data dir written before the sidecar existed (here: by the engine
 /// directly, with no daemon): every committed position still appears in
 /// `/changes`, reconstructed from the journal via the engine's bounded

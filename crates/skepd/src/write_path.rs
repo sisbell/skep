@@ -6,12 +6,17 @@
 //! element rather than conventions each caller remembers. `commits.log` is
 //! appended in position order with monotone times, which is the premise
 //! `sidecar.rs` states its invariants on; and every position a `GET /events`
-//! subscriber is told about is one `GET /changes` already carries, because
-//! the announcement happens behind the record that made it answerable. That
-//! second guarantee covers a stream's FIRST event too: a connecting
-//! subscriber is told [`WritePath::announced`], not the kernel's head, so
-//! the two can never come apart in the window between a commit and its
-//! record. Reads never come here and never take the lock.
+//! subscriber is told about is one `GET /changes` already carries.
+//!
+//! That second guarantee is an induction with both halves held here.
+//! [`WritePath::open`] is the BASE CASE: the stream is seeded from the head
+//! the sidecar has just covered, before any febe exists to commit between
+//! the two, so a connecting subscriber is told [`WritePath::announced`] and
+//! that first position is already answerable. [`WritePath::commit`] is the
+//! STEP: each announcement happens behind the record that made its position
+//! answerable. Neither half is a rule a caller remembers, so the two can
+//! never come apart in the window between a commit and its record. Reads
+//! never come here and never take the lock.
 //!
 //! [`write_meta`] is also THE read/write partition — a read is exactly an
 //! `Op` the change feed has nothing to record — so the history surface and
@@ -67,15 +72,20 @@ pub(crate) struct WritePath {
 
 impl WritePath {
     /// Replay the commit-metadata sidecar in `data_dir` and open the commit
-    /// stream at the journal's committed head. Fallible only in the sidecar
-    /// — the lock and the stream are memory — so the caller's error type
-    /// need name only that.
+    /// stream at the journal's committed head — in that order, which is the
+    /// base case of this card's guarantee (see the module doc). Fallible
+    /// only in the sidecar — the lock and the stream are memory — so the
+    /// caller's error type need name only that.
     pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
-        Ok(WritePath {
-            serial: Mutex::new(()),
-            sidecar: Sidecar::open(data_dir, engine)?,
-            commit_stream: CommitStream::at(engine.kernel().current_seq()),
-        })
+        let sidecar = Sidecar::open(data_dir, engine)?;
+        // Seeded AFTER the sidecar, from the same head, and before any febe
+        // exists to commit between the two: the stream's first announced
+        // position is therefore one `/changes` already carries. That is the
+        // BASE CASE of this card's guarantee, and it is why the two are
+        // sequenced statements — the order is then a fact of the code
+        // rather than of the order two fields happen to be listed in.
+        let commit_stream = CommitStream::at(engine.kernel().current_seq());
+        Ok(WritePath { serial: Mutex::new(()), sidecar, commit_stream })
     }
 
     /// One write, whole: execute under the serialization lock, record the

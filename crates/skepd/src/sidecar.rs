@@ -146,6 +146,11 @@ struct Inner {
     /// unreadable journal) and `/changes` answers 410. Deliberately not
     /// called a floor — the wire's `floor` is the oldest position still
     /// ANSWERABLE, whereas this is the highest one that is not.
+    ///
+    /// INVARIANT: `min_since <= head` always. A fence above the head is not
+    /// a fact about this journal and is discarded at open, exactly as an
+    /// entry above it is — the coverage clause above means something only
+    /// under that.
     min_since: u64,
     /// The journal head at open — the fence between replayed history and
     /// this uptime's commits. An ack carrying a position at or below it
@@ -157,9 +162,10 @@ struct Inner {
 }
 
 impl Sidecar {
-    /// Replay (truncating a torn tail), drop entries beyond this journal's
-    /// head, reconstruct any uncovered `(last recorded, head]` region as
-    /// bare positions, and persist what the reconstruction learned.
+    /// Replay (truncating a torn tail), drop everything the file says about
+    /// a journal other than this one — entries beyond the head AND a fence
+    /// above it — reconstruct any uncovered `(last recorded, head]` region
+    /// as bare positions, and persist what the reconstruction learned.
     ///
     /// COST, and the only step of daemon startup that is not O(1) in the
     /// data dir: reconstruction spends one whole-world `Engine::world_at`
@@ -216,6 +222,19 @@ impl Sidecar {
         if head < u64::MAX {
             let _ = entries.split_off(&(head + 1));
         }
+        // A fence above the head describes that other journal too, and is
+        // the half the entry clamp above does not reach. Left standing it
+        // makes `(min_since, head]` empty, so `changes` refuses every
+        // position this journal HAS — permanently, since nothing re-derives
+        // a fence the file already holds — while `/events` announces them
+        // and `/op-at` serves them. Discarded, the walk below covers
+        // `(last entry, head]` from scratch and the retention probe
+        // re-derives the true fence for THIS journal, which is what keeps
+        // `min_since <= head`.
+        let stale_fence = min_since > head;
+        if stale_fence {
+            min_since = 0;
+        }
         let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
         if head > low {
             // The walk's own fence, qualified because the accumulator it
@@ -242,7 +261,10 @@ impl Sidecar {
         if let Some(f) = retention_floor(engine) {
             min_since = min_since.max(f.saturating_sub(1));
         }
-        if entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
+        // The rewrite is unconditional under a discarded fence, so a journal
+        // that later grows past that number cannot resurrect it from the
+        // file.
+        if stale_fence || entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
             entries = entries.split_off(&min_since.saturating_add(1));
             file = rewrite(dir, &entries, min_since)?;
         }
@@ -286,8 +308,16 @@ impl Sidecar {
         let meta = Meta::Recorded { op: op.to_string(), docs, time };
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
+        // Reported without `eprintln!`, which PANICS when the stderr write
+        // fails: a daemon whose log pipe has lost its reader would then fail
+        // the op this arm exists to keep succeeding, answering
+        // `internal_panic` for a write that committed and losing the caller
+        // its position. Both failures are swallowed for the one reason.
         if let Err(e) = inner.file.write_all(&entry_line(at, &meta)) {
-            eprintln!("skepd: commits.log append failed at position {at}: {e}");
+            let _ = writeln!(
+                std::io::stderr(),
+                "skepd: commits.log append failed at position {at}: {e}"
+            );
         }
         inner.entries.insert(at, meta);
     }

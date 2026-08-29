@@ -167,14 +167,33 @@ fn http_hostile_bytes_single_response_daemon_survives() {
     }
     assert_health(port);
 
-    // Deterministic split-write scenarios: the daemon reassembles a request
-    // no matter how the TCP writes are chopped.
-    for boundary in [1usize, 2, 7, 40] {
+    // Deterministic split-write scenarios: the daemon REASSEMBLES a request
+    // no matter how the TCP writes are chopped — so the valid frame must be
+    // SERVED, not merely answered. A well-formedness check alone passes on
+    // the `400 malformed_http` a daemon gives up with when it cannot find
+    // the head terminator, which is the failure these sizes exist to catch:
+    // the terminator scan resumes three bytes behind the last read, so a
+    // CRLFCRLF straddling a boundary of 1 through 4 is what a wrong resume
+    // point would miss.
+    for boundary in [1usize, 2, 3, 4, 7, 40] {
         let raw = valid_op_request();
         let resp = split_write_exchange(port, &raw, boundary);
-        let _ = check_http_response(&resp).unwrap_or_else(|e| {
+        let (status, body) = check_http_response(&resp).unwrap_or_else(|e| {
             panic!("FINDING (fuzz_http): split-write at {boundary} gave a malformed response: {e}")
         });
+        assert_eq!(
+            status,
+            200,
+            "FINDING (fuzz_http): a valid frame split at {boundary} was not reassembled: {}",
+            String::from_utf8_lossy(body)
+        );
+        let v: Value = serde_json::from_slice(body).unwrap_or_else(|e| {
+            panic!("split-write at {boundary}: body is not JSON ({e})")
+        });
+        assert!(
+            v["resp"].is_string(),
+            "split-write at {boundary} must answer an operation response: {v}"
+        );
     }
     assert_health(port);
 

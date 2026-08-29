@@ -58,7 +58,8 @@ pub mod fuzz_support;
 
 pub use codec::JsonCodec;
 pub use server::{
-    serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd, UNIVERSAL_HEADERS,
+    body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd,
+    UNIVERSAL_HEADERS,
 };
 
 /// The engine types this crate's public surface hands out: the world

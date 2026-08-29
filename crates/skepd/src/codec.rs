@@ -714,24 +714,42 @@ fn p_region(v: &Value) -> PResult<Region> {
 /// forms (wire.md §Content values), contributing zero or more values that
 /// concatenate in order.
 ///
-/// THE place [`MAX_INSERT_VALUES`] is enforced, and it is checked on the
-/// running total rather than per element, because an element's own length
-/// bounds nothing: one per-byte string mints one value per byte, so the
-/// array's element count and the values it commands are different numbers.
-/// The total is tested after each element, so an over-budget array stops
-/// accumulating instead of being built whole and then measured.
+/// What bounds the whole array is [`MAX_INSERT_VALUES`], which [`p_val_form`]
+/// enforces against this accumulator before each element mints into it — the
+/// array's element count bounds nothing on its own, since one per-byte string
+/// mints one value per byte.
 fn p_values(v: &Value) -> PResult<Vec<Val>> {
     let arr = v.as_array().ok_or_else(|| PErr("expected a JSON array".into()))?;
     let mut out = Vec::new();
     for (i, x) in arr.iter().enumerate() {
         p_val_form(x, &mut out).map_err(|e| PErr(format!("[{i}]: {e}")))?;
-        if out.len() > MAX_INSERT_VALUES {
-            return Err(PErr(format!(
-                "[{i}]: values mint more than the {MAX_INSERT_VALUES}-value cap on one insert"
-            )));
-        }
     }
     Ok(out)
+}
+
+/// Room for what an element is ABOUT to mint — THE place
+/// [`MAX_INSERT_VALUES`] is enforced, and enforced ahead of the mint rather
+/// than behind it. An element's whole contribution is added in ONE `extend`,
+/// so a check that runs once the element has returned has already paid the
+/// peak the cap exists to prevent: an 8 MiB per-byte string mints 8.4M
+/// [`Val`]s, each its own `Arc` allocation, order 400 MB of live heap, for a
+/// frame that is then refused. Asked in VALUES — the unit the cap counts —
+/// and measured against the accumulator, so an element's own length is
+/// never mistaken for the budget it consumes.
+fn room(out: &[Val], adding: usize) -> PResult<()> {
+    if out.len().saturating_add(adding) > MAX_INSERT_VALUES {
+        return Err(PErr(format!(
+            "values mint more than the {MAX_INSERT_VALUES}-value cap on one insert"
+        )));
+    }
+    Ok(())
+}
+
+/// The values one hex field will mint, read from the ENCODED text without
+/// copying or decoding it, so [`room`] can refuse before either. A
+/// non-string field needs no room; `field` below reports its own fault.
+fn hex_len(m: &Map<String, Value>, k: &'static str) -> PResult<usize> {
+    Ok(need(m, k)?.as_str().map_or(0, |s| s.len() / 2))
 }
 
 /// One element of `values`. The per-byte forms (`"str"`, `{"hex"}`) mint one
@@ -740,9 +758,15 @@ fn p_values(v: &Value) -> PResult<Vec<Val>> {
 /// atom forms (`{"atom"}`, `{"atom_hex"}`) mint ONE composite value of all
 /// the bytes: coarse granularity must be said, never fallen into; a
 /// zero-byte atom is not expressible.
+///
+/// Every arm asks [`room`] for what it is about to add before it adds it, so
+/// an over-budget element mints nothing — and on the hex path is never even
+/// decoded. An atom asks for ONE value whatever its byte count, which is
+/// what a composite value is.
 fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
     let m = match v {
         Value::String(s) => {
+            room(out, s.len())?;
             out.extend(s.bytes().map(|b| Val::new(vec![b])));
             return Ok(());
         }
@@ -757,15 +781,18 @@ fn p_val_form(v: &Value, out: &mut Vec<Val>) -> PResult<()> {
         return Err(PErr("expected exactly one of 'hex', 'atom', or 'atom_hex'".into()));
     }
     if m.contains_key("hex") {
+        room(out, hex_len(m, "hex")?)?;
         let bytes = field(m, "hex", |v| p_hex(&p_string(v)?))?;
         out.extend(bytes.into_iter().map(|b| Val::new(vec![b])));
     } else if m.contains_key("atom") {
+        room(out, 1)?;
         let s = field(m, "atom", p_string)?;
         if s.is_empty() {
             return Err(PErr("atom: a zero-byte atom is not expressible".into()));
         }
         out.push(Val::new(s.into_bytes()));
     } else {
+        room(out, 1)?;
         let bytes = field(m, "atom_hex", |v| p_hex(&p_string(v)?))?;
         if bytes.is_empty() {
             return Err(PErr("atom_hex: a zero-byte atom is not expressible".into()));
@@ -1727,13 +1754,45 @@ mod tests {
         );
         let e = refusal(&forms(MAX_INSERT_VALUES + 1));
         assert!(e.0.contains("cap on one insert"), "the refusal names the cap: {e}");
-        // Split across two elements, the running total still sees it — the
-        // reason the check is on the accumulator and not per element.
+        // Split across two elements, the accumulator still sees it — the
+        // reason the room asked is measured against what is already there
+        // rather than against one element in isolation.
         let split = Value::Array(vec![
             Value::String("a".repeat(MAX_INSERT_VALUES)),
             Value::String("b".into()),
         ]);
         assert!(p_values(&split).is_err(), "the total is what is capped, not one element");
+    }
+
+    /// The cap refuses BEFORE the mint, not after. An element's whole
+    /// contribution is added in one `extend`, so a check made afterwards has
+    /// already paid the peak — one 8 MiB per-byte string mints 8.4M [`Val`]s,
+    /// order 400 MB of live heap, for a frame that is then refused. What a
+    /// test can see is that nothing was minted.
+    #[test]
+    fn an_over_cap_element_mints_nothing() {
+        let mut out: Vec<Val> = Vec::new();
+        let big = Value::String("a".repeat(MAX_INSERT_VALUES + 1));
+        assert!(p_val_form(&big, &mut out).is_err(), "one element past the cap is refused");
+        assert!(out.is_empty(), "and mints nothing: the refusal precedes the mint");
+        // Hex is measured on its ENCODED length, so neither the decode nor
+        // the values are built.
+        let mut out: Vec<Val> = Vec::new();
+        let hex = obj(vec![("hex", Value::String("ab".repeat(MAX_INSERT_VALUES + 1)))]);
+        assert!(p_val_form(&hex, &mut out).is_err(), "the hex form is capped too");
+        assert!(out.is_empty());
+        // Both ends against a partly-filled accumulator: the room asked is
+        // the element's, measured against what is already there.
+        let mut out: Vec<Val> =
+            (0..MAX_INSERT_VALUES - 1).map(|_| Val::new(vec![b'a'])).collect();
+        assert!(
+            p_val_form(&Value::String("ab".into()), &mut out).is_err(),
+            "two more values do not fit with one slot left"
+        );
+        assert_eq!(out.len(), MAX_INSERT_VALUES - 1, "and the refused element mints nothing");
+        p_val_form(&Value::String("a".into()), &mut out)
+            .expect("the element that exactly fills the cap is admitted");
+        assert_eq!(out.len(), MAX_INSERT_VALUES);
     }
 
     /// Span parse edges — every span on the wire goes through M1's

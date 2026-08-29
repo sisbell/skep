@@ -196,6 +196,11 @@ const SESSION_HEADER: &str = "Skepd-Session";
 
 /// Request-head size cap. Tokens and headers are small; frames ride in the
 /// body, capped separately by the route's [`body_cap`].
+///
+/// [`read_request`] scans for the head terminator incrementally, so the work
+/// this bounds is LINEAR in the head — the property a raise must preserve,
+/// since a rescan from zero after every read would make it quadratic in this
+/// number.
 const MAX_REQUEST_HEAD: usize = 64 * 1024;
 
 /// Request-body cap for the two frame-carrying routes, enforced on the
@@ -228,7 +233,13 @@ const MAX_SMALL_BODY: usize = 8 * 1024;
 /// The body cap for a path — checked on the declared `Content-Length`
 /// before a byte is read, so a route that cannot use a large body is never
 /// asked to allocate for one.
-fn body_cap(path: &str) -> usize {
+///
+/// Public because [`HttpRequest`] names it as a caller's obligation: a
+/// caller building a request for [`Daemon::route`] over a transport of its
+/// own takes the bound from here rather than transcribing it, so a
+/// route-scoped raise — the media round [`MAX_REQUEST_BODY`] anticipates —
+/// moves for them too.
+pub fn body_cap(path: &str) -> usize {
     match path {
         "/op" | "/op-at" => MAX_REQUEST_BODY,
         _ => MAX_SMALL_BODY,
@@ -415,12 +426,20 @@ pub enum Routed {
 /// any other caller of [`Daemon::route`]: `method` is the uppercase token;
 /// `path` is the request target with its query AND its `?` removed; `query`
 /// is what followed that `?`, without it; `body` is exactly the declared
-/// `Content-Length` bytes. Routing does not re-check them — it cannot tell
-/// a caller's mistake from a client's request — so a violation is answered
-/// honestly for the request as given and misleadingly for the one intended:
-/// a `path` still carrying its query is an unknown path (`404`), a
-/// lowercase `method` matches no arm (`405`), and a `query` still carrying
-/// its `?` names a parameter called `?since`.
+/// `Content-Length` bytes, and at most [`body_cap`] of `path` of them.
+/// Routing does not re-check them — it cannot tell a caller's mistake from a
+/// client's request — so a violation is answered honestly for the request as
+/// given and misleadingly for the one intended: a `path` still carrying its
+/// query is an unknown path (`404`), a lowercase `method` matches no arm
+/// (`405`), and a `query` still carrying its `?` names a parameter called
+/// `?since`.
+///
+/// The cap is the OUTERMOST bound on what a frame allocates, and the one
+/// clause a caller cannot discharge by inspection: every JSON-carrying route
+/// builds the whole `serde_json` tree before any codec cap runs, so a body
+/// admitted past it buys roughly twenty times its size in transient heap —
+/// for a frame the codec is then about to refuse. [`read_request`] enforces
+/// it on the declared `Content-Length`, before a byte is read.
 pub struct HttpRequest {
     /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
     pub method: String,
@@ -1587,10 +1606,18 @@ fn read_request(
 ) -> Result<Option<HttpRequest>, RequestRefusal> {
     // The head, plus whatever early body bytes arrived with it.
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    // How much of `buf` is known to hold no terminator, so the scan is
+    // linear in the head rather than quadratic: a peer pacing one byte per
+    // read would otherwise make the daemon rescan from zero every time, and
+    // 64 KiB of head costs order 2e9 window comparisons. A terminator can
+    // straddle the next read by at most three bytes, which is where the next
+    // scan may safely start.
+    let mut scanned = 0usize;
     let head_end = loop {
-        if let Some(i) = find_head_end(&buf) {
-            break i;
+        if let Some(i) = find_head_end(&buf[scanned..]) {
+            break scanned + i;
         }
+        scanned = buf.len().saturating_sub(3);
         if buf.len() > MAX_REQUEST_HEAD {
             return Err(format!("request head exceeds the {MAX_REQUEST_HEAD}-byte cap").into());
         }

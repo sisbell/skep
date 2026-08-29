@@ -610,6 +610,16 @@ const MAX_LIVE_SESSIONS: usize = 1024;
 /// binding, not the principal it named. Named once so the two places that
 /// mint one cannot drift, and so a reader meeting `u64::MAX` in either is
 /// not left asking whether the number is significant to M3 or M10.
+///
+/// A client may NAME this id — `POST /session {"principal":
+/// 18446744073709551615}` mints a LIVE session under it, since
+/// [`session_principal`] accepts any non-negative integer and it is the
+/// guest's RETIREMENT, not its number, that makes it a guest. That is free
+/// while the value means nothing, so the meaninglessness is load-bearing:
+/// the day this id means anything — a reserved identity, a default owner,
+/// an audit tag, all of which authentication makes natural — either that
+/// meaning must not attach to a nameable principal, or `session_principal`
+/// must refuse this one.
 pub(crate) const GUEST_PRINCIPAL: PrincipalId = PrincipalId(u64::MAX);
 
 /// Mint one session and retire it at once — THE guest pattern, and the one

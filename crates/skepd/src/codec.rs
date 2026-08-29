@@ -87,6 +87,17 @@ use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, Region, Spec, S
 /// transfers to one query slot; it does not price a region set, whose cost
 /// model is M6's rather than M8's. Anyone raising the body cap for a route
 /// that carries these ops owes that number.
+///
+/// The transferred argument likewise prices a list of SPANS, which become
+/// spans one for one. It does not price a list of V-SPECS — `copy`'s
+/// `specs`, `make_link`'s three slots and `edit_link`'s successor — whose
+/// elements RESOLVE against stored arrangement state: one spec becomes as
+/// many spans as the source document has runs under it, so a list at this
+/// cap expands by a factor this door cannot see and that grows with the
+/// source's edit history. M7's own [`RejectCode::SlotTooLarge`] is the
+/// evidence that a resolution can exceed its budget; whether that budget
+/// is measured before the resolution is built, and what this cap should be
+/// if it is not, are M7's and M5's.
 const MAX_WIRE_LIST: usize = MAX_SLOT_SPANS;
 
 /// The most values one `insert` frame may mint. Denominated in VALUES and
@@ -300,19 +311,11 @@ fn parse_value(v: Value) -> PResult<Request> {
     };
     let mut fields = Fields(m);
     let name = fields.string("op")?;
-    // The id is capped where it is minted: M10 retains it for the life of a
-    // cached write, so its LENGTH is the second factor in a retention bill
-    // nothing downstream bounds (see [`MAX_REQ_ID_BYTES`]).
-    let id = match fields.opt_string("id")? {
-        None => None,
-        Some(s) if s.len() > MAX_REQ_ID_BYTES => {
-            return Err(PErr(format!(
-                "id is {} bytes, past the {MAX_REQ_ID_BYTES}-byte wire cap",
-                s.len()
-            )))
-        }
-        Some(s) => Some(ReqId(s.into_bytes())),
-    };
+    // The id is capped where it is minted, and before it is copied: M10
+    // retains it for the life of a cached write, so its LENGTH is the second
+    // factor in a retention bill nothing downstream bounds (see
+    // [`MAX_REQ_ID_BYTES`]).
+    let id = fields.req_id()?;
     let op = parse_op(&name, &mut fields)?;
     fields.finish()?;
     Ok(Request { id, op })
@@ -455,11 +458,22 @@ impl Fields {
         self.field(k, p_string)
     }
 
-    fn opt_string(&mut self, k: &'static str) -> PResult<Option<String>> {
-        match self.take_opt(k) {
-            None => Ok(None),
-            Some(v) => p_string(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}"))),
+    /// The frame's idempotency id, capped BEFORE the copy — the discipline
+    /// [`room`] states and [`hex_values`] follows. A [`MAX_REQ_ID_BYTES`]
+    /// cap enforced after the string has been copied out of the tree copies
+    /// up to a whole request body to refuse 257 bytes.
+    fn req_id(&mut self) -> PResult<Option<ReqId>> {
+        let Some(v) = self.take_opt("id") else { return Ok(None) };
+        let s = v
+            .as_str()
+            .ok_or_else(|| PErr("field 'id': expected a JSON string".into()))?;
+        if s.len() > MAX_REQ_ID_BYTES {
+            return Err(PErr(format!(
+                "id is {} bytes, past the {MAX_REQ_ID_BYTES}-byte wire cap",
+                s.len()
+            )));
         }
+        Ok(Some(ReqId(s.as_bytes().to_vec())))
     }
 
     fn u64(&mut self, k: &'static str) -> PResult<u64> {

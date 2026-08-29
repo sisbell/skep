@@ -425,6 +425,14 @@ fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Res
 /// stopped answering (reclaimed / corrupt / I/O), the smallest `since` the
 /// feed can honor from there on — [`Inner::min_since`]'s number, not the
 /// wire's `floor`.
+///
+/// The descent holds its OWN termination: every step strictly decreases
+/// `boundary`, checked here rather than inherited from M2's reading of
+/// `nearest`. A `nearest` that did not descend ends the walk, and the
+/// region it would have covered is covered as bare entries on a later
+/// open — which is the honest outcome, since this runs inside
+/// `Daemon::open`, before the listener is bound, where a loop that did not
+/// terminate would be a daemon that never starts.
 fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
     let mut found = vec![head];
     let mut boundary = head;
@@ -440,7 +448,13 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
                 found.push(boundary);
             }
             Err(HistoryError::NotABoundary { nearest }) => {
-                if nearest.0 <= low {
+                // M2's `nearest` is the boundary BELOW the probe, which is
+                // what makes this descent terminate. Enforced rather than
+                // relied on: a `nearest` at or above the current boundary
+                // would loop here forever, inside `Daemon::open` and so
+                // before the listener is bound — a daemon that never starts,
+                // with no port to ask and no line to read.
+                if nearest.0 <= low || nearest.0 >= boundary {
                     break;
                 }
                 boundary = nearest.0;

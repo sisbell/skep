@@ -194,6 +194,15 @@ impl Sidecar {
     /// alone. The rewrite goes to a temp file and is renamed over the
     /// original, so a crash mid-compaction leaves the whole old file or
     /// the whole new one — never a half of either.
+    ///
+    /// DISPOSITION, deliberately the opposite of [`Sidecar::record`]'s:
+    /// every I/O failure here is fatal and reaches the caller as
+    /// `DaemonError::Sidecar`, including the walk's append, whose loss
+    /// would cost only a repeated walk on a later open. At ack time the ack
+    /// is already owed, so lost testimony degrades to bare; at open nothing
+    /// is owed yet, and a data dir that cannot take a write the kernel just
+    /// performed is an operator condition worth reporting rather than
+    /// limping past.
     pub fn open(dir: &Path, engine: &Engine) -> io::Result<Sidecar> {
         let path = dir.join(SIDECAR_FILE);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
@@ -402,6 +411,12 @@ fn retention_floor(engine: &Engine) -> Option<u64> {
 /// says the feed remembers nothing, and a crash there would cost the
 /// surviving metadata for no reason, since it is exactly the metadata the
 /// journal can no longer reconstruct.
+///
+/// The temp is `commits.log.compact`, a fixed name — safe because
+/// [`crate::server::Daemon::open`]'s precondition admits one live kernel
+/// per data dir. It is not cleaned up: a crash or an I/O failure between
+/// the create and the rename leaves it until the next compaction truncates
+/// it, which is the price of the rename being the only atomic step.
 fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<File> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));

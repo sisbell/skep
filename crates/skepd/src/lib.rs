@@ -33,11 +33,13 @@
 //!
 //! Durability lives in M2 and is *configured* here (`Durability::Fsync`,
 //! every-1024-commits checkpoints, two retained): genesis on a fresh data
-//! dir, recovery on an existing one. The one file this crate writes itself
-//! is `commits.log` — the wire-v6 commit-metadata sidecar — which persists
-//! nothing about the WORLD (two daemons replaying one journal still
-//! converge byte-identically): it is the daemon's own testimony about when
-//! and for whom it committed, the same standing as the kernel's lock file.
+//! dir, recovery on an existing one. The only files this crate writes
+//! itself are `commits.log` — the wire-v6 commit-metadata sidecar — and,
+//! transiently while that file is compacted, `commits.log.compact`.
+//! Neither persists anything about the WORLD (two daemons replaying one
+//! journal still converge byte-identically): the sidecar is the daemon's
+//! own testimony about when and for whom it committed, the same standing
+//! as the kernel's lock file.
 
 #![forbid(unsafe_code)]
 

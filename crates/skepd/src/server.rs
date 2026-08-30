@@ -28,8 +28,9 @@
 //! kernel on a real directory with `Durability::Fsync` (rollback burned-seq
 //! policy), an every-1024-commits checkpoint cadence, and two retained
 //! checkpoints — genesis on a fresh store, recovery on an existing one, both
-//! inside `Engine::open`. The one file this crate writes itself is the
-//! commit-metadata sidecar `commits.log`, opened here through
+//! inside `Engine::open`. The only files this crate writes itself are the
+//! commit-metadata sidecar `commits.log` and, transiently while that file
+//! is compacted, `commits.log.compact` — both opened here through
 //! `WritePath::open` and owned by `sidecar.rs`; nothing here writes any
 //! file of the WORLD's, which is why two daemons replaying one journal
 //! still converge byte-identically.

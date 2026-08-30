@@ -166,12 +166,18 @@ impl WritePath {
     /// decide whether the change feed reports it, and fails to compile
     /// until it does.
     ///
-    /// Returns the position [`WritePath::commit`] announces, which is
-    /// exactly the position whose record this call just made — so an
-    /// announcement can never outrun `/changes`. An idempotency replay
-    /// re-acks an OLD position, which the sidecar declines to re-record and
-    /// the monotone commit stream ignores, since that position was
-    /// announced when it was first committed.
+    /// Returns the position [`WritePath::commit`] announces, and in every
+    /// case one `/changes` already carries — which is the guarantee, rather
+    /// than the narrower "the position whose record this call just made".
+    /// Three paths reach it: a new commit, whose record this call makes; a
+    /// position already recorded this uptime (an idempotency replay), which
+    /// the sidecar declines and which was announced when it was first
+    /// committed; and one at or below the open-time head (`emit`'s
+    /// incumbent ack), which the sidecar also declines, which the reopen
+    /// walk has already covered, and which the monotone stream ignores
+    /// because it sits below the seed. A failed append is the fourth: the
+    /// line is lost but the in-memory entry is not, so `/changes` answers
+    /// that position this uptime and answers it bare after a restart.
     fn record(&self, meta: WriteMeta, resp: &Response) -> Option<Seq> {
         let WriteMeta { kind, docs } = meta;
         let (at, minted) = match resp {
@@ -256,6 +262,21 @@ pub(crate) enum AffectedDocs {
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
 /// decided, and that one decision classifies it for the history surface
 /// too.
+///
+/// OBLIGATION, and the one this table cannot check: `Some` for exactly the
+/// ops M10 executes as writes (`Op::is_write`, `pub(crate)` there, so this
+/// table is a restatement rather than a delegation). Both tables are
+/// exhaustive over `Op` and neither is derived from the other, so a
+/// divergence compiles. A write classified here as a read runs outside
+/// [`WritePath::commit`]'s lock, unrecorded and unannounced: `/changes`
+/// misses that position for the rest of the uptime, `/events` never
+/// announces it, and [`crate::sidecar::Sidecar::head_time`]'s premise that
+/// every commit is recorded fails, so `/health` reports an older position's
+/// time AS the head's — the one thing that method's contract says it does
+/// not do. A read classified here as a write is refused from `/op-at` as
+/// `write_at_history`, denying a legitimate historical read. The two tables
+/// agree at 14 writes of 38, with M10's own
+/// `partition_matches_the_design_grouping` pinning that side.
 pub(crate) fn write_meta(op: &Op) -> Option<WriteMeta> {
     let meta = |kind, docs| Some(WriteMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
@@ -315,6 +336,10 @@ pub(crate) fn write_meta(op: &Op) -> Option<WriteMeta> {
 /// history surface needs before dispatch). A read is exactly an `Op` the
 /// change feed has nothing to record: one table decides both, so an `Op`
 /// admitted to history can never be one that commits.
+///
+/// What the restatement costs — that agreeing with M10 is an unchecked
+/// obligation rather than a compiled fact — is [`write_meta`]'s to state,
+/// since that is the table which carries it.
 pub(crate) fn op_is_read(op: &Op) -> bool {
     write_meta(op).is_none()
 }

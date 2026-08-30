@@ -73,7 +73,12 @@ impl WorldState for World {
     /// by the recovery-equivalence test.
     fn rebuild_derived(self) -> Self {
         let World { m3, content, m5, links } = self;
-        World { m3, content, m5: m5.rebuild_derived(), links: links.rebuild_derived() }
+        // M3, then M4: neither rebuilds — both slices are fully serialized, so
+        // M2's default identity is the whole of their recovery, and their
+        // places in the order are held open rather than skipped.
+        let m5 = m5.rebuild_derived();
+        let links = links.rebuild_derived();
+        World { m3, content, m5, links }
     }
 }
 

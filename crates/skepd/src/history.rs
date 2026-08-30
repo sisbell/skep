@@ -20,15 +20,13 @@
 //! transport errors.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
-use skep_arrangement::Vstream;
 #[cfg(feature = "observe")]
 use skep_engine::observe::WorldDump;
-use skep_engine::{Engine, HistoryError, World};
-use skep_febe::{Operation, Request, Response, Stores};
+use skep_engine::{Engine, EngineStores, HistoryError, World};
+use skep_febe::{Operation, Request, Response};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
-use skep_links::LinkWriter;
-use skep_namespace::Namespace;
 
 use crate::server::open_guest_session;
 
@@ -200,6 +198,11 @@ impl Drop for ReconstructPermit<'_> {
 /// maintained the hints across the fold, so the premise holds. A world
 /// assembled any other way would be read through stale hints, and nothing
 /// about the answer would look wrong.
+///
+/// The `Stores<World>` factory is the engine's [`EngineStores`], over this
+/// throwaway kernel rather than the live one: which store driver fills which
+/// slot is assembly knowledge, and the daemon holds none of it. The `Arc` is
+/// one allocation against a whole-world replay.
 fn execute_read_on(world: World, req: Request) -> Response {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
@@ -207,33 +210,8 @@ fn execute_read_on(world: World, req: Request) -> Response {
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
-    let febe = Operation::new(Box::new(HistoryStores { kernel }));
+    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel))));
     febe.execute(open_guest_session(&febe), req)
-}
-
-/// `Stores<World>` over the throwaway historical kernel — the same shape as
-/// the engine's `EngineStores`, which is constructible only over the live
-/// recovered kernel and so cannot serve here.
-struct HistoryStores {
-    kernel: Kernel<World>,
-}
-
-impl Stores<World> for HistoryStores {
-    fn kernel(&self) -> &Kernel<World> {
-        &self.kernel
-    }
-
-    fn namespace(&self) -> Namespace<'_, World> {
-        Namespace::new(&self.kernel)
-    }
-
-    fn vstream(&self) -> Vstream<'_, World> {
-        Vstream::new(&self.kernel)
-    }
-
-    fn linkstore(&self) -> LinkWriter<'_, World> {
-        LinkWriter::new(&self.kernel)
-    }
 }
 
 /// Stamp the requested position as `as_of`: the throwaway kernel is rooted

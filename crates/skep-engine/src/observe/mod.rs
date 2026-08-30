@@ -39,7 +39,7 @@ use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 
-use crate::genesis::GenesisConfig;
+use crate::genesis::{GenesisConfig, SHIPPED};
 use crate::world::World;
 use canon::{render, to_canon, Canon};
 
@@ -156,6 +156,22 @@ fn addr_seq(addrs: &[Address]) -> Canon {
     Canon::Seq(addrs.iter().map(|a| Canon::Str(a.to_string())).collect())
 }
 
+/// The dump's own name for a shipped class. Exhaustive by construction, so
+/// the compiler audits the set this section enumerates against `ShippedType`
+/// itself: a sixth shipped class upstream cannot reach the dump unnamed, and
+/// so cannot drop out of the harnesses' oracle in silence. The vocabulary is
+/// the dump's, not M7's — these strings are wire-visible and outlive any
+/// rename of the variant.
+fn shipped_label(ty: ShippedType) -> &'static str {
+    match ty {
+        ShippedType::Retired => "shipped.retired",
+        ShippedType::Supersedes => "shipped.supersedes",
+        ShippedType::Retraction => "shipped.retraction",
+        ShippedType::PredDef => "shipped.pred_def",
+        ShippedType::PredStable => "shipped.pred_stable",
+    }
+}
+
 /// One type class's observable projection: its key endset and its
 /// audit/active slices (both already address-ordered `OrdSet`s).
 fn class_canon(links: &LinkState, ty: &Endset) -> Canon {
@@ -194,18 +210,12 @@ fn hints_canon(world: &World, cfg: &GenesisConfig) -> Canon {
         ),
     ];
 
-    // Per-class typed slices: the five shipped classes, then the app decls in
-    // genesis order — the same one configuration genesis sealed.
-    let shipped = [
-        ("shipped.retired", ShippedType::Retired),
-        ("shipped.supersedes", ShippedType::Supersedes),
-        ("shipped.retraction", ShippedType::Retraction),
-        ("shipped.pred_def", ShippedType::PredDef),
-        ("shipped.pred_stable", ShippedType::PredStable),
-    ];
+    // Per-class typed slices: the shipped classes off the one genesis list,
+    // then the app decls in genesis order — the same one configuration
+    // genesis sealed.
     let mut classes: Vec<(Canon, Canon)> = Vec::new();
-    for (label, t) in shipped {
-        classes.push((key(label), class_canon(links, links.reserved_type(t))));
+    for t in SHIPPED {
+        classes.push((key(shipped_label(t)), class_canon(links, links.reserved_type(t))));
     }
     for (i, d) in cfg.types.decls.iter().enumerate() {
         classes.push((Canon::Str(format!("app.{i}")), class_canon(links, &d.key)));

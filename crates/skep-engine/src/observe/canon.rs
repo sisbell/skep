@@ -30,7 +30,11 @@ pub(crate) enum Canon {
     Null,
     Opt(Box<Canon>),
     Seq(Vec<Canon>),
-    /// Entries as collected; sorted by rendered key at [`render`] time.
+    /// Entries as collected; [`render`] sorts them by the rendered (key,
+    /// value) PAIR. The value belongs in the sort key because the order must
+    /// be TOTAL: `sort` is stable, so entries whose keys render alike would
+    /// otherwise keep their collection order and leak back exactly the
+    /// instance-specific iteration this transcode exists to remove.
     Map(Vec<(Canon, Canon)>),
     /// An enum variant (or named wrapper) around its payload.
     Named(&'static str, Box<Canon>),

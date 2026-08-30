@@ -6,7 +6,7 @@
 use skep_address::{validate, Address, Nat, Tumbler};
 use skep_arrangement::M5State;
 use skep_content::ContentStore;
-use skep_links::{LinkState, RegistryError, ReservedAddrs, TypeConfig};
+use skep_links::{LinkState, RegistryError, ReservedAddrs, ShippedType, TypeConfig};
 use skep_namespace::M3State;
 
 use crate::world::World;
@@ -33,6 +33,19 @@ pub struct GenesisConfig {
     /// that could arrive matched at one door and mismatched at the next.
     pub types: TypeConfig,
 }
+
+/// The five shipped classes, in `ShippedType` declaration order — the ONE
+/// list, held beside the configuration that names them. Every walk over the
+/// shipped set reads it here: [`crate::Engine::open`]'s drift check and the
+/// observe surface's per-class hint enumeration. A second copy is how one of
+/// those two silently comes to cover four classes out of five.
+pub(crate) const SHIPPED: [ShippedType; 5] = [
+    ShippedType::Retired,
+    ShippedType::Supersedes,
+    ShippedType::Retraction,
+    ShippedType::PredDef,
+    ShippedType::PredStable,
+];
 
 /// A standard reserved type address: element-level `9.0.9.0.9.0.9.k` —
 /// subspace 9 ∉ {s_C, s_L} (reserved-isolation), under node `[9]`, which is
@@ -77,6 +90,17 @@ impl World {
     /// the PredLayer `pdef`/`pd_stable` registrations
     /// (`LinkState::genesis`). Deterministic given `cfg`, per M2's
     /// byte-identical-genesis caller contract.
+    ///
+    /// Σ₀ CARRIES ITS OWN DERIVED HINTS, and must: under
+    /// `Durability::InMemory` this value IS the installed root — that mode
+    /// does not load, so M2 never runs `WorldState::rebuild_derived` over it
+    /// — and every in-memory caller (the conformance rig, the daemon's
+    /// historical reads, the whole in-memory suite) reads through whatever
+    /// hints it arrives with. That is why each slice above comes from its own
+    /// genesis constructor rather than from a placeholder: `LinkState::genesis`
+    /// builds a real registry over an empty links map, and M5's rebuild is the
+    /// identity. `observe::hints_faithful` is the standing check that what is
+    /// seeded here equals a from-authoritative rebuild.
     pub fn genesis(cfg: &GenesisConfig) -> Result<World, RegistryError> {
         Ok(World {
             m3: M3State::genesis(),

@@ -8,11 +8,13 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use common::*;
 use skep_content::Val;
 use skep_discovery::LinkQuery;
-use skep_engine::{Engine, EngineError, GenesisConfig};
-use skep_links::{HasLinks, SlotArg};
+use skep_engine::{Engine, EngineError, GenesisConfig, TypeDecl};
+use skep_links::{enc, Behavior, HasLinks, Registration, Shape, SlotArg};
 use skep_retrieval::{Query, Spec};
 use tempfile::tempdir;
 
@@ -137,6 +139,10 @@ fn drifted_genesis_reopen_is_refused() {
         let engine =
             Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard()).expect("fsync open");
         setup_doc(&engine);
+        // LOAD-BEARING, not scenario dressing: the wire compares the passed
+        // config against the one a CHECKPOINT carries. With no checkpoint the
+        // reopen replays onto the passed genesis and there is nothing left to
+        // disagree with.
         engine.kernel().checkpoint().expect("checkpoint succeeds");
     }
 
@@ -148,5 +154,44 @@ fn drifted_genesis_reopen_is_refused() {
         Err(EngineError::GenesisDrift(_)) => {}
         Err(other) => panic!("expected GenesisDrift, got {other:?}"),
         Ok(_) => panic!("a drifted genesis reopen must be refused"),
+    }
+}
+
+/// The decl side of the same wire: a journal sealed with one app-declared
+/// type, reopened under a config declaring that same key with a DIFFERENT
+/// registration, is refused at assembly. Nothing downstream would have caught
+/// it — a daemon assembles no `Coordinator`, and the observation surface
+/// would go on enumerating that class from a registration the store never
+/// validated.
+#[test]
+fn drifted_app_decl_reopen_is_refused() {
+    let dir = tempdir().expect("tempdir");
+    let app_key = || enc(&[a(&[9, 0, 9, 0, 9, 0, 8, 1])]);
+    let declared = |idem: bool| TypeDecl {
+        key: app_key(),
+        reg: Registration { shape: Shape::Binary, idem, behaviors: BTreeSet::<Behavior>::new() },
+    };
+
+    let mut sealed = GenesisConfig::standard();
+    sealed.types.decls = vec![declared(true)];
+    {
+        let engine = Engine::open(fsync_cfg(dir.path()), sealed).expect("fsync open");
+        setup_doc(&engine);
+        // As above: the checkpoint is what carries the sealed config forward.
+        engine.kernel().checkpoint().expect("checkpoint succeeds");
+    }
+
+    // Valid on its own — an app may declare a Binary idem⊥ type — but not the
+    // registration this journal sealed for that key.
+    let mut drifted = GenesisConfig::standard();
+    drifted.types.decls = vec![declared(false)];
+
+    match Engine::open(fsync_cfg(dir.path()), drifted) {
+        Err(EngineError::GenesisDeclDrift(d)) => {
+            assert_eq!(d.key, app_key(), "the refusal names the decl the caller passed");
+            assert!(!d.reg.idem, "…with the registration it passed, not the sealed one");
+        }
+        Err(other) => panic!("expected GenesisDeclDrift, got {other:?}"),
+        Ok(_) => panic!("a drifted app decl must be refused"),
     }
 }

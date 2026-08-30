@@ -11,10 +11,12 @@ use skep_arrangement::Vstream;
 use skep_coordination::{CatalogError, Coordinator};
 use skep_febe::Stores;
 use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
-use skep_links::{HasLinks, LinkWriter, RegistryError, ShippedType, TypeRegistry};
+use skep_links::{
+    coverage_class, HasLinks, LinkWriter, RegistryError, ShippedType, TypeDecl, TypeRegistry,
+};
 use skep_namespace::Namespace;
 
-use crate::genesis::GenesisConfig;
+use crate::genesis::{GenesisConfig, SHIPPED};
 use crate::world::World;
 
 /// `Engine::open` failure: the genesis type configuration failed validation,
@@ -28,37 +30,52 @@ pub enum EngineError {
     /// `Kernel::open` failed (`InvalidConfig` / `Io` / `BadCheckpoint` /
     /// `Corruption`).
     Open(OpenError),
-    /// The recovered world's genesis-sealed type config disagrees with the
-    /// configuration passed to this open on the named shipped class — the
-    /// caller violated M2's byte-identical-genesis contract (e.g. reopened a
-    /// journal under an edited `GenesisConfig`).
+    /// The type config the recovered journal was sealed under disagrees with
+    /// the configuration passed to this open on the named shipped class.
+    /// Detected only where recovery restored a checkpointed world — see
+    /// [`Engine::open`] for what that leaves unchecked.
     GenesisDrift(ShippedType),
+    /// The same disagreement on an app-declared type: the passed decl's key
+    /// holds no registration in the sealed registry, or holds one that is not
+    /// the registration passed. Carries the PASSED decl, which is the half an
+    /// operator can act on — the sealed one is not publicly enumerable.
+    GenesisDeclDrift(TypeDecl),
 }
 
 impl fmt::Display for EngineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EngineError::Registry(e) => write!(f, "engine genesis: {e}"),
-            EngineError::Open(e) => write!(f, "engine open: {e:?}"),
+            EngineError::Open(e) => write!(f, "engine open: {e}"),
             EngineError::GenesisDrift(ty) => write!(
                 f,
                 "engine open: recovered journal was sealed under a different genesis type \
                  config (disagrees on {ty:?}); reopen with the original GenesisConfig"
             ),
+            EngineError::GenesisDeclDrift(d) => write!(
+                f,
+                "engine open: recovered journal was sealed under a different genesis type \
+                 config (disagrees on the app-declared type {d:?}); reopen with the original \
+                 GenesisConfig"
+            ),
         }
     }
 }
 
-impl std::error::Error for EngineError {}
-
-/// The five shipped classes, in declaration order — the drift-check walk.
-const SHIPPED: [ShippedType; 5] = [
-    ShippedType::Retired,
-    ShippedType::Supersedes,
-    ShippedType::Retraction,
-    ShippedType::PredDef,
-    ShippedType::PredStable,
-];
+/// `Display` states the whole condition on one line — that is what the
+/// operator reads — and `source` additionally exposes the inner failure as a
+/// link, so a reporter walking the chain reaches M2's or M7's own account
+/// instead of stopping at the assembler. Spelled out variant by variant: a
+/// wildcard would compile and silently drop the next variant's cause.
+impl std::error::Error for EngineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            EngineError::Registry(e) => Some(e),
+            EngineError::Open(e) => Some(e),
+            EngineError::GenesisDrift(_) | EngineError::GenesisDeclDrift(_) => None,
+        }
+    }
+}
 
 /// The assembled engine: the recovered kernel over the one concrete
 /// [`World`], the registry M7's slice validated from its own sealed
@@ -84,14 +101,28 @@ impl Engine {
     /// second build that would then owe an agreement check.
     ///
     /// Caller contract (M2, restated): pass the SAME `genesis` config on
-    /// every open of a given `cfg.journal_path`. The engine trips a wire on
-    /// violation: when recovery restores a checkpointed world, the slice's
-    /// OWN sealed config (deserialized from the journal, not from `genesis`)
-    /// must agree with the passed one on every shipped class, else
-    /// [`EngineError::GenesisDrift`] — catching the drifted-reopen mistake
-    /// loudly at assembly. (App-decl drift beyond the shipped five is not
-    /// publicly enumerable from the slice; M9's catalog projection at
-    /// [`Engine::coordinator`] covers the decl side.)
+    /// every open of a given journal. This is the one door that config comes
+    /// through, so the wire is here: the slice's OWN sealed config
+    /// (deserialized from the journal, not taken from `genesis`) must agree
+    /// with the passed one on every shipped class
+    /// ([`EngineError::GenesisDrift`]) AND on every app decl the passed
+    /// config carries ([`EngineError::GenesisDeclDrift`]). Both halves are
+    /// checked here because both are fed onward from the passed value —
+    /// [`Engine::coordinator`] hands M9 the decls, and the observe surface
+    /// enumerates its per-class hint sections from them — so a daemon that
+    /// never assembles a `Coordinator` would otherwise run with its
+    /// observation surface reporting classes genesis never sealed.
+    ///
+    /// TWO LIMITS, both structural, both worth knowing before trusting the
+    /// wire. It has force only where recovery restored a CHECKPOINTED world:
+    /// with no retained checkpoint the replay base is the passed `genesis`
+    /// itself (M2 §Fsync), so the slice's config IS the passed config and
+    /// every comparison below is vacuously true. And it can only check what
+    /// the passed config mentions — the registry is keyed by coverage class
+    /// and publishes no enumeration, so a decl the JOURNAL sealed and this
+    /// caller dropped, or a reordering of `decls`, passes unremarked.
+    /// Closing that direction needs an M7 accessor for the sealed
+    /// `TypeConfig`.
     pub fn open(cfg: KernelConfig, genesis: GenesisConfig) -> Result<Engine, EngineError> {
         let passed = TypeRegistry::build(&genesis.types).map_err(EngineError::Registry)?;
         let world = World::genesis(&genesis).map_err(EngineError::Registry)?;
@@ -99,18 +130,31 @@ impl Engine {
         let registry = {
             let snap = kernel.snapshot();
             let links = snap.world().links();
+            let sealed = links.registry();
             for ty in SHIPPED {
                 if links.reserved_type(ty) != passed.reserved_type(ty) {
                     return Err(EngineError::GenesisDrift(ty));
                 }
             }
-            Arc::clone(links.registry())
+            // The decl side, compared by coverage class — M7's own identity
+            // rule for a type. `TypeRegistry::build` above has already refused
+            // an empty or non-denoting key, so the class probe is total here
+            // and needs no second guard; a missing or unequal registration is
+            // drift and nothing else.
+            for d in &genesis.types.decls {
+                if sealed.registration(&coverage_class(&d.key)) != Some(&d.reg) {
+                    return Err(EngineError::GenesisDeclDrift(d.clone()));
+                }
+            }
+            Arc::clone(sealed)
         };
         Ok(Engine { kernel, registry, genesis })
     }
 
     /// The shared kernel (M2). Snapshots, checkpoints, and `current_seq` are
     /// reached through this; the engine adds nothing over them.
+    /// [`Engine::world_at`] is the one M2 method the engine forwards rather
+    /// than leaves to this handle, and it forwards verbatim.
     pub fn kernel(&self) -> &Arc<Kernel<World>> {
         &self.kernel
     }
@@ -166,14 +210,12 @@ impl Engine {
     /// `Operation::new` — the engine-facing store-driver constructors,
     /// wrapped once so the binary holds no assembly knowledge.
     pub fn stores(&self) -> EngineStores {
-        EngineStores { kernel: Arc::clone(&self.kernel) }
+        EngineStores::new(Arc::clone(&self.kernel))
     }
 
-    /// The committed world as of position `at` — M2's read-only bounded
-    /// replay ([`Kernel::world_at`]), which folds from the Σ₀ the kernel was
-    /// opened under, so a historical position starts from the same genesis
-    /// every recovery starts from. Observation-surface API: writes nothing,
-    /// takes no kernel lock, and leaves the live paths untouched.
+    /// The committed world as of position `at`: [`Kernel::world_at`] over the
+    /// assembled world, forwarded verbatim. The contract, the refusal
+    /// precedence and the cost are M2's, at that link.
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
         self.kernel.world_at(at)
     }
@@ -198,6 +240,18 @@ pub struct EngineStores {
     kernel: Arc<Kernel<World>>,
 }
 
+impl EngineStores {
+    /// Over any `Kernel<World>` — the live recovered one [`Engine::stores`]
+    /// passes, or a throwaway kernel rooted at a reconstructed historical
+    /// world. WHICH driver constructor fills which `Stores` slot is the
+    /// assembler's knowledge, so it is stated once, here: a caller that has a
+    /// kernel and needs an M10 over it asks for this rather than restating
+    /// the four constructors and inheriting the next change to them.
+    pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {
+        EngineStores { kernel }
+    }
+}
+
 impl Stores<World> for EngineStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
@@ -213,5 +267,34 @@ impl Stores<World> for EngineStores {
 
     fn linkstore(&self) -> LinkWriter<'_, World> {
         LinkWriter::new(&self.kernel)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use super::*;
+
+    /// The chain does not stop at the assembler: what an operator reads is
+    /// M2's own sentence about the journal, wrapped rather than restated, and
+    /// what a reporter walking `source` finds is M2's error itself.
+    #[test]
+    fn an_open_failure_carries_the_kernel_s_own_account_both_ways() {
+        let engine_err = EngineError::Open(OpenError::BadCheckpoint);
+        let rendered = engine_err.to_string();
+        assert!(
+            rendered.contains(&OpenError::BadCheckpoint.to_string()),
+            "the operator must read M2's sentence, not a paraphrase: {rendered}"
+        );
+        assert!(
+            !rendered.contains("BadCheckpoint"),
+            "a Debug form is not an operator's sentence: {rendered}"
+        );
+        assert!(engine_err.source().is_some(), "M2's failure stays reachable as a cause");
+        assert!(
+            EngineError::GenesisDrift(ShippedType::Retired).source().is_none(),
+            "a drift verdict is the engine's own; it wraps no inner failure"
+        );
     }
 }

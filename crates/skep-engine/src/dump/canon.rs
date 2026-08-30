@@ -133,8 +133,8 @@ impl fmt::Display for SerdeTree {
 
 /// Append a tree's deterministic text to `out`, for a caller assembling one
 /// rendering out of several pieces.
-pub(crate) fn render(c: &SerdeTree, out: &mut String) {
-    write!(out, "{c}").expect("writing to a String cannot fail")
+pub(crate) fn render(tree: &SerdeTree, out: &mut String) {
+    write!(out, "{tree}").expect("writing to a String cannot fail")
 }
 
 /// The transcode's error carrier — reachable only via `ser::Error::custom`
@@ -427,9 +427,9 @@ impl ser::SerializeStructVariant for VariantStructBuild {
 mod tests {
     use super::*;
 
-    fn rendered(c: &SerdeTree) -> String {
+    fn render_of(tree: &SerdeTree) -> String {
         let mut s = String::new();
-        render(c, &mut s);
+        render(tree, &mut s);
         s
     }
 
@@ -445,8 +445,8 @@ mod tests {
             (SerdeTree::Str("b".into()), SerdeTree::U64(2)),
             (SerdeTree::Str("a".into()), SerdeTree::U64(1)),
         ]);
-        assert_eq!(rendered(&ab), rendered(&ba));
-        assert_eq!(rendered(&ab), r#"{"a": 1, "b": 2}"#);
+        assert_eq!(render_of(&ab), render_of(&ba));
+        assert_eq!(render_of(&ab), r#"{"a": 1, "b": 2}"#);
     }
 
     /// The pair-sort's reason, in miniature: two entries whose KEYS render
@@ -464,20 +464,20 @@ mod tests {
             (SerdeTree::I64(1), SerdeTree::Str("b".into())),
             (SerdeTree::U64(1), SerdeTree::Str("a".into())),
         ]);
-        assert_eq!(rendered(&ab), rendered(&ba));
-        assert_eq!(rendered(&ab), r#"{1: "a", 1: "b"}"#);
+        assert_eq!(render_of(&ab), render_of(&ba));
+        assert_eq!(render_of(&ab), r#"{1: "a", 1: "b"}"#);
     }
 
     /// Sequences keep their order — it is semantic upstream.
     #[test]
     fn seq_order_is_preserved() {
         let s = SerdeTree::Seq(vec![SerdeTree::U64(2), SerdeTree::U64(1)]);
-        assert_eq!(rendered(&s), "[2, 1]");
+        assert_eq!(render_of(&s), "[2, 1]");
     }
 
     /// A serde derive round-trips through the transcode structurally.
     #[test]
-    fn serde_forms_transcode() {
+    fn a_serde_derive_transcodes_structurally() {
         #[derive(serde::Serialize)]
         enum E {
             A,
@@ -489,7 +489,7 @@ mod tests {
             y: Option<bool>,
         }
         let v = S { x: vec![E::A, E::B(7)], y: Some(true) };
-        assert_eq!(rendered(&to_tree(&v)), r#"{"x": [A, B(7)], "y": some(true)}"#);
+        assert_eq!(render_of(&to_tree(&v)), r#"{"x": [A, B(7)], "y": some(true)}"#);
     }
 
     /// Every scalar arm's text, pinned: the rendering IS the format the
@@ -511,7 +511,7 @@ mod tests {
             (SerdeTree::Named("V", Box::new(SerdeTree::Unit)), "V"),
             (SerdeTree::Named("V", Box::new(SerdeTree::U64(1))), "V(1)"),
         ] {
-            assert_eq!(rendered(&tree), text);
+            assert_eq!(render_of(&tree), text);
         }
     }
 
@@ -529,6 +529,6 @@ mod tests {
                 }
             }
         }
-        assert_eq!(rendered(&to_tree(&Branching)), "1");
+        assert_eq!(render_of(&to_tree(&Branching)), "1");
     }
 }

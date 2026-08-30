@@ -95,7 +95,7 @@ impl World {
     /// no arrangements, no provenance), and M7 with `links = ∅` and the
     /// validated, sealed type config — the five shipped classes including
     /// the PredLayer `pdef`/`pd_stable` registrations
-    /// (`LinkState::genesis`). Deterministic given `cfg`, per M2's
+    /// (`LinkState::genesis`). Deterministic given `genesis_config`, per M2's
     /// byte-identical-genesis caller contract.
     ///
     /// Σ₀ CARRIES ITS OWN DERIVED HINTS, and must: under
@@ -108,12 +108,12 @@ impl World {
     /// builds a real registry over an empty links map, and M5's rebuild is the
     /// identity. `Engine::check_hints` is the standing check that what is
     /// seeded here equals a from-authoritative rebuild.
-    pub fn genesis(cfg: &GenesisConfig) -> Result<World, RegistryError> {
+    pub fn genesis(genesis_config: &GenesisConfig) -> Result<World, RegistryError> {
         Ok(World {
             namespace: M3State::genesis(),
             content: ContentStore::default(),
             arrangement: M5State::genesis(),
-            links: LinkState::genesis(cfg.types.clone())?,
+            links: LinkState::genesis(genesis_config.types.clone())?,
         })
     }
 }

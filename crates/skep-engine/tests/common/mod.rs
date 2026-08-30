@@ -19,36 +19,36 @@ pub const USER: PrincipalId = PrincipalId(7);
 /// 2026-08-16) — the owner of everything `setup_doc` creates.
 pub const OWNER: Caller = Caller::Principal(USER);
 
-pub fn t(comps: &[u32]) -> Tumbler {
+pub fn tum(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
 }
 
-pub fn a(comps: &[u32]) -> Address {
-    validate(t(comps)).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+pub fn addr(comps: &[u32]) -> Address {
+    validate(tum(comps)).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
 }
 
-pub fn n(x: u32) -> Nat {
+pub fn nat(x: u32) -> Nat {
     Nat::from(x)
 }
 
 /// The genesis bootstrap node `[1]`.
 pub fn node1() -> Address {
-    a(&[1])
+    addr(&[1])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
-    VPos { subspace: n(subspace), ordinal: n(ordinal) }
+    VPos { subspace: nat(subspace), ordinal: nat(ordinal) }
 }
 
-/// An ordinal-level depth-2 V-span `[subspace, ord] w [0, width]`.
-pub fn vspan(subspace: u32, ord: u32, width: u32) -> Span {
-    Span::new(t(&[subspace, ord]), t(&[0, width]))
+/// An ordinal-level depth-2 V-span `[subspace, ordinal] w [0, width]`.
+pub fn vspan(subspace: u32, ordinal: u32, width: u32) -> Span {
+    Span::new(tum(&[subspace, ordinal]), tum(&[0, width]))
         .unwrap_or_else(|_| panic!("well-formed test span"))
 }
 
 /// A content V-spec over `doc`'s content subspace.
-pub fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
-    VSpec { source: doc.clone(), span: vspan(1, ord, width) }
+pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
+    VSpec { source: doc.clone(), span: vspan(1, ordinal, width) }
 }
 
 pub fn mem_cfg() -> KernelConfig {

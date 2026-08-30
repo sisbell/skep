@@ -29,29 +29,32 @@ fn engine_world_satisfies_the_febe_demand() {
     let engine = mem_engine();
     let op: Operation<skep_engine::World> = Operation::new(Box::new(engine.stores()));
 
-    let boot = op.bootstrap_session();
-    let prefix = match op.execute(boot, Request { id: None, op: Op::NextAccountPrefix { parent: node1() } })
-    {
+    let boot_session = op.bootstrap_session();
+    let prefix = match op.execute(
+        boot_session,
+        Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
+    ) {
         Response::MaybeAddr { addr: Some(a), .. } => a,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         _ => panic!("expected MaybeAddr"),
     };
 
     let acct = ack_addr(op.execute(
-        boot,
+        boot_session,
         Request {
             id: None,
             op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
         },
     ));
 
-    let s = op.open_session(USER);
-    let doc = ack_addr(
-        op.execute(s, Request { id: None, op: Op::CreateNewDocument { account: acct.clone() } }),
-    );
+    let session = op.open_session(USER);
+    let doc = ack_addr(op.execute(
+        session,
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone() } },
+    ));
 
     ack_addr(op.execute(
-        s,
+        session,
         Request {
             id: None,
             op: Op::Insert { doc: doc.clone(), at: vp(1, 1), values: vec![Val::new(vec![b'w'])] },
@@ -59,7 +62,7 @@ fn engine_world_satisfies_the_febe_demand() {
     ));
 
     match op.execute(
-        s,
+        session,
         Request {
             id: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
@@ -97,10 +100,10 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let kernel = Kernel::open(mem_cfg(), world).expect("an in-memory open runs no recovery");
     let op: Operation<skep_engine::World> =
         Operation::new(Box::new(EngineStores::new(Arc::new(kernel))));
-    let s = op.open_session(USER);
+    let session = op.open_session(USER);
 
     match op.execute(
-        s,
+        session,
         Request {
             id: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
@@ -116,7 +119,7 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     // …and it is the PAST: the value committed after `past` is not in it. A
     // reconstruction that came back holding it would read as the head.
     if let Response::Delivery { items, .. } = op.execute(
-        s,
+        session,
         Request {
             id: None,
             op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 2) }] },

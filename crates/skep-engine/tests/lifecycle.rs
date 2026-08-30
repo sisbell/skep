@@ -24,7 +24,7 @@ fn cross_store_lifecycle_under_fsync() {
     let dir = tempdir().expect("tempdir");
     let expected = vec![b"x".to_vec(), b"y".to_vec(), b"z".to_vec()];
 
-    let (doc, doc2, link, last_seq);
+    let (doc, version_doc, link, last_seq);
     {
         let engine =
             Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard()).expect("fsync open");
@@ -34,7 +34,7 @@ fn cross_store_lifecycle_under_fsync() {
         doc = d;
 
         // M5+M4+M3 composite: insert three values at the head.
-        let (_start, s_insert) = engine
+        let (_start, insert_seq) = engine
             .vstream()
             .insert(
                 OWNER,
@@ -57,7 +57,7 @@ fn cross_store_lifecycle_under_fsync() {
         }
 
         // M7+M3+M5 composite: an open content link over the inserted content.
-        let (l, s_link) = engine
+        let (l, link_seq) = engine
             .linkstore()
             .makelink(
                 OWNER,
@@ -68,13 +68,13 @@ fn cross_store_lifecycle_under_fsync() {
             )
             .expect("makelink succeeds");
         link = l;
-        assert!(s_link > s_insert, "commit order is monotone across stores");
+        assert!(link_seq > insert_seq, "commit order is monotone across stores");
 
         // M8: the link is discoverable from the home document's region…
-        let found = LinkQuery::new(engine.kernel())
+        let found_in_home = LinkQuery::new(engine.kernel())
             .findlinks_v(&doc, &[vspan(1, 1, 3)])
             .expect("findlinks succeeds");
-        assert!(found.contains(&link), "the fresh link is discoverable from its home");
+        assert!(found_in_home.contains(&link), "the fresh link is discoverable from its home");
 
         // …and M7's raw read returns it verbatim.
         {
@@ -83,23 +83,26 @@ fn cross_store_lifecycle_under_fsync() {
         }
 
         // M5+M3: version — a copy-on-write fork sharing the content.
-        let (d2, _s_version) = engine.vstream().version(USER, &doc).expect("version succeeds");
-        doc2 = d2;
+        let (vd, _version_seq) = engine.vstream().version(USER, &doc).expect("version succeeds");
+        version_doc = vd;
         {
             let snap = engine.kernel().snapshot();
             let q = Query::new(&snap);
             let delivery = q
-                .retrieve_v(&[Spec { doc: doc2.clone(), span: vspan(1, 1, 3) }])
+                .retrieve_v(&[Spec { doc: version_doc.clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve of the version failed: {e}"));
             assert_eq!(delivered_bytes(&delivery), expected, "the version shares the content");
         }
 
         // The same I-addresses arranged in the version make the link
         // discoverable from it too — cross-store transclusion discovery.
-        let found2 = LinkQuery::new(engine.kernel())
-            .findlinks_v(&doc2, &[vspan(1, 1, 3)])
+        let found_in_version = LinkQuery::new(engine.kernel())
+            .findlinks_v(&version_doc, &[vspan(1, 1, 3)])
             .expect("findlinks over the version succeeds");
-        assert!(found2.contains(&link), "the link is discoverable through the transclusion");
+        assert!(
+            found_in_version.contains(&link),
+            "the link is discoverable through the transclusion"
+        );
 
         last_seq = engine.kernel().current_seq();
         // The engine (and with it every Arc<Kernel> clone) drops here,
@@ -114,7 +117,7 @@ fn cross_store_lifecycle_under_fsync() {
 
         let snap = engine.kernel().snapshot();
         let q = Query::new(&snap);
-        for d in [&doc, &doc2] {
+        for d in [&doc, &version_doc] {
             let delivery = q
                 .retrieve_v(&[Spec { doc: (*d).clone(), span: vspan(1, 1, 3) }])
                 .unwrap_or_else(|e| panic!("retrieve after recovery failed: {e}"));
@@ -122,10 +125,10 @@ fn cross_store_lifecycle_under_fsync() {
         }
         assert!(snap.world().links().readlink(&link).is_some());
 
-        let found = LinkQuery::new(engine.kernel())
+        let found_in_home = LinkQuery::new(engine.kernel())
             .findlinks_v(&doc, &[vspan(1, 1, 3)])
             .expect("findlinks after recovery succeeds");
-        assert!(found.contains(&link));
+        assert!(found_in_home.contains(&link));
     }
 }
 
@@ -166,7 +169,7 @@ fn a_drifted_reopen_is_refused_and_names_the_shipped_class_that_drifted() {
         // Valid on its own — an unused ordinal in the same reserved family —
         // but not the config this journal was sealed under.
         let mut drifted = GenesisConfig::standard();
-        edit(&mut drifted.types.reserved, a(&[9, 0, 9, 0, 9, 0, 9, 6]));
+        edit(&mut drifted.types.reserved, addr(&[9, 0, 9, 0, 9, 0, 9, 6]));
 
         match Engine::open(fsync_cfg(dir.path()), drifted) {
             Err(EngineError::GenesisReservedDrift(named)) => {
@@ -186,7 +189,7 @@ fn a_drifted_reopen_is_refused_and_names_the_shipped_class_that_drifted() {
 #[test]
 fn drifted_app_decl_reopen_is_refused() {
     let dir = tempdir().expect("tempdir");
-    let app_key = || enc(&[a(&[9, 0, 9, 0, 9, 0, 8, 1])]);
+    let app_key = || enc(&[addr(&[9, 0, 9, 0, 9, 0, 8, 1])]);
     let declared = |idem: bool| TypeDecl {
         key: app_key(),
         reg: Registration { shape: Shape::Binary, idem, behaviors: BTreeSet::<Behavior>::new() },

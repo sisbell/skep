@@ -91,11 +91,11 @@ impl AsRef<str> for WorldDump {
 
 /// Render one world against the configuration it was sealed under: the
 /// authoritative section, then the hints section, which reads its app-class
-/// keys off `cfg` because that is the one place they live.
-fn dump(world: &World, cfg: &GenesisConfig) -> WorldDump {
+/// keys off `genesis_config` because that is the one place they live.
+fn dump(world: &World, genesis_config: &GenesisConfig) -> WorldDump {
     let root = SerdeTree::Map(vec![
         (key("authoritative"), authoritative_tree(world)),
-        (key("hints"), hints_tree(world, cfg)),
+        (key("hints"), hints_tree(world, genesis_config)),
     ]);
     let mut s = String::from("skep-world-dump v2\n");
     render(&root, &mut s);
@@ -128,9 +128,9 @@ fn authoritative_tree(world: &World) -> SerdeTree {
 /// incrementally-maintained hints match a from-authoritative rebuild; the
 /// authoritative sections are untouched by the rebuild, so any divergence
 /// localizes to a hint.
-fn hints_faithful(world: &World, cfg: &GenesisConfig) -> Result<(), HintDivergence> {
-    let live = dump(world, cfg);
-    let rebuilt = dump(&world.clone().rebuild_derived(), cfg);
+fn hints_faithful(world: &World, genesis_config: &GenesisConfig) -> Result<(), HintDivergence> {
+    let live = dump(world, genesis_config);
+    let rebuilt = dump(&world.clone().rebuild_derived(), genesis_config);
     if live == rebuilt {
         Ok(())
     } else {
@@ -147,14 +147,14 @@ pub struct HintDivergence {
 
 impl fmt::Display for HintDivergence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (a, b) = (self.live.as_str(), self.rebuilt.as_str());
-        let shorter = a.len().min(b.len());
-        let i = a.bytes().zip(b.bytes()).position(|(x, y)| x != y).unwrap_or(shorter);
+        let (live, rebuilt) = (self.live.as_str(), self.rebuilt.as_str());
+        let shorter = live.len().min(rebuilt.len());
+        let i = live.bytes().zip(rebuilt.bytes()).position(|(x, y)| x != y).unwrap_or(shorter);
         write!(
             f,
             "hint dump diverges at byte {i}: live …{:?}… vs rebuilt …{:?}…",
-            window(a, i),
-            window(b, i)
+            window(live, i),
+            window(rebuilt, i)
         )
     }
 }
@@ -220,7 +220,7 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     ])
 }
 
-fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
+fn hints_tree(world: &World, genesis_config: &GenesisConfig) -> SerdeTree {
     let links = &world.links;
     // Empty constraints ⇒ the whole view slice (M7 §G) — the one public
     // whole-store enumeration.
@@ -237,10 +237,10 @@ fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
     // then the app decls in genesis order — the same one configuration
     // genesis sealed.
     let mut classes: Vec<(SerdeTree, SerdeTree)> = Vec::new();
-    for t in SHIPPED {
-        classes.push((key(shipped_label(t)), class_tree(links, links.reserved_type(t))));
+    for ty in SHIPPED {
+        classes.push((key(shipped_label(ty)), class_tree(links, links.reserved_type(ty))));
     }
-    for (i, d) in cfg.types.decls.iter().enumerate() {
+    for (i, d) in genesis_config.types.decls.iter().enumerate() {
         classes.push((key(format!("app.{i}")), class_tree(links, &d.key)));
     }
     entries.push((key("types"), SerdeTree::Map(classes)));
@@ -259,12 +259,18 @@ fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
 
     // M9's definition registry, projected: `pdef`/`pd_stable` membership
     // (M9 owns no slice; its registry IS these M7 tuples).
-    let pd = links.reserved_type(ShippedType::PredDef);
-    let ps = links.reserved_type(ShippedType::PredStable);
-    entries.push((key("predicates.defs.audit"), addr_seq(&links.members(pd, View::Audit))));
-    entries.push((key("predicates.defs.active"), addr_seq(&links.members(pd, View::Active))));
-    entries.push((key("predicates.stable.audit"), addr_seq(&links.members(ps, View::Audit))));
-    entries.push((key("predicates.stable.active"), addr_seq(&links.members(ps, View::Active))));
+    let pred_def = links.reserved_type(ShippedType::PredDef);
+    let pred_stable = links.reserved_type(ShippedType::PredStable);
+    entries.push((key("predicates.defs.audit"), addr_seq(&links.members(pred_def, View::Audit))));
+    entries.push((key("predicates.defs.active"), addr_seq(&links.members(pred_def, View::Active))));
+    entries.push((
+        key("predicates.stable.audit"),
+        addr_seq(&links.members(pred_stable, View::Audit)),
+    ));
+    entries.push((
+        key("predicates.stable.active"),
+        addr_seq(&links.members(pred_stable, View::Active)),
+    ));
 
     SerdeTree::Map(entries)
 }
@@ -357,18 +363,18 @@ mod tests {
         validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
     }
 
-    fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
+    fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
         let span = Span::new(
-            Tumbler::new([Nat::from(1u32), Nat::from(ord)]).expect("nonempty"),
+            Tumbler::new([Nat::from(1u32), Nat::from(ordinal)]).expect("nonempty"),
             Tumbler::new([Nat::from(0u32), Nat::from(width)]).expect("nonempty"),
         )
         .unwrap_or_else(|_| panic!("well-formed test span"));
         VSpec { source: doc.clone(), span }
     }
 
-    fn render_of(t: &SerdeTree) -> String {
+    fn render_of(tree: &SerdeTree) -> String {
         let mut s = String::new();
-        render(t, &mut s);
+        render(tree, &mut s);
         s
     }
 
@@ -377,7 +383,7 @@ mod tests {
     /// (M4, arranged by M5), and one link (M7). The integration suite's own
     /// prologue is in `tests/common`, which a unit test cannot reach, so this
     /// restates it — cut to exactly what these tests read.
-    fn populated() -> (Engine, World) {
+    fn populated_world() -> (Engine, World) {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
@@ -431,7 +437,7 @@ mod tests {
     /// one slice at a time.
     #[test]
     fn each_authoritative_section_renders_its_own_slice() {
-        let (engine, rich) = populated();
+        let (engine, rich) = populated_world();
         let bare = World::genesis(engine.genesis_config()).expect("standard genesis");
         let base = render_of(&authoritative_tree(&bare));
 

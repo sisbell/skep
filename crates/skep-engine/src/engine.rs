@@ -422,7 +422,7 @@ mod tests {
     /// a journal, so a caller can compare the one it holds against the one it
     /// stored — before an open turns the question into a recovery.
     #[test]
-    fn genesis_configs_compare() {
+    fn a_genesis_config_equals_only_the_same_configuration() {
         assert_eq!(GenesisConfig::standard(), GenesisConfig::standard());
         let mut edited = GenesisConfig::standard();
         edited.types.reserved.retired = GenesisConfig::standard().types.reserved.supersedes;
@@ -434,8 +434,8 @@ mod tests {
     /// what a reporter walking `source` finds is M2's error itself.
     #[test]
     fn an_open_failure_carries_the_kernel_s_own_account_both_ways() {
-        let engine_err = EngineError::Open(OpenError::BadCheckpoint);
-        let rendered = engine_err.to_string();
+        let open_failure = EngineError::Open(OpenError::BadCheckpoint);
+        let rendered = open_failure.to_string();
         assert!(
             rendered.contains(&OpenError::BadCheckpoint.to_string()),
             "the operator must read M2's sentence, not a paraphrase: {rendered}"
@@ -444,7 +444,7 @@ mod tests {
             !rendered.contains("BadCheckpoint"),
             "a Debug form is not an operator's sentence: {rendered}"
         );
-        assert!(engine_err.source().is_some(), "M2's failure stays reachable as a cause");
+        assert!(open_failure.source().is_some(), "M2's failure stays reachable as a cause");
         assert!(
             EngineError::GenesisReservedDrift(ShippedType::Retired).source().is_none(),
             "a drift verdict is the engine's own; it wraps no inner failure"

@@ -23,31 +23,33 @@ use tempfile::tempdir;
 
 /// The standard reserved addresses plus one app-declared Binary idem⊤ type,
 /// so genesis decls (and their dump section) are non-trivial.
-fn rich_genesis() -> GenesisConfig {
-    let mut cfg = GenesisConfig::standard();
-    cfg.types.decls = vec![TypeDecl {
-        key: enc(&[a(&[9, 0, 9, 0, 9, 0, 8, 1])]),
+fn rich_genesis_config() -> GenesisConfig {
+    let mut genesis_config = GenesisConfig::standard();
+    genesis_config.types.decls = vec![TypeDecl {
+        key: enc(&[addr(&[9, 0, 9, 0, 9, 0, 8, 1])]),
         reg: Registration {
             shape: Shape::Binary,
             idem: true,
             behaviors: BTreeSet::<Behavior>::new(),
         },
     }];
-    cfg
+    genesis_config
 }
 
-/// The app-declared type's key, as [`rich_genesis`] seals it.
+/// The app-declared type's key, as [`rich_genesis_config`] seals it.
 fn app_type() -> Endset {
-    rich_genesis().types.decls[0].key.clone()
+    rich_genesis_config().types.decls[0].key.clone()
 }
 
 /// The links one populated world holds — one of each kind the dump's hints
-/// section projects.
+/// section projects. `sup_old` and `sup_new` are the two ends of the
+/// supersession claim, in M7's own slot order (F holds the OLD link; edges run
+/// old → new); `nullified` is the link the retraction nullifies.
 struct Deposited {
-    l1: Address,
-    l2: Address,
-    l3: Address,
-    sup: Address,
+    sup_old: Address,
+    sup_new: Address,
+    nullified: Address,
+    sup_claim: Address,
     retraction: Address,
     app: Address,
 }
@@ -55,7 +57,14 @@ struct Deposited {
 impl Deposited {
     /// Every link deposited, whatever its kind.
     fn all(&self) -> Vec<&Address> {
-        vec![&self.l1, &self.l2, &self.l3, &self.sup, &self.retraction, &self.app]
+        vec![
+            &self.sup_old,
+            &self.sup_new,
+            &self.nullified,
+            &self.sup_claim,
+            &self.retraction,
+            &self.app,
+        ]
     }
 }
 
@@ -65,7 +74,7 @@ impl Deposited {
 /// app-declared type. `start` is the first I-address the document's content
 /// occupies, which the emission points from.
 fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposited {
-    let link = |from: (u32, u32), to: (u32, u32)| {
+    let make_link = |from: (u32, u32), to: (u32, u32)| {
         engine
             .linkstore()
             .makelink(
@@ -78,23 +87,24 @@ fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposit
             .expect("makelink succeeds")
             .0
     };
-    let l1 = link((1, 1), (2, 1));
-    let l2 = link((2, 1), (1, 1));
-    let l3 = link((1, 2), (1, 1));
-    let (sup, _) = engine.linkstore().assert_sup(OWNER, doc, &l1, &l2).expect("assert_sup");
-    let (retraction, _) = engine.linkstore().nullify(OWNER, doc, &l3).expect("nullify");
+    let sup_old = make_link((1, 1), (2, 1));
+    let sup_new = make_link((2, 1), (1, 1));
+    let nullified = make_link((1, 2), (1, 1));
+    let (sup_claim, _) =
+        engine.linkstore().assert_sup(OWNER, doc, &sup_old, &sup_new).expect("assert_sup");
+    let (retraction, _) = engine.linkstore().nullify(OWNER, doc, &nullified).expect("nullify");
     let (app, _) = engine
         .linkstore()
         .emit(OWNER, doc, &app_type(), start, std::slice::from_ref(doc))
         .expect("app-typed emit");
-    Deposited { l1, l2, l3, sup, retraction, app }
+    Deposited { sup_old, sup_new, nullified, sup_claim, retraction, app }
 }
 
 /// An in-memory world with every dump-observable hint family populated, and
 /// its rendering. Each test builds its own, so none shares state with its
 /// neighbours.
-fn populated() -> (String, Deposited) {
-    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+fn populated_dump() -> (String, Deposited) {
+    let engine = Engine::open(mem_cfg(), rich_genesis_config()).expect("in-memory open");
     let (_acct, doc) = setup_doc(&engine);
     let (start, _) = engine
         .vstream()
@@ -134,41 +144,42 @@ fn class_of(members: &[&Address], key: &str) -> String {
 
 #[test]
 fn the_dump_lists_every_deposited_link_in_the_audit_slice() {
-    let (text, d) = populated();
-    assert_entry(&text, "links.audit", &seq_of(&d.all()));
+    let (text, deposited) = populated_dump();
+    assert_entry(&text, "links.audit", &seq_of(&deposited.all()));
 }
 
 #[test]
 fn the_dump_drops_a_nullified_link_from_the_active_slice() {
-    let (text, d) = populated();
-    let live: Vec<&Address> = d.all().into_iter().filter(|a| *a != &d.l3).collect();
+    let (text, deposited) = populated_dump();
+    let live: Vec<&Address> =
+        deposited.all().into_iter().filter(|a| *a != &deposited.nullified).collect();
     assert_entry(&text, "links.active", &seq_of(&live));
 }
 
 #[test]
 fn the_dump_names_the_nullified_set() {
-    let (text, d) = populated();
-    assert_entry(&text, "links.nullified", &seq_of(&[&d.l3]));
+    let (text, deposited) = populated_dump();
+    assert_entry(&text, "links.nullified", &seq_of(&[&deposited.nullified]));
 }
 
 #[test]
 fn the_dump_carries_the_supersession_forward_edges() {
-    let (text, d) = populated();
-    // The claim is the edge's, not the claimant's: `assert_sup(l1, l2)` puts
-    // one forward edge in the graph, out of l1.
-    let edges = format!("{{{}: {}}}", quoted(&d.l1), seq_of(&[&d.l2]));
+    let (text, deposited) = populated_dump();
+    // The claim is the edge's, not the claimant's: the one forward edge in the
+    // graph runs out of the superseded link, and the claim itself is not on it.
+    let edges = format!("{{{}: {}}}", quoted(&deposited.sup_old), seq_of(&[&deposited.sup_new]));
     assert_entry(&text, "supersession", &edges);
 }
 
 #[test]
 fn the_dump_names_every_shipped_class_with_its_typed_slices() {
-    let (text, d) = populated();
+    let (text, deposited) = populated_dump();
     for (label, ordinal, members) in [
         ("shipped.pred_def", 1, Vec::new()),
         ("shipped.pred_stable", 2, Vec::new()),
         ("shipped.retired", 3, Vec::new()),
-        ("shipped.supersedes", 4, vec![&d.sup]),
-        ("shipped.retraction", 5, vec![&d.retraction]),
+        ("shipped.supersedes", 4, vec![&deposited.sup_claim]),
+        ("shipped.retraction", 5, vec![&deposited.retraction]),
     ] {
         assert_entry(&text, label, &class_of(&members, &format!("9.0.9.0.9.0.9.{ordinal}")));
     }
@@ -176,8 +187,8 @@ fn the_dump_names_every_shipped_class_with_its_typed_slices() {
 
 #[test]
 fn the_dump_enumerates_the_app_classes_from_the_genesis_config() {
-    let (text, d) = populated();
-    assert_entry(&text, "app.0", &class_of(&[&d.app], "9.0.9.0.9.0.8.1"));
+    let (text, deposited) = populated_dump();
+    assert_entry(&text, "app.0", &class_of(&[&deposited.app], "9.0.9.0.9.0.8.1"));
 }
 
 /// M9 owns no slice — its definition registry IS these M7 tuples — so the four
@@ -185,7 +196,7 @@ fn the_dump_enumerates_the_app_classes_from_the_genesis_config() {
 /// their PRESENCE is what makes a later loss visible.
 #[test]
 fn the_dump_projects_the_predicate_registry() {
-    let (text, _) = populated();
+    let (text, _) = populated_dump();
     for entry in [
         "predicates.defs.audit",
         "predicates.defs.active",
@@ -207,7 +218,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
     /// in the first — enough distinct hashed keys that two coincidentally
     /// equal iteration orders are not the explanation.
     fn scripted() -> Engine {
-        let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+        let engine = Engine::open(mem_cfg(), rich_genesis_config()).expect("in-memory open");
         let (acct, doc) = setup_doc(&engine);
         let (start, _) = engine
             .vstream()
@@ -244,7 +255,8 @@ fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
 
     let dump_live;
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
+        let engine =
+            Engine::open(fsync_cfg(dir.path()), rich_genesis_config()).expect("fsync open");
         let (_acct, doc) = setup_doc(&engine);
 
         // History batch A (below the checkpoint): content.
@@ -272,7 +284,7 @@ fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
     }
 
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("reopen");
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis_config()).expect("reopen");
 
         let dump_recovered = engine.world_dump();
         assert_eq!(
@@ -296,7 +308,8 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
 
     let dump_live;
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
+        let engine =
+            Engine::open(fsync_cfg(dir.path()), rich_genesis_config()).expect("fsync open");
         let (_acct, doc) = setup_doc(&engine);
         let (start, _) = engine
             .vstream()
@@ -318,7 +331,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
     }
 
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("reopen");
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis_config()).expect("reopen");
         assert_eq!(
             dump_live,
             engine.world_dump(),
@@ -334,7 +347,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
 #[test]
 fn a_reconstructed_historical_world_carries_faithful_hints() {
     let dir = tempdir().expect("tempdir");
-    let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
+    let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis_config()).expect("fsync open");
     let (_acct, doc) = setup_doc(&engine);
     let (start, _) = engine
         .vstream()
@@ -360,7 +373,7 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
 /// config it was sealed under).
 #[test]
 fn a_caller_pinned_world_dumps_deterministically() {
-    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let engine = Engine::open(mem_cfg(), rich_genesis_config()).expect("in-memory open");
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
@@ -380,7 +393,7 @@ fn a_caller_pinned_world_dumps_deterministically() {
 /// the banner names the version those keys belong to.
 #[test]
 fn the_dump_names_each_section_for_its_store() {
-    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let engine = Engine::open(mem_cfg(), rich_genesis_config()).expect("in-memory open");
     let text = engine.world_dump().into_string();
 
     assert!(text.starts_with("skep-world-dump v2\n"), "unexpected banner: {text:.32}");
@@ -400,7 +413,7 @@ fn the_dump_names_each_section_for_its_store() {
 fn a_dump_reads_out_as_its_text_by_every_route() {
     use std::collections::HashSet;
 
-    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let engine = Engine::open(mem_cfg(), rich_genesis_config()).expect("in-memory open");
     let dump = engine.world_dump();
 
     assert_eq!(format!("{dump}"), dump.as_str());

@@ -28,20 +28,20 @@ const SHIPPED: [ShippedType; 5] = [
 fn genesis_seeds_each_store_per_its_design() {
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
-    let w = snap.world();
+    let world = snap.world();
 
     // M3: node [1] registered, owned by the bootstrap principal.
-    assert_eq!(w.m3().entity_level(&node1()), Some(Level::Node));
-    assert_eq!(w.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
+    assert_eq!(world.m3().entity_level(&node1()), Some(Level::Node));
+    assert_eq!(world.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
 
     // M4: the permascroll starts empty.
-    assert!(w.content().is_empty());
+    assert!(world.content().is_empty());
 
     // M5: no arrangements (any document reads as absent-empty).
-    assert_eq!(w.m5().content_count(&node1()), n(0));
+    assert_eq!(world.m5().content_count(&node1()), nat(0));
 
     // M7: no links; the whole audit slice is empty.
-    assert!(w.links().match_links(&[], View::Audit).is_empty());
+    assert!(world.links().match_links(&[], View::Audit).is_empty());
 }
 
 /// The genesis seam: the registry the engine publishes IS the one M7's slice
@@ -97,14 +97,17 @@ fn coordinator_projects_the_one_registry() {
 /// change.
 #[test]
 fn the_standard_config_pins_its_five_reserved_addresses() {
-    let cfg = GenesisConfig::standard();
-    let r = &cfg.types.reserved;
-    assert_eq!(r.pred_def.to_string(), "9.0.9.0.9.0.9.1");
-    assert_eq!(r.pred_stable.to_string(), "9.0.9.0.9.0.9.2");
-    assert_eq!(r.retired.to_string(), "9.0.9.0.9.0.9.3");
-    assert_eq!(r.supersedes.to_string(), "9.0.9.0.9.0.9.4");
-    assert_eq!(r.retraction.to_string(), "9.0.9.0.9.0.9.5");
-    assert!(cfg.types.decls.is_empty(), "the standard config declares no app types");
+    let genesis_config = GenesisConfig::standard();
+    let reserved = &genesis_config.types.reserved;
+    assert_eq!(reserved.pred_def.to_string(), "9.0.9.0.9.0.9.1");
+    assert_eq!(reserved.pred_stable.to_string(), "9.0.9.0.9.0.9.2");
+    assert_eq!(reserved.retired.to_string(), "9.0.9.0.9.0.9.3");
+    assert_eq!(reserved.supersedes.to_string(), "9.0.9.0.9.0.9.4");
+    assert_eq!(reserved.retraction.to_string(), "9.0.9.0.9.0.9.5");
+    assert!(
+        genesis_config.types.decls.is_empty(),
+        "the standard config declares no app types"
+    );
 }
 
 /// Reserved-isolation, the property that makes a reserved address safe as a
@@ -115,9 +118,15 @@ fn the_standard_config_pins_its_five_reserved_addresses() {
 fn no_reserved_address_can_ever_be_minted() {
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
-    let r = GenesisConfig::standard().types.reserved;
+    let reserved = GenesisConfig::standard().types.reserved;
 
-    for addr in [r.pred_def, r.pred_stable, r.retired, r.supersedes, r.retraction] {
+    for addr in [
+        reserved.pred_def,
+        reserved.pred_stable,
+        reserved.retired,
+        reserved.supersedes,
+        reserved.retraction,
+    ] {
         assert_ne!(addr.subspace(), Some(&content_subspace()), "{addr} sits in s_C");
         assert_ne!(addr.subspace(), Some(&link_subspace()), "{addr} sits in s_L");
         assert_ne!(
@@ -136,7 +145,7 @@ fn invalid_genesis_is_refused() {
     // A reserved type address inside the content subspace (s_C = 1) violates
     // reserved-isolation.
     let mut bad = GenesisConfig::standard();
-    bad.types.reserved.retired = a(&[9, 0, 9, 0, 9, 0, 1, 1]);
+    bad.types.reserved.retired = addr(&[9, 0, 9, 0, 9, 0, 1, 1]);
     match Engine::open(mem_cfg(), bad) {
         Err(EngineError::Registry(RegistryError::ReservedSubspaceClash)) => {}
         Err(other) => panic!("expected ReservedSubspaceClash, got {other:?}"),

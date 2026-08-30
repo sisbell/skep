@@ -1239,7 +1239,7 @@ shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
-deterministic world dump (`skep-world-dump v1` format), byte-comparable
+deterministic world dump (`skep-world-dump v2` format), byte-comparable
 across processes for run reconstruction. Two dumps of equal worlds are
 byte-equal. `GET /dump?at=N` serves a historical position (§Reading
 history).

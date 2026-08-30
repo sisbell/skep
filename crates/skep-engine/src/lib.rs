@@ -5,9 +5,13 @@
 //! the one central [`Record`] enum (every store's delta), implements M2's
 //! `WorldState` for `World` (dispatching `apply` into each store's fold),
 //! implements every store's accessor trait, and supplies every `From`-lift.
-//! Nothing depends on this crate except a binary; no store crate names
-//! `World`/`Record`, so the crate graph stays a DAG by construction
-//! (§Crate-graph consequence).
+//! No store crate names `World`/`Record`, so the lib graph stays a DAG by
+//! construction (§Crate-graph consequence); what sits above it, as built, is
+//! the daemon (`skepd`), the conformance harness (`skep-conformance`, a
+//! library, not a binary), and — dev-only, the edge back through M2 that
+//! cargo permits — M2's dirty-crash harness, which judges recovery against
+//! this crate's observe dump. Sizing a change to the public surface means
+//! those three.
 //!
 //! **The engine adds no semantics.** Every function here is dispatch,
 //! lifting, construction, or observation; every guard, policy, and

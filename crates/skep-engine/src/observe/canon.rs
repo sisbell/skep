@@ -12,9 +12,14 @@ use std::fmt;
 
 use serde::ser::{self, Serialize};
 
-/// The canonical value tree (the serde data model, flattened to what the
-/// world's serde forms actually use).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The value tree a transcode collects (the serde data model, flattened to
+/// what the world's serde forms actually use). Deliberately NOT comparable:
+/// canonical order is established by [`render`], not held by the tree, so
+/// two trees with equal contents in different collection order are equal
+/// only once rendered. Comparing worlds means comparing renderings — a
+/// derived `==` here would answer the question this transcode exists to
+/// answer, and answer it wrong.
+#[derive(Clone, Debug)]
 pub(crate) enum Canon {
     Unit,
     Bool(bool),
@@ -108,7 +113,7 @@ pub(crate) fn render(c: &Canon, out: &mut String) {
         }
         Canon::Named(name, inner) => {
             out.push_str(name);
-            if **inner != Canon::Unit {
+            if !matches!(**inner, Canon::Unit) {
                 out.push('(');
                 render(inner, out);
                 out.push(')');

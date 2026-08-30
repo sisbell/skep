@@ -99,11 +99,9 @@ impl History {
     }
 
     /// The `WorldDump` of the world as of `at` — the same bounded replay
-    /// [`History::read_at`] answers from, rendered as the engine renders its
-    /// live dump. The pairing of a reconstructed world with the genesis
-    /// config it must be read against lives here, with the reconstruction:
-    /// it is a fact about how a historical world is read, not about HTTP,
-    /// so `/dump`'s two arms each simply ask a collaborator for a dump.
+    /// [`History::read_at`] answers from, rendered by the engine that
+    /// reconstructed it, exactly as it renders its live dump. `/dump`'s two
+    /// arms therefore each simply ask a collaborator for a dump.
     ///
     /// The permit is held across the render, which is where this route's
     /// peak sits: the dump is a second whole-world materialization beside
@@ -111,7 +109,7 @@ impl History {
     #[cfg(feature = "observe")]
     pub fn dump_at(&self, engine: &Engine, at: Seq) -> Result<WorldDump, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        Ok(skep_engine::observe::dump(&world, engine.genesis_config()))
+        Ok(engine.dump_of(&world))
     }
 
     /// One already-classified READ frame answered as of `at`: reconstruct

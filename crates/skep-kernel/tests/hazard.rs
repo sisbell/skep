@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 
 use hazard_util::*;
 use skep_content::Val;
-use skep_engine::observe::dump;
 use skep_engine::{Engine, EngineError, GenesisConfig, OpenError};
 use skep_kernel::{CheckpointPolicy, Seq};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
@@ -513,7 +512,7 @@ fn d_trial(trial: u64) -> (usize, u64) {
         });
     }
     let live = engine.world_dump();
-    let refold = dump(&engine.world_at(Seq(head)).expect("head answers"), &genesis);
+    let refold = engine.dump_of(&engine.world_at(Seq(head)).expect("head answers"));
     assert_eq!(live, refold, "FINDING ({ctx}): fold ≢ checkpoint+replay after the kill");
     engine
         .check_hints()
@@ -604,7 +603,7 @@ fn e_seeded_random_mutation_lands_on_the_boundary_or_refuses_repeatably() {
                     });
                     assert_eq!(
                         live,
-                        dump(&at_head, &fixture.genesis),
+                        engine.dump_of(&at_head),
                         "FINDING ({ctx}): fold ≢ checkpoint+replay"
                     );
                     engine

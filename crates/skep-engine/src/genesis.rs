@@ -99,7 +99,7 @@ impl World {
     /// hints it arrives with. That is why each slice above comes from its own
     /// genesis constructor rather than from a placeholder: `LinkState::genesis`
     /// builds a real registry over an empty links map, and M5's rebuild is the
-    /// identity. `observe::hints_faithful` is the standing check that what is
+    /// identity. `Engine::check_hints` is the standing check that what is
     /// seeded here equals a from-authoritative rebuild.
     pub fn genesis(cfg: &GenesisConfig) -> Result<World, RegistryError> {
         Ok(World {

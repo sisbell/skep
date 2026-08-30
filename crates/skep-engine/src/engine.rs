@@ -52,12 +52,21 @@ impl fmt::Display for EngineError {
                 "engine open: recovered journal was sealed under a different genesis type \
                  config (disagrees on {ty:?}); reopen with the original GenesisConfig"
             ),
-            EngineError::GenesisDeclDrift(d) => write!(
-                f,
-                "engine open: recovered journal was sealed under a different genesis type \
-                 config (disagrees on the app-declared type {d:?}); reopen with the original \
-                 GenesisConfig"
-            ),
+            EngineError::GenesisDeclDrift(d) => {
+                // The key by its addresses, in the dotted form an operator's
+                // own config file spells them — a nested Debug of the endset
+                // is not a sentence anyone can act on. The registration is a
+                // small flat struct and reads as itself.
+                let key: Vec<String> = d.key.addrs().map(|t| t.to_string()).collect();
+                write!(
+                    f,
+                    "engine open: recovered journal was sealed under a different genesis type \
+                     config (disagrees on the app-declared type keyed [{}], passed as {:?}); \
+                     reopen with the original GenesisConfig",
+                    key.join(", "),
+                    d.reg
+                )
+            }
         }
     }
 }
@@ -82,8 +91,13 @@ impl std::error::Error for EngineError {
 /// configuration, and that configuration — held so every later consumer (M9's
 /// catalog, the observe surface's app-class enumeration) reads the SAME
 /// registry and the SAME config, never a copy that could drift.
+///
+/// The kernel is held as the [`EngineStores`] factory rather than bare: the
+/// engine's own driver accessors read through it, so which driver constructor
+/// fills which slot is written once, in one type, for both the engine's
+/// callers and M10's transport.
 pub struct Engine {
-    kernel: Arc<Kernel<World>>,
+    stores: EngineStores,
     registry: Arc<TypeRegistry>,
     genesis: GenesisConfig,
 }
@@ -91,9 +105,16 @@ pub struct Engine {
 impl Engine {
     /// Recover-or-init (M2's `Kernel::open`) over the full genesis world.
     ///
-    /// The genesis seam. `TypeRegistry::build` validates the PASSED
-    /// configuration — validate-once-or-fail, before any kernel exists — and
-    /// the resulting registry is the comparison basis below and nothing else.
+    /// The genesis seam. `TypeRegistry::build` yields the PASSED
+    /// configuration as a registry, which is the comparison basis below and
+    /// nothing else: it is how the passed reserved endsets are read through
+    /// M7's OWN `ShippedType`-to-address mapping, so the assembler never
+    /// copies that mapping into a match of its own — and a copy is what would
+    /// go blind to a sixth shipped class. (Validation is not this call's job:
+    /// `World::genesis` on the next line validates the same configuration
+    /// through `LinkState::genesis`, equally before any kernel exists, and
+    /// fails the same way.)
+    ///
     /// The registry the engine keeps is M7's own: the slice reconstructs it
     /// from the configuration the journal sealed, before replay, so the
     /// instance every later consumer reads (M9's catalog, the observe surface)
@@ -148,7 +169,7 @@ impl Engine {
             }
             Arc::clone(sealed)
         };
-        Ok(Engine { kernel, registry, genesis })
+        Ok(Engine { stores: EngineStores::new(kernel), registry, genesis })
     }
 
     /// The shared kernel (M2). Snapshots, checkpoints, and `current_seq` are
@@ -156,7 +177,7 @@ impl Engine {
     /// [`Engine::world_at`] is the one M2 method the engine forwards rather
     /// than leaves to this handle, and it forwards verbatim.
     pub fn kernel(&self) -> &Arc<Kernel<World>> {
-        &self.kernel
+        &self.stores.kernel
     }
 
     /// The ONE registry behind the genesis-sealed config — M7's own instance,
@@ -173,18 +194,18 @@ impl Engine {
 
     /// M3's driver (borrows the kernel for the call).
     pub fn namespace(&self) -> Namespace<'_, World> {
-        Namespace::new(&self.kernel)
+        self.stores.namespace()
     }
 
     /// M5's driver (borrows the kernel for the call).
     pub fn vstream(&self) -> Vstream<'_, World> {
-        Vstream::new(&self.kernel)
+        self.stores.vstream()
     }
 
     /// M7's driver (borrows the kernel; clones the slice's rebuilt registry
     /// `Arc` internally, per M7's as-built constructor).
     pub fn linkstore(&self) -> LinkWriter<'_, World> {
-        LinkWriter::new(&self.kernel)
+        self.stores.linkstore()
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
@@ -197,7 +218,7 @@ impl Engine {
     /// spurious type-check miss later.
     pub fn coordinator(&self) -> Result<Coordinator<World>, CatalogError> {
         Coordinator::new(
-            Arc::clone(&self.kernel),
+            Arc::clone(self.kernel()),
             Arc::clone(&self.registry),
             self.genesis.types.reserved.clone(),
             self.genesis.types.decls.clone(),
@@ -210,14 +231,14 @@ impl Engine {
     /// `Operation::new` — the engine-facing store-driver constructors,
     /// wrapped once so the binary holds no assembly knowledge.
     pub fn stores(&self) -> EngineStores {
-        EngineStores::new(Arc::clone(&self.kernel))
+        self.stores.clone()
     }
 
     /// The committed world as of position `at`: [`Kernel::world_at`] over the
     /// assembled world, forwarded verbatim. The contract, the refusal
     /// precedence and the cost are M2's, at that link.
     pub fn world_at(&self, at: Seq) -> Result<World, HistoryError> {
-        self.kernel.world_at(at)
+        self.kernel().world_at(at)
     }
 }
 
@@ -241,12 +262,14 @@ pub struct EngineStores {
 }
 
 impl EngineStores {
-    /// Over any `Kernel<World>` — the live recovered one [`Engine::stores`]
-    /// passes, or a throwaway kernel rooted at a reconstructed historical
-    /// world. WHICH driver constructor fills which `Stores` slot is the
-    /// assembler's knowledge, so it is stated once, here: a caller that has a
-    /// kernel and needs an M10 over it asks for this rather than restating
-    /// the four constructors and inheriting the next change to them.
+    /// Over any `Kernel<World>` — the live recovered one [`Engine`] holds, or
+    /// a throwaway kernel rooted at a reconstructed historical world. WHICH
+    /// driver constructor fills which `Stores` slot is the assembler's
+    /// knowledge, and the impl below is the one statement of it: the engine's
+    /// own `namespace`/`vstream`/`linkstore` read through this type, so a
+    /// caller that has a kernel and needs an M10 over it asks for this rather
+    /// than restating the four constructors and inheriting the next change to
+    /// them.
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {
         EngineStores { kernel }
     }
@@ -272,7 +295,10 @@ impl Stores<World> for EngineStores {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::error::Error;
+
+    use skep_links::{enc, Registration, Shape};
 
     use super::*;
 
@@ -295,6 +321,31 @@ mod tests {
         assert!(
             EngineError::GenesisDrift(ShippedType::Retired).source().is_none(),
             "a drift verdict is the engine's own; it wraps no inner failure"
+        );
+    }
+
+    /// A decl-drift refusal names the key the way the operator wrote it: the
+    /// dotted addresses, not a nested Debug of the endset that carries them.
+    #[test]
+    fn a_decl_drift_names_its_key_in_the_operator_s_own_form() {
+        let addr = GenesisConfig::standard().types.reserved.retired;
+        let dotted = addr.tumbler().to_string();
+        let rendered = EngineError::GenesisDeclDrift(TypeDecl {
+            key: enc(std::slice::from_ref(&addr)),
+            reg: Registration {
+                shape: Shape::Binary,
+                idem: true,
+                behaviors: BTreeSet::new(),
+            },
+        })
+        .to_string();
+        assert!(
+            rendered.contains(&dotted),
+            "the operator must read the key as they wrote it ({dotted}): {rendered}"
+        );
+        assert!(
+            !rendered.contains("Endset"),
+            "an endset's Debug form is not an operator's sentence: {rendered}"
         );
     }
 }

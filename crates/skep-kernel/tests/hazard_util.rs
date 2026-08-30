@@ -31,7 +31,7 @@ use std::time::Duration;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
 use skep_content::Val;
-use skep_engine::observe::{dump, WorldDump};
+use skep_engine::observe::WorldDump;
 use skep_engine::{Engine, EngineError, GenesisConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_links::SlotArg;
@@ -230,7 +230,6 @@ pub struct BoundaryOracle {
 /// version, a delete — built through the public engine drivers only.
 pub struct Fixture {
     pub dir: PathBuf,
-    pub genesis: GenesisConfig,
     pub genesis_dump: WorldDump,
     pub boundaries: Vec<BoundaryOracle>,
     pub doc: Address,
@@ -244,10 +243,10 @@ impl Fixture {
     /// so the oracle is always the pure genesis fold — recovered dumps
     /// judged against it prove fold ≡ checkpoint+replay under the fault.
     pub fn build(dir: &Path, ckpt_after: &[usize]) -> Fixture {
-        let genesis = GenesisConfig::standard();
-        let engine = Engine::open(cfg_manual(dir), genesis.clone()).expect("fixture open");
+        let engine =
+            Engine::open(cfg_manual(dir), GenesisConfig::standard()).expect("fixture open");
         let genesis_dump =
-            dump(&engine.world_at(Seq(0)).expect("genesis boundary answers"), &genesis);
+            engine.dump_of(&engine.world_at(Seq(0)).expect("genesis boundary answers"));
         let seg = seg_file(dir, 1);
         let mut boundaries: Vec<BoundaryOracle> = Vec::new();
 
@@ -264,7 +263,7 @@ impl Fixture {
             boundaries.push(BoundaryOracle {
                 seq: seq.0,
                 journal_len,
-                dump: dump(&world, &genesis),
+                dump: engine.dump_of(&world),
             });
             if ckpt_after.contains(&boundaries.len()) {
                 engine.kernel().checkpoint().expect("fixture checkpoint");
@@ -355,7 +354,7 @@ impl Fixture {
             .filter(|n| n.starts_with("seg-") && n.ends_with(".wal"))
             .count();
         assert_eq!(segs, 1, "the mixed fixture stays inside one journal segment");
-        Fixture { dir: dir.to_path_buf(), genesis, genesis_dump, boundaries, doc, full_len }
+        Fixture { dir: dir.to_path_buf(), genesis_dump, boundaries, doc, full_len }
     }
 
     /// The boundary rule: the greatest committed boundary whose bytes lie
@@ -423,10 +422,7 @@ pub fn judge_prefix(
         "FINDING ({ctx}): SILENT DIVERGENCE — recovered world ≠ ground truth at boundary {head}"
     );
     if depth == Depth::Full {
-        let at_genesis = dump(
-            &engine.world_at(Seq(0)).expect("genesis answers"),
-            &fixture.genesis,
-        );
+        let at_genesis = engine.dump_of(&engine.world_at(Seq(0)).expect("genesis answers"));
         assert_eq!(
             at_genesis, fixture.genesis_dump,
             "FINDING ({ctx}): genesis boundary diverged"
@@ -439,7 +435,7 @@ pub fn judge_prefix(
                 )
             });
             assert_eq!(
-                dump(&world, &fixture.genesis),
+                engine.dump_of(&world),
                 boundary.dump,
                 "FINDING ({ctx}): history at boundary {} diverges from ground truth",
                 boundary.seq

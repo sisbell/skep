@@ -66,11 +66,11 @@ impl WorldDump {
     }
 }
 
-/// Render one world. `cfg` must be the genesis configuration the world was
-/// opened under — it is the one place the app-declared type keys live, and
-/// the engine holds it precisely so observation enumerates the same classes
-/// genesis sealed.
-pub fn dump(world: &World, cfg: &GenesisConfig) -> WorldDump {
+/// Render one world against the configuration it was sealed under: the four
+/// slices' serde forms through the canonicalizing transcode, then the hints
+/// section, which reads its app-class keys off `cfg` because that is the one
+/// place they live.
+fn dump(world: &World, cfg: &GenesisConfig) -> WorldDump {
     let root = Canon::Map(vec![
         (
             key("authoritative"),
@@ -89,14 +89,14 @@ pub fn dump(world: &World, cfg: &GenesisConfig) -> WorldDump {
     WorldDump(s)
 }
 
-/// Hint faithfulness (the contract's helper): dump the live world, rebuild
-/// its derived state from scratch through the engine's own recovery path
+/// Hint faithfulness: dump the live world, rebuild its derived state from
+/// scratch through the engine's own recovery path
 /// (`WorldState::rebuild_derived` — the same call recovery makes before
 /// replay), dump again, compare bytes. Equal dumps certify that the
 /// incrementally-maintained hints match a from-authoritative rebuild; the
 /// authoritative sections are untouched by the rebuild, so any divergence
 /// localizes to a hint.
-pub fn hints_faithful(world: &World, cfg: &GenesisConfig) -> Result<(), HintDivergence> {
+fn hints_faithful(world: &World, cfg: &GenesisConfig) -> Result<(), HintDivergence> {
     let live = dump(world, cfg);
     let rebuilt = dump(&world.clone().rebuild_derived(), cfg);
     if live == rebuilt {
@@ -250,12 +250,35 @@ impl crate::Engine {
     /// Dump the currently committed world (one pinned snapshot).
     pub fn world_dump(&self) -> WorldDump {
         let snap = self.kernel().snapshot();
-        dump(snap.world(), self.genesis_config())
+        self.dump_of(snap.world())
+    }
+
+    /// Dump any world THIS engine produced — a snapshot of its kernel, or a
+    /// world [`crate::Engine::world_at`] reconstructed.
+    ///
+    /// A dump is only meaningful against the configuration its world was
+    /// sealed under, because the hints section enumerates its app-class
+    /// sections from the genesis decls: rendered against a foreign
+    /// configuration it reports classes the world never sealed and omits the
+    /// ones it did — and it does so deterministically, so two equally
+    /// mispaired dumps compare byte-equal and a harness narrowing on that
+    /// comparison sees nothing. Which configuration goes with which world is
+    /// assembly knowledge; the engine holds it, so the pairing is made here
+    /// and cannot be made anywhere else.
+    pub fn dump_of(&self, world: &World) -> WorldDump {
+        dump(world, self.genesis_config())
     }
 
     /// Run the hint-faithfulness check against the committed world.
     pub fn check_hints(&self) -> Result<(), HintDivergence> {
         let snap = self.kernel().snapshot();
-        hints_faithful(snap.world(), self.genesis_config())
+        self.check_hints_of(snap.world())
+    }
+
+    /// [`crate::Engine::check_hints`] over any world this engine produced,
+    /// paired with its genesis configuration exactly as
+    /// [`crate::Engine::dump_of`] pairs it.
+    pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
+        hints_faithful(world, self.genesis_config())
     }
 }

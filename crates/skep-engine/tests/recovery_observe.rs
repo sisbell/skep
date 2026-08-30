@@ -16,7 +16,6 @@ mod common;
 
 use common::*;
 use skep_content::Val;
-use skep_engine::observe::{dump, hints_faithful};
 use skep_engine::{Engine, GenesisConfig, TypeDecl};
 use skep_links::{enc, Behavior, Registration, Shape, SlotArg};
 use tempfile::tempdir;
@@ -114,12 +113,14 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
     }
 }
 
-/// The free-function surface works off a caller-pinned snapshot too (the
-/// harness shape: no `Engine`, just a world and the genesis config).
+/// A world the caller pinned itself — a snapshot rather than the engine's
+/// own committed read — dumps deterministically and its hints are faithful,
+/// with the genesis configuration supplied by the engine that produced it
+/// (the harness shape: any world this engine made, rendered against the one
+/// config it was sealed under).
 #[test]
-fn dump_free_functions_off_a_snapshot() {
-    let genesis = rich_genesis();
-    let engine = Engine::open(mem_cfg(), genesis.clone()).expect("in-memory open");
+fn a_caller_pinned_world_dumps_deterministically() {
+    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
@@ -127,8 +128,8 @@ fn dump_free_functions_off_a_snapshot() {
         .expect("insert succeeds");
 
     let snap = engine.kernel().snapshot();
-    let d1 = dump(snap.world(), &genesis);
-    let d2 = dump(snap.world(), &genesis);
+    let d1 = engine.dump_of(snap.world());
+    let d2 = engine.dump_of(snap.world());
     assert_eq!(d1, d2);
-    hints_faithful(snap.world(), &genesis).expect("hints are faithful");
+    engine.check_hints_of(snap.world()).expect("hints are faithful");
 }

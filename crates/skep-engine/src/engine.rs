@@ -264,15 +264,30 @@ impl Engine {
 /// total and needs no second guard, and a missing or unequal registration is
 /// drift and nothing else.
 ///
-/// TWO LIMITS, both structural, both worth knowing before trusting this. It
+/// THREE LIMITS, all structural, all worth knowing before trusting this. It
 /// has force only where recovery restored a CHECKPOINTED world: with no
 /// retained checkpoint the replay base is the passed config's own genesis
 /// world (M2 §Fsync), so the slice's config IS the passed config and every
-/// comparison here is vacuously true. And it can only check what the passed
+/// comparison here is vacuously true. It can only check what the passed
 /// config mentions — the registry is keyed by coverage class and publishes no
 /// enumeration, so a decl the JOURNAL sealed and this caller dropped, or a
 /// reordering of `decls`, passes unremarked. Closing that direction needs an
 /// M7 accessor for the sealed `TypeConfig`.
+///
+/// And it cannot speak AT ALL where the sealed config no longer re-validates,
+/// which is the limit to read before tightening `TypeRegistry::build`.
+/// Recovery runs `WorldState::rebuild_derived` over every base it selects,
+/// and M7's rebuild reconstructs its registry with a `TypeRegistry::build`
+/// it `expect`s — so a checkpoint whose sealed config decodes but no longer
+/// passes a tightened validation aborts the process inside `Kernel::open`,
+/// before this function is ever reached. Two things go with it: M2's
+/// fallback chain, which would otherwise skip that checkpoint for the
+/// next-older base and refuse cleanly as `OpenError::BadCheckpoint`, is
+/// bypassed — the load SUCCEEDED, and the panic is after it — and so is the
+/// diagnosis this check exists to give. Note which case survives to that
+/// panic: `World::genesis` validates the PASSED config first and would refuse
+/// as [`EngineError::Registry`], so what is left is passed-valid,
+/// sealed-invalid — a drifted config, exactly the family named here.
 fn check_genesis_drift(
     links: &LinkState,
     genesis_config: &GenesisConfig,
@@ -320,6 +335,22 @@ impl EngineStores {
     /// caller that has a kernel and needs an M10 over it asks for this rather
     /// than restating the four constructors and inheriting the next change to
     /// them.
+    ///
+    /// PRECONDITION, and the assembler's to state because the pairing is the
+    /// assembler's: `kernel`'s root must be a world that has been through
+    /// `WorldState::rebuild_derived`. In practice that means one
+    /// [`World::genesis`] built — which carries its own derived hints, and
+    /// says so — or one [`Engine::world_at`] reconstructed, whose replay
+    /// seeds its base through the rebuild. `Durability::InMemory` installs
+    /// the passed world unrebuilt, so a `World` that arrived any other way
+    /// (deserialized straight from bytes, say — `World: Deserialize` is
+    /// forced on it by `WorldState`) is served here with M7's skip-serialized
+    /// registry still at serde's seed: it "registers nothing, reports every
+    /// shipped endset as `⟨⟩`, and holds none of `TypeRegistry`'s invariant",
+    /// in `LinkState::registry`'s own words. Reads then answer with
+    /// nullification invisible, `Active` equal to `Audit`, and no
+    /// supersession or retraction recognized at all — and nothing about the
+    /// answers looks wrong.
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {
         EngineStores { kernel }
     }

@@ -33,6 +33,13 @@ pub(crate) enum SerdeTree {
     F64Bits(u64),
     Char(char),
     Str(String),
+    /// serde's `serialize_bytes`, which no type in the world reaches: serde
+    /// has no byte specialization for `[u8]`, so M4's `Val` transcodes as a
+    /// [`SerdeTree::Seq`] of [`SerdeTree::U64`] — one node per byte — and the
+    /// only way here is a slice that adopts a `serde_bytes` shadow. Worth
+    /// knowing before reading a dump's size off this arm: the content term is
+    /// the sequence's, roughly a node and several digits per byte, and not
+    /// the two hex characters below.
     Bytes(Vec<u8>),
     Null,
     Opt(Box<SerdeTree>),
@@ -47,9 +54,19 @@ pub(crate) enum SerdeTree {
     Named(&'static str, Box<SerdeTree>),
 }
 
-/// Transcode any serde-serializable value. Total over the world's serde
-/// forms: the only error path is a `Serialize` impl calling
-/// `ser::Error::custom`, which none of the slices' impls do.
+/// Transcode any serde-serializable value.
+///
+/// The `expect` rests on this, and on nothing weaker: the transcode itself
+/// raises `ser::Error::custom` in one place — a map value arriving before its
+/// key, which serde's own contract forbids — so the only way to an `Err` is a
+/// `Serialize` impl in the world's closure raising it. None can today,
+/// because every impl in that closure is a derive or a library's (`im`,
+/// `num-bigint`, serde's `rc` impls) and every serde shadow is spelled
+/// `into`, which cannot fail, rather than `try_into`. A slice that adds a
+/// fallible `serialize_with`, or writes a shadow `try_into` on the serialize
+/// side, is what makes this reachable — and it lands in the world dump, i.e.
+/// on whatever route serves one. Fail-stop is right for an oracle; the point
+/// is that the change which breaks it should land beside this sentence.
 pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
     v.serialize(SerdeTreeSer).expect("canonical transcode is total over the world's serde forms")
 }

@@ -92,6 +92,16 @@ impl WorldState for World {
     /// its OWN serialized `TypeConfig` and its hints from its OWN
     /// links map — so the order is future-proofing, pinned here and held to
     /// by the recovery-equivalence test.
+    ///
+    /// Infallible by M2's trait, and fail-stop in fact: the rebuilds composed
+    /// here run over state that was just DESERIALIZED, and M7's asserts what
+    /// it needs of it (that the sealed type config still validates, that
+    /// every stored link key is T4-valid and element-level). With no error
+    /// channel to refuse through, a base that violates any of those panics
+    /// rather than returning — inside `Kernel::open`, after that checkpoint
+    /// loaded, so M2's next-older-base fallback does not get its turn. The
+    /// engine's own genesis-drift check is downstream of this call and cannot
+    /// speak either; `check_genesis_drift` carries that as its third limit.
     fn rebuild_derived(self) -> Self {
         let World { namespace, content, arrangement, links } = self;
         // M3, then M4: neither rebuilds — both slices are fully serialized, so

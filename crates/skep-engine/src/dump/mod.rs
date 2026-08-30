@@ -271,6 +271,11 @@ fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
 
 impl crate::Engine {
     /// Dump the currently committed world (one pinned snapshot).
+    ///
+    /// COST is [`crate::Engine::dump_of`]'s, over a world whose size the
+    /// caller does not choose: this renders whatever the store currently
+    /// holds, so the figure there is read against the live world and not
+    /// against a request.
     pub fn world_dump(&self) -> WorldDump {
         let snap = self.kernel().snapshot();
         self.dump_of(snap.world())
@@ -288,11 +293,30 @@ impl crate::Engine {
     /// comparison sees nothing. Which configuration goes with which world is
     /// assembly knowledge; the engine holds it, so the pairing is made here
     /// and cannot be made anywhere else.
+    ///
+    /// COST, per call, uncached, and linear in the WHOLE world rather than in
+    /// anything the caller names. The authoritative half transcodes every
+    /// slice into an owned value tree before a byte of text is written, and
+    /// the render then materializes each map entry's own rendering as an
+    /// owned `String` to sort by — so at peak the text exists at least twice
+    /// over. The tree costs a node per serialized ELEMENT, and a content byte
+    /// is an element: serde has no byte specialization for `[u8]`, so M4's
+    /// `Val` transcodes as a sequence of integers and not as a blob
+    /// (`a_content_byte_costs_a_whole_tree_node` pins that, because it is the
+    /// term that dominates this figure and it is not what the byte payload
+    /// looks like). The hints half adds two whole-store link scans
+    /// (`match_links` under the empty constraint set, each lifting every key
+    /// it walks), one `is_nullified` and one `succs` per audit member, and two
+    /// typed-slice walks per class. Nothing here is memoized, and peak memory
+    /// is that figure times the number of calls in flight. Admission and
+    /// concurrency are the caller's to gate; this method gates neither.
     pub fn dump_of(&self, world: &World) -> WorldDump {
         dump(world, self.genesis_config())
     }
 
     /// Run the hint-faithfulness check against the committed world.
+    ///
+    /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
     pub fn check_hints(&self) -> Result<(), HintDivergence> {
         let snap = self.kernel().snapshot();
         self.check_hints_of(snap.world())
@@ -301,6 +325,12 @@ impl crate::Engine {
     /// [`crate::Engine::check_hints`] over any world this engine produced,
     /// paired with its genesis configuration exactly as
     /// [`crate::Engine::dump_of`] pairs it.
+    ///
+    /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
+    /// of the world and a whole-links `rebuild_derived` over it — so upwards
+    /// of twice that figure, and both dumps are resident at once for the
+    /// comparison. This is a harness surface: it gates nothing, and it should
+    /// not acquire a caller that does not gate it.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
         hints_faithful(world, self.genesis_config())
     }
@@ -439,6 +469,33 @@ mod tests {
             })
             .collect();
         assert_eq!(names, ["namespace", "content", "arrangement", "links"]);
+    }
+
+    /// The term that dominates a dump's cost, pinned where the cost is
+    /// claimed: a content byte is a whole serialized ELEMENT, not a byte of a
+    /// blob. serde has no byte specialization for `[u8]`, so M4's `Val` walks
+    /// the data model through `serialize_seq` — one integer node per byte —
+    /// and a world holding N bytes of content transcodes into a tree with N
+    /// nodes in it before a byte of text is written. The transcode's `Bytes`
+    /// arm exists and says the opposite at a glance, which is exactly why the
+    /// ratio [`crate::Engine::dump_of`] states is a test and not a sentence.
+    #[test]
+    fn a_content_byte_costs_a_whole_tree_node() {
+        let payload: Vec<u8> = (0..64u8).collect();
+        let SerdeTree::Seq(nodes) = to_tree(&Val::new(payload.clone())) else {
+            panic!("a content value transcodes as a sequence, not as a byte blob")
+        };
+        assert_eq!(nodes.len(), payload.len(), "one tree node per content byte");
+        assert!(
+            nodes.iter().all(|n| matches!(n, SerdeTree::U64(_))),
+            "every content byte arrives as its own integer element"
+        );
+
+        // …and the text is proportional to the same term: decimal digits and
+        // separators per byte, never the two hex characters the `Bytes` arm
+        // would have written.
+        let text = render_of(&to_tree(&Val::new(vec![255u8; 4])));
+        assert_eq!(text, "[255, 255, 255, 255]");
     }
 
     fn divergence(live: &str, rebuilt: &str) -> HintDivergence {

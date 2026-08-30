@@ -108,6 +108,11 @@ impl World {
     /// builds a real registry over an empty links map, and M5's rebuild is the
     /// identity. `Engine::check_hints` is the standing check that what is
     /// seeded here equals a from-authoritative rebuild.
+    ///
+    /// The one refusal is the passed configuration's: M7 validates it through
+    /// `LinkState::genesis` → `TypeRegistry::build`. M3's, M4's and M5's
+    /// genesis constructors are infallible, so an `Err` names `genesis_config`
+    /// and nothing else.
     pub fn genesis(genesis_config: &GenesisConfig) -> Result<World, RegistryError> {
         Ok(World {
             namespace: M3State::genesis(),

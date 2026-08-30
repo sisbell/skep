@@ -218,3 +218,45 @@ fn drifted_app_decl_reopen_is_refused() {
         Ok(_) => panic!("a drifted app decl must be refused"),
     }
 }
+
+/// Several disagreements can hold at once, and the check reports the first it
+/// finds: the reserved half before the decl half. An operator reading one
+/// refusal has been told about one disagreement, so a corrected config may be
+/// refused again — which is only true if the order is the stated one.
+/// Precedence stated and unchecked is precedence that gets reordered.
+#[test]
+fn a_reopen_drifting_on_both_halves_is_refused_on_the_reserved_one() {
+    let dir = tempdir().expect("tempdir");
+    let app_key = || enc(&[addr(&[9, 0, 9, 0, 9, 0, 8, 1])]);
+    let declared = |idem: bool| TypeDecl {
+        key: app_key(),
+        reg: Registration { shape: Shape::Binary, idem, behaviors: BTreeSet::<Behavior>::new() },
+    };
+
+    let mut sealed = GenesisConfig::standard();
+    sealed.types.decls = vec![declared(true)];
+    {
+        let engine = Engine::open(fsync_cfg(dir.path()), sealed).expect("fsync open");
+        setup_doc(&engine);
+        // As above: the checkpoint is what carries the sealed config forward.
+        engine.kernel().checkpoint().expect("checkpoint succeeds");
+    }
+
+    // BOTH halves edited: one shipped class moved, and the app decl's
+    // registration changed on the key the journal sealed.
+    let mut drifted = GenesisConfig::standard();
+    drifted.types.reserved.retraction = addr(&[9, 0, 9, 0, 9, 0, 9, 6]);
+    drifted.types.decls = vec![declared(false)];
+
+    match Engine::open(fsync_cfg(dir.path()), drifted) {
+        Err(EngineError::GenesisReservedDrift(named)) => {
+            assert_eq!(
+                named,
+                ShippedType::Retraction,
+                "the reserved half speaks first, naming the class that drifted"
+            );
+        }
+        Err(other) => panic!("expected the reserved half to speak first, got {other:?}"),
+        Ok(_) => panic!("a reopen drifting on both halves must be refused"),
+    }
+}

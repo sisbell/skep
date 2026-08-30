@@ -3,10 +3,17 @@
 //! sorted by their rendered key**, so a slice whose internal map iterates in
 //! instance-specific order (M3's frontier `im::HashMap` hashes with a
 //! per-instance `RandomState`; M4's map iterates in hash-trie order) still
-//! renders byte-identically for equal contents. Sequences keep their order —
-//! for the slices' `im::Vector`/`im::OrdSet` fields that order is semantic or
-//! already sorted. No iteration-order dependence survives this path, which is
-//! the world dump's determinism clause.
+//! renders byte-identically for equal contents.
+//!
+//! Sequences keep their order, and that is an OBLIGATION on the world's serde
+//! forms rather than a description of them: a collection serialized as a
+//! SEQUENCE must carry an order that is a function of its contents. Every
+//! field satisfies it — the unordered collections (M3's `frontiers`, M4's
+//! map) serialize as serde MAPS and are sorted here, and what serializes as a
+//! sequence is `im::Vector`/`OrdSet`/`OrdMap` or a `Vec` held in genesis
+//! order. A slice that serializes an unordered collection as a sequence
+//! breaks the world dump's determinism clause, and this transcode cannot
+//! detect it.
 
 use std::fmt::{self, Write as _};
 

@@ -8,7 +8,13 @@
 //! serde forms pushed through the canonicalizing transcode (maps sorted, so
 //! instance-specific hash iteration cannot leak into the bytes); the hints
 //! section is built from the stores' PUBLIC read surfaces over
-//! already-ordered results. Two dumps of equal worlds are byte-equal.
+//! already-ordered results. Two dumps of equal worlds rendered against the
+//! same configuration VALUE are byte-equal. The configuration belongs in that
+//! sentence: the app-class sections are labelled by position in `decls`, and
+//! `check_genesis_drift` does not pin decl order, so two configurations that
+//! both pass it can label one world's classes differently. Each section
+//! carries its own class key, so the index carries the order and nothing
+//! else.
 //!
 //! What each section holds, per the contract:
 //! * **authoritative** — M3's registry/principals/frontiers, M4's content
@@ -24,14 +30,29 @@
 //!   section demands.
 //! * **hints** — M7's recomputable state, read through its public surfaces
 //!   (`match_links`, `type_slice`, `members`, `succs`): the audit and active
-//!   slices, the nullified set, per-class type slices (five shipped classes
-//!   plus the app decls from the one genesis config), the supersession
-//!   forward edges (the BH2 walk), and M9's definition registry projected as
-//!   `pdef`/`pd_stable` membership. M7's `dedup` and `home_frontier` hints
-//!   have no public read surface and are exercised by the stores' own
-//!   write-path tests instead — stated here so their absence is a scope
-//!   decision, not an oversight. M3/M4 hold no hints; M5's rebuild is the
-//!   identity in v1.
+//!   slices, the nullified members of the audit slice, per-class type slices
+//!   (five shipped classes plus the app decls from the one genesis config),
+//!   the supersession forward edges (the BH2 walk), and M9's definition
+//!   registry projected as `pdef`/`pd_stable` membership. M3/M4 hold no
+//!   hints; M5's rebuild is the identity in v1.
+//!
+//!   THREE of M7's hint families sit outside that reach, so the section — and
+//!   the faithfulness check built on it — is an oracle over what it renders
+//!   and nothing more. `dedup` has no public read surface at all.
+//!   `home_frontier` has one, `LinkState::age`, which is that hint less a
+//!   link's own ordinal — so its omission is a decision about this format
+//!   rather than a consequence of M7's surface, and closing it would move
+//!   bytes the harnesses pin. And M7's fold indexes a type slice for EVERY
+//!   coverage class while this section names only the genesis-known ones, so
+//!   the typed slice an ordinary content-typed link lands in is never
+//!   rendered. Each is exercised by M7's own write-path tests instead.
+//!
+//!   `links.nullified` renders the nullified members of the audit slice,
+//!   which is the whole tombstone set only because `nullify`'s P-tgt gate
+//!   admits no target but a resident link or the address the retraction tuple
+//!   itself will occupy. M7's fold inserts every denoted to-root of an `[R]`
+//!   link, so a root that is not itself a link would sit in the hint and
+//!   outside this rendering.
 
 mod canon;
 
@@ -46,10 +67,12 @@ use crate::world::World;
 use canon::{render, to_tree, SerdeTree};
 
 /// A deterministic rendering of one world. Byte-equality is the comparison
-/// the harnesses use: two dumps of equal worlds are byte-equal, and a
-/// checkpoint+replay world dumps byte-equal to the live fold it recovers.
-/// `Hash` comes with that equality, for a harness collecting the distinct
-/// dumps across a sweep of crash points.
+/// the harnesses use: two dumps of equal worlds rendered against the same
+/// configuration value are byte-equal, and a checkpoint+replay world dumps
+/// byte-equal to the live fold it recovers. `Hash` comes with that equality,
+/// for a harness collecting the distinct dumps across a sweep of crash
+/// points. The configuration is part of the claim because the app-class
+/// sections are labelled positionally from its `decls`.
 ///
 /// The text goes out — through `Display`, `as_str`, `as_bytes`,
 /// `into_string` — and none comes in. A dump exists only because an engine
@@ -124,10 +147,10 @@ fn authoritative_tree(world: &World) -> SerdeTree {
 /// Hint faithfulness: dump the live world, rebuild its derived state from
 /// scratch through the engine's own recovery path
 /// (`WorldState::rebuild_derived` — the same call recovery makes before
-/// replay), dump again, compare bytes. Equal dumps certify that the
-/// incrementally-maintained hints match a from-authoritative rebuild; the
-/// authoritative sections are untouched by the rebuild, so any divergence
-/// localizes to a hint.
+/// replay), dump again, compare bytes. Equal dumps certify that every hint
+/// THIS DUMP RENDERS matches a from-authoritative rebuild; the authoritative
+/// sections are untouched by the rebuild, so any divergence localizes to a
+/// hint, and a hint the dump does not render is not in the comparison.
 fn hints_faithful(world: &World, genesis_config: &GenesisConfig) -> Result<(), HintDivergence> {
     let live = dump(world, genesis_config);
     let rebuilt = dump(&world.clone().rebuild_derived(), genesis_config);
@@ -206,6 +229,13 @@ fn shipped_label(ty: ShippedType) -> &'static str {
 
 /// One type class's observable projection: its key endset and its
 /// audit/active slices (both already address-ordered `OrdSet`s).
+///
+/// `ty` carries M7's stated precondition — address-denoting or
+/// `iextent`-built, else `type_slice` panics naming it — and both callers
+/// below are inside it: a reserved endset is M7's own, and a genesis decl's
+/// key was checked by the `TypeRegistry::build` that `crate::Engine::open`
+/// ran over the very configuration this dump is rendered against. That is
+/// where the obligation is discharged; it is not re-checked here.
 fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     SerdeTree::Map(vec![
         (key("key"), tum_seq(ty.addrs())),
@@ -322,6 +352,9 @@ impl crate::Engine {
 
     /// Run the hint-faithfulness check against the committed world.
     ///
+    /// What `Ok(())` certifies — and the three hint families it leaves
+    /// uncertified — is [`crate::Engine::check_hints_of`]'s.
+    ///
     /// COST: [`crate::Engine::check_hints_of`]'s, over the committed world.
     pub fn check_hints(&self) -> Result<(), HintDivergence> {
         let snap = self.kernel().snapshot();
@@ -331,6 +364,18 @@ impl crate::Engine {
     /// [`crate::Engine::check_hints`] over any world this engine produced,
     /// paired with its genesis configuration exactly as
     /// [`crate::Engine::dump_of`] pairs it.
+    ///
+    /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
+    /// slices, the nullified members of the audit slice, the typed slices of
+    /// the genesis-known classes, the supersession forward edges and the
+    /// predicate projections each agree with a rebuild from authoritative
+    /// state. It certifies nothing of the three families the dump does not
+    /// reach, and each of those drives something a caller can observe —
+    /// `dedup` drives `emit`'s incumbent lookup and with it idempotence;
+    /// `home_frontier` drives the address `next_link_address` mints and the
+    /// answers `age`/`stale` give; the type slice of a class outside the
+    /// genesis config drives every typed read over ordinary content-typed
+    /// links. A rebuild that mis-derived one of those passes here.
     ///
     /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
     /// of the world and a whole-links `rebuild_derived` over it — so upwards

@@ -24,6 +24,37 @@ use skep_namespace::{HasM3, M3Rec, M3State};
 /// checkpoints a world through bincode, which encodes a struct as its fields
 /// in declaration order and carries no names, so a rename is byte-neutral for
 /// recovery and a reordering is not.
+///
+/// INVARIANT — a world's derived state agrees with its authoritative state:
+/// concretely, M7's skip-serialized registry and hints. TWO construction
+/// paths establish it, and the third does not. [`World::genesis`] establishes
+/// it, each slice arriving from its own genesis constructor; and
+/// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
+/// every base it loads, before replay. The `Deserialize` derived below
+/// establishes nothing — it leaves M7's registry at serde's seed, which
+/// "registers nothing, reports every shipped endset as `⟨⟩` and holds none of
+/// `TypeRegistry`'s invariant", in `LinkState::registry`'s own words. So a
+/// world decoded from bytes is not one until the rebuild has run over it.
+/// That gate cannot be closed here: `WorldState: DeserializeOwned` forces the
+/// impl to exist, and this type is public, so the only defence is the
+/// discipline of the one mode that skips the rebuild —
+/// `Durability::InMemory` installs the passed world as the root exactly as
+/// given, and [`crate::EngineStores::new`] states the precondition for the
+/// kernels built that way and what reads answer when it is violated.
+///
+/// THREE OBLIGATIONS `WorldState` places on this type that M2 cannot check,
+/// each discharged by a fact about the slices rather than about this file.
+/// `Clone` must be cheap, because M2 clones a world per `transact` while
+/// holding the applier lock: all four slices are `im` persistent structures,
+/// so the `..self.clone()` in [`WorldState::apply`] is four root clones.
+/// `Drop` must not unwind, because M2 drops the previous root inside the
+/// atomic install: no type in the world's closure implements `Drop` at all.
+/// And this type's and [`Record`]'s `Deserialize` must terminate and must not
+/// exhaust the stack on any byte string: that closure holds no recursive
+/// type, so decode depth is a property of the types and not of the bytes. A
+/// slice that moves to an eagerly-copied collection, or grows a recursive
+/// value, breaks one of these where the obligation's own text is a crate
+/// away.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct World {
     pub(crate) namespace: M3State,

@@ -32,7 +32,9 @@ use crate::world::World;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum EngineError {
-    /// `TypeRegistry::build` / `LinkState::genesis` rejected the config.
+    /// `World::genesis`, through `LinkState::genesis`, rejected the passed
+    /// type configuration — before any kernel exists. That is the one site
+    /// where a configuration is validated, once per open.
     Registry(RegistryError),
     /// `Kernel::open` failed (`InvalidConfig` / `Io` / `BadCheckpoint` /
     /// `Corruption`).
@@ -41,12 +43,20 @@ pub enum EngineError {
     /// under disagrees with the configuration passed to this open on the
     /// named shipped class. Detected only where recovery restored a
     /// checkpointed world — see `check_genesis_drift` for the limits.
+    ///
+    /// One disagreement, the first found, and the reserved half is compared
+    /// before the decl half: a fixed config may be refused again on the next
+    /// open. `check_genesis_drift` states the precedence in full.
     GenesisReservedDrift(ShippedType),
     /// The decl half: the same disagreement on an app-declared type — the
     /// passed decl's key holds no registration in the sealed registry, or
     /// holds one that is not the registration passed. Carries the PASSED
     /// decl, which is the half an operator can act on; the sealed one is not
     /// publicly enumerable.
+    ///
+    /// One disagreement, the first found in `decls` order, and reached only
+    /// once the whole reserved half agrees — so this refusal is evidence
+    /// about one decl and about no other.
     GenesisDeclDrift(TypeDecl),
 }
 
@@ -211,9 +221,17 @@ impl Engine {
     /// validated from, and the two op-handle factories whose bodies discharge
     /// M9's standing assembly obligation (constructing `Vstream`/`LinkWriter`
     /// from `&Kernel<W>`). M9 takes the configuration as its two halves and
-    /// its catalog projection is validate-once-or-fail: drift between the
-    /// configuration and the registry fails HERE, at assembly, never as a
-    /// spurious type-check miss later.
+    /// its catalog projection is validate-once-or-fail, so a disagreement
+    /// between the configuration and the registry fails at assembly rather
+    /// than as a spurious type-check miss later.
+    ///
+    /// After a successful [`Engine::open`] that channel carries no operator
+    /// condition: `check_genesis_drift` has already compared this same pair
+    /// against this same registry, and more strictly — `Endset` equality on
+    /// all five shipped classes where M9 asks coverage-equality, and the exact
+    /// passed `Registration` for each decl where M9 asks only that one exists.
+    /// So an `Err` here is the engine's check and M9's projection disagreeing:
+    /// an assembler bug, not a configuration an operator can fix.
     pub fn coordinator(&self) -> Result<Coordinator<World>, CatalogError> {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),
@@ -242,9 +260,12 @@ impl Engine {
 
 /// The engine's one act of judgment: does the type configuration the
 /// recovered slice was SEALED under agree with the one this open was passed?
-/// `links` is read off the recovered world, so its config was deserialized
-/// from the journal rather than taken from `genesis_config`, and the two are
-/// compared on both halves of M7's `TypeConfig` — every shipped class
+/// `links` is read off the recovered world at its post-replay HEAD, and what
+/// makes that the seal is M7's own fold — `apply_link` carries the genesis
+/// config and its registry forward unchanged on every record, and no
+/// `LinkRec` replaces either, so the head's config is the recovery base's,
+/// deserialized from the journal rather than taken from `genesis_config`. The
+/// two are compared on both halves of M7's `TypeConfig` — every shipped class
 /// ([`EngineError::GenesisReservedDrift`]) and every app decl the passed
 /// config carries ([`EngineError::GenesisDeclDrift`]).
 ///
@@ -254,15 +275,27 @@ impl Engine {
 /// `Coordinator` would otherwise run with its dump reporting classes genesis
 /// never sealed.
 ///
-/// The passed side is read through a registry built from the passed config,
-/// which is what that build is for and all it is for: it resolves the passed
-/// reserved endsets through M7's OWN `ShippedType`-to-address mapping, so the
-/// assembler never copies that mapping into a match of its own — and a copy
-/// is what would go blind to a sixth shipped class. The decl side compares by
-/// coverage class, M7's own identity rule for a type; `TypeRegistry::build`
-/// has already refused an empty or non-denoting key, so the class probe is
-/// total and needs no second guard, and a missing or unequal registration is
-/// drift and nothing else.
+/// PRECONDITION: `genesis_config` has already passed `TypeRegistry::build`.
+/// The one caller, [`Engine::open`], discharges it a line earlier at
+/// `World::genesis` and refuses there as [`EngineError::Registry`] — so the
+/// build below is a READ, not a second check, and it is here for one reason:
+/// it resolves the passed reserved endsets through M7's OWN
+/// `ShippedType`-to-address mapping, so the assembler never copies that
+/// mapping into a match of its own, and a copy is what would go blind to a
+/// sixth shipped class. The build is a pure function of a configuration that
+/// nothing touches between the two calls, so its refusal cannot arrive here.
+///
+/// The decl side compares by coverage class, M7's own identity rule for a
+/// type; that same upstream build has already refused an empty or
+/// non-denoting key, so the class probe is total and needs no second guard,
+/// and a missing or unequal registration is drift and nothing else.
+///
+/// PRECEDENCE: the first disagreement found speaks, and several can hold at
+/// once. The reserved half is compared before the decl half, in `SHIPPED`
+/// order within the one and `decls` order within the other. So a refusal
+/// names one disagreement and is evidence about no other — a corrected
+/// config may be refused again on the next open, and only a clean reopen
+/// says the whole configuration agrees.
 ///
 /// THREE LIMITS, all structural, all worth knowing before trusting this. It
 /// has force only where recovery restored a CHECKPOINTED world: with no
@@ -292,7 +325,10 @@ fn check_genesis_drift(
     links: &LinkState,
     genesis_config: &GenesisConfig,
 ) -> Result<(), EngineError> {
-    let passed = TypeRegistry::build(&genesis_config.types).map_err(EngineError::Registry)?;
+    let passed = TypeRegistry::build(&genesis_config.types).expect(
+        "the passed config validated at World::genesis, and TypeRegistry::build is a pure \
+         function of it",
+    );
     for ty in SHIPPED {
         if links.reserved_type(ty) != passed.reserved_type(ty) {
             return Err(EngineError::GenesisReservedDrift(ty));

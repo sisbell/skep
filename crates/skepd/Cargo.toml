@@ -13,7 +13,7 @@ readme = "README.md"
 # so the workspace gate exercises the route and the restart test's dump
 # equality; a build without it simply has no /dump route.
 default = ["observe"]
-observe = ["skep-engine/observe"]
+observe = ["skep-engine/dump"]
 # `client` embeds skep/clients/board.html (include_str! at build — the
 # binary is self-contained) and serves it at GET /. **DEFAULT-OFF, and
 # the default is the SAFE state** (owner ruling 2026-08-22): the client

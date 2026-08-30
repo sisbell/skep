@@ -128,8 +128,8 @@ fn cross_store_lifecycle_under_fsync() {
     }
 }
 
-/// Reopening a checkpointed journal under an edited genesis config trips the
-/// engine's drift wire (M2's byte-identical-genesis contract, checked at
+/// Reopening a checkpointed journal under an edited genesis config trips
+/// `check_genesis_drift` (M2's byte-identical-genesis contract, checked at
 /// assembly) instead of silently running under a configuration the journal
 /// was never sealed with.
 #[test]
@@ -139,7 +139,7 @@ fn drifted_genesis_reopen_is_refused() {
         let engine =
             Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard()).expect("fsync open");
         setup_doc(&engine);
-        // LOAD-BEARING, not scenario dressing: the wire compares the passed
+        // LOAD-BEARING, not scenario dressing: the check compares the passed
         // config against the one a CHECKPOINT carries. With no checkpoint the
         // reopen replays onto the passed genesis and there is nothing left to
         // disagree with.
@@ -151,18 +151,17 @@ fn drifted_genesis_reopen_is_refused() {
     drifted.types.reserved.retired = a(&[9, 0, 9, 0, 9, 0, 9, 6]);
 
     match Engine::open(fsync_cfg(dir.path()), drifted) {
-        Err(EngineError::GenesisDrift(_)) => {}
-        Err(other) => panic!("expected GenesisDrift, got {other:?}"),
+        Err(EngineError::GenesisReservedDrift(_)) => {}
+        Err(other) => panic!("expected GenesisReservedDrift, got {other:?}"),
         Ok(_) => panic!("a drifted genesis reopen must be refused"),
     }
 }
 
-/// The decl side of the same wire: a journal sealed with one app-declared
+/// The decl side of the same check: a journal sealed with one app-declared
 /// type, reopened under a config declaring that same key with a DIFFERENT
 /// registration, is refused at assembly. Nothing downstream would have caught
-/// it — a daemon assembles no `Coordinator`, and the observation surface
-/// would go on enumerating that class from a registration the store never
-/// validated.
+/// it — a daemon assembles no `Coordinator`, and the world dump would go on
+/// enumerating that class from a registration the store never validated.
 #[test]
 fn drifted_app_decl_reopen_is_refused() {
     let dir = tempdir().expect("tempdir");

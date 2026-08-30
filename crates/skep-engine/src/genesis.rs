@@ -36,9 +36,9 @@ pub struct GenesisConfig {
 
 /// The five shipped classes, in `ShippedType` declaration order — the ONE
 /// list, held beside the configuration that names them. Every walk over the
-/// shipped set reads it here: [`crate::Engine::open`]'s drift check and the
-/// observe surface's per-class hint enumeration. A second copy is how one of
-/// those two silently comes to cover four classes out of five.
+/// shipped set reads it here: [`crate::Engine::open`]'s genesis-drift check
+/// and the world dump's per-class hint enumeration. A second copy is how one
+/// of those two silently comes to cover four classes out of five.
 pub(crate) const SHIPPED: [ShippedType; 5] = [
     ShippedType::Retired,
     ShippedType::Supersedes,
@@ -103,9 +103,9 @@ impl World {
     /// seeded here equals a from-authoritative rebuild.
     pub fn genesis(cfg: &GenesisConfig) -> Result<World, RegistryError> {
         Ok(World {
-            m3: M3State::genesis(),
+            namespace: M3State::genesis(),
             content: ContentStore::default(),
-            m5: M5State::genesis(),
+            arrangement: M5State::genesis(),
             links: LinkState::genesis(cfg.types.clone())?,
         })
     }

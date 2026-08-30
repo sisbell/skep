@@ -1,4 +1,4 @@
-//! The observation surface and the recovery-order contract, together:
+//! The world-dump surface and the recovery-order contract, together:
 //! dump determinism (two dumps of equal worlds are byte-equal), recovery
 //! equivalence (a world folded live from genesis dumps byte-equal to the
 //! world restored from checkpoint + rebuild_derived + replay), and hint
@@ -8,7 +8,7 @@
 //! typed slices (shipped and app classes), the nullified set, supersession
 //! edges, and content/arrangement state.
 
-#![cfg(feature = "observe")]
+#![cfg(feature = "dump")]
 
 use std::collections::BTreeSet;
 
@@ -132,4 +132,22 @@ fn a_caller_pinned_world_dumps_deterministically() {
     let d2 = engine.dump_of(snap.world());
     assert_eq!(d1, d2);
     engine.check_hints_of(snap.world()).expect("hints are faithful");
+}
+
+/// The dump's vocabulary is part of its format, so it is pinned here rather
+/// than left to whatever the assembler happens to call its fields: each
+/// authoritative section is named for the store whose slice it renders, and
+/// the banner names the version those keys belong to.
+#[test]
+fn the_dump_names_each_section_for_its_store() {
+    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let text = engine.world_dump().into_string();
+
+    assert!(text.starts_with("skep-world-dump v2\n"), "unexpected banner: {text:.32}");
+    for section in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
+        assert!(
+            text.contains(section),
+            "the authoritative section {section} must be named: {text:.200}"
+        );
+    }
 }

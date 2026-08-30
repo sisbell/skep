@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "observe")]
-use skep_engine::observe::WorldDump;
+use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{Operation, Request, Response};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};

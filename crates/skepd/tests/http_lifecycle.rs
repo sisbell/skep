@@ -696,7 +696,7 @@ fn dump_serves_the_world_dump() {
     let (st, body) = get(port, "/dump");
     assert_eq!(st, 200);
     let text = String::from_utf8(body).expect("dump is utf-8 text");
-    assert!(text.starts_with("skep-world-dump v1"), "unexpected dump header: {text:.40}");
+    assert!(text.starts_with("skep-world-dump v2"), "unexpected dump header: {text:.40}");
 
     sd.shutdown();
 }

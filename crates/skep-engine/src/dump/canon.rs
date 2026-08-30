@@ -1,26 +1,28 @@
-//! A canonicalizing serde transcode: any `Serialize` value → a [`Canon`]
-//! tree → deterministic text. The one rule that earns its keep: **map
-//! entries are sorted by their rendered key**, so a slice whose internal map
-//! iterates in instance-specific order (M3's frontier `im::HashMap` hashes
-//! with a per-instance `RandomState`; M4's map iterates in hash-trie order)
-//! still renders byte-identically for equal contents. Sequences keep their
-//! order — for the slices' `im::Vector`/`im::OrdSet` fields that order is
-//! semantic or already sorted. No iteration-order dependence survives this
-//! path, which is the observe contract's determinism clause.
+//! A canonicalizing serde transcode: any `Serialize` value → a [`SerdeTree`]
+//! → deterministic text. The one rule that earns its keep: **map entries are
+//! sorted by their rendered key**, so a slice whose internal map iterates in
+//! instance-specific order (M3's frontier `im::HashMap` hashes with a
+//! per-instance `RandomState`; M4's map iterates in hash-trie order) still
+//! renders byte-identically for equal contents. Sequences keep their order —
+//! for the slices' `im::Vector`/`im::OrdSet` fields that order is semantic or
+//! already sorted. No iteration-order dependence survives this path, which is
+//! the world dump's determinism clause.
 
 use std::fmt;
 
 use serde::ser::{self, Serialize};
 
-/// The value tree a transcode collects (the serde data model, flattened to
-/// what the world's serde forms actually use). Deliberately NOT comparable:
-/// canonical order is established by [`render`], not held by the tree, so
-/// two trees with equal contents in different collection order are equal
-/// only once rendered. Comparing worlds means comparing renderings — a
-/// derived `==` here would answer the question this transcode exists to
-/// answer, and answer it wrong.
+/// The serde data model, flattened to the shapes the world's serde forms
+/// actually use, as a value a transcode can collect into. It holds entries
+/// and elements in the order the `Serialize` impl produced them; canonical
+/// order is [`render`]'s doing, established as the text is written.
+///
+/// So this type is deliberately NOT comparable. Two trees with equal contents
+/// in different collection order are equal only once rendered, and comparing
+/// worlds therefore means comparing renderings: a derived `==` here would
+/// answer the question this transcode exists to answer, and answer it wrong.
 #[derive(Clone, Debug)]
-pub(crate) enum Canon {
+pub(crate) enum SerdeTree {
     Unit,
     Bool(bool),
     I64(i64),
@@ -33,52 +35,52 @@ pub(crate) enum Canon {
     Str(String),
     Bytes(Vec<u8>),
     Null,
-    Opt(Box<Canon>),
-    Seq(Vec<Canon>),
+    Opt(Box<SerdeTree>),
+    Seq(Vec<SerdeTree>),
     /// Entries as collected; [`render`] sorts them by the rendered (key,
     /// value) PAIR. The value belongs in the sort key because the order must
     /// be TOTAL: `sort` is stable, so entries whose keys render alike would
     /// otherwise keep their collection order and leak back exactly the
     /// instance-specific iteration this transcode exists to remove.
-    Map(Vec<(Canon, Canon)>),
+    Map(Vec<(SerdeTree, SerdeTree)>),
     /// An enum variant (or named wrapper) around its payload.
-    Named(&'static str, Box<Canon>),
+    Named(&'static str, Box<SerdeTree>),
 }
 
 /// Transcode any serde-serializable value. Total over the world's serde
 /// forms: the only error path is a `Serialize` impl calling
 /// `ser::Error::custom`, which none of the slices' impls do.
-pub(crate) fn to_canon<T: Serialize + ?Sized>(v: &T) -> Canon {
-    v.serialize(CanonSer).expect("canonical transcode is total over the world's serde forms")
+pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
+    v.serialize(SerdeTreeSer).expect("canonical transcode is total over the world's serde forms")
 }
 
-/// Render a [`Canon`] tree as deterministic text, appending to `out`.
+/// Render a [`SerdeTree`] as deterministic text, appending to `out`.
 /// Maps render `{k: v, …}` with entries sorted by (rendered key, rendered
 /// value); everything else renders structurally.
-pub(crate) fn render(c: &Canon, out: &mut String) {
+pub(crate) fn render(c: &SerdeTree, out: &mut String) {
     match c {
-        Canon::Unit => out.push_str("()"),
-        Canon::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Canon::I64(v) => out.push_str(&v.to_string()),
-        Canon::U64(v) => out.push_str(&v.to_string()),
-        Canon::I128(v) => out.push_str(&v.to_string()),
-        Canon::U128(v) => out.push_str(&v.to_string()),
-        Canon::F64Bits(b) => out.push_str(&format!("f64:0x{b:016x}")),
-        Canon::Char(ch) => out.push_str(&format!("{ch:?}")),
-        Canon::Str(s) => out.push_str(&format!("{s:?}")),
-        Canon::Bytes(b) => {
+        SerdeTree::Unit => out.push_str("()"),
+        SerdeTree::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        SerdeTree::I64(v) => out.push_str(&v.to_string()),
+        SerdeTree::U64(v) => out.push_str(&v.to_string()),
+        SerdeTree::I128(v) => out.push_str(&v.to_string()),
+        SerdeTree::U128(v) => out.push_str(&v.to_string()),
+        SerdeTree::F64Bits(b) => out.push_str(&format!("f64:0x{b:016x}")),
+        SerdeTree::Char(ch) => out.push_str(&format!("{ch:?}")),
+        SerdeTree::Str(s) => out.push_str(&format!("{s:?}")),
+        SerdeTree::Bytes(b) => {
             out.push_str("0x");
             for byte in b {
                 out.push_str(&format!("{byte:02x}"));
             }
         }
-        Canon::Null => out.push_str("none"),
-        Canon::Opt(v) => {
+        SerdeTree::Null => out.push_str("none"),
+        SerdeTree::Opt(v) => {
             out.push_str("some(");
             render(v, out);
             out.push(')');
         }
-        Canon::Seq(items) => {
+        SerdeTree::Seq(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
@@ -88,7 +90,7 @@ pub(crate) fn render(c: &Canon, out: &mut String) {
             }
             out.push(']');
         }
-        Canon::Map(entries) => {
+        SerdeTree::Map(entries) => {
             let mut rendered: Vec<(String, String)> = entries
                 .iter()
                 .map(|(k, v)| {
@@ -111,9 +113,9 @@ pub(crate) fn render(c: &Canon, out: &mut String) {
             }
             out.push('}');
         }
-        Canon::Named(name, inner) => {
+        SerdeTree::Named(name, inner) => {
             out.push_str(name);
-            if !matches!(**inner, Canon::Unit) {
+            if !matches!(**inner, SerdeTree::Unit) {
                 out.push('(');
                 render(inner, out);
                 out.push(')');
@@ -141,10 +143,10 @@ impl ser::Error for CanonError {
     }
 }
 
-struct CanonSer;
+struct SerdeTreeSer;
 
-impl ser::Serializer for CanonSer {
-    type Ok = Canon;
+impl ser::Serializer for SerdeTreeSer {
+    type Ok = SerdeTree;
     type Error = CanonError;
     type SerializeSeq = SeqBuild;
     type SerializeTuple = SeqBuild;
@@ -154,81 +156,81 @@ impl ser::Serializer for CanonSer {
     type SerializeStruct = StructBuild;
     type SerializeStructVariant = VariantStructBuild;
 
-    fn serialize_bool(self, v: bool) -> Result<Canon, CanonError> {
-        Ok(Canon::Bool(v))
+    fn serialize_bool(self, v: bool) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Bool(v))
     }
-    fn serialize_i8(self, v: i8) -> Result<Canon, CanonError> {
-        Ok(Canon::I64(v.into()))
+    fn serialize_i8(self, v: i8) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::I64(v.into()))
     }
-    fn serialize_i16(self, v: i16) -> Result<Canon, CanonError> {
-        Ok(Canon::I64(v.into()))
+    fn serialize_i16(self, v: i16) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::I64(v.into()))
     }
-    fn serialize_i32(self, v: i32) -> Result<Canon, CanonError> {
-        Ok(Canon::I64(v.into()))
+    fn serialize_i32(self, v: i32) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::I64(v.into()))
     }
-    fn serialize_i64(self, v: i64) -> Result<Canon, CanonError> {
-        Ok(Canon::I64(v))
+    fn serialize_i64(self, v: i64) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::I64(v))
     }
-    fn serialize_i128(self, v: i128) -> Result<Canon, CanonError> {
-        Ok(Canon::I128(v))
+    fn serialize_i128(self, v: i128) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::I128(v))
     }
-    fn serialize_u8(self, v: u8) -> Result<Canon, CanonError> {
-        Ok(Canon::U64(v.into()))
+    fn serialize_u8(self, v: u8) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::U64(v.into()))
     }
-    fn serialize_u16(self, v: u16) -> Result<Canon, CanonError> {
-        Ok(Canon::U64(v.into()))
+    fn serialize_u16(self, v: u16) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::U64(v.into()))
     }
-    fn serialize_u32(self, v: u32) -> Result<Canon, CanonError> {
-        Ok(Canon::U64(v.into()))
+    fn serialize_u32(self, v: u32) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::U64(v.into()))
     }
-    fn serialize_u64(self, v: u64) -> Result<Canon, CanonError> {
-        Ok(Canon::U64(v))
+    fn serialize_u64(self, v: u64) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::U64(v))
     }
-    fn serialize_u128(self, v: u128) -> Result<Canon, CanonError> {
-        Ok(Canon::U128(v))
+    fn serialize_u128(self, v: u128) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::U128(v))
     }
-    fn serialize_f32(self, v: f32) -> Result<Canon, CanonError> {
-        Ok(Canon::F64Bits(f64::from(v).to_bits()))
+    fn serialize_f32(self, v: f32) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::F64Bits(f64::from(v).to_bits()))
     }
-    fn serialize_f64(self, v: f64) -> Result<Canon, CanonError> {
-        Ok(Canon::F64Bits(v.to_bits()))
+    fn serialize_f64(self, v: f64) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::F64Bits(v.to_bits()))
     }
-    fn serialize_char(self, v: char) -> Result<Canon, CanonError> {
-        Ok(Canon::Char(v))
+    fn serialize_char(self, v: char) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Char(v))
     }
-    fn serialize_str(self, v: &str) -> Result<Canon, CanonError> {
-        Ok(Canon::Str(v.to_owned()))
+    fn serialize_str(self, v: &str) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Str(v.to_owned()))
     }
-    fn serialize_bytes(self, v: &[u8]) -> Result<Canon, CanonError> {
-        Ok(Canon::Bytes(v.to_vec()))
+    fn serialize_bytes(self, v: &[u8]) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Bytes(v.to_vec()))
     }
-    fn serialize_none(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Null)
+    fn serialize_none(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Null)
     }
-    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<Canon, CanonError> {
-        Ok(Canon::Opt(Box::new(value.serialize(CanonSer)?)))
+    fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Opt(Box::new(value.serialize(SerdeTreeSer)?)))
     }
-    fn serialize_unit(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Unit)
+    fn serialize_unit(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Unit)
     }
-    fn serialize_unit_struct(self, _name: &'static str) -> Result<Canon, CanonError> {
-        Ok(Canon::Unit)
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Unit)
     }
     fn serialize_unit_variant(
         self,
         _name: &'static str,
         _index: u32,
         variant: &'static str,
-    ) -> Result<Canon, CanonError> {
-        Ok(Canon::Named(variant, Box::new(Canon::Unit)))
+    ) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Named(variant, Box::new(SerdeTree::Unit)))
     }
     fn serialize_newtype_struct<T: Serialize + ?Sized>(
         self,
         _name: &'static str,
         value: &T,
-    ) -> Result<Canon, CanonError> {
+    ) -> Result<SerdeTree, CanonError> {
         // Transparent, matching the serde data model.
-        value.serialize(CanonSer)
+        value.serialize(SerdeTreeSer)
     }
     fn serialize_newtype_variant<T: Serialize + ?Sized>(
         self,
@@ -236,8 +238,8 @@ impl ser::Serializer for CanonSer {
         _index: u32,
         variant: &'static str,
         value: &T,
-    ) -> Result<Canon, CanonError> {
-        Ok(Canon::Named(variant, Box::new(value.serialize(CanonSer)?)))
+    ) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Named(variant, Box::new(value.serialize(SerdeTreeSer)?)))
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<SeqBuild, CanonError> {
         Ok(SeqBuild(Vec::with_capacity(len.unwrap_or(0))))
@@ -278,71 +280,71 @@ impl ser::Serializer for CanonSer {
     }
 }
 
-struct SeqBuild(Vec<Canon>);
+struct SeqBuild(Vec<SerdeTree>);
 
 impl ser::SerializeSeq for SeqBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(CanonSer)?);
+        self.0.push(value.serialize(SerdeTreeSer)?);
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Seq(self.0))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Seq(self.0))
     }
 }
 
 impl ser::SerializeTuple for SeqBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(CanonSer)?);
+        self.0.push(value.serialize(SerdeTreeSer)?);
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Seq(self.0))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Seq(self.0))
     }
 }
 
 impl ser::SerializeTupleStruct for SeqBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(CanonSer)?);
+        self.0.push(value.serialize(SerdeTreeSer)?);
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Seq(self.0))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Seq(self.0))
     }
 }
 
 struct VariantSeqBuild {
     variant: &'static str,
-    items: Vec<Canon>,
+    items: Vec<SerdeTree>,
 }
 
 impl ser::SerializeTupleVariant for VariantSeqBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.items.push(value.serialize(CanonSer)?);
+        self.items.push(value.serialize(SerdeTreeSer)?);
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Named(self.variant, Box::new(Canon::Seq(self.items))))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Named(self.variant, Box::new(SerdeTree::Seq(self.items))))
     }
 }
 
 struct MapBuild {
-    entries: Vec<(Canon, Canon)>,
-    pending: Option<Canon>,
+    entries: Vec<(SerdeTree, SerdeTree)>,
+    pending: Option<SerdeTree>,
 }
 
 impl ser::SerializeMap for MapBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), CanonError> {
-        self.pending = Some(key.serialize(CanonSer)?);
+        self.pending = Some(key.serialize(SerdeTreeSer)?);
         Ok(())
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
@@ -350,50 +352,50 @@ impl ser::SerializeMap for MapBuild {
             .pending
             .take()
             .ok_or_else(|| ser::Error::custom("map value serialized before its key"))?;
-        self.entries.push((key, value.serialize(CanonSer)?));
+        self.entries.push((key, value.serialize(SerdeTreeSer)?));
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Map(self.entries))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Map(self.entries))
     }
 }
 
-struct StructBuild(Vec<(Canon, Canon)>);
+struct StructBuild(Vec<(SerdeTree, SerdeTree)>);
 
 impl ser::SerializeStruct for StructBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(
         &mut self,
         key: &'static str,
         value: &T,
     ) -> Result<(), CanonError> {
-        self.0.push((Canon::Str(key.to_owned()), value.serialize(CanonSer)?));
+        self.0.push((SerdeTree::Str(key.to_owned()), value.serialize(SerdeTreeSer)?));
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Map(self.0))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Map(self.0))
     }
 }
 
 struct VariantStructBuild {
     variant: &'static str,
-    fields: Vec<(Canon, Canon)>,
+    fields: Vec<(SerdeTree, SerdeTree)>,
 }
 
 impl ser::SerializeStructVariant for VariantStructBuild {
-    type Ok = Canon;
+    type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(
         &mut self,
         key: &'static str,
         value: &T,
     ) -> Result<(), CanonError> {
-        self.fields.push((Canon::Str(key.to_owned()), value.serialize(CanonSer)?));
+        self.fields.push((SerdeTree::Str(key.to_owned()), value.serialize(SerdeTreeSer)?));
         Ok(())
     }
-    fn end(self) -> Result<Canon, CanonError> {
-        Ok(Canon::Named(self.variant, Box::new(Canon::Map(self.fields))))
+    fn end(self) -> Result<SerdeTree, CanonError> {
+        Ok(SerdeTree::Named(self.variant, Box::new(SerdeTree::Map(self.fields))))
     }
 }
 
@@ -401,7 +403,7 @@ impl ser::SerializeStructVariant for VariantStructBuild {
 mod tests {
     use super::*;
 
-    fn rendered(c: &Canon) -> String {
+    fn rendered(c: &SerdeTree) -> String {
         let mut s = String::new();
         render(c, &mut s);
         s
@@ -411,13 +413,13 @@ mod tests {
     /// different collection order render byte-identically.
     #[test]
     fn map_entry_order_is_canonicalized() {
-        let ab = Canon::Map(vec![
-            (Canon::Str("a".into()), Canon::U64(1)),
-            (Canon::Str("b".into()), Canon::U64(2)),
+        let ab = SerdeTree::Map(vec![
+            (SerdeTree::Str("a".into()), SerdeTree::U64(1)),
+            (SerdeTree::Str("b".into()), SerdeTree::U64(2)),
         ]);
-        let ba = Canon::Map(vec![
-            (Canon::Str("b".into()), Canon::U64(2)),
-            (Canon::Str("a".into()), Canon::U64(1)),
+        let ba = SerdeTree::Map(vec![
+            (SerdeTree::Str("b".into()), SerdeTree::U64(2)),
+            (SerdeTree::Str("a".into()), SerdeTree::U64(1)),
         ]);
         assert_eq!(rendered(&ab), rendered(&ba));
         assert_eq!(rendered(&ab), r#"{"a": 1, "b": 2}"#);
@@ -426,7 +428,7 @@ mod tests {
     /// Sequences keep their order — it is semantic upstream.
     #[test]
     fn seq_order_is_preserved() {
-        let s = Canon::Seq(vec![Canon::U64(2), Canon::U64(1)]);
+        let s = SerdeTree::Seq(vec![SerdeTree::U64(2), SerdeTree::U64(1)]);
         assert_eq!(rendered(&s), "[2, 1]");
     }
 
@@ -444,6 +446,6 @@ mod tests {
             y: Option<bool>,
         }
         let v = S { x: vec![E::A, E::B(7)], y: Some(true) };
-        assert_eq!(rendered(&to_canon(&v)), r#"{"x": [A, B(7)], "y": some(true)}"#);
+        assert_eq!(rendered(&to_tree(&v)), r#"{"x": [A, B(7)], "y": some(true)}"#);
     }
 }

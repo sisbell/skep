@@ -5,21 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one type configuration, the pinned recovery order, and the observe dump surface"
+description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one type configuration, the pinned recovery order, and the world dump surface"
 readme = "README.md"
 
 [features]
-# `observe` gates the WorldDump surface for the conformance/crash harnesses.
+# `dump` gates the WorldDump surface for the conformance/crash harnesses.
 # Default-ON so the workspace gate (build/clippy/test) exercises the dump path
 # and its tests; a production binary opts out with `default-features = false`.
-default = ["observe"]
-observe = []
+default = ["dump"]
+dump = []
 
 [dependencies]
 # The World/Record serde derives satisfying M2's WorldState bounds.
 serde.workspace = true
 # M1 — Tumbler/Address construction for the standard reserved type addresses
-# and the observe surface's address rendering.
+# and the world dump's address rendering.
 skep-address = { path = "../skep-address" }
 # M2 — Kernel::open over the assembled World; WorldState is implemented here.
 skep-kernel = { path = "../skep-kernel" }

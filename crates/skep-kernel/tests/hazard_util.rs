@@ -31,7 +31,7 @@ use std::time::Duration;
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
 use skep_content::Val;
-use skep_engine::observe::WorldDump;
+use skep_engine::dump::WorldDump;
 use skep_engine::{Engine, EngineError, GenesisConfig};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_links::SlotArg;

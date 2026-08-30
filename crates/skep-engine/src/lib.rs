@@ -10,11 +10,11 @@
 //! the daemon (`skepd`), the conformance harness (`skep-conformance`, a
 //! library, not a binary), and — dev-only, the edge back through M2 that
 //! cargo permits — M2's dirty-crash harness, which judges recovery against
-//! this crate's observe dump. Sizing a change to the public surface means
+//! this crate's world dump. Sizing a change to the public surface means
 //! those three.
 //!
 //! **The engine adds no semantics.** Every function here is dispatch,
-//! lifting, construction, or observation; every guard, policy, and
+//! lifting, construction, or rendering; every guard, policy, and
 //! computation lives in a store. Three obligations are the engine's alone:
 //!
 //! * **Genesis** ([`GenesisConfig`], [`World::genesis`], [`Engine::open`]) —
@@ -23,10 +23,10 @@
 //!   the engine shares out to M9 (and any other assembly-time consumer).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated and pinned in one place.
-//! * **The observation surface** ([`observe`], behind the `observe` feature)
-//!   — a deterministic, byte-comparable rendering of the authoritative
-//!   observable state plus the recomputable hints, for the conformance and
-//!   crash harnesses.
+//! * **The world dump** ([`dump`], behind the `dump` feature) — a
+//!   deterministic, byte-comparable rendering of the authoritative observable
+//!   state plus the recomputable hints, for the conformance and crash
+//!   harnesses.
 
 #![forbid(unsafe_code)]
 
@@ -34,8 +34,8 @@ mod engine;
 mod genesis;
 mod world;
 
-#[cfg(feature = "observe")]
-pub mod observe;
+#[cfg(feature = "dump")]
+pub mod dump;
 
 pub use engine::{Engine, EngineError, EngineStores};
 pub use genesis::GenesisConfig;

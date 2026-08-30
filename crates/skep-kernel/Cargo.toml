@@ -32,7 +32,7 @@ im.workspace = true
 tempfile.workspace = true
 # The hazard (dirty-crash) suite builds its fixtures through the PUBLIC
 # engine surface — real mixed ops over the real World — and judges recovery
-# against the engine's observe dump oracle (hardening H3 ruling). Dev-only,
+# against the engine's world dump oracle (hardening H3 ruling). Dev-only,
 # so the edge back through skep-kernel is the dev-dependency cycle cargo
 # permits; the lib graph stays a DAG.
 skep-engine = { path = "../skep-engine" }

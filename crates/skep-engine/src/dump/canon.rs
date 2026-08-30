@@ -432,6 +432,25 @@ mod tests {
         assert_eq!(rendered(&ab), r#"{"a": 1, "b": 2}"#);
     }
 
+    /// The pair-sort's reason, in miniature: two entries whose KEYS render
+    /// alike still sort totally, because the value is part of the sort key.
+    /// `sort` is stable, so a key-only sort would keep collection order here
+    /// and leak back exactly the instance-specific iteration this transcode
+    /// exists to remove.
+    #[test]
+    fn entries_whose_keys_render_alike_sort_by_value_too() {
+        let ab = SerdeTree::Map(vec![
+            (SerdeTree::U64(1), SerdeTree::Str("a".into())),
+            (SerdeTree::I64(1), SerdeTree::Str("b".into())),
+        ]);
+        let ba = SerdeTree::Map(vec![
+            (SerdeTree::I64(1), SerdeTree::Str("b".into())),
+            (SerdeTree::U64(1), SerdeTree::Str("a".into())),
+        ]);
+        assert_eq!(rendered(&ab), rendered(&ba));
+        assert_eq!(rendered(&ab), r#"{1: "a", 1: "b"}"#);
+    }
+
     /// Sequences keep their order — it is semantic upstream.
     #[test]
     fn seq_order_is_preserved() {

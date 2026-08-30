@@ -8,7 +8,7 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
-use skep_address::Level;
+use skep_address::{content_subspace, link_subspace, Level};
 use skep_arrangement::HasM5;
 use skep_content::HasContent;
 use skep_engine::{Engine, EngineError, GenesisConfig};
@@ -88,6 +88,45 @@ fn coordinator_projects_the_one_registry() {
 
     let snap = engine.kernel().snapshot();
     assert!(coord.quiescent(&snap), "an empty rule registry is quiescent");
+}
+
+/// The five reserved addresses are format state: a journal sealed under them
+/// must reopen under them, so an edit here silently mis-recovers every journal
+/// in existence. Pinned as literal text rather than re-derived from the
+/// constructor that makes them — that constructor is the thing that could
+/// change.
+#[test]
+fn the_standard_config_pins_its_five_reserved_addresses() {
+    let cfg = GenesisConfig::standard();
+    let r = &cfg.types.reserved;
+    assert_eq!(r.pred_def.to_string(), "9.0.9.0.9.0.9.1");
+    assert_eq!(r.pred_stable.to_string(), "9.0.9.0.9.0.9.2");
+    assert_eq!(r.retired.to_string(), "9.0.9.0.9.0.9.3");
+    assert_eq!(r.supersedes.to_string(), "9.0.9.0.9.0.9.4");
+    assert_eq!(r.retraction.to_string(), "9.0.9.0.9.0.9.5");
+    assert!(cfg.types.decls.is_empty(), "the standard config declares no app types");
+}
+
+/// Reserved-isolation, the property that makes a reserved address safe as a
+/// type key: outside {s_C, s_L}, and under a node the bootstrap node is not,
+/// so no mint and no `register_node` can ever issue one and a reserved name
+/// can never equal an allocated address.
+#[test]
+fn no_reserved_address_can_ever_be_minted() {
+    let engine = mem_engine();
+    let snap = engine.kernel().snapshot();
+    let r = GenesisConfig::standard().types.reserved;
+
+    for addr in [r.pred_def, r.pred_stable, r.retired, r.supersedes, r.retraction] {
+        assert_ne!(addr.subspace(), Some(&content_subspace()), "{addr} sits in s_C");
+        assert_ne!(addr.subspace(), Some(&link_subspace()), "{addr} sits in s_L");
+        assert_ne!(
+            addr.node_field(),
+            node1().node_field(),
+            "{addr} is under the bootstrap node, so a mint could reach it"
+        );
+        assert!(!snap.world().m3().is_allocated(&addr), "{addr} is an allocated address");
+    }
 }
 
 /// An invalid type configuration is refused at open — validate-once-or-fail,

@@ -11,10 +11,11 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::*;
+use skep_address::Address;
 use skep_content::Val;
 use skep_discovery::LinkQuery;
-use skep_engine::{Engine, EngineError, GenesisConfig, TypeDecl};
-use skep_links::{enc, Behavior, HasLinks, Registration, Shape, SlotArg};
+use skep_engine::{Engine, EngineError, GenesisConfig, ReservedAddrs, TypeDecl};
+use skep_links::{enc, Behavior, HasLinks, Registration, Shape, ShippedType, SlotArg};
 use skep_retrieval::{Query, Spec};
 use tempfile::tempdir;
 
@@ -130,30 +131,50 @@ fn cross_store_lifecycle_under_fsync() {
 
 /// Reopening a checkpointed journal under an edited genesis config trips
 /// `check_genesis_drift` (M2's byte-identical-genesis contract, checked at
-/// assembly) instead of silently running under a configuration the journal
-/// was never sealed with.
+/// assembly) instead of silently running under a configuration the journal was
+/// never sealed with — for EVERY shipped class, and the refusal names the one
+/// that disagrees. A check that covered four classes out of five would refuse
+/// nothing on the fifth, and a refusal that named the wrong class would send
+/// the operator to the wrong line of their config.
 #[test]
-fn drifted_genesis_reopen_is_refused() {
-    let dir = tempdir().expect("tempdir");
-    {
-        let engine =
-            Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard()).expect("fsync open");
-        setup_doc(&engine);
-        // LOAD-BEARING, not scenario dressing: the check compares the passed
-        // config against the one a CHECKPOINT carries. With no checkpoint the
-        // reopen replays onto the passed genesis and there is nothing left to
-        // disagree with.
-        engine.kernel().checkpoint().expect("checkpoint succeeds");
-    }
+fn a_drifted_reopen_is_refused_and_names_the_shipped_class_that_drifted() {
+    /// One edit to the reserved half: the shipped class it moves, and the
+    /// setter that moves it.
+    type ReservedEdit = (ShippedType, fn(&mut ReservedAddrs, Address));
 
-    // Valid on its own, but not the config this journal was sealed under.
-    let mut drifted = GenesisConfig::standard();
-    drifted.types.reserved.retired = a(&[9, 0, 9, 0, 9, 0, 9, 6]);
+    let edits: [ReservedEdit; 5] = [
+        (ShippedType::PredDef, |r, addr| r.pred_def = addr),
+        (ShippedType::PredStable, |r, addr| r.pred_stable = addr),
+        (ShippedType::Retired, |r, addr| r.retired = addr),
+        (ShippedType::Supersedes, |r, addr| r.supersedes = addr),
+        (ShippedType::Retraction, |r, addr| r.retraction = addr),
+    ];
 
-    match Engine::open(fsync_cfg(dir.path()), drifted) {
-        Err(EngineError::GenesisReservedDrift(_)) => {}
-        Err(other) => panic!("expected GenesisReservedDrift, got {other:?}"),
-        Ok(_) => panic!("a drifted genesis reopen must be refused"),
+    for (class, edit) in edits {
+        let dir = tempdir().expect("tempdir");
+        {
+            let engine = Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard())
+                .expect("fsync open");
+            setup_doc(&engine);
+            // LOAD-BEARING, not scenario dressing: the check compares the
+            // passed config against the one a CHECKPOINT carries. With no
+            // checkpoint the reopen replays onto the passed genesis and there
+            // is nothing left to disagree with.
+            engine.kernel().checkpoint().expect("checkpoint succeeds");
+        }
+
+        // Valid on its own — an unused ordinal in the same reserved family —
+        // but not the config this journal was sealed under.
+        let mut drifted = GenesisConfig::standard();
+        edit(&mut drifted.types.reserved, a(&[9, 0, 9, 0, 9, 0, 9, 6]));
+
+        match Engine::open(fsync_cfg(dir.path()), drifted) {
+            Err(EngineError::GenesisReservedDrift(named)) => {
+                assert_eq!(named, class, "the refusal must name the class that drifted");
+            }
+            Err(other) => panic!("expected GenesisReservedDrift({class:?}), got {other:?}"),
+            Ok(_) => panic!("a drifted genesis reopen must be refused ({class:?})"),
+        }
     }
 }
 

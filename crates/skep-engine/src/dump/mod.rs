@@ -89,32 +89,36 @@ impl AsRef<str> for WorldDump {
     }
 }
 
-/// Render one world against the configuration it was sealed under: the four
-/// slices' serde forms through the canonicalizing transcode, then the hints
-/// section, which reads its app-class keys off `cfg` because that is the one
-/// place they live.
-///
-/// The section keys below are the dump's own wire vocabulary, exactly as
-/// [`shipped_label`]'s are: they name each slice for the store it belongs to
-/// and match the [`World`] field names by intent, not by construction. They
-/// are part of the format, so the banner's version moves with them.
+/// Render one world against the configuration it was sealed under: the
+/// authoritative section, then the hints section, which reads its app-class
+/// keys off `cfg` because that is the one place they live.
 fn dump(world: &World, cfg: &GenesisConfig) -> WorldDump {
     let root = SerdeTree::Map(vec![
-        (
-            key("authoritative"),
-            SerdeTree::Map(vec![
-                (key("namespace"), to_tree(&world.namespace)),
-                (key("content"), to_tree(&world.content)),
-                (key("arrangement"), to_tree(&world.arrangement)),
-                (key("links"), to_tree(&world.links)),
-            ]),
-        ),
+        (key("authoritative"), authoritative_tree(world)),
         (key("hints"), hints_tree(world, cfg)),
     ]);
     let mut s = String::from("skep-world-dump v2\n");
     render(&root, &mut s);
     s.push('\n');
     WorldDump(s)
+}
+
+/// The authoritative section: one entry per store slice, each the slice's own
+/// serde form through the canonicalizing transcode. Every slice is rendered,
+/// so a world differing in any one of them dumps differently — which is what
+/// makes the harnesses' byte comparison an oracle over the whole state.
+///
+/// The section keys are the dump's own wire vocabulary, exactly as
+/// [`shipped_label`]'s are: they name each slice for the store it belongs to
+/// and match the [`World`] field names by intent, not by construction. They
+/// are part of the format, so the banner's version moves with them.
+fn authoritative_tree(world: &World) -> SerdeTree {
+    SerdeTree::Map(vec![
+        (key("namespace"), to_tree(&world.namespace)),
+        (key("content"), to_tree(&world.content)),
+        (key("arrangement"), to_tree(&world.arrangement)),
+        (key("links"), to_tree(&world.links)),
+    ])
 }
 
 /// Hint faithfulness: dump the live world, rebuild its derived state from
@@ -299,5 +303,182 @@ impl crate::Engine {
     /// [`crate::Engine::dump_of`] pairs it.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
         hints_faithful(world, self.genesis_config())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use skep_address::{validate, Nat, Span};
+    use skep_arrangement::{Caller, VPos, VSpec};
+    use skep_content::Val;
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+    use skep_links::SlotArg;
+    use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+
+    use crate::Engine;
+
+    use super::*;
+
+    const USER: PrincipalId = PrincipalId(7);
+
+    fn addr(comps: &[u32]) -> Address {
+        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
+            .unwrap_or_else(|_| panic!("test tumblers are nonempty"));
+        validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+    }
+
+    fn vspec(doc: &Address, ord: u32, width: u32) -> VSpec {
+        let span = Span::new(
+            Tumbler::new([Nat::from(1u32), Nat::from(ord)]).expect("nonempty"),
+            Tumbler::new([Nat::from(0u32), Nat::from(width)]).expect("nonempty"),
+        )
+        .unwrap_or_else(|_| panic!("well-formed test span"));
+        VSpec { source: doc.clone(), span }
+    }
+
+    fn render_of(t: &SerdeTree) -> String {
+        let mut s = String::new();
+        render(t, &mut s);
+        s
+    }
+
+    /// An in-memory engine whose every slice holds something, driven through
+    /// the real drivers: an account and a document (M3), two content values
+    /// (M4, arranged by M5), and one link (M7). The integration suite's own
+    /// prologue is in `tests/common`, which a unit test cannot reach, so this
+    /// restates it — cut to exactly what these tests read.
+    fn populated() -> (Engine, World) {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine =
+            Engine::open(cfg, GenesisConfig::standard()).expect("in-memory open cannot fail");
+
+        let prefix = {
+            let snap = engine.kernel().snapshot();
+            snap.world()
+                .m3()
+                .next_account_prefix(&addr(&[1]))
+                .expect("the genesis node has a delegable next-form prefix")
+        };
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegation of the peeked prefix succeeds");
+        let (doc, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct)
+            .expect("the delegated owner may create a document");
+        engine
+            .vstream()
+            .insert(
+                Caller::Principal(USER),
+                &doc,
+                VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
+                vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
+            )
+            .expect("insert succeeds");
+        engine
+            .linkstore()
+            .makelink(
+                Caller::Principal(USER),
+                &doc,
+                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
+                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
+            )
+            .expect("makelink succeeds");
+
+        let world = engine.kernel().snapshot().world().clone();
+        (engine, world)
+    }
+
+    /// Each authoritative section renders ITS OWN slice: a world differing in
+    /// exactly one slice must render a different authoritative section, or the
+    /// harnesses' byte comparison is blind to that store. Only a test inside
+    /// the crate can pose the question, because only here can a world be built
+    /// one slice at a time.
+    #[test]
+    fn each_authoritative_section_renders_its_own_slice() {
+        let (engine, rich) = populated();
+        let bare = World::genesis(engine.genesis_config()).expect("standard genesis");
+        let base = render_of(&authoritative_tree(&bare));
+
+        for (slice, hybrid) in [
+            ("namespace", World { namespace: rich.namespace.clone(), ..bare.clone() }),
+            ("content", World { content: rich.content.clone(), ..bare.clone() }),
+            ("arrangement", World { arrangement: rich.arrangement.clone(), ..bare.clone() }),
+            ("links", World { links: rich.links.clone(), ..bare.clone() }),
+        ] {
+            assert_ne!(
+                render_of(&authoritative_tree(&hybrid)),
+                base,
+                "the authoritative section ignores the {slice} slice"
+            );
+        }
+    }
+
+    /// `World`'s DECLARATION order is what M2's bincode checkpoints encode —
+    /// positionally, with no field names — so a reordering silently mis-reads
+    /// every checkpoint on disk while a rename is byte-neutral. Serde emits
+    /// fields in declaration order to any serializer, so the transcode's
+    /// COLLECTION order (before `render` sorts) is that order. The names are
+    /// here to identify the fields; the ORDER is the claim.
+    #[test]
+    fn the_world_serializes_its_slices_in_declaration_order() {
+        let world = World::genesis(&GenesisConfig::standard()).expect("standard genesis");
+        let SerdeTree::Map(entries) = to_tree(&world) else {
+            panic!("a world transcodes as a map of its fields")
+        };
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|(k, _)| match k {
+                SerdeTree::Str(s) => s.as_str(),
+                other => panic!("struct field keys are strings, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["namespace", "content", "arrangement", "links"]);
+    }
+
+    fn divergence(live: &str, rebuilt: &str) -> HintDivergence {
+        HintDivergence {
+            live: WorldDump(live.to_owned()),
+            rebuilt: WorldDump(rebuilt.to_owned()),
+        }
+    }
+
+    /// The report a real divergence produces — the one text a harness prints
+    /// when the check finds what it exists to find: it names the byte the two
+    /// renderings first disagree on and shows both sides around it.
+    #[test]
+    fn a_hint_divergence_localizes_the_first_differing_byte() {
+        let rendered = divergence("hints: [a, b]", "hints: [a, c]").to_string();
+        assert!(rendered.contains("byte 11"), "the offset must be named: {rendered}");
+        assert!(
+            rendered.contains("hints: [a, b]") && rendered.contains("hints: [a, c]"),
+            "both renderings must be shown: {rendered}"
+        );
+    }
+
+    /// …and it survives the strings a real divergence carries: a difference
+    /// inside multibyte text, where a fixed-width window lands mid-character
+    /// at both ends; one at the very first byte; and one where a rendering is
+    /// a strict prefix of the other, so there is no differing byte at all and
+    /// the shorter length is the offset.
+    #[test]
+    fn a_hint_divergence_report_survives_multibyte_and_prefix_cases() {
+        let snow = "☃".repeat(20);
+
+        let live = format!("{snow}abc{snow}");
+        let rebuilt = format!("{snow}abd{snow}");
+        let rendered = divergence(&live, &rebuilt).to_string();
+        assert!(rendered.contains("byte 62"), "the offset must be named: {rendered}");
+
+        let rendered = divergence(&snow, &format!("z{snow}")).to_string();
+        assert!(rendered.contains("byte 0"), "the offset must be named: {rendered}");
+
+        let rendered = divergence("ab", &format!("abx{}", "🌍".repeat(20))).to_string();
+        assert!(rendered.contains("byte 2"), "a prefix diverges at its own end: {rendered}");
     }
 }

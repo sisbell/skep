@@ -1,12 +1,12 @@
-//! The world-dump surface and the recovery-order contract, together:
-//! dump determinism (two dumps of equal worlds are byte-equal), recovery
-//! equivalence (a world folded live from genesis dumps byte-equal to the
-//! world restored from checkpoint + rebuild_derived + replay), and hint
-//! faithfulness (live incrementally-maintained hints equal a
-//! from-authoritative rebuild). The scenario deliberately crosses a
-//! checkpoint mid-history and populates every dump-observable hint family:
-//! typed slices (shipped and app classes), the nullified set, supersession
-//! edges, and content/arrangement state.
+//! The world-dump surface and the recovery-order contract, together: what the
+//! dump SHOWS (one test per hint family, each pinned to its rendered text,
+//! because the dump is the crash harness's oracle and an entry that renders
+//! empty is a hole in it), dump determinism (two engines that ran the same
+//! history render byte-identically), recovery equivalence (a world folded live
+//! from genesis dumps byte-equal to the world restored from checkpoint +
+//! rebuild_derived + replay, with the checkpoint taken both before and after
+//! the links exist), and hint faithfulness (live incrementally-maintained
+//! hints equal a from-authoritative rebuild).
 
 #![cfg(feature = "dump")]
 
@@ -15,9 +15,10 @@ use std::collections::BTreeSet;
 mod common;
 
 use common::*;
+use skep_address::Address;
 use skep_content::Val;
 use skep_engine::{Engine, GenesisConfig, TypeDecl};
-use skep_links::{enc, Behavior, Registration, Shape, SlotArg};
+use skep_links::{enc, Behavior, Endset, Registration, Shape, SlotArg};
 use tempfile::tempdir;
 
 /// The standard reserved addresses plus one app-declared Binary idem⊤ type,
@@ -35,14 +36,215 @@ fn rich_genesis() -> GenesisConfig {
     cfg
 }
 
+/// The app-declared type's key, as [`rich_genesis`] seals it.
+fn app_type() -> Endset {
+    rich_genesis().types.decls[0].key.clone()
+}
+
+/// The links one populated world holds — one of each kind the dump's hints
+/// section projects.
+struct Deposited {
+    l1: Address,
+    l2: Address,
+    l3: Address,
+    sup: Address,
+    retraction: Address,
+    app: Address,
+}
+
+impl Deposited {
+    /// Every link deposited, whatever its kind.
+    fn all(&self) -> Vec<&Address> {
+        vec![&self.l1, &self.l2, &self.l3, &self.sup, &self.retraction, &self.app]
+    }
+}
+
+/// Deposit one of every hint family the dump can show, through the real write
+/// surfaces: three links over the document's content, a supersession claim
+/// over two of them, a retraction of the third, and one emission under the
+/// app-declared type. `start` is the first I-address the document's content
+/// occupies, which the emission points from.
+fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposited {
+    let link = |from: (u32, u32), to: (u32, u32)| {
+        engine
+            .linkstore()
+            .makelink(
+                OWNER,
+                doc,
+                SlotArg::Resolve(vec![vspec(doc, from.0, from.1)]),
+                SlotArg::Resolve(vec![vspec(doc, to.0, to.1)]),
+                SlotArg::Resolve(vec![vspec(doc, 1, 2)]),
+            )
+            .expect("makelink succeeds")
+            .0
+    };
+    let l1 = link((1, 1), (2, 1));
+    let l2 = link((2, 1), (1, 1));
+    let l3 = link((1, 2), (1, 1));
+    let (sup, _) = engine.linkstore().assert_sup(OWNER, doc, &l1, &l2).expect("assert_sup");
+    let (retraction, _) = engine.linkstore().nullify(OWNER, doc, &l3).expect("nullify");
+    let (app, _) = engine
+        .linkstore()
+        .emit(OWNER, doc, &app_type(), start, std::slice::from_ref(doc))
+        .expect("app-typed emit");
+    Deposited { l1, l2, l3, sup, retraction, app }
+}
+
+/// An in-memory world with every dump-observable hint family populated, and
+/// its rendering. Each test builds its own, so none shares state with its
+/// neighbours.
+fn populated() -> (String, Deposited) {
+    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let (_acct, doc) = setup_doc(&engine);
+    let (start, _) = engine
+        .vstream()
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+        .expect("insert succeeds");
+    let deposited = every_hint_family(&engine, &doc, &start);
+    (engine.world_dump().into_string(), deposited)
+}
+
+/// One hints entry, rendered exactly. The dump IS the harnesses' oracle, so an
+/// entry that goes empty — or renders something else — is a hole in it that
+/// every dump-to-dump comparison stays green through.
+fn assert_entry(text: &str, key: &str, value: &str) {
+    let needle = format!("{key:?}: {value}");
+    assert!(text.contains(&needle), "expected {needle} in the dump:\n{text}");
+}
+
+/// One address as the dump renders it: dotted decimal, quoted.
+fn quoted(addr: &Address) -> String {
+    format!("{:?}", addr.to_string())
+}
+
+/// An address sequence as the dump renders it: address-ordered, since every
+/// hint it reads is an ordered set.
+fn seq_of(addrs: &[&Address]) -> String {
+    let mut sorted = addrs.to_vec();
+    sorted.sort();
+    let rendered: Vec<String> = sorted.iter().map(|a| quoted(a)).collect();
+    format!("[{}]", rendered.join(", "))
+}
+
+/// One type class's rendering: its audit and active slices and its key.
+fn class_of(members: &[&Address], key: &str) -> String {
+    let m = seq_of(members);
+    format!("{{\"active\": {m}, \"audit\": {m}, \"key\": [{:?}]}}", key)
+}
+
 #[test]
-fn dumps_are_deterministic_and_recovery_is_equivalent() {
+fn the_dump_lists_every_deposited_link_in_the_audit_slice() {
+    let (text, d) = populated();
+    assert_entry(&text, "links.audit", &seq_of(&d.all()));
+}
+
+#[test]
+fn the_dump_drops_a_nullified_link_from_the_active_slice() {
+    let (text, d) = populated();
+    let live: Vec<&Address> = d.all().into_iter().filter(|a| *a != &d.l3).collect();
+    assert_entry(&text, "links.active", &seq_of(&live));
+}
+
+#[test]
+fn the_dump_names_the_nullified_set() {
+    let (text, d) = populated();
+    assert_entry(&text, "links.nullified", &seq_of(&[&d.l3]));
+}
+
+#[test]
+fn the_dump_carries_the_supersession_forward_edges() {
+    let (text, d) = populated();
+    // The claim is the edge's, not the claimant's: `assert_sup(l1, l2)` puts
+    // one forward edge in the graph, out of l1.
+    let edges = format!("{{{}: {}}}", quoted(&d.l1), seq_of(&[&d.l2]));
+    assert_entry(&text, "supersession", &edges);
+}
+
+#[test]
+fn the_dump_names_every_shipped_class_with_its_typed_slices() {
+    let (text, d) = populated();
+    for (label, ordinal, members) in [
+        ("shipped.pred_def", 1, Vec::new()),
+        ("shipped.pred_stable", 2, Vec::new()),
+        ("shipped.retired", 3, Vec::new()),
+        ("shipped.supersedes", 4, vec![&d.sup]),
+        ("shipped.retraction", 5, vec![&d.retraction]),
+    ] {
+        assert_entry(&text, label, &class_of(&members, &format!("9.0.9.0.9.0.9.{ordinal}")));
+    }
+}
+
+#[test]
+fn the_dump_enumerates_the_app_classes_from_the_genesis_config() {
+    let (text, d) = populated();
+    assert_entry(&text, "app.0", &class_of(&[&d.app], "9.0.9.0.9.0.8.1"));
+}
+
+/// M9 owns no slice — its definition registry IS these M7 tuples — so the four
+/// projections are what a harness sees of it. They are empty in this world;
+/// their PRESENCE is what makes a later loss visible.
+#[test]
+fn the_dump_projects_the_predicate_registry() {
+    let (text, _) = populated();
+    for entry in [
+        "predicates.defs.audit",
+        "predicates.defs.active",
+        "predicates.stable.audit",
+        "predicates.stable.active",
+    ] {
+        assert_entry(&text, entry, "[]");
+    }
+}
+
+/// The determinism clause, stated over EQUAL WORLDS rather than one world: two
+/// engines that ran the same history render byte-identically, though their M3
+/// frontiers are separate `im::HashMap`s with separate hash seeds and iterate
+/// in different orders. That is the whole reason the transcode sorts map
+/// entries.
+#[test]
+fn two_engines_with_the_same_history_dump_byte_equal() {
+    /// Three documents in one account, content in each, and every hint family
+    /// in the first — enough distinct hashed keys that two coincidentally
+    /// equal iteration orders are not the explanation.
+    fn scripted() -> Engine {
+        let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+        let (acct, doc) = setup_doc(&engine);
+        let (start, _) = engine
+            .vstream()
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .expect("insert succeeds");
+        every_hint_family(&engine, &doc, &start);
+        for byte in [b'r', b's', b't'] {
+            let (d, _) = engine
+                .namespace()
+                .create_new_document(USER, &acct)
+                .expect("the delegated owner may create a document");
+            engine
+                .vstream()
+                .insert(OWNER, &d, vp(1, 1), vec![Val::new(vec![byte])])
+                .expect("insert succeeds");
+        }
+        engine
+    }
+
+    assert_eq!(
+        scripted().world_dump(),
+        scripted().world_dump(),
+        "two engines that ran one history must render one text"
+    );
+}
+
+/// Recovery equivalence with the checkpoint taken BELOW the links: the reopen
+/// restores a content-only checkpoint and replays the whole link history onto
+/// it, so what is pinned here is that the incremental fold reproduces the live
+/// world exactly.
+#[test]
+fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
     let dir = tempdir().expect("tempdir");
-    let genesis = rich_genesis();
 
     let dump_live;
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), genesis.clone()).expect("fsync open");
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
         let (_acct, doc) = setup_doc(&engine);
 
         // History batch A (below the checkpoint): content.
@@ -55,43 +257,14 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
         // pure journal fold.
         engine.kernel().checkpoint().expect("checkpoint succeeds");
 
-        // History batch B (the replay tail): links, a supersession claim, a
-        // retraction, and an app-typed emission — populating every
-        // dump-observable hint family past the checkpoint.
-        let (l1, _) = engine
-            .linkstore()
-            .makelink(
-                OWNER,
-                &doc,
-                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
-                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
-                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
-            )
-            .expect("makelink l1");
-        let (l2, _) = engine
-            .linkstore()
-            .makelink(
-                OWNER,
-                &doc,
-                SlotArg::Resolve(vec![vspec(&doc, 2, 1)]),
-                SlotArg::Resolve(vec![vspec(&doc, 1, 1)]),
-                SlotArg::Resolve(vec![vspec(&doc, 1, 2)]),
-            )
-            .expect("makelink l2");
-        engine.linkstore().assert_sup(OWNER, &doc, &l1, &l2).expect("assert_sup");
-        engine.linkstore().nullify(OWNER, &doc, &l1).expect("nullify");
-        let rel = genesis.types.decls[0].key.clone();
-        engine
-            .linkstore()
-            .emit(OWNER, &doc, &rel, &start, std::slice::from_ref(&doc))
-            .expect("app-typed emit");
+        // History batch B (the replay tail): every hint family, past the
+        // checkpoint.
+        every_hint_family(&engine, &doc, &start);
 
-        // Dump determinism: two dumps of one world are byte-equal.
         let d1 = engine.world_dump();
         let d2 = engine.world_dump();
         assert_eq!(d1, d2, "two dumps of one world must be byte-equal");
 
-        // Hint faithfulness on the live world.
         engine.check_hints().expect("live hints match a from-scratch rebuild");
 
         dump_live = d1;
@@ -99,18 +272,85 @@ fn dumps_are_deterministic_and_recovery_is_equivalent() {
     }
 
     {
-        let engine = Engine::open(fsync_cfg(dir.path()), genesis.clone()).expect("reopen");
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("reopen");
 
-        // Recovery equivalence: live fold == checkpoint + rebuild + replay.
         let dump_recovered = engine.world_dump();
         assert_eq!(
             dump_live, dump_recovered,
             "a world folded live and a world restored from checkpoint+replay must dump byte-equal"
         );
 
-        // Hint faithfulness again, now over the recovered hints.
         engine.check_hints().expect("recovered hints match a from-scratch rebuild");
     }
+}
+
+/// The recovery the world actually has to survive: a checkpoint taken with the
+/// links already resident, so the reopen deserializes M7's slice with its
+/// skip-serialized registry and hints gone, rebuilds both from the
+/// authoritative links map, and only then replays the tail. The other
+/// equivalence test checkpoints below the first link, so its rebuild runs over
+/// an empty map and says nothing about this one.
+#[test]
+fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
+    let dir = tempdir().expect("tempdir");
+
+    let dump_live;
+    {
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
+        let (_acct, doc) = setup_doc(&engine);
+        let (start, _) = engine
+            .vstream()
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .expect("insert succeeds");
+        every_hint_family(&engine, &doc, &start);
+
+        // LOAD-BEARING: the checkpoint sits ABOVE every link, so the recovered
+        // base is a world whose hints must be rebuilt rather than replayed.
+        engine.kernel().checkpoint().expect("checkpoint succeeds");
+
+        // A short replay tail above it, so recovery is genuinely base + fold.
+        engine
+            .vstream()
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'r'])])
+            .expect("insert succeeds");
+
+        dump_live = engine.world_dump();
+    }
+
+    {
+        let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("reopen");
+        assert_eq!(
+            dump_live,
+            engine.world_dump(),
+            "hints rebuilt from a checkpoint that already held links must equal the live fold"
+        );
+        engine.check_hints().expect("rebuilt hints match a from-scratch rebuild");
+    }
+}
+
+/// A world `Engine::world_at` reconstructed is a root a kernel can be opened
+/// on: `Durability::InMemory` never runs `rebuild_derived`, so a reconstruction
+/// must arrive with its hints already faithful.
+#[test]
+fn a_reconstructed_historical_world_carries_faithful_hints() {
+    let dir = tempdir().expect("tempdir");
+    let engine = Engine::open(fsync_cfg(dir.path()), rich_genesis()).expect("fsync open");
+    let (_acct, doc) = setup_doc(&engine);
+    let (start, _) = engine
+        .vstream()
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+        .expect("insert succeeds");
+
+    let past = engine.kernel().current_seq();
+    every_hint_family(&engine, &doc, &start);
+
+    let world = engine.world_at(past).expect("a committed boundary answers");
+    engine.check_hints_of(&world).expect("a reconstructed world's hints match a rebuild");
+    assert_ne!(
+        engine.dump_of(&world),
+        engine.world_dump(),
+        "the reconstruction must be of the PAST, not of the head"
+    );
 }
 
 /// A world the caller pinned itself — a snapshot rather than the engine's

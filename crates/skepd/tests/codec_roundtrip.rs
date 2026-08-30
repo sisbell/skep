@@ -627,7 +627,7 @@ fn reject_code_names_are_pinned() {
 
 /// The four dispositions and the diagnostic-field presence rules.
 #[test]
-fn rejection_dispositions_and_optional_fields() {
+fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
     let codec = JsonCodec;
     let table = [
         (Disposition::Permanent, "permanent"),
@@ -699,7 +699,7 @@ fn an_endset_round_trips_its_spans_in_the_order_given() {
 /// field order, and the empty slot-constraint normalization all read; the
 /// canonical form is what comes back out.
 #[test]
-fn lenient_parse_canonical_emit() {
+fn lenient_forms_parse_and_re_emit_canonically() {
     let codec = JsonCodec;
     // Integer nats and shuffled fields.
     let lenient =

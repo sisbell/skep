@@ -51,37 +51,37 @@ const COLS: [&str; 6] =
 
 const OK: &str = "ok";
 const NOT_OWNER: &str = "not_owner";
-const UNAUTH: &str = "unauthenticated";
+const UNAUTHENTICATED: &str = "unauthenticated";
 
 struct Row {
-    op: &'static str,
+    label: &'static str,
     expect: [&'static str; 6],
 }
 
 #[rustfmt::skip]
 const MATRIX: &[Row] = &[
-    // ── namespace writes ──                owner  sibling         child           parent            guest   stale
-    Row { op: "create_new_document",  expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "delegate",             expect: [OK, "not_ancestor", "not_ancestor", "not_authorized", UNAUTH, UNAUTH] },
-    Row { op: "register_node",        expect: [OK, OK,             OK,             OK,               UNAUTH, UNAUTH] },
-    Row { op: "fork",                 expect: [OK, OK,             OK,             OK,               UNAUTH, UNAUTH] },
+    // ── namespace writes ──                    owner sibling         child           parent            guest            stale
+    Row { label: "create_new_document",   expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "delegate",              expect: [OK, "not_ancestor", "not_ancestor", "not_authorized", UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "register_node",         expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "fork",                  expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── arrangement writes (target: a document owned by `owner`) ──
-    Row { op: "insert",               expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "delete",               expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "rearrange",            expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "copy (foreign dest)",  expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "copy (foreign source)",expect: [OK, OK,             OK,             OK,               UNAUTH, UNAUTH] },
-    Row { op: "version (foreign src)",expect: [OK, OK,             OK,             OK,               UNAUTH, UNAUTH] },
+    Row { label: "insert",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "delete",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "rearrange",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "copy (foreign dest)",   expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "copy (foreign source)", expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "version (foreign src)", expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── link writes (home: a document owned by `owner`) ──
-    Row { op: "make_link",            expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "emit",                 expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "assert_sup",           expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "nullify (home)",       expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "nullify (target)",     expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "edit_link (d_s)",      expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "edit_link (d_a)",      expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTH, UNAUTH] },
-    Row { op: "edit_link (foreign original)",
-                                      expect: [OK, OK,             OK,             OK,               UNAUTH, UNAUTH] },
+    Row { label: "make_link",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "emit",                  expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "assert_sup",            expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "nullify (home)",        expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "nullify (target)",      expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "edit_link (d_s)",       expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "edit_link (d_a)",       expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "edit_link (foreign original)",
+                                          expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
 ];
 
 // ── fixture plumbing ─────────────────────────────────────────────────────
@@ -267,7 +267,7 @@ fn run_cell(
     tokens: &Tokens,
     stale_token: &str,
     counters: &Counters,
-    row: &str,
+    label: &str,
     col: usize,
 ) -> String {
     // The caller context: a session (or none), and a document the caller
@@ -281,7 +281,7 @@ fn run_cell(
     let own_doc: &str = if col <= 3 { &fixture.own_doc[col] } else { &fixture.own_doc[0] };
     let authed = col <= 3;
 
-    let frame = match row {
+    let frame = match label {
         "create_new_document" => {
             format!(r#"{{"op":"create_new_document","account":"{}"}}"#, fixture.owner_account)
         }
@@ -393,12 +393,12 @@ fn walk_matrix(
     let mut cells = 0usize;
     for row in MATRIX {
         for (col, expected) in row.expect.iter().enumerate() {
-            let got = run_cell(port, fixture, tokens, stale_token, counters, row.op, col);
+            let got = run_cell(port, fixture, tokens, stale_token, counters, row.label, col);
             cells += 1;
             if got != *expected {
                 mismatches.push(format!(
                     "  row={:<28} col={:<16} expected={expected} got={got}",
-                    row.op, COLS[col]
+                    row.label, COLS[col]
                 ));
             }
         }
@@ -464,7 +464,7 @@ fn authorization_matrix_holds_and_survives_restart() {
 /// with the process: a post-restart retry re-executes (duplicate by
 /// design).
 #[test]
-fn idempotency_confinement_probing_and_restart() {
+fn an_idempotency_id_is_keyed_by_session_and_op_kind_and_dies_with_the_process() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();

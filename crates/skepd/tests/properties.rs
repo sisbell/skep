@@ -85,11 +85,11 @@ enum PlanOp {
     Rearrange { p: u8, d: u8, a: u16, b: u16, c: u16 },
     Version { p: u8, sd: u8 },
     CreateDoc { p: u8 },
-    MakeLink { p: u8, d: u8, resolve: bool, cty: bool, f: u16, w: u8 },
+    MakeLink { p: u8, d: u8, resolve_from: bool, resolve_ty: bool, f: u16, w: u8 },
     Emit { p: u8, d: u8, root: u8 },
     AssertSup { p: u8, d: u8, x: u8, y: u8 },
     Nullify { p: u8, l: u8 },
-    EditLink { p: u8, d: u8, l: u8, resolve: bool },
+    EditLink { p: u8, d: u8, l: u8, resolve_from: bool },
     IdemRetry,
     Forbidden { p: u8, kind: u8 },
 }
@@ -114,13 +114,15 @@ fn plan_strategy() -> impl Strategy<Value = Vec<PlanOp>> {
     ];
     let links = prop_oneof![
         4 => (0..3u8, any::<u8>(), any::<bool>(), prop::bool::weighted(0.25), any::<u16>(), any::<u8>())
-            .prop_map(|(p, d, resolve, cty, f, w)| PlanOp::MakeLink { p, d, resolve, cty, f, w }),
+            .prop_map(|(p, d, resolve_from, resolve_ty, f, w)| {
+                PlanOp::MakeLink { p, d, resolve_from, resolve_ty, f, w }
+            }),
         2 => (0..3u8, any::<u8>(), any::<u8>()).prop_map(|(p, d, root)| PlanOp::Emit { p, d, root }),
         2 => (0..3u8, any::<u8>(), any::<u8>(), any::<u8>())
             .prop_map(|(p, d, x, y)| PlanOp::AssertSup { p, d, x, y }),
         2 => (0..3u8, any::<u8>()).prop_map(|(p, l)| PlanOp::Nullify { p, l }),
         2 => (0..3u8, any::<u8>(), any::<u8>(), any::<bool>())
-            .prop_map(|(p, d, l, resolve)| PlanOp::EditLink { p, d, l, resolve }),
+            .prop_map(|(p, d, l, resolve_from)| PlanOp::EditLink { p, d, l, resolve_from }),
     ];
     let meta = prop_oneof![
         2 => Just(PlanOp::IdemRetry),
@@ -503,12 +505,12 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let di = shadow.docs.len() - 1;
             shadow.principals[pi].docs.push(di);
         }
-        PlanOp::MakeLink { p, d, resolve, cty, f, w: wd } => {
+        PlanOp::MakeLink { p, d, resolve_from, resolve_ty, f, w: wd } => {
             let pi = *p as usize % 3;
             let di = own_doc(shadow, pi, *d);
             let home = shadow.docs[di].addr.clone();
             let len = shadow.docs[di].content.len() as u64;
-            let from = if *resolve && len >= 1 {
+            let from = if *resolve_from && len >= 1 {
                 let f1 = 1 + (*f as u64) % len;
                 let width = 1 + (*wd as u64) % (len - f1 + 1).min(4);
                 format!(r#"[{{"source":"{home}","span":{{"start":"1.{f1}","width":"0.{width}"}}}}]"#)
@@ -518,7 +520,7 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             // The type slot, both wire-v5 forms: a unique ghost NAME
             // (address form — the probe key), or a content RESOLUTION over
             // the home's own first position (never empty — the type floor).
-            let (ty_arg, ty_key) = if *cty && len >= 1 {
+            let (ty_arg, ty_key) = if *resolve_ty && len >= 1 {
                 (
                     format!(r#"[{{"source":"{home}","span":{{"start":"1.1","width":"0.1"}}}}]"#),
                     None,
@@ -587,7 +589,7 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             commit(shadow, state, pi, frame, op_index);
             shadow.links[li].nullified = true;
         }
-        PlanOp::EditLink { p, d, l, resolve } => {
+        PlanOp::EditLink { p, d, l, resolve_from } => {
             let pi = *p as usize % 3;
             if shadow.links.is_empty() {
                 return fallback_insert(shadow, state, pi, op_index);
@@ -596,7 +598,7 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let di = own_doc(shadow, pi, *d);
             let home = shadow.docs[di].addr.clone();
             let ghost = format!("{home}.0.3.6.{}", state.next_ghost());
-            let from = if *resolve && !shadow.docs[di].content.is_empty() {
+            let from = if *resolve_from && !shadow.docs[di].content.is_empty() {
                 format!(r#"[{{"source":"{home}","span":{{"start":"1.1","width":"0.1"}}}}]"#)
             } else {
                 "[]".to_string()

@@ -17,11 +17,11 @@ const DEFAULT_WORKERS: usize = 4;
 /// the default, so the setting stops working with no message anywhere.
 struct EnvSetting {
     var: &'static str,
-    what: &'static str,
+    expected: &'static str,
 }
 
-const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", what: "a port" };
-const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", what: "a count" };
+const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", expected: "a port" };
+const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "a count" };
 
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
@@ -66,7 +66,7 @@ fn from_env<T: std::str::FromStr>(setting: EnvSetting) -> Result<Option<T>, Stri
             Err(format!("{}: the value is not UTF-8 text", setting.var))
         }
         Ok(v) => v.parse().map(Some).map_err(|_| {
-            format!("{}: '{v}' is not {}", setting.var, setting.what)
+            format!("{}: '{v}' is not {}", setting.var, setting.expected)
         }),
     }
 }

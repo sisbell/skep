@@ -151,3 +151,23 @@ fn the_dump_names_each_section_for_its_store() {
         );
     }
 }
+
+/// A dump is its text, and every way of reading it out gives the same text —
+/// so a caller showing one reaches for `{}` rather than an accessor, and
+/// equal dumps hash alike for a harness collecting the distinct ones across a
+/// sweep of crash points.
+#[test]
+fn a_dump_reads_out_as_its_text_by_every_route() {
+    use std::collections::HashSet;
+
+    let engine = Engine::open(mem_cfg(), rich_genesis()).expect("in-memory open");
+    let dump = engine.world_dump();
+
+    assert_eq!(format!("{dump}"), dump.as_str());
+    assert_eq!(AsRef::<str>::as_ref(&dump), dump.as_str());
+    assert_eq!(dump.as_bytes(), dump.as_str().as_bytes());
+
+    let distinct: HashSet<_> = [engine.world_dump(), engine.world_dump()].into_iter().collect();
+    assert_eq!(distinct.len(), 1, "two dumps of one world are one dump");
+    assert_eq!(dump.clone().into_string(), dump.as_str());
+}

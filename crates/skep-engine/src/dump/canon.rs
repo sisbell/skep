@@ -8,7 +8,7 @@
 //! already sorted. No iteration-order dependence survives this path, which is
 //! the world dump's determinism clause.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use serde::ser::{self, Serialize};
 
@@ -54,74 +54,70 @@ pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
     v.serialize(SerdeTreeSer).expect("canonical transcode is total over the world's serde forms")
 }
 
-/// Render a [`SerdeTree`] as deterministic text, appending to `out`.
-/// Maps render `{k: v, …}` with entries sorted by (rendered key, rendered
-/// value); everything else renders structurally.
-pub(crate) fn render(c: &SerdeTree, out: &mut String) {
-    match c {
-        SerdeTree::Unit => out.push_str("()"),
-        SerdeTree::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        SerdeTree::I64(v) => out.push_str(&v.to_string()),
-        SerdeTree::U64(v) => out.push_str(&v.to_string()),
-        SerdeTree::I128(v) => out.push_str(&v.to_string()),
-        SerdeTree::U128(v) => out.push_str(&v.to_string()),
-        SerdeTree::F64Bits(b) => out.push_str(&format!("f64:0x{b:016x}")),
-        SerdeTree::Char(ch) => out.push_str(&format!("{ch:?}")),
-        SerdeTree::Str(s) => out.push_str(&format!("{s:?}")),
-        SerdeTree::Bytes(b) => {
-            out.push_str("0x");
-            for byte in b {
-                out.push_str(&format!("{byte:02x}"));
-            }
-        }
-        SerdeTree::Null => out.push_str("none"),
-        SerdeTree::Opt(v) => {
-            out.push_str("some(");
-            render(v, out);
-            out.push(')');
-        }
-        SerdeTree::Seq(items) => {
-            out.push('[');
-            for (i, item) in items.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
+/// The deterministic text is the tree's `Display`: maps render `{k: v, …}`
+/// with entries sorted by (rendered key, rendered value), and everything else
+/// renders structurally. Writing through the formatter rather than building
+/// intermediate strings keeps a whole-world render to the allocations the sort
+/// genuinely needs — the map entries', whose sort key IS their rendering.
+impl fmt::Display for SerdeTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SerdeTree::Unit => f.write_str("()"),
+            SerdeTree::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
+            SerdeTree::I64(v) => write!(f, "{v}"),
+            SerdeTree::U64(v) => write!(f, "{v}"),
+            SerdeTree::I128(v) => write!(f, "{v}"),
+            SerdeTree::U128(v) => write!(f, "{v}"),
+            SerdeTree::F64Bits(b) => write!(f, "f64:0x{b:016x}"),
+            SerdeTree::Char(ch) => write!(f, "{ch:?}"),
+            SerdeTree::Str(s) => write!(f, "{s:?}"),
+            SerdeTree::Bytes(b) => {
+                f.write_str("0x")?;
+                for byte in b {
+                    write!(f, "{byte:02x}")?;
                 }
-                render(item, out);
+                Ok(())
             }
-            out.push(']');
-        }
-        SerdeTree::Map(entries) => {
-            let mut rendered: Vec<(String, String)> = entries
-                .iter()
-                .map(|(k, v)| {
-                    let mut ks = String::new();
-                    render(k, &mut ks);
-                    let mut vs = String::new();
-                    render(v, &mut vs);
-                    (ks, vs)
-                })
-                .collect();
-            rendered.sort();
-            out.push('{');
-            for (i, (k, v)) in rendered.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
+            SerdeTree::Null => f.write_str("none"),
+            SerdeTree::Opt(v) => write!(f, "some({v})"),
+            SerdeTree::Seq(items) => {
+                f.write_str("[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{item}")?;
                 }
-                out.push_str(k);
-                out.push_str(": ");
-                out.push_str(v);
+                f.write_str("]")
             }
-            out.push('}');
-        }
-        SerdeTree::Named(name, inner) => {
-            out.push_str(name);
-            if !matches!(**inner, SerdeTree::Unit) {
-                out.push('(');
-                render(inner, out);
-                out.push(')');
+            SerdeTree::Map(entries) => {
+                let mut rendered: Vec<(String, String)> =
+                    entries.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+                rendered.sort();
+                f.write_str("{")?;
+                for (i, (k, v)) in rendered.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k}: {v}")?;
+                }
+                f.write_str("}")
+            }
+            SerdeTree::Named(name, inner) => {
+                f.write_str(name)?;
+                if !matches!(**inner, SerdeTree::Unit) {
+                    write!(f, "({inner})")?;
+                }
+                Ok(())
             }
         }
     }
+}
+
+/// Append a tree's deterministic text to `out`, for a caller assembling one
+/// rendering out of several pieces.
+pub(crate) fn render(c: &SerdeTree, out: &mut String) {
+    write!(out, "{c}").expect("writing to a String cannot fail")
 }
 
 /// The transcode's error carrier — reachable only via `ser::Error::custom`
@@ -155,6 +151,17 @@ impl ser::Serializer for SerdeTreeSer {
     type SerializeMap = MapBuild;
     type SerializeStruct = StructBuild;
     type SerializeStructVariant = VariantStructBuild;
+
+    /// This transcode walks the same data model M2's checkpoint does —
+    /// bincode, which answers `false` — so a `Serialize` impl that branches on
+    /// this flag takes the checkpoint's branch here too, and the authoritative
+    /// section keeps rendering the form the journal stores. serde's default is
+    /// `true`, and no slice branches today; answering `false` is what keeps
+    /// the first one that does from silently moving the dump off the bytes it
+    /// is the oracle for.
+    fn is_human_readable(&self) -> bool {
+        false
+    }
 
     fn serialize_bool(self, v: bool) -> Result<SerdeTree, CanonError> {
         Ok(SerdeTree::Bool(v))
@@ -447,5 +454,45 @@ mod tests {
         }
         let v = S { x: vec![E::A, E::B(7)], y: Some(true) };
         assert_eq!(rendered(&to_tree(&v)), r#"{"x": [A, B(7)], "y": some(true)}"#);
+    }
+
+    /// Every scalar arm's text, pinned: the rendering IS the format the
+    /// harnesses compare, so each shape is stated here rather than left to
+    /// whichever world happens to contain one.
+    #[test]
+    fn each_scalar_arm_renders_its_pinned_form() {
+        for (tree, text) in [
+            (SerdeTree::Unit, "()"),
+            (SerdeTree::Bool(false), "false"),
+            (SerdeTree::I64(-3), "-3"),
+            (SerdeTree::I128(-3), "-3"),
+            (SerdeTree::U128(3), "3"),
+            (SerdeTree::F64Bits(0.5f64.to_bits()), "f64:0x3fe0000000000000"),
+            (SerdeTree::Char('q'), "'q'"),
+            (SerdeTree::Bytes(vec![0x00, 0x0f, 0xff]), "0x000fff"),
+            (SerdeTree::Null, "none"),
+            (SerdeTree::Opt(Box::new(SerdeTree::U64(1))), "some(1)"),
+            (SerdeTree::Named("V", Box::new(SerdeTree::Unit)), "V"),
+            (SerdeTree::Named("V", Box::new(SerdeTree::U64(1))), "V(1)"),
+        ] {
+            assert_eq!(rendered(&tree), text);
+        }
+    }
+
+    /// The transcode walks the checkpoint's data model, so a `Serialize` impl
+    /// that branches on `is_human_readable` renders the branch bincode stores.
+    #[test]
+    fn the_transcode_takes_the_checkpoint_s_serde_branch() {
+        struct Branching;
+        impl Serialize for Branching {
+            fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                if s.is_human_readable() {
+                    s.serialize_str("prose")
+                } else {
+                    s.serialize_u64(1)
+                }
+            }
+        }
+        assert_eq!(rendered(&to_tree(&Branching)), "1");
     }
 }

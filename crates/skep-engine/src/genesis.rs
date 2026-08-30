@@ -26,8 +26,15 @@ use crate::world::World;
 ///
 /// M2's caller contract: the SAME configuration must be passed on every
 /// `open()` of a given journal (genesis must be byte-identical); the config
-/// is data precisely so the binary can hold it constant.
-#[derive(Clone)]
+/// is data precisely so the binary can hold it constant — and `Eq` is here so
+/// that a binary holding one can say so, against the value it stored, before
+/// an open turns the question into a recovery.
+///
+/// There is deliberately no `Default`. [`GenesisConfig::standard`] is not a
+/// neutral value but the format-pinned one, and which configuration a journal
+/// was sealed under is a decision every caller must make visibly; a `Default`
+/// is how it stops being made.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenesisConfig {
     /// The type configuration, carried whole so no consumer is handed halves
     /// that could arrive matched at one door and mismatched at the next.

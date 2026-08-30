@@ -1,5 +1,5 @@
 //! The world-dump surface (engine obligation 3, behind the `dump` feature):
-//! [`WorldDump`] — a deterministic, serializable rendering of the
+//! [`WorldDump`] — a deterministic, byte-comparable rendering of the
 //! authoritative observable state, with the recomputable hints in a separate
 //! section — plus the hint-faithfulness check the crash/conformance
 //! harnesses lean on.
@@ -17,7 +17,9 @@
 //!   R, M7's link store with its sealed genesis type config. M3 and M4
 //!   expose no enumeration API, so their slices (and, uniformly, M5's and
 //!   M7's) are rendered through their serde checkpoint forms — the same
-//!   bytes-level seam M2's checkpoints already depend on. M7's
+//!   bytes-level seam M2's checkpoints already depend on, down to serde's
+//!   human-readable flag, which the transcode answers the way bincode does so
+//!   a branching `Serialize` impl renders the branch the journal stores. M7's
 //!   `#[serde(skip)]` registry/hints are thereby excluded, exactly as the
 //!   section demands.
 //! * **hints** — M7's recomputable state, read through its public surfaces
@@ -35,7 +37,6 @@ mod canon;
 
 use std::fmt;
 
-use serde::Serialize;
 use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
@@ -47,7 +48,16 @@ use canon::{render, to_tree, SerdeTree};
 /// A deterministic rendering of one world. Byte-equality is the comparison
 /// the harnesses use: two dumps of equal worlds are byte-equal, and a
 /// checkpoint+replay world dumps byte-equal to the live fold it recovers.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// `Hash` comes with that equality, for a harness collecting the distinct
+/// dumps across a sweep of crash points.
+///
+/// The text goes out — through `Display`, `as_str`, `as_bytes`,
+/// `into_string` — and none comes in. A dump exists only because an engine
+/// rendered one, which is what makes byte-equality mean the worlds agree; a
+/// value parsed from arbitrary text would compare equal to a rendering it was
+/// never produced by, and that is the one comparison a harness must not be
+/// able to make.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct WorldDump(String);
 
 impl WorldDump {
@@ -64,6 +74,18 @@ impl WorldDump {
     /// Unwrap the rendering.
     pub fn into_string(self) -> String {
         self.0
+    }
+}
+
+impl fmt::Display for WorldDump {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for WorldDump {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -150,16 +172,16 @@ fn window(s: &str, i: usize) -> &str {
 
 // ── the hints section, from public reads only ──
 
-fn key(s: &str) -> SerdeTree {
-    SerdeTree::Str(s.to_owned())
+fn key(s: impl Into<String>) -> SerdeTree {
+    SerdeTree::Str(s.into())
 }
 
-fn tum_seq<'a>(it: impl Iterator<Item = &'a Tumbler>) -> SerdeTree {
-    SerdeTree::Seq(it.map(|t| SerdeTree::Str(t.to_string())).collect())
+fn tum_seq<'a>(it: impl IntoIterator<Item = &'a Tumbler>) -> SerdeTree {
+    SerdeTree::Seq(it.into_iter().map(|t| SerdeTree::Str(t.to_string())).collect())
 }
 
-fn addr_seq(addrs: &[Address]) -> SerdeTree {
-    SerdeTree::Seq(addrs.iter().map(|a| SerdeTree::Str(a.to_string())).collect())
+fn addr_seq<'a>(addrs: impl IntoIterator<Item = &'a Address>) -> SerdeTree {
+    SerdeTree::Seq(addrs.into_iter().map(|a| SerdeTree::Str(a.to_string())).collect())
 }
 
 /// The dump's own name for a shipped class. Exhaustive by construction, so
@@ -204,16 +226,7 @@ fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
     let mut entries: Vec<(SerdeTree, SerdeTree)> = vec![
         (key("links.audit"), tum_seq(audit.iter().map(Address::tumbler))),
         (key("links.active"), tum_seq(active.iter().map(Address::tumbler))),
-        (
-            key("links.nullified"),
-            SerdeTree::Seq(
-                audit
-                    .iter()
-                    .filter(|a| links.is_nullified(a))
-                    .map(|a| SerdeTree::Str(a.to_string()))
-                    .collect(),
-            ),
-        ),
+        (key("links.nullified"), addr_seq(audit.iter().filter(|a| links.is_nullified(a)))),
     ];
 
     // Per-class typed slices: the shipped classes off the one genesis list,
@@ -224,7 +237,7 @@ fn hints_tree(world: &World, cfg: &GenesisConfig) -> SerdeTree {
         classes.push((key(shipped_label(t)), class_tree(links, links.reserved_type(t))));
     }
     for (i, d) in cfg.types.decls.iter().enumerate() {
-        classes.push((SerdeTree::Str(format!("app.{i}")), class_tree(links, &d.key)));
+        classes.push((key(format!("app.{i}")), class_tree(links, &d.key)));
     }
     entries.push((key("types"), SerdeTree::Map(classes)));
 

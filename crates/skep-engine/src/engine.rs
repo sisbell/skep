@@ -24,7 +24,13 @@ use crate::world::World;
 /// M2's recovery failed, or the passed configuration disagrees with the one
 /// the recovered journal was sealed under. All are operator-intervention
 /// conditions, not auto-retried (M2 caller contract).
+///
+/// The set of ways an open can fail is the assembler's to extend as the
+/// stores below it grow conditions worth naming, so it is `#[non_exhaustive]`:
+/// a caller matching on the variants keeps its catch-all, and an addition
+/// costs a recompile rather than a broken build.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EngineError {
     /// `TypeRegistry::build` / `LinkState::genesis` rejected the config.
     Registry(RegistryError),
@@ -104,6 +110,30 @@ pub struct Engine {
     genesis_config: GenesisConfig,
 }
 
+/// `skepd` serves a whole worker pool off one shared `Engine`, so `Send +
+/// Sync` is part of what this type promises. [`World`] and [`EngineStores`]
+/// have theirs enforced by `WorldState`'s and `Stores`'s supertrait bounds;
+/// `Engine` implements no trait that would hold it, so it is pinned here —
+/// where a field that revoked it would fail, rather than one crate away in
+/// the daemon's `serve`.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Engine>();
+};
+
+/// The kernel's head and the size of the configuration behind it — enough to
+/// tell two engines apart in a log line. The world itself is not printed: its
+/// rendering is a `WorldDump`, which needs the genesis config this engine
+/// holds and `Debug` cannot take.
+impl fmt::Debug for Engine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Engine")
+            .field("kernel", self.kernel())
+            .field("app_decls", &self.genesis_config.types.decls.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Engine {
     /// Recover-or-init (M2's `Kernel::open`) over the full genesis world.
     ///
@@ -135,11 +165,16 @@ impl Engine {
         Ok(Engine { stores: EngineStores::new(kernel), registry, genesis_config })
     }
 
-    /// The shared kernel (M2). Snapshots, checkpoints, and `current_seq` are
-    /// reached through this; the engine adds nothing over them.
-    /// [`Engine::world_at`] is the one M2 method the engine forwards rather
-    /// than leaves to this handle, and it forwards verbatim.
-    pub fn kernel(&self) -> &Arc<Kernel<World>> {
+    /// The kernel (M2). Snapshots, checkpoints, and `current_seq` are reached
+    /// through this; the engine adds nothing over them. [`Engine::world_at`]
+    /// is the one M2 method the engine forwards rather than leaves to this
+    /// handle, and it forwards verbatim.
+    ///
+    /// A borrow, matching `Stores::kernel` below: that the kernel is shared
+    /// behind an `Arc` is how the engine hands the same one to M9 and to every
+    /// driver, and it is not something a reader of this method needs to hold.
+    /// The shared-ownership seam is [`EngineStores`], which clones.
+    pub fn kernel(&self) -> &Kernel<World> {
         &self.stores.kernel
     }
 
@@ -181,7 +216,7 @@ impl Engine {
     /// spurious type-check miss later.
     pub fn coordinator(&self) -> Result<Coordinator<World>, CatalogError> {
         Coordinator::new(
-            Arc::clone(self.kernel()),
+            Arc::clone(&self.stores.kernel),
             Arc::clone(&self.registry),
             self.genesis_config.types.reserved.clone(),
             self.genesis_config.types.decls.clone(),
@@ -271,7 +306,7 @@ fn mk_link_store(k: &Kernel<World>) -> LinkWriter<'_, World> {
 /// factory passed to `Operation::new`, built via the engine-facing
 /// store-driver constructors"). Holds only the shared kernel; each call
 /// hands out a fresh driver.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EngineStores {
     kernel: Arc<Kernel<World>>,
 }
@@ -313,9 +348,55 @@ mod tests {
     use std::collections::BTreeSet;
     use std::error::Error;
 
+    use skep_kernel::{CheckpointPolicy, Durability};
     use skep_links::{enc, Registration, Shape};
 
     use super::*;
+
+    fn mem_engine() -> Engine {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        Engine::open(cfg, GenesisConfig::standard()).expect("in-memory open cannot fail")
+    }
+
+    /// What a missing `Debug` costs is not the print, it is the wall: a
+    /// caller's own type holding an assembled engine derives its own.
+    #[test]
+    fn a_holder_of_the_assembled_types_derives_debug() {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct Holder {
+            engine: Engine,
+            stores: EngineStores,
+            config: GenesisConfig,
+        }
+
+        let engine = mem_engine();
+        let holder = Holder {
+            stores: engine.stores(),
+            config: engine.genesis_config().clone(),
+            engine,
+        };
+        let rendered = format!("{holder:?}");
+        assert!(rendered.contains("Engine"), "the engine renders as itself: {rendered}");
+        assert!(
+            rendered.contains("seq"),
+            "the kernel's head is the one thing worth reading here: {rendered}"
+        );
+    }
+
+    /// M2's contract is that the SAME configuration is passed on every open of
+    /// a journal, so a caller can compare the one it holds against the one it
+    /// stored — before an open turns the question into a recovery.
+    #[test]
+    fn genesis_configs_compare() {
+        assert_eq!(GenesisConfig::standard(), GenesisConfig::standard());
+        let mut edited = GenesisConfig::standard();
+        edited.types.reserved.retired = GenesisConfig::standard().types.reserved.supersedes;
+        assert_ne!(GenesisConfig::standard(), edited);
+    }
 
     /// The chain does not stop at the assembler: what an operator reads is
     /// M2's own sentence about the journal, wrapped rather than restated, and

@@ -108,7 +108,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_engine::{Engine, EngineError, GenesisConfig, HistoryError, World};
+use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{Codec, Operation, Response, SessionId};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
@@ -265,7 +265,7 @@ const BOARD_HTML: &str = include_str!("../../../clients/board.html");
 #[non_exhaustive]
 pub enum DaemonError {
     /// The engine could not genesis/recover (corrupt journal, bad
-    /// checkpoint, drifted genesis config).
+    /// checkpoint).
     Engine(EngineError),
     /// `commits.log` (the commit-metadata sidecar) could not be opened,
     /// replayed, or extended. A torn tail is NOT an error (it truncates);
@@ -796,7 +796,7 @@ impl Daemon {
     /// `Drop` both release that lock before returning, which is what closes
     /// the race with a stopping server. Every other variant is an
     /// operator-intervention condition (corrupt journal, bad checkpoint,
-    /// drifted genesis, a data dir refusing I/O the kernel just performed):
+    /// a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
     ///
     /// The sidecar replay is the one step here whose cost is not O(1) in
@@ -813,7 +813,7 @@ impl Daemon {
             },
             checkpoint: CheckpointPolicy::EveryN(CHECKPOINT_EVERY_COMMITS),
         };
-        let engine = Engine::open(cfg, GenesisConfig::standard()).map_err(DaemonError::Engine)?;
+        let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         let febe = Operation::new(Box::new(engine.stores()));
         let guest = open_guest_session(&febe);

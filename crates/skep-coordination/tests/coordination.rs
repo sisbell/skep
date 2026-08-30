@@ -8,20 +8,18 @@
 
 mod common;
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use common::*;
 use skep_coordination::{
-    Atom, CatalogError, CertifyError, Coordinator, DefineError, Dom, Enabled, Env, EvalError,
-    FireAction, FireError, FireOutcome, Lit, Prim, RegisterError, RetractError, Rule,
-    RuleCertification, RuleError, ScopeBody, Sort, StepOutcome, Term, TriggerRef, TypeError,
-    TypeKey, TypeRef, TypedTerm, Value, VarId, EXPANSION_NAME_BASE,
+    Atom, CertifyError, Coordinator, DefineError, Dom, Enabled, Env, EvalError, FireAction,
+    FireError, FireOutcome, Lit, Prim, RegisterError, RetractError, Rule, RuleCertification,
+    RuleError, ScopeBody, Sort, StepOutcome, Term, TriggerRef, TypeError, TypeKey, TypeRef,
+    TypedTerm, Value, VarId, EXPANSION_NAME_BASE,
 };
 use skep_kernel::TxnError;
 use skep_links::{
-    enc, Behavior, Caller, EmitError, HasLinks, NullifyError, Registration, Shape, ShippedType,
-    Tip, TypeDecl, TypeRegistry, View,
+    enc, Behavior, Caller, EmitError, HasLinks, NullifyError, ShippedType, Tip, View,
 };
 use skep_arrangement::HasM5;
 
@@ -114,11 +112,13 @@ fn marker_action() -> FireAction {
 
 // ───────────────────────────── construction ─────────────────────────────
 
-/// Catalog projection: validate-once-or-fail against the injected registry;
-/// the cached `reserved_type` accessor serves the shipped endsets (coverage-
-/// equal — byte-identical in fact — to genesis's).
+/// Catalog projection: a pure, infallible read of the injected registry —
+/// the cached `reserved_type` accessor serves the five shipped endsets at
+/// the compiled ghost-tumbler constants (there is no twice-passed
+/// configuration left to drift; the old validate-once-or-fail arms went
+/// with the retired `GenesisConfig` seam).
 #[test]
-fn catalog_projects_validates_and_serves_reserved_endsets() {
+fn catalog_projects_and_serves_reserved_endsets() {
     let k = kernel();
     let c = coord(&k);
     assert_eq!(c.reserved_type(ShippedType::PredDef), &enc(&[ra(1)]));
@@ -126,24 +126,6 @@ fn catalog_projects_validates_and_serves_reserved_endsets() {
     assert_eq!(c.reserved_type(ShippedType::Retired), &enc(&[ra(3)]));
     assert_eq!(c.reserved_type(ShippedType::Supersedes), &enc(&[ra(4)]));
     assert_eq!(c.reserved_type(ShippedType::Retraction), &enc(&[ra(5)]));
-
-    // Residual drift of the twice-passed pair is caught at assembly.
-    let mut drifted = reserved();
-    drifted.pred_def = ra(7);
-    assert!(matches!(
-        try_coord(&k, registry(), drifted, decls()),
-        Err(CatalogError::ReservedMismatch(ShippedType::PredDef))
-    ));
-
-    let mut extra = decls();
-    extra.push(TypeDecl {
-        key: enc(&[ra(20)]),
-        reg: Registration { shape: Shape::Unary, idem: true, behaviors: BTreeSet::new() },
-    });
-    assert!(matches!(
-        try_coord(&k, registry(), reserved(), extra),
-        Err(CatalogError::DeclNotInRegistry(TypeKey(e))) if e == enc(&[ra(20)])
-    ));
 }
 
 /// The reserved expansion-name range is structurally uninhabitable by caller
@@ -192,12 +174,12 @@ fn type_check_gamma_and_catalog_guards() {
     ));
     // The catalog probe is Endset-equality: an uncataloged key misses.
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(enc(&[ra(20)])))))),
+        c.type_check(vec![], Term::Atom(Atom::Members(TypeRef::Concrete(TypeKey(uncataloged_ty(20)))))),
         Err(TypeError::UnregisteredType(_))
     ));
     // An atom needing a behavior the registration lacks.
     assert!(matches!(
-        c.type_check(vec![], Term::Atom(Atom::SourcesTo(conc(&rel_ty()), at(lit_addr(&ca(1)))))),
+        c.type_check(vec![], Term::Atom(Atom::SourcesTo(conc(&pred_def_ty()), at(lit_addr(&ca(1)))))),
         Err(TypeError::BehaviorMissing { needs: Behavior::ReverseLookup, .. })
     ));
     // A ClassVar under no enclosing Reg binder.
@@ -212,50 +194,46 @@ fn type_check_gamma_and_catalog_guards() {
     ));
 
     // targets_keyed is in the vocabulary iff some cataloged class attaches
-    // BH3 (V-atom): a no-BH3 catalog rejects it.
-    let no_bh3: Vec<TypeDecl> = decls().into_iter().filter(|d| d.key != bh3_ty()).collect();
-    let reg2 = Arc::new(TypeRegistry::build(&config_with(no_bh3.clone())).expect("valid config"));
-    let c2 = try_coord(&k, reg2, reserved(), no_bh3).expect("projects");
+    // BH3 (V-atom): no shipped registration does, so THE catalog — every
+    // board's catalog — rejects it.
     assert!(matches!(
-        c2.type_check(vec![], Term::Atom(Atom::TargetsKeyed(at(lit_addr(&ca(1)))))),
+        c.type_check(vec![], Term::Atom(Atom::TargetsKeyed(at(lit_addr(&ca(1)))))),
         Err(TypeError::NoReverseLookupClass)
     ));
 }
 
 /// V-IDX: `count(Reg)` folds to the (constant) registered-class count;
-/// Reg-quantifiers expand per class with the class-unindexed `targets_keyed`
-/// join as the survivor body; an instance-wise ill-typed body rejects whole.
+/// Reg-quantifiers expand per class; an instance-wise ill-typed body rejects
+/// whole.
 #[test]
 fn reg_expansion_folds_instantiates_and_rejects() {
     let k = kernel();
     let c = coord(&k);
     let ls = links(&k);
 
-    // 5 shipped + 5 app decls.
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::Reg), lit_nat(10))));
+    // The whole population: the shipped five.
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::Reg), lit_nat(5))));
 
-    // ∃K∈Reg :: def(targets_keyed(x)[K]) — false with no BH3 tuple, true
-    // once one exists (the mandatory non-BH3 instances denote ⊥ harmlessly).
+    // ∃K∈Reg :: is_K(x) — false while x heads no cataloged class, true once
+    // a tuple lands in one (the other instances denote ⊥ harmlessly).
     let ex = c
         .type_check(
             vec![(v(1), Sort::Addr)],
             Term::Exists {
                 var: v(7),
                 dom: ad(Dom::Reg),
-                body: at(Term::Prim(Prim::Def(at(Term::Prim(Prim::MapGet(
-                    at(Term::Atom(Atom::TargetsKeyed(at(var(1))))),
-                    TypeRef::ClassVar(v(7)),
-                )))))),
+                body: at(Term::Atom(Atom::IsK(TypeRef::ClassVar(v(7)), at(var(1))))),
             },
         )
-        .expect("Reg-quantified MapGet body type-checks");
+        .expect("Reg-quantified IsK body type-checks");
     let env = Env::empty().bind(v(1), Value::Addr(ca(5)));
     assert!(!c.decide(&ex, &env, View::Active, &k.snapshot()));
-    ls.emit(Caller::System, &doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
+    ls.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(5), &[]).expect("pred_def emit");
     assert!(c.decide(&ex, &env, View::Active, &k.snapshot()));
 
     // A class-indexed behavior atom at the bound class dies by instantiation
-    // (some instance lacks the behavior) — RegInstanceIllTyped.
+    // (some instance lacks the behavior) — RegInstanceIllTyped: only Retired
+    // declares BH1, so the Forall's pred_def instance is the ill-typed one.
     assert!(matches!(
         c.type_check(
             vec![(v(1), Sort::Addr)],
@@ -281,12 +259,12 @@ fn eval_views_uv_rewrite_and_atoms() {
     let ls = links(&k);
     let retired = c.reserved_type(ShippedType::Retired).clone();
 
-    let (t1, _) = ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    let t1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // pred_stable class, F=ca1, G=ca2
+    deposit_rel(&k, 2, &ca(3), &ca(2));
 
     // is_K / member counting / L_dom / reflection membership.
-    assert!(decide_now(&k, &c, View::Active, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&rel_ty()))), lit_nat(2))));
+    assert!(decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(2))));
     assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(2))));
     assert!(decide_now(
         &k,
@@ -298,59 +276,42 @@ fn eval_views_uv_rewrite_and_atoms() {
     // Retraction: the active reading shrinks, the audit reading persists —
     // the term view selects (PR-VIEW: the view is an eval parameter).
     ls.nullify(Caller::System, &doc1(), &t1).expect("retract rel 1");
-    assert!(!decide_now(&k, &c, View::Active, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
-    assert!(decide_now(&k, &c, View::Audit, is_k_t(&rel_ty(), lit_addr(&ca(1)))));
+    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(decide_now(&k, &c, View::Audit, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
     // The audit tuple slice still carries t1 (∃ t ∈ L_rel :: ca1 ∈ cov_F(t)).
     assert!(decide_now(
         &k,
         &c,
         View::Active,
-        exists(1, Dom::AuditSlice(conc(&rel_ty())), Term::Atom(Atom::InCoverageF(at(lit_addr(&ca(1))), v(1))))
+        exists(1, Dom::AuditSlice(conc(&pred_stable_ty())), Term::Atom(Atom::InCoverageF(at(lit_addr(&ca(1))), v(1))))
     ));
 
     // UV default view: members(K, default) drops elements filtered by BH1
     // types OTHER than K — and never by K itself (retired is unfiltered in
     // its own default reading — the OQ1 commitment).
     ls.emit(Caller::System, &doc1(), &retired, &ca(3), &[]).expect("retire ca3");
-    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&rel_ty()))), lit_nat(1))));
-    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&rel_ty()))), lit_nat(0))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(1))));
+    assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
     assert!(decide_now(&k, &c, View::Default, nat_eq(count(Dom::MembersDom(conc(&retired))), lit_nat(1))));
 
     // V-DOC: residence is M3 registration.
     assert!(decide_now(&k, &c, View::Active, Term::Atom(Atom::IsDoc(at(lit_addr(&doc1()))))));
     assert!(!decide_now(&k, &c, View::Active, Term::Atom(Atom::IsDoc(at(lit_addr(&ca(1)))))));
 
-    // BH3 + the binder guard: target_of narrows through IfSome; the
-    // targets_keyed join keys by class, absent keys denote ⊥.
-    ls.emit(Caller::System, &doc1(), &bh3_ty(), &ca(5), &[ca(6)]).expect("bh3 emit");
+    // The binder guard: IfSome narrows an optional through its `var`, and
+    // the else-branch answers when the optional is ⊥. (The BH3 atoms —
+    // TargetOf/TargetsKeyed — are out of the vocabulary in this format: no
+    // cataloged class declares ReverseLookup, which the typing test pins.)
     assert!(decide_now(
         &k,
         &c,
         View::Active,
         Term::IfSome {
-            opt: at(Term::Atom(Atom::TargetOf(conc(&bh3_ty()), at(lit_addr(&ca(5)))))),
+            opt: at(Term::Lit(Lit::BotAddr)),
             var: v(2),
-            then_: at(addr_eq(var(2), lit_addr(&ca(6)))),
-            else_: at(Term::Lit(Lit::False)),
+            then_: at(Term::Lit(Lit::False)),
+            else_: at(Term::Lit(Lit::True)),
         }
-    ));
-    assert!(decide_now(
-        &k,
-        &c,
-        View::Active,
-        Term::Prim(Prim::Def(at(Term::Prim(Prim::MapGet(
-            at(Term::Atom(Atom::TargetsKeyed(at(lit_addr(&ca(5)))))),
-            conc(&bh3_ty()),
-        )))))
-    ));
-    assert!(!decide_now(
-        &k,
-        &c,
-        View::Active,
-        Term::Prim(Prim::Def(at(Term::Prim(Prim::MapGet(
-            at(Term::Atom(Atom::TargetsKeyed(at(lit_addr(&ca(5)))))),
-            conc(&rel_ty()),
-        )))))
     ));
 }
 
@@ -392,18 +353,18 @@ fn classify_stability_lattice_and_view_scan() {
     let tc1 = |t: Term| c.type_check(vec![(v(1), Sort::Addr)], t).expect("test term type-checks");
 
     // ∃ over the grow-only L_K is ST; its negation SF.
-    let ex = tc(exists(2, Dom::AuditSlice(conc(&rel_ty())), tru()));
+    let ex = tc(exists(2, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
     assert_eq!(c.classify(&ex, View::Audit).stability, Stability::StOnly);
-    let nex = tc(not(exists(2, Dom::AuditSlice(conc(&rel_ty())), tru())));
+    let nex = tc(not(exists(2, Dom::AuditSlice(conc(&pred_def_ty())), tru())));
     assert_eq!(c.classify(&nex, View::Audit).stability, Stability::SfOnly);
 
     // Lower-bound counts ST, upper-bound SF, equality Neither (the
     // authoring-precision recommendation's substance).
-    let lo = tc(nat_le(lit_nat(2), count(Dom::AuditSlice(conc(&rel_ty())))));
+    let lo = tc(nat_le(lit_nat(2), count(Dom::AuditSlice(conc(&pred_def_ty())))));
     assert_eq!(c.classify(&lo, View::Audit).stability, Stability::StOnly);
-    let hi = tc(nat_le(count(Dom::AuditSlice(conc(&rel_ty()))), lit_nat(2)));
+    let hi = tc(nat_le(count(Dom::AuditSlice(conc(&pred_def_ty()))), lit_nat(2)));
     assert_eq!(c.classify(&hi, View::Audit).stability, Stability::SfOnly);
-    let eq = tc(nat_eq(count(Dom::AuditSlice(conc(&rel_ty()))), lit_nat(2)));
+    let eq = tc(nat_eq(count(Dom::AuditSlice(conc(&pred_def_ty()))), lit_nat(2)));
     assert_eq!(c.classify(&eq, View::Audit).stability, Stability::Neither);
 
     // Audit is_K at a step-constant argument is ST; the SAME term classified
@@ -417,7 +378,7 @@ fn classify_stability_lattice_and_view_scan() {
     assert!(c.classify(&ex, View::Audit).view_independent);
 
     // The named exception: an active-slice read can shrink under retraction.
-    let act = tc(exists(2, Dom::ActiveSlice(conc(&rel_ty())), tru()));
+    let act = tc(exists(2, Dom::ActiveSlice(conc(&pred_def_ty())), tru()));
     assert!(c.classify(&act, View::Active).active_exceptions.retraction_shrinks);
     assert!(!c.classify(&ex, View::Audit).active_exceptions.retraction_shrinks);
 }
@@ -600,7 +561,7 @@ fn certify_stable_cvalid_legs() {
     assert!(matches!(c.certify_stable(&doc1(), &ca(40)), Err(CertifyError::NotEverRegistered)));
 
     // A ⊤-stable, view-independent Boolean def certifies and deposits.
-    let (s0, _) = define(exists(1, Dom::AuditSlice(conc(&rel_ty())), tru()));
+    let (s0, _) = define(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru()));
     c.certify_stable(&doc1(), &s0).expect("certify");
     assert!(c.is_certified_stable(&s0, &k.snapshot()));
 
@@ -609,17 +570,17 @@ fn certify_stable_cvalid_legs() {
     assert!(matches!(c.certify_stable(&doc1(), &sa), Err(CertifyError::NotBoolean)));
 
     // (ii) view-independent expansion (M_K is view-parameterized).
-    let (sv, _) = define(exists(1, Dom::MembersDom(conc(&rel_ty())), tru()));
+    let (sv, _) = define(exists(1, Dom::MembersDom(conc(&pred_def_ty())), tru()));
     assert!(matches!(c.certify_stable(&doc1(), &sv), Err(CertifyError::ViewDependent)));
 
     // (iii) ST⁺: an SF-only spelling is not ⊤-stable.
-    let (sn, _) = define(not(exists(1, Dom::AuditSlice(conc(&rel_ty())), tru())));
+    let (sn, _) = define(not(exists(1, Dom::AuditSlice(conc(&pred_def_ty())), tru())));
     assert!(matches!(c.certify_stable(&doc1(), &sn), Err(CertifyError::NotStable)));
 
     // The ST⁺ widening: `count(L_K) ≥ x` with x a bound ℕ parameter
     // certifies (a literal-only PD0 would refuse) — while plain classify
     // stays Neither (the widening is certification-only).
-    let widened = nat_le(var(1), count(Dom::AuditSlice(conc(&rel_ty()))));
+    let widened = nat_le(var(1), count(Dom::AuditSlice(conc(&pred_def_ty()))));
     let tw = c.type_check(vec![(v(1), Sort::Nat)], widened).expect("widened def");
     assert_eq!(
         c.classify(&tw, View::Audit).stability,
@@ -685,13 +646,13 @@ fn register_rule_validation_gates() {
     // Domain↔trigger sort reconciliation: a Tup domain demands a Tup-param
     // trigger.
     assert!(matches!(
-        c.register_rule(mk(Dom::ActiveSlice(conc(&rel_ty())), always_addr(&c), marker_action())),
+        c.register_rule(mk(Dom::ActiveSlice(conc(&pred_stable_ty())), always_addr(&c), marker_action())),
         Err(RuleError::DomainTriggerSortMismatch { expected: Sort::Tup, found: Sort::Addr })
     ));
     // A Def trigger is Codom-only, so it can never serve a Tup domain.
     assert!(matches!(
         c.register_rule(mk(
-            Dom::ActiveSlice(conc(&rel_ty())),
+            Dom::ActiveSlice(conc(&pred_stable_ty())),
             TriggerRef::Def(p_start.clone()),
             marker_action()
         )),
@@ -700,14 +661,14 @@ fn register_rule_validation_gates() {
     // Trigger codomain and arity.
     let nat_trig = c.type_check_trigger(vec![(v(1), Sort::Addr)], lit_nat(1)).expect("Nat trigger");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&rel_ty())), TriggerRef::Inline(nat_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(nat_trig), marker_action())),
         Err(RuleError::TriggerNotBoolean)
     ));
     let two_param = c
         .type_check_trigger(vec![(v(1), Sort::Addr), (v(2), Sort::Addr)], tru())
         .expect("two-param term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&rel_ty())), TriggerRef::Inline(two_param), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(two_param), marker_action())),
         Err(RuleError::BadTriggerArity)
     ));
     // A ref-bearing Inline trigger.
@@ -715,35 +676,40 @@ fn register_rule_validation_gates() {
         .type_check_trigger(vec![(v(1), Sort::Addr)], Term::Ref { addr: p_start.clone(), args: vec![at(var(1))] })
         .expect("ref-bearing trigger term");
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&rel_ty())), TriggerRef::Inline(ref_trig), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Inline(ref_trig), marker_action())),
         Err(RuleError::RefBearingInlineTrigger)
     ));
     // A Def trigger with no defined signature.
     assert!(matches!(
-        c.register_rule(mk(Dom::MembersDom(conc(&rel_ty())), TriggerRef::Def(ca(77)), marker_action())),
+        c.register_rule(mk(Dom::MembersDom(conc(&pred_stable_ty())), TriggerRef::Def(ca(77)), marker_action())),
         Err(RuleError::DefTriggerUnregistered(_))
     ));
-    // Marker.ty guards: cataloged Unary; idem⊤; non-PredLayer.
+    // Marker.ty guards: cataloged Unary and non-PredLayer. A Binary shipped
+    // class and an uncataloged number both land BadMarkerType; the PredLayer
+    // pair is refused by name (PR-DISC). The `NonIdemMarkerType` arm is
+    // structurally unreachable in this format — every cataloged Unary class
+    // is idem⊤ — and stays declared for the day a registered idem⊥ Unary
+    // class exists again.
     assert!(matches!(
         c.register_rule(mk(
-            Dom::MembersDom(conc(&rel_ty())),
+            Dom::MembersDom(conc(&pred_stable_ty())),
             always_addr(&c),
-            FireAction::Marker { home: doc1(), ty: key(&rel_ty()) }
+            FireAction::Marker { home: doc1(), ty: key(&retraction_ty()) }
         )),
         Err(RuleError::BadMarkerType(_))
     ));
     assert!(matches!(
         c.register_rule(mk(
-            Dom::MembersDom(conc(&rel_ty())),
+            Dom::MembersDom(conc(&pred_stable_ty())),
             always_addr(&c),
-            FireAction::Marker { home: doc1(), ty: key(&bh4_ty()) }
+            FireAction::Marker { home: doc1(), ty: key(&uncataloged_ty(20)) }
         )),
-        Err(RuleError::NonIdemMarkerType(_))
+        Err(RuleError::BadMarkerType(_))
     ));
     let pdef_key = TypeKey(c.reserved_type(ShippedType::PredDef).clone());
     assert!(matches!(
         c.register_rule(mk(
-            Dom::MembersDom(conc(&rel_ty())),
+            Dom::MembersDom(conc(&pred_stable_ty())),
             always_addr(&c),
             FireAction::Marker { home: doc1(), ty: pdef_key }
         )),
@@ -759,15 +725,15 @@ fn marker_rule_certifies_fires_and_quiesces() {
     let k = kernel();
     let mut c = coord(&k);
     let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
+    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
             .expect("¬is_K(marker, x) @ audit"),
     );
     let rule = Rule {
-        domain: Dom::MembersDom(conc(&rel_ty())),
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: trig,
         view: View::Audit,
         action: marker_action(),
@@ -821,14 +787,13 @@ fn marker_rule_certifies_fires_and_quiesces() {
 fn nullify_rules_uncertified_fire_and_failed_surface() {
     let k = kernel();
     let mut c = coord(&k);
-    let ls = links(&k);
-    let (m1, _) = ls.emit(Caller::System, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
+    let m1 = deposit_rel(&k, 2, &ca(1), &ca(2)); // a pred_stable-classed tuple
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Tup)], tru()).expect("Tup trigger"),
     );
     let rule = Rule {
-        domain: Dom::ActiveSlice(conc(&multi_ty())),
+        domain: Dom::ActiveSlice(conc(&pred_stable_ty())),
         trigger: trig,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -853,12 +818,12 @@ fn nullify_rules_uncertified_fire_and_failed_surface() {
     // links, so every fire trips M7's BadTarget — surfaced, rotate-past.
     let k2 = kernel();
     let mut c2 = coord(&k2);
-    links(&k2).emit(Caller::System, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi");
+    deposit_rel(&k2, 2, &ca(1), &ca(2));
     let trig2 = TriggerRef::Inline(
         c2.type_check_trigger(vec![(v(1), Sort::Addr)], tru()).expect("Addr trigger"),
     );
     let bad = Rule {
-        domain: Dom::MembersDom(conc(&multi_ty())),
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
         trigger: trig2,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },
@@ -882,8 +847,8 @@ fn quiescent_scoped_exact_then_over_approximates() {
     let k = kernel();
     let mut c = coord(&k);
     let ls = links(&k);
-    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(1), &[ca(2)]).expect("rel 1");
-    ls.emit(Caller::System, &doc1(), &rel_ty(), &ca(3), &[ca(2)]).expect("rel 2");
+    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel 1");
+    ls.emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("rel 2");
 
     let trig = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
@@ -891,7 +856,7 @@ fn quiescent_scoped_exact_then_over_approximates() {
     );
     let id = c
         .register_rule(Rule {
-            domain: Dom::MembersDom(conc(&rel_ty())),
+            domain: Dom::MembersDom(conc(&pred_stable_ty())),
             trigger: trig,
             view: View::Audit,
             action: marker_action(),
@@ -915,12 +880,12 @@ fn quiescent_scoped_exact_then_over_approximates() {
     // A Tup-domain rule is sort-incompatible with PerAddress: left UNSCOPED,
     // its enabled occurrence keeps the scoped verdict false — more work
     // reported, never false quiescence.
-    ls.emit(Caller::System, &doc1(), &multi_ty(), &ca(5), &[ca(6)]).expect("multi");
+    deposit_rel(&k, 1, &ca(5), &ca(6)); // a pred_def-classed tuple
     let trig_t = TriggerRef::Inline(
         c.type_check_trigger(vec![(v(2), Sort::Tup)], tru()).expect("Tup trigger"),
     );
     c.register_rule(Rule {
-        domain: Dom::ActiveSlice(conc(&multi_ty())),
+        domain: Dom::ActiveSlice(conc(&pred_def_ty())),
         trigger: trig_t,
         view: View::Active,
         action: FireAction::Nullify { home: doc1() },

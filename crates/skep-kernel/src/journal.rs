@@ -23,8 +23,12 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// Per-frame sync word anchoring recovery resynchronization (§1/§7).
-const MAGIC: [u8; 4] = *b"SKJ1";
+/// Per-frame sync word anchoring recovery resynchronization (§1/§7) — and
+/// the journal's FORMAT stamp: the trailing numeral names the format that
+/// wrote the frame. Bumped 1 → 2 at the 2026-08-26 genesis re-baseline
+/// (ghost-tumbler reserved types; `GenesisConfig` retired), so a journal
+/// written under the 9-space regime does not reopen as this format's.
+const MAGIC: [u8; 4] = *b"SKJ2";
 /// Frame header: magic (4) + len (4) + crc (4).
 pub(crate) const FRAME_HEADER_LEN: usize = 12;
 /// Sanity bound on a single frame — the journal's FRAME CAP (open build

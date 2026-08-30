@@ -8,19 +8,16 @@
 //! serde forms pushed through the canonicalizing transcode (maps sorted, so
 //! instance-specific hash iteration cannot leak into the bytes); the hints
 //! section is built from the stores' PUBLIC read surfaces over
-//! already-ordered results. Two dumps of equal worlds rendered against the
-//! same configuration VALUE are byte-equal. The configuration belongs in that
-//! sentence: the app-class sections are labelled by position in `decls`, and
-//! `check_genesis_drift` does not pin decl order, so two configurations that
-//! both pass it can label one world's classes differently. Each section
-//! carries its own class key, so the index carries the order and nothing
-//! else.
+//! already-ordered results. Two dumps of equal worlds are byte-equal — with
+//! the type set a compiled format constant there is no configuration left to
+//! pair a rendering with, and the per-class sections are the shipped five in
+//! their one declaration order.
 //!
 //! What each section holds, per the contract:
 //! * **authoritative** — M3's registry/principals/frontiers, M4's content
 //!   map, M5's arrangements (their resident form IS the canonical
 //!   maximally-merged decomposition, maintained by M5's fold) and provenance
-//!   R, M7's link store with its sealed genesis type config. M3 and M4
+//!   R, M7's link store. M3 and M4
 //!   expose no enumeration API, so their slices (and, uniformly, M5's and
 //!   M7's) are rendered through their serde checkpoint forms — the same
 //!   bytes-level seam M2's checkpoints already depend on, down to serde's
@@ -30,11 +27,10 @@
 //!   section demands.
 //! * **hints** — M7's recomputable state, read through its public surfaces
 //!   (`match_links`, `type_slice`, `members`, `succs`): the audit and active
-//!   slices, the nullified members of the audit slice, per-class type slices
-//!   (five shipped classes plus the app decls from the one genesis config),
-//!   the supersession forward edges (the BH2 walk), and M9's definition
-//!   registry projected as `pdef`/`pd_stable` membership. M3/M4 hold no
-//!   hints; M5's rebuild is the identity in v1.
+//!   slices, the nullified members of the audit slice, the five shipped
+//!   classes' type slices, the supersession forward edges (the BH2 walk),
+//!   and M9's definition registry projected as `pdef`/`pd_stable`
+//!   membership. M3/M4 hold no hints; M5's rebuild is the identity in v1.
 //!
 //!   THREE of M7's hint families sit outside that reach, so the section — and
 //!   the faithfulness check built on it — is an oracle over what it renders
@@ -43,9 +39,9 @@
 //!   link's own ordinal — so its omission is a decision about this format
 //!   rather than a consequence of M7's surface, and closing it would move
 //!   bytes the harnesses pin. And M7's fold indexes a type slice for EVERY
-//!   coverage class while this section names only the genesis-known ones, so
-//!   the typed slice an ordinary content-typed link lands in is never
-//!   rendered. Each is exercised by M7's own write-path tests instead.
+//!   coverage class while this section names only the shipped five, so the
+//!   typed slice an ordinary content-typed link lands in is never rendered.
+//!   Each is exercised by M7's own write-path tests instead.
 //!
 //!   `links.nullified` renders the nullified members of the audit slice,
 //!   which is the whole tombstone set only because `nullify`'s P-tgt gate
@@ -62,17 +58,15 @@ use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 
-use crate::genesis::{GenesisConfig, SHIPPED};
+use crate::genesis::SHIPPED;
 use crate::world::World;
 use canon::{render, to_tree, SerdeTree};
 
 /// A deterministic rendering of one world. Byte-equality is the comparison
-/// the harnesses use: two dumps of equal worlds rendered against the same
-/// configuration value are byte-equal, and a checkpoint+replay world dumps
-/// byte-equal to the live fold it recovers. `Hash` comes with that equality,
-/// for a harness collecting the distinct dumps across a sweep of crash
-/// points. The configuration is part of the claim because the app-class
-/// sections are labelled positionally from its `decls`.
+/// the harnesses use: two dumps of equal worlds are byte-equal, and a
+/// checkpoint+replay world dumps byte-equal to the live fold it recovers.
+/// `Hash` comes with that equality, for a harness collecting the distinct
+/// dumps across a sweep of crash points.
 ///
 /// The text goes out — through `Display`, `as_str`, `as_bytes`,
 /// `into_string` — and none comes in. A dump exists only because an engine
@@ -112,15 +106,14 @@ impl AsRef<str> for WorldDump {
     }
 }
 
-/// Render one world against the configuration it was sealed under: the
-/// authoritative section, then the hints section, which reads its app-class
-/// keys off `genesis_config` because that is the one place they live.
-fn dump(world: &World, genesis_config: &GenesisConfig) -> WorldDump {
+/// Render one world: the authoritative section, then the hints section over
+/// the shipped classes.
+fn dump(world: &World) -> WorldDump {
     let root = SerdeTree::Map(vec![
         (key("authoritative"), authoritative_tree(world)),
-        (key("hints"), hints_tree(world, genesis_config)),
+        (key("hints"), hints_tree(world)),
     ]);
-    let mut s = String::from("skep-world-dump v2\n");
+    let mut s = String::from("skep-world-dump v3\n");
     render(&root, &mut s);
     s.push('\n');
     WorldDump(s)
@@ -151,9 +144,9 @@ fn authoritative_tree(world: &World) -> SerdeTree {
 /// THIS DUMP RENDERS matches a from-authoritative rebuild; the authoritative
 /// sections are untouched by the rebuild, so any divergence localizes to a
 /// hint, and a hint the dump does not render is not in the comparison.
-fn hints_faithful(world: &World, genesis_config: &GenesisConfig) -> Result<(), HintDivergence> {
-    let live = dump(world, genesis_config);
-    let rebuilt = dump(&world.clone().rebuild_derived(), genesis_config);
+fn hints_faithful(world: &World) -> Result<(), HintDivergence> {
+    let live = dump(world);
+    let rebuilt = dump(&world.clone().rebuild_derived());
     if live == rebuilt {
         Ok(())
     } else {
@@ -231,11 +224,8 @@ fn shipped_label(ty: ShippedType) -> &'static str {
 /// audit/active slices (both already address-ordered `OrdSet`s).
 ///
 /// `ty` carries M7's stated precondition — address-denoting or
-/// `iextent`-built, else `type_slice` panics naming it — and both callers
-/// below are inside it: a reserved endset is M7's own, and a genesis decl's
-/// key was checked by the `TypeRegistry::build` that `crate::Engine::open`
-/// ran over the very configuration this dump is rendered against. That is
-/// where the obligation is discharged; it is not re-checked here.
+/// `iextent`-built, else `type_slice` panics naming it — and the one caller
+/// below is inside it: a reserved endset is M7's own.
 fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     SerdeTree::Map(vec![
         (key("key"), tum_seq(ty.addrs())),
@@ -250,7 +240,7 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     ])
 }
 
-fn hints_tree(world: &World, genesis_config: &GenesisConfig) -> SerdeTree {
+fn hints_tree(world: &World) -> SerdeTree {
     let links = &world.links;
     // Empty constraints ⇒ the whole view slice (M7 §G) — the one public
     // whole-store enumeration.
@@ -263,15 +253,10 @@ fn hints_tree(world: &World, genesis_config: &GenesisConfig) -> SerdeTree {
         (key("links.nullified"), addr_seq(audit.iter().filter(|a| links.is_nullified(a)))),
     ];
 
-    // Per-class typed slices: the shipped classes off the one genesis list,
-    // then the app decls in genesis order — the same one configuration
-    // genesis sealed.
+    // Per-class typed slices: the shipped classes off the one genesis list.
     let mut classes: Vec<(SerdeTree, SerdeTree)> = Vec::new();
     for ty in SHIPPED {
         classes.push((key(shipped_label(ty)), class_tree(links, links.reserved_type(ty))));
-    }
-    for (i, d) in genesis_config.types.decls.iter().enumerate() {
-        classes.push((key(format!("app.{i}")), class_tree(links, &d.key)));
     }
     entries.push((key("types"), SerdeTree::Map(classes)));
 
@@ -318,17 +303,9 @@ impl crate::Engine {
     }
 
     /// Dump any world THIS engine produced — a snapshot of its kernel, or a
-    /// world [`crate::Engine::world_at`] reconstructed.
-    ///
-    /// A dump is only meaningful against the configuration its world was
-    /// sealed under, because the hints section enumerates its app-class
-    /// sections from the genesis decls: rendered against a foreign
-    /// configuration it reports classes the world never sealed and omits the
-    /// ones it did — and it does so deterministically, so two equally
-    /// mispaired dumps compare byte-equal and a harness narrowing on that
-    /// comparison sees nothing. Which configuration goes with which world is
-    /// assembly knowledge; the engine holds it, so the pairing is made here
-    /// and cannot be made anywhere else.
+    /// world [`crate::Engine::world_at`] reconstructed. The class sections
+    /// are the format's shipped five, so no pairing decision exists: any
+    /// world this format wrote renders against the same class list.
     ///
     /// COST, per call, uncached, and linear in the WHOLE world rather than in
     /// anything the caller names. The authoritative half transcodes every
@@ -347,7 +324,7 @@ impl crate::Engine {
     /// is that figure times the number of calls in flight. Admission and
     /// concurrency are the caller's to gate; this method gates neither.
     pub fn dump_of(&self, world: &World) -> WorldDump {
-        dump(world, self.genesis_config())
+        dump(world)
     }
 
     /// Run the hint-faithfulness check against the committed world.
@@ -361,21 +338,19 @@ impl crate::Engine {
         self.check_hints_of(snap.world())
     }
 
-    /// [`crate::Engine::check_hints`] over any world this engine produced,
-    /// paired with its genesis configuration exactly as
-    /// [`crate::Engine::dump_of`] pairs it.
+    /// [`crate::Engine::check_hints`] over any world this engine produced.
     ///
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
-    /// slices, the nullified members of the audit slice, the typed slices of
-    /// the genesis-known classes, the supersession forward edges and the
-    /// predicate projections each agree with a rebuild from authoritative
-    /// state. It certifies nothing of the three families the dump does not
-    /// reach, and each of those drives something a caller can observe —
-    /// `dedup` drives `emit`'s incumbent lookup and with it idempotence;
-    /// `home_frontier` drives the address `next_link_address` mints and the
-    /// answers `age`/`stale` give; the type slice of a class outside the
-    /// genesis config drives every typed read over ordinary content-typed
-    /// links. A rebuild that mis-derived one of those passes here.
+    /// slices, the nullified members of the audit slice, the shipped classes'
+    /// typed slices, the supersession forward edges and the predicate
+    /// projections each agree with a rebuild from authoritative state. It
+    /// certifies nothing of the three families the dump does not reach, and
+    /// each of those drives something a caller can observe — `dedup` drives
+    /// `emit`'s incumbent lookup and with it idempotence; `home_frontier`
+    /// drives the address `next_link_address` mints and the answers
+    /// `age`/`stale` give; the type slice of a class outside the shipped five
+    /// drives every typed read over ordinary content-typed links. A rebuild
+    /// that mis-derived one of those passes here.
     ///
     /// COST, per call, uncached: two [`crate::Engine::dump_of`]s plus a clone
     /// of the world and a whole-links `rebuild_derived` over it — so upwards
@@ -383,7 +358,7 @@ impl crate::Engine {
     /// comparison. This is a harness surface: it gates nothing, and it should
     /// not acquire a caller that does not gate it.
     pub fn check_hints_of(&self, world: &World) -> Result<(), HintDivergence> {
-        hints_faithful(world, self.genesis_config())
+        hints_faithful(world)
     }
 }
 
@@ -433,8 +408,7 @@ mod tests {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
-        let engine =
-            Engine::open(cfg, GenesisConfig::standard()).expect("in-memory open cannot fail");
+        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
 
         let prefix = {
             let snap = engine.kernel().snapshot();
@@ -483,7 +457,8 @@ mod tests {
     #[test]
     fn each_authoritative_section_renders_its_own_slice() {
         let (engine, rich) = populated_world();
-        let bare = World::genesis(engine.genesis_config()).expect("standard genesis");
+        let bare = World::genesis();
+        let _ = &engine;
         let base = render_of(&authoritative_tree(&bare));
 
         for (slice, hybrid) in [
@@ -508,7 +483,7 @@ mod tests {
     /// here to identify the fields; the ORDER is the claim.
     #[test]
     fn the_world_serializes_its_slices_in_declaration_order() {
-        let world = World::genesis(&GenesisConfig::standard()).expect("standard genesis");
+        let world = World::genesis();
         let SerdeTree::Map(entries) = to_tree(&world) else {
             panic!("a world transcodes as a map of its fields")
         };

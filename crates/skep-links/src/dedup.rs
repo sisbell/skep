@@ -86,7 +86,7 @@ mod tests {
     fn key_is_the_coverage_identity_and_the_lock_section_follows_it() {
         let a = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
         let b = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);
-        let ty = addr(&[9, 0, 9, 0, 9, 0, 9, 1]);
+        let ty = addr(&[1, 1, 0, 1, 0, 1, 0, 1, 1]); // pred_def's ghost tumbler
         // Span ORDER is decomposition, never identity: two structurally
         // distinct values of one coverage are one I0 class, and — because
         // the lock is derived from the key — one M2 section.

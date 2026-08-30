@@ -111,7 +111,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 
     // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
     let (e1, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(9)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(9)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     assert_eq!(e1, la(1));
     // m1 reaches position 2 via FROM, 3 via TO, and 1 via TYPE (makelink
@@ -161,7 +161,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let lq = LinkQuery::new(&k);
     for to in [ca(101), ca(102), ca(103)] {
         store
-            .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[to])
+            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
             .expect("emit succeeds");
     }
     let region = [vspan(1, 1, 1)];
@@ -207,10 +207,10 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
         .makelink(
@@ -255,13 +255,13 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
-        .emit(SYS, &doc2(), &rel_ty(), &ca(1), &[ca(102)])
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
 
     // (∗,∗,∗,∗) — the whole addressable slice (FL-WILD), address order.
@@ -310,13 +310,13 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     store
-        .emit(SYS, &doc2(), &rel_ty(), &ca(1), &[ca(102)])
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
 
     // home is matched against home(a) = document_of — an address projection,
@@ -360,7 +360,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(2), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
 
     // FROM covers ca(2) ⇒ exactly V-position [s_C, 2] of doc1.
@@ -391,7 +391,7 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(true));
     // Registered-but-empty d: nothing is reachable.
@@ -487,10 +487,10 @@ fn delete_orphans_reports_active_last_witness_losses() {
     let lq = LinkQuery::new(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
     let (_link_a, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(2)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     let (link_b, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(3), &[ca(3)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
 
     // Deleting position 3 drops link_b's last witness in d.
@@ -522,10 +522,10 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     let (e2, _) = store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     let (claim, _) = store.assert_sup(SYS, &doc1(), &e1, &e2).expect("assert_sup succeeds");
 
@@ -568,7 +568,7 @@ fn snapshot_twins_read_one_pinned_state() {
     let store = LinkWriter::new(&k);
     let lq = LinkQuery::new(&k);
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(101)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     let region = [vspan(1, 1, 1)];
 
@@ -578,7 +578,7 @@ fn snapshot_twins_read_one_pinned_state() {
     let snap = k.snapshot();
     assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
     store
-        .emit(SYS, &doc1(), &rel_ty(), &ca(1), &[ca(102)])
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
     assert_eq!(count_v_on(&snap, &doc1(), &region), Ok(1));
     let w = window_v_on(&snap, &doc1(), &region, None, 10).expect("window");

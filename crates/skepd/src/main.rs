@@ -126,7 +126,7 @@ fn main() {
         }
     };
     // Genesis-or-recover; every EngineError is an operator condition
-    // (corrupt journal, bad checkpoint, drifted genesis) — report and stop.
+    // (corrupt journal, bad checkpoint) — report and stop.
     let daemon = match Daemon::open(&args.data_dir) {
         Ok(d) => d,
         Err(e) => {

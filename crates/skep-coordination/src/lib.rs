@@ -75,7 +75,7 @@ pub use check::TypedTerm;
 pub use coordinator::Coordinator;
 pub use dynamics::{ActiveExceptions, Dynamics, Footprint, Stability};
 pub use error::{
-    CatalogError, CertifyError, DefineError, EvalError, FireError, RegisterError, RetractError,
+    CertifyError, DefineError, EvalError, FireError, RegisterError, RetractError,
     RuleError, TypeError,
 };
 pub use rule::{

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
-use skep_engine::{Engine, GenesisConfig};
+use skep_engine::Engine;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Delivery, DeliveryItem};
@@ -70,7 +70,7 @@ pub fn fsync_cfg(path: &Path) -> KernelConfig {
 }
 
 pub fn mem_engine() -> Engine {
-    Engine::open(mem_cfg(), GenesisConfig::standard()).expect("in-memory open cannot fail")
+    Engine::open(mem_cfg()).expect("in-memory open cannot fail")
 }
 
 /// Bootstrap prologue, all through the real drivers: peek the next delegable

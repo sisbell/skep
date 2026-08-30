@@ -3,12 +3,11 @@
 //! the bound M8 queries under, plus M4 so INSERT can arrange content — and
 //! address/type fixtures. Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
-//! elements `[doc·0·2·k]`; reserved type addresses live in subspace 9 —
-//! element-level, outside {s_C, s_L} (reserved-isolation).
+//! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
+//! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26).
 
 #![allow(dead_code)] // each integration test binary uses a subset
 
-use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
@@ -16,8 +15,7 @@ use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs, Shape, TypeConfig,
-    TypeDecl,
+    enc, Endset, HasLinks, LinkRec, LinkState,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -163,10 +161,11 @@ pub fn la2(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
 }
 
-/// Reserved/app type address `k` — element-level in subspace 9 (outside
-/// {s_C, s_L}, the reserved-isolation precondition): `[9,0,9,0,9,0,9,k]`.
+/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]` (the
+/// compiled format constants for k = 1..=5; higher ordinals are ordinary
+/// unregistered numbers).
 pub fn ra(k: u32) -> Address {
-    a(&[9, 0, 9, 0, 9, 0, 9, k])
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal] × [0, count]`.
@@ -195,42 +194,14 @@ pub fn run(start: &Address, width: u32) -> Run {
     Run::new(start.clone(), n(width)).expect("element-level start with width ≥ 1 is a valid Run")
 }
 
-// ───────────────────────────── genesis type config ─────────────────────────
+// ─────────────────────────── the format type set ────────────────────────────
 
-/// The five reserved type addresses (ordinals 1–5 in subspace 9).
-pub fn reserved() -> ReservedAddrs {
-    ReservedAddrs {
-        pred_def: ra(1),
-        pred_stable: ra(2),
-        retired: ra(3),
-        supersedes: ra(4),
-        retraction: ra(5),
-    }
-}
-
-/// The one app type the discovery tests emit under: Binary, idem⊤.
+/// The one relation type the discovery tests deposit under — an ordinary
+/// unregistered NUMBER (a type is a number; the class-keyed reads serve it
+/// verbatim), carried into tuples through MAKELINK's open surface, since the
+/// managed gate admits only the shipped Unary classes in this format.
 pub fn rel_ty() -> Endset {
     enc(&[ra(10)])
-}
-
-pub fn decls() -> Vec<TypeDecl> {
-    vec![TypeDecl {
-        key: rel_ty(),
-        reg: Registration {
-            shape: Shape::Binary,
-            idem: true,
-            behaviors: BTreeSet::new(),
-        },
-    }]
-}
-
-/// The fixture type configuration — the five reserved addresses plus the one
-/// app decl above.
-pub fn config() -> TypeConfig {
-    TypeConfig {
-        reserved: reserved(),
-        decls: decls(),
-    }
 }
 
 // ─────────────────────────────── world assembly ─────────────────────────────
@@ -258,7 +229,7 @@ pub fn genesis_world() -> World {
         m3: seeded_m3(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
+        links: LinkState::genesis(),
     }
 }
 

@@ -17,8 +17,7 @@ use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, ReservedAddrs,
-    TypeConfig,
+    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
@@ -117,25 +116,10 @@ pub fn node1() -> Address {
     a(&[1])
 }
 
-/// Reserved type address `k` — element-level in subspace 9 (outside
-/// {s_C, s_L}: reserved-isolation).
+/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]` (the
+/// compiled format constants for k = 1..=5).
 pub fn ra(k: u32) -> Address {
-    a(&[9, 0, 9, 0, 9, 0, 9, k])
-}
-
-pub fn reserved() -> ReservedAddrs {
-    ReservedAddrs {
-        pred_def: ra(1),
-        pred_stable: ra(2),
-        retired: ra(3),
-        supersedes: ra(4),
-        retraction: ra(5),
-    }
-}
-
-/// The fixture type configuration — the five reserved addresses, no app decls.
-pub fn config() -> TypeConfig {
-    TypeConfig { reserved: reserved(), decls: vec![] }
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// The shipped Supersedes class as an address-denoting type endset.
@@ -170,7 +154,7 @@ pub fn genesis_world() -> World {
         m3: M3State::genesis(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
+        links: LinkState::genesis(),
     }
 }
 

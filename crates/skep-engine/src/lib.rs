@@ -17,10 +17,11 @@
 //! lifting, construction, or rendering; every guard, policy, and
 //! computation lives in a store. Three obligations are the engine's alone:
 //!
-//! * **Genesis** ([`GenesisConfig`], [`World::genesis`], [`Engine::open`]) —
-//!   the initial world, with the one [`TypeConfig`] held in ONE place and
-//!   validated once, into the single `Arc<TypeRegistry>` M7's slice holds and
-//!   the engine shares out to M9 (and any other assembly-time consumer).
+//! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
+//!   a compiled constant (the reserved type set is format, not
+//!   configuration — owner ruling, 2026-08-26), whose single
+//!   `Arc<TypeRegistry>` M7's slice holds and the engine shares out to M9
+//!   (and any other assembly-time consumer).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated and pinned in one place.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
@@ -38,11 +39,9 @@ mod world;
 pub mod dump;
 
 pub use engine::{Engine, EngineError, EngineStores};
-pub use genesis::GenesisConfig;
 pub use world::{Record, World};
 
 // The foreign types the engine's own signatures name, re-exported so a binary
 // can drive `Engine::open`/`coordinator()` without spelling every store crate.
-pub use skep_coordination::CatalogError;
 pub use skep_kernel::{HistoryError, KernelConfig, OpenError};
-pub use skep_links::{RegistryError, ReservedAddrs, TypeConfig, TypeDecl};
+pub use skep_links::ReservedAddrs;

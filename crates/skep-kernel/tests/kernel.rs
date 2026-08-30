@@ -244,7 +244,7 @@ fn frame_spans(path: &Path) -> Vec<(u64, u64)> {
     let mut pos = 0usize;
     let header = FRAME_HEADER_LEN as usize;
     while pos + header <= buf.len() {
-        assert_eq!(&buf[pos..pos + 4], b"SKJ1", "expected a clean frame stream");
+        assert_eq!(&buf[pos..pos + 4], b"SKJ2", "expected a clean frame stream");
         let len = u32::from_le_bytes(buf[pos + 4..pos + 8].try_into().unwrap()) as usize;
         spans.push((pos as u64, (header + len) as u64));
         pos += header + len;
@@ -942,7 +942,7 @@ fn world_at_halts_when_the_frame_stream_cannot_be_enumerated() {
     let k = Kernel::open(cfg_fsync(dir.path()), genesis()).unwrap();
     let mut evil = Vec::new();
     while evil.len() < 256 * 1024 {
-        evil.extend_from_slice(b"SKJ1");
+        evil.extend_from_slice(b"SKJ2");
         evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
         evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
         evil.extend_from_slice(&[0u8; 4]);
@@ -1578,7 +1578,7 @@ fn world_at_ignores_the_suffix_a_racing_append_can_leave() {
     assert_eq!(world_items(&k.world_at(Seq(2)).unwrap()), vec![10, 20]);
 
     // A frame torn mid-write: a header claiming a payload that never landed.
-    let mut torn = b"SKJ1".to_vec();
+    let mut torn = b"SKJ2".to_vec();
     torn.extend_from_slice(&4096u32.to_le_bytes()); // a length…
     torn.extend_from_slice(&0u32.to_le_bytes()); // …a crc…
     torn.extend_from_slice(b"xyz"); // …and the payload stops here

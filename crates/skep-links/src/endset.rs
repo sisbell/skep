@@ -95,11 +95,9 @@ impl Endset {
     /// Every span unit-depth — the address-denoting test, vacuously true for
     /// `⟨⟩`. Selects [`coverage_class`]'s exact denoted branch, and is
     /// verbatim the admission rule of the managed surface's `ty`
-    /// (`NonAddressDenotingType`) and of `TypeRegistry::build`'s
-    /// key-denotation clause (`NonAddressDenotingKey`), so a caller can ask
-    /// before it is refused. STRICTLY STRONGER than
-    /// [`Endset::is_level_uniform`], which is what [`coverage_class`] itself
-    /// requires.
+    /// (`NonAddressDenotingType`), so a caller can ask before it is refused.
+    /// STRICTLY STRONGER than [`Endset::is_level_uniform`], which is what
+    /// [`coverage_class`] itself requires.
     pub fn is_address_denoting(&self) -> bool {
         self.spans().all(is_unit_depth)
     }

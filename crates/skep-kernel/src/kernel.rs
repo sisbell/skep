@@ -1375,7 +1375,7 @@ mod tests {
             let mut writer = JournalWriter::open_active(dir.path(), 1).unwrap();
             let mut evil = Vec::new();
             while evil.len() < 256 * 1024 {
-                evil.extend_from_slice(b"SKJ1");
+                evil.extend_from_slice(b"SKJ2");
                 evil.extend_from_slice(&(64 * 1024u32).to_le_bytes()); // a len that fits
                 evil.extend_from_slice(&0u32.to_le_bytes()); // a crc that will not
                 evil.extend_from_slice(&[0u8; 4]);

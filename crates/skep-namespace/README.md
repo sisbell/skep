@@ -12,7 +12,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **The frontier allocator** — mints fresh document and element
   addresses per (home, subspace) by monotone increment behind a
   structural-validity gate; over-allocation is harmless, reuse is
-  impossible by construction.
+  impossible by construction, and the five reserved type addresses
+  (the ghost tumblers — content positions 1–5 of the registry
+  operator's doc-1) are never issued at all: their namespace's
+  frontier is floored past them as compiled format.
 - **Registration reads** — document/account existence and
   entity-level classification, the universal gates other stores
   consult.

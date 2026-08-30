@@ -1,19 +1,22 @@
 //! Genesis: the initial world seeds each store per its own design, and the
-//! one `TypeConfig` reaches every registry consumer — M7's genesis-sealed
-//! slice, the engine handle, and M9's validate-once-or-fail catalog
-//! projection — as ONE validated registry, not as copies that could drift.
+//! registry built from the compiled format constants (owner ruling,
+//! 2026-08-26 — `GenesisConfig` is retired) reaches every consumer — M7's
+//! slice, the engine handle, and M9's catalog projection — as ONE instance,
+//! not as copies that could drift. The five reserved type addresses are
+//! in-docuverse ghost tumblers, and the property the abolished 9-space
+//! bought by unreachability is re-proven here through the real ops: the
+//! allocator never issues them.
 
 mod common;
 
 use std::sync::Arc;
 
 use common::*;
-use skep_address::{content_subspace, link_subspace, Level};
 use skep_arrangement::HasM5;
-use skep_content::HasContent;
-use skep_engine::{Engine, EngineError, GenesisConfig};
-use skep_links::{coverage_class, HasLinks, RegistryError, ShippedType, View};
-use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
+use skep_content::{HasContent, Val};
+use skep_engine::{ReservedAddrs, World};
+use skep_links::{coverage_class, HasLinks, ShippedType, View};
+use skep_namespace::{ghost_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
 
 const SHIPPED: [ShippedType; 5] = [
     ShippedType::Retired,
@@ -23,7 +26,8 @@ const SHIPPED: [ShippedType; 5] = [
     ShippedType::PredStable,
 ];
 
-/// Genesis seeds M3's baptismal roots and leaves M4/M5/M7's stores empty.
+/// Genesis seeds M3's baptismal roots and leaves M4/M5/M7's stores empty —
+/// exactly two things exist: the namespace roots and the empty docuverse.
 #[test]
 fn genesis_seeds_each_store_per_its_design() {
     let engine = mem_engine();
@@ -31,7 +35,7 @@ fn genesis_seeds_each_store_per_its_design() {
     let world = snap.world();
 
     // M3: node [1] registered, owned by the bootstrap principal.
-    assert_eq!(world.m3().entity_level(&node1()), Some(Level::Node));
+    assert_eq!(world.m3().entity_level(&node1()), Some(skep_address::Level::Node));
     assert_eq!(world.m3().effective_owner(&node1()), Some(BOOTSTRAP_PRINCIPAL));
 
     // M4: the permascroll starts empty.
@@ -44,10 +48,20 @@ fn genesis_seeds_each_store_per_its_design() {
     assert!(world.links().match_links(&[], View::Audit).is_empty());
 }
 
+/// Genesis is a compiled constant: two constructions are byte-identical
+/// through M2's own checkpoint encoding — the determinism that used to be a
+/// caller contract over a passed configuration is now a fact with no inputs.
+#[test]
+fn two_geneses_are_byte_identical() {
+    let a = bincode::serialize(&World::genesis()).expect("a world serializes");
+    let b = bincode::serialize(&World::genesis()).expect("a world serializes");
+    assert_eq!(a, b, "genesis must be one value, byte for byte");
+}
+
 /// The genesis seam: the registry the engine publishes IS the one M7's slice
-/// validated from its own sealed configuration — one instance, so the two
-/// consumers cannot disagree by construction rather than by comparison — and
-/// every shipped class is registered in it.
+/// built from the format constants — one instance, so the two consumers
+/// cannot disagree by construction rather than by comparison — and every
+/// shipped class is registered in it.
 #[test]
 fn the_engine_publishes_the_slice_s_own_registry() {
     let engine = mem_engine();
@@ -68,15 +82,13 @@ fn the_engine_publishes_the_slice_s_own_registry() {
     }
 }
 
-/// The third consumer: M9's catalog projection validates against that same
-/// registry at assembly (drift would fail `coordinator()` here), and the
+/// The third consumer: M9's catalog is a pure projection of that same
+/// registry (assembly is infallible now — nothing is twice-passed), and the
 /// empty rule registry is vacuously quiescent.
 #[test]
 fn coordinator_projects_the_one_registry() {
     let engine = mem_engine();
-    let coord = engine
-        .coordinator()
-        .expect("the catalog projection validates against the same genesis config");
+    let coord = engine.coordinator();
 
     for ty in SHIPPED {
         assert_eq!(
@@ -90,65 +102,95 @@ fn coordinator_projects_the_one_registry() {
     assert!(coord.quiescent(&snap), "an empty rule registry is quiescent");
 }
 
-/// The five reserved addresses are format state: a journal sealed under them
-/// must reopen under them, so an edit here silently mis-recovers every journal
-/// in existence. Pinned as literal text rather than re-derived from the
-/// constructor that makes them — that constructor is the thing that could
-/// change.
+/// The five reserved addresses are format state — the owner-pinned ghost
+/// tumblers (2026-08-26): content positions 1–5 of doc 1 of account 1 of the
+/// registry node 1.1, in the ruling's assignment order. Pinned as literal
+/// text rather than re-derived from the constructor that makes them — that
+/// constructor is the thing that could change — and format-frozen the day
+/// this merged: an edit silently mis-dispatches every journal in existence.
 #[test]
-fn the_standard_config_pins_its_five_reserved_addresses() {
-    let genesis_config = GenesisConfig::standard();
-    let reserved = &genesis_config.types.reserved;
-    assert_eq!(reserved.pred_def.to_string(), "9.0.9.0.9.0.9.1");
-    assert_eq!(reserved.pred_stable.to_string(), "9.0.9.0.9.0.9.2");
-    assert_eq!(reserved.retired.to_string(), "9.0.9.0.9.0.9.3");
-    assert_eq!(reserved.supersedes.to_string(), "9.0.9.0.9.0.9.4");
-    assert_eq!(reserved.retraction.to_string(), "9.0.9.0.9.0.9.5");
-    assert!(
-        genesis_config.types.decls.is_empty(),
-        "the standard config declares no app types"
-    );
-}
-
-/// Reserved-isolation, the property that makes a reserved address safe as a
-/// type key: outside {s_C, s_L}, and under a node the bootstrap node is not,
-/// so no mint and no `register_node` can ever issue one and a reserved name
-/// can never equal an allocated address.
-#[test]
-fn no_reserved_address_can_ever_be_minted() {
+fn the_format_pins_its_five_reserved_addresses() {
+    let reserved = ReservedAddrs::format();
+    assert_eq!(reserved.pred_def.to_string(), "1.1.0.1.0.1.0.1.1");
+    assert_eq!(reserved.pred_stable.to_string(), "1.1.0.1.0.1.0.1.2");
+    assert_eq!(reserved.retired.to_string(), "1.1.0.1.0.1.0.1.3");
+    assert_eq!(reserved.supersedes.to_string(), "1.1.0.1.0.1.0.1.4");
+    assert_eq!(reserved.retraction.to_string(), "1.1.0.1.0.1.0.1.5");
+    // The engine's registry serves exactly these, so the dispatch keys and
+    // the pinned literals are one set.
     let engine = mem_engine();
-    let snap = engine.kernel().snapshot();
-    let reserved = GenesisConfig::standard().types.reserved;
-
-    for addr in [
-        reserved.pred_def,
-        reserved.pred_stable,
-        reserved.retired,
-        reserved.supersedes,
-        reserved.retraction,
+    for (ty, addr) in [
+        (ShippedType::PredDef, &reserved.pred_def),
+        (ShippedType::PredStable, &reserved.pred_stable),
+        (ShippedType::Retired, &reserved.retired),
+        (ShippedType::Supersedes, &reserved.supersedes),
+        (ShippedType::Retraction, &reserved.retraction),
     ] {
-        assert_ne!(addr.subspace(), Some(&content_subspace()), "{addr} sits in s_C");
-        assert_ne!(addr.subspace(), Some(&link_subspace()), "{addr} sits in s_L");
-        assert_ne!(
-            addr.node_field(),
-            node1().node_field(),
-            "{addr} is under the bootstrap node, so a mint could reach it"
-        );
-        assert!(!snap.world().m3().is_allocated(&addr), "{addr} is an allocated address");
+        assert_eq!(engine.registry().reserved_type(ty), &skep_links::enc(std::slice::from_ref(addr)));
     }
 }
 
-/// An invalid type configuration is refused at open — validate-once-or-fail,
-/// before any kernel exists.
+/// Non-reissue end to end, through the assembled engine — the load-bearing
+/// clause of the ghost-tumbler ruling (1c): dispatch is by number, so a
+/// fresh mint landing on the `retraction` value would be catastrophic. The
+/// ghost region is REACHABLE territory (that is what the old 9-space test
+/// proved could never happen by unreachability): the registry node is
+/// admitted, the claim ceremony's delegate lands the operator at account 1,
+/// its doc-1 mints at its ordinary ordinal — and the doc's content frontier
+/// provably starts past the region, so INSERT's content lands from position
+/// 6 and nothing exists at any ghost tumbler, before or after.
 #[test]
-fn invalid_genesis_is_refused() {
-    // A reserved type address inside the content subspace (s_C = 1) violates
-    // reserved-isolation.
-    let mut bad = GenesisConfig::standard();
-    bad.types.reserved.retired = addr(&[9, 0, 9, 0, 9, 0, 1, 1]);
-    match Engine::open(mem_cfg(), bad) {
-        Err(EngineError::Registry(RegistryError::ReservedSubspaceClash)) => {}
-        Err(other) => panic!("expected ReservedSubspaceClash, got {other:?}"),
-        Ok(_) => panic!("an invalid genesis config must not open"),
+fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
+    let engine = mem_engine();
+    let reserved = ReservedAddrs::format();
+
+    // Before any of the lineage exists: nothing at the five, anywhere.
+    {
+        let snap = engine.kernel().snapshot();
+        for addr in [
+            &reserved.pred_def,
+            &reserved.pred_stable,
+            &reserved.retired,
+            &reserved.supersedes,
+            &reserved.retraction,
+        ] {
+            assert!(!snap.world().m3().is_allocated(addr), "{addr} allocated at genesis");
+        }
     }
+
+    // The registry node 1.1, its operator (the claim ceremony's delegate,
+    // at account ordinal 1 by next-form), and the ceremony's doc-1 — all at
+    // their ordinary ordinals: the pin renumbers nothing.
+    engine.namespace().register_node(tum(&[1, 1])).expect("the registry node is admissible");
+    let (operator, _) = engine
+        .namespace()
+        .delegate(BOOTSTRAP_PRINCIPAL, tum(&[1, 1, 0, 1]), USER)
+        .expect("the operator lands at account 1");
+    assert_eq!(operator, addr(&[1, 1, 0, 1]));
+    let (doc1, _) = engine
+        .namespace()
+        .create_new_document(USER, &operator)
+        .expect("the ceremony's doc-1");
+    assert_eq!(doc1, ghost_doc(), "doc-1 IS the ghost home document");
+
+    // INSERT drives the content chain: the permascroll writes land from
+    // position GHOST_POSITIONS + 1, and keep going contiguously.
+    let (start, _) = engine
+        .vstream()
+        .insert(OWNER, &doc1, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])])
+        .expect("insert into the ghost doc succeeds");
+    assert_eq!(
+        start,
+        addr(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1]),
+        "the first content mint lands past the ghost region"
+    );
+
+    let snap = engine.kernel().snapshot();
+    for x in 1..=GHOST_POSITIONS {
+        assert!(
+            !snap.world().m3().is_allocated(&ghost_position(x)),
+            "ghost {x} must stay unallocated with the chain past it"
+        );
+    }
+    assert!(snap.world().m3().is_allocated(&start));
 }

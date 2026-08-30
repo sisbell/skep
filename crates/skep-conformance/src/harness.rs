@@ -12,7 +12,7 @@
 use skep_address::{Address, Nat, Span};
 use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
-use skep_engine::{Engine, GenesisConfig, World};
+use skep_engine::{Engine, World};
 use skep_febe::{Op, Operation, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
 use skep_links::Endset;
@@ -73,7 +73,7 @@ impl Rig {
             durability: Durability::InMemory,
             checkpoint: CheckpointPolicy::Manual,
         };
-        let engine = Engine::open(cfg, GenesisConfig::standard())
+        let engine = Engine::open(cfg)
             .map_err(|e| format!("engine open: {e}"))?;
         let op = Operation::new(Box::new(engine.stores()));
         let boot = op.bootstrap_session();

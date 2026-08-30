@@ -162,7 +162,7 @@ fn all_requests() -> Vec<Request> {
             None,
             Op::Emit {
                 home: d1(),
-                ty: Endset::from_spans([sp(&[9, 0, 9, 0, 9, 0, 9, 4], &[0, 0, 0, 0, 0, 0, 0, 1])]),
+                ty: Endset::from_spans([sp(&[1, 1, 0, 1, 0, 1, 0, 1, 4], &[0, 0, 0, 0, 0, 0, 0, 0, 1])]),
                 from: d1(),
                 to: vec![d2()],
             },

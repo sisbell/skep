@@ -327,7 +327,7 @@ fn run_cell(
         // ([K_sup] and [R] are fenced). Same tuple every cell — the owner's
         // walk-2 re-emit dedups to the incumbent ack (idem⊤), still `ok`.
         "emit" => format!(
-            r#"{{"op":"emit","home":"{home}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{home}.0.3.9.1","to":[]}}"#,
+            r#"{{"op":"emit","home":"{home}","ty":[{{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}}],"from":"{home}.0.3.9.1","to":[]}}"#,
             home = fixture.link_home
         ),
         "assert_sup" => format!(

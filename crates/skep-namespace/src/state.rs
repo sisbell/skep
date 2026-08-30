@@ -368,6 +368,108 @@ pub(crate) fn bootstrap_root() -> Address {
     validate(root).expect("the bootstrap root [1] is T4-valid")
 }
 
+// ---------------------------------------------------------------------------
+// The ghost region (owner ruling, 2026-08-26: reserved types are in-docuverse
+// ghost tumblers; the out-of-tree 9-space is abolished).
+// ---------------------------------------------------------------------------
+
+/// How many content positions of [`ghost_doc`] are the GHOST REGION: the
+/// realm-global reserved type addresses M7 compiles as its format constants
+/// (`ReservedAddrs::format` builds them from [`ghost_position`], so the two
+/// crates cannot drift). A ghost tumbler is a dispatch key only — a fixed,
+/// well-known, T4-valid name at which nothing exists and nothing may ever be
+/// minted.
+///
+/// M3 owes the allocation half of that sentence, and it is the load-bearing
+/// clause of the whole ruling: dispatch is by number, so a fresh content mint
+/// landing on the `retraction` value would be catastrophic. The old 9-space
+/// bought non-collision by sitting outside every admissible subtree; the
+/// ghost region sits INSIDE the docuverse, at the first five content
+/// positions of the registry operator's own doc-1, and that document is
+/// minted into by an ordinary `register_node([1,1])` → `delegate` →
+/// `create_new_document` → INSERT sequence — so unreachability cannot be
+/// proven and an explicit allocator skip is required. The skip is
+/// [`ghost_floor`]; the argument that it suffices is stated there.
+pub const GHOST_POSITIONS: u32 = 5;
+
+/// The ghost region's home document — doc 1 of account 1 of the registry
+/// node `1.1`: `[1,1,0,1,0,1]` (owner numbering, FINAL 2026-08-27: registry
+/// = node 1.1, host = 1.2, root `[1]` abstract). Account 1 is the node
+/// operator's by the claim-ceremony convention — the first delegate under a
+/// node receives account ordinal 1, which `delegate`'s next-form gate
+/// enforces — and doc 1 is the ceremony's own doc-1 mint (AUTH-5.55 step 2).
+/// Both land at their ordinary ordinals: the document is REAL, only content
+/// positions 1..=[`GHOST_POSITIONS`] inside it are ghost, and its first
+/// content mint lands at position [`GHOST_POSITIONS`] + 1.
+pub fn ghost_doc() -> Address {
+    let comps = [1u32, 1, 0, 1, 0, 1].into_iter().map(Nat::from);
+    let t = Tumbler::new(comps).expect("a six-component sequence is nonempty");
+    validate(t).expect("the ghost document 1.1.0.1.0.1 is T4-valid by construction")
+}
+
+/// Ghost tumbler `x` of the region — content position `x` of [`ghost_doc`]:
+/// `[1,1,0,1,0,1,0,1,x]`, element-level in the content subspace (`s_C` = 1).
+/// The one mint-shaped spelling of the five reserved type addresses; M7's
+/// `ReservedAddrs::format` reads them here.
+///
+/// # Panics
+///
+/// Outside `1..=GHOST_POSITIONS` — the region has exactly five names, and a
+/// sixth would be an ordinarily mintable content position.
+pub fn ghost_position(x: u32) -> Address {
+    assert!(
+        (1..=GHOST_POSITIONS).contains(&x),
+        "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
+    );
+    let comps = [1u32, 1, 0, 1, 0, 1, 0, 1, x].into_iter().map(Nat::from);
+    let t = Tumbler::new(comps).expect("a nine-component sequence is nonempty");
+    validate(t).expect("a ghost position 1.1.0.1.0.1.0.1.x is T4-valid by construction")
+}
+
+/// Is `key` THE ghost content namespace — `(b_C(ghost_doc), 1)`, the one
+/// namespace whose chain contains the five ghost tumblers? Decided by key
+/// equality against a lazily-built constant, so the compare on every other
+/// namespace fails at the first differing component and the hot paths pay a
+/// short slice comparison.
+fn is_ghost_ns(key: &NsKey) -> bool {
+    use std::sync::OnceLock;
+    static GHOST_NS: OnceLock<NsKey> = OnceLock::new();
+    key == GHOST_NS.get_or_init(|| content_ns(&ghost_doc()))
+}
+
+/// The allocator skip: the frontier FLOOR of `key` — [`GHOST_POSITIONS`] for
+/// the ghost content namespace, 0 for every other. Three readers, and the
+/// guarantee needs all three: [`M3State::next_in`] mints past
+/// `max(frontier, floor)`, [`M3State::is_chain_member`] refuses ordinals at
+/// or below the floor, and [`M3State::apply_m3`]'s contiguity check expects
+/// `max(frontier, floor) + 1`.
+///
+/// NON-REISSUE, the property this floor exists for: no mint, on any board
+/// running this format, ever yields a ghost tumbler. Every mint returns
+/// `c_{m+1}` of the one namespace its key names, and by T4b unique-parse the
+/// decomposed namespace of a ghost tumbler `[1,1,0,1,0,1,0,1,x]` is exactly
+/// the ghost content namespace (a `g = 2` member would carry a separator
+/// before its ordinal; every other `g = 1` family differs in subspace, tier
+/// gate, or anchor) — so the ghost content chain is the ONLY chain that
+/// could issue one. Its effective frontier starts at the floor and frontiers
+/// never regress (`Allocate` is the sole advance, by +1), so every mint it
+/// serves has ordinal > [`GHOST_POSITIONS`]. Membership excludes the floored
+/// ordinals besides, so `is_allocated` answers false at all five, forever:
+/// nothing exists at a ghost tumbler on any board, and M5's
+/// referential-integrity oracle refuses a COPY of one.
+///
+/// The floor is a compiled constant, not genesis state: Σ₀ still creates
+/// exactly the namespace roots and the empty docuverse, every board agrees
+/// because the floor IS the format, and a checkpoint has nothing extra to
+/// carry.
+fn ghost_floor(key: &NsKey) -> u32 {
+    if is_ghost_ns(key) {
+        GHOST_POSITIONS
+    } else {
+        0
+    }
+}
+
 /// THE chain-family rule: the generator carrying an anchor at one tier to a
 /// child at another — same tier extends the anchor's own field, a lower tier
 /// opens the next one. Every `NsKey`'s `g` comes from here, and this is what
@@ -535,9 +637,11 @@ impl M3State {
     /// dispatch to this. TOTALITY DOMAIN (M2's total-apply obligation, stated
     /// here at the seam the engine wires): total — deterministic,
     /// side-effect-free, panic-free — over every record whose `Allocate`
-    /// address BOTH extends a parent AND carries its namespace's frontier + 1
-    /// as its ordinal. Every mint's does: a mint extends a REGISTERED parent
-    /// and emits exactly `c_{m+1}`.
+    /// address BOTH extends a parent AND carries its namespace's effective
+    /// frontier + 1 as its ordinal (effective = `max(frontier, floor)`; the
+    /// floor is nonzero only for the ghost content namespace —
+    /// [`ghost_floor`]). Every mint's does: a mint extends a REGISTERED
+    /// parent and emits exactly `c_{m+1}` past the floor.
     ///
     /// The two conditions differ in kind, and only the first is owed to the
     /// journal. Extending a parent is a per-record fact, so it is carried at
@@ -586,13 +690,16 @@ impl M3State {
                     .expect("≥ 2 components — every mint extends a registered parent");
                 let n = ordinal(addr.tumbler()).clone();
                 // Contiguity fail-stop: every record M3's own paths stage
-                // mints exactly c_{m+1}, so at fold time the ordinal is
-                // frontier + 1 — a regressed or jumped ordinal is OUTSIDE the
-                // totality domain, never silently absorbed.
+                // mints exactly c_{m+1} past the floor, so at fold time the
+                // ordinal is the effective frontier + 1 — a regressed or
+                // jumped ordinal is OUTSIDE the totality domain, never
+                // silently absorbed. The floor term matters exactly once per
+                // journal: the ghost doc's first content Allocate carries
+                // ordinal GHOST_POSITIONS + 1 over an absent frontier.
                 debug_assert_eq!(
                     n,
-                    s.frontiers.get(&key).cloned().unwrap_or_else(Nat::zero) + 1u32,
-                    "Allocate ordinal must equal its namespace frontier + 1"
+                    s.effective_frontier(&key) + 1u32,
+                    "Allocate ordinal must equal its namespace's effective frontier + 1"
                 );
                 s.frontiers.insert(key, n);
             }
@@ -612,9 +719,28 @@ impl M3State {
 // ---------------------------------------------------------------------------
 
 impl M3State {
+    /// The frontier `next_in` mints past and the fold's contiguity check
+    /// expects: `max(frontiers[key], ghost_floor(key))`. For every namespace
+    /// but the ghost content one the floor is 0 and this IS the stored
+    /// frontier; for that one it starts the chain past the ghost region
+    /// ([`ghost_floor`] carries the non-reissue argument). NOT the membership
+    /// bound — membership reads the STORED frontier and excludes the floored
+    /// ordinals, because a floor that counted as members would make the five
+    /// ghost tumblers allocated without a mint.
+    fn effective_frontier(&self, key: &NsKey) -> Nat {
+        let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
+        let floor = ghost_floor(key);
+        if floor > 0 && m < Nat::from(floor) {
+            return Nat::from(floor);
+        }
+        m
+    }
+
     /// `next(B, p, g)` in closed form (§1): the chain `S(p, g)` is
     /// `cₙ = p ++ [0]^(g−1) ++ [n]`, so the next address is
-    /// `c_{m+1}` — read the count, advance the trailing ordinal. Pure function
+    /// `c_{m+1}` — read the count, advance the trailing ordinal, where `m` is
+    /// the [`M3State::effective_frontier`] (the stored count, floored past
+    /// the ghost region for the one namespace that holds it). Pure function
     /// of `frontiers` (B2 determinism — the natural property-test oracle).
     /// M1's `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every first
     /// emission through it is the defensive guard (it can only fire on a
@@ -640,7 +766,7 @@ impl M3State {
     /// costs nothing, because a lock key is never dereferenced — what those
     /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     pub(crate) fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
-        let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
+        let m = self.effective_frontier(key);
         let anchor = validate(key.parent.clone()).expect(
             "next_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
         );
@@ -855,17 +981,25 @@ impl M3State {
     /// Membership-correctness invariant: for T4-valid `a`, `a` is *exactly*
     /// `c_{ordinal(a)}` of its decomposed `(parent, g)` namespace (ASN-0040
     /// `S(p, d)` canonical form; T4b unique-parse), so `a ∈ {c₁..cₘ}` iff
-    /// `1 ≤ ordinal(a) ≤ m` — genuine chain membership with NO false
+    /// `floor < ordinal(a) ≤ m`, where the floor is 0 everywhere but the
+    /// ghost content namespace — genuine chain membership with NO false
     /// positives, not an approximation. The `1 ≤` half is carried by the
     /// [`Address`] type, since T4 forbids a trailing zero and `ordinal` reads
-    /// the last component, so the code spells only the `≤ m` half.
+    /// the last component, so the code spells the `≤ m` half and the ghost
+    /// exclusion. The exclusion is permanent: the five ghost tumblers answer
+    /// unallocated on every board forever ([`ghost_floor`] — nothing exists
+    /// at a dispatch key), however far the chain past them has advanced.
     fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
+        let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
+        let floor = ghost_floor(&key);
+        if floor > 0 && *n <= Nat::from(floor) {
+            return false; // a ghost tumbler is never a member, mint or no mint
+        }
         // An absent frontier is m = 0, which no positive ordinal is ≤, so the
         // missing key needs no branch of its own.
-        let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
         self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 

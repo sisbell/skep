@@ -13,9 +13,11 @@
 //! de-duplication, and the spanfilade discovery primitives for M8.
 //!
 //! The Lampson spine (§Core data model): the journal (via M2) is truth; the
-//! authoritative state is one append-only map plus the genesis type config;
-//! everything else is a recomputable hint — lose any hint and replay rebuilds
-//! it, never wrong. There is no update, no delete, no tombstone record.
+//! authoritative state is one append-only map; everything else is a
+//! recomputable hint — lose any hint and replay rebuilds it, never wrong —
+//! and the type registry is a compiled format constant, not state (the five
+//! reserved classes are ghost tumblers, [`ReservedAddrs::format`]; owner
+//! ruling, 2026-08-26). There is no update, no delete, no tombstone record.
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -69,10 +71,7 @@ pub use error::{
     RetractStaleError,
 };
 pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
-pub use registry::{
-    Behavior, Registration, RegistryError, ReservedAddrs, Shape, ShippedType, TypeConfig,
-    TypeDecl, TypeRegistry,
-};
+pub use registry::{Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry};
 pub use state::{LinkRec, LinkState};
 pub use writes::{LinkWriter, SlotArg, MAX_SLOT_SPANS};
 
@@ -88,7 +87,6 @@ const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<LinkState>(); // the `WorldState` bound reaches this through the engine
     owed::<LinkRec>(); // and this through `WorldState::Record`
-    owed::<TypeConfig>();
     owed::<TypeRegistry>();
     owed::<Endset>();
     owed::<Link>();
@@ -102,7 +100,6 @@ const _: fn() = || {
     owed::<NullifyError>();
     owed::<AssertSupError>();
     owed::<EditLinkError>();
-    owed::<RegistryError>();
     owed::<NotBh4>();
     owed::<Invalid>();
     owed::<RetractStaleError>();

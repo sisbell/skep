@@ -60,7 +60,11 @@
 //!   [`M3Rec`]s through `transact` and is recovered by checkpoint-load +
 //!   replay, §8);
 //! * deletion/revocation — none exists: allocations, nodes, and principals
-//!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1).
+//!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1). The
+//!   one carve-out is the compiled GHOST REGION (owner ruling, 2026-08-26):
+//!   content positions 1..=[`GHOST_POSITIONS`] of [`ghost_doc`] — the five
+//!   reserved type addresses — are never issued and never members; the
+//!   allocator floor at [`ghost_position`]'s namespace is format, not state.
 //!
 //! ## Composition
 //!
@@ -82,7 +86,8 @@ mod state;
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
 pub use state::{
-    prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS,
+    ghost_doc, ghost_position, prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL,
+    GHOST_POSITIONS, MAX_NODE_COMPONENTS,
 };
 
 /// The engine's **read accessor** for M3's slice (Engine Composition

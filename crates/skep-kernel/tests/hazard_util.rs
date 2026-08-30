@@ -32,7 +32,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
-use skep_engine::{Engine, EngineError, GenesisConfig};
+use skep_engine::{Engine, EngineError};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -124,7 +124,7 @@ pub fn timed_open_result(dir: &Path, ctx: &str) -> Result<Engine, EngineError> {
     let dir = dir.to_path_buf();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(Engine::open(cfg_manual(&dir), GenesisConfig::standard()));
+        let _ = tx.send(Engine::open(cfg_manual(&dir)));
     });
     match rx.recv_timeout(OPEN_TIMEOUT) {
         Ok(r) => r,
@@ -244,7 +244,7 @@ impl Fixture {
     /// judged against it prove fold ≡ checkpoint+replay under the fault.
     pub fn build(dir: &Path, ckpt_after: &[usize]) -> Fixture {
         let engine =
-            Engine::open(cfg_manual(dir), GenesisConfig::standard()).expect("fixture open");
+            Engine::open(cfg_manual(dir)).expect("fixture open");
         let genesis_dump =
             engine.dump_of(&engine.world_at(Seq(0)).expect("genesis boundary answers"));
         let seg = seg_file(dir, 1);

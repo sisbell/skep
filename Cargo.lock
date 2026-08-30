@@ -661,6 +661,7 @@ dependencies = [
 name = "skep-engine"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "serde",
  "skep-address",
  "skep-arrangement",

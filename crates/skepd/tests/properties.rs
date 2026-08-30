@@ -549,7 +549,7 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             let ghost_root = format!("{home}.0.3.9.{}", 1 + (*root % 2));
             let id = state.next_id();
             let frame = format!(
-                r#"{{"op":"emit","id":"{id}","home":"{home}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{ghost_root}","to":[]}}"#
+                r#"{{"op":"emit","id":"{id}","home":"{home}","ty":[{{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}}],"from":"{ghost_root}","to":[]}}"#
             );
             commit(shadow, state, pi, frame, op_index);
         }

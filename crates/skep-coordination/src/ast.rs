@@ -47,8 +47,8 @@ impl VarId {
 /// Caller contract (§Core data model): the catalog probe is `Endset`-equality
 /// while M7's type identity is by coverage (I0), so every `Concrete` `TypeKey`
 /// MUST be built from a canonical catalog endset —
-/// `Coordinator::reserved_type(ShippedType)` for a shipped class, your own
-/// `TypeDecl.key` for an app class. A coverage-equal-but-byte-different key
+/// `Coordinator::reserved_type(ShippedType)`, the shipped five being the
+/// catalog's whole population. A coverage-equal-but-byte-different key
 /// misses as `UnregisteredType`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeKey(pub Endset);

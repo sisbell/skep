@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use hazard_util::*;
 use skep_content::Val;
-use skep_engine::{Engine, EngineError, GenesisConfig, OpenError};
+use skep_engine::{Engine, EngineError, OpenError};
 use skep_kernel::{CheckpointPolicy, Seq};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
@@ -297,12 +297,10 @@ impl SoleDamage {
 fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
     let tmp = tempdir().expect("tempdir");
     let dir = tmp.path().join("fixture");
-    let genesis = GenesisConfig::standard();
     const BLOB: usize = 300 * 1024;
     {
-        let engine =
-            Engine::open(cfg(&dir, CheckpointPolicy::Manual, 1), genesis.clone())
-                .expect("blob fixture open");
+        let engine = Engine::open(cfg(&dir, CheckpointPolicy::Manual, 1))
+            .expect("blob fixture open");
         let prefix = {
             let snap = engine.kernel().snapshot();
             snap.world().m3().next_account_prefix(&node1()).expect("delegable prefix")
@@ -381,11 +379,8 @@ fn hazard_d_child_process_entry() {
     let Some(dir) = std::env::var_os("SKEP_HAZARD_D_DIR") else { return };
     let dir = PathBuf::from(dir);
     let doc = parse_addr(&std::env::var("SKEP_HAZARD_D_DOC").expect("child doc env"));
-    let engine = Engine::open(
-        cfg(&dir, CheckpointPolicy::EveryN(2), 999),
-        GenesisConfig::standard(),
-    )
-    .expect("hazard child: engine open");
+    let engine = Engine::open(cfg(&dir, CheckpointPolicy::EveryN(2), 999))
+        .expect("hazard child: engine open");
     const BLOB: usize = 48 * 1024;
     let stdout = std::io::stdout();
     for i in 0u64.. {
@@ -429,11 +424,10 @@ fn d_kill_mid_checkpoint_loses_no_acked_commit() {
 fn d_trial(trial: u64) -> (usize, u64) {
     let tmp = tempdir().expect("tempdir");
     let dir = tmp.path().join("store");
-    let genesis = GenesisConfig::standard();
     // Prologue in THIS process: delegate an account, create the document
     // the child will write into; then release the journal lock.
     let doc_str = {
-        let engine = Engine::open(cfg_manual(&dir), genesis.clone()).expect("D prologue open");
+        let engine = Engine::open(cfg_manual(&dir)).expect("D prologue open");
         let prefix = {
             let snap = engine.kernel().snapshot();
             snap.world().m3().next_account_prefix(&node1()).expect("delegable prefix")

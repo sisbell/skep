@@ -12,7 +12,7 @@ use skep_arrangement::{HasM5, M5Rec, Vstream};
 use skep_content::{ContentWrite, HasContent};
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{
-    Endset, HasLinks, LinkRec, LinkWriter, Pattern, ReservedAddrs, ShippedType, TypeDecl,
+    Endset, HasLinks, LinkRec, LinkWriter, Pattern, ShippedType,
     TypeRegistry, View,
 };
 use skep_namespace::{HasM3, M3Rec};
@@ -22,7 +22,7 @@ use crate::catalog::TypeCatalog;
 use crate::check::{Checker, Ctx, TypedTerm};
 use crate::codec;
 use crate::dynamics::{classify_term, Dynamics};
-use crate::error::{CatalogError, TypeError};
+use crate::error::TypeError;
 use crate::eval::{eval_term, DefSource, EvalCtx};
 use crate::rule::RuleId;
 use crate::value::{Env, Signature, Sort, Value};
@@ -99,32 +99,26 @@ where
     W::Record: From<LinkRec> + From<M5Rec> + From<M3Rec> + From<ContentWrite>,
 {
     /// Engine-assembled construction. Receives the shared kernel; the ONE
-    /// engine-built `Arc<TypeRegistry>` behind the genesis-sealed config
-    /// (NEVER rebuilt here — Conflicts §7), which M9 projects its static
-    /// `TypeCatalog` from and then need not retain; the `(reserved, decls)`
-    /// pair naming the app type-key endsets and the five `ShippedType`
-    /// endsets for that projection; and two op-handle factories minting a
-    /// borrow-scoped `Vstream`/`LinkWriter` off `&Kernel<W>` per call (the
-    /// engine — the one crate that can name those constructors — supplies
-    /// them; HRTB because each handle borrows the kernel).
+    /// engine-built `Arc<TypeRegistry>` (NEVER rebuilt here — Conflicts §7),
+    /// which M9 projects its static `TypeCatalog` from and then need not
+    /// retain; and two op-handle factories minting a borrow-scoped
+    /// `Vstream`/`LinkWriter` off `&Kernel<W>` per call (the engine — the one
+    /// crate that can name those constructors — supplies them; HRTB because
+    /// each handle borrows the kernel).
     ///
-    /// The catalog projection is VALIDATE-ONCE-OR-FAIL (mirroring genesis):
-    /// each `enc(&[reserved.X])` must be coverage-equal to the injected
-    /// registry's own `reserved(X)` and each decls key must hold a
-    /// registration in that registry — a miss fails construction with
-    /// [`CatalogError`], so residual drift of the twice-passed pair is caught
-    /// at assembly, never as a spurious `UnregisteredType` at type-check.
+    /// Infallible: the registry's population is the compiled shipped five
+    /// (owner ruling, 2026-08-26), so the projection is a pure read of the
+    /// injected registry and there is no twice-passed configuration whose
+    /// drift a validate-once-or-fail step would catch.
     #[allow(clippy::type_complexity)] // the factory types are the interface's, verbatim
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
-        reserved: ReservedAddrs,
-        decls: Vec<TypeDecl>,
         mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
         mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkWriter<'k, W> + Send + Sync>,
-    ) -> Result<Coordinator<W>, CatalogError> {
-        let catalog = TypeCatalog::project(&registry, &reserved, &decls)?;
-        Ok(Coordinator {
+    ) -> Coordinator<W> {
+        let catalog = TypeCatalog::project(&registry);
+        Coordinator {
             kernel,
             catalog,
             memo: RwLock::new(HashMap::new()),
@@ -133,7 +127,7 @@ where
             cursor: 0,
             mk_vstream,
             mk_link_store,
-        })
+        }
     }
 
     /// M9's own cached catalog accessor (no snapshot) — the `&Endset` every

@@ -682,7 +682,7 @@ mod tests {
     /// PR-ENC's round-trip (injectivity witness on this input).
     #[test]
     fn roundtrip_identity() {
-        let key = TypeKey(skep_links::enc(&[ad(&[9, 0, 9, 0, 9, 0, 9, 1])]));
+        let key = TypeKey(skep_links::enc(&[ad(&[1, 1, 0, 1, 0, 1, 0, 1, 1])]));
         let body = Term::Exists {
             var: v(1),
             dom: Arc::new(Dom::Filter {

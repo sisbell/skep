@@ -1,29 +1,39 @@
 //! Op-level contracts over a real kernel (InMemory): the two write
-//! disciplines and their gates (the shape table cell by cell, the
-//! pre-transact fences, the hoisted home/ω checks on hit AND miss and ahead
-//! of an op's own declared-first verdict), the `[R]` and `[K_sup]`
-//! sole-writer fences on BOTH surfaces, idempotent dedup + resurrection and
-//! the T1-least ACTIVE incumbent a hit returns, retraction, its
-//! irreversibility, its target precedence and the active view, supersession +
-//! the BH2 walk at each of its three halts and the endpoint retraction that
-//! leaves an edge operative, editlink's atomic composite, its two distinct
-//! homes and its DC guard clause by clause, the ω-on-the-home-and-nothing-else
-//! capability `assert_sup` and `editlink` publish, MAKELINK end-to-end (wf
-//! over every slot's specs, multi-spec resolution, deposit, seat), EL14
-//! currency disclosure and the denotation regime its claim relation reads,
-//! Observe over a whole slice with its AND-of-probes pattern sides and its
-//! view selection, BH1/BH3/BH4 behaviors and the two matching regimes they
-//! choose between, the enumeration reads at the cardinality their loops need,
-//! the BH3 join across every reverse-lookup class, the non-atomic BH4 batch
-//! and the retraction-per-target its result carries, the §G discovery
-//! primitives with their `Default → Active` coercion, their empty-query floor
-//! and their absent-slot rule, the AND-combiner's agreement with its own
-//! conjuncts, the verbatim order FOLLOWLINK folds, the ratio a `Resolve` slot
-//! amplifies by and the per-slot span budget at its exact boundary on every
-//! op and slot form that carries one, editlink's canonical two-home lock
-//! order, BH1's whole multi-root filter
-//! domain, the rejection family's `Display`/`source` chaining, and the
-//! checkpoint-roundtrip + rebuild_derived discipline.
+//! disciplines and their gates (the reachable shape cells, the pre-transact
+//! fences, the hoisted home/ω checks on hit AND miss and ahead of an op's
+//! own declared-first verdict), the `[R]` and `[K_sup]` sole-writer fences on
+//! BOTH surfaces, idempotent dedup + resurrection and the T1-least ACTIVE
+//! incumbent a hit returns, retraction, its irreversibility, its target
+//! precedence and the active view, supersession + the BH2 walk at each of
+//! its three halts and the endpoint retraction that leaves an edge operative,
+//! editlink's atomic composite, its two distinct homes and its DC guard
+//! clause by clause, the ω-on-the-home-and-nothing-else capability
+//! `assert_sup` and `editlink` publish, MAKELINK end-to-end (wf over every
+//! slot's specs, multi-spec resolution, deposit, seat), EL14 currency
+//! disclosure and the denotation regime its claim relation reads, Observe
+//! over a whole slice with its AND-of-probes pattern sides and its view
+//! selection, BH1's filter and the class-keyed reads over registered and
+//! unregistered classes alike, the enumeration reads at the cardinality
+//! their loops need, the §G discovery primitives with their
+//! `Default → Active` coercion, their empty-query floor and their
+//! absent-slot rule, the AND-combiner's agreement with its own conjuncts,
+//! the verbatim order FOLLOWLINK folds, the ratio a `Resolve` slot amplifies
+//! by and the per-slot span budget at its exact boundary on every op and
+//! slot form that carries one, editlink's canonical two-home lock order,
+//! BH1's whole multi-root filter domain, the rejection family's
+//! `Display`/`source` chaining, and the checkpoint-roundtrip +
+//! rebuild_derived discipline.
+//!
+//! The registry's population is the compiled shipped five (owner ruling,
+//! 2026-08-26 — the app-decl seam is deleted): the managed surface's
+//! reachable registered classes are the three Unary idem⊤ ones
+//! (`PredDef`/`PredStable`/`Retired`; `Supersedes` and `Retraction` are
+//! sole-writer-fenced), so emit-mechanics tests run over those, Binary/Multi
+//! tuples enter through the open surface, arbitrary type NUMBERS are
+//! unregistered classes the class-keyed reads answer for verbatim, and the
+//! BH3 join and BH4 staleness gates — which no shipped class declares —
+//! refuse or answer empty for every input, which is pinned below where their
+//! served paths were once exercised.
 
 mod common;
 
@@ -33,8 +43,8 @@ use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Invalid, Link,
-    LinkWriter, MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, Shape,
-    ShippedType, SlotArg, Tip, Tuple, View, FROM, TO, TYPE,
+    LinkWriter, MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, ShippedType,
+    SlotArg, Tip, Tuple, View, FROM, TO, TYPE,
 };
 
 fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
@@ -46,42 +56,28 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
     let k = kernel();
     let w = writer(&k);
     let (a1, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
-        .expect("registered Binary emit succeeds");
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
+        .expect("registered Unary emit succeeds");
     assert_eq!(a1, la(1)); // first link minted on doc1's link chain
 
     let snap = k.snapshot();
     let links = snap.world().links();
-    // READLINK: the value verbatim — from/to are the canonical encodings, ty
-    // stored verbatim as e₃.
+    // READLINK: the value verbatim — from is the canonical encoding, to the
+    // empty endset a Unary emission carries, ty stored verbatim as e₃.
     let link = links.readlink(&a1).expect("deposited link is resident");
     assert_eq!(link.from_slot(), &enc(&[ca(1)]));
-    assert_eq!(link.to_slot(), &enc(&[ca(2)]));
-    assert_eq!(link.type_slot(), &idem_top_ty());
+    assert_eq!(link.to_slot(), &Endset::empty());
+    assert_eq!(link.type_slot(), &pred_def_ty());
     // Emit_K does NOT seat (MAKELINK alone seats).
     assert_eq!(snap.world().m5().link_count(&doc1()), n(0));
     // Observe: the empty pattern is no constraint; exact ⊆-coverage match.
-    let all = links.observe(&idem_top_ty(), Pattern::default(), View::Active);
+    let all = links.observe(&pred_def_ty(), Pattern::default(), View::Active);
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].addr, a1);
-    assert_eq!(
-        links.observe(
-            &idem_top_ty(),
-            Pattern {
-                from: &[ca(1).tumbler().clone()],
-                to: &[ca(2).tumbler().clone()],
-            },
-            View::Active
-        )
-        .len(),
-        1
-    );
-    // The two sides are not interchangeable: an unmatched F-probe finds
-    // nothing, and ca(1) — which this tuple's F covers — also finds nothing
-    // as a G-probe.
+    // An unmatched F-probe finds nothing.
     assert!(links
         .observe(
-            &idem_top_ty(),
+            &pred_def_ty(),
             Pattern {
                 from: &[ca(3).tumbler().clone()],
                 to: &[],
@@ -89,9 +85,59 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
             View::Active
         )
         .is_empty());
+    // Default predicates D1/D2/D3.
+    assert!(links.is_k(&pred_def_ty(), ca(1).tumbler()));
+    assert!(!links.is_k(&pred_def_ty(), ca(2).tumbler()));
+    // The probe domain is all of carrier T: a raw tumbler under subtree(ca1)
+    // — not an element address — is an honest membership probe.
+    assert!(links.is_k(&pred_def_ty(), &t(&[1, 0, 1, 0, 1, 0, 1, 1, 5])));
+    assert_eq!(links.members(&pred_def_ty(), View::Active), vec![ca(1)]);
+}
+
+#[test]
+fn the_class_keyed_reads_serve_an_unregistered_type_verbatim() {
+    // A type is a number (owner ruling, 2026-08-26): the open surface
+    // deposits any type name verbatim, the fold indexes a type slice for
+    // EVERY coverage class, and observe/is_k/members/targets_of and the BH3
+    // endpoint pair answer by CLASS with no registration consulted — what an
+    // unregistered type means is its interpreting client's business, and
+    // these reads are that client's surface. The two pattern sides stay
+    // distinct, which no Unary emission can show.
+    let k = kernel();
+    let w = writer(&k);
+    let rel = unregistered_ty(1);
+    let (l1, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(2)]),
+            SlotArg::Addrs(vec![unregistered_ta(1)]),
+        )
+        .expect("the open surface admits an unregistered type");
+    let snap = k.snapshot();
+    let links = snap.world().links();
+    let one = links.observe(&rel, Pattern::default(), View::Active);
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].addr, l1);
+    assert_eq!(
+        links
+            .observe(
+                &rel,
+                Pattern {
+                    from: &[ca(1).tumbler().clone()],
+                    to: &[ca(2).tumbler().clone()],
+                },
+                View::Active
+            )
+            .len(),
+        1
+    );
+    // The two sides are not interchangeable: ca(1) — which this tuple's F
+    // covers — finds nothing as a G-probe.
     assert!(links
         .observe(
-            &idem_top_ty(),
+            &rel,
             Pattern {
                 from: &[],
                 to: &[ca(1).tumbler().clone()],
@@ -99,17 +145,13 @@ fn emit_deposits_verbatim_reads_back_and_never_seats() {
             View::Active
         )
         .is_empty());
-    // Default predicates D1/D2/D3.
-    assert!(links.is_k(&idem_top_ty(), ca(1).tumbler()));
-    assert!(!links.is_k(&idem_top_ty(), ca(2).tumbler())); // membership is over F, not G
-    // The probe domain is all of carrier T: a raw tumbler under subtree(ca1)
-    // — not an element address — is an honest membership probe.
-    assert!(links.is_k(&idem_top_ty(), &t(&[1, 0, 1, 0, 1, 0, 1, 1, 5])));
-    assert_eq!(links.members(&idem_top_ty(), View::Active), vec![ca(1)]);
-    assert_eq!(links.targets_of(&idem_top_ty(), &ca(1), View::Active), vec![ca(2)]);
-    // BH3 endpoint projections.
-    assert_eq!(links.sources_to(&idem_top_ty(), &ca(2)), vec![ca(1)]);
-    assert_eq!(links.target_of(&idem_top_ty(), &ca(1)), Some(ca(2)));
+    assert!(links.is_k(&rel, ca(1).tumbler()));
+    assert_eq!(links.members(&rel, View::Active), vec![ca(1)]);
+    assert_eq!(links.targets_of(&rel, &ca(1), View::Active), vec![ca(2)]);
+    // The BH3 endpoint pair answers for any class — only the keyed JOIN
+    // reads declarations back.
+    assert_eq!(links.sources_to(&rel, &ca(2)), vec![ca(1)]);
+    assert_eq!(links.target_of(&rel, &ca(1)), Some(ca(2)));
 }
 
 #[test]
@@ -141,14 +183,14 @@ fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
         w.emit(P1, &doc1(), &sup, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::SupersessionClass))
     ));
-    // Unregistered class.
+    // Unregistered class — any type number outside the shipped five.
     assert!(matches!(
-        w.emit(P1, &doc1(), &enc(&[ra(20)]), &ca(1), &[ca(2)]),
+        w.emit(P1, &doc1(), &unregistered_ty(20), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::NotRegistered))
     ));
-    // Shape gate: Binary demands |G| = 1.
+    // Shape gate: Unary demands |G| = 0.
     assert!(matches!(
-        w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2), ca(3)]),
+        w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::ShapeViolation))
     ));
     // K ≁ R: retraction writes only through nullify.
@@ -158,40 +200,36 @@ fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
     ));
     // Home existence, enforced on every path.
     assert!(matches!(
-        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::HomeNotRegistered))
     ));
 }
 
 #[test]
 fn the_shape_gate_admits_exactly_the_registered_span_counts() {
-    // P3 Sh-conf is a table, not a single cell: every shape requires |F| = 1
-    // (which emit forces through its own enc({from})), and |G| is 0 under
-    // Unary, 1 under Binary, finite under Multi — checked against the
-    // REGISTERED shape, never inferred from the tuple. Each cell emits from
-    // its own source, so no case can dedup into a neighbour's incumbent.
+    // P3 Sh-conf checks the REGISTERED shape, never one inferred from the
+    // tuple: every shape requires |F| = 1 (which emit forces through its own
+    // enc({from})), and |G| is 0 under Unary. The Unary row is the whole
+    // reachable table on this surface — the format's registered population
+    // is the shipped five, its two Binary classes are sole-writer-fenced
+    // ahead of the shape gate, and no Multi class exists; `sh_conf`'s own
+    // unit table in the registry crate keeps the other rows. Each admitted
+    // cell emits from its own source, so no case can dedup into a
+    // neighbour's incumbent.
     let k = kernel();
     let w = writer(&k);
     let targets = [vec![], vec![ca(90)], vec![ca(91), ca(92)]];
     let mut from = 10;
-    for (shape, ty) in [
-        (Shape::Unary, bh4_ty()),
-        (Shape::Binary, idem_top_ty()),
-        (Shape::Multi, multi_ty()),
-    ] {
+    for ty in [pred_def_ty(), pred_stable_ty(), retired_ty()] {
         for (g, to) in targets.iter().enumerate() {
-            let conforms = match shape {
-                Shape::Unary => g == 0,
-                Shape::Binary => g == 1,
-                Shape::Multi => true,
-            };
+            let conforms = g == 0; // Unary: no TO span
             let got = w.emit(P1, &doc1(), &ty, &ca(from), to);
             from += 1;
             match (&got, conforms) {
                 (Ok(_), true) => {}
                 (Err(TxnError::Rejected(EmitError::ShapeViolation)), false) => {}
                 _ => panic!(
-                    "{shape:?} type with |G| = {g}: expected {}, got {got:?}",
+                    "Unary type with |G| = {g}: expected {}, got {got:?}",
                     if conforms {
                         "the registered shape admitted"
                     } else {
@@ -235,7 +273,7 @@ fn emit_reports_the_retraction_fence_before_the_shape_gate() {
         Err(TxnError::Rejected(EmitError::RetractionClass))
     ));
     assert!(matches!(
-        w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2), ca(3)]),
+        w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[ca(2), ca(3)]),
         Err(TxnError::Rejected(EmitError::ShapeViolation))
     ));
 }
@@ -249,18 +287,18 @@ fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
     let k = kernel();
     let w = writer(&k);
     let (incumbent, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("incumbent");
     let before = k.current_seq();
     assert!(matches!(
-        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::HomeNotRegistered))
     ));
     assert_eq!(k.current_seq(), before);
     // The same tuple at a REGISTERED home dedups to the incumbent, so the
     // refusal above was the home check and not an absent key.
     let (hit, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("dedup hit");
     assert_eq!(hit, incumbent);
 }
@@ -290,7 +328,7 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
         Err(TxnError::Rejected(EmitError::SupersessionClass))
     ));
     assert!(matches!(
-        w.retract_stale(P2, &ghost_home, &multi_ty(), 0),
+        w.retract_stale(P2, &ghost_home, &unregistered_ty(2), 0),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
 }
@@ -316,22 +354,26 @@ fn observe_coerces_default_to_active_and_never_filters() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
-        .expect("relation");
+    let rel = unregistered_ty(1);
+    w.makelink(
+        P1,
+        &doc1(),
+        SlotArg::Addrs(vec![ca(1)]),
+        SlotArg::Addrs(vec![ca(2)]),
+        SlotArg::Addrs(vec![unregistered_ta(1)]),
+    )
+    .expect("relation");
     w.emit(P1, &doc1(), &retired, &ca(1), &[])
         .expect("retire ca1");
     let snap = k.snapshot();
     let links = snap.world().links();
     assert!(links.is_filtered(ca(1).tumbler()));
-    assert!(links.members(&multi_ty(), View::Default).is_empty());
+    assert!(links.members(&rel, View::Default).is_empty());
     assert_eq!(
-        links.observe(&multi_ty(), Pattern::default(), View::Default),
-        links.observe(&multi_ty(), Pattern::default(), View::Active)
+        links.observe(&rel, Pattern::default(), View::Default),
+        links.observe(&rel, Pattern::default(), View::Active)
     );
-    assert_eq!(
-        links.observe(&multi_ty(), Pattern::default(), View::Default).len(),
-        1
-    );
+    assert_eq!(links.observe(&rel, Pattern::default(), View::Default).len(), 1);
 }
 
 #[test]
@@ -339,21 +381,35 @@ fn an_idem_top_duplicate_returns_the_incumbent_and_a_nullified_one_resurrects() 
     let k = kernel();
     let w = writer(&k);
     // idem⊤: a duplicate returns the incumbent with the base Seq and commits
-    // nothing.
-    let (a1, s1) = w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("first emit");
+    // nothing. Every registered class in this format is idem⊤, so the dedup
+    // discipline is the managed surface's whole deposit behavior.
+    let (a1, s1) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("first emit");
     assert_eq!(k.current_seq(), s1);
-    let (a1b, s1b) = w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
+    let (a1b, s1b) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
     assert_eq!(a1b, a1);
     assert_eq!(s1b, s1);
     assert_eq!(k.current_seq(), s1); // zero-step: nothing committed
-    // idem⊥ (Multi app type): every emit deposits fresh (ML0's analogue).
-    let (m1, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 1");
-    let (m2, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("multi 2");
+    // The open surface is the fresh-always contrast (ML0): the identical
+    // deposit lands at a new address every time, dedup lock and check alike
+    // absent.
+    let open = || {
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(2)]),
+            SlotArg::Addrs(vec![unregistered_ta(1)]),
+        )
+        .expect("open deposit")
+        .0
+    };
+    let m1 = open();
+    let m2 = open();
     assert_ne!(m1, m2);
     // Resurrection (I2): dedup reads the ACTIVE view — a nullified incumbent
     // is invisible, so re-emitting lands at a fresh address; audit keeps both.
     w.nullify(P1, &doc1(), &a1).expect("nullify the idem⊤ tuple");
-    let (a3, _) = w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("re-emit");
+    let (a3, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("re-emit");
     assert_ne!(a3, a1);
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -377,7 +433,7 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         Err(TxnError::Rejected(NullifyError::HomeNotRegistered))
     ));
     // Happy path: the [R] tuple nullifies exactly the target root.
-    let (m1, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("emit");
+    let (m1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("emit");
     let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("nullify");
     {
         let snap = k.snapshot();
@@ -386,8 +442,8 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
         assert!(!links.is_active(&m1));
         assert!(links.is_active(&r1)); // the retraction tuple itself is active
         // Active slices exclude the nullified tuple; audit keeps it (R3).
-        assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
-        assert!(links.type_slice(&multi_ty(), View::Audit).contains(&m1));
+        assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
+        assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&m1));
     }
     // idem⊤: re-retracting the same target from the same home dedups.
     let (r2, _) = w.nullify(P1, &doc1(), &m1).expect("re-nullify dedups");
@@ -427,8 +483,8 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     // Schema preconditions.
     assert!(matches!(
         w.assert_sup(P1, &doc1(), &x, &la(9)),
@@ -452,10 +508,10 @@ fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() 
         assert!(!links.is_in_chain(&sup, &y, &x));
         // The walk family serves only the shipped Supersedes class in v1 —
         // for any other ty the chain is empty, so nothing is a member.
-        assert!(links.succs(&idem_top_ty(), &x).is_empty());
-        assert!(links.chain(&idem_top_ty(), &x).is_empty());
-        assert!(!links.is_in_chain(&idem_top_ty(), &x, &x));
-        assert_eq!(links.tip(&idem_top_ty(), &x), Tip::Indeterminate);
+        assert!(links.succs(&pred_def_ty(), &x).is_empty());
+        assert!(links.chain(&pred_def_ty(), &x).is_empty());
+        assert!(!links.is_in_chain(&pred_def_ty(), &x, &x));
+        assert_eq!(links.tip(&pred_def_ty(), &x), Tip::Indeterminate);
     }
     // Dedup excludes home: the same (old, new) from ANOTHER home hits the
     // first claim (Conflicts §9).
@@ -493,8 +549,8 @@ fn the_walk_halts_indeterminate_on_a_supersession_cycle() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     w.assert_sup(P1, &doc1(), &x, &y).expect("x → y");
     w.assert_sup(P1, &doc1(), &y, &x)
         .expect("y → x closes the cycle");
@@ -525,15 +581,15 @@ fn nullifying_an_endpoint_leaves_its_claim_s_edge_operative() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
     w.nullify(P1, &doc1(), &y).expect("retract the successor");
     {
         let snap = k.snapshot();
         let links = snap.world().links();
         assert!(links.is_nullified(&y));
-        assert!(!links.type_slice(&multi_ty(), View::Active).contains(&y));
+        assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&y));
         assert_eq!(
             links.succs(&sup, &x),
             vec![y.clone()],
@@ -597,7 +653,7 @@ fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
     let k = kernel();
     let w = writer(&k);
     let (m1, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("target");
     let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract from doc1");
     let (r2, _) = w.nullify(P1, &doc2(), &m1).expect("retract from doc2");
@@ -624,10 +680,10 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
         .links()
         .reserved_type(ShippedType::Retraction)
         .clone();
-    let (orig, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("orig");
+    let (orig, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("orig");
 
     // One atomic composite: fresh successor + claim; original untouched.
-    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     let (s1, c1, _) = w
         .editlink(P1, &orig, succ_value.clone(), &doc1(), &doc1())
         .expect("editlink");
@@ -646,7 +702,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
 
     // Fork permanence: a second edit of the same original yields a distinct
     // successor and a co-visible claim; the walk reports the branch.
-    let succ2 = Link::new([enc(&[ca(5)]), enc(&[ca(6)]), enc(&[ra(31)])]).expect("arity 3");
+    let succ2 = Link::new([enc(&[ca(5)]), enc(&[ca(6)]), unregistered_ty(31)]).expect("arity 3");
     let (s2, c2, _) = w.editlink(P1, &orig, succ2, &doc1(), &doc1()).expect("fork");
     {
         let snap = k.snapshot();
@@ -667,7 +723,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
 
     // A [K_sup]-typed successor is admitted iff schema-conforming (DC): both
     // endpoints resident, distinct, unit-depth single-addr F/G.
-    let (z, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
+    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
     let conforming = Link::new([enc([&orig]), enc([&z]), sup.clone()]).expect("arity 3");
     w.editlink(P1, &orig, conforming, &doc1(), &doc1())
         .expect("schema-conforming claim-typed successor");
@@ -677,7 +733,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     }
 
     // Rejections (each leaves no state change by M2's Rejected contract).
-    let ok_succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(32)])]).expect("arity 3");
+    let ok_succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(32)]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &la(90), ok_succ.clone(), &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::OriginalNotResident))
@@ -689,7 +745,7 @@ fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type()
     let arity4 = Link::new(vec![
         enc(&[ca(3)]),
         enc(&[ca(4)]),
-        enc(&[ra(33)]),
+        unregistered_ty(33),
         enc(&[ca(5)]),
     ])
     .expect("capacity admits arity 4");
@@ -723,7 +779,7 @@ fn editlink_rejects_a_non_level_uniform_successor_type_slot() {
     let k = kernel();
     let w = writer(&k);
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     let skew = skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
     let successor =
@@ -748,9 +804,9 @@ fn editlink_rejects_a_claim_typed_successor_with_a_non_resident_endpoint() {
         .reserved_type(ShippedType::Supersedes)
         .clone();
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let (z, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
+    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
     let ghost_endpoint = Link::new([enc([&la(90)]), enc([&z]), sup.clone()]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &orig, ghost_endpoint, &doc1(), &doc1()),
@@ -780,16 +836,16 @@ fn current_discloses_every_operative_claim_targeting_a_sink() {
         .reserved_type(ShippedType::Supersedes)
         .clone();
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     let (s1, c1, _) = w
         .editlink(P1, &orig, succ_value, &doc1(), &doc1())
         .expect("editlink");
     // `outsider` is unreachable from orig, and its claim names the SINK as
     // successor.
     let (outsider, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(8)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(8), &[])
         .expect("outsider");
     let (outside_claim, _) = w
         .assert_sup(P1, &doc1(), &outsider, &s1)
@@ -818,9 +874,9 @@ fn current_discloses_a_nullified_sink_with_its_own_activity() {
     let k = kernel();
     let w = writer(&k);
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     let (s1, c1, _) = w
         .editlink(P1, &orig, succ_value, &doc1(), &doc1())
         .expect("editlink");
@@ -844,8 +900,8 @@ fn a_node_whose_only_claim_is_retracted_is_its_own_sink() {
     // here the claim is nullified and the successor stands.
     let k = kernel();
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
     {
         // The control: while the claim is operative, x is not a sink and y is.
@@ -883,8 +939,8 @@ fn current_discloses_inbound_claims_by_denotation_never_by_coverage() {
     // discloses as its own sink; no claim names it.
     let k = kernel();
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -912,7 +968,7 @@ fn targets_keyed_joins_only_the_reverse_lookup_classes() {
     let k = kernel();
     let w = writer(&k);
     let (m1, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("m1");
     w.nullify(P1, &doc1(), &m1).expect("retract it from doc1");
     let snap = k.snapshot();
@@ -1173,17 +1229,17 @@ fn makelink_into_a_registered_idem_top_class_deposits_and_never_dedups() {
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 2)]), // a wide, Extents-classed F
             SlotArg::Addrs(vec![]),
-            SlotArg::Addrs(vec![ra(10)]), // idem_top_ty — registered Binary, idem⊤
+            SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
         )
         .expect("the open surface has no registration or shape gate");
     let (e, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("emit into the same class");
     assert_ne!(e, l, "a distinct I0 class, so the emit deposits fresh");
     let snap = k.snapshot();
     let links = snap.world().links();
     assert!(links.is_active(&l) && links.is_active(&e));
-    let slice = links.type_slice(&idem_top_ty(), View::Active);
+    let slice = links.type_slice(&pred_def_ty(), View::Active);
     assert!(slice.contains(&l) && slice.contains(&e));
 }
 
@@ -1198,21 +1254,21 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     let k = kernel();
     let w = writer(&k);
     // enc([ca1, ca1]) denotes {ca1}, so this F shares an I0 class with
-    // emit's own enc({ca1}) — while storing two spans, where Binary's shape
+    // emit's own enc({ca1}) — while storing two spans, where Unary's shape
     // gate forces one.
     let (l, _) = w
         .makelink(
             P1,
             &doc1(),
             SlotArg::Addrs(vec![ca(1), ca(1)]),
-            SlotArg::Addrs(vec![ca(2)]),
-            SlotArg::Addrs(vec![ra(10)]), // idem_top_ty — registered Binary, idem⊤
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
         )
         .expect("the open surface has no shape gate");
     let before = k.current_seq();
     let (e, seq) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
-        .expect("the emit's own value is Binary-conformant");
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
+        .expect("the emit's own value is Unary-conformant");
     assert_eq!(e, l, "the MAKELINK deposit IS the incumbent this emit hits");
     assert_eq!(seq, before, "zero-step: nothing committed");
     assert_eq!(k.current_seq(), before);
@@ -1226,7 +1282,7 @@ fn an_emit_hit_may_return_a_link_its_own_shape_gate_would_have_refused() {
     // The control: the same emit against a shape-conformant store deposits,
     // so the equality above is the dedup hit and not an absent write path.
     let (fresh, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(3), &[ca(4)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[])
         .expect("a distinct I0 class");
     assert_ne!(fresh, e);
 }
@@ -1246,8 +1302,8 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
             P1,
             &doc1(),
             SlotArg::Addrs(vec![ca(1)]),
-            SlotArg::Addrs(vec![ca(2)]),
-            SlotArg::Addrs(vec![ra(10)]), // idem_top_ty — registered Binary, idem⊤
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![ra(1)]), // pred_def — registered Unary, idem⊤
         )
         .expect("the open surface runs no dedup check")
         .0
@@ -1259,7 +1315,7 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
     // LEAST: both are active members of the one I0 class the emit builds.
     let before = k.current_seq();
     let (hit, seq) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("dedup hit");
     assert_eq!(hit, first, "the T1-least of the class's several active tuples");
     assert_eq!(seq, before);
@@ -1270,7 +1326,7 @@ fn a_dedup_hit_returns_the_t1_least_active_tuple_of_the_class() {
     w.nullify(P1, &doc1(), &first).expect("retract the incumbent");
     let before = k.current_seq();
     let (hit, _) = w
-        .emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("the next active tuple of the class");
     assert_eq!(hit, second);
     assert_eq!(k.current_seq(), before, "still a hit, so still zero-step");
@@ -1324,7 +1380,15 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
 }
 
 #[test]
-fn age_counts_back_from_the_home_frontier_and_the_batch_serves_only_bh4_types() {
+fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
+    // BH4 splits down the middle of its corpus name, and this format makes
+    // the split total: `age` reads no registration and answers for any
+    // resident link, while `stale` — and `retract_stale`, which builds its
+    // batch from it — GATES on an Age declaration that no class in the
+    // compiled shipped population carries (all five are idem⊤, and BH4
+    // demands idem⊥). So the staleness family refuses every type a caller
+    // can name, shipped and unregistered alike, and the refusal fires
+    // pre-transact with nothing committed.
     let k = kernel();
     let w = writer(&k);
     let snap0 = k.snapshot();
@@ -1333,178 +1397,63 @@ fn age_counts_back_from_the_home_frontier_and_the_batch_serves_only_bh4_types() 
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    // Three idem⊥ BH4 tuples on doc2's chain: ordinals 1..3.
-    let (t1, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
-    let (t2, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
-    let (t3, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
-    // Two idem⊥ Multi tuples so an UNFENCED batch would have stale targets.
-    let (m1, _) = w.emit(P1, &doc2(), &multi_ty(), &ca(4), &[]).expect("m1");
+    // Three tuples on doc2's chain: ordinals 1..3.
+    let (t1, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("t1");
+    let (t2, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(2), &[]).expect("t2");
+    let (t3, _) = w.emit(P1, &doc2(), &pred_stable_ty(), &ca(3), &[]).expect("t3");
+    let (m1, _) = w
+        .makelink(
+            P1,
+            &doc2(),
+            SlotArg::Addrs(vec![ca(4)]),
+            SlotArg::Addrs(vec![]),
+            SlotArg::Addrs(vec![unregistered_ta(4)]),
+        )
+        .expect("an open deposit ages like any other");
     {
         let snap = k.snapshot();
         let links = snap.world().links();
         // age = home-relative chain distance (ordinal time): count 4 so far.
         assert_eq!(links.age(&t1), Some(3));
+        assert_eq!(links.age(&t2), Some(2));
         assert_eq!(links.age(&t3), Some(1));
         assert_eq!(links.age(&m1), Some(0));
         assert_eq!(links.age(&ca(1)), None); // non-resident ⇒ None
-        // stale = age > h over the ACTIVE type slice, BH4-registered only.
-        assert_eq!(links.stale(&bh4_ty(), 2).expect("BH4-registered"), vec![t1.clone()]);
-        assert_eq!(
-            links.stale(&bh4_ty(), 1).expect("BH4-registered"),
-            vec![t1.clone(), t2.clone()]
-        );
-        // Served only where declared: a non-BH4 ty is a typed rejection —
-        // its tuples have positive ages, but an empty stale set is never
-        // conflated with "not a BH4 type".
-        assert_eq!(links.stale(&multi_ty(), 0), Err(NotBh4));
+        // stale refuses EVERY class: the registered idem⊤ five and an
+        // unregistered number alike — an empty stale set is never conflated
+        // with "not a BH4 type".
+        assert_eq!(links.stale(&pred_def_ty(), 0), Err(NotBh4));
+        assert_eq!(links.stale(&retired_ty(), 0), Err(NotBh4));
         assert_eq!(links.stale(&sup, 0), Err(NotBh4));
+        assert_eq!(links.stale(&unregistered_ty(4), 0), Err(NotBh4));
     }
-    // The batch nullifier rejects a non-BH4 ty PRE-TRANSACT: typed refusal,
-    // no transaction, no effect (the fence that keeps it from ever being
-    // aimed at an idem⊤/other class to mass-nullify).
+    // The batch nullifier rejects every ty PRE-TRANSACT: typed refusal, no
+    // transaction, no effect — the fence that keeps it from ever being aimed
+    // at an idem⊤/other class to mass-nullify, and in this format the whole
+    // of the op's reachable behavior.
     let before = k.current_seq();
     assert!(matches!(
-        w.retract_stale(P1, &doc2(), &multi_ty(), 0),
+        w.retract_stale(P1, &doc2(), &pred_def_ty(), 0),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
     assert!(matches!(
         w.retract_stale(P1, &doc2(), &sup, 0),
         Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
-    // A constituent nullify's rejection lifts through Nullify (nothing
-    // committed here either: the first nullify rejects on P0).
     assert!(matches!(
-        w.retract_stale(P1, &a(&[1, 0, 1, 0, 7]), &bh4_ty(), 2),
-        Err(TxnError::Rejected(RetractStaleError::Nullify(
-            NullifyError::HomeNotRegistered
-        )))
+        w.retract_stale(P1, &doc2(), &unregistered_ty(4), 0),
+        Err(TxnError::Rejected(RetractStaleError::NotBh4))
+    ));
+    // ...even at an unregistered home: NotBh4 outranks the home check, so
+    // no transaction opens anywhere on this surface.
+    assert!(matches!(
+        w.retract_stale(P1, &a(&[1, 0, 1, 0, 7]), &pred_def_ty(), 2),
+        Err(TxnError::Rejected(RetractStaleError::NotBh4))
     ));
     assert_eq!(k.current_seq(), before);
-    // On a BH4 ty it nullifies exactly the stale set snapshotted at entry.
-    let out = w.retract_stale(P1, &doc2(), &bh4_ty(), 2).expect("batch");
-    assert_eq!(out.len(), 1);
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(links.is_nullified(&t1));
-    assert!(!links.is_nullified(&t2));
-    assert!(!links.is_nullified(&t3));
-}
-
-#[test]
-fn retract_stale_keeps_earlier_nullifies_when_a_later_one_rejects() {
-    // The batch is a sequence of nullify transacts, not one atomic op: a
-    // rejection part-way leaves the earlier ones committed and durable
-    // (append-only, no rollback), which is what makes re-running with the
-    // same d_retr the documented recovery.
-    let k = kernel();
-    let w = writer(&k);
-    // doc2 is P1's, sib_doc is P2's — both carry BH4 tuples, so the stale set
-    // the batch builds spans two owners.
-    let (t1, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
-    let (t2, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
-    let (t3, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
-    let (f1, _) = w.emit(P2, &sib_doc(), &bh4_ty(), &ca(4), &[]).expect("f1");
-    w.emit(P2, &sib_doc(), &bh4_ty(), &ca(5), &[]).expect("f2");
-    {
-        let snap = k.snapshot();
-        let links = snap.world().links();
-        assert_eq!(
-            links.stale(&bh4_ty(), 0).expect("BH4-registered"),
-            vec![t1.clone(), t2.clone(), f1.clone()],
-            "the stale set is the whole active BH4 slice, across homes"
-        );
-    }
-    // P1 owns doc2 and its tuples; f1 belongs to the sibling account, so the
-    // third constituent nullify rejects on the v1 target policy.
-    let out = w.retract_stale(P1, &doc2(), &bh4_ty(), 0);
-    assert!(
-        matches!(
-            &out,
-            Err(TxnError::Rejected(RetractStaleError::Nullify(
-                NullifyError::NotOwner(d)
-            ))) if *d == f1
-        ),
-        "the constituent rejection lifts into the batch, naming the target"
-    );
-    let snap = k.snapshot();
-    let links = snap.world().links();
-    assert!(links.is_nullified(&t1), "earlier nullifies stay committed");
-    assert!(links.is_nullified(&t2));
-    assert!(!links.is_nullified(&f1), "the rejecting target is untouched");
-    assert!(!links.is_nullified(&t3), "t3 was never in the batch");
-}
-
-#[test]
-fn retract_stale_returns_one_retraction_per_target_in_the_stale_order() {
-    // "one `(retraction address, seq)` per nullified target, in `stale`'s
-    // order" — a correspondence, and a length check on a one-element batch
-    // says nothing about it. The order is the published re-run determinism,
-    // and the ELEMENT is the retraction and never the target.
-    let k = kernel();
-    let w = writer(&k);
-    let (t1, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
-    let (t2, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
-    let (t3, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
-    w.emit(P1, &doc2(), &bh4_ty(), &ca(4), &[]).expect("t4, age 0");
-    let stale = {
-        let snap = k.snapshot();
-        let stale = snap
-            .world()
-            .links()
-            .stale(&bh4_ty(), 0)
-            .expect("BH4-registered");
-        assert_eq!(stale, vec![t1, t2, t3], "three stale, the newest excluded");
-        stale
-    };
-
-    let out = w.retract_stale(P1, &doc2(), &bh4_ty(), 0).expect("batch");
-    assert_eq!(out.len(), stale.len(), "one result per stale target");
-    let snap = k.snapshot();
-    let links = snap.world().links();
-    for ((retraction, _), target) in out.iter().zip(&stale) {
-        let tuple = links.readlink(retraction).expect("the retraction is resident");
-        assert_eq!(
-            tuple.to_slot(),
-            &enc([target]),
-            "each result is the [R] tuple retracting ITS OWN target, in order"
-        );
-        assert_eq!(
-            tuple.from_slot(),
-            &enc([&doc2()]),
-            "with d_retr's canonical from-fill"
-        );
-        assert!(links.is_nullified(target));
-    }
-}
-
-#[test]
-fn stale_excludes_a_nullified_tuple_that_is_still_old() {
-    // `stale` reads the ACTIVE typed slice, so a retracted tuple leaves the
-    // stale set while its age keeps growing — the recomputed set is what
-    // makes a re-run of the batch safe.
-    let k = kernel();
-    let w = writer(&k);
-    let (t1, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(1), &[]).expect("t1");
-    let (t2, _) = w.emit(P1, &doc2(), &bh4_ty(), &ca(2), &[]).expect("t2");
-    w.emit(P1, &doc2(), &bh4_ty(), &ca(3), &[]).expect("t3");
-    w.emit(P1, &doc2(), &multi_ty(), &ca(4), &[]).expect("m1");
-    {
-        let snap = k.snapshot();
-        let links = snap.world().links();
-        assert_eq!(links.stale(&bh4_ty(), 2).expect("BH4-registered"), vec![t1.clone()]);
-    }
-    w.nullify(P1, &doc2(), &t1).expect("retract the stale tuple");
-    let snap = k.snapshot();
-    let links = snap.world().links();
-    assert!(
-        links.age(&t1).expect("still resident") > 2,
-        "t1 is excluded for its activity, not for its age"
-    );
-    assert_eq!(
-        links.stale(&bh4_ty(), 2).expect("BH4-registered"),
-        vec![t2.clone()],
-        "the nullified tuple leaves the stale set; the next one enters it"
-    );
+    assert!(!links.is_nullified(&t1), "no batch ever fires");
 }
 
 #[test]
@@ -1519,8 +1468,15 @@ fn is_filtered_reads_the_active_retired_slice() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
-        .expect("relation");
+    let rel = unregistered_ty(1);
+    w.makelink(
+        P1,
+        &doc1(),
+        SlotArg::Addrs(vec![ca(1)]),
+        SlotArg::Addrs(vec![ca(2)]),
+        SlotArg::Addrs(vec![unregistered_ta(1)]),
+    )
+    .expect("relation");
     let (r, _) = w
         .emit(P1, &doc1(), &retired, &ca(1), &[])
         .expect("retire ca1");
@@ -1528,7 +1484,7 @@ fn is_filtered_reads_the_active_retired_slice() {
         let snap = k.snapshot();
         let links = snap.world().links();
         assert!(links.is_filtered(ca(1).tumbler()));
-        assert!(links.members(&multi_ty(), View::Default).is_empty());
+        assert!(links.members(&rel, View::Default).is_empty());
     }
     w.nullify(P1, &doc1(), &r)
         .expect("retract the retirement itself");
@@ -1538,7 +1494,7 @@ fn is_filtered_reads_the_active_retired_slice() {
         !links.is_filtered(ca(1).tumbler()),
         "a nullified retired root filters nothing"
     );
-    assert_eq!(links.members(&multi_ty(), View::Default), vec![ca(1)]);
+    assert_eq!(links.members(&rel, View::Default), vec![ca(1)]);
 }
 
 #[test]
@@ -1553,16 +1509,23 @@ fn default_view_subtracts_a_filtered_target() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
-        .expect("relation");
+    let rel = unregistered_ty(1);
+    w.makelink(
+        P1,
+        &doc1(),
+        SlotArg::Addrs(vec![ca(1)]),
+        SlotArg::Addrs(vec![ca(2)]),
+        SlotArg::Addrs(vec![unregistered_ta(1)]),
+    )
+    .expect("relation");
     w.emit(P1, &doc1(), &retired, &ca(2), &[])
         .expect("retire the target");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert_eq!(links.targets_of(&multi_ty(), &ca(1), View::Active), vec![ca(2)]);
-    assert!(links.targets_of(&multi_ty(), &ca(1), View::Default).is_empty());
+    assert_eq!(links.targets_of(&rel, &ca(1), View::Active), vec![ca(2)]);
+    assert!(links.targets_of(&rel, &ca(1), View::Default).is_empty());
     // The source is untouched, so the members side still answers.
-    assert_eq!(links.members(&multi_ty(), View::Default), vec![ca(1)]);
+    assert_eq!(links.members(&rel, View::Default), vec![ca(1)]);
 }
 
 #[test]
@@ -1575,7 +1538,15 @@ fn retired_filter_rewrites_default_views_only() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("relation");
+    let rel = unregistered_ty(1);
+    w.makelink(
+        P1,
+        &doc1(),
+        SlotArg::Addrs(vec![ca(1)]),
+        SlotArg::Addrs(vec![ca(2)]),
+        SlotArg::Addrs(vec![unregistered_ta(1)]),
+    )
+    .expect("relation");
     {
         let snap = k.snapshot();
         assert!(!snap.world().links().is_filtered(ca(1).tumbler()));
@@ -1590,42 +1561,55 @@ fn retired_filter_rewrites_default_views_only() {
     // or not.
     assert!(links.is_filtered(&t(&[1, 0, 1, 0, 1, 0, 1, 1, 7])));
     // Default = active ∖ filtered — on members/targets_of only.
-    assert_eq!(links.members(&multi_ty(), View::Active), vec![ca(1)]);
-    assert!(links.members(&multi_ty(), View::Default).is_empty());
-    assert_eq!(links.targets_of(&multi_ty(), &ca(1), View::Default), vec![ca(2)]);
+    assert_eq!(links.members(&rel, View::Active), vec![ca(1)]);
+    assert!(links.members(&rel, View::Default).is_empty());
+    assert_eq!(links.targets_of(&rel, &ca(1), View::Default), vec![ca(2)]);
     // is_k is never filtered (BH1 Rewrite scope).
-    assert!(links.is_k(&multi_ty(), ca(1).tumbler()));
+    assert!(links.is_k(&rel, ca(1).tumbler()));
     // J ≠ K′: the filter class itself is not self-subtracted.
     assert_eq!(links.members(&retired, View::Default), vec![ca(1)]);
 }
 
 #[test]
-fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
+fn bh3_endpoint_reads_are_exact_over_the_active_typed_slice_and_the_join_covers_nothing() {
+    // The BH3 endpoint pair answers by CLASS for any type number; only the
+    // keyed JOIN reads declarations back, and no class in the compiled
+    // shipped population declares ReverseLookup — so `targets_keyed` covers
+    // nothing, however cleanly a class's tuples would qualify.
     let k = kernel();
     let w = writer(&k);
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(2)]).expect("bh3 tuple");
+    let rel = unregistered_ty(13);
+    let other = unregistered_ty(14);
+    let deposit = |to: u32, ty: u32| {
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(to)]),
+            SlotArg::Addrs(vec![unregistered_ta(ty)]),
+        )
+        .expect("open deposit")
+        .0
+    };
+    deposit(2, 13);
     // A same-source tuple of ANOTHER type must not disturb the typed reads.
-    w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(3)]).expect("idem⊤ tuple");
+    deposit(3, 14);
     {
         let snap = k.snapshot();
         let links = snap.world().links();
-        assert_eq!(links.target_of(&bh3_ty(), &ca(1)), Some(ca(2)));
-        assert_eq!(links.sources_to(&bh3_ty(), &ca(2)), vec![ca(1)]);
-        // targets_keyed joins BH3-registered Binary types only, keyed by the
-        // public coverage_class.
-        let keyed = links.targets_keyed(&ca(1));
-        assert_eq!(keyed.len(), 1);
-        assert_eq!(
-            keyed.get(&skep_links::coverage_class(&bh3_ty())),
-            Some(&ca(2))
-        );
+        assert_eq!(links.target_of(&rel, &ca(1)), Some(ca(2)));
+        assert_eq!(links.sources_to(&rel, &ca(2)), vec![ca(1)]);
+        assert_eq!(links.target_of(&other, &ca(1)), Some(ca(3)));
+        // The join is empty — not because these classes lack qualifying
+        // tuples, but because nothing declares BH3 in this format.
+        assert!(links.targets_keyed(&ca(1)).is_empty());
     }
     // A second active tuple of the same class denoting the same source makes
     // target_of ⊥ ("exactly one active K-tuple").
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(4)]).expect("second bh3 tuple");
+    deposit(4, 13);
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert_eq!(links.target_of(&bh3_ty(), &ca(1)), None);
+    assert_eq!(links.target_of(&rel, &ca(1)), None);
     assert!(links.targets_keyed(&ca(1)).is_empty());
 }
 
@@ -1633,79 +1617,72 @@ fn bh3_reverse_family_is_exact_over_the_active_typed_slice() {
 fn targets_of_collects_every_target_of_every_matching_tuple() {
     // D3 is two nested loops — every tuple whose F covers the source, and
     // every address that tuple's G denotes — and a one-target result cannot
-    // tell either of them from a `next()`. `multi_ty` is what lets |G| > 1
-    // exist at all.
+    // tell either of them from a `next()`. The open surface is what lets
+    // |G| > 1 exist at all in this format.
     let k = kernel();
     let w = writer(&k);
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2), ca(3)])
-        .expect("two targets in one tuple");
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3), ca(5)])
-        .expect("a second matching tuple, overlapping the first");
-    w.emit(P1, &doc1(), &multi_ty(), &ca(4), &[ca(9)])
-        .expect("a non-matching tuple, whose target must not appear");
+    let rel = unregistered_ty(11);
+    let deposit = |from: u32, to: &[u32]| {
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(from)]),
+            SlotArg::Addrs(to.iter().map(|&i| ca(i)).collect()),
+            SlotArg::Addrs(vec![unregistered_ta(11)]),
+        )
+        .expect("open deposit")
+        .0
+    };
+    deposit(1, &[2, 3]);
+    deposit(1, &[3, 5]);
+    deposit(4, &[9]);
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
-        links.targets_of(&multi_ty(), &ca(1), View::Active),
+        links.targets_of(&rel, &ca(1), View::Active),
         vec![ca(2), ca(3), ca(5)],
         "every target of every matching tuple, ca(3) deduplicated across the two"
     );
     // The control: the excluded tuple IS in the slice, so ca(9)'s absence is
     // the F-coverage test and not an absent tuple.
-    assert_eq!(
-        links.targets_of(&multi_ty(), &ca(4), View::Active),
-        vec![ca(9)]
-    );
+    assert_eq!(links.targets_of(&rel, &ca(4), View::Active), vec![ca(9)]);
 }
 
 #[test]
 fn sources_to_collects_every_source_deduplicated() {
     // BH3's reverse lookup walks the WHOLE active typed slice: every tuple
-    // whose G covers the target contributes its F, deduplicated. `bh3_ty` is
-    // idem⊥, so the repeated tuple deposits fresh rather than dedupping.
+    // whose G covers the target contributes its F, deduplicated. The open
+    // surface never dedups (ML0), so the repeated tuple deposits fresh.
     let k = kernel();
     let w = writer(&k);
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(9)]).expect("s1");
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(4), &[ca(9)]).expect("s2");
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(9)])
-        .expect("idem⊥: a third tuple repeating the first source");
+    let rel = unregistered_ty(13);
+    let other = unregistered_ty(11);
+    let deposit = |from: u32, ty: u32| {
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(from)]),
+            SlotArg::Addrs(vec![ca(9)]),
+            SlotArg::Addrs(vec![unregistered_ta(ty)]),
+        )
+        .expect("open deposit")
+        .0
+    };
+    deposit(1, 13);
+    deposit(4, 13);
+    deposit(1, 13); // a third tuple repeating the first source
     // Another type, same target — the typed slice is the domain.
-    w.emit(P1, &doc1(), &multi_ty(), &ca(7), &[ca(9)])
-        .expect("a same-target tuple of another type");
+    deposit(7, 11);
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
-        links.sources_to(&bh3_ty(), &ca(9)),
+        links.sources_to(&rel, &ca(9)),
         vec![ca(1), ca(4)],
         "every source of every matching tuple, deduplicated, in Tumbler order"
     );
     // The control: that other tuple answers for its OWN type, so ca(7)'s
     // absence above is the typed slice and not an absent tuple.
-    assert_eq!(links.sources_to(&multi_ty(), &ca(9)), vec![ca(7)]);
-}
-
-#[test]
-fn targets_keyed_joins_every_reverse_lookup_class() {
-    // "across EVERY BH3-registered Binary type", keyed BY CLASS — two claims
-    // that a single-class join satisfies vacuously.
-    let k = kernel();
-    let w = writer(&k);
-    w.emit(P1, &doc1(), &bh3_ty(), &ca(1), &[ca(2)]).expect("bh3");
-    w.emit(P1, &doc1(), &bh3_alt_ty(), &ca(1), &[ca(5)])
-        .expect("a second BH3-registered class");
-    let snap = k.snapshot();
-    let links = snap.world().links();
-    let keyed = links.targets_keyed(&ca(1));
-    assert_eq!(keyed.len(), 2, "every reverse-lookup class, not the first");
-    assert_eq!(
-        keyed.get(&skep_links::coverage_class(&bh3_ty())),
-        Some(&ca(2)),
-        "each class keys to its OWN target"
-    );
-    assert_eq!(
-        keyed.get(&skep_links::coverage_class(&bh3_alt_ty())),
-        Some(&ca(5))
-    );
+    assert_eq!(links.sources_to(&other, &ca(9)), vec![ca(7)]);
 }
 
 #[test]
@@ -1723,24 +1700,24 @@ fn sources_to_matches_a_target_by_coverage() {
             &doc1(),
             SlotArg::Addrs(vec![ca(1)]),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 2, 2)]), // one span, [ca2, ca4)
-            SlotArg::Addrs(vec![ra(13)]),                   // the registered BH3 class
+            SlotArg::Addrs(vec![unregistered_ta(13)]),      // a type is a number
         )
         .expect("makelink");
     let snap = k.snapshot();
     let links = snap.world().links();
-    assert!(links.type_slice(&bh3_ty(), View::Active).contains(&l));
+    assert!(links.type_slice(&unregistered_ty(13), View::Active).contains(&l));
     assert_eq!(
-        links.sources_to(&bh3_ty(), &ca(2)),
+        links.sources_to(&unregistered_ty(13), &ca(2)),
         vec![ca(1)],
         "the extent's first tumbler"
     );
     assert_eq!(
-        links.sources_to(&bh3_ty(), &ca(3)),
+        links.sources_to(&unregistered_ty(13), &ca(3)),
         vec![ca(1)],
         "mid-extent: no denotation reaches it, coverage does"
     );
     assert!(
-        links.sources_to(&bh3_ty(), &ca(4)).is_empty(),
+        links.sources_to(&unregistered_ty(13), &ca(4)).is_empty(),
         "the extent is half-open"
     );
 }
@@ -1759,18 +1736,18 @@ fn target_of_matches_a_source_by_denotation() {
             &doc1(),
             SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 2)]), // one span, [ca1, ca3)
             SlotArg::Addrs(vec![ca(9)]),
-            SlotArg::Addrs(vec![ra(13)]),
+            SlotArg::Addrs(vec![unregistered_ta(13)]),
         )
         .expect("makelink");
     let snap = k.snapshot();
     let links = snap.world().links();
-    // The control: the tuple IS in the active BH3 slice and its F covers the
-    // probe, so the ⊥ below is the matching rule and not an absent tuple.
-    assert!(links.type_slice(&bh3_ty(), View::Active).contains(&l));
+    // The control: the tuple IS in the active typed slice and its F covers
+    // the probe, so the ⊥ below is the matching rule and not an absent tuple.
+    assert!(links.type_slice(&unregistered_ty(13), View::Active).contains(&l));
     let link = links.readlink(&l).expect("resident");
     assert!(link.from_slot().covers(ca(1).tumbler()));
     assert_eq!(
-        links.target_of(&bh3_ty(), &ca(1)),
+        links.target_of(&unregistered_ty(13), &ca(1)),
         None,
         "F covers ca(1) and denotes nothing"
     );
@@ -1787,9 +1764,19 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (a1, _) = w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("idem⊤");
-    let (m1, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("m1");
-    let (m2, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(4)]).expect("m2");
+    let (a1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("idem⊤");
+    let (m1, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("m1");
+    let (m2, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("m2");
+    let (o1, _) = w
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(5)]),
+            SlotArg::Addrs(vec![ca(6)]),
+            SlotArg::Addrs(vec![unregistered_ta(11)]),
+        )
+        .expect("an unregistered-class deposit, so its slice is rebuilt too");
+    let _ = &o1;
     let (c, _) = w.assert_sup(P1, &doc1(), &m1, &m2).expect("claim");
     w.nullify(P1, &doc1(), &m1).expect("nullify m1");
 
@@ -1808,13 +1795,14 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     assert!(back.is_nullified(&m1));
     assert_eq!(back.succs(&sup, &m1), vec![m2.clone()]); // sup_fwd rebuilt
     assert_eq!(
-        orig.type_slice(&idem_top_ty(), View::Audit),
-        back.type_slice(&idem_top_ty(), View::Audit)
+        orig.type_slice(&pred_def_ty(), View::Audit),
+        back.type_slice(&pred_def_ty(), View::Audit)
     );
     assert_eq!(
-        orig.type_slice(&multi_ty(), View::Active),
-        back.type_slice(&multi_ty(), View::Active)
+        orig.type_slice(&unregistered_ty(11), View::Active),
+        back.type_slice(&unregistered_ty(11), View::Active)
     );
+    assert!(!back.type_slice(&unregistered_ty(11), View::Active).is_empty());
     // The home-frontier hint, which age/stale and nullify's `a_emit`
     // prediction all stand on — and a live value, so the pair is not two
     // zeros agreeing.
@@ -1829,7 +1817,7 @@ fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     };
     let k2 = skep_kernel::Kernel::open(cfg, recovered).expect("reopen");
     let w2 = writer(&k2);
-    let (again, _) = w2.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("dedup hit");
+    let (again, _) = w2.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("dedup hit");
     assert_eq!(again, a1);
 }
 
@@ -1844,8 +1832,8 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
     let w = writer(&k);
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     let before = k.current_seq();
     assert!(matches!(
         w.makelink(
@@ -1858,14 +1846,14 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
         Err(TxnError::Rejected(MakeLinkError::NotOwner(d))) if d == doc1()
     ));
     assert!(matches!(
-        w.emit(P2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P2, &doc1(), &pred_def_ty(), &ca(9), &[]),
         Err(TxnError::Rejected(EmitError::NotOwner(d))) if d == doc1()
     ));
     assert!(matches!(
         w.assert_sup(P2, &doc1(), &x, &y),
         Err(TxnError::Rejected(AssertSupError::NotOwner(d))) if d == doc1()
     ));
-    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     // Foreign d_s (successor home): the error names d_s.
     assert!(matches!(
         w.editlink(P2, &x, succ.clone(), &doc1(), &sib_doc()),
@@ -1885,7 +1873,7 @@ fn deposit_ops_reject_a_foreign_home_and_commit_nothing() {
     ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
     // System bypasses the gate (M9 ⟂ M10 — rule fires carry no principal).
-    w.emit(Caller::System, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)])
+    w.emit(Caller::System, &doc1(), &pred_def_ty(), &ca(9), &[])
         .expect("the automation path deposits ungated");
 }
 
@@ -1896,9 +1884,9 @@ fn ownership_gate_holds_on_the_idem_hit_path() {
     // cannot observe the dedup branch through the rejection.
     let k = kernel();
     let w = writer(&k);
-    w.emit(P1, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]).expect("incumbent");
+    w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("incumbent");
     assert!(matches!(
-        w.emit(P2, &doc1(), &idem_top_ty(), &ca(1), &[ca(2)]),
+        w.emit(P2, &doc1(), &pred_def_ty(), &ca(1), &[]),
         Err(TxnError::Rejected(EmitError::NotOwner(_)))
     ));
 }
@@ -1911,7 +1899,7 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     // audit view retains everything.
     let k = kernel();
     let w = writer(&k);
-    let (m1, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("P1's tuple");
+    let (m1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("P1's tuple");
     // Foreign target, owned home: NotOwner carrying the target link.
     assert!(matches!(
         w.nullify(P2, &sib_doc(), &m1),
@@ -1932,8 +1920,8 @@ fn nullify_requires_owning_home_and_target_and_still_filters_the_active_view() {
     let links = snap.world().links();
     assert!(links.is_nullified(&m1));
     assert!(links.readlink(&m1).is_some());
-    assert!(links.type_slice(&multi_ty(), View::Audit).contains(&m1));
-    assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
+    assert!(links.type_slice(&pred_def_ty(), View::Audit).contains(&m1));
+    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
 }
 
 #[test]
@@ -1951,8 +1939,8 @@ fn assert_sup_and_editlink_claim_over_links_the_caller_does_not_own() {
         .links()
         .reserved_type(ShippedType::Supersedes)
         .clone();
-    let (x, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)]).expect("x");
-    let (y, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("y");
+    let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
 
     // P2, from a home P2 owns, claims that one of P1's links supersedes
     // another — and the walk family reports it as fact.
@@ -1974,7 +1962,7 @@ fn assert_sup_and_editlink_claim_over_links_the_caller_does_not_own() {
 
     // editlink the same way: P2 edits P1's link, depositing into its own
     // homes. What it asserts about `original` needs no ω on `original`.
-    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     let (s, claim, _) = w
         .editlink(P2, &x, succ, &sib_doc(), &sib_doc())
         .expect("ω on d_s and d_a only");
@@ -2000,7 +1988,7 @@ fn makelink_cannot_forge_a_retraction_of_a_foreign_link() {
     let k = kernel();
     let w = writer(&k);
     let (victim, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("P1's own tuple");
     let before = k.current_seq();
     assert!(matches!(
@@ -2018,7 +2006,7 @@ fn makelink_cannot_forge_a_retraction_of_a_foreign_link() {
     let links = snap.world().links();
     assert!(links.is_active(&victim));
     assert!(!links.is_nullified(&victim));
-    assert!(links.type_slice(&multi_ty(), View::Active).contains(&victim));
+    assert!(links.type_slice(&pred_def_ty(), View::Active).contains(&victim));
     // The owner's own retraction is the one path that reaches the tombstone.
     w.nullify(P1, &doc1(), &victim).expect("owner retraction");
     assert!(k.snapshot().world().links().is_nullified(&victim));
@@ -2098,7 +2086,7 @@ fn editlink_rejects_a_non_level_uniform_span_in_any_slot() {
     let k = kernel();
     let w = writer(&k);
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     let skew =
         || Endset::from_spans([skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12")]);
@@ -2202,11 +2190,17 @@ fn an_observed_tuple_carries_the_link_s_own_f_and_g_in_those_roles() {
     let k = kernel();
     let w = writer(&k);
     let (a1, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2), ca(3)])
-        .expect("Multi admits |G| = 2");
+        .makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(1)]),
+            SlotArg::Addrs(vec![ca(2), ca(3)]),
+            SlotArg::Addrs(vec![unregistered_ta(11)]),
+        )
+        .expect("the open surface admits |G| = 2");
     let snap = k.snapshot();
     let links = snap.world().links();
-    let tuples = links.observe(&multi_ty(), Pattern::default(), View::Active);
+    let tuples = links.observe(&unregistered_ty(11), Pattern::default(), View::Active);
     assert_eq!(tuples.len(), 1);
     assert_eq!(tuples[0].addr, a1);
     assert_eq!(tuples[0].from, enc(&[ca(1)]), "the F slot, verbatim");
@@ -2228,30 +2222,40 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
     let w = writer(&k);
     let tuple_addrs =
         |tuples: Vec<Tuple>| tuples.into_iter().map(|tuple| tuple.addr).collect::<Vec<_>>();
-    let (a1, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2), ca(3)])
-        .expect("a1");
-    let (a2, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(4), &[ca(2)]).expect("a2");
-    let (a3, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(3)]).expect("a3");
+    let rel = unregistered_ty(11);
+    let deposit = |from: u32, to: &[u32]| {
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![ca(from)]),
+            SlotArg::Addrs(to.iter().map(|&i| ca(i)).collect()),
+            SlotArg::Addrs(vec![unregistered_ta(11)]),
+        )
+        .expect("open deposit")
+        .0
+    };
+    let a1 = deposit(1, &[2, 3]);
+    let a2 = deposit(4, &[2]);
+    let a3 = deposit(1, &[3]);
     {
         let snap = k.snapshot();
         let links = snap.world().links();
         // EVERY match, not the first — and ascending by tuple address.
         assert_eq!(
-            tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
+            tuple_addrs(links.observe(&rel, Pattern::default(), View::Active)),
             vec![a1.clone(), a2.clone(), a3.clone()]
         );
         // One F-probe selects two of the three.
         let f = [ca(1).tumbler().clone()];
         assert_eq!(
-            tuple_addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &[] }, View::Active)),
+            tuple_addrs(links.observe(&rel, Pattern { from: &f, to: &[] }, View::Active)),
             vec![a1.clone(), a3.clone()]
         );
         // A pattern side is an AND of its probes, not an OR: a1's G covers
         // ca(2) AND ca(3); a3's covers only ca(3), so an OR would keep it.
         let g = [ca(2).tumbler().clone(), ca(3).tumbler().clone()];
         assert_eq!(
-            tuple_addrs(links.observe(&multi_ty(), Pattern { from: &f, to: &g }, View::Active)),
+            tuple_addrs(links.observe(&rel, Pattern { from: &f, to: &g }, View::Active)),
             vec![a1.clone()]
         );
     }
@@ -2261,11 +2265,11 @@ fn observe_returns_every_match_in_ascending_tuple_address_order() {
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
-        tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Audit)),
+        tuple_addrs(links.observe(&rel, Pattern::default(), View::Audit)),
         vec![a1.clone(), a2.clone(), a3.clone()]
     );
     assert_eq!(
-        tuple_addrs(links.observe(&multi_ty(), Pattern::default(), View::Active)),
+        tuple_addrs(links.observe(&rel, Pattern::default(), View::Active)),
         vec![a1, a3]
     );
 }
@@ -2285,10 +2289,10 @@ fn editlink_deposits_the_successor_in_d_s_and_the_claim_in_d_a() {
         .reserved_type(ShippedType::Supersedes)
         .clone();
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     assert_eq!(orig, la(1)); // so doc1's next mint is la(2), doc2's first la2(1)
-    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ_value = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     let (s, c, _) = w
         .editlink(P1, &orig, succ_value.clone(), &doc1(), &doc2())
         .expect("P1 owns both homes");
@@ -2320,9 +2324,9 @@ fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addre
         .reserved_type(ShippedType::Supersedes)
         .clone();
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
-    let (z, _) = w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(7)]).expect("z");
+    let (z, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(7), &[]).expect("z");
     let multi_f = Link::new([enc([&orig, &z]), enc([&z]), sup.clone()]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &orig, multi_f, &doc1(), &doc1()),
@@ -2359,7 +2363,7 @@ fn nullifying_a_retraction_restores_nothing() {
     let k = kernel();
     let w = writer(&k);
     let (m1, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("target");
     let (r1, _) = w.nullify(P1, &doc1(), &m1).expect("retract it");
     let (r2, _) = w
@@ -2373,7 +2377,7 @@ fn nullifying_a_retraction_restores_nothing() {
         links.is_nullified(&m1),
         "and its target stays nullified — the set is monotone"
     );
-    assert!(!links.type_slice(&multi_ty(), View::Active).contains(&m1));
+    assert!(!links.type_slice(&pred_def_ty(), View::Active).contains(&m1));
     // The replay half: the fold re-derives the tombstone from a nullified
     // [R] link, so recovery restores nothing either.
     let bytes = bincode::serialize(snap.world()).expect("world serializes");
@@ -2424,16 +2428,16 @@ fn the_discovery_primitives_read_default_as_active() {
     let k = kernel();
     let w = writer(&k);
     let (kept, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_stable_ty(), &ca(1), &[])
         .expect("kept");
     let (gone, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(3), &[ca(4)])
+        .emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[])
         .expect("gone");
     w.nullify(P1, &doc1(), &gone).expect("nullify one");
     let snap = k.snapshot();
     let links = snap.world().links();
     // Both links share a TYPE slot, so one query reaches both.
-    let query = multi_ty();
+    let query = pred_stable_ty();
     assert!(
         links.stab(TYPE, &query, View::Audit).contains(&gone),
         "the Audit answer is not vacuous"
@@ -2458,12 +2462,12 @@ fn the_discovery_primitives_read_default_as_active() {
         links.match_links(&[], View::Default),
         links.match_links(&[], View::Active)
     );
-    assert!(links.type_slice(&multi_ty(), View::Audit).contains(&gone));
+    assert!(links.type_slice(&pred_stable_ty(), View::Audit).contains(&gone));
     assert_eq!(
-        links.type_slice(&multi_ty(), View::Default),
-        links.type_slice(&multi_ty(), View::Active)
+        links.type_slice(&pred_stable_ty(), View::Default),
+        links.type_slice(&pred_stable_ty(), View::Active)
     );
-    assert!(!links.type_slice(&multi_ty(), View::Default).contains(&gone));
+    assert!(!links.type_slice(&pred_stable_ty(), View::Default).contains(&gone));
 }
 
 #[test]
@@ -2474,7 +2478,7 @@ fn editlink_reports_an_unregistered_home_before_a_non_resident_original() {
     // hoist is observable.
     let k = kernel();
     let w = writer(&k);
-    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &la(90), succ, &a(&[1, 0, 1, 0, 7]), &doc1()),
         Err(TxnError::Rejected(EditLinkError::HomeNotRegistered))
@@ -2488,7 +2492,7 @@ fn stab_with_an_empty_query_matches_nothing() {
     // empty the AND.
     let k = kernel();
     let w = writer(&k);
-    w.emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+    w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("a link to miss");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -2514,7 +2518,7 @@ fn stab_matches_nothing_at_a_slot_the_link_does_not_have() {
     let k = kernel();
     let w = writer(&k);
     let (l, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("a link to miss");
     let snap = k.snapshot();
     let links = snap.world().links();
@@ -2803,43 +2807,26 @@ fn an_addrs_slot_past_the_span_budget_is_refused() {
 #[test]
 fn emit_rejects_a_to_list_past_the_span_budget() {
     // `to` is one of the two managed slots a caller sizes (`ty` is the other,
-    // and `enc({from})` is one span), and the shape gate cannot bound it:
-    // Multi admits any finite `|G|`. So the same per-slot span budget
-    // MAKELINK's slots carry sits here, pre-transact.
+    // and `enc({from})` is one span). The per-slot span budget sits here
+    // PRE-TRANSACT — ahead of the shape gate, which every registered class
+    // in this format would also refuse a nonempty `to` under; the at-budget
+    // ADMIT case needs a registered non-Unary class and so lives on the open
+    // surface (`an_addrs_slot_past_the_span_budget_is_refused` carries it).
     let k = kernel();
     let w = writer(&k);
     let targets = |n: u32| -> Vec<Address> { (1..=n).map(ca).collect() };
     let budget = skep_links::MAX_SLOT_SPANS as u32;
 
-    let (at_budget, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &targets(budget))
-        .expect("exactly the budget is admitted");
-    {
-        let snap = k.snapshot();
-        let links = snap.world().links();
-        assert_eq!(
-            links.readlink(&at_budget).expect("resident").to_slot().len(),
-            skep_links::MAX_SLOT_SPANS,
-            "Multi really does admit a |G| this wide"
-        );
-    }
-
     let before = k.current_seq();
     assert!(matches!(
-        w.emit(P1, &doc1(), &multi_ty(), &ca(2), &targets(budget + 1)),
+        w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &targets(budget + 1)),
         Err(TxnError::Rejected(EmitError::SlotTooLarge))
     ));
     assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
-    // Pre-transact, so ahead of the shape gate — which the same input also
-    // violates under Binary.
-    assert!(matches!(
-        w.emit(P1, &doc1(), &idem_top_ty(), &ca(3), &targets(budget + 1)),
-        Err(TxnError::Rejected(EmitError::SlotTooLarge))
-    ));
     // ...and each verdict is separately reachable, so the above is the
-    // precedence and not the only answer either input can get.
+    // precedence and not the only answer the input can get.
     assert!(matches!(
-        w.emit(P1, &doc1(), &idem_top_ty(), &ca(3), &[ca(4), ca(5)]),
+        w.emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[ca(4), ca(5)]),
         Err(TxnError::Rejected(EmitError::ShapeViolation))
     ));
 }
@@ -2855,17 +2842,17 @@ fn emit_rejects_a_ty_endset_past_the_span_budget() {
     let k = kernel();
     let w = writer(&k);
     let budget = skep_links::MAX_SLOT_SPANS as u32;
-    // One distinct denoted address, repeated: the class is `idem_top_ty`'s —
-    // registered Binary, idem⊤ — whatever the span count.
-    let wide_ty = |n: u32| -> Endset { enc(&vec![ra(10); n as usize]) };
+    // One distinct denoted address, repeated: the class is pred_def's —
+    // registered Unary, idem⊤ — whatever the span count.
+    let wide_ty = |n: u32| -> Endset { enc(&vec![ra(1); n as usize]) };
     assert_eq!(
         skep_links::coverage_class(&wide_ty(budget)),
-        skep_links::coverage_class(&idem_top_ty()),
+        skep_links::coverage_class(&pred_def_ty()),
         "the span count does not change the class, which is why it needs its own bound"
     );
 
     let (at_budget, _) = w
-        .emit(P1, &doc1(), &wide_ty(budget), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &wide_ty(budget), &ca(1), &[])
         .expect("exactly the budget is admitted");
     {
         let snap = k.snapshot();
@@ -2879,20 +2866,13 @@ fn emit_rejects_a_ty_endset_past_the_span_budget() {
 
     let before = k.current_seq();
     assert!(matches!(
-        w.emit(P1, &doc1(), &wide_ty(budget + 1), &ca(3), &[ca(4)]),
+        w.emit(P1, &doc1(), &wide_ty(budget + 1), &ca(3), &[]),
         Err(TxnError::Rejected(EmitError::SlotTooLarge))
     ));
     assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
-    // Reachable under EVERY shape, unlike the `to` cause: this class is Multi,
-    // so `|G| = 2` conforms and nothing but the ty slot can refuse it.
-    let wide_multi: Endset = enc(&vec![ra(11); budget as usize + 1]);
-    assert!(matches!(
-        w.emit(P1, &doc1(), &wide_multi, &ca(5), &[ca(6), ca(7)]),
-        Err(TxnError::Rejected(EmitError::SlotTooLarge))
-    ));
-    // The control: the same shape and the same class at an in-budget width
-    // deposits, so the refusals above are the slot and not the class.
-    w.emit(P1, &doc1(), &multi_ty(), &ca(5), &[ca(6), ca(7)])
+    // The control: the same class at an in-budget width deposits, so the
+    // refusal above is the slot and not the class.
+    w.emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[])
         .expect("a narrow ty of the same class is admitted");
 }
 
@@ -2908,7 +2888,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     let k = kernel();
     let w = writer(&k);
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     let spans = |n: u32| -> Endset {
         (1..=n)
@@ -2918,7 +2898,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     let budget = skep_links::MAX_SLOT_SPANS as u32;
 
     let at_budget =
-        Link::new([spans(budget), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+        Link::new([spans(budget), enc(&[ca(1)]), unregistered_ty(30)]).expect("arity 3");
     let (s, _, _) = w
         .editlink(P1, &orig, at_budget, &doc1(), &doc1())
         .expect("exactly the budget is admitted");
@@ -2935,7 +2915,7 @@ fn editlink_rejects_a_successor_slot_past_the_span_budget() {
     // One span more, refused before anything is staged — and refused ahead of
     // `IllFormedSuccessor`, which is where the per-span walk lives.
     let before = k.current_seq();
-    let over = Link::new([spans(budget + 1), enc(&[ca(1)]), enc(&[ra(30)])]).expect("arity 3");
+    let over = Link::new([spans(budget + 1), enc(&[ca(1)]), unregistered_ty(30)]).expect("arity 3");
     assert!(matches!(
         w.editlink(P1, &orig, over, &doc1(), &doc1()),
         Err(TxnError::Rejected(EditLinkError::SlotTooLarge))
@@ -2961,10 +2941,10 @@ fn editlink_locks_two_homes_in_one_canonical_order() {
     let k = kernel();
     let w = writer(&k);
     let (orig, _) = w
-        .emit(P1, &doc1(), &multi_ty(), &ca(1), &[ca(2)])
+        .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
     assert_eq!(orig, la(1)); // doc1's next mint is la(2); doc2's first is la2(1)
-    let succ = || Link::new([enc(&[ca(3)]), enc(&[ca(4)]), enc(&[ra(30)])]).expect("arity 3");
+    let succ = || Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
 
     let (s1, c1, _) = w
         .editlink(P1, &orig, succ(), &doc1(), &doc2())
@@ -2991,9 +2971,16 @@ fn the_default_view_subtracts_under_every_active_retired_root() {
         .links()
         .reserved_type(ShippedType::Retired)
         .clone();
+    let rel = unregistered_ty(11);
     for (source, target) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
-        w.emit(P1, &doc1(), &multi_ty(), &source, &[target])
-            .expect("relation");
+        w.makelink(
+            P1,
+            &doc1(),
+            SlotArg::Addrs(vec![source]),
+            SlotArg::Addrs(vec![target]),
+            SlotArg::Addrs(vec![unregistered_ta(11)]),
+        )
+        .expect("relation");
     }
     for root in [ca(2), ca(3), ca(7)] {
         w.emit(P1, &doc1(), &retired, &root, &[])
@@ -3002,21 +2989,19 @@ fn the_default_view_subtracts_under_every_active_retired_root() {
     let snap = k.snapshot();
     let links = snap.world().links();
     assert_eq!(
-        links.members(&multi_ty(), View::Active),
+        links.members(&rel, View::Active),
         vec![ca(1), ca(2), ca(3)],
         "the unfiltered control"
     );
     assert_eq!(
-        links.members(&multi_ty(), View::Default),
+        links.members(&rel, View::Default),
         vec![ca(1)],
         "the second and third roots subtract as surely as the first"
     );
     // The third root reaches the targets side, which collects the domain of
     // its own accord.
-    assert_eq!(links.targets_of(&multi_ty(), &ca(3), View::Active), vec![ca(7)]);
-    assert!(links
-        .targets_of(&multi_ty(), &ca(3), View::Default)
-        .is_empty());
+    assert_eq!(links.targets_of(&rel, &ca(3), View::Active), vec![ca(7)]);
+    assert!(links.targets_of(&rel, &ca(3), View::Default).is_empty());
     // Each root still answers the single-probe read, which short-circuits
     // rather than collecting.
     for root in [ca(2), ca(3), ca(7)] {

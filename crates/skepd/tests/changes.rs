@@ -428,7 +428,7 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         (
             "emit",
             format!(
-                r#"{{"op":"emit","home":"{doc_a}","ty":[{{"start":"9.0.9.0.9.0.9.3","width":"0.0.0.0.0.0.0.1"}}],"from":"{doc_a}.0.3.9.1","to":[]}}"#
+                r#"{{"op":"emit","home":"{doc_a}","ty":[{{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}}],"from":"{doc_a}.0.3.9.1","to":[]}}"#
             ),
             serde_json::json!([doc_a]),
         ),
@@ -650,7 +650,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
 /// example.
 #[test]
 fn pre_feature_positions_answer_bare_entries() {
-    use skep_engine::{Engine, GenesisConfig, KernelConfig};
+    use skep_engine::{Engine, KernelConfig};
     use skep_febe::{Codec, Operation, Response, SessionId};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability};
     use skep_namespace::PrincipalId;
@@ -666,7 +666,7 @@ fn pre_feature_positions_answer_bare_entries() {
             },
             checkpoint: CheckpointPolicy::EveryN(1024),
         };
-        let engine = Engine::open(cfg, GenesisConfig::standard()).expect("engine genesis");
+        let engine = Engine::open(cfg).expect("engine genesis");
         let febe = Operation::new(Box::new(engine.stores()));
         let codec = JsonCodec;
         let exec = |sid: SessionId, frame: &str| {
@@ -762,7 +762,7 @@ fn pre_feature_positions_answer_bare_entries() {
 /// this a test of compaction rather than of the walk.
 #[test]
 fn the_sidecar_compacts_to_the_journals_retention() {
-    use skep_engine::{Engine, GenesisConfig, KernelConfig};
+    use skep_engine::{Engine, KernelConfig};
     use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, Seq};
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -812,7 +812,7 @@ fn the_sidecar_compacts_to_the_journals_retention() {
             },
             checkpoint: CheckpointPolicy::Manual,
         };
-        let engine = Engine::open(cfg, GenesisConfig::standard()).expect("engine recover");
+        let engine = Engine::open(cfg).expect("engine recover");
         engine.kernel().checkpoint().expect("checkpoint reclaims below itself");
         assert_eq!(engine.kernel().current_seq().0, head, "no new commit was made");
         assert!(

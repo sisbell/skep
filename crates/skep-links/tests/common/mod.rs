@@ -2,22 +2,19 @@
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7, plus
 //! address/type fixtures. Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
-//! elements `[doc·0·2·k]`; reserved type addresses live in subspace 9 —
-//! element-level, outside {s_C, s_L} (reserved-isolation).
+//! elements `[doc·0·2·k]`. The five reserved type addresses are the compiled
+//! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26); the
+//! registry's population is exactly the shipped five, so a managed emit
+//! lands on a shipped Unary idem⊤ class and anything else is unregistered.
 
 #![allow(dead_code)] // each integration test binary uses a subset
-
-use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{HasM5, M5Rec, M5State, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
-use skep_links::{
-    enc, Behavior, Caller, Endset, HasLinks, LinkRec, LinkState, Registration, ReservedAddrs,
-    Shape, TypeConfig, TypeDecl,
-};
+use skep_links::{enc, Caller, Endset, HasLinks, LinkRec, LinkState, ReservedAddrs};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 /// The seeded owner of doc1/doc2 — every pre-ruling op runs under it, so
@@ -164,10 +161,12 @@ pub fn la2(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
 }
 
-/// Reserved/app type address `k` — element-level in subspace 9 (outside
-/// {s_C, s_L}, the reserved-isolation precondition): `[9,0,9,0,9,0,9,k]`.
+/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content
+/// position `k` of the ghost doc (the compiled format constants for
+/// k = 1..=5; `ReservedAddrs::format` assignment order: pred_def,
+/// pred_stable, retired, supersedes, retraction).
 pub fn ra(k: u32) -> Address {
-    a(&[9, 0, 9, 0, 9, 0, 9, k])
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal] × [0, count]`.
@@ -191,96 +190,45 @@ pub fn spec(source: &Address, subspace: u32, ordinal: u32, count: u32) -> VSpec 
     }
 }
 
-// ───────────────────────────── genesis type config ─────────────────────────
+// ─────────────────────────── the format type set ────────────────────────────
 
-/// The five reserved type addresses (ordinals 1–5 in subspace 9).
+/// The five reserved type addresses — the compiled format constants.
 pub fn reserved() -> ReservedAddrs {
-    ReservedAddrs {
-        pred_def: ra(1),
-        pred_stable: ra(2),
-        retired: ra(3),
-        supersedes: ra(4),
-        retraction: ra(5),
-    }
+    ReservedAddrs::format()
 }
 
-/// App type keys (ordinals ≥ 10 in subspace 9).
-pub fn idem_top_ty() -> Endset {
-    enc(&[ra(10)]) // Binary, idem⊤
+/// The registered Unary idem⊤ classes an ordinary managed emit may land on:
+/// `PredDef`/`PredStable`/`Retired` (the `Retraction` and `Supersedes`
+/// classes are sole-writer-fenced at `emit`).
+pub fn pred_def_ty() -> Endset {
+    enc(&[ra(1)])
 }
-pub fn multi_ty() -> Endset {
-    enc(&[ra(11)]) // Multi, idem⊥
+pub fn pred_stable_ty() -> Endset {
+    enc(&[ra(2)])
 }
-pub fn bh4_ty() -> Endset {
-    enc(&[ra(12)]) // Unary, idem⊥, Age
+pub fn retired_ty() -> Endset {
+    enc(&[ra(3)])
 }
-pub fn bh3_ty() -> Endset {
-    enc(&[ra(13)]) // Binary, idem⊥, ReverseLookup
+/// The two fenced shipped classes, for the tests that probe the fences and
+/// the sole-writer surfaces.
+pub fn supersedes_ty() -> Endset {
+    enc(&[ra(4)])
 }
-/// A SECOND BH3 class, so the join has more than one class to cover — the
-/// cardinality at which "across EVERY BH3-registered Binary type" says
-/// anything.
-pub fn bh3_alt_ty() -> Endset {
-    enc(&[ra(14)]) // Binary, idem⊥, ReverseLookup
-}
-
-pub fn decls() -> Vec<TypeDecl> {
-    vec![
-        TypeDecl {
-            key: idem_top_ty(),
-            reg: Registration {
-                shape: Shape::Binary,
-                idem: true,
-                behaviors: BTreeSet::new(),
-            },
-        },
-        TypeDecl {
-            key: multi_ty(),
-            reg: Registration {
-                shape: Shape::Multi,
-                idem: false,
-                behaviors: BTreeSet::new(),
-            },
-        },
-        TypeDecl {
-            key: bh4_ty(),
-            reg: Registration {
-                shape: Shape::Unary,
-                idem: false,
-                behaviors: BTreeSet::from([Behavior::Age]),
-            },
-        },
-        TypeDecl {
-            key: bh3_ty(),
-            reg: Registration {
-                shape: Shape::Binary,
-                idem: false,
-                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
-            },
-        },
-        TypeDecl {
-            key: bh3_alt_ty(),
-            reg: Registration {
-                shape: Shape::Binary,
-                idem: false,
-                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
-            },
-        },
-    ]
+pub fn retraction_ty() -> Endset {
+    enc(&[ra(5)])
 }
 
-/// The fixture type configuration — the five reserved addresses plus the five
-/// app decls above. `config_with(decls)` names the cases that vary the decls
-/// against the same reserved addresses.
-pub fn config() -> TypeConfig {
-    config_with(decls())
+/// An UNREGISTERED type's address — an ordinary content address of a foreign
+/// document (`[1,0,9,0,9,0,1,k]`). A type is a number: the open surface
+/// deposits it verbatim, and the managed surface refuses it `NotRegistered`,
+/// because the registry's population is the shipped five and nothing else.
+pub fn unregistered_ta(k: u32) -> Address {
+    a(&[1, 0, 9, 0, 9, 0, 1, k])
 }
 
-pub fn config_with(decls: Vec<TypeDecl>) -> TypeConfig {
-    TypeConfig {
-        reserved: reserved(),
-        decls,
-    }
+/// [`unregistered_ta`] as the one-address type endset the reads take.
+pub fn unregistered_ty(k: u32) -> Endset {
+    enc(&[unregistered_ta(k)])
 }
 
 // ─────────────────────────────── world assembly ─────────────────────────────
@@ -323,7 +271,7 @@ pub fn genesis_world() -> World {
         m3: seeded_m3(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
+        links: LinkState::genesis(),
     }
 }
 

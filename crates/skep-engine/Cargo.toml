@@ -43,5 +43,7 @@ skep-febe = { path = "../skep-febe" }
 # lifecycle test, never needed by the assembly itself.
 skep-retrieval = { path = "../skep-retrieval" }
 skep-discovery = { path = "../skep-discovery" }
-# Fsync journals for the lifecycle/recovery tests.
+# Fsync journals for the lifecycle/recovery tests; bincode is M2's actual
+# wire format — the genesis-determinism test compares two Σ₀ through it.
 tempfile.workspace = true
+bincode.workspace = true

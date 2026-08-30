@@ -13,8 +13,10 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   only by their own crates.
 - **Accessor impls** — each store's read-seam trait implemented over
   the assembled world, so store crates stay generic.
-- **Genesis and recovery order** — the seeded initial world (reserved
-  types, roots) and the pinned `rebuild_derived` order.
+- **Genesis and recovery order** — the constant initial world (the
+  namespace roots and the empty docuverse; the reserved type registry
+  is compiled format, not seeded state) and the pinned
+  `rebuild_derived` order.
 - **`Engine::open`** — genesis-or-recover in one call; the
   `Stores<World>` factory the operation surface injects.
 

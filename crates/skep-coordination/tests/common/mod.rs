@@ -1,12 +1,14 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
-//! contract's assembler role, in miniature) over M3 + M4 + M5 + M7, the
-//! genesis type config M9's catalog projects from, and a `Coordinator`
-//! constructor wiring the engine-injected pieces (the shared registry and the
-//! two op-handle factories). Address fixtures follow M3's minted shapes.
+//! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 and a
+//! `Coordinator` constructor wiring the engine-injected pieces (the shared
+//! registry — built from the compiled format constants, owner ruling
+//! 2026-08-26 — and the two op-handle factories). Address fixtures follow
+//! M3's minted shapes; the catalog's population is the shipped five, so
+//! rule/marker fixtures lean on the three Unary idem⊤ classes and TO-bearing
+//! tuples enter cataloged classes through the open surface.
 
 #![allow(dead_code)] // each integration test binary uses a subset
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -16,8 +18,7 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_coordination::Coordinator;
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
-    enc, Behavior, Endset, HasLinks, LinkRec, LinkState, LinkWriter, Registration, ReservedAddrs,
-    Shape, TypeConfig, TypeDecl, TypeRegistry,
+    enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -130,87 +131,41 @@ pub fn la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
 }
 
-/// Reserved/app type address `k` — element-level in subspace 9 (outside
-/// {s_C, s_L}: reserved-isolation).
+/// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`
+/// (`ReservedAddrs::format` assignment order for k = 1..=5: pred_def,
+/// pred_stable, retired, supersedes, retraction; higher ordinals are
+/// uncataloged numbers).
 pub fn ra(k: u32) -> Address {
-    a(&[9, 0, 9, 0, 9, 0, 9, k])
+    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
     VPos { subspace: n(subspace), ordinal: n(ordinal) }
 }
 
-// ───────────────────────────── genesis type config ─────────────────────────
+// ─────────────────────────── the format type set ────────────────────────────
 
-pub fn reserved() -> ReservedAddrs {
-    ReservedAddrs {
-        pred_def: ra(1),
-        pred_stable: ra(2),
-        retired: ra(3),
-        supersedes: ra(4),
-        retraction: ra(5),
-    }
+/// The cataloged classes the tests lean on. `pred_def`/`pred_stable` are the
+/// two plain Unary idem⊤ classes; `retired` doubles as the MARKER class —
+/// the one cataloged Unary idem⊤ class outside the PredLayer pair, which the
+/// Marker action's guards demand.
+pub fn pred_def_ty() -> Endset {
+    enc(&[ra(1)])
 }
-
-/// App type keys (ordinals ≥ 10 in subspace 9).
-pub fn rel_ty() -> Endset {
-    enc(&[ra(10)]) // Binary, idem⊤
-}
-pub fn multi_ty() -> Endset {
-    enc(&[ra(11)]) // Multi, idem⊥
-}
-pub fn bh4_ty() -> Endset {
-    enc(&[ra(12)]) // Unary, idem⊥, Age
-}
-pub fn bh3_ty() -> Endset {
-    enc(&[ra(13)]) // Binary, idem⊥, ReverseLookup
+pub fn pred_stable_ty() -> Endset {
+    enc(&[ra(2)])
 }
 pub fn marker_ty() -> Endset {
-    enc(&[ra(14)]) // Unary, idem⊤ — the canonical Marker class
+    enc(&[ra(3)]) // the shipped Retired class
+}
+pub fn retraction_ty() -> Endset {
+    enc(&[ra(5)])
 }
 
-pub fn decls() -> Vec<TypeDecl> {
-    vec![
-        TypeDecl {
-            key: rel_ty(),
-            reg: Registration { shape: Shape::Binary, idem: true, behaviors: BTreeSet::new() },
-        },
-        TypeDecl {
-            key: multi_ty(),
-            reg: Registration { shape: Shape::Multi, idem: false, behaviors: BTreeSet::new() },
-        },
-        TypeDecl {
-            key: bh4_ty(),
-            reg: Registration {
-                shape: Shape::Unary,
-                idem: false,
-                behaviors: BTreeSet::from([Behavior::Age]),
-            },
-        },
-        TypeDecl {
-            key: bh3_ty(),
-            reg: Registration {
-                shape: Shape::Binary,
-                idem: false,
-                behaviors: BTreeSet::from([Behavior::ReverseLookup]),
-            },
-        },
-        TypeDecl {
-            key: marker_ty(),
-            reg: Registration { shape: Shape::Unary, idem: true, behaviors: BTreeSet::new() },
-        },
-    ]
-}
-
-/// The fixture type configuration — the five reserved addresses plus the five
-/// app decls above. `config_with(decls)` names the cases that vary the decls
-/// against the same reserved addresses.
-pub fn config() -> TypeConfig {
-    config_with(decls())
-}
-
-pub fn config_with(decls: Vec<TypeDecl>) -> TypeConfig {
-    TypeConfig { reserved: reserved(), decls }
+/// An UNCATALOGED type number — `type_check`'s `UnregisteredType` probe and
+/// the open surface's verbatim deposits.
+pub fn uncataloged_ty(k: u32) -> Endset {
+    enc(&[ra(k)])
 }
 
 // ─────────────────────────────── world assembly ─────────────────────────────
@@ -230,7 +185,7 @@ pub fn genesis_world() -> World {
         m3: seeded_m3(),
         content: ContentStore::default(),
         m5: M5State::genesis(),
-        links: LinkState::genesis(config()).expect("test genesis type config is valid"),
+        links: LinkState::genesis(),
     }
 }
 
@@ -243,10 +198,10 @@ pub fn kernel() -> Arc<Kernel<World>> {
     Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
 }
 
-/// The ONE engine-built registry (the test assembler's copy of the
-/// genesis-sealed config — same validated inputs as `LinkState::genesis`).
+/// The ONE engine-built registry — the format constants, same build as
+/// `LinkState::genesis`.
 pub fn registry() -> Arc<TypeRegistry> {
-    Arc::new(TypeRegistry::build(&config()).expect("test genesis type config is valid"))
+    Arc::new(TypeRegistry::build())
 }
 
 fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {
@@ -257,28 +212,27 @@ fn mk_ls(k: &Kernel<World>) -> LinkWriter<'_, World> {
     LinkWriter::new(k)
 }
 
-/// The engine-assembled Coordinator over the shared kernel.
+/// The engine-assembled Coordinator over the shared kernel — infallible: the
+/// catalog is a pure read of the injected registry.
 pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
-    try_coord(k, registry(), reserved(), decls())
-        .expect("the catalog projection validates against the same genesis config")
+    Coordinator::new(Arc::clone(k), registry(), Box::new(mk_vs), Box::new(mk_ls))
 }
 
-/// Assembly with caller-controlled (registry, reserved, decls) — the
-/// validate-once-or-fail projection under test.
-pub fn try_coord(
-    k: &Arc<Kernel<World>>,
-    registry: Arc<TypeRegistry>,
-    reserved: ReservedAddrs,
-    decls: Vec<TypeDecl>,
-) -> Result<Coordinator<World>, skep_coordination::CatalogError> {
-    Coordinator::new(
-        Arc::clone(k),
-        registry,
-        reserved,
-        decls,
-        Box::new(mk_vs),
-        Box::new(mk_ls),
-    )
+/// A TO-bearing tuple in a CATALOGED class, deposited through the open
+/// surface (the managed gate admits only Unary tuples in this format, and
+/// the open surface is shape-blind) — the M9 domain/eval tests' way of
+/// putting a relation with a G slot into a class the catalog speaks about.
+pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address) -> Address {
+    LinkWriter::new(k.as_ref())
+        .makelink(
+            Caller::System,
+            &doc1(),
+            SlotArg::Addrs(vec![from.clone()]),
+            SlotArg::Addrs(vec![to.clone()]),
+            SlotArg::Addrs(vec![ra(ty)]),
+        )
+        .expect("open-surface deposit")
+        .0
 }
 
 /// A LinkWriter handle for direct upstream writes in tests.

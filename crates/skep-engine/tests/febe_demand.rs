@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use common::*;
 use skep_content::Val;
-use skep_engine::{Engine, EngineStores, GenesisConfig};
+use skep_engine::{Engine, EngineStores};
 use skep_febe::{Op, Operation, Request, Response};
 use skep_kernel::Kernel;
 use skep_retrieval::Spec;
@@ -83,7 +83,7 @@ fn engine_world_satisfies_the_febe_demand() {
 #[test]
 fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let dir = tempdir().expect("tempdir");
-    let engine = Engine::open(fsync_cfg(dir.path()), GenesisConfig::standard()).expect("fsync open");
+    let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()

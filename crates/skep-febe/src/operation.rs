@@ -702,7 +702,7 @@ mod tests {
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
-    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, ReservedAddrs, TypeConfig};
+    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter};
     use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
     use super::*;
@@ -789,26 +789,12 @@ mod tests {
     fn a(comps: &[u32]) -> Address {
         validate(t(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
-    fn ra(k: u32) -> Address {
-        a(&[9, 0, 9, 0, 9, 0, 9, k]) // reserved-type fixtures: subspace 9 ∉ {s_C, s_L}
-    }
-
     fn genesis_world() -> World {
         World {
             m3: M3State::genesis(),
             content: ContentStore::default(),
             m5: M5State::genesis(),
-            links: LinkState::genesis(TypeConfig {
-                reserved: ReservedAddrs {
-                    pred_def: ra(1),
-                    pred_stable: ra(2),
-                    retired: ra(3),
-                    supersedes: ra(4),
-                    retraction: ra(5),
-                },
-                decls: vec![],
-            })
-            .expect("test genesis type config is valid"),
+            links: LinkState::genesis(),
         }
     }
 

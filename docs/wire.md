@@ -769,11 +769,13 @@ other address.
 (the type key as an endset, usually unit subtree spans of type addresses)
 from `from` to the `to` addresses, homed in `home`. Idempotent within a
 type class: re-emitting an existing tuple acks the incumbent address.
-→ `ack_addr`.
+→ `ack_addr`. The example retires `1.0.1.0.2` under the shipped Retired
+class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3` (§Reserved type
+addresses in the changelog): Unary, so `to` is empty.
 
 <!-- wire: request emit -->
 ```json
-{"from":"1.0.1.0.1","home":"1.0.1.0.1","op":"emit","to":["1.0.1.0.2"],"ty":[{"start":"9.0.9.0.9.0.9.4","width":"0.0.0.0.0.0.0.1"}]}
+{"from":"1.0.1.0.2","home":"1.0.1.0.1","op":"emit","to":[],"ty":[{"start":"1.1.0.1.0.1.0.1.3","width":"0.0.0.0.0.0.0.0.1"}]}
 ```
 
 **`nullify`** — the sole retraction path: retract `target` (a link) from
@@ -1261,6 +1263,33 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v6.2 (reserved type addresses are in-docuverse ghost tumblers; the genesis
+configuration is retired — the two owner rulings of 2026-08-26, applied):
+
+* The five reserved type addresses are GHOST TUMBLERS — compiled format
+  constants at `1.1.0.1.0.1.0.1.x` for x = 1..5 (pred_def, pred_stable,
+  retired, supersedes, retraction): content positions 1–5 of doc 1 of
+  account 1 (the node operator's, by the claim-ceremony convention) of
+  the registry node `1.1`. T4-valid, in-docuverse names at which nothing
+  exists and nothing is ever minted — the allocator's compiled
+  ghost-region floor is what makes "a reserved name can never equal an
+  allocated address" true, replacing the abolished out-of-tree
+  `9.0.9.0.9.0.9.k` namespace (no address space exists outside the
+  docuverse). A type is a number: the daemon's semantics for the five
+  shipped classes are compiled in; every other type means what its
+  interpreting client says it means, and no document is semantically
+  authoritative for a type.
+* `GenesisConfig` and the app-declared types seam (`decls`) are RETIRED:
+  the values are the format, not a sealed configuration, so the
+  byte-identical-genesis caller contract and the reopened-under-
+  different-config refusals are gone; the journal and checkpoint format
+  stamps (`SKJ2`/`SKC2`) name the format that wrote them. The
+  architecture's extension path is predicates (pdef content), not new
+  compiled substrate classes.
+* FORMAT CONSEQUENCE, accepted by the owner in the ruling (pre-release):
+  journals and checkpoints written under the 9-space configuration DO
+  NOT REOPEN under this format.
 
 v6.1 (routed documentation pins — the PUB sweeps' wire routes, landed
 2026-08-28; no encoding, surface, or behavior change):

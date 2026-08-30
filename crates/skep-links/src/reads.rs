@@ -292,8 +292,9 @@ impl LinkState {
     /// filters nothing, where its coverage is non-empty. NOT
     /// [`LinkState::is_k`]'s regime, which is `covers` outright.
     ///
-    /// Correct TYPE-LESS because v1 registers exactly one BH1 type —
-    /// build-enforced (`UnservedSecondFilter`, §B).
+    /// Correct TYPE-LESS because exactly one BH1 type is registered — the
+    /// registry's population is the compiled shipped table and `Retired` is
+    /// its one `ReadFilter` (§B).
     pub fn is_filtered(&self, probe: &Tumbler) -> bool {
         under_any(self.retired_roots(), probe)
     }
@@ -732,10 +733,11 @@ impl LinkState {
     }
 
     /// The v1 walk-serving scope (§5): the walk family serves the shipped
-    /// `Supersedes` class and no other. The one statement of the rule
-    /// `succs`/`chain`/`tip` apply, and the read-side half of the build-time
-    /// fence `RegistryError::UnservedWalk` holds up — both lift together when
-    /// the parameterized multi-BH2 path lands.
+    /// `Supersedes` class and no other — the one statement of the rule
+    /// `succs`/`chain`/`tip` apply. With the registry's population fixed to
+    /// the compiled shipped table, no second BH2 declaration can exist to be
+    /// unserved; this scope test lifts when the parameterized multi-BH2 path
+    /// lands.
     ///
     /// Also the walk family's ONE classification site, so their shared `ty`
     /// precondition has one origin: [`coverage_class`] is total on the

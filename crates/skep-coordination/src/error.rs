@@ -6,7 +6,7 @@
 use skep_address::Address;
 use skep_arrangement::InsertError;
 use skep_kernel::TxnError;
-use skep_links::{Behavior, EmitError, NullifyError, ShippedType};
+use skep_links::{Behavior, EmitError, NullifyError};
 
 use crate::ast::{TypeKey, VarId};
 use crate::value::Sort;
@@ -150,21 +150,6 @@ pub enum RuleError {
     /// `Marker.ty` ∈ {pdef, pd_stable} — PR-DISC reserves those slices for
     /// `register_pred`/`certify_stable`.
     PredLayerMarkerType(TypeKey),
-}
-
-/// `Coordinator::new` rejection — the catalog projection is
-/// validate-once-or-fail, mirroring genesis (§Core data model), so residual
-/// drift of the twice-passed `(reserved, decls)` is caught at assembly, never
-/// as a spurious `UnregisteredType` at type-check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CatalogError {
-    /// `enc(&[reserved.X])` not coverage-equal to the injected registry's own
-    /// `reserved(X)` — the twice-passed pair drifted from the genesis pair.
-    ReservedMismatch(ShippedType),
-    /// A `decls` key (pre-checked address-denoting, keeping the
-    /// `coverage_class` probe total) with no registration in the injected
-    /// registry — drift caught at construction.
-    DeclNotInRegistry(TypeKey),
 }
 
 // ───────────────── `?`-conversions the op bodies need ─────────────────

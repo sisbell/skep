@@ -18,7 +18,10 @@ use serde::Serialize;
 
 use crate::journal::fsync_dir;
 
-const MAGIC: [u8; 4] = *b"SKC1";
+// The trailing numeral is the checkpoint's FORMAT stamp; bumped 1 → 2 at
+// the 2026-08-26 genesis re-baseline (M7's slice no longer carries a sealed
+// type config, so pre-baseline checkpoint bytes are not this format's).
+const MAGIC: [u8; 4] = *b"SKC2";
 const HEADER_LEN: usize = 24;
 
 /// One checkpoint on disk: the coordinate its name claims, and where it is.
@@ -212,7 +215,7 @@ mod tests {
         let body = bincode::serialize(&world()).unwrap();
 
         let mut expected = Vec::new();
-        expected.extend_from_slice(b"SKC1");
+        expected.extend_from_slice(b"SKC2");
         expected.extend_from_slice(&7u64.to_le_bytes()); // seq
         expected.extend_from_slice(&crc32c::crc32c(&body).to_le_bytes()); // crc(body)
         expected.extend_from_slice(&(body.len() as u64).to_le_bytes()); // body_len

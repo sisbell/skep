@@ -11,12 +11,12 @@ readme = "README.md"
 [dependencies]
 # The design's mandated shapes (§Core data model): persistent im collections
 # for the authoritative links map and every recomputable hint; the serde
-# feature because the authoritative slice (links + genesis type config) rides
-# M2 checkpoints.
+# feature because the authoritative slice (the links map) rides M2
+# checkpoints.
 im.workspace = true
-# serde's `rc` feature: the genesis `TypeConfig` is Arc-wrapped so the
-# clone-and-modify fold bumps a refcount instead of copying the declaration
-# vector on every record (§Core data model).
+# serde's `rc` feature: retained for the Arc-wrapped skip-serialized
+# registry field's derive plumbing (the sealed genesis config it once
+# checkpointed is retired — the type set is compiled format).
 serde = { workspace = true, features = ["rc"] }
 # M1 — tumbler/address/span algebra; M7 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }

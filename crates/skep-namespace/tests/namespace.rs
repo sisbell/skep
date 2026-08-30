@@ -16,6 +16,7 @@ use skep_kernel::{
     WorldState,
 };
 use skep_namespace::{
+    ghost_doc, ghost_position, GHOST_POSITIONS,
     prefix_contains, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError,
     Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS,
 };
@@ -1403,7 +1404,7 @@ fn pre_work_rejections_open_no_transaction() {
 /// so this states the fail-stop only where debug assertions are compiled in.
 #[test]
 #[cfg(debug_assertions)]
-#[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
+#[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
     let _ = M3State::genesis().apply_m3(&alloc(&[1, 0, 5]));
 }
@@ -1412,7 +1413,7 @@ fn a_jumped_allocate_ordinal_fail_stops_the_fold() {
 /// silently regress the frontier and re-hand an address already minted.
 #[test]
 #[cfg(debug_assertions)]
-#[should_panic(expected = "Allocate ordinal must equal its namespace frontier + 1")]
+#[should_panic(expected = "Allocate ordinal must equal its namespace's effective frontier + 1")]
 fn a_regressed_allocate_ordinal_fail_stops_the_fold() {
     let s = M3State::genesis()
         .apply_m3(&alloc(&[1, 0, 1]))
@@ -1574,4 +1575,184 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     let (d2, _) = m3.mint_document(&acct).expect("mint after recovery");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+}
+
+// ---- the ghost region (owner ruling, 2026-08-26) ----
+
+/// The non-reissue guarantee, driven through the real ops — the load-bearing
+/// clause of the ghost-tumbler ruling: dispatch is by number, so the
+/// allocator must provably never issue any of the five reserved values. The
+/// ghost region IS reachable territory (registry node admitted, operator
+/// delegated, doc-1 created, content minted), which is exactly why the floor
+/// exists; this drives the one chain that could issue a ghost tumbler from
+/// genesis to well past the region and watches every answer.
+#[test]
+fn the_content_chain_of_the_ghost_doc_never_issues_a_ghost_tumbler() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+
+    // Before any of its lineage exists, nothing exists at a ghost tumbler.
+    for x in 1..=GHOST_POSITIONS {
+        assert!(
+            !k.snapshot().world().m3().is_allocated(&ghost_position(x)),
+            "ghost {x} allocated at genesis"
+        );
+    }
+
+    // The registry node 1.1, admitted under the abstract root [1]; the claim
+    // ceremony's delegate (the operator at account 1); the ceremony's doc-1.
+    ns.register_node(t(&[1, 1])).expect("the registry node 1.1 is admissible");
+    let (operator, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
+        .expect("the operator lands at account 1");
+    let (doc1, _) = ns.create_new_document(ID1, &operator).expect("the ceremony's doc-1");
+    assert_eq!(
+        doc1,
+        ghost_doc(),
+        "the ceremony's doc-1 is the ghost home document, at its ordinary ordinal"
+    );
+
+    // Drive the one namespace whose chain contains the five ghost tumblers:
+    // every mint lands PAST the region, contiguously from GHOST_POSITIONS + 1.
+    for expected in GHOST_POSITIONS + 1..=GHOST_POSITIONS + 7 {
+        let minted = commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
+            m3.mint_content(&doc1)
+        });
+        assert_eq!(
+            minted,
+            a(&[1, 1, 0, 1, 0, 1, 0, 1, expected]),
+            "the ghost doc's content chain must start past the region and stay contiguous"
+        );
+    }
+
+    // The exclusion is permanent, not merely initial: with the stored
+    // frontier far past the region, the five still answer unallocated —
+    // nothing exists at a dispatch key, and a COPY oracle asking about one
+    // is refused. Position GHOST_POSITIONS + 1 is an ordinary member.
+    let snap = k.snapshot();
+    let m3 = snap.world().m3();
+    for x in 1..=GHOST_POSITIONS {
+        assert!(!m3.is_allocated(&ghost_position(x)), "ghost {x} became a chain member");
+    }
+    assert!(m3.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
+
+    // The sibling chains under the same lineage produce their own members,
+    // never a ghost tumbler — the T4b unique-parse half of the argument, at
+    // the chains an attacker would actually drive: the link chain differs in
+    // subspace, the version chain in tier shape.
+    let link = commit_mint(&k, M3State::link_lock_key(&doc1), |m3| m3.mint_link(&doc1));
+    assert_eq!(link, a(&[1, 1, 0, 1, 0, 1, 0, 2, 1]));
+    let version = commit_mint(&k, M3State::version_lock_key(&doc1), |m3| {
+        m3.mint_version(&doc1)
+    });
+    assert_eq!(version, a(&[1, 1, 0, 1, 0, 1, 1]));
+
+    // A SECOND document under the operator carries no floor: its content
+    // chain starts at 1 like any other — the region is five positions of one
+    // document, not a rule about the prefix.
+    let (doc2, _) = ns.create_new_document(ID1, &operator).expect("doc-2");
+    assert_eq!(doc2, a(&[1, 1, 0, 1, 0, 2]));
+    let first = commit_mint(&k, M3State::content_lock_key(&doc2), |m3| {
+        m3.mint_content(&doc2)
+    });
+    assert_eq!(first, a(&[1, 1, 0, 1, 0, 2, 0, 1, 1]));
+}
+
+/// The floored frontier is ordinary recoverable state: a slice that minted
+/// past the ghost region round-trips M2's checkpoint encoding, and the
+/// recovered slice keeps both halves — members stay members, ghosts stay
+/// excluded. The frontier key's anchor is the ghost doc's content base,
+/// which must pass the NsKeyShadow T4 door like any other key.
+#[test]
+fn a_floored_frontier_survives_the_checkpoint_round_trip() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    ns.register_node(t(&[1, 1])).expect("register 1.1");
+    let (operator, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
+        .expect("delegate the operator");
+    let (doc1, _) = ns.create_new_document(ID1, &operator).expect("doc-1");
+    commit_mint(&k, M3State::content_lock_key(&doc1), |m3| m3.mint_content(&doc1));
+
+    let live = k.snapshot().world().m3().clone();
+    let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
+    let recovered: M3State = bincode::deserialize(&bytes).expect("the slice re-enters");
+    assert_eq!(recovered, live);
+    for x in 1..=GHOST_POSITIONS {
+        assert!(!recovered.is_allocated(&ghost_position(x)));
+    }
+    assert!(recovered.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
+    let (next, _) = recovered.mint_content(&doc1).expect("the chain continues");
+    assert_eq!(next, a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 2]));
+}
+
+/// A ghost-ordinal `Allocate` is OUTSIDE the fold's totality domain — the
+/// contiguity fail-stop reads the effective frontier, so a record claiming a
+/// ghost tumbler is corruption caught at the fold, not an ordinal silently
+/// absorbed into membership.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "effective frontier")]
+fn the_fold_fail_stops_on_an_allocate_inside_the_ghost_region() {
+    M3State::genesis().apply_m3(&alloc(&[1, 1, 0, 1, 0, 1, 0, 1, 1]));
+}
+
+/// Account prefix 1.1 is the node operator's by standing convention (ruling
+/// clause 2), and M3 already enforces the half a format can: the first
+/// delegate under ANY node receives account ordinal 1 — the frontier's
+/// `c₁ = N·0·1`, which `delegate`'s next-form gate demands verbatim — and
+/// once seated it is never re-delegated, because prefix freshness refuses
+/// the seat a second time. Pinned at the bootstrap node and at the registry
+/// node, the two boards the numbering ruling names.
+#[test]
+fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+
+    // Under the abstract root [1], the peek and the gate agree on 1.0.1…
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m3().next_account_prefix(&a(&[1])), Some(a(&[1, 0, 1])));
+    drop(snap);
+    // …an off-by-one guess is refused as not next-form…
+    assert!(matches!(
+        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID1)),
+        DelegateError::NotNextForm
+    ));
+    // …and the first delegation is exactly account 1.
+    let (first, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("the first delegate under [1]");
+    assert_eq!(first, a(&[1, 0, 1]));
+
+    // The registry node: the operator's prefix is 1.1.0.1, and once seated
+    // it cannot be delegated to anyone else — π₀ is no longer its ω (the
+    // gate order reaches NotAuthorized before freshness), and the operator
+    // itself is refused at ancestry (a prefix is never its own strict
+    // ancestor). The next arrival lands at ordinal 2.
+    ns.register_node(t(&[1, 1])).expect("register 1.1");
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m3().next_account_prefix(&a(&[1, 1])),
+        Some(a(&[1, 1, 0, 1])),
+        "the claim ceremony's delegate lands the operator at account 1"
+    );
+    drop(snap);
+    let (operator, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID2)
+        .expect("the operator's delegation");
+    assert_eq!(operator, a(&[1, 1, 0, 1]));
+    assert!(matches!(
+        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), UNKNOWN_ID)),
+        DelegateError::NotAuthorized
+    ));
+    assert!(matches!(
+        rejected(ns.delegate(ID2, t(&[1, 1, 0, 1]), UNKNOWN_ID)),
+        DelegateError::NotAncestor
+    ));
+    let snap = k.snapshot();
+    assert_eq!(
+        snap.world().m3().next_account_prefix(&a(&[1, 1])),
+        Some(a(&[1, 1, 0, 2])),
+        "the operator's prefix is never delegated to anyone else"
+    );
 }

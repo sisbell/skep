@@ -24,7 +24,9 @@ acknowledged only after it is durable on disk.
 
 | Method & path    | Purpose                                                    |
 |------------------|------------------------------------------------------------|
-| `POST /session`  | Bind a principal; returns an opaque session token.         |
+| `POST /session`  | Bind a principal — bare, or signed over a challenge; returns an opaque session token. |
+| `GET /challenge` | Issue a signed-handshake nonce for a principal (§Sessions). |
+| `POST /session/close` | End the presented session; idempotent `204` (§Sessions). |
 | `POST /op`       | One operation frame in, one response document out.         |
 | `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
 | `GET /health`    | Liveness, current log position, and the head commit's time. |
@@ -45,20 +47,46 @@ long-lived response — a single unbounded body, ended by the daemon (clean
 close) at shutdown. HTTP/1.0 and 1.1 are accepted; request bodies ride
 with `Content-Length` (absent means empty; `Transfer-Encoding` is refused
 with `400 malformed_http`); `Expect: 100-continue` is honored. Bodies are
-capped at **8 MiB**: a larger declared `Content-Length` is refused with
-`413 payload_too_large` before any body byte is read.
+capped per route — **8 MiB** on the frame routes (`/op`, `/op-at`),
+**8 KiB** everywhere else (the session bodies ride the small cap): a
+larger declared `Content-Length` is refused with `413 payload_too_large`
+before any body byte is read.
 
-### Identity — a scope decision
+### Identity — modes, principals, credentials
 
-Identity is **local trust**: a client names its own principal (a small
-integer) at `POST /session`, with no credential and no cryptographic
-authentication. Principal `0` is the bootstrap principal, which owns the
+Identity has two layers. A **principal** (a small integer) is the account
+system's actor: principal `0` is the bootstrap principal, which owns the
 root of the namespace; any other principal must first be minted with a
-`delegate` operation before its writes will be accepted by the stores. Each
-distinct principal is its own account, so every write is attributed. This is
-the deliberate v1 scope — the daemon binds only the loopback interface
-precisely because this trust model does not survive a network. It is a
-decision, not a TODO.
+`delegate` operation before its writes will be accepted by the stores.
+Each distinct principal is its own account, so every write is attributed.
+A **credential** is an Ed25519 public key enrolled for an account
+(§The claim ceremony and credentials): keys ride the wire as 64 lowercase
+hex of the raw key, and a key is named by its **fingerprint** — 64
+lowercase hex of `SHA-256("skep-key-v1" ‖ be32-framed alg token ‖
+be32-framed raw key)` — the flat form every identity surface below emits
+(grouping is a client display convention).
+
+The board is always in exactly one of three MODES, derived from two facts
+`GET /health` publishes (`auth.claimant` and `auth.local_trust` — there
+is deliberately no `mode` field; clients derive it from the pair):
+
+* **UNCLAIMED** — no claimant yet. Bare sessions bind on loopback, and
+  the write surface admits only the claim ceremony's own opening shape —
+  everything else refuses `claim_first` (§Credential refusals). Reads
+  are open throughout.
+* **CLAIMED-PERMISSIVE** — claimed, `--local-trust` on (the default). A
+  bare session still binds on loopback: any local party may write as any
+  principal. That is the default's disclosed cost, and the daemon warns
+  about it at startup and again at the claim flip. Credential deposits
+  and bare writes landing in the published world still refuse
+  (`signed_session_required`).
+* **ENFORCING** — claimed, `--local-trust` off. Bare sessions are
+  refused; only signed sessions write.
+
+The signed session is cryptographic identity — a challenge signed by a
+key enrolled for the principal's account (§Sessions). The bare session is
+v1's **local trust**, retained as a mode rather than the whole model; the
+daemon still binds **127.0.0.1 only**.
 
 **Ownership** (v5.1): attribution now gates. A write into a document's
 space — its content arrangement or its link subspace — is accepted only
@@ -75,56 +103,242 @@ document) — proposing a change is forking, never editing in place.
 ### Cross-origin access — a scope decision
 
 Every response — every status, every endpoint, rejections and transport
-errors included — carries `Access-Control-Allow-Origin: *`. `OPTIONS` on
-any known path answers the preflight:
+errors included — carries `Access-Control-Allow-Origin: *` and
+`Access-Control-Expose-Headers: Skepd-Session` (the death signal below
+is not a CORS-safelisted response header; without the exposure a page on
+a configured non-loopback origin could never read it). `OPTIONS` on any
+known path — the session endpoints included — answers the preflight:
 
 ```
 OPTIONS /op
 → 204
 Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Skepd-Session
 Access-Control-Allow-Methods: GET, POST, OPTIONS
 Access-Control-Allow-Headers: Content-Type, Skepd-Session
 Access-Control-Max-Age: 86400
 ```
 
-(`OPTIONS` on an unknown path is the ordinary 404.) The `*` is deliberate:
-the daemon is loopback-only under the local trust model above, so any
-local page may read what any local process may read. Writes still require
-a session token, and the token is not a browser credential — a page holds
-one only if it opened the session itself. This decision is revisited when
-authentication lands, not before.
+(`OPTIONS` on an unknown path is the ordinary 404.) Authentication has
+landed and the v4 decision was revisited as promised: `*` stays,
+deliberately. Reads are guest-free, and neither credential is
+browser-ambient — the signed session binds its origin inside the
+signature (no cookies; §Sessions), the bare bind — the one ambient
+credential retained — is refused server-side when the request's
+`Origin` header is not one the bare origin set answers for, and the
+session token is 128 bits of CSPRNG output a foreign page cannot guess.
+A narrower ACAO was weighed and declined: the foreign page's POST is
+fenced by the daemon, not by what the browser lets it read back, and
+narrowing would break local pages that only read.
 
 ### Sessions
 
+The token is **32 lowercase hex** — 128 bits of fresh OS-CSPRNG output
+minted per session open, never derived from process state. Admission is
+strict: a presented header value that is not exactly 32 lowercase hex IS
+no token — the request runs as a guest, nothing is closed, no signal is
+sent. (v1's `prefix.suffix` token shape is refused.) Send it on
+subsequent calls as the header:
+
 ```
-POST /session
-{"principal": 2}
+Skepd-Session: 9f3a6c21d4b8e07a5c1b2d4e6f708192
+```
+
+**`POST /session`** accepts exactly two body forms. Anything else — an
+unknown field, a missing member of the signed triple, a malformed value
+— is `400 malformed_session_request` with a `detail`, and a 400 never
+spends a nonce: a syntax fault costs no re-challenge.
+
+*Bare* — `{"principal": 2}`, v1's form unchanged. Honored only when ALL
+of: the board is not ENFORCING (§Identity); the TCP peer is loopback;
+and the request's `Origin` header, when present, parses as a canonical
+origin in the **bare origin set** (§The claim ceremony and credentials;
+`Origin: null` parses to nothing and refuses). Refusal is the one 401
+below.
+
+*Signed* — `{"principal": 2, "nonce": "<64 hex>", "origin":
+"<origin>", "sig": "<128 hex>"}` — verified in every mode, UNCLAIMED
+included. The fields are strict bytes: `origin` must arrive already
+canonical (lowercase `scheme://host[:port]`, no path, no trailing
+slash, the scheme's default port omitted), `nonce` is 64 LOWERCASE hex,
+`sig` is 128 hex characters (case-free — it is decoded, never framed)
+for exactly 64 signature bytes. The daemon canonicalizes nothing on
+this path.
+
+The handshake starts at the challenge:
+
+```
+GET /challenge?principal=7
 → 200
-{"principal": 2, "session": "9f3a6c21d4b8e07a.1"}
+{"nonce":"<64 lowercase hex>","principal":7,"ttl_ms":60000}
 ```
 
-The returned `session` string is an opaque token. Send it on subsequent
-`/op` calls as the header:
+A nonce is issued for ANY principal — nothing about issuance is secret;
+the burn is the credential. It lives 60 seconds (`ttl_ms` is a byte pin
+of that constant) and is **single-use**: verification removes it
+whether or not the signature validates, so a failed signed attempt
+costs a fresh challenge. At most 4096 nonces are live at once; past the
+cap the oldest is evicted. A malformed query is
+`400 malformed_challenge`.
+
+The signed bytes are
 
 ```
-Skepd-Session: 9f3a6c21d4b8e07a.1
+"skep-session-v1" ‖ be32(|origin|)‖origin ‖ be32(|nonce|)‖nonce ‖ be32(|principal|)‖principal
 ```
 
-The daemon echoes `principal` back so the client can name its own account
-later via the `principal_prefix` operation.
+over the body's OWN strings — `principal` as shortest ASCII decimal,
+`be32` the 4-byte big-endian byte length. Sign with a private key whose
+public key is enrolled for the principal's account: principal `0` signs
+with the CLAIMANT account's keys (none exist while unclaimed), every
+other principal with its own account's. Verification order: the origin
+must be in the **signed origin set**; the nonce burns (unknown,
+expired, wrong-principal and reused all die here, and the entry is gone
+either way); the account's key set must be non-empty; then every
+enrolled key is tried in fingerprint order (Ed25519 strict
+verification) — no cutoff, ever.
+
+**Every handshake failure — bare and signed alike — answers the ONE
+auth transport error**, permanent, byte-identical across causes,
+carrying no detail by design:
+
+```
+→ 401
+{"error":"session_rejected"}
+```
+
+Success is the familiar answer — the token, and `principal` echoed so
+the client can name its own account later via `principal_prefix`:
+
+```
+→ 200
+{"principal":7,"session":"9f3a6c21d4b8e07a5c1b2d4e6f708192"}
+```
+
+Every successful `POST /session` mints a distinct session, principal
+`0` included.
+
+**`POST /session/close`** (token in `Skepd-Session`) → `204`,
+idempotent. Closing a live session is a bare 204 — the close is the
+caller's own act, so no signal rides it; presenting an unknown or
+already-dead token answers 204 **with** the death signal below.
 
 Rules:
 
-* Tokens are process-lifetime state. **After a daemon restart every token is
-  dead**; requests carrying one behave exactly like requests carrying none
-  (below). Re-open your session.
-* A request with **no token, or an unknown/stale token**, still gets a full
-  answer: read operations are principal-free and succeed normally; write
-  operations are rejected with code `unauthenticated` (permanent). That
-  rejection is your signal to (re)open a session.
-* There is no close-session endpoint in v1: sessions are a map entry, they
-  live until the process exits. (Scope decision.)
-* A malformed session body gets `400` with a transport error (see below).
+* **Sessions can end before restart** — four ways: `POST
+  /session/close`; a daemon restart (every token dies; a stale token
+  then reads as unknown); **retirement** — a signed session dies when
+  its establishing key leaves the account's enrolled set; and **mode**
+  — a bare session's entry dies when the board is ENFORCING at
+  presentation. Dead entries are evicted lazily, at the next
+  presentation. There is no session TTL and no session cap.
+* **The death signal.** When a token-accepting route is presented an
+  UNKNOWN token, or a token whose entry is dead, the daemon closes the
+  binding and the response carries the header `Skepd-Session: closed`
+  — a read presenting a dead token is never silently a guest read. The
+  token-accepting routes: `POST /op`, `POST /op-at`, `GET /changes`,
+  `GET /dump`, `POST /session/close`, and `GET /events` — checked
+  before the stream opens, the header written once on the stream head.
+  `GET /health`, `GET /challenge`, `POST /session` and `GET /` are
+  token-blind.
+* **Refused-for-this-request is not death.** A LIVE bare session
+  presented from a request whose `Origin` header falls outside the bare
+  set (or from a non-loopback peer) runs that one request as a guest:
+  the entry lives untouched and no header is sent.
+* A request with **no token** (or an unparseable one) still gets a full
+  answer: read operations are principal-free and succeed normally;
+  write operations are rejected with code `unauthenticated`
+  (permanent) — still the first gate in the write order, ahead of every
+  credential token (§Credential refusals). That rejection is your
+  signal to (re)open a session.
+* The signal is additive: reads and writes are otherwise unchanged.
+
+### The claim ceremony and credentials
+
+Credential state is written THROUGH the ordinary link surface — no new
+write op exists. A **credential deposit** is a `make_link` whose type
+slot names one of three reserved credential type addresses — ghost
+tumblers in subspace 3 of the same ghost document that carries the
+reserved link classes; nothing is ever minted at them, and a resolved
+content span can never equal them:
+
+| Kind | Type address | Deposit shape |
+|------|--------------|---------------|
+| enroll | `1.1.0.1.0.1.0.3.1` | `from` = the record's positions (in the home's own space), `to` = the subject account (one address), homed in a **doc 1** — the subject's own for a holder act, its delegator's (the genesis registry) for the first seeding |
+| retire | `1.1.0.1.0.1.0.3.2` | the same shape, homed in the subject's OWN doc 1 only — no ancestor retires a holder's keys |
+| claim | `1.1.0.1.0.1.0.3.3` | `from` = the claiming account (one address), `to` = `[]`, no payload, homed in that account's doc 1 |
+
+Deposit slots are **address-form only** (`{"addrs": […]}`): a V-spec
+`from`/`to` refuses `resolved_from`, a credential-typed `emit` always
+refuses `emit_not_make_link`, and a credential-typed `edit_link` always
+refuses `resolved_from` (§Credential refusals). The home pin (RES-17):
+a credential link homed in any document of its account other than
+doc 1 refuses `not_doc_one`.
+
+The records themselves are plain content. Write the record's bytes into
+the home document first — the convention is ONE composite atom, so one
+address names the whole record — then deposit a link whose `from` names
+those positions (endset order, bytes concatenated; every named position
+must be in the home's own space and occupied). A record is capped at
+64 KiB and reads:
+
+```
+skep-enroll v1
+anchor ed25519 <64 hex public key> <label…>
+ed25519 <64 hex public key> <label…>
+```
+
+```
+skep-retire v1
+<64 hex fingerprint>
+```
+
+Line 1 is the header, byte-exact; one key (or fingerprint) per line;
+the LEADING token `anchor` marks an anchor key, and the flag is fixed
+for the fingerprint's lifetime; the label is everything after the hex,
+verbatim; `sig …` lines are skipped (reserved); lines split on `\n`
+alone; hex parses case-insensitively and is lowercase canonically. An
+unparseable record makes the deposit permanently inert — the daemon
+refuses it up front as `malformed_payload:<sub>` (§Credential
+refusals).
+
+**The ceremony** is the unclaimed board's one admitted write sequence
+(worked end-to-end in §A first board): `delegate` from principal 0 →
+the home mint (`create_new_document`, which becomes doc 1) → the record
+`insert` into doc 1 → the genesis enroll deposit → the claim deposit.
+The genesis deposit seeds the account's key set (the enrolled-set cap
+does not bind it, and the anchor gate is exempt — the seeding hand
+records the initial set, flags included); the claim deposit flips the
+board claimed — first claim wins, permanently. Only a top-level
+(bootstrap-delegated) account with a non-empty key set can claim. The
+ceremony's convention signs the claim with a just-enrolled key, proving
+custody before the flip; the unclaimed window itself admits the deposit
+from a bare session too.
+
+**Origins, and the claim-time drop.** Origins are configured at launch
+(`--origin`, repeatable) and published verbatim by `GET /health`
+(§The other endpoints); the canonical form is lowercase
+`scheme://host[:port]`, no path, no trailing slash, the scheme's
+default port omitted. Two sets derive from the config:
+
+* the **bare set** — configured ∪ the three loopback defaults of the
+  bound port (`http://127.0.0.1:P`, `http://[::1]:P`,
+  `http://localhost:P`) — in every mode;
+* the **signed set** — the bare set while unclaimed; **the configured
+  origins alone** once claimed. The drop is the point: a signed
+  handshake binds its origin inside the signature, and after the claim
+  only origins the operator affirmatively configured are signable.
+
+The empty-origins consequence: a board claimed with NO `--origin` has
+an empty signed set, so **every signed session is refused** (the one
+401) until the daemon is relaunched with an origin. The daemon says so
+— at startup and again, unconditionally, at the claim flip it warns:
+`board is claimed with no configured origin: signed_origins is empty
+and every signed session will be refused`. Its two sibling warnings:
+claimed with `--local-trust` still on (any loopback party may write as
+any principal — CLAIMED-PERMISSIVE), and a configured loopback-host
+origin naming a port the daemon is not bound to (keys enrolled under it
+are stranded until the origin is re-issued for the bound port).
 
 ### Correlation and idempotency
 
@@ -139,7 +353,11 @@ session, the daemon returns the original acknowledgment instead of
 re-executing. It is a best-effort hint: it does not survive a daemon
 restart, it is never applied to reads or rejections (a `reorder`/`retry`
 reissue always re-executes), and an `id` reused across different op kinds
-misses.
+misses. One credential-path difference: a credential deposit (§The claim
+ceremony and credentials) rides its own per-session memo with the same
+contract — the original acknowledgment, byte-identical, no re-execution
+— except the hit is KIND-BLIND (`id` already ran on this session) and
+the memo dies with its session, close included.
 
 ### HTTP status codes
 
@@ -151,7 +369,9 @@ Non-200 statuses are transport-level failures with a body of the shape
 
 | Status | `error`                     | When                                    |
 |--------|-----------------------------|-----------------------------------------|
-| 400    | `malformed_session_request` | `POST /session` body isn't `{"principal": n}` |
+| 400    | `malformed_session_request` | `POST /session` body is neither session form (§Sessions); the nonce survives |
+| 400    | `malformed_challenge`       | the `/challenge` query isn't `principal=<non-negative integer>` |
+| 401    | `session_rejected`          | the `POST /session` handshake refused — one code for every cause, no detail (§Sessions) |
 | 400    | `malformed_op_at`           | `POST /op-at` body isn't `{"at": n, "frame": {…}}` |
 | 400    | `write_at_history`          | the `/op-at` frame is a write operation |
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
@@ -491,6 +711,17 @@ in that document (a preview; nothing is written).
 {"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.1.0.2.3","home":"1.0.1.0.1","new":"1.0.1.0.1.0.2.2","old":"1.0.1.0.1.0.2.1"}],"resp":"claims"}
 ```
 
+**`key_set`** — key_set: an account's credential table (§Identity
+reads). `enrolled` and `retired` entries ride in fingerprint order;
+`anchor` per entry is the flag the fingerprint was ENROLLED under,
+retired entries included. A keyless account answers two empty arrays.
+(The example is illustrative — this shape is asserted by the daemon's
+auth suite against live bytes, not by the codec fixtures.)
+
+```json
+{"as_of":9,"enrolled":[{"alg":"ed25519","anchor":true,"fingerprint":"abababababababababababababababababababababababababababababababab","key":"d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"}],"resp":"key_set","retired":[{"anchor":false,"fingerprint":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}]}
+```
+
 ## Rejections
 
 Every failure of a parsed operation — and every unparseable frame — is the
@@ -528,8 +759,11 @@ Fields:
   lookups — and, on a `not_owner` rejection, the document (or target link)
   that failed the ownership check. Span faults: `not_ordinal_level`,
   `not_level_uniform`, `start_not_zero_free`, `start_too_shallow`.
-* `detail` — optional human-readable message (always present on
-  `unparseable`, where it says what failed to parse). One exclusion is
+* `detail` — optional message (always present on `unparseable`, where
+  it says what failed to parse). On `credential_refused` the field is a
+  MACHINE token — the code:detail convention, one pinned token per
+  refusal, e.g. `signed_session_required` — and the one place clients
+  dispatch on `detail` (§Credential refusals). One exclusion is
   pinned ahead of its code: the publication rounds' planned `withheld`
   rejection carries no `detail`, ever — its whole diagnosis is `code`
   plus `site.addr` — so no daemon drifts into describing, one field
@@ -554,6 +788,10 @@ Transport/lifecycle: `unauthenticated`, `malformed`, `durability`,
 `txn_over_budget` (the request's records all encode, but the transaction
 as a whole exceeds the kernel's per-transaction byte budget — permanent;
 split the request), `poisoned`.
+
+Credentials: `credential_refused` — the auth work's one new code,
+always `permanent`, always carrying a machine `detail` token
+(§Credential refusals below).
 
 Registration/residence: `home_not_registered`, `doc_not_registered`,
 `source_not_registered`, `parent_not_registered`, `not_registered`,
@@ -584,6 +822,88 @@ third round also rejects an over-large slot (`SlotTooLarge`, its
 MAX_SLOT_SPANS bound) and refuses through the supersession-class fence.
 Neither has a wire code — the list above deliberately carries none;
 codes are to be assigned when that links family ships on the wire.
+
+### Credential refusals
+
+Every `credential_refused` is the ordinary `rejected` shape with
+`disposition: "permanent"` uniformly and `detail` carrying exactly one
+machine token — key client behavior on the token, never on prose. A
+bare session depositing a credential on a claimed board, for example:
+
+```json
+{"code":"credential_refused","detail":"signed_session_required","disposition":"permanent","op":"make_link","resp":"rejected"}
+```
+
+The write order, as built. `unauthenticated` is slot 0 on every path: a
+guest write (no token, unknown token, dead entry) answers M10's own
+`unauthenticated` and never reaches a credential token. `not_owner`
+stays `execute`'s own code — never a `credential_refused` detail — and
+resolves AFTER every token below.
+
+**Ordinary (non-deposit) writes** pass three gates, in order, after the
+actor resolves:
+
+1. `nullify_not_retraction` — a `nullify` whose target link is
+   credential-typed: retraction never edits the key table. On a CLAIMED
+   board the token reaches only the owner of the target's home; any
+   other caller falls through and answers plain `not_owner`,
+   indistinguishable from the non-credential answer (an entitlement
+   scope, not a second rule).
+2. `mint_home_first` — MINT-FIRST: a `fork` or `version` by a principal
+   whose account's space has never held a document. Mint the home first
+   (`create_new_document`, which becomes the account's doc 1). Where
+   these committed before, they now refuse.
+3. The board-state gate, one arm per mode:
+   * claimed — `signed_session_required` (the publish class): a
+     bare-session op whose write lands in the PUBLISHED world. The one
+     born-published class this build computes is the mechanical home
+     mint — each account's doc 1; flagless mints resolve draft. So: an
+     `insert`/`delete`/`copy`/`rearrange` whose `doc` is a published
+     document the caller owns, a link write homed in one (`edit_link`
+     reads `d_s`), or a flagless `version` of a published source. A
+     foreign or unregistered home answers `execute`'s own code instead
+     (`not_owner`, `*_not_registered`). Signed sessions, draft writes,
+     bare reads, `delegate` and the home mint itself are unchanged.
+   * unclaimed — `claim_first`: an unclaimed daemon admits only the
+     ceremony's own shape — `delegate` from principal 0, a
+     `create_new_document` into an account holding no documents, an
+     `insert` into the caller's own doc 1 — from bare and signed
+     sessions alike; every other write refuses. Reads are untouched.
+
+**Credential deposits** — a write whose TYPE slot names a credential
+type (§The claim ceremony and credentials) — run a stricter order:
+
+* Ahead of any lock, the shape slots: `emit_not_make_link` (every
+  credential-typed `emit`, unconditionally — the emit path's dedup
+  could phantom-ack an act `key_set` never shows) and `resolved_from`
+  (a credential `make_link` whose `from` or `to` is the V-spec form —
+  deposit slots are address-form — and every credential-typed
+  `edit_link`).
+* Under the credential write lock, the identity fold's own verdict —
+  a deposit the fold would record but never honor is refused up front
+  with the fold's token: `malformed_shape`; `not_doc_one` (the home
+  pin: a credential link homed in a document of its account other than
+  doc 1); `no_holder`; `not_genesis_registry`; `not_holder_retirement`;
+  `would_empty` (a retirement naming the whole enrolled set);
+  `nothing_changed`; `already_claimed`; `claimant_keyless`;
+  `claimant_not_top_level`; `unpublished` (unreachable on this daemon —
+  v1 wires publication constant-true); and the payload joins
+  `malformed_payload:<sub>` with `<sub>` one of `too_large`,
+  `foreign_content`, `missing_value`, `not_utf8`, `bad_header`,
+  `bad_line:<n>`, `duplicate_key:<n>`, `empty` (`<n>` a 1-based line
+  number, the record header being line 1).
+* Then the daemon's own slots, in order: `undecodable_key` (valid-hex
+  key bytes that decode to no Ed25519 point can never sign — refused at
+  enrollment rather than discovered at a handshake);
+  `too_many_enrolled` (the enrolled-set cap, **16** — daemon policy,
+  raisable without format consequence; the enroll arm only, the
+  ceremony's genesis exempt); `anchor_session_required` (an anchor
+  retirement, or a post-genesis anchor-flagged enrollment, requires a
+  session an ANCHOR key of that account established — a bare session
+  never satisfies it; genesis exempt); and the two board-state arms
+  again — claimed: `signed_session_required` for ANY bare-session
+  deposit, genesis included; unclaimed: `claim_first` for any deposit
+  other than the ceremony's own genesis and claim.
 
 ## Operations
 
@@ -650,14 +970,35 @@ at session open — to resolve your own account. The argument is named
 {"op":"principal_prefix","principal":2}
 ```
 
+### Identity reads
+
+**`key_set`** — the credential table of `account`: who can sign for it,
+now and historically. Principal-free like every read — NO session is
+needed; the auth work deliberately preserves the no-session read — and
+served on `/op-at` too, as of any committed position (the same
+dispatcher; a historical world's identity table is rebuilt from the
+deposits committed by then, under the reconstruction budget like every
+historical answer). A non-account address rejects with the existing
+code `not_an_account` (`reorder`); a keyless account answers empty
+lists; an `id` is accepted and ignored, as on every read. → `key_set`.
+
+```json
+{"account":"1.0.1","op":"key_set"}
+```
+
 ### Arrangement (document editing)
 
 Ownership (v5.1): `insert`, `delete`, and `rearrange` require the session
 principal to own `doc`; `copy` requires owning the **destination** `doc`
 only — its source spans may read anyone's content (transclusion is
 unrestricted). A non-owner gets `not_owner` (permanent) with the document
-in `site.addr`. `version` is deliberately ungated: forking a foreign
-document into your own account IS the sanctioned "propose a change" path.
+in `site.addr`. `version` is deliberately un-owner-gated: forking a
+foreign document into your own account IS the sanctioned "propose a
+change" path. Since v7 that sentence carries two qualifications, neither
+an ownership gate: `mint_home_first` (a principal whose account holds no
+documents must mint its home before `fork`/`version`) and, on a claimed
+board, `signed_session_required` for a flagless `version` of a PUBLISHED
+source from a bare session (§Credential refusals).
 
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
@@ -723,6 +1064,16 @@ retraction should be open with viewer-side filtering, is a genuine
 governance question for the lattice — explicitly deferred, not decided by
 omission. Failures are `not_owner` (permanent) with the failing home or
 target in `site.addr`.
+
+Credential deposits (v7): a `make_link` whose `ty` names a credential
+type address (§The claim ceremony and credentials) is a credential
+DEPOSIT and runs the credential write sequence. Its `from` and `to`
+must be the address form (`resolved_from` otherwise); a
+credential-typed `emit` is always `emit_not_make_link`; a
+credential-typed `edit_link` is always `resolved_from`; and a `nullify`
+targeting a credential link is `nullify_not_retraction` — retraction
+never edits the key table (§Credential refusals for all four, and for
+the entitlement scope on the last).
 
 **`make_link`** — create an open link homed in `home`. Each of `from`,
 `to`, `ty` takes **one of two forms** (wire v5; no mixing within one slot):
@@ -1086,12 +1437,22 @@ head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s,
 the reconstruction bound included (`503 history_busy`); a malformed query
 is `400 {"error": "malformed_at", "detail": …}`.
 
+Routed, not yet in the protocol: an I-ADDRESSED value read as of a
+position — the home's mint frontier at N plus the values under it, a
+fact no arrangement-addressed read composes (an address minted and
+later un-arranged answers like one never minted). Named here because
+this document owns it when it lands; its consumers are the mirror fold
+and realm verification. No such op exists today.
+
 ## The commit stream
 
 **`GET /events`** answers `200 Content-Type: text/event-stream` and never
 ends on its own: it is the daemon's push channel for log movement, so
 clients stop polling `/health`. No session is needed — like every read it
-is principal-free. On connect the daemon immediately sends one event
+is principal-free — but the route is token-accepting (§Sessions): a dead
+or unknown token presented here meets `Skepd-Session: closed` on the
+stream's own head, written once, at open. On connect the daemon
+immediately sends one event
 carrying the current committed head; thereafter it sends an event whenever
 the head advances. Every event has this framing (`data` is compact JSON,
 the position alone):
@@ -1111,9 +1472,10 @@ Host: 127.0.0.1:8642
 
 HTTP/1.1 200 OK
 Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Skepd-Session
+Connection: close
 Content-Type: text/event-stream
 Cache-Control: no-cache
-Connection: close
 
 event: commit
 data: {"log_position":12}
@@ -1165,6 +1527,14 @@ Each entry:
   write names its **home** (`edit_link` both its homes, successor's first);
   the **minted** document for `create_new_document`/`fork`/`version`;
   `delegate` and `register_node` touch no document and carry `[]`.
+* `key` (v7) — the write's AUTH testimony: the 64-hex fingerprint of the
+  enrolled key whose signed session committed it; `"bare"` for a
+  bare-session write; `null` ONLY for lost metadata (a bare entry, or a
+  record written before testimony existed) — never for a bare write, and
+  never invented. Forward rule, pinned now: on a feed served by a daemon
+  that did not itself commit the entry (a future mirror), the field is
+  ABSENT rather than null — a consumer written to the three values must
+  not treat absence as a protocol violation.
 * `time` — the commit's wall-clock unix milliseconds, or `null` (below).
 
 Only writes appear: reads are not in the journal and never enter the feed.
@@ -1185,33 +1555,50 @@ a fence, not necessarily a position: any number works, and `since ≥ head`
 answers the empty page. Determinism: the same `(since, limit)` against the
 same journal answers byte-identically, across repeats and restarts.
 
-The examples below are produced by this flow on a fresh world, asserted
+The examples below are produced by this flow on a fresh board, asserted
 against live daemon bytes (the `time` values are illustrative — the one
-normalized field): `delegate` commits at position 2, `create_new_document`
-at 3, a two-byte `insert` at 8, `make_link` at 11.
+normalized field). A fresh board's first five commits are the claim
+ceremony's own (§A first board): positions 2, 3, 6, 9, 12 — the
+delegate, the home mint, the record insert, the genesis link, the claim
+link. The flow behind the examples then runs on that base, from bare
+sessions (CLAIMED-PERMISSIVE, so every `key` reads `"bare"`):
+`delegate` commits at position 14, the home mint at 15, a second —
+private — document at 16 (the account's doc 1 is born published, where
+bare writes are gated by design, so the flow's content goes to a draft
+document), a two-byte `insert` at 21, `make_link` at 24. The feed past
+the ceremony, `GET /changes?since=12`:
 
 <!-- wire: changes feed -->
 ```json
-{"changes":[{"at":2,"docs":[],"op":"delegate","time":1786838400000},{"at":3,"docs":["1.0.1.0.1"],"op":"create_new_document","time":1786838400012},{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1786838400031},{"at":11,"docs":["1.0.1.0.1"],"op":"make_link","time":1786838400047}],"last":11,"more":false}
+{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012},{"at":16,"docs":["1.0.2.0.2"],"key":"bare","op":"create_new_document","time":1786838400021},{"at":21,"docs":["1.0.2.0.2"],"key":"bare","op":"insert","time":1786838400033},{"at":24,"docs":["1.0.2.0.2"],"key":"bare","op":"make_link","time":1786838400047}],"last":24,"more":false}
 ```
 
-The first page of the same feed, `GET /changes?since=0&limit=2`:
+The first page of the same feed, `GET /changes?since=12&limit=2`:
 
 <!-- wire: changes feed_page -->
 ```json
-{"changes":[{"at":2,"docs":[],"op":"delegate","time":1786838400000},{"at":3,"docs":["1.0.1.0.1"],"op":"create_new_document","time":1786838400012}],"last":3,"more":true}
+{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":15,"more":true}
 ```
 
 **Bare entries.** A position whose metadata the daemon never observed — a
 data dir written before this feature existed, or a record lost to a crash
 — still appears, reconstructed from the journal itself, with every
-metadata field `null`. The same flow's first three writes on a pre-feature
-dir (byte-exact):
+metadata field `null`. A pre-feature data dir holding three writes (a
+delegate at 2, a mint at 3, an insert at 8 — written by the engine
+directly, before any daemon), byte-exact:
 
 <!-- wire: changes bare -->
 ```json
-{"changes":[{"at":2,"docs":null,"op":null,"time":null},{"at":3,"docs":null,"op":null,"time":null},{"at":8,"docs":null,"op":null,"time":null}],"last":8,"more":false}
+{"changes":[{"at":2,"docs":null,"key":null,"op":null,"time":null},{"at":3,"docs":null,"key":null,"op":null,"time":null},{"at":8,"docs":null,"key":null,"op":null,"time":null}],"last":8,"more":false}
 ```
+
+Routed, not yet in the protocol: `delegate` entries carrying the minted
+`new_prefix` and `new_id` (equivalently serving, a
+principal-enumeration read as of a position). Today a `delegate` entry
+carries `docs: []` and names neither, so the span from `delegate` to
+the first signed session is resumable from client state only — no
+board-side read ties a new account to its principal id. Reserved as a
+later round's delta.
 
 **Retention.** The feed's memory is the daemon's `commits.log` sidecar
 plus what the journal can still reconstruct. When `since` reaches below
@@ -1223,10 +1610,26 @@ parameter) is `400 {"error": "malformed_changes", "detail": …}`.
 
 ## The other endpoints
 
-**`GET /health`** → `200 {"head_time": <ms>|null, "log_position": <n>,
-"ok": true}`. `head_time` is the newest recorded commit's wall-clock unix
-milliseconds (§The change feed's timestamp scope: transport metadata) —
-`null` on a fresh world or when the head position's record is bare.
+**`GET /health`** → `200` with `ok`, `log_position`, `head_time`, and —
+since v7 — the `auth` object. Token-blind. `head_time` is the newest
+recorded commit's wall-clock unix milliseconds (§The change feed's
+timestamp scope: transport metadata) — `null` on a fresh world or when
+the head position's record is bare. A claimed board configured with one
+origin answers, illustratively:
+
+```json
+{"auth":{"claimant":"1.0.1","local_trust":true,"origins":["http://127.0.0.1:8642","http://[::1]:8642","http://localhost:8642","https://board.example"],"signed_origins":["https://board.example"]},"head_time":1786838400047,"log_position":24,"ok":true}
+```
+
+`auth.claimant` is the claiming account's address, `null` while
+unclaimed; `auth.local_trust` echoes the flag; and TWO origin lists ride
+side by side, each published VERBATIM from its own arm's rule so a
+refused handshake is diagnosable from the list its arm actually
+consulted: `origins` is the BARE arm's set (configured ∪ the three
+loopback defaults, in every mode), `signed_origins` the SIGNED arm's
+(configured alone once claimed; the bare set before) — the two differ
+exactly on a claimed board. There is deliberately NO `mode` field:
+derive the mode from the `(claimant, local_trust)` pair (§Identity).
 
 **`GET /`** (only in builds with the `client` feature — **default-off**,
 the 2026-08-22 ruling (AUTH-4.57(e); R89, the client rule): the served
@@ -1241,19 +1644,65 @@ shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
-deterministic world dump (`skep-world-dump v3` format), byte-comparable
-across processes for run reconstruction. Two dumps of equal worlds are
-byte-equal. `GET /dump?at=N` serves a historical position (§Reading
-history).
+deterministic world dump — format **`skep-world-dump v3`**, the banner
+the code emits. (The v2→v3 renumber rode the ghost-tumbler genesis
+rework of 2026-08-30, not the auth delta; its design-side record lands
+as an AUTH RES entry — citation pending, deliberately not invented
+here.) Byte-comparable across processes for run reconstruction: two
+dumps of equal worlds are byte-equal. As built the dump carries NO
+dedicated identity section: the identity table is DERIVED state — a
+pure function of the credential deposits, which are ordinary links
+already in the dump's links slice — so byte-equal dumps imply equal
+identity tables, and `key_set` (not the dump) is the identity read
+surface. `GET /dump?at=N` serves a historical position (§Reading
+history). The route is token-accepting (the death signal rides it); the
+dump itself is principal-free.
 
-## A first session, end to end
+## A first board, end to end
+
+A fresh board is UNCLAIMED, and an unclaimed daemon admits only the
+opening below — every other write refuses `claim_first` (§Credential
+refusals); reads are open throughout. The claim ceremony, entirely in
+ordinary wire ops:
 
 ```
-POST /session          {"principal": 0}                # bootstrap
+POST /session          {"principal": 0}                # bootstrap, bare
 POST /op   (session)   {"op": "next_account_prefix", "parent": "1"}
-POST /op   (session)   {"op": "delegate", "new_prefix": <that>, "new_id": 1}
-POST /session          {"principal": 1}                # your principal
-POST /op   (session)   {"op": "create_new_document", "account": <delegated>}
+POST /op   (session)   {"op": "delegate", "new_prefix": <that>, "new_id": 900}
+POST /session          {"principal": 900}              # the owner, bare
+POST /op   (session)   {"op": "create_new_document", "account": <account>}    # doc 1 — the home mint
+```
+
+Compose the enrollment record (§The claim ceremony and credentials) and
+seat it in doc 1 as ONE composite value — one position, so one address
+names the whole record:
+
+```
+POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"},
+                        "values": [{"atom": "skep-enroll v1\nanchor ed25519 <64 hex> paper\ned25519 <64 hex> notebook\n"}]}
+```
+
+Deposit it — the genesis enrollment, then (from a signed session,
+proving custody before the flip) the claim:
+
+```
+POST /op   (session)   {"op": "make_link", "home": <doc 1>,
+                        "from": {"addrs": ["<doc 1>.0.1.1"]},           # the record atom's position
+                        "to":   {"addrs": ["<account>"]},
+                        "ty":   {"addrs": ["1.1.0.1.0.1.0.3.1"]}}       # T_enroll
+GET  /challenge?principal=900
+POST /session          {"principal": 900, "nonce": <that>, "origin": <a configured origin>, "sig": <128 hex>}
+POST /op   (signed)    {"op": "make_link", "home": <doc 1>,
+                        "from": {"addrs": ["<account>"]}, "to": {"addrs": []},
+                        "ty":   {"addrs": ["1.1.0.1.0.1.0.3.3"]}}       # T_claim — the board flips claimed
+```
+
+Then ordinary work — remembering that doc 1 is born published, so on
+the claimed board its content takes a signed session; a bare session
+(CLAIMED-PERMISSIVE) writes drafts:
+
+```
+POST /op   (session)   {"op": "create_new_document", "account": <account>}    # a draft document
 POST /op   (session)   {"op": "insert", "doc": <doc>, "at": {"subspace": "1", "ordinal": "1"}, "values": ["hello"]}
 POST /op               {"op": "retrieve_v", "specs": [{"doc": <doc>, "span": {"start": "1.1", "width": "0.5"}}]}
 ```
@@ -1263,6 +1712,99 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7 (the AUTH surface — sessions, credentials, the write gates; the AUTH
+build of 2026-08-30, documented as built):
+
+* Session tokens are 128-bit CSPRNG values, **32 lowercase hex**, strict
+  admission — v1's `prefix.suffix` shape is refused, and an unparseable
+  header value IS no token. `POST /session` accepts exactly two body
+  forms — bare `{"principal"}` and signed
+  `{"principal","nonce","origin","sig"}`, strict bytes — anything else
+  `400 malformed_session_request`, and a syntax 400 never burns a
+  nonce. New `GET /challenge?principal=N` →
+  `{"nonce","principal","ttl_ms":60000}`: a 64-lowercase-hex
+  single-use nonce (burned on verification whether or not it
+  validates), 60 s TTL, 4096 live cap, issued for any principal. The
+  signed bytes: `"skep-session-v1"` ‖ be32-framed origin · nonce ·
+  principal-decimal, over the body's own strings; verification tries
+  every enrolled key in fingerprint order (Ed25519 strict). EVERY
+  handshake failure — bare and signed alike — is the one
+  `401 {"error":"session_rejected"}`, no detail by design. New
+  `POST /session/close` → idempotent `204`. Sessions now end before
+  restart — close, key retirement, mode (a bare entry presented under
+  ENFORCING) — evicted lazily at presentation; no TTL, no cap.
+* The death signal: `Skepd-Session: closed` rides every response whose
+  presented token is unknown or whose entry died — on `/op`, `/op-at`,
+  `/changes`, `/dump`, `/session/close`, and `/events` (checked before
+  the stream opens; written once on its head). A live entry refused for
+  one request (bare, foreign `Origin`) gets no header — nothing died.
+  `Access-Control-Expose-Headers: Skepd-Session` now rides EVERY
+  response so a page can read the signal; the preflight covers the
+  session endpoints (every known path already answered `OPTIONS`).
+* Identity is a MODE, not the whole model: UNCLAIMED /
+  CLAIMED-PERMISSIVE / ENFORCING, derived from `/health`'s new `auth`
+  object — `{"claimant","local_trust","origins","signed_origins"}`,
+  the TWO origin lists published verbatim per arm, deliberately no
+  `mode` field. The bare bind is honored on loopback outside ENFORCING,
+  and only when the request's `Origin` header (if present) is in the
+  bare set. The claim-time drop: `signed_origins` = the configured
+  origins alone once claimed — a board claimed with no `--origin`
+  refuses every signed session, warned at startup and at the flip.
+* The claim ceremony rides the ordinary surface: credential deposits
+  are `make_link`s typed by three reserved ghost tumblers
+  (`1.1.0.1.0.1.0.3.{1,2,3}` — enroll · retire · claim), address-form
+  slots only, homed in doc 1, their payloads (`skep-enroll v1` /
+  `skep-retire v1` records, 64 KiB cap) plain doc-1 content the `from`
+  names. Genesis seeds the key set; the claim flips the board; first
+  claim wins.
+* New rejection family: `credential_refused`, always `permanent`,
+  `detail` a single machine token (the code:detail convention —
+  clients key on the token). The vocabulary and its order as built
+  (§Credential refusals): the shape slots `emit_not_make_link` and
+  `resolved_from`; the fold's inert tokens — `not_doc_one` (RES-17,
+  the home pin) among them — and the `malformed_payload:<sub>` joins;
+  `undecodable_key`; `too_many_enrolled` (the enrolled-set cap, 16 —
+  daemon policy, RES-57); `anchor_session_required`; MINT-FIRST's
+  `mint_home_first` (`fork`/`version` before the home mint — where
+  they committed before, they now refuse); the publish class
+  `signed_session_required` (RES-26: a bare-session write landing in
+  the published world — today an account's doc 1 — refuses on a
+  claimed board; credential deposits from bare sessions refuse there
+  uniformly, genesis included); and pre-claim `claim_first`
+  (RES-27/27a: an unclaimed daemon admits only the ceremony's shape).
+  `unauthenticated` stays slot 0 ahead of them all; `not_owner` stays
+  `execute`'s own and resolves after every token; RES-32 scopes
+  `nullify_not_retraction` on a claimed board to the target-home owner
+  (anyone else reads plain `not_owner`). v5.1's "`version` is
+  deliberately ungated" is qualified twice (MINT-FIRST; the publish
+  class) — un-OWNER-gated it remains.
+* New read `key_set` → new response shape `key_set`: an account's
+  enrolled and retired credentials, fingerprint order, anchor flags as
+  enrolled; `not_an_account` (reorder) on a non-account; empty lists
+  on a keyless account. Principal-free — the no-session read the auth
+  work deliberately preserves — and served identically on `/op-at`
+  (the identity table of a historical world is rebuilt from its
+  deposits).
+* `/changes` entries gain `key` — the committing session's testimony:
+  an enrolled-key fingerprint, `"bare"` for a bare-session write,
+  `null` only for lost metadata (never for a bare write, never
+  invented); pinned ABSENT (not null) on a feed whose serving daemon
+  did not commit the entry (a future mirror's case). The feed examples
+  are re-pinned onto a claimed board's positions — the ceremony's five
+  commits occupy 2–12 on a fresh board.
+* The dump: the code emits `skep-world-dump v3` — docs and code agree;
+  the v2→v3 renumber rode the ghost-tumbler rework (2026-08-30), and
+  its design-side record lands as an AUTH RES entry (citation
+  pending). As built the dump gains NO identity section: the identity
+  table is derived state, a pure function of deposits the links slice
+  already carries — the sealed spec's per-account dump section
+  (AUTH-6.28) rides to the engine round with the build report, and
+  `key_set` is the identity read surface meanwhile.
+* CORS `*` reaffirmed post-auth — v4's "revisited when authentication
+  lands" is resolved: reads are guest-free, the signed origin is bound
+  inside the signature, the bare bind is origin-fenced daemon-side,
+  the token is unguessable; a narrower ACAO was weighed and declined.
 
 v6.2 (reserved type addresses are in-docuverse ghost tumblers; the genesis
 configuration is retired — the two owner rulings of 2026-08-26, applied):
@@ -1384,7 +1926,8 @@ ruling; no encoding change, new rejection paths):
   viewer-side filtering is an explicitly deferred scope decision.
 * `version` of a foreign document remains ungated by design: it forks into
   the CALLER's account (denial-as-fork) and is the sanctioned
-  "propose a change" path.
+  "propose a change" path. (Since qualified twice at v7 — MINT-FIRST and
+  the publish class; the OWNER gate it never had, it still has not.)
 * Reads are unchanged: every read remains principal-free.
 
 v5 (address-denoting endsets on the open link surface — the 2026-08-16
@@ -1504,7 +2047,10 @@ v1 (initial):
   binding lives in the daemon, so session identity never rides the wire;
   tokens die with the process; unknown/absent token = principal-free guest
   (reads served, writes `unauthenticated`); no close endpoint in v1.
+  (Superseded at v7: strict 32-hex tokens, a close endpoint, sessions
+  ending before restart, the death signal.)
 * Identity: local trust, client-named principals, loopback bind only.
+  (Local trust became a MODE at v7; the loopback bind stands.)
 * `principal_prefix`'s argument is `"principal"` on the wire (envelope
   `"id"` is the idempotency key).
 * Four-set slot constraints: `"any"` / `"empty"` / span array; `[]` reads

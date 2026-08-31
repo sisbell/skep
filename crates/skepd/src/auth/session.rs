@@ -518,7 +518,7 @@ mod tests {
     /// AUTH-4.17 — token round-trip and strict admission.
     #[test]
     fn token_parse_admits_only_to_wire_output() {
-        let t = Token([7; 16]);
+        let t = Token([0xab; 16]);
         assert_eq!(Token::parse(&t.to_wire()), Some(t.clone()));
         assert!(Token::parse("nonsense").is_none());
         assert!(Token::parse(&t.to_wire().to_uppercase()).is_none());

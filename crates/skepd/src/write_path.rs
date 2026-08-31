@@ -88,10 +88,20 @@ impl WritePath {
         Ok(WritePath { serial: Mutex::new(()), sidecar, commit_stream })
     }
 
-    /// One write, whole: execute under the serialization lock, record the
-    /// position it committed, announce that position, and hand back the
-    /// answer. The three steps are one operation precisely so no caller can
-    /// perform two of them.
+    /// Take the write-serialization lock ALONE — for the auth write
+    /// sequences, which must take their world snapshot AFTER no further
+    /// commit can intervene (the gates' answers and the execute they gate
+    /// then stand on one committed state). Lock order is fixed at the
+    /// caller: the auth gate first, then this, never inverted.
+    pub fn serial_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.serial.lock()
+    }
+
+    /// One write, whole, under a serialization guard the CALLER already
+    /// holds ([`WritePath::serial_lock`]): execute, record the position it
+    /// committed, announce that position, and hand back the answer. The
+    /// guard argument is what keeps the three steps one operation even now
+    /// that the lock's scope is the caller's write sequence.
     ///
     /// `execute` is a closure so this card stays free of M10's session and
     /// request types: what belongs here is the ordering, not the dispatch.
@@ -103,10 +113,14 @@ impl WritePath {
     /// not a fault but a silent lie: the change feed reports that position
     /// under the wrong op kind, or names a document the write did not touch,
     /// permanently, since nothing re-derives an entry the sidecar already
-    /// holds. `Daemon::post_op` establishes it by deriving `meta` from the
-    /// frame it is about to execute, and is the only caller.
-    pub fn commit(&self, meta: WriteMeta, execute: impl FnOnce() -> Response) -> Response {
-        let _serial = self.serial.lock();
+    /// holds. The daemon's write sequences establish it by deriving `meta`
+    /// from the frame they are about to execute, and are the only callers.
+    pub fn commit_under(
+        &self,
+        _serial: &parking_lot::MutexGuard<'_, ()>,
+        meta: WriteMeta,
+        execute: impl FnOnce() -> Response,
+    ) -> Response {
         let resp = execute();
         if let Some(at) = self.record(meta, &resp) {
             self.commit_stream.announce(at);
@@ -179,7 +193,7 @@ impl WritePath {
     /// line is lost but the in-memory entry is not, so `/changes` answers
     /// that position this uptime and answers it bare after a restart.
     fn record(&self, meta: WriteMeta, resp: &Response) -> Option<Seq> {
-        let WriteMeta { kind, docs } = meta;
+        let WriteMeta { kind, docs, key } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
             Response::AckAddr { addr, at } => (*at, Some(addr)),
@@ -217,7 +231,7 @@ impl WritePath {
                 minted.map(|a| vec![a.tumbler().to_string()]).unwrap_or_default()
             }
         };
-        self.sidecar.record(at.0, op_name(kind), docs);
+        self.sidecar.record(at.0, op_name(kind), docs, key);
         Some(at)
     }
 }
@@ -235,6 +249,12 @@ impl WritePath {
 pub(crate) struct WriteMeta {
     pub kind: OpKind,
     pub docs: AffectedDocs,
+    /// The AUTH key testimony (AUTH-4.48): the establishing key's
+    /// fingerprint hex, or `"bare"`. Supplied by the write sequences from
+    /// the resolved actor — [`write_meta`] seeds it `"bare"` and the
+    /// sequences overwrite it before commit, so a path that forgot would
+    /// testify bare rather than invent a key.
+    pub key: String,
 }
 
 /// A write's affected document(s) for the sidecar (wire.md §The change
@@ -278,7 +298,7 @@ pub(crate) enum AffectedDocs {
 /// agree at 14 writes of 38, with M10's own
 /// `partition_matches_the_design_grouping` pinning that side.
 pub(crate) fn write_meta(op: &Op) -> Option<WriteMeta> {
-    let meta = |kind, docs| Some(WriteMeta { kind, docs });
+    let meta = |kind, docs| Some(WriteMeta { kind, docs, key: "bare".to_string() });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
     match op {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),

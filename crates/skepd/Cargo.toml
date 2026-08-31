@@ -54,6 +54,21 @@ skep-arrangement = { path = "../skep-arrangement" }
 skep-retrieval = { path = "../skep-retrieval" }
 skep-links = { path = "../skep-links" }
 skep-discovery = { path = "../skep-discovery" }
+# The AUTH identity fold (credential data model, key sets, the classify
+# oracle). skepd composes the fold BESIDE the engine — derived state rebuilt
+# from the recovered world, never persisted here.
+skep-identity = { path = "../skep-identity" }
+# The Ed25519 verifier — AUTH-7.17's crate pick, argued in the build report:
+# `verify_strict` by name (AUTH-4.32's pinned semantics), pure Rust, and
+# canonical point decoding at `VerifyingKey::from_bytes` (the
+# one-canonical-raw-form-per-token obligation, AUTH-2.99). skepd is the ONLY
+# crate that links a signature library (AUTH-2.2).
+ed25519-dalek = "2"
+# OS entropy for nonces and session tokens (AUTH-4.13: at least 128 bits per
+# token from a CryptoRng, never a per-process prefix plus a counter), and
+# the `CryptoRng` bound the auth surface's declared signatures carry.
+getrandom = "0.3"
+rand_core = "0.9"
 # JSON frames. The codec builds Values through its own key-sorting obj()
 # helper, so marshal determinism never depends on serde_json's map backend.
 serde_json.workspace = true
@@ -71,6 +86,12 @@ parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Test-side SIGNING (the daemon itself only verifies): the ceremony and
+# handshake suites hold deterministic seed keypairs (SigningKey::from_bytes)
+# and sign session payloads with them. No rand feature — seeds are fixed.
+ed25519-dalek = "2"
+# The record grammar the ceremony helper encodes enrollments with.
+skep-identity = { path = "../skep-identity" }
 # H4 property-based op sequences (tests/properties.rs): random-but-valid
 # plans with shrinking; failure seeds persist to proptest-regressions/
 # (pins, same standing as goldens).

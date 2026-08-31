@@ -78,6 +78,10 @@ pub const RESP_SHAPES: &[&str] = &[
 /// would agree with any name that code invented.
 pub const TRANSPORT_ERRORS: &[&str] = &[
     "malformed_session_request",
+    "malformed_challenge",
+    // The ONE auth transport code (AUTH-6.5): permanent, no detail, 401 —
+    // a fuzz payload that assembles a well-formed signed body lands here.
+    "session_rejected",
     "malformed_op_at",
     "write_at_history",
     "beyond_head",

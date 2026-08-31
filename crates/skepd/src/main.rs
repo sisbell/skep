@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-use skepd::{serve, Daemon};
+use skepd::{serve, AuthOptions, Daemon, Origin};
 
 const DEFAULT_PORT: u16 = 8642;
 const DEFAULT_WORKERS: usize = 4;
@@ -22,6 +22,8 @@ struct EnvSetting {
 
 const SKEPD_PORT: EnvSetting = EnvSetting { var: "SKEPD_PORT", expected: "a port" };
 const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "a count" };
+const SKEPD_LOCAL_TRUST: EnvSetting =
+    EnvSetting { var: "SKEPD_LOCAL_TRUST", expected: "true or false" };
 
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
@@ -29,6 +31,7 @@ fn usage() -> String {
     format!(
         "\
 usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
+             [--local-trust | --no-local-trust] [--origin <ORIGIN>]...
 
   --data-dir <DIR>   journal/checkpoint directory (env: SKEPD_DATA_DIR);
                      created if absent, recovered if populated
@@ -38,6 +41,15 @@ usage: skepd --data-dir <DIR> [--port <PORT>] [--workers <N>]
   --workers <N>      request worker threads (env: SKEPD_WORKERS; default \
 {DEFAULT_WORKERS};
                      minimum 1)
+  --local-trust      honor bare (unsigned) loopback sessions after the
+                     board is claimed (the default — a hosted image must
+                     pass --no-local-trust affirmatively)
+  --no-local-trust   refuse every bare session once the board is claimed
+                     (env: SKEPD_LOCAL_TRUST=true|false)
+  --origin <ORIGIN>  a canonical origin this board answers for, e.g.
+                     https://board.example — repeatable; the signed
+                     session arm accepts ONLY these once the board is
+                     claimed (env: SKEPD_ORIGIN, comma-separated)
   --help             this text
 
 The wire protocol is specified in skep/docs/wire.md."
@@ -48,6 +60,8 @@ struct Args {
     data_dir: PathBuf,
     port: u16,
     workers: usize,
+    local_trust: bool,
+    origins: Vec<Origin>,
 }
 
 /// Read one setting from the environment, or `None` when it is UNSET. Each
@@ -77,6 +91,18 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     let mut data_dir = std::env::var_os("SKEPD_DATA_DIR").map(PathBuf::from);
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
+    let mut local_trust: Option<bool> = from_env(SKEPD_LOCAL_TRUST)?;
+    let mut origins: Vec<Origin> = match std::env::var("SKEPD_ORIGIN") {
+        Err(_) => Vec::new(),
+        Ok(v) => v
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                Origin::parse(s)
+                    .ok_or_else(|| format!("SKEPD_ORIGIN: '{s}' is not a canonical origin"))
+            })
+            .collect::<Result<_, _>>()?,
+    };
     let mut it = argv;
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -92,6 +118,17 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
                 let v = it.next().ok_or("--workers needs a value")?;
                 workers =
                     Some(v.parse().map_err(|_| format!("--workers: '{v}' is not a count"))?);
+            }
+            "--local-trust" => local_trust = Some(true),
+            "--no-local-trust" => local_trust = Some(false),
+            "--origin" => {
+                let v = it.next().ok_or("--origin needs a value")?;
+                origins.push(Origin::parse(&v).ok_or_else(|| {
+                    format!(
+                        "--origin: '{v}' is not a canonical origin \
+                         (scheme://host[:port], lowercase, default port omitted)"
+                    )
+                })?);
             }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown argument '{other}'")),
@@ -110,6 +147,10 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
         data_dir: data_dir.ok_or("--data-dir (or SKEPD_DATA_DIR) is required")?,
         port: port.unwrap_or(DEFAULT_PORT),
         workers,
+        // Phase A default ON (AUTH-1.45): a hosted image must set the flag
+        // AFFIRMATIVELY false — abstention keeps the notebook behavior.
+        local_trust: local_trust.unwrap_or(true),
+        origins,
     }))
 }
 
@@ -127,7 +168,8 @@ fn main() {
     };
     // Genesis-or-recover; every EngineError is an operator condition
     // (corrupt journal, bad checkpoint) — report and stop.
-    let daemon = match Daemon::open(&args.data_dir) {
+    let opts = AuthOptions { local_trust: args.local_trust, origins: args.origins.clone() };
+    let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("skepd: {e}");

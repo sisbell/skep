@@ -242,6 +242,29 @@ impl JsonCodec {
         parse_value(frame).map_err(|e| ParseError { detail: Some(e.0) })
     }
 
+    /// The daemon-level parse: the `key_set` frame — served by the daemon's
+    /// own dispatcher because the identity slice rides beside the engine's
+    /// `World` in this build (the authorized M10 row is unusable until the
+    /// slice is seated; see the build report) — or the ordinary M10 frame.
+    /// One grammar discipline for both: internally tagged, unknown fields
+    /// refused.
+    pub(crate) fn parse_daemon(&self, frame: &[u8]) -> Result<DaemonOp, ParseError> {
+        let v: Value = match serde_json::from_slice(frame) {
+            Ok(v) => v,
+            Err(e) => return Err(ParseError { detail: Some(format!("invalid JSON: {e}")) }),
+        };
+        self.parse_daemon_value(v)
+    }
+
+    /// [`JsonCodec::parse_daemon`] over an already-decoded value (the
+    /// `/op-at` envelope's frame).
+    pub(crate) fn parse_daemon_value(&self, v: Value) -> Result<DaemonOp, ParseError> {
+        if v.as_object().and_then(|m| m.get("op")).and_then(Value::as_str) == Some("key_set") {
+            return parse_key_set(v).map_err(|e| ParseError { detail: Some(e.0) });
+        }
+        parse_value(v).map(DaemonOp::Febe).map_err(|e| ParseError { detail: Some(e.0) })
+    }
+
     /// The transport's one never-silent obligation outside M10's dispatch
     /// (M10 §Codec): a frame that failed to parse still gets exactly one
     /// response — the `Unparseable` rejection, built HERE and marshaled like
@@ -255,6 +278,54 @@ impl JsonCodec {
             detail: e.detail,
         })
     }
+}
+
+/// One parsed daemon-level frame: an M10 request, or the `key_set` read the
+/// daemon serves itself (AUTH-6.18–6.20).
+#[derive(Debug)]
+pub(crate) enum DaemonOp {
+    Febe(Request),
+    KeySet { account: Address },
+}
+
+/// `{"op":"key_set","account":"<address>"}` (+ the optional idempotency
+/// `id`, accepted and dropped — reads are never memoized), under the same
+/// field discipline as every other frame.
+fn parse_key_set(v: Value) -> PResult<DaemonOp> {
+    let Value::Object(m) = v else {
+        return Err(PErr("request frame must be a JSON object".into()));
+    };
+    let mut fields = Fields(m);
+    let _ = fields.string("op")?;
+    let _ = fields.req_id()?;
+    let account = fields.addr("account")?;
+    fields.finish()?;
+    Ok(DaemonOp::KeySet { account })
+}
+
+/// A rejection the DAEMON originates (the `credential_refused` family and
+/// the `key_set` row's `not_an_account`), byte-shaped exactly as
+/// [`j_rejection`] marshals M10's: `{"code","disposition","op","resp"}`
+/// plus the optional `detail`. The daemon cannot construct M10's
+/// `Rejection` for codes M10 does not carry (the `RejectCode` delta is out
+/// of this round's upstream reach), so the wire shape is built here — one
+/// shape on the wire either way.
+pub(crate) fn daemon_rejected(
+    op: &str,
+    code: &str,
+    disposition: &str,
+    detail: Option<String>,
+) -> Vec<u8> {
+    let mut pairs = vec![
+        ("resp", Value::String("rejected".into())),
+        ("op", Value::String(op.into())),
+        ("code", Value::String(code.into())),
+        ("disposition", Value::String(disposition.into())),
+    ];
+    if let Some(d) = detail {
+        pairs.push(("detail", Value::String(d)));
+    }
+    to_bytes(obj(pairs))
 }
 
 /// Serialize a finished `Value` tree — the one place this crate turns a

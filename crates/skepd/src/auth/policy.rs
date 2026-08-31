@@ -1,0 +1,493 @@
+//! The write-path policy surface (AUTH part 03): the credential type
+//! addresses, op classification, the refusal producers at their pinned lock
+//! scopes, and the precheck's ordered slots.
+
+use std::sync::LazyLock;
+
+use ed25519_dalek::VerifyingKey;
+use skep_address::{checked_inc, validate, Address, Level, Nat, Span, Tumbler};
+use skep_febe::Op;
+use skep_identity::{
+    CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
+};
+use skep_links::{enc, HasLinks, SlotArg};
+use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+
+use super::fold::WorldCtx;
+use super::{GateRead, GateWrite};
+use crate::World;
+
+/// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
+/// config-visible constant, never a fold constant — `Enroll` arm only,
+/// `Genesis` exempt. Raisable later without format consequence.
+pub(crate) const ENROLLED_CAP: usize = 16;
+
+/// The three credential type addresses — AUTH-7.1 horn B's allocation,
+/// recorded for the commons-seeding table (see the build report): subspace
+/// 3 of the ghost document `1.1.0.1.0.1`, ordinals 1–3 in the order
+/// enroll · retire · claim.
+///
+/// Why subspace 3 discharges AUTH-3.70's unreachability obligation with no
+/// store edit: content V-spec RESOLUTION only ever yields I-spans in the
+/// CONTENT subspace (subspace 1) of real documents — M3's content mints are
+/// the resolution's whole codomain — and no M3 door mints into any
+/// document's subspace 3 at all, so these names are never allocated and no
+/// resolved span can equal their subtree spans. `deposits_credential_link`
+/// therefore answers false for every `Resolve` type slot without resolving
+/// anything, which is exactly AUTH-2.61's lock-free classifier.
+pub(crate) const T_ENROLL: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 1];
+pub(crate) const T_RETIRE: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 2];
+pub(crate) const T_CLAIM: [u32; 9] = [1, 1, 0, 1, 0, 1, 0, 3, 3];
+
+fn addr_of(comps: &[u32]) -> Address {
+    let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
+        .expect("the credential type components are nonempty");
+    validate(t).expect("the credential type addresses are T4-valid by construction")
+}
+
+/// The ONE `TypeAddrs` (`IDENTITY_TYPES`, AUTH-2.79) — an I2 frozen
+/// constant; every classifier and the fold read this instance.
+pub(crate) fn identity_types() -> &'static TypeAddrs {
+    static TYPES: LazyLock<TypeAddrs> = LazyLock::new(|| {
+        TypeAddrs::new(addr_of(&T_ENROLL), addr_of(&T_RETIRE), addr_of(&T_CLAIM))
+    });
+    &TYPES
+}
+
+/// A slot's spans in M7's own deposited form: `enc(addrs)` for the
+/// address form; `None` for `Resolve` — a resolved slot can never name a
+/// credential type (the allocation above), so classification never
+/// resolves.
+fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
+    match s {
+        SlotArg::Addrs(addrs) => {
+            let spans: Vec<Span> = enc(addrs.iter()).spans().cloned().collect();
+            identity_types().kind_of(&spans)
+        }
+        SlotArg::Resolve(_) => None,
+    }
+}
+
+/// AUTH-2.61 — op classification: the op's OWN type slot, no world read,
+/// so the lock is chosen before any lock is taken. True for the three
+/// deposit-shaped ops whose type slot names a credential type; a `Nullify`
+/// deposits nothing (its class is `nullify_refusal`'s, under the read
+/// lock).
+pub(crate) fn deposits_credential_link(op: &Op) -> bool {
+    match op {
+        Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
+        Op::Emit { ty, .. } => {
+            let spans: Vec<Span> = ty.spans().cloned().collect();
+            identity_types().kind_of(&spans).is_some()
+        }
+        Op::EditLink { successor, .. } => slotarg_kind(&successor.ty).is_some(),
+        _ => false,
+    }
+}
+
+/// The daemon-side refusal vocabulary (AUTH-3.53). Every one marshals as
+/// `code: credential_refused, disposition: permanent, detail: token()`
+/// (AUTH-3.54 — `Permanent` UNIFORMLY; the remedy lives in the face).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// The fold's own verdict — produced by `precheck`, slot (3).
+    Inert(Inert),
+    /// Slot (1), ahead of the write lock.
+    EmitNotMakeLink,
+    /// Slot (4).
+    UndecodableKey,
+    /// The NULLIFY class, under `gate.read()`, outside slots (1)–(8).
+    NullifyNotRetraction,
+    /// Slot (6).
+    AnchorSessionRequired,
+    /// Slot (2), ahead of the write lock.
+    ResolvedFrom,
+    /// Slot (5) — present because the build takes the cap (RES-57, at 16).
+    TooManyEnrolled,
+    /// The MINT class, on the plain path.
+    MintHomeFirst,
+    /// Slot (7), and the plain path's publish gate (RES-26).
+    SignedSessionRequired,
+    /// Slot (8), and the plain path's pre-claim admission gate (RES-27).
+    ClaimFirst,
+}
+
+impl Refusal {
+    /// The wire `detail` token: the fold arm delegates to `Inert::token()`
+    /// (the payload arm is the one `malformed_payload:<sub>` join,
+    /// AUTH-2.55); the daemon-side tokens are hand-spelled here and only
+    /// here.
+    pub fn token(&self) -> String {
+        match self {
+            Refusal::Inert(Inert::MalformedPayload(p)) => {
+                format!("malformed_payload:{}", p.token())
+            }
+            Refusal::Inert(i) => i.token().to_string(),
+            Refusal::EmitNotMakeLink => "emit_not_make_link".into(),
+            Refusal::UndecodableKey => "undecodable_key".into(),
+            Refusal::NullifyNotRetraction => "nullify_not_retraction".into(),
+            Refusal::AnchorSessionRequired => "anchor_session_required".into(),
+            Refusal::ResolvedFrom => "resolved_from".into(),
+            Refusal::TooManyEnrolled => "too_many_enrolled".into(),
+            Refusal::MintHomeFirst => "mint_home_first".into(),
+            Refusal::SignedSessionRequired => "signed_session_required".into(),
+            Refusal::ClaimFirst => "claim_first".into(),
+        }
+    }
+}
+
+// ── op_shape_refusal — slots (1)–(2), lock-free (AUTH-3.4–3.6) ───────────
+
+/// Slots (1) `emit_not_make_link` and (2) `resolved_from`, evaluated (1)
+/// then (2), reading the op's OWN slots and nothing else — evaluated
+/// beside `deposits_credential_link` and AHEAD of `gate.write()`
+/// (AUTH-3.5): a refusal here never takes the write lock.
+pub(crate) fn op_shape_refusal(op: &Op) -> Option<Refusal> {
+    match op {
+        // (1) — every credential-typed emit, unconditionally: M7's dedup
+        // could hand a phantom ack for an act key_set never shows.
+        Op::Emit { .. } => Some(Refusal::EmitNotMakeLink),
+        // (2) — a credential deposit whose from OR to entity slot is a
+        // Resolve, either of them, regardless of emptiness.
+        Op::MakeLink { from, to, .. } => {
+            if matches!(from, SlotArg::Resolve(_)) || matches!(to, SlotArg::Resolve(_)) {
+                Some(Refusal::ResolvedFrom)
+            } else {
+                None
+            }
+        }
+        // (2) — every credential edit_link, unconditionally: the successor
+        // endsets are V-spec-only as built (AUTH-3.18's dead rule stands
+        // recorded there; the op never reaches deposit construction).
+        Op::EditLink { .. } => Some(Refusal::ResolvedFrom),
+        _ => None,
+    }
+}
+
+// ── nullify_refusal — the NULLIFY class, under gate.read() (AUTH-3.7–3.9) ─
+
+/// `Some(NullifyNotRetraction)` iff `op` is a `Nullify` whose target's
+/// `readlink` type slot is credential-typed. The op-kind test is INSIDE
+/// and first (one match arm for the common case); `world` MUST be the
+/// snapshot taken under the read guard for this request — the guard
+/// argument is that contract's cheap half.
+pub(crate) fn nullify_refusal(_g: &GateRead<'_>, world: &World, op: &Op) -> Option<Refusal> {
+    let Op::Nullify { target, .. } = op else { return None };
+    let link = world.links().readlink(target)?;
+    let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
+    identity_types().kind_of(&spans).map(|_| Refusal::NullifyNotRetraction)
+}
+
+// ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
+
+/// The account's doc-1 address: `inc(A, 2)` — the same arithmetic the
+/// identity fold pins (AUTH-2.109/2.126). Total: the fallback prefix is
+/// document-of nothing, so every comparison against it refuses.
+pub(crate) fn doc_1_of(a: &Address) -> Address {
+    checked_inc(a, 2).unwrap_or_else(|_| a.clone())
+}
+
+/// AUTH-3.68's `has_documents(account)`, built over M3's PUBLIC read
+/// surface: `is_registered_document(doc 1 of A)` — the behaviorally
+/// equivalent form AUTH-3.69 records as not-taken; taken here because the
+/// upstream M3 delta is out of this round's reach (a report finding, not
+/// an upstream edit). The equivalence holds on every input: M3 mints every
+/// account-tier document through one frontier starting at ordinal 1.
+pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
+    world.m3().is_registered_document(&doc_1_of(account))
+}
+
+/// `Some(MintHomeFirst)` iff `op` is a document-minting op OTHER than
+/// `create_new_document` and the subject account's chain is empty. The
+/// subject is `principal_prefix(p)` THEN an account-hood test — never
+/// `key_subject` (AUTH-3.11); a subject that is not an account answers
+/// `None` and no arm fires. Reads the op's KIND and the PRINCIPAL and
+/// nothing else — never a fork/version source (AUTH-3.13).
+pub(crate) fn mint_home_refusal(
+    _g: &GateRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<Refusal> {
+    if !matches!(op, Op::Fork | Op::Version { .. }) {
+        return None;
+    }
+    let subject = world.m3().principal_prefix(principal)?;
+    if world.m3().entity_level(subject) != Some(Level::Account) {
+        return None;
+    }
+    if has_documents(world, subject) {
+        None
+    } else {
+        Some(Refusal::MintHomeFirst)
+    }
+}
+
+// ── board_state_refusal — the two mode-complementary gates (AUTH-3.78) ───
+
+/// v1's publication read for the PUBLISH gate (RES-26): the one
+/// born-published class this build can compute is the mechanical home mint
+/// — an account's doc 1 (publication.md rule 1's home-mint law). Flagless
+/// mints resolve DRAFT (AUTH-3.67's scoping), and no wire flag exists yet,
+/// so a document is published here iff it IS its account's doc 1. The
+/// fold's own `is_published` stays wired constant `true` (AUTH-2.117) and
+/// agrees on every credential home, all of which the home pin confines to
+/// doc 1.
+fn is_published_v1(world: &World, doc: &Address) -> bool {
+    world
+        .m3()
+        .effective_owner(doc)
+        .and_then(|id| world.m3().principal_prefix(id))
+        .is_some_and(|prefix| *doc == doc_1_of(prefix))
+}
+
+/// The plain path's one producer for the two board-state gates, dispatched
+/// on claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
+/// (RES-26, `signed_session_required`); in UNCLAIMED the pre-claim
+/// admission gate (RES-27, `claim_first`). Exact under the read guard: the
+/// claim commits only under `gate.write()`.
+pub(crate) fn board_state_refusal(
+    _g: &GateRead<'_>,
+    world: &World,
+    identity: &IdentityState,
+    op: &Op,
+    principal: PrincipalId,
+    key: Option<&skep_identity::Fingerprint>,
+) -> Option<Refusal> {
+    if identity.claimant().is_some() {
+        publish_gate(world, op, principal, key)
+    } else {
+        pre_claim_gate(world, op, principal)
+    }
+}
+
+/// RES-26 (AUTH-3.79–3.81): on a claimed board, an op whose write lands in
+/// the published world is accepted only from a signed session. Domain per
+/// input form: a flagless `version` reads `published(d_src)`; a homed
+/// write reads `published(home)`. Flagless `create`/`fork` resolve draft
+/// (outside), `delegate`/`register_node`/`nullify` present no input form,
+/// and the mechanical home mint is exempt by AUTH-3.80. Registration and ω
+/// stand AHEAD: the gate evaluates only registered addresses the caller
+/// owns, so an unregistered or foreign home answers `execute`'s own code.
+fn publish_gate(
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+    key: Option<&skep_identity::Fingerprint>,
+) -> Option<Refusal> {
+    if key.is_some() {
+        return None;
+    }
+    let homed = |home: &Address| -> Option<Refusal> {
+        let m3 = world.m3();
+        if m3.is_registered_document(home)
+            && is_published_v1(world, home)
+            && m3.is_effective_owner(principal, home)
+        {
+            Some(Refusal::SignedSessionRequired)
+        } else {
+            None
+        }
+    };
+    match op {
+        Op::Version { d_src } => {
+            if world.m3().is_registered_document(d_src) && is_published_v1(world, d_src) {
+                Some(Refusal::SignedSessionRequired)
+            } else {
+                None
+            }
+        }
+        Op::Insert { doc, .. }
+        | Op::Delete { doc, .. }
+        | Op::Copy { doc, .. }
+        | Op::Rearrange { doc, .. } => homed(doc),
+        Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
+            homed(home)
+        }
+        Op::EditLink { d_s, .. } => homed(d_s),
+        _ => None,
+    }
+}
+
+/// RES-27/27a (AUTH-3.82–3.83): an UNCLAIMED daemon admits only the claim
+/// ceremony's own op SHAPES — per op, by shape, no ceremony state machine:
+/// the `delegate` from principal 0, the mechanical home mint, and the
+/// record atom's `insert` into the depositing account's own doc 1. The
+/// credential deposits' pre-claim cells are the precheck's slot (8), never
+/// this producer's. Everything else refuses `claim_first`, bare and signed
+/// sessions alike.
+fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Refusal> {
+    let admitted = match op {
+        Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
+        Op::CreateNewDocument { account } => !has_documents(world, account),
+        Op::Insert { doc, .. } => world
+            .m3()
+            .principal_prefix(principal)
+            .is_some_and(|prefix| *doc == doc_1_of(prefix)),
+        _ => false,
+    };
+    if admitted {
+        None
+    } else {
+        Some(Refusal::ClaimFirst)
+    }
+}
+
+// ── precheck — slots (3)–(8), under gate.write() (AUTH-3.15–3.19) ────────
+
+/// The owned span form of one would-be deposit, built from the frame
+/// VERBATIM (AUTH-3.17): `home` verbatim, `from`/`to`/`ty` as
+/// address-form spans via M7's `enc`, in endset order.
+pub(crate) struct DepositSpans {
+    pub home: Address,
+    pub from: Vec<Span>,
+    pub to: Vec<Span>,
+    pub ty: Vec<Span>,
+}
+
+impl DepositSpans {
+    /// `Some` only for a `MakeLink` whose three slots are all address-form
+    /// — the one op that reaches deposit construction (`Emit` dies at slot
+    /// (1), `EditLink` at slot (2), a `Nullify` is `nullify_refusal`'s).
+    pub fn of(op: &Op) -> Option<DepositSpans> {
+        let Op::MakeLink { home, from, to, ty } = op else { return None };
+        let addrs_spans = |s: &SlotArg| -> Option<Vec<Span>> {
+            match s {
+                SlotArg::Addrs(a) => Some(enc(a.iter()).spans().cloned().collect()),
+                SlotArg::Resolve(_) => None,
+            }
+        };
+        Some(DepositSpans {
+            home: home.clone(),
+            from: addrs_spans(from)?,
+            to: addrs_spans(to)?,
+            ty: addrs_spans(ty)?,
+        })
+    }
+
+    pub fn deposit(&self) -> LinkDeposit<'_> {
+        LinkDeposit { home: &self.home, from: &self.from, to: &self.to, ty: &self.ty }
+    }
+}
+
+/// The precheck's answer: the refusal, or the previewed effect the caller
+/// feeds forward (the fold step and the claim-flip tail read it).
+/// `Ok(None)` is AUTH-3.19's defect arm — `NotCredential` at the classify
+/// line is unreachable by construction; if reached, assert and PASS the
+/// write (the fold reads the same slot and reaches the same verdict), with
+/// no slot (4)–(8) and no fold feed.
+pub(crate) fn precheck(
+    _g: &GateWrite<'_>,
+    world: &World,
+    identity: &IdentityState,
+    dep: &DepositSpans,
+    key: Option<&skep_identity::Fingerprint>,
+) -> Result<Option<Effect>, Refusal> {
+    // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
+    // order — kind, home account, publication, the per-kind arm.
+    let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
+    let effect = match verdict {
+        Verdict::NotCredential => {
+            debug_assert!(false, "classify answered NotCredential on a classified deposit");
+            return Ok(None);
+        }
+        Verdict::Inert(i) => return Err(Refusal::Inert(i)),
+        Verdict::Honored(e) => e,
+    };
+    // (4) — undecodable_key: a valid-hex non-point key can never sign; the
+    // fold accepts syntax, the daemon extends the courtesy.
+    let keys_decodable = |keys: &[skep_identity::Enrolled]| {
+        keys.iter().all(|e| {
+            <[u8; 32]>::try_from(e.key.raw())
+                .ok()
+                .and_then(|raw| VerifyingKey::from_bytes(&raw).ok())
+                .is_some()
+        })
+    };
+    match &effect {
+        Effect::Enroll { added, .. } if !keys_decodable(added) => {
+            return Err(Refusal::UndecodableKey)
+        }
+        Effect::Genesis { keys, .. } if !keys_decodable(keys) => {
+            return Err(Refusal::UndecodableKey)
+        }
+        _ => {}
+    }
+    // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt.
+    if let Effect::Enroll { account, added } = &effect {
+        if identity.key_set(account).enrolled().count() + added.len() > ENROLLED_CAP {
+            return Err(Refusal::TooManyEnrolled);
+        }
+    }
+    // (6) — the anchor gate (AUTH-3.20–3.23): an anchor retirement or a
+    // post-genesis anchor-flagged enrollment needs a session an anchor of
+    // that account established; a bare session never satisfies it; the
+    // record is refused WHOLE. Genesis is exempt (the seeding hand records
+    // the initial set, flags included).
+    let anchor_act = match &effect {
+        Effect::Retire { account, removed } => {
+            let set = identity.key_set(account);
+            removed.iter().any(|fp| set.is_anchor(fp)).then_some(account)
+        }
+        Effect::Enroll { account, added } => {
+            added.iter().any(|e| e.anchor).then_some(account)
+        }
+        _ => None,
+    };
+    if let Some(account) = anchor_act {
+        let set = identity.key_set(account);
+        if !key.is_some_and(|k| set.is_anchor(k)) {
+            return Err(Refusal::AnchorSessionRequired);
+        }
+    }
+    // (7)/(8) — the mode-disjoint board-state slots.
+    let claimed = identity.claimant().is_some();
+    if claimed {
+        // (7) — arm-blind: Genesis is NOT exempt here; a bare genesis
+        // plant on a claimed board dies at this slot.
+        if key.is_none() {
+            return Err(Refusal::SignedSessionRequired);
+        }
+    } else if !matches!(effect, Effect::Genesis { .. } | Effect::Claim { .. }) {
+        // (8) — the pre-claim admission gate's deposit cell, evaluated on
+        // the slot-(3) preview: only the ceremony's own deposits pass.
+        return Err(Refusal::ClaimFirst);
+    }
+    Ok(Some(effect))
+}
+
+/// The five reserved subtree spans overlap nothing the credential types
+/// name: the identity types live in subspace 3 while the shipped classes
+/// sit at content positions 1..=5 — pinned so a change to either
+/// allocation fails here rather than in a fold.
+#[cfg(test)]
+mod tests {
+    use skep_address::subtree_of;
+
+    use super::*;
+
+    #[test]
+    fn identity_types_are_distinct_and_recognized() {
+        let types = identity_types();
+        let enroll_span = subtree_of(addr_of(&T_ENROLL).tumbler());
+        assert_eq!(types.kind_of(&[enroll_span]), Some(CredentialKind::Enroll));
+        let retire_span = subtree_of(addr_of(&T_RETIRE).tumbler());
+        assert_eq!(types.kind_of(&[retire_span]), Some(CredentialKind::Retire));
+        let claim_span = subtree_of(addr_of(&T_CLAIM).tumbler());
+        assert_eq!(types.kind_of(&[claim_span]), Some(CredentialKind::Claim));
+        // A shipped reserved type (ghost position 1, the content subspace)
+        // is NOT a credential type.
+        let retired = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(types.kind_of(&[retired]), None);
+    }
+
+    /// AUTH-3.70's conformance expression in miniature: a content-I-span
+    /// type slot answers no credential kind — a resolved span's start is a
+    /// mintable content position, never a subspace-3 name.
+    #[test]
+    fn a_content_span_ty_is_never_credential() {
+        // Content position 1 of some ordinary doc: <doc>.0.1.1.
+        let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(identity_types().kind_of(&[content]), None);
+    }
+}

@@ -20,20 +20,31 @@ use serde_json::Value;
 /// two content writes, one placement — (position 8), `make_link` 3 — mint,
 /// link, seat — (position 11). If an ack below drifts, a store changed its
 /// transaction shape and wire.md §The change feed must be re-pinned.
+/// The head the claim ceremony leaves behind (`common::claim_board`):
+/// delegate (2 records), the home mint (1), the one-atom insert (3), the
+/// genesis link (3), the claim link (3) — twelve records, and the base
+/// every seeded position below sits on. Lane 3.2 re-pins wire.md's
+/// change-feed examples onto these numbers.
+const CEREMONY_HEAD: u64 = 12;
+
 fn seed_flow(port: u16) -> String {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
     assert_eq!(
-        prefix, "1.0.1",
-        "genesis frontier drifted; the wire.md change-feed examples must be re-pinned"
+        prefix, "1.0.2",
+        "the ceremony holds 1.0.1; frontier drift here means re-pinning the examples"
     );
     let v = op(
         port,
         Some(&boot),
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
     );
-    assert_eq!(acked_at(&v), 2, "delegate is a 2-record commit (Allocate + RegisterPrincipal)");
+    assert_eq!(
+        acked_at(&v),
+        CEREMONY_HEAD + 2,
+        "delegate is a 2-record commit (Allocate + RegisterPrincipal)"
+    );
     let s1 = open_session(port, 1);
     let v = op(
         port,
@@ -41,8 +52,8 @@ fn seed_flow(port: u16) -> String {
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
     let doc = acked_addr(&v);
-    assert_eq!(doc, "1.0.1.0.1", "first document address drifted; re-pin wire.md");
-    assert_eq!(acked_at(&v), 3, "create_new_document is a 1-record commit");
+    assert_eq!(doc, "1.0.2.0.1", "first document address drifted; re-pin the examples");
+    assert_eq!(acked_at(&v), CEREMONY_HEAD + 3, "create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -50,7 +61,7 @@ fn seed_flow(port: u16) -> String {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
         ),
     );
-    assert_eq!(acked_at(&v), 8, "a 2-value insert is a 5-record commit");
+    assert_eq!(acked_at(&v), CEREMONY_HEAD + 8, "a 2-value insert is a 5-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -58,12 +69,16 @@ fn seed_flow(port: u16) -> String {
             concat!(
                 r#"{{"op":"make_link","home":"{d}","#,
                 r#""from":[{{"source":"{d}","span":{{"start":"1.1","width":"0.2"}}}}],"#,
-                r#""to":{{"addrs":["{d}"]}},"ty":{{"addrs":["1.0.1.0.1.0.3.1"]}}}}"#
+                r#""to":{{"addrs":["{d}"]}},"ty":{{"addrs":["1.0.2.0.1.0.3.1"]}}}}"#
             ),
             d = doc
         ),
     );
-    assert_eq!(acked_at(&v), 11, "make_link is a 3-record commit (mint + link + seat)");
+    assert_eq!(
+        acked_at(&v),
+        CEREMONY_HEAD + 11,
+        "make_link is a 3-record commit (mint + link + seat)"
+    );
     doc
 }
 
@@ -152,10 +167,25 @@ fn normalize_times(s: &str) -> String {
     String::from_utf8(out).expect("normalization preserves UTF-8")
 }
 
+/// The page with each entry's wire-v7 `key` field removed — the one field
+/// wire.md's frozen examples predate; lane 3.2's doc delta restores the
+/// byte comparison.
+fn strip_keys(v: &Value) -> Value {
+    let mut v = v.clone();
+    if let Some(entries) = v.get_mut("changes").and_then(Value::as_array_mut) {
+        for e in entries {
+            if let Some(m) = e.as_object_mut() {
+                m.remove("key");
+            }
+        }
+    }
+    v
+}
+
 #[test]
 fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let sd = spawn(dir.path());
+    let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
 
     // A fresh world has no recorded commit: head_time is null, honestly.
@@ -172,6 +202,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(0), Some(false)));
 
+    common::claim_board(port);
     let doc = seed_flow(port);
 
     // Reads and rejected writes are not in the feed: issue both, then
@@ -193,17 +224,15 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     );
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
 
-    // ── the full feed: ops, docs, ordering — and the doc-pinned bytes ──
-    let (st, body) = changes_raw(port, "since=0");
+    // ── the full seeded feed: ops, docs, ordering, testimony ──
+    // (The wire.md 'feed'/'feed_page' byte comparisons ride to lane 3.2,
+    // which re-pins the examples onto the post-ceremony positions and the
+    // wire-v7 `key` field; the structural pins below are this round's.)
+    let b = CEREMONY_HEAD;
+    let (st, body) = changes_raw(port, &format!("since={b}"));
     assert_eq!(st, 200);
-    let full = String::from_utf8(body.clone()).expect("utf-8 body");
-    assert_eq!(
-        normalize_times(&full),
-        normalize_times(&doc_changes_block("feed")),
-        "wire.md 'changes feed' example drifted from the daemon"
-    );
     let v = json(&body);
-    assert_eq!(entry_ats(&v), vec![2, 3, 8, 11]);
+    assert_eq!(entry_ats(&v), vec![b + 2, b + 3, b + 8, b + 11]);
     let entries = v["changes"].as_array().expect("changes");
     assert_eq!(entries[0]["op"].as_str(), Some("delegate"));
     assert_eq!(entries[0]["docs"], serde_json::json!([]), "delegate names no doc");
@@ -213,40 +242,37 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
         serde_json::json!([doc]),
         "a link write names its home doc"
     );
+    // The wire-v7 testimony (AUTH-6.15): every one of these was a
+    // bare-session write, so every entry reads "bare" — never null.
+    for e in entries {
+        assert_eq!(e["key"].as_str(), Some("bare"), "bare-session testimony: {e}");
+    }
     let times: Vec<u64> =
         entries.iter().map(|e| e["time"].as_u64().expect("live entries carry times")).collect();
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "times monotone in position: {times:?}");
-    assert_eq!(v["last"].as_u64(), Some(11));
+    assert_eq!(v["last"].as_u64(), Some(b + 11));
     assert_eq!(v["more"], Value::Bool(false));
 
     // Determinism: the same question answers byte-identically.
-    let (_, again) = changes_raw(port, "since=0");
+    let (_, again) = changes_raw(port, &format!("since={b}"));
     assert_eq!(body, again, "same (since, limit) on the same journal must be byte-equal");
 
     // ── paging ──
-    let (st, body) = changes_raw(port, "since=0&limit=2");
-    assert_eq!(st, 200);
-    let page = String::from_utf8(body).expect("utf-8 body");
-    assert_eq!(
-        normalize_times(&page),
-        normalize_times(&doc_changes_block("feed_page")),
-        "wire.md 'changes feed_page' example drifted from the daemon"
-    );
-    let v: Value = serde_json::from_str(&page).expect("json");
-    assert_eq!(entry_ats(&v), vec![2, 3]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(3), Some(true)));
-    let v = changes_ok(port, "since=3&limit=2");
-    assert_eq!(entry_ats(&v), vec![8, 11]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(11), Some(false)));
+    let v = changes_ok(port, &format!("since={b}&limit=2"));
+    assert_eq!(entry_ats(&v), vec![b + 2, b + 3]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
+    let v = changes_ok(port, &format!("since={}&limit=2", b + 3));
+    assert_eq!(entry_ats(&v), vec![b + 8, b + 11]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
 
     // `since` is a fence, not a position: an interior number pages cleanly.
-    let v = changes_ok(port, "since=5");
-    assert_eq!(entry_ats(&v), vec![8, 11]);
+    let v = changes_ok(port, &format!("since={}", b + 5));
+    assert_eq!(entry_ats(&v), vec![b + 8, b + 11]);
 
     // since ≥ head: empty, `last` echoes `since`.
-    let v = changes_ok(port, "since=11");
+    let v = changes_ok(port, &format!("since={}", b + 11));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(11), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
     let v = changes_ok(port, "since=999");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!(v["last"].as_u64(), Some(999));
@@ -724,13 +750,18 @@ fn pre_feature_positions_answer_bare_entries() {
         "the engine alone must write no sidecar (it is the daemon's file)"
     );
 
-    let sd = spawn(dir.path());
+    // Spawned UNCLAIMED: this fixture's whole point is a pre-feature
+    // journal served as-is, and claiming would append the ceremony's
+    // commits after the bare region. Reads are untouched pre-claim.
+    let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
     let (st, body) = changes_raw(port, "since=0");
     assert_eq!(st, 200);
+    // Compared MODULO the wire-v7 `key` field (null on every bare entry),
+    // which lands in wire.md with lane 3.2's doc delta.
     assert_eq!(
-        String::from_utf8(body).expect("utf-8 body"),
-        doc_changes_block("bare"),
+        strip_keys(&json(&body)),
+        strip_keys(&serde_json::from_str(&doc_changes_block("bare")).expect("doc json")),
         "wire.md 'changes bare' example drifted from the daemon"
     );
     // Pre-feature commits have no recorded time: head_time is null.

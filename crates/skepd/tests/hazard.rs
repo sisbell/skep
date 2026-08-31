@@ -157,6 +157,8 @@ fn route_raw(
         path: path.to_string(),
         query: query.map(str::to_string),
         session_token: token.map(str::to_string),
+        origin: None,
+        peer: skepd::Peer::Loopback,
         body: body.to_vec(),
     };
     match d.route(&req) {

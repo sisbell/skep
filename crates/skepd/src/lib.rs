@@ -43,6 +43,7 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
 mod codec;
 mod history;
 mod server;
@@ -58,9 +59,10 @@ mod write_path;
 #[doc(hidden)]
 pub mod fuzz_support;
 
+pub use auth::{AuthOptions, Origin};
 pub use codec::JsonCodec;
 pub use server::{
-    body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Reply, Routed, Skepd,
+    body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
     UNIVERSAL_HEADERS,
 };
 

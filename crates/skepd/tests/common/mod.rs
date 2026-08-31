@@ -16,10 +16,150 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
+use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
 use skepd::{serve, Daemon, Skepd};
 
+/// The credential type addresses this build allocates (AUTH-7.1 horn B):
+/// subspace 3 of the ghost document, ordinals enroll·retire·claim.
+pub const T_ENROLL: &str = "1.1.0.1.0.1.0.3.1";
+pub const T_RETIRE: &str = "1.1.0.1.0.1.0.3.2";
+pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
+
+/// The claim ceremony's fixed test identity: a high principal id so suite
+/// principals (0, 1, 2, …) never collide with it, and deterministic key
+/// seeds so a reopened board verifies against the same keys.
+pub const OWNER_PRINCIPAL: u64 = 900;
+pub const OWNER_ACCOUNT: &str = "1.0.1";
+pub const OWNER_DOC1: &str = "1.0.1.0.1";
+pub const DEVICE_SEED: [u8; 32] = [7; 32];
+pub const ANCHOR_SEED: [u8; 32] = [8; 32];
+
+pub fn device_key() -> SigningKey {
+    SigningKey::from_bytes(&DEVICE_SEED)
+}
+
+pub fn anchor_key() -> SigningKey {
+    SigningKey::from_bytes(&ANCHOR_SEED)
+}
+
+fn pubkey_of(sk: &SigningKey) -> PublicKey {
+    PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
+}
+
+pub fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Sign the session payload (AUTH-6.4): `framed(SESSION_TAG, [origin,
+/// nonce, principal-decimal])`, returning the 128-hex signature.
+pub fn sign_session(sk: &SigningKey, origin: &str, nonce: &str, principal: u64) -> String {
+    let payload = framed(
+        SESSION_TAG,
+        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
+    );
+    hex(&sk.sign(&payload).to_bytes())
+}
+
+/// Open a SIGNED session for `principal` over the challenge/response
+/// handshake, signing the origin actually dialed.
+pub fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let sig = sign_session(sk, &origin, &nonce, principal);
+    let body = format!(
+        "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+    );
+    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "signed session: {}", String::from_utf8_lossy(&resp));
+    json(&resp)["session"].as_str().expect("session token").to_string()
+}
+
+/// The board claimed? — off `/health.auth.claimant`.
+pub fn claimed(port: u16) -> bool {
+    let (st, body) = http(port, "GET", "/health", None, b"");
+    assert_eq!(st, 200);
+    !json(&body)["auth"]["claimant"].is_null()
+}
+
+/// Run the notebook claim ceremony (AUTH-5.55 steps 1–5) over the wire:
+/// delegate from 0, the home mint, the genesis atom + deposit, the SIGNED
+/// claim. Idempotent — a reopened claimed board skips it.
+pub fn claim_board(port: u16) {
+    if claimed(port) {
+        return;
+    }
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    assert_eq!(prefix, OWNER_ACCOUNT, "the ceremony must be the board's first delegate");
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{OWNER_PRINCIPAL}}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let owner = open_session(port, OWNER_PRINCIPAL);
+    let v = op(
+        port,
+        Some(&owner),
+        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+    );
+    assert_eq!(acked_addr(&v), OWNER_DOC1, "the home mint is doc 1");
+    // The enrollment record — the anchor and the device key — as ONE ATOM.
+    let record = encode_enroll(&[
+        Enrollment::new(pubkey_of(&anchor_key()), true, Some("paper-a".into()))
+            .expect("a legal label"),
+        Enrollment::new(pubkey_of(&device_key()), false, Some("notebook".into()))
+            .expect("a legal label"),
+    ]);
+    let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
+    let atom = serde_json::to_string(&Value::String(record_text)).expect("json string");
+    let v = op(
+        port,
+        Some(&owner),
+        &format!(
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}]}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    let atom_addr = format!("{OWNER_DOC1}.0.1.1");
+    let v = op(
+        port,
+        Some(&owner),
+        &format!(
+            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    // The claim, from a session SIGNED by the device key (step 5).
+    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{OWNER_ACCOUNT}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    assert!(claimed(port), "the claim link flips the board claimed");
+}
+
+/// Spawn a daemon and CLAIM its board: under the pre-claim admission gate
+/// (RES-27) an unclaimed daemon runs nothing but the ceremony, so every
+/// suite about ordinary op semantics runs post-claim (CLAIMED-PERMISSIVE —
+/// local trust stays the default, so the suites' bare sessions still bind).
 pub fn spawn(dir: &Path) -> Skepd {
+    let sd = spawn_unclaimed(dir);
+    claim_board(sd.port());
+    sd
+}
+
+/// Spawn without claiming — the AUTH suites drive the window itself.
+pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     let daemon = Daemon::open(dir).expect("daemon open (genesis or recover)");
     serve(daemon, 0, 4).expect("bind an ephemeral port")
 }

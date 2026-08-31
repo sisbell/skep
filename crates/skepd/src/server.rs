@@ -96,7 +96,6 @@
 //! is the safe state; the feature's note in `Cargo.toml` carries the
 //! ruling. A build without the feature has no `/` route (404).
 
-use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -109,14 +108,29 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Operation, Response, SessionId};
+use skep_febe::{Codec, Op, Operation, Request, Response, SessionId};
+use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
 
-use crate::codec::{check_keys, obj, to_bytes, JsonCodec};
+use crate::auth::fold::{canonical_identity, key_set_reply};
+use crate::auth::policy::{
+    board_state_refusal, deposits_credential_link, mint_home_refusal, nullify_refusal,
+    op_shape_refusal, DepositSpans, Refusal,
+};
+use crate::auth::session::{
+    handshake, parse_session_body, resolve, Actor, GuestReason, SessionEntry, Token,
+    CHALLENGE_TTL,
+};
+use crate::auth::{
+    bare_origins, signed_origins, startup_warnings, AuthOptions, AuthState, OsEntropy,
+};
+use crate::codec::{check_keys, daemon_rejected, obj, to_bytes, DaemonOp, JsonCodec};
 use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::ChangesAnswer;
-use crate::write_path::{op_is_read, write_meta, StreamStep, WritePath};
+use crate::write_path::{op_is_read, write_meta, StreamStep, WriteMeta, WritePath};
+
+pub use crate::auth::session::Peer;
 
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon). Together with
@@ -182,8 +196,13 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 /// than this daemon's own CRLF bytes, so a caller serving replies over a
 /// transport of its own supplies them however that transport spells a
 /// header instead of parsing a framing only this crate's writer can use.
-pub const UNIVERSAL_HEADERS: [(&str, &str); 2] = [
+pub const UNIVERSAL_HEADERS: [(&str, &str); 3] = [
     ("Access-Control-Allow-Origin", "*"),
+    // AUTH-6.12: `Skepd-Session` is not CORS-safelisted, so without this a
+    // client on a configured non-loopback origin could not read the death
+    // signal. Exposing a public header narrows nothing; the fence stays
+    // daemon-side.
+    ("Access-Control-Expose-Headers", "Skepd-Session"),
     ("Connection", "close"),
 ];
 
@@ -453,6 +472,13 @@ pub struct HttpRequest {
     /// The `Skepd-Session` header's value, if present: the opaque token a
     /// session was bound to. Absent or unknown resolves to the guest.
     pub session_token: Option<String>,
+    /// The `Origin` header's value verbatim, if present — the bare arm's
+    /// per-request origin check reads it; `Origin: null` arrives as the
+    /// literal string and parses to nothing.
+    pub origin: Option<String>,
+    /// The TCP peer's loopback-ness — established by the accept path from
+    /// the socket's peer address; a caller routing by hand supplies it.
+    pub peer: Peer,
     /// The body, exactly `Content-Length` bytes (empty when absent).
     pub body: Vec<u8>,
 }
@@ -467,6 +493,8 @@ impl std::fmt::Debug for HttpRequest {
             .field("path", &self.path)
             .field("query", &self.query)
             .field("session_token", &self.session_token.as_ref().map(|_| "<token>"))
+            .field("origin", &self.origin)
+            .field("peer", &self.peer)
             .field("body_len", &self.body.len())
             .finish()
     }
@@ -481,6 +509,7 @@ impl std::fmt::Debug for HttpRequest {
 enum TransportError {
     // The envelope and query parsers.
     MalformedSessionRequest,
+    MalformedChallenge,
     MalformedOpAt,
     MalformedChanges,
     #[cfg(feature = "observe")]
@@ -507,6 +536,7 @@ impl TransportError {
     fn name(self) -> &'static str {
         match self {
             TransportError::MalformedSessionRequest => "malformed_session_request",
+            TransportError::MalformedChallenge => "malformed_challenge",
             TransportError::MalformedOpAt => "malformed_op_at",
             TransportError::MalformedChanges => "malformed_changes",
             #[cfg(feature = "observe")]
@@ -535,6 +565,7 @@ impl TransportError {
     fn status(self) -> u16 {
         match self {
             TransportError::MalformedSessionRequest
+            | TransportError::MalformedChallenge
             | TransportError::MalformedOpAt
             | TransportError::MalformedChanges
             | TransportError::WriteAtHistory
@@ -584,26 +615,13 @@ fn refuse_with(err: TransportError, fields: Vec<(&'static str, Value)>) -> Reply
 /// A known path answers `OPTIONS` with a preflight and a wrong method with
 /// `405`; everything else is the ordinary `404`.
 fn path_is_known(path: &str) -> bool {
-    matches!(path, "/session" | "/op" | "/op-at" | "/health" | "/events" | "/changes")
-        || (cfg!(feature = "observe") && path == "/dump")
+    matches!(
+        path,
+        "/session" | "/session/close" | "/challenge" | "/op" | "/op-at" | "/health" | "/events"
+            | "/changes"
+    ) || (cfg!(feature = "observe") && path == "/dump")
         || (cfg!(feature = "client") && path == "/")
 }
-
-/// Live token bindings retained, oldest evicted first. `POST /session` is
-/// unauthenticated and costs a client ~90 wire bytes, so an unbounded map
-/// would let any local process (or any page the browser loads) retain
-/// memory here and in M10 without limit and without ever writing —
-/// unlike the CPU costs elsewhere on this surface, retention does not
-/// clear when the caller stops.
-///
-/// Eviction is inside the documented session model rather than a
-/// narrowing of it: wire.md already says a token may simply miss and
-/// resolve to the guest, which is what an evicted one now does. The number
-/// is M10's own idempotency capacity (1024), which is the commensurate
-/// scale because [`Operation::close_session`] purges exactly one session's
-/// idempotency entries — the two ephemeral tables are sized by the same
-/// argument and are retired together.
-const MAX_LIVE_SESSIONS: usize = 1024;
 
 /// The principal a guest session is minted under. Arbitrary by
 /// construction: the session is retired before any request runs, so the
@@ -638,116 +656,9 @@ pub(crate) fn open_guest_session(febe: &Operation<World>) -> SessionId {
     guest
 }
 
-/// Identity as local trust: the token ↔ `SessionId` binding, and the one
-/// policy over it. Clients name their own principal at `POST /session` and
-/// get an opaque token back; a `SessionId` never rides the wire (M10's
-/// non-forgeability precondition). Tokens die with the process — a token
-/// from a previous run misses the map, and a miss is not an error: it
-/// resolves to the guest, under which M10 itself serves reads and rejects
-/// writes `Unauthenticated`, so the daemon holds no auth policy of its own.
-///
-/// The binding table is bounded at [`MAX_LIVE_SESSIONS`], so retention is
-/// a function of the daemon's own budget rather than of how many sessions
-/// a caller chose to open. Retiring a binding is this transport's to do —
-/// nothing else in M10 retires one — and [`Sessions::bind`] hands back
-/// what it evicted so `POST /session` can discharge that obligation
-/// against M10 as well as against this map.
-#[derive(Debug)]
-struct Sessions {
-    /// The token table and its mint order, under one lock.
-    bindings: Mutex<Bindings>,
-    /// A session opened and immediately closed at startup: permanently
-    /// unbound, never reissued (M10 §6) — what an absent or unknown token
-    /// resolves to.
-    guest: SessionId,
-    /// Per-uptime random token prefix: a stale token from a previous run
-    /// misses instead of silently aliasing onto a fresh session. Drawn
-    /// independently of every suffix — no token is derived from it.
-    token_prefix: u64,
-}
-
-/// The bounded token table: the map, plus the mint order eviction reads.
-/// One value under one lock, so the queue cannot describe a token the map
-/// has lost or vice versa. Insertion order and not recency — a token's
-/// worth to a client does not grow with use, and mint order needs no
-/// bookkeeping on the read path, which is every request.
-#[derive(Debug, Default)]
-struct Bindings {
-    map: HashMap<String, SessionId>,
-    order: VecDeque<String>,
-}
-
-impl Sessions {
-    fn new(guest: SessionId) -> Sessions {
-        Sessions {
-            bindings: Mutex::new(Bindings::default()),
-            guest,
-            token_prefix: unpredictable_u64(),
-        }
-    }
-
-    /// Mint the opaque token naming `sid`, remember the binding, and hand
-    /// back every session the insertion evicted — which the caller owes to
-    /// [`Operation::close_session`], since a binding this map has dropped
-    /// is one nothing can reach again.
-    ///
-    /// The suffix is drawn fresh per token rather than counted, so no
-    /// issued token names any other: a counter would let one client that
-    /// holds a token enumerate every live token of the same uptime, and
-    /// the day `POST /session` gains a credential that enumeration is
-    /// session hijacking. Today it is narrower — a guessed token replays
-    /// another session's cached acks — and closing it now costs one draw
-    /// per session.
-    fn bind(&self, sid: SessionId) -> (String, Vec<SessionId>) {
-        let token = format!("{:016x}.{:016x}", self.token_prefix, unpredictable_u64());
-        let mut bindings = self.bindings.lock();
-        let mut evicted = Vec::new();
-        match bindings.map.insert(token.clone(), sid) {
-            // Fresh: the token takes its place in the mint order.
-            None => bindings.order.push_back(token.clone()),
-            // A repeated draw. The token keeps its ONE place in the order,
-            // and the binding it displaced is unreachable, so it is retired
-            // like any evicted one. This is what keeps map and order in
-            // exact step without the invariant resting on the draw never
-            // repeating — a queue naming one token twice would evict the
-            // map entry belonging to the LIVE binding.
-            Some(displaced) => evicted.push(displaced),
-        }
-        while bindings.order.len() > MAX_LIVE_SESSIONS {
-            if let Some(old) = bindings.order.pop_front() {
-                if let Some(sid) = bindings.map.remove(&old) {
-                    evicted.push(sid);
-                }
-            }
-        }
-        (token, evicted)
-    }
-
-    /// The session a request runs under: its token's, or the guest for a
-    /// token that is absent, unknown, or evicted.
-    fn resolve(&self, token: Option<&str>) -> SessionId {
-        token.and_then(|t| self.bindings.lock().map.get(t).copied()).unwrap_or(self.guest)
-    }
-}
-
-/// One unpredictable `u64` from the standard library's own entropy — the
-/// source both halves of a token draw from, and no new dependency.
-///
-/// The source is `RandomState`'s per-thread key, which std seeds randomly
-/// and does NOT promise to keep unrelated across calls: today consecutive
-/// draws on one thread are SipHash-1-3 of the empty message under a
-/// counter-incremented key. That is enough for the property
-/// [`Sessions::bind`] needs today — a guessed token replays another
-/// session's cached acks and nothing more, since `POST /session` is itself
-/// unauthenticated and mints a token for any principal a caller names — and
-/// it is NOT enough for a token that is a credential. When `POST /session`
-/// gains one, this draw must come from the OS, which std does not expose;
-/// the dependency that decision buys is the daemon's to take.
-fn unpredictable_u64() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    RandomState::new().build_hasher().finish()
-}
+// The token ↔ session binding, the handshake, and per-request resolution
+// live in `crate::auth` (the AUTH session layer). What remains here is the
+// guest pattern above and the glue below.
 
 /// The daemon's state: the assembled engine, M10's front door, the codec,
 /// and the token → session binding. Socket-free — [`Daemon::route`] is the
@@ -761,8 +672,11 @@ pub struct Daemon {
     /// boundary takes the boundary's name.
     febe: Operation<World>,
     codec: JsonCodec,
-    /// The token ↔ session binding and the guest policy over it.
-    sessions: Sessions,
+    /// The AUTH session layer: config, the challenge and session stores,
+    /// the write gate, the identity fold, the credential memo.
+    auth: AuthState,
+    /// The permanently retired session every guest request runs under.
+    guest: SessionId,
     /// The write path: the serialization point, the commit-metadata sidecar
     /// behind `GET /changes` and `head_time` (wire v6), and the commit
     /// stream behind `GET /events` (wire v4). One field because the three
@@ -805,6 +719,14 @@ impl Daemon {
     /// up to the retained window (`CHECKPOINT_EVERY_COMMITS` ×
     /// `RETAINED_CHECKPOINTS`). `Sidecar::open` states the bound.
     pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
+        Daemon::open_with(data_dir, AuthOptions::default())
+    }
+
+    /// [`Daemon::open`] with the session-layer configuration named: the
+    /// local-trust flag and the configured origins. The identity fold is
+    /// seeded here from the RECOVERED world (derived state — the canonical
+    /// rebuild; the journal stays the one source of truth).
+    pub fn open_with(data_dir: &Path, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         let cfg = KernelConfig {
             durability: Durability::Fsync {
                 journal_path: data_dir.to_path_buf(),
@@ -817,14 +739,27 @@ impl Daemon {
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
         let febe = Operation::new(Box::new(engine.stores()));
         let guest = open_guest_session(&febe);
+        let auth = {
+            let snap = engine.kernel().snapshot();
+            AuthState::open(opts, snap.world())
+        };
         Ok(Daemon {
             engine,
             febe,
             codec: JsonCodec,
-            sessions: Sessions::new(guest),
+            auth,
+            guest,
             writes,
             history: History::new(),
         })
+    }
+
+    /// Bind the auth surface to the served port — the origin sets and the
+    /// `/health.auth` lists derive from it. [`serve`] calls this with the
+    /// bound port; a socket-free embedder that wants origin behavior calls
+    /// it itself.
+    pub fn bind_auth_port(&self, port: u16) {
+        self.auth.cfg.bind_port(port);
     }
 
     /// The world as of a committed position — the same bounded replay
@@ -866,19 +801,30 @@ impl Daemon {
     }
 
     /// The request/response routes — every method/path pair but the event
-    /// stream, decided in one match.
+    /// stream, decided in one match. The token-accepting set (AUTH-4.43) —
+    /// `/op`, `/op-at`, `/changes`, `/dump`, `/session/close` here, plus
+    /// `/events` on the accept path — runs [`Daemon::authenticate`] before
+    /// dispatch; `/health` and `/` are token-blind by design.
     fn reply(&self, req: &HttpRequest) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
             // CORS preflight (wire v4): 204 on any known path; an unknown
             // path falls through to the ordinary 404 below.
             ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
-            ("POST", "/session") => self.post_session(&req.body),
-            ("POST", "/op") => self.post_op(req.session_token.as_deref(), &req.body),
-            ("POST", "/op-at") => self.post_op_at(&req.body),
+            ("GET", "/challenge") => self.get_challenge(req.query.as_deref()),
+            ("POST", "/session") => self.post_session(req),
+            ("POST", "/session/close") => self.post_session_close(req),
+            ("POST", "/op") => self.post_op(req),
+            ("POST", "/op-at") => self.post_op_at(req),
             ("GET", "/health") => self.get_health(),
-            ("GET", "/changes") => self.get_changes(req.query.as_deref()),
+            ("GET", "/changes") => {
+                let authed = self.authenticate(req);
+                with_signal(self.get_changes(req.query.as_deref()), authed.closed)
+            }
             #[cfg(feature = "observe")]
-            ("GET", "/dump") => self.get_dump(req.query.as_deref()),
+            ("GET", "/dump") => {
+                let authed = self.authenticate(req);
+                with_signal(self.get_dump(req.query.as_deref()), authed.closed)
+            }
             #[cfg(feature = "client")]
             ("GET", "/") => {
                 Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
@@ -891,54 +837,351 @@ impl Daemon {
         }
     }
 
-    /// `POST /session` — bind a named principal (local trust: the client
-    /// names it), return the opaque token and echo the principal so the
-    /// client can name its own account in `principal_prefix`.
-    fn post_session(&self, body: &[u8]) -> Reply {
-        let principal = match session_principal(body) {
-            Ok(p) => p,
-            Err(detail) => {
-                return refuse(TransportError::MalformedSessionRequest, Some(&detail))
+    /// The four-part death sequence's ONE home (AUTH-4.42), run before
+    /// dispatch on every token-accepting route: the site's own lookup,
+    /// `resolve` against the HEAD (AUTH-4.29 — historical routes included),
+    /// close-both-stores on `Unknown | EntryDead`, and the
+    /// `Skepd-Session: closed` header on this response. The resolved actor
+    /// is handed to dispatch, never re-resolved at the route level.
+    fn authenticate(&self, req: &HttpRequest) -> Authed {
+        // A present-but-unparseable token IS no token (AUTH-4.18):
+        // `Guest(NoToken)`, nothing to close, no header.
+        let token = req.session_token.as_deref().and_then(Token::parse);
+        let lookup = self.auth.sessions.lookup(token.as_ref());
+        let snap = self.engine.kernel().snapshot();
+        let identity = self.auth.fold.snapshot();
+        let actor = resolve(
+            &self.auth.cfg,
+            lookup,
+            req.peer,
+            req.origin.as_deref(),
+            snap.world(),
+            &identity,
+        );
+        let closed = matches!(actor, Actor::Guest(GuestReason::Unknown | GuestReason::EntryDead));
+        if closed {
+            if let Some(t) = &token {
+                self.close_binding(t);
             }
-        };
-        let sid = self.febe.open_session(PrincipalId(principal));
-        let (token, evicted) = self.sessions.bind(sid);
-        // The transport obligation M10 names: nothing else retires a
-        // binding, and an evicted token can never be presented again, so
-        // its session and its idempotency entries go with it.
-        for dead in evicted {
-            self.febe.close_session(dead);
         }
+        Authed { actor, closed }
+    }
+
+    /// Close one token's binding in BOTH stores — the sessions map and M10
+    /// — plus the credential memo. `authenticate`'s eviction arm and
+    /// `/session/close` share it.
+    fn close_binding(&self, token: &Token) {
+        if let Some(entry) = self.auth.sessions.close(token) {
+            self.febe.close_session(entry.sid);
+            self.auth.memo.purge(entry.sid);
+        }
+    }
+
+    /// `GET /challenge?principal=N` (AUTH-6.1): issue a nonce for ANY
+    /// principal — nothing is secret; the burn is the credential.
+    fn get_challenge(&self, query: Option<&str>) -> Reply {
+        let principal = match challenge_principal(query) {
+            Ok(p) => p,
+            Err(detail) => return refuse(TransportError::MalformedChallenge, Some(&detail)),
+        };
+        let nonce =
+            self.auth.challenges.issue(PrincipalId(principal), Instant::now(), &mut OsEntropy);
         Reply::json(
             200,
             obj(vec![
+                ("nonce", Value::String(nonce.to_hex())),
                 ("principal", Value::Number(principal.into())),
-                ("session", Value::String(token)),
+                ("ttl_ms", Value::Number(u64::try_from(CHALLENGE_TTL.as_millis()).unwrap_or(60_000).into())),
             ]),
         )
     }
 
-    /// `POST /op` — one frame in, one marshaled `Response` out; the HTTP
-    /// exchange is the correlation envelope. Every inbound frame gets
-    /// exactly one response: parsed → `execute`'s answer; unparseable → the
-    /// `Unparseable` rejection, marshaled the same way.
-    ///
-    /// A write additionally goes through [`WritePath::commit`], which owns
-    /// the ordering the change feed and the commit stream both rest on:
-    /// commit, record, announce, under one lock. Reads execute directly and
-    /// take no lock — a read has no position of its own to record or
-    /// announce. `/op` is the daemon's only live write path, so this is
-    /// complete: no head advance goes unannounced.
-    fn post_op(&self, token: Option<&str>, body: &[u8]) -> Reply {
-        let sid = self.sessions.resolve(token);
-        let resp = match self.codec.parse(body) {
-            Ok(req) => match write_meta(&req.op) {
-                None => self.febe.execute(sid, req),
-                Some(meta) => self.writes.commit(meta, || self.febe.execute(sid, req)),
-            },
-            Err(e) => self.codec.unparseable(e),
+    /// `POST /session` — the two-form body (AUTH-6.2): bare (honored per
+    /// `bare_bind_allowed`) or signed (the challenge/response handshake,
+    /// verified in EVERY mode). A syntax fault is the 400 and spends no
+    /// credential; every handshake failure is the ONE 401,
+    /// `session_rejected`, byte-identical across causes (AUTH-6.5).
+    fn post_session(&self, req: &HttpRequest) -> Reply {
+        let body = match parse_session_body(&req.body) {
+            Ok(b) => b,
+            Err(detail) => {
+                return refuse(TransportError::MalformedSessionRequest, Some(&detail))
+            }
         };
-        self.op_reply(&resp)
+        let snap = self.engine.kernel().snapshot();
+        let identity = self.auth.fold.snapshot();
+        let outcome = handshake(
+            &self.auth.cfg,
+            &self.auth.challenges,
+            snap.world(),
+            &identity,
+            body,
+            req.peer,
+            req.origin.as_deref(),
+            Instant::now(),
+        );
+        match outcome {
+            Ok((principal, key)) => {
+                // Every POST /session mints a DISTINCT SessionId, principal
+                // 0 included (AUTH-4.40; M10's bootstrap_session mints
+                // fresh per call — confirmed as-built, AUTH-6.35).
+                let sid = if principal == skep_namespace::BOOTSTRAP_PRINCIPAL {
+                    self.febe.bootstrap_session()
+                } else {
+                    self.febe.open_session(principal)
+                };
+                let token = self
+                    .auth
+                    .sessions
+                    .open(SessionEntry { sid, principal, key }, &mut OsEntropy);
+                Reply::json(
+                    200,
+                    obj(vec![
+                        ("principal", Value::Number(principal.0.into())),
+                        ("session", Value::String(token.to_wire())),
+                    ]),
+                )
+            }
+            Err(_) => Reply::json(
+                401,
+                obj(vec![("error", Value::String("session_rejected".into()))]),
+            ),
+        }
+    }
+
+    /// `POST /session/close` (AUTH-4.47): idempotent 204. Through
+    /// `authenticate`, the header falls out with no special case — a LIVE
+    /// token's 204 carries no header (the close is the person's own act);
+    /// an unknown or already-dead one resolves Guest and its 204 carries
+    /// `Skepd-Session: closed`.
+    fn post_session_close(&self, req: &HttpRequest) -> Reply {
+        let authed = self.authenticate(req);
+        if let Actor::Principal(_) = &authed.actor {
+            if let Some(t) = req.session_token.as_deref().and_then(Token::parse) {
+                self.close_binding(&t);
+            }
+        }
+        with_signal(Reply { status: 204, body: None, headers: Vec::new() }, authed.closed)
+    }
+
+    /// `POST /op` — one frame in, one marshaled answer out; the HTTP
+    /// exchange is the correlation envelope. The frame is either the
+    /// daemon-served `key_set` read, an M10 read (no lock, the actor's
+    /// session), or a write, which runs one of the two pinned write
+    /// sequences (AUTH-3.35 / AUTH-3.37) under the write gate.
+    fn post_op(&self, req: &HttpRequest) -> Reply {
+        let authed = self.authenticate(req);
+        let reply = match self.codec.parse_daemon(&req.body) {
+            Err(e) => self.op_reply(&self.codec.unparseable(e)),
+            Ok(DaemonOp::KeySet { account }) => {
+                // The one dispatcher (AUTH-6.20): the head pair — the live
+                // fold beside the head snapshot. Principal-free.
+                let snap = self.engine.kernel().snapshot();
+                let identity = self.auth.fold.snapshot();
+                let bytes = key_set_reply(snap.seq(), snap.world(), &identity, &account);
+                Reply::bodied(200, "application/json", bytes)
+            }
+            Ok(DaemonOp::Febe(freq)) => match write_meta(&freq.op) {
+                // Reads execute directly and take no lock (AUTH-3.36).
+                None => self.op_reply(&self.febe.execute(self.actor_sid(&authed.actor), freq)),
+                Some(meta) => self.write_sequence(&authed, meta, freq, req),
+            },
+        };
+        with_signal(reply, authed.closed)
+    }
+
+    /// The session a request's dispatch runs under: the actor's, or the
+    /// permanently retired guest (M10 serves reads and refuses writes
+    /// `Unauthenticated` under it).
+    fn actor_sid(&self, actor: &Actor) -> SessionId {
+        match actor {
+            Actor::Principal(e) => e.sid,
+            Actor::Guest(_) => self.guest,
+        }
+    }
+
+    /// One write, through its pinned sequence: the credential path for a
+    /// deposit-classified op (`deposits_credential_link`, decided lock-free
+    /// off the op's own type slot), the plain path for everything else.
+    fn write_sequence(
+        &self,
+        authed: &Authed,
+        meta: WriteMeta,
+        freq: Request,
+        req: &HttpRequest,
+    ) -> Reply {
+        if deposits_credential_link(&freq.op) {
+            self.credential_sequence(authed, meta, freq, req)
+        } else {
+            self.plain_sequence(meta, freq, req)
+        }
+    }
+
+    /// The under-lock resolution BOTH sequences perform at their own site
+    /// (AUTH-4.28's WHICH-lookup pin): a fresh lookup + resolve over the
+    /// guard snapshot. `Guest(Unknown | EntryDead)` takes the
+    /// close-and-signal arm (close both stores; the header on THIS
+    /// response); every Guest answers `unauthenticated` by executing under
+    /// the retired guest session — M10's own code, with the op kind named.
+    fn resolve_under_lock(
+        &self,
+        req: &HttpRequest,
+        world: &World,
+        identity: &IdentityState,
+    ) -> (Actor, bool) {
+        let token = req.session_token.as_deref().and_then(Token::parse);
+        let lookup = self.auth.sessions.lookup(token.as_ref());
+        let actor =
+            resolve(&self.auth.cfg, lookup, req.peer, req.origin.as_deref(), world, identity);
+        let closed = matches!(actor, Actor::Guest(GuestReason::Unknown | GuestReason::EntryDead));
+        if closed {
+            if let Some(t) = &token {
+                self.close_binding(t);
+            }
+        }
+        (actor, closed)
+    }
+
+    /// The PLAIN sequence (AUTH-3.35): gate.read → the serialization lock →
+    /// the head snapshot → this site's own resolve → `nullify_refusal` →
+    /// `mint_home_refusal` → `board_state_refusal` → execute. The serial
+    /// lock is taken before the snapshot so the gates' answers and the
+    /// execute they gate stand on one committed state.
+    fn plain_sequence(&self, mut meta: WriteMeta, freq: Request, req: &HttpRequest) -> Reply {
+        let _g = self.auth.gate.read();
+        let serial = self.writes.serial_lock();
+        let snap = self.engine.kernel().snapshot();
+        let identity = self.auth.fold.snapshot();
+        let (actor, closed) = self.resolve_under_lock(req, snap.world(), &identity);
+        let entry = match actor {
+            Actor::Principal(e) => e,
+            Actor::Guest(_) => {
+                let resp = self.febe.execute(self.guest, freq);
+                return with_signal(self.op_reply(&resp), closed);
+            }
+        };
+        let op_name = crate::codec::op_name(meta.kind);
+        if let Some(r) = nullify_refusal(&_g, snap.world(), &freq.op) {
+            // RES-32's entitlement scope on a CLAIMED board: the shape
+            // token reaches only the target-home owner; a non-owner's
+            // nullify falls through to execute and answers ω's own
+            // `not_owner`, indistinguishable from its non-credential
+            // answer. Pre-claim the order stands for every caller.
+            let claimed = identity.claimant().is_some();
+            let owner_masked = claimed
+                && !match &freq.op {
+                    Op::Nullify { home, .. } => {
+                        skep_namespace::HasM3::m3(snap.world())
+                            .is_effective_owner(entry.principal, home)
+                    }
+                    _ => false,
+                };
+            if !owner_masked {
+                return with_signal(credential_refused(op_name, &r), closed);
+            }
+        }
+        if let Some(r) = mint_home_refusal(&_g, snap.world(), &freq.op, entry.principal) {
+            return with_signal(credential_refused(op_name, &r), closed);
+        }
+        if let Some(r) = board_state_refusal(
+            &_g,
+            snap.world(),
+            &identity,
+            &freq.op,
+            entry.principal,
+            entry.key.as_ref(),
+        ) {
+            return with_signal(credential_refused(op_name, &r), closed);
+        }
+        meta.key = testimony(&entry);
+        let resp = self.writes.commit_under(&serial, meta, || self.febe.execute(entry.sid, freq));
+        with_signal(self.op_reply(&resp), closed)
+    }
+
+    /// The CREDENTIAL sequence (AUTH-3.37): the pre-lock actor is
+    /// `authenticate`'s; `op_shape_refusal` runs ahead of the lock; then
+    /// gate.write → serial → snapshot → this site's own resolve → recall →
+    /// precheck → execute → the fold step, the memo, and the claim-flip
+    /// tail — all under the write guard.
+    fn credential_sequence(
+        &self,
+        authed: &Authed,
+        mut meta: WriteMeta,
+        freq: Request,
+        req: &HttpRequest,
+    ) -> Reply {
+        let op_name = crate::codec::op_name(meta.kind);
+        // 1 — the pre-lock actor check: both outcomes are refusals that
+        // execute nothing (AUTH-3.38).
+        if let Actor::Guest(_) = authed.actor {
+            let resp = self.febe.execute(self.guest, freq);
+            return self.op_reply(&resp);
+        }
+        // 2 — slots (1)–(2), ahead of the lock (AUTH-3.5).
+        if let Some(r) = op_shape_refusal(&freq.op) {
+            return credential_refused(op_name, &r);
+        }
+        // 3 — the write lock, the serialization lock, the locked snapshot,
+        // and this site's OWN resolution.
+        let _g = self.auth.gate.write();
+        let serial = self.writes.serial_lock();
+        let snap = self.engine.kernel().snapshot();
+        let identity = self.auth.fold.snapshot();
+        let (actor, closed) = self.resolve_under_lock(req, snap.world(), &identity);
+        let entry = match actor {
+            Actor::Principal(e) => e,
+            // 4 — the only reachable arms are Unknown | EntryDead
+            // (AUTH-3.37 item 4); the close-and-signal already fired.
+            Actor::Guest(_) => {
+                let resp = self.febe.execute(self.guest, freq);
+                return with_signal(self.op_reply(&resp), closed);
+            }
+        };
+        // 5 — recall, kind-blind, atomic with the precheck-and-execute it
+        // guards (AUTH-3.40/3.41): the ORIGINAL ack, byte-identical,
+        // executing nothing.
+        if let Some(id) = &freq.id {
+            if let Some(ack) = self.auth.memo.recall(entry.sid, id) {
+                return with_signal(Reply::bodied(200, "application/json", ack), closed);
+            }
+        }
+        // 6 — the precheck's ordered slots over the verbatim deposit.
+        let Some(dep) = DepositSpans::of(&freq.op) else {
+            // Unreachable: only a MakeLink with address-form slots
+            // classifies credential past slots (1)–(2). Refuse in the
+            // shape vocabulary rather than invent one.
+            return with_signal(credential_refused(op_name, &Refusal::ResolvedFrom), closed);
+        };
+        match crate::auth::policy::precheck(
+            &_g,
+            snap.world(),
+            &identity,
+            &dep,
+            entry.key.as_ref(),
+        ) {
+            Err(r) => return with_signal(credential_refused(op_name, &r), closed),
+            Ok(_effect) => {}
+        }
+        // 7 — execute (commit-record-announce under the held serial lock).
+        meta.key = testimony(&entry);
+        let req_id = freq.id.clone();
+        let resp = self.writes.commit_under(&serial, meta, || self.febe.execute(entry.sid, freq));
+        let ack = self.codec.marshal(&resp);
+        if matches!(resp, Response::AckAddr { .. }) {
+            // 8 — feed the fold from the committed deposit (post-commit
+            // snapshot as ctx) and run the claim-flip tail (AUTH-3.43).
+            let post = self.engine.kernel().snapshot();
+            let flipped = self.auth.fold.step_committed(post.world(), &dep.deposit());
+            if let Some(id) = &req_id {
+                self.auth.memo.store(entry.sid, id, ack.clone());
+            }
+            if flipped {
+                for w in startup_warnings(&self.auth.cfg, true) {
+                    let _ = writeln!(std::io::stderr(), "skepd: warning (at claim): {w}");
+                }
+            }
+        }
+        with_signal(Reply::bodied(200, "application/json", ack), closed)
     }
 
     /// One marshaled operation answer as its reply — always `200`, whatever
@@ -964,22 +1207,48 @@ impl Daemon {
     /// `as_of` reporting `at`. History is not a place you can act — a write
     /// frame is a transport-level 400 before anything runs; an unparseable
     /// frame gets the same `unparseable` rejection `/op` gives it.
-    fn post_op_at(&self, body: &[u8]) -> Reply {
+    fn post_op_at(&self, req: &HttpRequest) -> Reply {
+        let authed = self.authenticate(req);
+        with_signal(self.op_at_reply(&req.body), authed.closed)
+    }
+
+    fn op_at_reply(&self, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
             Err(detail) => return refuse(TransportError::MalformedOpAt, Some(&detail)),
         };
-        let req = match self.codec.parse_frame(frame) {
+        let parsed = match self.codec.parse_daemon_value(frame) {
             Ok(r) => r,
             Err(e) => return self.op_reply(&self.codec.unparseable(e)),
         };
-        if !op_is_read(&req.op) {
-            // The ruling-fixed body, exactly: {"error": "write_at_history"}.
-            return refuse(TransportError::WriteAtHistory, None);
-        }
-        match self.history.read_at(&self.engine, at, req) {
-            Ok(resp) => self.op_reply(&resp),
-            Err(e) => refuse_unavailable(e),
+        match parsed {
+            DaemonOp::KeySet { account } => {
+                // The SAME dispatcher as /op's, over the reconstructed
+                // world and its canonical identity rebuild (AUTH-6.20) —
+                // under the reconstruction budget like every historical
+                // answer.
+                match self.history.reconstruct(&self.engine, at) {
+                    Ok((_permit, world)) => {
+                        let identity = canonical_identity(&world);
+                        Reply::bodied(
+                            200,
+                            "application/json",
+                            key_set_reply(at, &world, &identity, &account),
+                        )
+                    }
+                    Err(e) => refuse_unavailable(e),
+                }
+            }
+            DaemonOp::Febe(freq) => {
+                if !op_is_read(&freq.op) {
+                    // The ruling-fixed body, exactly: {"error": "write_at_history"}.
+                    return refuse(TransportError::WriteAtHistory, None);
+                }
+                match self.history.read_at(&self.engine, at, freq) {
+                    Ok(resp) => self.op_reply(&resp),
+                    Err(e) => refuse_unavailable(e),
+                }
+            }
         }
     }
 
@@ -997,9 +1266,32 @@ impl Daemon {
         // `Sidecar::head_time` states what each field is true of.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
+        // The auth object (AUTH-6.13): claimant, local_trust, and the TWO
+        // origin lists — each published VERBATIM from its set function, so
+        // the published list and the arm's own rule are one rule. NO
+        // `.mode` field (the negative pin): mode is derived client-side
+        // from the pair.
+        let identity = self.auth.fold.snapshot();
+        let claimed = identity.claimant().is_some();
+        let origin_list = |set: std::collections::BTreeSet<crate::auth::Origin>| {
+            Value::Array(set.iter().map(|o| Value::String(o.as_str().to_string())).collect())
+        };
+        let auth = obj(vec![
+            (
+                "claimant",
+                identity
+                    .claimant()
+                    .map(|a| Value::String(a.tumbler().to_string()))
+                    .unwrap_or(Value::Null),
+            ),
+            ("local_trust", Value::Bool(self.auth.cfg.local_trust)),
+            ("origins", origin_list(bare_origins(&self.auth.cfg))),
+            ("signed_origins", origin_list(signed_origins(&self.auth.cfg, claimed))),
+        ]);
         Reply::json(
             200,
             obj(vec![
+                ("auth", auth),
                 ("head_time", head_time),
                 ("log_position", Value::Number(self.febe.log_position().0.into())),
                 ("ok", Value::Bool(true)),
@@ -1055,17 +1347,65 @@ impl Daemon {
     }
 }
 
-/// Strictly `{"principal": <non-negative integer>}`.
-fn session_principal(body: &[u8]) -> Result<u64, String> {
-    let v: Value =
-        serde_json::from_slice(body).map_err(|e| format!("invalid JSON: {e}"))?;
-    let Value::Object(m) = v else {
-        return Err("session request must be a JSON object".into());
+/// The route-level authentication outcome: the resolved actor and whether
+/// this response owes the `Skepd-Session: closed` header.
+struct Authed {
+    actor: Actor,
+    closed: bool,
+}
+
+/// Attach the death signal (AUTH-6.7) when owed — once, however many
+/// resolution sites observed the death on this request.
+fn with_signal(mut reply: Reply, closed: bool) -> Reply {
+    if closed && !reply.headers.iter().any(|(k, _)| *k == SESSION_HEADER) {
+        reply.headers.push((SESSION_HEADER, "closed"));
+    }
+    reply
+}
+
+/// One daemon-originated credential refusal as its 200-enveloped rejection
+/// (AUTH-3.54): `code: credential_refused`, `disposition: permanent`
+/// uniformly, `detail` the machine token. The op field names the refused
+/// op, exactly as M10's rejections do.
+fn credential_refused(op_name: &str, r: &Refusal) -> Reply {
+    Reply::bodied(
+        200,
+        "application/json",
+        daemon_rejected(op_name, "credential_refused", "permanent", Some(r.token())),
+    )
+}
+
+/// The key testimony of one committed write (AUTH-4.48): the establishing
+/// key's fingerprint hex, or `"bare"`.
+fn testimony(entry: &SessionEntry) -> String {
+    match &entry.key {
+        Some(fp) => fp.to_hex(),
+        None => "bare".to_string(),
+    }
+}
+
+/// The `/challenge` query: exactly `principal=<non-negative integer>`.
+fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
+    let q = match query {
+        None | Some("") => return Err("the required parameter is principal=<id>".into()),
+        Some(q) => q,
     };
-    check_keys(&m, &["principal"])?;
-    m.get("principal")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| "missing or non-integer field 'principal'".into())
+    let mut principal: Option<u64> = None;
+    for (k, v) in query_pairs(q)? {
+        match k {
+            "principal" => {
+                if principal.is_some() {
+                    return Err("duplicate parameter 'principal'".into());
+                }
+                principal = Some(
+                    v.parse()
+                        .map_err(|_| format!("principal: '{v}' is not a non-negative integer"))?,
+                );
+            }
+            other => return Err(format!("unknown parameter '{other}'")),
+        }
+    }
+    principal.ok_or_else(|| String::from("the required parameter is principal=<id>"))
 }
 
 // ── the change feed (wire v6) ────────────────────────────────────────────
@@ -1291,6 +1631,16 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let daemon = Arc::new(daemon);
     let listener = Arc::new(TcpListener::bind(("127.0.0.1", port))?);
     let port = listener.local_addr()?.port();
+    // The auth surface derives its origin sets from the BOUND port, and the
+    // startup warnings are logged here — the one thing the glue does with
+    // the config before serving (AUTH-4.11).
+    daemon.bind_auth_port(port);
+    {
+        let claimed = daemon.auth.fold.snapshot().claimant().is_some();
+        for w in startup_warnings(&daemon.auth.cfg, claimed) {
+            let _ = writeln!(std::io::stderr(), "skepd: warning: {w}");
+        }
+    }
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
     // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS
@@ -1443,12 +1793,19 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    // The peer's loopback-ness, off the socket itself (AUTH-4.14). This
+    // daemon binds 127.0.0.1, so every peer is loopback today; deriving it
+    // rather than asserting it is what a bind-override needs no change for.
+    let peer = match stream.peer_addr() {
+        Ok(a) if a.ip().is_loopback() => Peer::Loopback,
+        _ => Peer::Remote,
+    };
     // One deadline per transfer: the socket's own timeouts bound silence and
     // are renewed by any byte, so this is what bounds a peer that is slow
     // rather than quiet. The reply gets its own below, which is what keeps a
     // request refused AT its deadline still answerable.
     let deadline = Instant::now() + TRANSFER_DEADLINE;
-    let req = match read_request(&mut stream, deadline) {
+    let req = match read_request(&mut stream, peer, deadline) {
         Ok(Some(r)) => r,
         // Clean close before any byte (a port probe, shutdown's wake
         // connect): no request, so no reply owed.
@@ -1477,7 +1834,13 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
         Routed::Reply(reply) => {
             let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
         }
-        Routed::EventStream => subscribers.admit(Arc::clone(daemon), stream),
+        Routed::EventStream => {
+            // `/events` runs `authenticate` before the stream OPENS
+            // (AUTH-4.44): a dead token meets `Skepd-Session: closed` on
+            // the stream's own head, written once, at open.
+            let closed = daemon.authenticate(&req).closed;
+            subscribers.admit(Arc::clone(daemon), stream, closed);
+        }
     }
 }
 
@@ -1516,7 +1879,7 @@ impl Subscribers {
     /// the socket — a clean close before any stream head, which is the same
     /// end a subscriber meets at shutdown and the one a reconnecting client
     /// already handles.
-    fn admit(&self, daemon: Arc<Daemon>, stream: TcpStream) {
+    fn admit(&self, daemon: Arc<Daemon>, stream: TcpStream, closed: bool) {
         let mut live = self.live.lock();
         // Reap finished threads so the registry tracks live streams, not
         // history — which is also what returns a departed subscriber's slot.
@@ -1534,7 +1897,7 @@ impl Subscribers {
         // which is the clean close above.
         let spawned = thread::Builder::new()
             .name("skepd-events".into())
-            .spawn(move || serve_events(&daemon, stream));
+            .spawn(move || serve_events(&daemon, stream, closed));
         if let Ok(h) = spawned {
             live.push(h);
         }
@@ -1613,6 +1976,7 @@ fn refuse_request(refusal: RequestRefusal) -> Reply {
 /// which is where a timed-out read already lands.
 fn read_request(
     stream: &mut TcpStream,
+    peer: Peer,
     deadline: Instant,
 ) -> Result<Option<HttpRequest>, RequestRefusal> {
     // The head, plus whatever early body bytes arrived with it.
@@ -1674,6 +2038,7 @@ fn read_request(
     // malformed head with two different diagnoses.
     let mut content_length: Option<usize> = None;
     let mut session_token: Option<String> = None;
+    let mut origin: Option<String> = None;
     let mut expects_continue: Option<bool> = None;
     fn once<T>(slot: &Option<T>, name: &str) -> Result<(), RequestRefusal> {
         match slot {
@@ -1696,6 +2061,9 @@ fn read_request(
         } else if name.eq_ignore_ascii_case(SESSION_HEADER) {
             once(&session_token, name)?;
             session_token = Some(value.to_string());
+        } else if name.eq_ignore_ascii_case("Origin") {
+            once(&origin, name)?;
+            origin = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Expect") {
             once(&expects_continue, name)?;
             expects_continue = Some(value.eq_ignore_ascii_case("100-continue"));
@@ -1739,7 +2107,7 @@ fn read_request(
     // A byte past Content-Length would be a pipelined second request; this
     // connection answers one and closes, so it is dropped unread.
     body.truncate(declared);
-    Ok(Some(HttpRequest { method, path, query, session_token, body }))
+    Ok(Some(HttpRequest { method, path, query, session_token, origin, peer, body }))
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {
@@ -1826,6 +2194,7 @@ fn reason(status: u16) -> &'static str {
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
         410 => "Gone",
@@ -1848,13 +2217,18 @@ fn reason(status: u16) -> &'static str {
 /// the kernel, which is what keeps every announced position one
 /// `GET /changes` already carries — see that method for the window the
 /// distinction closes.
-fn serve_events(daemon: &Daemon, mut stream: TcpStream) {
+fn serve_events(daemon: &Daemon, mut stream: TcpStream, closed: bool) {
     let mut head = b"HTTP/1.1 200 OK\r\n".to_vec();
     for (name, value) in UNIVERSAL_HEADERS {
         push_header(&mut head, name, value);
     }
     push_header(&mut head, "Content-Type", "text/event-stream");
     push_header(&mut head, "Cache-Control", "no-cache");
+    if closed {
+        // The death signal, written ONCE at open (AUTH-4.44): a session
+        // dying mid-stream is a stated residue.
+        push_header(&mut head, SESSION_HEADER, "closed");
+    }
     head.extend_from_slice(b"\r\n");
     if stream.write_all(&head).is_err() {
         return;
@@ -1906,6 +2280,8 @@ mod tests {
     /// every method.
     const ROUTES: &[&str] = &[
         "/session",
+        "/session/close",
+        "/challenge",
         "/op",
         "/op-at",
         "/health",
@@ -1951,6 +2327,8 @@ mod tests {
             path: path.to_string(),
             query: None,
             session_token: None,
+            origin: None,
+            peer: Peer::Loopback,
             body: Vec::new(),
         };
         let status = |method: &str, path: &str| match daemon.route(&bare(method, path)) {
@@ -1999,103 +2377,53 @@ mod tests {
         }
     }
 
-    /// The guest policy in one place: an absent or unrecognized token is
-    /// the guest (M10 then serves reads and refuses writes), a bound token
-    /// is its own session, and two binds never collide.
+    /// The guest policy at the route level: an absent token serves reads
+    /// and meets M10's own `Unauthenticated` on writes; an unknown token
+    /// additionally carries the death signal (AUTH-6.7) — an evicted or
+    /// stale token is never silently a guest.
     #[test]
-    fn sessions_resolve_unknown_tokens_to_the_guest() {
+    fn a_guest_reads_and_an_unknown_token_is_signalled() {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = Daemon::open(dir.path()).expect("genesis open");
-        let guest = daemon.sessions.resolve(None);
-        assert_eq!(
-            daemon.sessions.resolve(Some("no-such-token")),
-            guest,
-            "an unknown token is the guest, not an error"
-        );
-        let sid = daemon.febe.open_session(PrincipalId(7));
-        let (token, evicted) = daemon.sessions.bind(sid);
-        assert!(evicted.is_empty(), "an unfilled table evicts nothing");
-        assert_eq!(daemon.sessions.resolve(Some(&token)), sid, "a bound token is its session");
-        let (other, _) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(8)));
-        assert_ne!(token, other, "each binding gets its own token");
-    }
-
-    /// The binding table is bounded, and what falls out of it is retired
-    /// rather than merely forgotten: `POST /session` is unauthenticated, so
-    /// an unbounded map is memory any caller can retain — here and in M10 —
-    /// without ever writing. The evicted token resolves to the guest, which
-    /// is a state wire.md already documents (an unknown token is not an
-    /// error), so the bound narrows retention without narrowing the wire.
-    #[test]
-    fn the_session_table_is_bounded_and_evicts_oldest_first() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = Daemon::open(dir.path()).expect("genesis open");
-        let guest = daemon.sessions.resolve(None);
-
-        let mut tokens = Vec::new();
-        for _ in 0..MAX_LIVE_SESSIONS {
-            let (t, evicted) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(1)));
-            assert!(evicted.is_empty(), "nothing is evicted up to the bound");
-            tokens.push(t);
-        }
-        assert_eq!(daemon.sessions.bindings.lock().map.len(), MAX_LIVE_SESSIONS);
-        assert_ne!(daemon.sessions.resolve(Some(&tokens[0])), guest, "all still live");
-
-        // One past the bound evicts exactly the oldest, and hands it back
-        // so the caller can retire it in M10 too.
-        let (newest, evicted) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(2)));
-        assert_eq!(evicted.len(), 1, "one in, one out");
-        assert_eq!(
-            daemon.sessions.resolve(Some(&tokens[0])),
-            guest,
-            "the oldest token now resolves to the guest, as an unknown token does"
-        );
-        assert_ne!(
-            daemon.sessions.resolve(Some(&tokens[1])),
-            guest,
-            "and only the oldest went"
-        );
-        assert_ne!(daemon.sessions.resolve(Some(&newest)), guest, "the newest is live");
-        assert_eq!(
-            daemon.sessions.bindings.lock().map.len(),
-            MAX_LIVE_SESSIONS,
-            "the table stays at its bound however many sessions are opened"
-        );
-    }
-
-    /// A token names no other token: the suffix is drawn fresh per binding,
-    /// not counted, so holding one gives a client no way to enumerate the
-    /// rest. Nothing on the wire reveals the draw, which is what keeps the
-    /// property true when `POST /session` gains a credential.
-    #[test]
-    fn one_token_does_not_name_the_next() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = Daemon::open(dir.path()).expect("genesis open");
-        let mint = || daemon.sessions.bind(daemon.febe.open_session(PrincipalId(1))).0;
-        let first = mint();
-        let rest: Vec<String> = (0..64).map(|_| mint()).collect();
-        let (prefix, suffix) =
-            first.split_once('.').expect("a token is <uptime prefix>.<per-token draw>");
+        let post = |token: Option<&str>, body: &str| {
+            let Routed::Reply(r) = daemon.route(&HttpRequest {
+                method: "POST".to_string(),
+                path: "/op".to_string(),
+                query: None,
+                session_token: token.map(str::to_string),
+                origin: None,
+                peer: Peer::Loopback,
+                body: body.as_bytes().to_vec(),
+            }) else {
+                panic!("POST /op is not the event stream")
+            };
+            r
+        };
+        let read = post(None, r#"{"op":"next_account_prefix","parent":"1"}"#);
+        let v: Value = serde_json::from_slice(read.bytes()).expect("json");
+        assert_eq!(v["resp"].as_str(), Some("maybe_addr"), "a guest read serves: {v}");
+        let write = post(None, r#"{"op":"fork"}"#);
+        let v: Value = serde_json::from_slice(write.bytes()).expect("json");
+        assert_eq!(v["code"].as_str(), Some("unauthenticated"), "a guest write refuses: {v}");
         assert!(
-            rest.iter().all(|t| t.starts_with(&format!("{prefix}."))),
-            "the uptime prefix is shared, so a stale token still misses"
+            !write.headers.iter().any(|(k, _)| *k == SESSION_HEADER),
+            "no token presented, so nothing died and nothing signals"
         );
-        let next = u64::from_str_radix(suffix, 16).expect("hex suffix").wrapping_add(1);
-        let guessed = format!("{prefix}.{next:016x}");
+        // A well-formed but unknown token: the same refusal, WITH the
+        // signal — a stale token is never silently a guest.
+        let stale = "0123456789abcdef0123456789abcdef";
+        let write = post(Some(stale), r#"{"op":"fork"}"#);
+        let v: Value = serde_json::from_slice(write.bytes()).expect("json");
+        assert_eq!(v["code"].as_str(), Some("unauthenticated"), "{v}");
         assert!(
-            !rest.contains(&guessed),
-            "the token after one you hold is not the one adjacent to it"
+            write.headers.iter().any(|(k, v)| *k == SESSION_HEADER && *v == "closed"),
+            "an unknown token carries Skepd-Session: closed"
         );
-        let uniq: std::collections::HashSet<&String> = rest.iter().collect();
-        assert_eq!(uniq.len(), rest.len(), "and no two bindings collide");
-        // The invariant `Bindings` claims, checked rather than argued: the
-        // queue describes exactly the tokens the map holds. Insertion, not
-        // the draw, is what keeps the two in step.
-        let bindings = daemon.sessions.bindings.lock();
-        assert_eq!(
-            bindings.map.len(),
-            bindings.order.len(),
-            "the mint order names each live token exactly once"
+        // An unparseable header value IS no token (AUTH-4.18): no signal.
+        let junk = post(Some("not-a-token"), r#"{"op":"fork"}"#);
+        assert!(
+            !junk.headers.iter().any(|(k, _)| *k == SESSION_HEADER),
+            "a value Token::parse refuses resolves NoToken — nothing to close"
         );
     }
 
@@ -2149,6 +2477,7 @@ mod tests {
     fn every_transport_error_pairs_its_documented_name_with_its_documented_status() {
         let mut table: Vec<(TransportError, &'static str, u16)> = vec![
             (TransportError::MalformedSessionRequest, "malformed_session_request", 400),
+            (TransportError::MalformedChallenge, "malformed_challenge", 400),
             (TransportError::MalformedOpAt, "malformed_op_at", 400),
             (TransportError::WriteAtHistory, "write_at_history", 400),
             (TransportError::BeyondHead, "beyond_head", 400),
@@ -2186,10 +2515,12 @@ mod tests {
         // Both transcriptions of wire.md's error column, measured against
         // each other. A NEW variant is caught by the compiler at `name`
         // and `status`; this catches one that reaches the wire without
-        // reaching either list.
+        // reaching either list. The `+ 1` is `session_rejected` — the one
+        // documented error name that is not a `TransportError` variant
+        // (the handshake's single 401, built at its own site per AUTH-6.5).
         #[cfg(feature = "observe")]
         assert_eq!(
-            table.len(),
+            table.len() + 1,
             crate::fuzz_support::TRANSPORT_ERRORS.len(),
             "the two hand transcriptions of wire.md's error column disagree in length"
         );
@@ -2306,17 +2637,37 @@ mod tests {
     /// correct on a quiet socket and wrong under concurrency, leaking a
     /// write another thread had committed but not yet recorded. Here that
     /// gap is opened deliberately instead of raced for.
+    /// A bare 0-session's token, opened through the route itself.
+    fn bare_session(daemon: &Daemon, principal: u64) -> String {
+        let Routed::Reply(r) = daemon.route(&HttpRequest {
+            method: "POST".to_string(),
+            path: "/session".to_string(),
+            query: None,
+            session_token: None,
+            origin: None,
+            peer: Peer::Loopback,
+            body: format!("{{\"principal\":{principal}}}").into_bytes(),
+        }) else {
+            panic!("POST /session is not the event stream")
+        };
+        assert_eq!(r.status, 200, "{}", String::from_utf8_lossy(r.bytes()));
+        let v: Value = serde_json::from_slice(r.bytes()).expect("json");
+        v["session"].as_str().expect("token").to_string()
+    }
+
     #[test]
     fn only_a_committing_write_announces_and_only_its_own_position() {
         let dir = tempfile::tempdir().expect("tempdir");
         let daemon = Daemon::open(dir.path()).expect("genesis open");
-        let (token, _) = daemon.sessions.bind(daemon.febe.open_session(PrincipalId(0)));
+        let token = bare_session(&daemon, 0);
         let announced = || daemon.writes.announced();
         let post = |body: &str| match daemon.route(&HttpRequest {
             method: "POST".to_string(),
             path: "/op".to_string(),
             query: None,
             session_token: Some(token.clone()),
+            origin: None,
+            peer: Peer::Loopback,
             body: body.as_bytes().to_vec(),
         }) {
             Routed::Reply(r) => serde_json::from_slice::<Value>(r.bytes()).expect("json"),
@@ -2325,9 +2676,12 @@ mod tests {
 
         // Commit past the stream without announcing: this is the state a
         // concurrent write leaves behind between its commit and its record.
+        // Driven through `febe` directly — the one path that commits
+        // without announcing — so the daemon's own gates are deliberately
+        // bypassed.
         let frame = br#"{"op":"register_node","addr":"1.9001"}"#;
         let req = daemon.codec.parse(frame).unwrap_or_else(|_| panic!("test frame parses"));
-        let sid = daemon.sessions.resolve(Some(&token));
+        let sid = daemon.febe.bootstrap_session();
         let ahead = match daemon.febe.execute(sid, req) {
             Response::AckAddr { at, .. } => at,
             // `Response` derives no Debug upstream; marshal to say what came back.
@@ -2350,8 +2704,12 @@ mod tests {
         assert_eq!(bad["op"].as_str(), Some("unparseable"));
         assert!(announced().0 < ahead.0, "an unparseable frame announces nothing either");
 
-        let write = post(r#"{"op":"register_node","addr":"1.9002"}"#);
-        let at = write["at"].as_u64().expect("register_node commits: {write}");
+        // A route-level write that commits pre-claim: the ceremony's own
+        // delegate from principal 0 (the pre-claim gate admits it).
+        let prefix = read["addr"].as_str().expect("a delegable prefix").to_string();
+        let write =
+            post(&format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":41}}"#));
+        let at = write["at"].as_u64().unwrap_or_else(|| panic!("delegate commits: {write}"));
         assert_eq!(
             announced().0,
             at,
@@ -2380,8 +2738,7 @@ mod tests {
 
         let (announced, ahead) = {
             let d = server.daemon();
-            let (token, _) = d.sessions.bind(d.febe.open_session(PrincipalId(0)));
-            let sid = d.sessions.resolve(Some(&token));
+            let sid = d.febe.bootstrap_session();
             let req = d
                 .codec
                 .parse(br#"{"op":"register_node","addr":"1.9001"}"#)

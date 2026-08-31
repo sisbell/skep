@@ -86,7 +86,7 @@ impl History {
     ///
     /// `at` is not examined until a permit is in hand, so
     /// [`Unavailable::Busy`] precedes every journal verdict about it.
-    fn reconstruct(
+    pub(crate) fn reconstruct(
         &self,
         engine: &Engine,
         at: Seq,

@@ -73,8 +73,13 @@ pub(crate) enum Meta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
     /// an invented value.
     Bare,
-    /// Witnessed at ack time by the daemon's own write path.
-    Recorded { op: String, docs: Vec<String>, time: u64 },
+    /// Witnessed at ack time by the daemon's own write path. `key` is the
+    /// AUTH testimony (AUTH-4.48): the fingerprint hex of the enrolled key
+    /// that established the authoring session, or `"bare"` for a bare one.
+    /// `None` only for a line written before the feature — served as the
+    /// reserved null (AUTH-1.52's lost-metadata meaning), never for a
+    /// commit this daemon served since.
+    Recorded { op: String, docs: Vec<String>, time: u64, key: Option<String> },
 }
 
 impl Meta {
@@ -86,17 +91,19 @@ impl Meta {
     /// absent and null alike, so the shorter line costs nothing there,
     /// while a client reading the wire is owed the field it asked about.
     pub fn into_entry(self, at: u64) -> Value {
-        let (docs, op, time) = match self {
-            Meta::Bare => (Value::Null, Value::Null, Value::Null),
-            Meta::Recorded { op, docs, time } => (
+        let (docs, op, time, key) = match self {
+            Meta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
+            Meta::Recorded { op, docs, time, key } => (
                 Value::Array(docs.into_iter().map(Value::String).collect()),
                 Value::String(op),
                 Value::Number(time.into()),
+                key.map(Value::String).unwrap_or(Value::Null),
             ),
         };
         obj(vec![
             ("at", Value::Number(at.into())),
             ("docs", docs),
+            ("key", key),
             ("op", op),
             ("time", time),
         ])
@@ -303,7 +310,7 @@ impl Sidecar {
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
     /// this file's own obligation rather than the caller's.
-    pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>) {
+    pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>, key: String) {
         let mut inner = self.inner.lock();
         if at <= inner.open_head || inner.entries.contains_key(&at) {
             return;
@@ -314,7 +321,7 @@ impl Sidecar {
             .unwrap_or(0);
         let time = now.max(inner.last_time);
         inner.last_time = time;
-        let meta = Meta::Recorded { op: op.to_string(), docs, time };
+        let meta = Meta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
         // Reported without `eprintln!`, which PANICS when the stderr write
@@ -539,6 +546,12 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
                 .map(|d| d.as_str().map(str::to_string))
                 .collect::<Option<Vec<String>>>()?,
             time: time.as_u64()?,
+            // Absent on a pre-feature line — the reserved null, never
+            // invented (AUTH-1.52); present-but-not-a-string is torn.
+            key: match field("key") {
+                None => None,
+                Some(k) => Some(k.as_str()?.to_string()),
+            },
         },
         _ => return None,
     };
@@ -551,13 +564,16 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
 /// lets `GET /changes` answer byte-identically across a restart.
 fn entry_line(at: u64, meta: &Meta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
-    if let Meta::Recorded { op, docs, time } = meta {
+    if let Meta::Recorded { op, docs, time, key } = meta {
         pairs.push(("op", Value::String(op.clone())));
         pairs.push((
             "docs",
             Value::Array(docs.iter().map(|d| Value::String(d.clone())).collect()),
         ));
         pairs.push(("time", Value::Number((*time).into())));
+        if let Some(k) = key {
+            pairs.push(("key", Value::String(k.clone())));
+        }
     }
     line_bytes(obj(pairs))
 }

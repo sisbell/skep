@@ -80,12 +80,14 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let bare = open_session(port, OWNER_PRINCIPAL);
-    // Refuse: a bare write homed in the published doc 1.
+    // Refuse: a bare write homed in the published doc 1 (ordinal 2 — the
+    // one legal insert slot after the ceremony's atom, so the gate is what
+    // refuses it, not the arrangement's bounds).
     let v = op(
         port,
         Some(&bare),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"9"}},"values":["x"]}}"#
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"]}}"#
         ),
     );
     assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
@@ -107,13 +109,14 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
         ),
     );
     expect_resp(&v, "ack_addr");
-    // Accept: the SIGNED session writes into the published home.
+    // Accept: the SIGNED session writes the SAME position into the
+    // published home.
     let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"9"}},"values":["y"]}}"#
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"]}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -386,13 +389,14 @@ fn restart_recovers_the_identity_fold() {
         "the rebuilt key table equals the live fold's"
     );
     // The recovered fold verifies a fresh signed handshake, and the signed
-    // session writes into the published home.
+    // session writes into the published home (ordinal 2 — the one legal
+    // insert slot after the ceremony's atom).
     let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"8"}},"values":["r"]}}"#
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"]}}"#
         ),
     );
     expect_resp(&v, "ack_addr");

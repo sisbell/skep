@@ -12,14 +12,14 @@
 #![allow(dead_code)]
 
 use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skepd::{serve, Daemon, Skepd};
+use skepd::{serve, AuthOptions, Daemon, Origin, Skepd};
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
 /// subspace 3 of the ghost document, ordinals enroll·retire·claim.
@@ -152,8 +152,23 @@ pub fn claim_board(port: u16) {
 /// (RES-27) an unclaimed daemon runs nothing but the ceremony, so every
 /// suite about ordinary op semantics runs post-claim (CLAIMED-PERMISSIVE —
 /// local trust stays the default, so the suites' bare sessions still bind).
+///
+/// A claimed board's signed arm accepts ONLY the configured origins
+/// (AUTH-4.3's claim-time drop), and a production claimed board is launched
+/// with `--origin` naming what it is reachable at — so this spawn mirrors
+/// that shape. Origins carry the port, and configuration happens at open,
+/// before any listener exists: reserve an ephemeral port first, configure
+/// the loopback origin the suites dial, then serve on the reserved port.
 pub fn spawn(dir: &Path) -> Skepd {
-    let sd = spawn_unclaimed(dir);
+    let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
+    let port = reserved.local_addr().expect("reserved local addr").port();
+    let origin =
+        Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
+    let opts = AuthOptions { origins: vec![origin], ..AuthOptions::default() };
+    let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
+    // The reservation held through the slow open; only the rebind gap races.
+    drop(reserved);
+    let sd = serve(daemon, port, 4).expect("bind the reserved port");
     claim_board(sd.port());
     sd
 }

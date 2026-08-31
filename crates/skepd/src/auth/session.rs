@@ -24,6 +24,10 @@ pub(crate) const CHALLENGE_TTL: Duration = Duration::from_secs(60);
 /// token from a `CryptoRng` — never a per-process prefix plus a counter.
 pub(crate) const SESSION_TOKEN_BITS: usize = 128;
 
+/// The floor met exactly, as the byte width [`Token`] holds and
+/// [`Sessions::open`] draws per token.
+const SESSION_TOKEN_BYTES: usize = SESSION_TOKEN_BITS / 8;
+
 // ── Peer ─────────────────────────────────────────────────────────────────
 
 /// The TCP peer's loopback-ness ALONE, no address payload (AUTH-4.14).
@@ -49,6 +53,9 @@ pub(crate) struct Nonce([u8; 32]);
 
 impl Nonce {
     /// 64 lowercase hex, always.
+    // AUTH-4.15 pins this exact declaration — `to_hex(&self)` — and the
+    // type being `Copy` is what trips the by-value convention lint.
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_hex(&self) -> String {
         hex_lower(&self.0)
     }
@@ -151,7 +158,7 @@ impl Challenges {
 /// lowercase hex. `parse` admits ONLY what `to_wire` emits and the pair is
 /// injective (AUTH-4.17). Compared exactly, never logged.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct Token([u8; 16]);
+pub(crate) struct Token([u8; SESSION_TOKEN_BYTES]);
 
 impl Token {
     pub fn to_wire(&self) -> String {
@@ -161,10 +168,12 @@ impl Token {
     /// ONLY 32 lowercase hex; a value this refuses is NO token
     /// (AUTH-4.18) — it resolves `Guest(NoToken)`, nothing to close.
     pub fn parse(s: &str) -> Option<Token> {
-        if s.len() != 32 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        if s.len() != SESSION_TOKEN_BYTES * 2
+            || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
             return None;
         }
-        let mut raw = [0u8; 16];
+        let mut raw = [0u8; SESSION_TOKEN_BYTES];
         for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
             raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
         }
@@ -203,10 +212,10 @@ impl Sessions {
         Sessions { map: parking_lot::RwLock::new(HashMap::new()) }
     }
 
-    /// Mint a fresh token for `e`: `SESSION_TOKEN_BITS` of CSPRNG output
+    /// Mint a fresh token for `e`: [`SESSION_TOKEN_BITS`] of CSPRNG output
     /// per call (AUTH-4.23).
     pub fn open(&self, e: SessionEntry, rng: &mut impl CryptoRng) -> Token {
-        let mut raw = [0u8; 16];
+        let mut raw = [0u8; SESSION_TOKEN_BYTES];
         rng.fill_bytes(&mut raw);
         let token = Token(raw);
         self.map.write().insert(token.clone(), e);

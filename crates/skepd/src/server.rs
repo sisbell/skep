@@ -983,8 +983,8 @@ impl Daemon {
             }
             Ok(DaemonOp::Febe(freq)) => match write_meta(&freq.op) {
                 // Reads execute directly and take no lock (AUTH-3.36).
-                None => self.op_reply(&self.febe.execute(self.actor_sid(&authed.actor), freq)),
-                Some(meta) => self.write_sequence(&authed, meta, freq, req),
+                None => self.op_reply(&self.febe.execute(self.actor_sid(&authed.actor), *freq)),
+                Some(meta) => self.write_sequence(&authed, meta, *freq, req),
             },
         };
         with_signal(reply, authed.closed)
@@ -1244,7 +1244,7 @@ impl Daemon {
                     // The ruling-fixed body, exactly: {"error": "write_at_history"}.
                     return refuse(TransportError::WriteAtHistory, None);
                 }
-                match self.history.read_at(&self.engine, at, freq) {
+                match self.history.read_at(&self.engine, at, *freq) {
                     Ok(resp) => self.op_reply(&resp),
                     Err(e) => refuse_unavailable(e),
                 }

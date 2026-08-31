@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
+use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
+use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
 use skepd::{serve, Daemon, Skepd};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
@@ -75,13 +77,158 @@ fn op(port: u16, session: Option<&str>, frame: &str) -> Value {
     serde_json::from_slice(&body).expect("op response is JSON")
 }
 
-/// wire.md's end-to-end bootstrap: π₀ session → next prefix under node [1]
-/// → delegate principal 1. Returns principal 1's account address.
+// ── the claim ceremony (RES-27: an unclaimed daemon runs nothing else) ──
+//
+// The fixture claims each test board before the adapter drives ordinary
+// ops: pre-claim, everything outside the ceremony's own op shapes answers
+// `credential_refused claim_first`. A dedicated owner principal claims
+// under the board's first delegated account; the suite's principal 1 is
+// delegated beside it afterward, so no test address collides with the
+// ceremony's.
+
+/// The credential type addresses this build allocates (AUTH-7.1 horn B).
+const T_ENROLL: &str = "1.1.0.1.0.1.0.3.1";
+const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
+
+/// The ceremony's fixed identity: a high principal id the suite's own
+/// principals never reach, deterministic key seeds so a reopened board
+/// verifies against the same keys.
+const OWNER_PRINCIPAL: u64 = 900;
+const OWNER_ACCOUNT: &str = "1.0.1";
+const OWNER_DOC1: &str = "1.0.1.0.1";
+
+fn device_key() -> SigningKey {
+    SigningKey::from_bytes(&[7; 32])
+}
+
+fn anchor_key() -> SigningKey {
+    SigningKey::from_bytes(&[8; 32])
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn pubkey_of(sk: &SigningKey) -> PublicKey {
+    PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
+}
+
+fn open_bare_session(port: u16, principal: u64) -> String {
+    let body = format!("{{\"principal\":{principal}}}");
+    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "bare session: {}", String::from_utf8_lossy(&resp));
+    let v: Value = serde_json::from_slice(&resp).expect("session JSON");
+    v["session"].as_str().expect("session token").to_string()
+}
+
+/// A SIGNED session over the challenge handshake, signing the origin
+/// actually dialed (the AUTH-6.4 framing).
+fn open_signed_session(port: u16, principal: u64, sk: &SigningKey) -> String {
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+    assert_eq!(st, 200, "challenge: {}", String::from_utf8_lossy(&body));
+    let v: Value = serde_json::from_slice(&body).expect("challenge JSON");
+    let nonce = v["nonce"].as_str().expect("nonce").to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let payload = framed(
+        SESSION_TAG,
+        &[origin.as_bytes(), nonce.as_bytes(), principal.to_string().as_bytes()],
+    );
+    let sig = hex(&sk.sign(&payload).to_bytes());
+    let body =
+        json!({"principal": principal, "nonce": nonce, "origin": origin, "sig": sig}).to_string();
+    let (st, resp) = http(port, "POST", "/session", None, body.as_bytes());
+    assert_eq!(st, 200, "signed session: {}", String::from_utf8_lossy(&resp));
+    let v: Value = serde_json::from_slice(&resp).expect("session JSON");
+    v["session"].as_str().expect("session token").to_string()
+}
+
+/// Run the notebook claim ceremony over the wire (idempotent — a reopened
+/// claimed board skips it): delegate the owner from π₀, the home mint, the
+/// genesis enrollment atom + deposit, the signed claim.
+fn claim_board(port: u16) {
+    let (st, body) = http(port, "GET", "/health", None, b"");
+    assert_eq!(st, 200, "health: {}", String::from_utf8_lossy(&body));
+    let health: Value = serde_json::from_slice(&body).expect("health JSON");
+    if !health["auth"]["claimant"].is_null() {
+        return;
+    }
+    let boot = open_bare_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = v["addr"].as_str().expect("delegable prefix").to_string();
+    assert_eq!(prefix, OWNER_ACCOUNT, "the ceremony must be the board's first delegate");
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{OWNER_PRINCIPAL}}}"#),
+    );
+    assert_eq!(v["resp"], "ack_addr", "owner delegate: {v}");
+    let owner = open_bare_session(port, OWNER_PRINCIPAL);
+    let v = op(
+        port,
+        Some(&owner),
+        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+    );
+    assert_eq!(v["resp"], "ack_addr", "owner home mint: {v}");
+    assert_eq!(v["addr"], json!(OWNER_DOC1), "the home mint is doc 1");
+    // The enrollment record — the anchor and the device key — as ONE ATOM.
+    let record = encode_enroll(&[
+        Enrollment::new(pubkey_of(&anchor_key()), true, Some("paper-a".into()))
+            .expect("a legal label"),
+        Enrollment::new(pubkey_of(&device_key()), false, Some("notebook".into()))
+            .expect("a legal label"),
+    ]);
+    let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
+    let v = op(
+        port,
+        Some(&owner),
+        &json!({
+            "op": "insert",
+            "doc": OWNER_DOC1,
+            "at": {"subspace": "1", "ordinal": "1"},
+            "values": [{"atom": record_text}],
+        })
+        .to_string(),
+    );
+    assert_eq!(v["resp"], "ack_addr", "genesis atom insert: {v}");
+    let atom_addr = v["addr"].as_str().expect("the record atom's I-address").to_string();
+    let v = op(
+        port,
+        Some(&owner),
+        &json!({
+            "op": "make_link",
+            "home": OWNER_DOC1,
+            "from": {"addrs": [atom_addr]},
+            "to": {"addrs": [OWNER_ACCOUNT]},
+            "ty": {"addrs": [T_ENROLL]},
+        })
+        .to_string(),
+    );
+    assert_eq!(v["resp"], "ack_addr", "genesis deposit: {v}");
+    // The claim, from a session SIGNED by the device key.
+    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let v = op(
+        port,
+        Some(&signed),
+        &json!({
+            "op": "make_link",
+            "home": OWNER_DOC1,
+            "from": {"addrs": [OWNER_ACCOUNT]},
+            "to": {"addrs": []},
+            "ty": {"addrs": [T_CLAIM]},
+        })
+        .to_string(),
+    );
+    assert_eq!(v["resp"], "ack_addr", "the claim: {v}");
+}
+
+/// wire.md's end-to-end bootstrap, on a CLAIMED board: the ceremony first,
+/// then π₀ delegates principal 1, then principal 1's own home mint. Doc 1
+/// is born published and RES-26 shuts published homes to bare sessions, so
+/// minting it here leaves every document the tests create a DRAFT the
+/// adapter's bare session may write. Returns principal 1's account address.
 fn provision_principal_1(port: u16) -> String {
-    let (st, body) = http(port, "POST", "/session", None, br#"{"principal":0}"#);
-    assert_eq!(st, 200, "bootstrap session: {}", String::from_utf8_lossy(&body));
-    let boot: Value = serde_json::from_slice(&body).expect("session JSON");
-    let boot = boot["session"].as_str().expect("token").to_string();
+    claim_board(port);
+    let boot = open_bare_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = v["addr"].as_str().expect("delegable prefix").to_string();
     let v = op(
@@ -90,7 +237,15 @@ fn provision_principal_1(port: u16) -> String {
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
     );
     assert_eq!(v["resp"], "ack_addr", "delegate: {v}");
-    v["addr"].as_str().expect("account address").to_string()
+    let account = v["addr"].as_str().expect("account address").to_string();
+    let p1 = open_bare_session(port, 1);
+    let v = op(
+        port,
+        Some(&p1),
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    assert_eq!(v["resp"], "ack_addr", "principal 1's home mint: {v}");
+    account
 }
 
 fn spawn_daemon(dir: &Path, port: u16) -> Skepd {

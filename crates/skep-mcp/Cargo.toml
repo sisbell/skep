@@ -17,6 +17,11 @@ serde_json.workspace = true
 
 [dev-dependencies]
 # The real stack: tests build a daemon in-process on an ephemeral port over
-# a temp data dir, provision a principal over the wire, and drive the built
-# skep-mcp binary through its stdin/stdout.
+# a temp data dir, claim its board over the wire (an unclaimed daemon runs
+# nothing but the claim ceremony — RES-27), provision a principal, and
+# drive the built skep-mcp binary through its stdin/stdout.
 skepd = { path = "../skepd" }
+# The ceremony's record grammar and session-payload framing.
+skep-identity = { path = "../skep-identity" }
+# Test-side signing for the ceremony's claim step (the daemon only verifies).
+ed25519-dalek = "2"

@@ -232,16 +232,6 @@ impl JsonCodec {
         to_bytes(obj(pairs))
     }
 
-    /// Parse a frame that arrived already decoded — the `/op-at` envelope
-    /// carries its frame as a JSON value, so this is the same parse
-    /// [`Codec::parse`] performs, entered one step later. Identical
-    /// verdicts: the envelope reader does no parsing of its own beyond
-    /// deciding that a non-object `frame` is a transport fault rather than
-    /// an operation rejection.
-    pub(crate) fn parse_frame(&self, frame: Value) -> Result<Request, ParseError> {
-        parse_value(frame).map_err(|e| ParseError { detail: Some(e.0) })
-    }
-
     /// The daemon-level parse: the `key_set` frame — served by the daemon's
     /// own dispatcher because the identity slice rides beside the engine's
     /// `World` in this build (the authorized M10 row is unusable until the
@@ -262,7 +252,9 @@ impl JsonCodec {
         if v.as_object().and_then(|m| m.get("op")).and_then(Value::as_str) == Some("key_set") {
             return parse_key_set(v).map_err(|e| ParseError { detail: Some(e.0) });
         }
-        parse_value(v).map(DaemonOp::Febe).map_err(|e| ParseError { detail: Some(e.0) })
+        parse_value(v)
+            .map(|r| DaemonOp::Febe(Box::new(r)))
+            .map_err(|e| ParseError { detail: Some(e.0) })
     }
 
     /// The transport's one never-silent obligation outside M10's dispatch
@@ -282,9 +274,11 @@ impl JsonCodec {
 
 /// One parsed daemon-level frame: an M10 request, or the `key_set` read the
 /// daemon serves itself (AUTH-6.18–6.20). No `Debug`: M10's `Request`
-/// carries none, and both consumers match rather than print.
+/// carries none, and both consumers match rather than print. The request
+/// rides boxed — it is an order of magnitude wider than the other arm, and
+/// this enum sits on every dispatch path.
 pub(crate) enum DaemonOp {
-    Febe(Request),
+    Febe(Box<Request>),
     KeySet { account: Address },
 }
 

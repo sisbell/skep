@@ -141,32 +141,6 @@ fn doc_changes_block(name: &str) -> String {
     body.trim_end().to_string()
 }
 
-/// Replace every `"time":<digits>` value with `"time":0` — the one field a
-/// live daemon cannot reproduce byte-for-byte. `"time":null` is untouched,
-/// so a bare entry stays byte-exact.
-fn normalize_times(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let pat: &[u8] = b"\"time\":";
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(pat) {
-            out.extend_from_slice(pat);
-            i += pat.len();
-            if i < bytes.len() && bytes[i].is_ascii_digit() {
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
-                    i += 1;
-                }
-                out.push(b'0');
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).expect("normalization preserves UTF-8")
-}
-
 /// The page with each entry's wire-v7 `key` field removed — the one field
 /// wire.md's frozen examples predate; lane 3.2's doc delta restores the
 /// byte comparison.

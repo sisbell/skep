@@ -289,6 +289,84 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     sd.shutdown();
 }
 
+/// The NULLIFY class (AUTH-3.7–3.9) and RES-32's entitlement scope in one
+/// producer: a credential-typed link's retraction is refused
+/// `nullify_not_retraction` to the owner of the home it would land in, and
+/// on a CLAIMED board the shape token reaches nobody else — anyone else
+/// falls through to execute and answers ω's own `not_owner`,
+/// indistinguishable from its non-credential answer.
+///
+/// Both arms are one producer's, so a reader auditing RES-32 finds the
+/// whole rule where the code that enforces it is, and the two verdicts a
+/// caller can receive are pinned side by side.
+#[test]
+fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+
+    // One fresh credential-typed link in the owner's own doc 1.
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}]}}"#,
+            enroll_atom(&[&distinct_key(3)])
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{OWNER_DOC1}.0.1.2"]}},"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+        ),
+    );
+    let credential = acked_addr(&v);
+
+    // The home's owner gets the shape token.
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(r#"{{"op":"nullify","home":"{OWNER_DOC1}","target":"{credential}"}}"#),
+    );
+    assert_eq!(rejected_detail(&v), "credential_refused:nullify_not_retraction");
+
+    // A stranger naming the same home does not: masked, the op reaches
+    // execute, and ω answers. Seated post-claim, which the publish gate
+    // admits (delegate presents no input form).
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":31}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let stranger = open_session(port, 31);
+    let v = op(
+        port,
+        Some(&stranger),
+        &format!(r#"{{"op":"nullify","home":"{OWNER_DOC1}","target":"{credential}"}}"#),
+    );
+    let rej = expect_resp(&v, "rejected");
+    assert_eq!(
+        rej["code"].as_str(),
+        Some("not_owner"),
+        "the shape token is masked, so ω answers as it would for any link: {v}"
+    );
+
+    // …and the credential link is untouched by either refusal.
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{credential}"}}"#));
+    assert!(
+        !expect_resp(&v, "link_value")["link"].is_null(),
+        "neither refusal retracted anything"
+    );
+    sd.shutdown();
+}
+
 /// `key_set` (AUTH-6.18–6.20): fingerprint-ordered entries with flags on
 /// `/op`; `not_an_account` on a non-account; the SAME dispatcher as of a
 /// historical position on `/op-at` (empty before the genesis).

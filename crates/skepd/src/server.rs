@@ -108,15 +108,14 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Op, Operation, Request, Response, SessionId};
+use skep_febe::{Codec, Operation, Request, Response, SessionId};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_namespace::PrincipalId;
 
-use crate::auth::fold::{canonical_identity, key_set_reply};
+use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
-    board_state_refusal, deposits_credential_link, mint_home_refusal, nullify_refusal,
-    op_shape_refusal, DepositSpans, Refusal,
+    deposits_credential_link, op_shape_refusal, plain_refusal, DepositSpans, Refusal,
 };
 use crate::auth::session::{
     handshake, parse_session_body, resolve, Actor, GuestReason, SessionEntry, Token,
@@ -125,10 +124,12 @@ use crate::auth::session::{
 use crate::auth::{
     bare_origins, signed_origins, startup_warnings, AuthOptions, AuthState, OsEntropy,
 };
-use crate::codec::{check_keys, daemon_rejected, obj, to_bytes, DaemonOp, JsonCodec};
+use crate::codec::{
+    check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
+};
 use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::ChangesAnswer;
-use crate::write_path::{op_is_read, write_meta, StreamStep, WriteMeta, WritePath};
+use crate::write_path::{op_is_read, write_meta, FrameMeta, StreamStep, WritePath};
 
 pub use crate::auth::session::Peer;
 
@@ -837,39 +838,20 @@ impl Daemon {
         }
     }
 
-    /// The four-part death sequence's ONE home (AUTH-4.42), run before
-    /// dispatch on every token-accepting route: the site's own lookup,
-    /// `resolve` against the HEAD (AUTH-4.29 — historical routes included),
-    /// close-both-stores on `Unknown | EntryDead`, and the
-    /// `Skepd-Session: closed` header on this response. The resolved actor
-    /// is handed to dispatch, never re-resolved at the route level.
+    /// [`Daemon::resolve_actor`] against the HEAD — the route-level
+    /// resolution run before dispatch on every token-accepting route. The
+    /// resolved actor is handed to dispatch; the write sequences re-resolve
+    /// at their own sites against the snapshot their gates stand on.
     fn authenticate(&self, req: &HttpRequest) -> Authed {
-        // A present-but-unparseable token IS no token (AUTH-4.18):
-        // `Guest(NoToken)`, nothing to close, no header.
-        let token = req.session_token.as_deref().and_then(Token::parse);
-        let lookup = self.auth.sessions.lookup(token.as_ref());
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
-        let actor = resolve(
-            &self.auth.cfg,
-            lookup,
-            req.peer,
-            req.origin.as_deref(),
-            snap.world(),
-            &identity,
-        );
-        let closed = matches!(actor, Actor::Guest(GuestReason::Unknown | GuestReason::EntryDead));
-        if closed {
-            if let Some(t) = &token {
-                self.close_binding(t);
-            }
-        }
+        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
         Authed { actor, closed }
     }
 
     /// Close one token's binding in BOTH stores — the sessions map and M10
-    /// — plus the credential memo. `authenticate`'s eviction arm and
-    /// `/session/close` share it.
+    /// — plus the credential memo. [`Daemon::resolve_actor`]'s eviction arm
+    /// and `/session/close` share it.
     fn close_binding(&self, token: &Token) {
         if let Some(entry) = self.auth.sessions.close(token) {
             self.febe.close_session(entry.sid);
@@ -978,7 +960,8 @@ impl Daemon {
                 // fold beside the head snapshot. Principal-free.
                 let snap = self.engine.kernel().snapshot();
                 let identity = self.auth.fold.snapshot();
-                let bytes = key_set_reply(snap.seq(), snap.world(), &identity, &account);
+                let set = key_set_of(snap.world(), &identity, &account);
+                let bytes = key_set_reply(snap.seq(), set);
                 Reply::bodied(200, "application/json", bytes)
             }
             Ok(DaemonOp::Febe(freq)) => match write_meta(&freq.op) {
@@ -1006,7 +989,7 @@ impl Daemon {
     fn write_sequence(
         &self,
         authed: &Authed,
-        meta: WriteMeta,
+        meta: FrameMeta,
         freq: Request,
         req: &HttpRequest,
     ) -> Reply {
@@ -1017,18 +1000,26 @@ impl Daemon {
         }
     }
 
-    /// The under-lock resolution BOTH sequences perform at their own site
-    /// (AUTH-4.28's WHICH-lookup pin): a fresh lookup + resolve over the
-    /// guard snapshot. `Guest(Unknown | EntryDead)` takes the
-    /// close-and-signal arm (close both stores; the header on THIS
-    /// response); every Guest answers `unauthenticated` by executing under
-    /// the retired guest session — M10's own code, with the op kind named.
-    fn resolve_under_lock(
+    /// The four-part death sequence's ONE home (AUTH-4.42): the site's own
+    /// token parse and lookup, `resolve` against the state the CALLER
+    /// supplies, the close-both-stores arm on `Unknown | EntryDead`, and
+    /// whether this response owes `Skepd-Session: closed`.
+    ///
+    /// The state is the caller's because that is the only thing the three
+    /// sites differ by: the route level resolves against the HEAD
+    /// (AUTH-4.29 — historical routes included), while the two write
+    /// sequences must resolve against the snapshot their gates stand on
+    /// (AUTH-4.28's WHICH-lookup pin). Every Guest then answers
+    /// `unauthenticated` by executing under the retired guest session —
+    /// M10's own code, with the op kind named.
+    fn resolve_actor(
         &self,
         req: &HttpRequest,
         world: &World,
         identity: &IdentityState,
     ) -> (Actor, bool) {
+        // A present-but-unparseable token IS no token (AUTH-4.18):
+        // `Guest(NoToken)`, nothing to close, no header.
         let token = req.session_token.as_deref().and_then(Token::parse);
         let lookup = self.auth.sessions.lookup(token.as_ref());
         let actor =
@@ -1043,16 +1034,16 @@ impl Daemon {
     }
 
     /// The PLAIN sequence (AUTH-3.35): gate.read → the serialization lock →
-    /// the head snapshot → this site's own resolve → `nullify_refusal` →
-    /// `mint_home_refusal` → `board_state_refusal` → execute. The serial
-    /// lock is taken before the snapshot so the gates' answers and the
-    /// execute they gate stand on one committed state.
-    fn plain_sequence(&self, mut meta: WriteMeta, freq: Request, req: &HttpRequest) -> Reply {
+    /// the head snapshot → this site's own resolve → `plain_refusal`'s
+    /// ordered producers → execute. The serial lock is taken before the
+    /// snapshot so the gates' answers and the execute they gate stand on
+    /// one committed state.
+    fn plain_sequence(&self, meta: FrameMeta, freq: Request, req: &HttpRequest) -> Reply {
         let _g = self.auth.gate.read();
         let serial = self.writes.serial_lock();
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
-        let (actor, closed) = self.resolve_under_lock(req, snap.world(), &identity);
+        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
         let entry = match actor {
             Actor::Principal(e) => e,
             Actor::Guest(_) => {
@@ -1060,30 +1051,7 @@ impl Daemon {
                 return with_signal(self.op_reply(&resp), closed);
             }
         };
-        let op_name = crate::codec::op_name(meta.kind);
-        if let Some(r) = nullify_refusal(&_g, snap.world(), &freq.op) {
-            // RES-32's entitlement scope on a CLAIMED board: the shape
-            // token reaches only the target-home owner; a non-owner's
-            // nullify falls through to execute and answers ω's own
-            // `not_owner`, indistinguishable from its non-credential
-            // answer. Pre-claim the order stands for every caller.
-            let claimed = identity.claimant().is_some();
-            let owner_masked = claimed
-                && !match &freq.op {
-                    Op::Nullify { home, .. } => {
-                        skep_namespace::HasM3::m3(snap.world())
-                            .is_effective_owner(entry.principal, home)
-                    }
-                    _ => false,
-                };
-            if !owner_masked {
-                return with_signal(credential_refused(op_name, &r), closed);
-            }
-        }
-        if let Some(r) = mint_home_refusal(&_g, snap.world(), &freq.op, entry.principal) {
-            return with_signal(credential_refused(op_name, &r), closed);
-        }
-        if let Some(r) = board_state_refusal(
+        if let Some(r) = plain_refusal(
             &_g,
             snap.world(),
             &identity,
@@ -1091,10 +1059,12 @@ impl Daemon {
             entry.principal,
             entry.key.as_ref(),
         ) {
+            let op_name = crate::codec::op_name(meta.kind);
             return with_signal(credential_refused(op_name, &r), closed);
         }
-        meta.key = testimony(&entry);
-        let resp = self.writes.commit_under(&serial, meta, || self.febe.execute(entry.sid, freq));
+        let resp = self.writes.commit_under(&serial, meta.attributed(entry.testimony()), || {
+            self.febe.execute(entry.sid, freq)
+        });
         with_signal(self.op_reply(&resp), closed)
     }
 
@@ -1106,7 +1076,7 @@ impl Daemon {
     fn credential_sequence(
         &self,
         authed: &Authed,
-        mut meta: WriteMeta,
+        meta: FrameMeta,
         freq: Request,
         req: &HttpRequest,
     ) -> Reply {
@@ -1127,7 +1097,7 @@ impl Daemon {
         let serial = self.writes.serial_lock();
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
-        let (actor, closed) = self.resolve_under_lock(req, snap.world(), &identity);
+        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
         let entry = match actor {
             Actor::Principal(e) => e,
             // 4 — the only reachable arms are Unknown | EntryDead
@@ -1163,18 +1133,24 @@ impl Daemon {
             Ok(_effect) => {}
         }
         // 7 — execute (commit-record-announce under the held serial lock).
-        meta.key = testimony(&entry);
         let req_id = freq.id.clone();
-        let resp = self.writes.commit_under(&serial, meta, || self.febe.execute(entry.sid, freq));
+        let resp = self.writes.commit_under(&serial, meta.attributed(entry.testimony()), || {
+            self.febe.execute(entry.sid, freq)
+        });
         let ack = self.codec.marshal(&resp);
         if matches!(resp, Response::AckAddr { .. }) {
-            // 8 — feed the fold from the committed deposit (post-commit
-            // snapshot as ctx) and run the claim-flip tail (AUTH-3.43).
+            // 8 — the committed tail (AUTH-3.43): the fold step from the
+            // committed deposit against the post-commit snapshot, and the
+            // memo entry, as one operation under the write guard.
             let post = self.engine.kernel().snapshot();
-            let flipped = self.auth.fold.step_committed(post.world(), &dep.deposit());
-            if let Some(id) = &req_id {
-                self.auth.memo.store(entry.sid, id, ack.clone());
-            }
+            let flipped = self.auth.commit_tail(
+                &_g,
+                post.world(),
+                &dep.deposit(),
+                entry.sid,
+                req_id.as_ref(),
+                &ack,
+            );
             if flipped {
                 for w in startup_warnings(&self.auth.cfg, true) {
                     let _ = writeln!(std::io::stderr(), "skepd: warning (at claim): {w}");
@@ -1233,7 +1209,7 @@ impl Daemon {
                         Reply::bodied(
                             200,
                             "application/json",
-                            key_set_reply(at, &world, &identity, &account),
+                            key_set_reply(at, key_set_of(&world, &identity, &account)),
                         )
                     }
                     Err(e) => refuse_unavailable(e),
@@ -1373,15 +1349,6 @@ fn credential_refused(op_name: &str, r: &Refusal) -> Reply {
         "application/json",
         daemon_rejected(op_name, "credential_refused", "permanent", Some(r.token())),
     )
-}
-
-/// The key testimony of one committed write (AUTH-4.48): the establishing
-/// key's fingerprint hex, or `"bare"`.
-fn testimony(entry: &SessionEntry) -> String {
-    match &entry.key {
-        Some(fp) => fp.to_hex(),
-        None => "bare".to_string(),
-    }
 }
 
 /// The `/challenge` query: exactly `principal=<non-negative integer>`.

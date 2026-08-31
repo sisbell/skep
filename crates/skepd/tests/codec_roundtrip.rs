@@ -500,17 +500,27 @@ fn every_response_shape_marshals_deterministically() {
 /// snake_case token in §Rejection codes. Harvested from the arbiter rather
 /// than restated, because a third hand transcription would drift the same
 /// way the table below already did.
+///
+/// The section ends at the next heading of ANY level, not at the next
+/// top-level one: §Credential refusals follows it and spells out the
+/// DETAIL tokens `credential_refused` carries (`already_claimed`,
+/// `mint_home_first`, `malformed_payload:<sub>`, …). Those are not codes,
+/// no `RejectCode` row can pin them, and reading them as codes would make
+/// this harvest measure the table against the wrong list.
 fn documented_reject_codes() -> Vec<String> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wire.md");
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let section = text
+    let after = text
         .split_once("### Rejection codes")
         .expect("wire.md names its rejection-code section")
-        .1
-        .split_once("\n## ")
-        .expect("the section ends at the next top-level heading")
-        .0;
+        .1;
+    let end = [after.find("\n### "), after.find("\n## ")]
+        .into_iter()
+        .flatten()
+        .min()
+        .expect("the section ends at the next heading");
+    let section = &after[..end];
     let mut out: Vec<String> = section
         .split('`')
         .skip(1)
@@ -533,7 +543,7 @@ fn documented_reject_codes() -> Vec<String> {
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
-/// the document lists.
+/// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
     let table: [(RejectCode, &str); 62] = [
@@ -612,15 +622,42 @@ fn reject_code_names_are_pinned() {
         let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
         assert_eq!(v["code"].as_str(), Some(name), "wire name drifted for {code:?}");
     }
-    // Every code the document lists must be pinned here. The reverse is
-    // deliberately NOT asserted: `slot_too_large` is a name `code_name` can
-    // emit that wire.md v6.1 assigns no code to — a guarantee question, not
-    // a table error (see the boundary note).
+    // The harvest reads prose, so it cannot tell a code from a word the
+    // prose quotes while describing one. These three are every such word
+    // §Rejection codes carries, each with the reason it is not a table
+    // error and where it IS watched:
+    //
+    // * `credential_refused` — a code, but the DAEMON's own, built by
+    //   `daemon_rejected` rather than lowered from `RejectCode`, which has
+    //   no such variant (wire.md: "the auth work's one new code"). Its
+    //   wire shape is asserted end to end in `tests/auth_wire.rs`.
+    // * `permanent` — a disposition, pinned by
+    //   `every_disposition_marshals_and_diagnostics_are_omitted_when_absent`.
+    // * `detail` — the rejection envelope's own field, pinned by that same
+    //   test's presence rules.
+    //
+    // Named rather than filtered by shape, and each required below to
+    // still appear in the section, so an exemption cannot outlive the
+    // sentence that earns it. A FOURTH word appearing here should fail
+    // this test: the right answer is to read the new sentence and decide
+    // whether it names a code, not to widen the list to quiet it.
+    const NOT_TABLE_ROWS: [&str; 3] = ["credential_refused", "detail", "permanent"];
+    // Every other code the document lists must be pinned here. The reverse
+    // is deliberately NOT asserted: `slot_too_large` is a name `code_name`
+    // can emit that wire.md v6.1 assigns no code to — a guarantee question,
+    // not a table error (see the boundary note).
+    let documented = documented_reject_codes();
     let pinned: std::collections::HashSet<&str> = table.iter().map(|&(_, n)| n).collect();
-    for name in documented_reject_codes() {
+    for name in &documented {
         assert!(
-            pinned.contains(name.as_str()),
+            pinned.contains(name.as_str()) || NOT_TABLE_ROWS.contains(&name.as_str()),
             "wire.md documents rejection code '{name}', which this table does not pin"
+        );
+    }
+    for name in NOT_TABLE_ROWS {
+        assert!(
+            documented.iter().any(|d| d == name),
+            "'{name}' is exempted from the table, but §Rejection codes no longer quotes it"
         );
     }
 }

@@ -12,6 +12,7 @@ use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::{bare_origins, signed_origins, AuthConfig, Origin};
+use crate::codec::{check_keys, hex_string};
 use crate::World;
 use skep_address::Address;
 use skep_namespace::HasM3;
@@ -57,7 +58,7 @@ impl Nonce {
     // type being `Copy` is what trips the by-value convention lint.
     #[allow(clippy::wrong_self_convention)]
     pub fn to_hex(&self) -> String {
-        hex_lower(&self.0)
+        hex_string(&self.0)
     }
 
     /// ONLY 64 lowercase hex — deliberately narrower than
@@ -83,16 +84,6 @@ fn hex_nibble(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         _ => None,
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(HEX[(b >> 4) as usize] as char);
-        s.push(HEX[(b & 0x0f) as usize] as char);
-    }
-    s
 }
 
 /// The challenge store (AUTH-4.19): a map plus a FIFO of insertion order
@@ -162,7 +153,7 @@ pub(crate) struct Token([u8; SESSION_TOKEN_BYTES]);
 
 impl Token {
     pub fn to_wire(&self) -> String {
-        hex_lower(&self.0)
+        hex_string(&self.0)
     }
 
     /// ONLY 32 lowercase hex; a value this refuses is NO token
@@ -188,6 +179,19 @@ pub(crate) struct SessionEntry {
     pub sid: SessionId,
     pub principal: PrincipalId,
     pub key: Option<Fingerprint>,
+}
+
+impl SessionEntry {
+    /// The key testimony of a write this session commits (AUTH-4.48): the
+    /// establishing key's fingerprint hex, or `"bare"` for a bare bind.
+    /// Lives here because the key does — a write path that must name the
+    /// testimony asks the binding rather than re-deriving the rule.
+    pub fn testimony(&self) -> String {
+        match &self.key {
+            Some(fp) => fp.to_hex(),
+            None => "bare".to_string(),
+        }
+    }
 }
 
 /// A map lookup's three arms, constructed in ONE home so no call site can
@@ -380,10 +384,10 @@ pub(crate) fn parse_session_body(body: &[u8]) -> Result<SessionBody, String> {
         .and_then(Value::as_u64)
         .ok_or("missing or non-integer field 'principal'")?;
     let principal = PrincipalId(principal);
-    let known: &[&str] = &["principal", "nonce", "origin", "sig"];
-    if let Some(k) = m.keys().find(|k| !known.contains(&k.as_str())) {
-        return Err(format!("unknown field '{k}'"));
-    }
+    // The codec's never-silent device, so a client's typo is a named
+    // failure here exactly as in a frame — and its echo of the offending
+    // key is bounded, which a hand-rolled one is not.
+    check_keys(&m, &["principal", "nonce", "origin", "sig"])?;
     let signed_fields =
         [m.get("nonce"), m.get("origin"), m.get("sig")].iter().filter(|f| f.is_some()).count();
     match signed_fields {

@@ -374,6 +374,66 @@ fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value)
     (ack, entries[0].clone())
 }
 
+/// The key testimony (AUTH-4.48, wire v7) names the key that established
+/// the committing session — the field a reader of the feed attributes a
+/// write by, so both of its answers are pinned here and pinned apart.
+///
+/// `"bare"` is the load-bearing one: it is a positive claim that nobody
+/// signed, not a null a reader can distrust, and the sidecar never
+/// re-derives an entry it holds — so a signed write recorded under it is
+/// permanently misattributed with nothing to notice. The fingerprint is
+/// read out of `key_set`, tying the entry to what the wire itself
+/// publishes about that key rather than to a value this test computes.
+#[test]
+fn the_key_testimony_names_the_key_that_signed_the_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+
+    // The ceremony enrolls two keys: the anchor, and the device key every
+    // signed session here is opened with.
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+    let device_fp = v["enrolled"]
+        .as_array()
+        .expect("enrolled")
+        .iter()
+        .find(|e| e["anchor"] == Value::Bool(false))
+        .and_then(|e| e["fingerprint"].as_str())
+        .expect("the ceremony enrolls one non-anchor device key")
+        .to_string();
+
+    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let (_, entry) = feed_entry(
+        port,
+        &signed,
+        "a signed write",
+        &format!(
+            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"]}}"#
+        ),
+    );
+    assert_eq!(
+        entry["key"].as_str(),
+        Some(device_fp.as_str()),
+        "a signed write testifies the establishing key's fingerprint: {entry}"
+    );
+
+    // The bare arm beside it, from the SAME principal on the same account
+    // — so the two entries differ in their testimony and nothing else a
+    // reader could attribute by, which is what makes the field worth
+    // reading. A draft mint, since the publish gate is the bare session's
+    // wall at the published home.
+    let bare = open_session(port, OWNER_PRINCIPAL);
+    let (_, entry) = feed_entry(
+        port,
+        &bare,
+        "a bare write",
+        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+    );
+    assert_eq!(entry["key"].as_str(), Some("bare"), "a bare bind testifies bare: {entry}");
+
+    sd.shutdown();
+}
+
 /// wire.md §The change feed fixes `docs` as a table: the target doc for
 /// arrangement writes; a link write's HOME (`edit_link` both its homes,
 /// successor's first); the MINTED document for create/fork/version; `[]`

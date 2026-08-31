@@ -108,13 +108,18 @@ impl WritePath {
     /// It runs exactly once, inside the lock.
     ///
     /// PRECONDITION: `meta` is [`write_meta`]'s answer for the `Op` that
-    /// `execute` runs. Nothing here can check it — the closure is opaque by
+    /// `execute` runs, attributed to the session `execute` runs it under.
+    /// Nothing here can check the first half — the closure is opaque by
     /// design, which is what keeps this card free of M10 — and a mismatch is
     /// not a fault but a silent lie: the change feed reports that position
     /// under the wrong op kind, or names a document the write did not touch,
     /// permanently, since nothing re-derives an entry the sidecar already
     /// holds. The daemon's write sequences establish it by deriving `meta`
     /// from the frame they are about to execute, and are the only callers.
+    /// The second half needs no discharging: [`FrameMeta::attributed`] is
+    /// the only way to reach a [`WriteMeta`], so a path that forgot to
+    /// attribute does not compile rather than testifying `"bare"` for a
+    /// signed write.
     pub fn commit_under(
         &self,
         _serial: &parking_lot::MutexGuard<'_, ()>,
@@ -238,22 +243,40 @@ impl WritePath {
 
 // ── the read/write partition, and what a write records ───────────────────
 
-/// What the change feed will say about one write, as far as the frame can
-/// tell: the op kind and the affected documents. The frame-derived stage of
-/// a `commits.log` entry — [`crate::sidecar::Meta`] is the next one,
-/// completed at record time with the committed position and the wall-clock
-/// time. Produced by [`write_meta`] and by nothing else, which is what lets
-/// [`WritePath::commit`] state its precondition about one value rather than
-/// about the correspondence between three arguments.
+/// What the change feed will say about one write as far as the FRAME can
+/// tell: the op kind and the affected documents. Not yet a [`WriteMeta`]:
+/// the AUTH testimony (AUTH-4.48) is the committing session's, which no
+/// frame carries, so [`FrameMeta::attributed`] is the only way to reach a
+/// value [`WritePath::commit_under`] accepts. A placeholder key would be a
+/// wrong answer that looks right — `"bare"` is what a genuine bare-session
+/// write records, and the sidecar never re-derives an entry it holds.
+#[derive(Debug)]
+pub(crate) struct FrameMeta {
+    pub kind: OpKind,
+    pub docs: AffectedDocs,
+}
+
+impl FrameMeta {
+    /// Attribute this write to the session committing it — the key
+    /// testimony from [`crate::auth::session::SessionEntry::testimony`].
+    pub fn attributed(self, key: String) -> WriteMeta {
+        WriteMeta { kind: self.kind, docs: self.docs, key }
+    }
+}
+
+/// What the change feed will say about one write: the op kind, the
+/// affected documents, and the session that committed it. The
+/// frame-derived stage of a `commits.log` entry — [`crate::sidecar::Meta`]
+/// is the next one, completed at record time with the committed position
+/// and the wall-clock time. Reachable only through
+/// [`FrameMeta::attributed`], which is what lets
+/// [`WritePath::commit_under`] state its precondition about one value.
 #[derive(Debug)]
 pub(crate) struct WriteMeta {
     pub kind: OpKind,
     pub docs: AffectedDocs,
     /// The AUTH key testimony (AUTH-4.48): the establishing key's
-    /// fingerprint hex, or `"bare"`. Supplied by the write sequences from
-    /// the resolved actor — [`write_meta`] seeds it `"bare"` and the
-    /// sequences overwrite it before commit, so a path that forgot would
-    /// testify bare rather than invent a key.
+    /// fingerprint hex, or `"bare"` for a bare bind.
     pub key: String,
 }
 
@@ -276,7 +299,7 @@ pub(crate) enum AffectedDocs {
     Minted,
 }
 
-/// The [`WriteMeta`] of a write `Op` — `None` for reads, which is also
+/// The [`FrameMeta`] of a write `Op` — `None` for reads, which is also
 /// THE read/write partition: [`op_is_read`] is defined as this answer's
 /// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
@@ -297,8 +320,8 @@ pub(crate) enum AffectedDocs {
 /// `write_at_history`, denying a legitimate historical read. The two tables
 /// agree at 14 writes of 38, with M10's own
 /// `partition_matches_the_design_grouping` pinning that side.
-pub(crate) fn write_meta(op: &Op) -> Option<WriteMeta> {
-    let meta = |kind, docs| Some(WriteMeta { kind, docs, key: "bare".to_string() });
+pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
+    let meta = |kind, docs| Some(FrameMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
     match op {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),

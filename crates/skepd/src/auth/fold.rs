@@ -1,7 +1,7 @@
 //! The identity fold BESIDE the engine: the world-fact seam (`FoldCtx`
 //! over the assembled `World`), the canonical rebuild at open, the live
 //! fold the write path advances, the credential idempotency memo, and the
-//! `key_set` read's marshal.
+//! `key_set` read's identity half.
 //!
 //! DERIVED STATE, and only that: the fold is rebuilt from the recovered
 //! world at open and advanced from committed deposits at runtime — nothing
@@ -17,17 +17,14 @@
 
 use std::collections::HashMap;
 
-use serde_json::Value;
 use skep_address::{document_of, Address, Level, Span, Tumbler};
 use skep_content::HasContent;
 use skep_febe::{ReqId, SessionId};
-use skep_identity::{FoldCtx, IdentityState, LinkDeposit, Owner, Values, Verdict};
-use skep_kernel::Seq;
+use skep_identity::{FoldCtx, IdentityState, KeySet, LinkDeposit, Owner, Values, Verdict};
 use skep_links::{HasLinks, View};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
 use super::policy::identity_types;
-use crate::codec::{obj, to_bytes};
 use crate::World;
 
 // ── the world-fact seam ──────────────────────────────────────────────────
@@ -207,48 +204,20 @@ impl CredMemo {
     }
 }
 
-// ── the key_set read's marshal (AUTH-6.18–6.20) ──────────────────────────
+// ── the key_set read's identity half (AUTH-6.18–6.20) ────────────────────
 
-/// The `key_set` answer over one `(world, identity)` pair — the ONE
-/// dispatcher both `/op` (head, live fold) and `/op-at` (reconstructed
-/// world, canonical rebuild) call, so the two routes cannot diverge.
-/// A non-account address answers the EXISTING code `not_an_account`; a
-/// keyless account answers empty lists.
-pub(crate) fn key_set_reply(
-    as_of: Seq,
+/// The key set one `(world, identity)` pair holds for an address, or
+/// `None` when the address is not an account — the ONE account-hood test
+/// both `/op` (head, live fold) and `/op-at` (reconstructed world,
+/// canonical rebuild) call, so the two routes cannot diverge on it. The
+/// rendering is [`crate::codec::key_set_reply`]'s, where every wire shape
+/// this crate emits is rendered.
+pub(crate) fn key_set_of<'a>(
     world: &World,
-    identity: &IdentityState,
+    identity: &'a IdentityState,
     account: &Address,
-) -> Vec<u8> {
-    if world.m3().entity_level(account) != Some(Level::Account) {
-        return crate::codec::daemon_rejected("key_set", "not_an_account", "reorder", None);
-    }
-    let set = identity.key_set(account);
-    let enrolled: Vec<Value> = set
-        .enrolled()
-        .map(|(fp, e)| {
-            obj(vec![
-                ("alg", Value::String(e.key.alg().into())),
-                ("anchor", Value::Bool(e.anchor)),
-                ("fingerprint", Value::String(fp.to_hex())),
-                ("key", Value::String(e.key.to_hex())),
-            ])
-        })
-        .collect();
-    let retired: Vec<Value> = set
-        .retired()
-        .map(|(fp, anchor)| {
-            obj(vec![
-                ("anchor", Value::Bool(anchor)),
-                ("fingerprint", Value::String(fp.to_hex())),
-            ])
-        })
-        .collect();
-    to_bytes(obj(vec![
-        ("as_of", Value::Number(as_of.0.into())),
-        ("enrolled", Value::Array(enrolled)),
-        ("resp", Value::String("key_set".into())),
-        ("retired", Value::Array(retired)),
-    ]))
+) -> Option<&'a KeySet> {
+    (world.m3().entity_level(account) == Some(Level::Account))
+        .then(|| identity.key_set(account))
 }
 

@@ -167,15 +167,32 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<Refusal> {
 // ── nullify_refusal — the NULLIFY class, under gate.read() (AUTH-3.7–3.9) ─
 
 /// `Some(NullifyNotRetraction)` iff `op` is a `Nullify` whose target's
-/// `readlink` type slot is credential-typed. The op-kind test is INSIDE
-/// and first (one match arm for the common case); `world` MUST be the
-/// snapshot taken under the read guard for this request — the guard
-/// argument is that contract's cheap half.
-pub(crate) fn nullify_refusal(_g: &GateRead<'_>, world: &World, op: &Op) -> Option<Refusal> {
-    let Op::Nullify { target, .. } = op else { return None };
+/// `readlink` type slot is credential-typed AND the shape token is the
+/// caller's to receive. The op-kind test is INSIDE and first (one match
+/// arm for the common case); `world` MUST be the snapshot taken under the
+/// read guard for this request — the guard argument is that contract's
+/// cheap half.
+///
+/// RES-32's entitlement scope is the second conjunct: on a CLAIMED board
+/// the shape token reaches only the owner of the `home` the retraction
+/// would land in, so anyone else answers `None` here, falls through to
+/// execute, and receives ω's own `not_owner` — indistinguishable from its
+/// non-credential answer. Pre-claim the order stands for every caller.
+pub(crate) fn nullify_refusal(
+    _g: &GateRead<'_>,
+    world: &World,
+    identity: &IdentityState,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<Refusal> {
+    let Op::Nullify { home, target } = op else { return None };
     let link = world.links().readlink(target)?;
     let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
-    identity_types().kind_of(&spans).map(|_| Refusal::NullifyNotRetraction)
+    identity_types().kind_of(&spans)?;
+    if identity.claimant().is_some() && !world.m3().is_effective_owner(principal, home) {
+        return None;
+    }
+    Some(Refusal::NullifyNotRetraction)
 }
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
@@ -331,6 +348,30 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Refu
     } else {
         Some(Refusal::ClaimFirst)
     }
+}
+
+// ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
+
+/// The plain path's three producers in their pinned order: the NULLIFY
+/// class, then the MINT class, then the mode-complementary board-state
+/// pair. The ORDER is the pin, so it lives here with the producers rather
+/// than at the call site — the same treatment [`precheck`] gives the
+/// credential path's eight slots.
+///
+/// `world` and `identity` MUST be the pair taken under the read guard for
+/// this request; the guard argument each producer takes is that contract's
+/// cheap half.
+pub(crate) fn plain_refusal(
+    g: &GateRead<'_>,
+    world: &World,
+    identity: &IdentityState,
+    op: &Op,
+    principal: PrincipalId,
+    key: Option<&skep_identity::Fingerprint>,
+) -> Option<Refusal> {
+    nullify_refusal(g, world, identity, op, principal)
+        .or_else(|| mint_home_refusal(g, world, op, principal))
+        .or_else(|| board_state_refusal(g, world, identity, op, principal, key))
 }
 
 // ── precheck — slots (3)–(8), under gate.write() (AUTH-3.15–3.19) ────────

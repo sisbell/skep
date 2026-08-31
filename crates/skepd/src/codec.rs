@@ -51,6 +51,7 @@ use skep_febe::{
     Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
     Response, SlotArg, SuccessorSpec,
 };
+use skep_identity::KeySet;
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
@@ -320,6 +321,45 @@ pub(crate) fn daemon_rejected(
         pairs.push(("detail", Value::String(d)));
     }
     to_bytes(obj(pairs))
+}
+
+/// The `key_set` answer (AUTH-6.18–6.20) — the daemon's own response
+/// shape, rendered here because every wire shape this crate emits is
+/// rendered here. `set` is [`crate::auth::fold::key_set_of`]'s answer over
+/// the `(world, identity)` pair the route holds: `None` is the
+/// not-an-account case and answers the EXISTING code `not_an_account`; a
+/// keyless account answers empty lists. Entries ride in the key set's own
+/// fingerprint order.
+pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
+    let Some(set) = set else {
+        return daemon_rejected("key_set", "not_an_account", "reorder", None);
+    };
+    let enrolled: Vec<Value> = set
+        .enrolled()
+        .map(|(fp, e)| {
+            obj(vec![
+                ("alg", Value::String(e.key.alg().into())),
+                ("anchor", Value::Bool(e.anchor)),
+                ("fingerprint", Value::String(fp.to_hex())),
+                ("key", Value::String(e.key.to_hex())),
+            ])
+        })
+        .collect();
+    let retired: Vec<Value> = set
+        .retired()
+        .map(|(fp, anchor)| {
+            obj(vec![
+                ("anchor", Value::Bool(anchor)),
+                ("fingerprint", Value::String(fp.to_hex())),
+            ])
+        })
+        .collect();
+    to_bytes(obj(vec![
+        ("as_of", Value::Number(as_of.0.into())),
+        ("enrolled", Value::Array(enrolled)),
+        ("resp", Value::String("key_set".into())),
+        ("retired", Value::Array(retired)),
+    ]))
 }
 
 /// Serialize a finished `Value` tree — the one place this crate turns a

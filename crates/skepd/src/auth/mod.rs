@@ -22,6 +22,8 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use rand_core::{CryptoRng, RngCore};
+use skep_febe::{ReqId, SessionId};
+use skep_identity::LinkDeposit;
 
 use crate::World;
 use fold::{CredMemo, IdentityFold};
@@ -106,6 +108,33 @@ impl AuthState {
             fold: IdentityFold::seeded(fold::canonical_identity(world)),
             memo: CredMemo::new(),
         }
+    }
+
+    /// The credential path's committed tail (AUTH-3.43), whole and under
+    /// the write guard the caller already holds: advance the fold from the
+    /// deposit this write committed, memoize the marshaled ack under the
+    /// frame's id (AUTH-7.20's first horn), and answer whether this step
+    /// flipped the board claimed — the claim-flip warning's trigger.
+    ///
+    /// One method because the three are one obligation: a fold advanced
+    /// without its memo entry replays nothing on retry, and a memo entry
+    /// stored without the fold step memoizes an ack for a state the fold
+    /// never reached. `world_post` is the POST-COMMIT snapshot — the ctx
+    /// the deposit's own commit is visible in.
+    pub fn commit_tail(
+        &self,
+        _g: &GateWrite<'_>,
+        world_post: &World,
+        dep: &LinkDeposit<'_>,
+        sid: SessionId,
+        id: Option<&ReqId>,
+        ack: &[u8],
+    ) -> bool {
+        let flipped = self.fold.step_committed(world_post, dep);
+        if let Some(id) = id {
+            self.memo.store(sid, id, ack.to_vec());
+        }
+        flipped
     }
 }
 

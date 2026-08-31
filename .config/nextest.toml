@@ -1,0 +1,28 @@
+# The two-gate split (2026-08-30). Both profiles keep fail-fast OFF: a
+# partial gate once hid seven red targets for three rounds, so a gate
+# reports every red it can reach, always.
+#
+# default — gate-fast (scripts/gate-fast.sh): the review-round inner loop.
+#   The #[ignore = "timing test - gate-full only"] partition (designed
+#   wall-clock sleeps) is excluded by nextest's default run-ignored policy.
+# full — gate-full (scripts/gate-full.sh): the gate of record, run with
+#   --run-ignored all. Its termination timeout turns a hung daemon test
+#   into a NAMED failure instead of a wedged gate — nameless failures are
+#   poison (the runner head-cap lesson).
+
+[profile.default]
+fail-fast = false
+# Advisory only (no terminate-after): a SLOW marker flags creep in the fast
+# set without killing a legitimately slow test on a loaded machine.
+slow-timeout = "30s"
+
+[profile.full]
+fail-fast = false
+# Termination well above the longest designed wall-clock test (the ~40 s
+# keepalive ceiling) and above the hazard suites' multi-minute trial loops:
+# 120 s periods, terminated after 5 — a 10-minute cap that names the test.
+# Generous on purpose: measured 2026-08-31, a starved machine (system scan
+# storm) stretched 12 ms unit tests past 190 s; a cap that tight would
+# convert machine weather into false reds. A real hang still terminates
+# WITH ITS NAME well before it wedges a nightly.
+slow-timeout = { period = "120s", terminate-after = 5 }

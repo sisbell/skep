@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
 use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};

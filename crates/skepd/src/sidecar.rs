@@ -608,37 +608,57 @@ mod tests {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_000,
+            key: Some("bare".into()),
         };
         assert_eq!(
             entry_line(8, &meta),
-            b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000000}\n"
+            b"{\"at\":8,\"docs\":[\"1.0.1.0.1\"],\"key\":\"bare\",\"op\":\"insert\",\"time\":1700000000000}\n"
+        );
+        // A pre-feature recorded line carries no `key` field at all —
+        // omitted in the file, replayed as `None` below.
+        let pre_feature = Meta::Recorded {
+            op: "insert".into(),
+            docs: vec!["1.0.1.0.1".into()],
+            time: 1_700_000_000_001,
+            key: None,
+        };
+        assert_eq!(
+            entry_line(9, &pre_feature),
+            b"{\"at\":9,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000001}\n"
         );
         assert_eq!(entry_line(3, &Meta::Bare), b"{\"at\":3}\n");
         assert_eq!(min_since_line(2048), b"{\"min_since\":2048}\n");
 
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(&entry_line(8, &meta));
+        file.extend_from_slice(&entry_line(9, &pre_feature));
         file.extend_from_slice(&entry_line(3, &Meta::Bare));
         file.extend_from_slice(&min_since_line(2048));
         let (recs, end) = parse_records(&file);
         assert_eq!(end, file.len(), "every whole line is trusted");
-        assert_eq!(recs.len(), 3);
+        assert_eq!(recs.len(), 4);
         match &recs[0] {
-            Rec::Entry(at, Meta::Recorded { op, docs, time }) => {
+            Rec::Entry(at, Meta::Recorded { op, docs, time, key }) => {
                 assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
                 assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
+                assert_eq!(key.as_deref(), Some("bare"), "testimony replays as written");
             }
             other => panic!("first line is a recorded entry: {other:?}"),
         }
         assert!(
-            matches!(recs[1], Rec::Entry(3, Meta::Bare)),
-            "second line is a bare entry: {:?}",
+            matches!(&recs[1], Rec::Entry(9, Meta::Recorded { key: None, .. })),
+            "a pre-feature line replays with no testimony: {:?}",
             recs[1]
         );
         assert!(
-            matches!(recs[2], Rec::MinSince(2048)),
-            "third line names the smallest admissible since: {:?}",
+            matches!(recs[2], Rec::Entry(3, Meta::Bare)),
+            "third line is a bare entry: {:?}",
             recs[2]
+        );
+        assert!(
+            matches!(recs[3], Rec::MinSince(2048)),
+            "fourth line names the smallest admissible since: {:?}",
+            recs[3]
         );
     }
 
@@ -685,21 +705,34 @@ mod tests {
     /// The wire entry names every field, a bare position's as explicit
     /// `null` — never invented, and never merely absent, which a client
     /// could not tell from a field this daemon does not know about. The
-    /// file line omits what the wire nulls; both are deliberate.
+    /// file line omits what the wire nulls; both are deliberate. `key`'s
+    /// null is AUTH-1.52's reserved lost-metadata meaning: a pre-feature
+    /// record reads it exactly as a bare position does.
     #[test]
     fn wire_entries_null_what_the_file_line_omits() {
         let meta = Meta::Recorded {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_000,
+            key: Some("bare".into()),
         };
         assert_eq!(
             serde_json::to_string(&meta.into_entry(8)).expect("json"),
-            r#"{"at":8,"docs":["1.0.1.0.1"],"op":"insert","time":1700000000000}"#
+            r#"{"at":8,"docs":["1.0.1.0.1"],"key":"bare","op":"insert","time":1700000000000}"#
+        );
+        let pre_feature = Meta::Recorded {
+            op: "insert".into(),
+            docs: vec!["1.0.1.0.1".into()],
+            time: 1_700_000_000_000,
+            key: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&pre_feature.into_entry(8)).expect("json"),
+            r#"{"at":8,"docs":["1.0.1.0.1"],"key":null,"op":"insert","time":1700000000000}"#
         );
         assert_eq!(
             serde_json::to_string(&Meta::Bare.into_entry(3)).expect("json"),
-            r#"{"at":3,"docs":null,"op":null,"time":null}"#
+            r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#
         );
     }
 }

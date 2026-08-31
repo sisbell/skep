@@ -281,8 +281,8 @@ impl JsonCodec {
 }
 
 /// One parsed daemon-level frame: an M10 request, or the `key_set` read the
-/// daemon serves itself (AUTH-6.18–6.20).
-#[derive(Debug)]
+/// daemon serves itself (AUTH-6.18–6.20). No `Debug`: M10's `Request`
+/// carries none, and both consumers match rather than print.
 pub(crate) enum DaemonOp {
     Febe(Request),
     KeySet { account: Address },

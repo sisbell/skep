@@ -371,10 +371,11 @@ impl Sidecar {
     /// invented.
     ///
     /// What it reads is the LAST RECORDED position's time, which IS the
-    /// head's because every commit is recorded: `WritePath::commit` records
-    /// under the lock it commits under, and `/op` is the only live write
-    /// path. That premise is this file's RELIANCE, not its check — a
-    /// `Sidecar` never learns the live head — and two states break it.
+    /// head's because every commit is recorded: `WritePath::commit_under`
+    /// records and announces inside the guard its caller holds across both,
+    /// and `/op` is the only live write path. That premise is this file's
+    /// RELIANCE, not its check — a `Sidecar` never learns the live head —
+    /// and two states break it.
     ///
     /// Transiently: any in-flight write. `/health` reads this and the log
     /// position independently and under no lock, so its pair may straddle

@@ -4,17 +4,25 @@
 //! Contract): a long-running process owning ONE `World`, serving the full
 //! M10 operation surface over HTTP/JSON to multiple concurrent local
 //! clients. **skepd owns no semantics** — every decision worth making was
-//! made in a store; this crate is the wire codec, the process, and the
-//! kernel's configuration:
+//! made in a store, save the session layer's own, whose gates are the
+//! daemon's by spec; this crate is the wire codec, the session layer, the
+//! process, and the kernel's configuration:
 //!
 //! * [`JsonCodec`] — the one concrete `Codec` (M10's seam): JSON frames in,
 //!   deterministic JSON responses out. The byte conventions are the
 //!   cross-client contract in `skep/docs/wire.md`, whose examples the tests
 //!   assert.
-//! * [`Daemon`] — the state and the socket-free router: `POST /session`,
-//!   `POST /op`, `POST /op-at` (any READ frame answered as of a committed
+//! * `auth/` — the AUTH session layer (wire v7): the two origin sets, the
+//!   challenge/response handshake, the sessions store and per-request
+//!   resolution, the write gate with its ordered refusal producers, and the
+//!   identity fold this daemon composes BESIDE the engine (derived state,
+//!   rebuilt at open, never persisted here).
+//! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
+//!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
+//!   (any READ frame answered as of a committed
 //!   position, served from the journal via the engine's bounded replay),
-//!   `GET /health` (liveness, position, and — wire v6 — `head_time`),
+//!   `GET /health` (liveness, position, — wire v6 — `head_time`, and —
+//!   wire v7 — the `auth` object the board's mode derives from),
 //!   `GET /events` (the server-sent commit stream, wire v4),
 //!   `GET /changes` (the pull delta feed of committed writes, wire v6, fed
 //!   by the daemon's own commit-metadata sidecar `commits.log`), `GET /`
@@ -25,11 +33,11 @@
 //!   historical position.
 //! * [`serve`]/[`Skepd`] — the synchronous accept loop: worker threads over
 //!   one owned `TcpListener` speaking a written-out HTTP/1.1 subset (one
-//!   request per connection, `Connection: close` and
-//!   `Access-Control-Allow-Origin: *` on every response), bound to
-//!   127.0.0.1 (local trust does not survive a network). Event-stream
-//!   subscribers run on dedicated threads off the op pool, fed by
-//!   write-path notification — no polling anywhere.
+//!   request per connection, and [`UNIVERSAL_HEADERS`] on every response),
+//!   bound to 127.0.0.1 (the bare bind is loopback-privileged, and that
+//!   privilege does not survive a network). Event-stream subscribers run
+//!   on dedicated threads off the op pool, fed by write-path notification
+//!   — no polling anywhere.
 //!
 //! Durability lives in M2 and is *configured* here (`Durability::Fsync`,
 //! every-1024-commits checkpoints, two retained): genesis on a fresh data

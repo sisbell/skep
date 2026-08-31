@@ -1,6 +1,7 @@
 //! The daemon's write path — the whole ordering protocol on one card: a
 //! write commits, its change-feed record is appended, and its position is
-//! announced, in that order and under one lock ([`WritePath::commit`]).
+//! announced, in that order, under one lock ([`WritePath::commit_under`],
+//! which runs inside a guard its caller holds).
 //!
 //! Holding the three together is what makes two guarantees facts about this
 //! element rather than conventions each caller remembers. `commits.log` is
@@ -12,11 +13,11 @@
 //! [`WritePath::open`] is the BASE CASE: the stream is seeded from the head
 //! the sidecar has just covered, before any febe exists to commit between
 //! the two, so a connecting subscriber is told [`WritePath::announced`] and
-//! that first position is already answerable. [`WritePath::commit`] is the
-//! STEP: each announcement happens behind the record that made its position
-//! answerable. Neither half is a rule a caller remembers, so the two can
-//! never come apart in the window between a commit and its record. Reads
-//! never come here and never take the lock.
+//! that first position is already answerable. [`WritePath::commit_under`]
+//! is the STEP: each announcement happens behind the record that made its
+//! position answerable. Neither half is a rule a caller remembers, so the
+//! two can never come apart in the window between a commit and its record.
+//! Reads never come here and never take the lock.
 //!
 //! [`write_meta`] is also THE read/write partition — a read is exactly an
 //! `Op` the change feed has nothing to record — so the history surface and
@@ -49,11 +50,16 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// The delegating methods below are one-line calls into the sidecar or the
 /// stream, deliberately: what this card buys over holding the two side by
 /// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and
-/// `CommitStream::announce` are reachable only from [`WritePath::commit`],
-/// which is what makes the ordering above a property of this type rather
-/// than a rule each handler remembers — `Sidecar::record`'s caller contract
-/// is discharged by there being nowhere else to fail it. Reaching the two
-/// through here is what that costs.
+/// `CommitStream::announce` are reachable only from
+/// [`WritePath::commit_under`], which is what makes the ordering above a
+/// property of this type rather than a rule each handler remembers —
+/// `Sidecar::record`'s caller contract is discharged by there being nowhere
+/// else to fail it. Reaching the two through here is what that costs.
+///
+/// What that does NOT buy is the guard's SPAN. [`WritePath::serial_lock`]
+/// hands the lock out, so that the snapshot a caller's gates read was taken
+/// under the same guard is that method's contract with its callers, not
+/// this type's — the same shape as `Sidecar::record`'s, one layer up.
 pub(crate) struct WritePath {
     /// The serialization point. M2's applier serializes the commits
     /// themselves anyway, so this only moves that point up — and buys the
@@ -93,6 +99,12 @@ impl WritePath {
     /// commit can intervene (the gates' answers and the execute they gate
     /// then stand on one committed state). Lock order is fixed at the
     /// caller: the auth gate first, then this, never inverted.
+    ///
+    /// CALLER CONTRACT, and the half [`WritePath`] cannot hold for them:
+    /// take the snapshot the gates read under THIS guard, and pass the
+    /// guard on to [`WritePath::commit_under`] rather than dropping it —
+    /// nothing here can check either, and a snapshot taken outside it lets
+    /// a commit land between what a gate read and what it gated.
     pub fn serial_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.serial.lock()
     }
@@ -142,9 +154,10 @@ impl WritePath {
     /// `head_time`), or `None` when that position's record is bare.
     ///
     /// The sidecar answers for the head by answering for its last recorded
-    /// position, which is the same position because [`WritePath::commit`]
-    /// records every commit under the lock it commits under. That premise
-    /// is kept HERE; `Sidecar::head_time` states what relying on it costs.
+    /// position, which is the same position because
+    /// [`WritePath::commit_under`] records and announces inside the guard
+    /// the caller holds across both. That premise is kept HERE;
+    /// `Sidecar::head_time` states what relying on it costs.
     pub fn head_time(&self) -> Option<u64> {
         self.sidecar.head_time()
     }
@@ -165,8 +178,8 @@ impl WritePath {
     /// first, and what a test can witness without opening a socket.
     ///
     /// Deliberately not the kernel's committed head. Between a write's
-    /// commit and its change-feed record — [`WritePath::commit`] holds the
-    /// lock across both — the head names a position `/changes` cannot yet
+    /// commit and its change-feed record — [`WritePath::commit_under`] holds
+    /// the lock across both — the head names a position `/changes` cannot yet
     /// answer, and a subscriber told that number reads an empty delta and
     /// shows a stale view until the next commit. Announced positions sit
     /// behind their own records by construction, which is what makes this
@@ -185,9 +198,9 @@ impl WritePath {
     /// decide whether the change feed reports it, and fails to compile
     /// until it does.
     ///
-    /// Returns the position [`WritePath::commit`] announces, and in every
-    /// case one `/changes` already carries — which is the guarantee, rather
-    /// than the narrower "the position whose record this call just made".
+    /// Returns the position [`WritePath::commit_under`] announces, and in
+    /// every case one `/changes` already carries — which is the guarantee,
+    /// rather than the narrower "the position whose record this call made".
     /// Three paths reach it: a new commit, whose record this call makes; a
     /// position already recorded this uptime (an idempotency replay), which
     /// the sidecar declines and which was announced when it was first
@@ -311,7 +324,7 @@ pub(crate) enum AffectedDocs {
 /// table is a restatement rather than a delegation). Both tables are
 /// exhaustive over `Op` and neither is derived from the other, so a
 /// divergence compiles. A write classified here as a read runs outside
-/// [`WritePath::commit`]'s lock, unrecorded and unannounced: `/changes`
+/// [`WritePath::commit_under`]'s lock, unrecorded and unannounced: `/changes`
 /// misses that position for the rest of the uptime, `/events` never
 /// announces it, and [`crate::sidecar::Sidecar::head_time`]'s premise that
 /// every commit is recorded fails, so `/health` reports an older position's

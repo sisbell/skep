@@ -65,16 +65,7 @@ impl Nonce {
     /// `Fingerprint::parse_hex` (AUTH-4.16): an uppercase nonce is a 400
     /// syntax fault whose nonce SURVIVES, never a burned 401.
     pub fn parse_hex(s: &str) -> Option<Nonce> {
-        if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-            return None;
-        }
-        let mut raw = [0u8; 32];
-        for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-            let hi = hex_nibble(chunk[0])?;
-            let lo = hex_nibble(chunk[1])?;
-            raw[i] = (hi << 4) | lo;
-        }
-        Some(Nonce(raw))
+        parse_lower_hex(s).map(Nonce)
     }
 }
 
@@ -84,6 +75,21 @@ fn hex_nibble(b: u8) -> Option<u8> {
         b'a'..=b'f' => Some(b - b'a' + 10),
         _ => None,
     }
+}
+
+/// Exactly `N` bytes of LOWERCASE hex, or `None` — the admission rule both
+/// wire tokens rest on. Each `parse` admits only what its own emitter
+/// produces, so an uppercase value is refused rather than normalized; what
+/// that costs a caller is per-type and stays stated on each.
+fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
+    if s.len() != N * 2 {
+        return None;
+    }
+    let mut raw = [0u8; N];
+    for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
+        raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
+    }
+    Some(raw)
 }
 
 /// The challenge store (AUTH-4.19): a map plus a FIFO of insertion order
@@ -159,16 +165,7 @@ impl Token {
     /// ONLY 32 lowercase hex; a value this refuses is NO token
     /// (AUTH-4.18) — it resolves `Guest(NoToken)`, nothing to close.
     pub fn parse(s: &str) -> Option<Token> {
-        if s.len() != SESSION_TOKEN_BYTES * 2
-            || !s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
-            return None;
-        }
-        let mut raw = [0u8; SESSION_TOKEN_BYTES];
-        for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
-            raw[i] = (hex_nibble(chunk[0])? << 4) | hex_nibble(chunk[1])?;
-        }
-        Some(Token(raw))
+        parse_lower_hex(s).map(Token)
     }
 }
 

@@ -35,35 +35,49 @@
 //! file of the WORLD's, which is why two daemons replaying one journal
 //! still converge byte-identically.
 //!
-//! **Identity is local trust**: clients name their own principal at
-//! `POST /session` and get an opaque token; the daemon maps token →
-//! M10-minted `SessionId` in its own state, so a `SessionId` never rides the
-//! wire (M10's non-forgeability precondition) and every write is attributed
-//! to the named principal. Tokens die with the process — M10 session ids
-//! reset on restart, and a stale token simply misses. A request with no (or
-//! an unknown) token runs under a pre-retired guest session: reads are
-//! principal-free and succeed; writes get M10's own `Unauthenticated`
-//! rejection. The daemon binds 127.0.0.1 only — the trust model does not
-//! survive a network.
+//! **Identity is the AUTH session layer** (`auth/`): `GET /challenge` and
+//! `POST /session` mint a session by one of two arms — a BARE bind (v1's
+//! form, honored only from a loopback peer at an admitted origin, and only
+//! while the board is not ENFORCING) or a SIGNED challenge/response — and
+//! the daemon maps the opaque token → M10-minted `SessionId` in its own
+//! state, so a `SessionId` never rides the wire (M10's non-forgeability
+//! precondition). A request with no token, or one whose binding is gone,
+//! runs under a pre-retired guest session: reads are principal-free and
+//! succeed, writes get M10's own `Unauthenticated`, and a token naming a
+//! binding this daemon has closed carries `Skepd-Session: closed` back.
+//! `auth/` owns the rest and this file holds none of it: the two origin
+//! sets and their publication, the handshake, the write gate, the ordered
+//! refusal producers, and the identity fold rebuilt beside the engine.
+//! What this file adds is the two write sequences that call them in their
+//! pinned order, and the `/session` and `/health` marshals. Tokens are
+//! uptime-scoped; the daemon binds 127.0.0.1 only.
 //!
-//! **Cross-origin posture (wire v4)**: every response carries
-//! `Access-Control-Allow-Origin: *`, written from one constant
-//! ([`UNIVERSAL_HEADERS`]) by both response writers — the reply path and
-//! the event stream — so nothing this daemon answers can miss it, and
-//! `OPTIONS` on any known path answers a 204 preflight naming the allowed
-//! methods and headers. The `*` is a scope decision, not an accident — but
-//! the session token is not what bounds it: `POST /session` is itself
-//! unauthenticated and cross-origin reachable, so a page that wants a token
-//! mints one, naming any principal it likes. What `*` grants any page the
-//! browser loads is exactly what this daemon already grants any local
-//! process: the whole surface, reads and writes alike. That equivalence is
-//! the decision. Revisited when authentication lands.
+//! **Cross-origin posture (wire v7)**: every response carries
+//! `Access-Control-Allow-Origin: *` and
+//! `Access-Control-Expose-Headers: Skepd-Session`, written from one
+//! constant ([`UNIVERSAL_HEADERS`]) by both response writers — the reply
+//! path and the event stream — so nothing this daemon answers can miss
+//! them, and `OPTIONS` on any known path answers a 204 preflight naming
+//! the allowed methods and headers. The `*` is a scope decision, and it
+//! was revisited when authentication landed (wire.md §Cross-origin
+//! access): it stays, because neither credential is browser-ambient.
+//! Reads are principal-free, so `*` grants any page the whole read
+//! surface. Writes do not follow it: a write needs a session,
+//! [`crate::auth::bare_bind_allowed`] refuses a bare bind whose `Origin`
+//! is not in the bare set (a browser sends that header on every
+//! cross-origin POST), and the signed arm binds its origin inside the
+//! signature. A foreign page's POST is fenced by the daemon rather than
+//! by what the browser lets it read back, which is why a narrower ACAO
+//! was weighed and declined.
 //!
 //! **Writes go through one card** (`write_path.rs`): `POST /op` — the
-//! daemon's only live write path — hands each write to `WritePath::commit`,
-//! which commits it, records its change-feed entry, and announces its
-//! position, in that order and under one lock. What this file adds is the
-//! frame's parse and its classification; the ordering the commit stream and
+//! daemon's only live write path — hands each write to
+//! `WritePath::commit_under`, which commits it, records its change-feed
+//! entry, and announces its position, in that order and inside the
+//! serialization guard the write sequences here hold. What this file adds
+//! is the frame's parse, its classification, and the two write sequences,
+//! which take `serial_lock` themselves so their gates and the execute they
+//! gate stand on one committed state; the ordering the commit stream and
 //! the change feed below rest on is not a thing a handler here can take
 //! apart. Reads execute directly and take no lock.
 //!
@@ -110,7 +124,7 @@ use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{Codec, Operation, Request, Response, SessionId};
 use skep_identity::IdentityState;
-use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
+use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
@@ -186,10 +200,11 @@ const TRANSFER_DEADLINE: Duration = Duration::from_secs(30);
 /// Preflight cache lifetime advertised on `OPTIONS` (wire v4).
 const CORS_MAX_AGE_SECS: &str = "86400";
 
-/// The two headers wire.md promises on EVERY response: the cross-origin
-/// posture and the one-request-per-connection framing. Written once because
-/// the event stream's head is composed outside [`write_reply`] — a stream is
-/// not a request/response reply — so a change to either must reach both
+/// The headers wire.md promises on EVERY response: the cross-origin
+/// posture, the exposure that lets a page read the death signal, and the
+/// one-request-per-connection framing. Written once because the event
+/// stream's head is composed outside [`write_reply`] — a stream is not a
+/// request/response reply — so a change to any of them must reach both
 /// writers or reach neither.
 ///
 /// Exported because [`Reply`] names them as a caller's obligation. They are
@@ -340,14 +355,15 @@ pub struct Body {
 /// is what keeps the writer from inferring it from the status, where a 204
 /// built with bytes would drop them in silence.
 ///
-/// A HANDLER'S ANSWER, not a complete HTTP response. Four headers come from
-/// [`write_reply`] rather than from any `Reply` value: `Content-Type` and
-/// `Content-Length`, which it derives from the `body` field below and omits
-/// entirely when there is none, and [`UNIVERSAL_HEADERS`]' two, which
-/// wire.md §Transport and §Cross-origin access promise on EVERY response.
-/// A caller serving these over a transport of its own owes the last two —
-/// and takes them from that constant rather than transcribing them, so the
-/// day the cross-origin posture is revisited it moves for them too.
+/// A HANDLER'S ANSWER, not a complete HTTP response. Two kinds of header
+/// come from [`write_reply`] rather than from any `Reply` value:
+/// `Content-Type` and `Content-Length`, which it derives from the `body`
+/// field below and omits entirely when there is none, and every member of
+/// [`UNIVERSAL_HEADERS`], which wire.md §Transport and §Cross-origin access
+/// promise on EVERY response. A caller serving these over a transport of
+/// its own owes that constant's members — and takes them from it rather
+/// than transcribing them, so a change to the cross-origin posture moves
+/// for them too.
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Reply {
@@ -355,8 +371,9 @@ pub struct Reply {
     pub body: Option<Body>,
     /// Extra response headers beyond what [`write_reply`] supplies —
     /// `Content-Type` and `Content-Length` from the body, and
-    /// [`UNIVERSAL_HEADERS`]' two always. The preflight trio rides here;
-    /// that set is `write_reply`'s to supply, not this list's.
+    /// [`UNIVERSAL_HEADERS`] always. The preflight trio rides here, as does
+    /// the death signal; that constant is `write_reply`'s to supply, not
+    /// this list's.
     pub headers: Vec<(&'static str, &'static str)>,
 }
 
@@ -714,11 +731,14 @@ impl Daemon {
     /// a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
     ///
-    /// The sidecar replay is the one step here whose cost is not O(1) in
-    /// the data dir: where commit metadata is missing it reconstructs the
+    /// TWO steps here cost more than O(1) in the data dir. The sidecar
+    /// replay is one: where commit metadata is missing it reconstructs the
     /// uncovered positions from the journal, one whole-world replay each,
     /// up to the retained window (`CHECKPOINT_EVERY_COMMITS` ×
-    /// `RETAINED_CHECKPOINTS`). `Sidecar::open` states the bound.
+    /// `RETAINED_CHECKPOINTS`). `Sidecar::open` states that bound. The
+    /// identity fold is the other: [`Daemon::open_with`] rebuilds it from
+    /// the recovered world, which reads every link in it —
+    /// [`crate::auth::fold::canonical_identity`] states that bound.
     pub fn open(data_dir: &Path) -> Result<Daemon, DaemonError> {
         Daemon::open_with(data_dir, AuthOptions::default())
     }
@@ -726,7 +746,9 @@ impl Daemon {
     /// [`Daemon::open`] with the session-layer configuration named: the
     /// local-trust flag and the configured origins. The identity fold is
     /// seeded here from the RECOVERED world (derived state — the canonical
-    /// rebuild; the journal stays the one source of truth).
+    /// rebuild; the journal stays the one source of truth), which reads
+    /// every link in that world: [`crate::auth::fold::canonical_identity`]
+    /// states the bound, and [`Daemon::open`] names it beside the sidecar's.
     pub fn open_with(data_dir: &Path, opts: AuthOptions) -> Result<Daemon, DaemonError> {
         let cfg = KernelConfig {
             durability: Durability::Fsync {
@@ -792,8 +814,9 @@ impl Daemon {
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
-    /// the way out is the headers [`write_reply`] supplies, two of which
-    /// wire.md promises on every response.
+    /// the way out is the headers [`write_reply`] supplies,
+    /// [`UNIVERSAL_HEADERS`] among them, which wire.md promises on every
+    /// response.
     pub fn route(&self, req: &HttpRequest) -> Routed {
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", "/events") => Routed::EventStream,
@@ -1033,23 +1056,48 @@ impl Daemon {
         (actor, closed)
     }
 
-    /// The PLAIN sequence (AUTH-3.35): gate.read → the serialization lock →
-    /// the head snapshot → this site's own resolve → `plain_refusal`'s
-    /// ordered producers → execute. The serial lock is taken before the
-    /// snapshot so the gates' answers and the execute they gate stand on
-    /// one committed state.
-    fn plain_sequence(&self, meta: FrameMeta, freq: Request, req: &HttpRequest) -> Reply {
-        let _g = self.auth.gate.read();
-        let serial = self.writes.serial_lock();
+    /// The locked state one write sequence stands on: the world snapshot,
+    /// the fold snapshot beside it, and this site's own resolution against
+    /// that pair (AUTH-4.28's WHICH-lookup pin). Taken AFTER the
+    /// serialization lock — which is what the guard argument proves — so no
+    /// commit can intervene between what the gates read and what the
+    /// execute they gate runs against.
+    ///
+    /// The auth gate is the CALLER's: the two sequences hold different
+    /// guard types (read for the plain path, write for the credential
+    /// path), and holding one is the half this signature cannot state.
+    fn locked_state(
+        &self,
+        _serial: &parking_lot::MutexGuard<'_, ()>,
+        req: &HttpRequest,
+    ) -> (Snapshot<World>, IdentityState, Authed) {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
         let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
+        (snap, identity, Authed { actor, closed })
+    }
+
+    /// The answer every Guest arm gives: execute under the permanently
+    /// retired guest session, which is M10's own `Unauthenticated` with the
+    /// op kind named. This daemon holds no authorization policy of its own,
+    /// so the refusal is M10's to word.
+    fn guest_reply(&self, freq: Request) -> Reply {
+        self.op_reply(&self.febe.execute(self.guest, freq))
+    }
+
+    /// The PLAIN sequence (AUTH-3.35): gate.read → the serialization lock →
+    /// [`Daemon::locked_state`] (the head snapshot, the fold beside it, and
+    /// this site's own resolve) → `plain_refusal`'s ordered producers →
+    /// execute. The serial lock is taken before the snapshot so the gates'
+    /// answers and the execute they gate stand on one committed state; the
+    /// producers' ORDER is `plain_refusal`'s, not this site's.
+    fn plain_sequence(&self, meta: FrameMeta, freq: Request, req: &HttpRequest) -> Reply {
+        let _g = self.auth.gate.read();
+        let serial = self.writes.serial_lock();
+        let (snap, identity, Authed { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
             Actor::Principal(e) => e,
-            Actor::Guest(_) => {
-                let resp = self.febe.execute(self.guest, freq);
-                return with_signal(self.op_reply(&resp), closed);
-            }
+            Actor::Guest(_) => return with_signal(self.guest_reply(freq), closed),
         };
         if let Some(r) = plain_refusal(
             &_g,
@@ -1070,9 +1118,9 @@ impl Daemon {
 
     /// The CREDENTIAL sequence (AUTH-3.37): the pre-lock actor is
     /// `authenticate`'s; `op_shape_refusal` runs ahead of the lock; then
-    /// gate.write → serial → snapshot → this site's own resolve → recall →
-    /// precheck → execute → the fold step, the memo, and the claim-flip
-    /// tail — all under the write guard.
+    /// gate.write → serial → [`Daemon::locked_state`] → recall → precheck →
+    /// execute → the fold step, the memo, and the claim-flip tail — all
+    /// under the write guard.
     fn credential_sequence(
         &self,
         authed: &Authed,
@@ -1082,10 +1130,11 @@ impl Daemon {
     ) -> Reply {
         let op_name = crate::codec::op_name(meta.kind);
         // 1 — the pre-lock actor check: both outcomes are refusals that
-        // execute nothing (AUTH-3.38).
+        // execute nothing (AUTH-3.38). No `with_signal` here: this arm
+        // reads the HEAD resolution, whose death signal `post_op`'s outer
+        // wrap already carries.
         if let Actor::Guest(_) = authed.actor {
-            let resp = self.febe.execute(self.guest, freq);
-            return self.op_reply(&resp);
+            return self.guest_reply(freq);
         }
         // 2 — slots (1)–(2), ahead of the lock (AUTH-3.5).
         if let Some(r) = op_shape_refusal(&freq.op) {
@@ -1095,17 +1144,12 @@ impl Daemon {
         // and this site's OWN resolution.
         let _g = self.auth.gate.write();
         let serial = self.writes.serial_lock();
-        let snap = self.engine.kernel().snapshot();
-        let identity = self.auth.fold.snapshot();
-        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
+        let (snap, identity, Authed { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
             Actor::Principal(e) => e,
             // 4 — the only reachable arms are Unknown | EntryDead
             // (AUTH-3.37 item 4); the close-and-signal already fired.
-            Actor::Guest(_) => {
-                let resp = self.febe.execute(self.guest, freq);
-                return with_signal(self.op_reply(&resp), closed);
-            }
+            Actor::Guest(_) => return with_signal(self.guest_reply(freq), closed),
         };
         // 5 — recall, kind-blind, atomic with the precheck-and-execute it
         // guards (AUTH-3.40/3.41): the ORIGINAL ack, byte-identical,
@@ -1117,9 +1161,15 @@ impl Daemon {
         }
         // 6 — the precheck's ordered slots over the verbatim deposit.
         let Some(dep) = DepositSpans::of(&freq.op) else {
-            // Unreachable: only a MakeLink with address-form slots
-            // classifies credential past slots (1)–(2). Refuse in the
-            // shape vocabulary rather than invent one.
+            // Unreachable by construction: only a MakeLink with
+            // address-form slots classifies credential past slots (1)–(2).
+            // The assert is what makes the premise LOUD — the release
+            // answer refuses in the shape vocabulary rather than inventing
+            // one, and a `resolved_from` a caller's frame did not earn is
+            // indistinguishable from a genuine slot-(2) refusal, which is
+            // exactly what a silent arm here would ship. Same treatment
+            // `precheck` gives its own `NotCredential` line.
+            debug_assert!(false, "a classified deposit is an address-form MakeLink");
             return with_signal(credential_refused(op_name, &Refusal::ResolvedFrom), closed);
         };
         match crate::auth::policy::precheck(
@@ -1789,10 +1839,10 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // mutated across a point that can unwind — the session table's map and
     // queue move together under one lock, and the sidecar appends before it
     // inserts. The one thing a panic can cost is the tail of one write:
-    // `WritePath::commit` runs `execute` under the serialization lock, so a
-    // panic inside M10 after its commit leaves that position unrecorded and
-    // unannounced. The reopen walk re-covers it as a bare entry, and the
-    // next commit's announcement carries the stream past it.
+    // `WritePath::commit_under` runs `execute` under the serialization
+    // lock, so a panic inside M10 after its commit leaves that position
+    // unrecorded and unannounced. The reopen walk re-covers it as a bare
+    // entry, and the next commit's announcement carries the stream past it.
     let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route(&req))) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),
@@ -2115,11 +2165,11 @@ fn push_header(head: &mut Vec<u8>, name: &str, value: &str) {
 }
 
 /// Write one complete reply; the connection closes behind it. Every reply
-/// carries [`UNIVERSAL_HEADERS`] — wire v4's CORS posture and the
-/// one-request-per-connection framing — supplied at this one choke point so
-/// no reply can miss them, and shared with `serve_events`, which composes
-/// its own head because a stream is not a reply. A bodiless reply carries
-/// no content headers (RFC 7230's 204).
+/// carries [`UNIVERSAL_HEADERS`] — the cross-origin posture, the death
+/// signal's exposure, and the one-request-per-connection framing — supplied
+/// at this one choke point so no reply can miss them, and shared with
+/// `serve_events`, which composes its own head because a stream is not a
+/// reply. A bodiless reply carries no content headers (RFC 7230's 204).
 fn write_reply(stream: &mut TcpStream, reply: &Reply, deadline: Instant) -> io::Result<()> {
     let mut head = Vec::with_capacity(256);
     head.extend_from_slice(

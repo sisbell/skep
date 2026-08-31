@@ -57,6 +57,13 @@ impl FoldCtx for WorldCtx<'_> {
         self.0.m3().entity_level(a) == Some(Level::Account)
     }
 
+    /// The daemon's OTHER publication read is
+    /// [`super::policy::is_published_v1`], which computes v1's real answer
+    /// (a document is published iff it IS its account's doc 1) for the
+    /// RES-26 publish gate. The two are one design decision under two
+    /// rules, and they agree on every credential home — which the home pin
+    /// confines to doc 1, the argument written there. A draft substrate
+    /// moves both.
     fn is_published(&self, _doc: &Address) -> bool {
         true
     }
@@ -87,6 +94,14 @@ impl Candidate {
 /// fixpoint, each pass stepping the still-pending deposits in address
 /// order with claims last. Deterministic — a pure function of the world —
 /// and equal to the live fold for every gate-written journal (module doc).
+///
+/// COST: one pass over EVERY link in `world` — M7's `match_links` with no
+/// constraint is the whole audit slice — to lift the credential-shaped
+/// ones, then a fixpoint over those, each pass re-stepping the
+/// still-pending set, so `d` deposits that honor one per pass cost O(d²)
+/// `step` calls. Paid at every [`crate::Daemon::open`], and at every
+/// historical `key_set` read, which reconstructs a world and rebuilds over
+/// it under one reconstruction permit.
 pub(crate) fn canonical_identity(world: &World) -> IdentityState {
     let links = world.links();
     let types = identity_types();

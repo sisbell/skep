@@ -392,7 +392,7 @@ fn the_key_testimony_names_the_key_that_signed_the_session() {
 
     // The ceremony enrolls two keys: the anchor, and the device key every
     // signed session here is opened with.
-    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     let device_fp = v["enrolled"]
         .as_array()
         .expect("enrolled")
@@ -402,13 +402,13 @@ fn the_key_testimony_names_the_key_that_signed_the_session() {
         .expect("the ceremony enrolls one non-anchor device key")
         .to_string();
 
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (_, entry) = feed_entry(
         port,
         &signed,
         "a signed write",
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"]}}"#
         ),
     );
     assert_eq!(
@@ -422,12 +422,12 @@ fn the_key_testimony_names_the_key_that_signed_the_session() {
     // reader could attribute by, which is what makes the field worth
     // reading. A draft mint, since the publish gate is the bare session's
     // wall at the published home.
-    let bare = open_session(port, OWNER_PRINCIPAL);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let (_, entry) = feed_entry(
         port,
         &bare,
         "a bare write",
-        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     assert_eq!(entry["key"].as_str(), Some("bare"), "a bare bind testifies bare: {entry}");
 

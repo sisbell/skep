@@ -151,8 +151,9 @@ pub(crate) fn canonical_identity(world: &World) -> IdentityState {
 // ── the live fold ────────────────────────────────────────────────────────
 
 /// The daemon's live identity state: seeded from the recovered world at
-/// open, advanced under `gate.write()` from every committed credential
-/// deposit. Readers clone the state (im structures — root clones).
+/// open, advanced under `credential_lock.write()` from every committed
+/// credential deposit. Readers clone the state (im structures — root
+/// clones).
 pub(crate) struct IdentityFold {
     state: parking_lot::Mutex<IdentityState>,
 }
@@ -170,9 +171,9 @@ impl IdentityFold {
     }
 
     /// Advance from one COMMITTED deposit (the credential path's, under
-    /// `gate.write()`): step the fold with the post-commit world as ctx.
-    /// Returns whether this step flipped the board claimed — the claim-flip
-    /// tail's trigger (AUTH-3.43).
+    /// `credential_lock.write()`): step the fold with the post-commit world
+    /// as ctx. Returns whether this step flipped the board claimed — the
+    /// claim-flip tail's trigger (AUTH-3.43).
     pub fn step_committed(&self, world_post: &World, dep: &LinkDeposit<'_>) -> bool {
         let mut g = self.state.lock();
         let was_claimed = g.claimant().is_some();
@@ -192,9 +193,9 @@ impl IdentityFold {
 /// own, because M10's memo exposes no `recall` accessor in this workspace
 /// (a report finding; the semantics are the pinned ones): the ORIGINAL
 /// ack, byte-identical, no execution; KIND-BLIND on a hit; uptime-scoped;
-/// consulted inside `gate.write()` before the precheck; purged with its
-/// session. Stores marshaled bytes at execute time (AUTH-7.20's first
-/// horn).
+/// consulted inside `credential_lock.write()` before the precheck; purged
+/// with its session. Stores marshaled bytes at execute time (AUTH-7.20's
+/// first horn).
 pub(crate) struct CredMemo {
     map: parking_lot::Mutex<HashMap<(SessionId, ReqId), Vec<u8>>>,
 }

@@ -49,10 +49,10 @@ use serde_json::Value;
 //     publish row's owner cell. ω and M10 stand AHEAD of the gate, so the
 //     foreign and guest cells keep their own verdicts. The success half —
 //     the same write class from a SIGNED session — is asserted beside each
-//     walk (`signed_owner_writes_doc1`): only the claimant's account holds
-//     enrolled keys, so it is the account that can sign. Every OTHER row
-//     runs against second, private mints, where bare sessions keep their
-//     standing (CLAIMED-PERMISSIVE local trust).
+//     walk (`signed_claimant_writes_its_published_doc1`): only the
+//     claimant's account holds enrolled keys, so it is the account that
+//     can sign. Every OTHER row runs against second, private mints, where
+//     bare sessions keep their standing (CLAIMED-PERMISSIVE local trust).
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Column order — indexes into every row's `expect` array.
@@ -459,18 +459,18 @@ fn walk_matrix(
 /// (the matrix principals hold none, which is exactly why their column is
 /// the refusal). Walked each life: the enrollment derives from the
 /// registry, so a post-restart handshake must still sign in and land.
-fn signed_owner_writes_doc1(port: u16, walk: &str) {
+fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
     let frame = format!(
-        r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["z"]}}"#
+        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["z"]}}"#
     );
-    let bare = open_session(port, OWNER_PRINCIPAL);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let v = op(port, Some(&bare), &frame);
     assert_eq!(
         verdict(&v),
         SIGNED_REQUIRED,
         "{walk}: the claimant's bare write into its published home: {v}"
     );
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(port, Some(&signed), &frame);
     assert_eq!(verdict(&v), OK, "{walk}: the same write, signed, lands: {v}");
 }
@@ -503,7 +503,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let tokens = open_tokens(port);
         let fixture = build_fixture(port, &boot, &tokens, &counters);
         walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
-        signed_owner_writes_doc1(port, "walk 1");
+        signed_claimant_writes_its_published_doc1(port, "walk 1");
         let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
@@ -518,7 +518,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let port = sd.port();
         let tokens = open_tokens(port);
         walk_matrix(port, &fixture, &tokens, &stale1, &counters, "walk 2 (post-restart)");
-        signed_owner_writes_doc1(port, "walk 2 (post-restart)");
+        signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)");
         sd.shutdown();
     }
 }

@@ -14,7 +14,7 @@ use skep_links::{enc, HasLinks, SlotArg};
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::fold::WorldCtx;
-use super::{GateRead, GateWrite};
+use super::{LockRead, LockWrite};
 use crate::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
@@ -89,14 +89,14 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
 /// `code: credential_refused, disposition: permanent, detail: token()`
 /// (AUTH-3.54 — `Permanent` UNIFORMLY; the remedy lives in the face).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Refusal {
+pub(crate) enum CredentialRefusal {
     /// The fold's own verdict — produced by `precheck`, slot (3).
     Inert(Inert),
     /// Slot (1), ahead of the write lock.
     EmitNotMakeLink,
     /// Slot (4).
     UndecodableKey,
-    /// The NULLIFY class, under `gate.read()`, outside slots (1)–(8).
+    /// The NULLIFY class, under the read lock, outside slots (1)–(8).
     NullifyNotRetraction,
     /// Slot (6).
     AnchorSessionRequired,
@@ -112,26 +112,26 @@ pub(crate) enum Refusal {
     ClaimFirst,
 }
 
-impl Refusal {
+impl CredentialRefusal {
     /// The wire `detail` token: the fold arm delegates to `Inert::token()`
     /// (the payload arm is the one `malformed_payload:<sub>` join,
     /// AUTH-2.55); the daemon-side tokens are hand-spelled here and only
     /// here.
     pub fn token(&self) -> String {
         match self {
-            Refusal::Inert(Inert::MalformedPayload(p)) => {
+            CredentialRefusal::Inert(Inert::MalformedPayload(p)) => {
                 format!("malformed_payload:{}", p.token())
             }
-            Refusal::Inert(i) => i.token().to_string(),
-            Refusal::EmitNotMakeLink => "emit_not_make_link".into(),
-            Refusal::UndecodableKey => "undecodable_key".into(),
-            Refusal::NullifyNotRetraction => "nullify_not_retraction".into(),
-            Refusal::AnchorSessionRequired => "anchor_session_required".into(),
-            Refusal::ResolvedFrom => "resolved_from".into(),
-            Refusal::TooManyEnrolled => "too_many_enrolled".into(),
-            Refusal::MintHomeFirst => "mint_home_first".into(),
-            Refusal::SignedSessionRequired => "signed_session_required".into(),
-            Refusal::ClaimFirst => "claim_first".into(),
+            CredentialRefusal::Inert(i) => i.token().to_string(),
+            CredentialRefusal::EmitNotMakeLink => "emit_not_make_link".into(),
+            CredentialRefusal::UndecodableKey => "undecodable_key".into(),
+            CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),
+            CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),
+            CredentialRefusal::ResolvedFrom => "resolved_from".into(),
+            CredentialRefusal::TooManyEnrolled => "too_many_enrolled".into(),
+            CredentialRefusal::MintHomeFirst => "mint_home_first".into(),
+            CredentialRefusal::SignedSessionRequired => "signed_session_required".into(),
+            CredentialRefusal::ClaimFirst => "claim_first".into(),
         }
     }
 }
@@ -140,18 +140,18 @@ impl Refusal {
 
 /// Slots (1) `emit_not_make_link` and (2) `resolved_from`, evaluated (1)
 /// then (2), reading the op's OWN slots and nothing else — evaluated
-/// beside `deposits_credential_link` and AHEAD of `gate.write()`
+/// beside `deposits_credential_link` and AHEAD of `credential_lock.write()`
 /// (AUTH-3.5): a refusal here never takes the write lock.
-pub(crate) fn op_shape_refusal(op: &Op) -> Option<Refusal> {
+pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
     match op {
         // (1) — every credential-typed emit, unconditionally: M7's dedup
         // could hand a phantom ack for an act key_set never shows.
-        Op::Emit { .. } => Some(Refusal::EmitNotMakeLink),
+        Op::Emit { .. } => Some(CredentialRefusal::EmitNotMakeLink),
         // (2) — a credential deposit whose from OR to entity slot is a
         // Resolve, either of them, regardless of emptiness.
         Op::MakeLink { from, to, .. } => {
             if matches!(from, SlotArg::Resolve(_)) || matches!(to, SlotArg::Resolve(_)) {
-                Some(Refusal::ResolvedFrom)
+                Some(CredentialRefusal::ResolvedFrom)
             } else {
                 None
             }
@@ -159,12 +159,12 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<Refusal> {
         // (2) — every credential edit_link, unconditionally: the successor
         // endsets are V-spec-only as built (AUTH-3.18's dead rule stands
         // recorded there; the op never reaches deposit construction).
-        Op::EditLink { .. } => Some(Refusal::ResolvedFrom),
+        Op::EditLink { .. } => Some(CredentialRefusal::ResolvedFrom),
         _ => None,
     }
 }
 
-// ── nullify_refusal — the NULLIFY class, under gate.read() (AUTH-3.7–3.9) ─
+// ── nullify_refusal — the NULLIFY class, read lock (AUTH-3.7–3.9) ────────
 
 /// `Some(NullifyNotRetraction)` iff `op` is a `Nullify` whose target's
 /// `readlink` type slot is credential-typed AND the shape token is the
@@ -179,12 +179,12 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<Refusal> {
 /// execute, and receives ω's own `not_owner` — indistinguishable from its
 /// non-credential answer. Pre-claim the order stands for every caller.
 pub(crate) fn nullify_refusal(
-    _g: &GateRead<'_>,
+    _g: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-) -> Option<Refusal> {
+) -> Option<CredentialRefusal> {
     let Op::Nullify { home, target } = op else { return None };
     let link = world.links().readlink(target)?;
     let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
@@ -192,7 +192,7 @@ pub(crate) fn nullify_refusal(
     if identity.claimant().is_some() && !world.m3().is_effective_owner(principal, home) {
         return None;
     }
-    Some(Refusal::NullifyNotRetraction)
+    Some(CredentialRefusal::NullifyNotRetraction)
 }
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
@@ -221,11 +221,11 @@ pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
 /// `None` and no arm fires. Reads the op's KIND and the PRINCIPAL and
 /// nothing else — never a fork/version source (AUTH-3.13).
 pub(crate) fn mint_home_refusal(
-    _g: &GateRead<'_>,
+    _g: &LockRead<'_>,
     world: &World,
     op: &Op,
     principal: PrincipalId,
-) -> Option<Refusal> {
+) -> Option<CredentialRefusal> {
     if !matches!(op, Op::Fork | Op::Version { .. }) {
         return None;
     }
@@ -236,7 +236,7 @@ pub(crate) fn mint_home_refusal(
     if has_documents(world, subject) {
         None
     } else {
-        Some(Refusal::MintHomeFirst)
+        Some(CredentialRefusal::MintHomeFirst)
     }
 }
 
@@ -262,17 +262,17 @@ fn is_published_v1(world: &World, doc: &Address) -> bool {
 /// on claimed-ness (AUTH-3.78): once claimed, the public-permanent gate
 /// (RES-26, `signed_session_required`); in UNCLAIMED the pre-claim
 /// admission gate (RES-27, `claim_first`). Exact under the read guard: the
-/// claim commits only under `gate.write()`.
+/// claim commits only under `credential_lock.write()`.
 pub(crate) fn board_state_refusal(
-    _g: &GateRead<'_>,
+    _g: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    key: Option<&skep_identity::Fingerprint>,
-) -> Option<Refusal> {
+    signer: Option<&skep_identity::Fingerprint>,
+) -> Option<CredentialRefusal> {
     if identity.claimant().is_some() {
-        publish_gate(world, op, principal, key)
+        publish_gate(world, op, principal, signer)
     } else {
         pre_claim_gate(world, op, principal)
     }
@@ -290,18 +290,18 @@ fn publish_gate(
     world: &World,
     op: &Op,
     principal: PrincipalId,
-    key: Option<&skep_identity::Fingerprint>,
-) -> Option<Refusal> {
-    if key.is_some() {
+    signer: Option<&skep_identity::Fingerprint>,
+) -> Option<CredentialRefusal> {
+    if signer.is_some() {
         return None;
     }
-    let homed = |home: &Address| -> Option<Refusal> {
+    let homed = |home: &Address| -> Option<CredentialRefusal> {
         let m3 = world.m3();
         if m3.is_registered_document(home)
             && is_published_v1(world, home)
             && m3.is_effective_owner(principal, home)
         {
-            Some(Refusal::SignedSessionRequired)
+            Some(CredentialRefusal::SignedSessionRequired)
         } else {
             None
         }
@@ -309,7 +309,7 @@ fn publish_gate(
     match op {
         Op::Version { d_src } => {
             if world.m3().is_registered_document(d_src) && is_published_v1(world, d_src) {
-                Some(Refusal::SignedSessionRequired)
+                Some(CredentialRefusal::SignedSessionRequired)
             } else {
                 None
             }
@@ -333,7 +333,7 @@ fn publish_gate(
 /// credential deposits' pre-claim cells are the precheck's slot (8), never
 /// this producer's. Everything else refuses `claim_first`, bare and signed
 /// sessions alike.
-fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Refusal> {
+fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<CredentialRefusal> {
     let admitted = match op {
         Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
         Op::CreateNewDocument { account } => !has_documents(world, account),
@@ -346,7 +346,7 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Refu
     if admitted {
         None
     } else {
-        Some(Refusal::ClaimFirst)
+        Some(CredentialRefusal::ClaimFirst)
     }
 }
 
@@ -362,19 +362,19 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Refu
 /// this request; the guard argument each producer takes is that contract's
 /// cheap half.
 pub(crate) fn plain_refusal(
-    g: &GateRead<'_>,
+    g: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
-    key: Option<&skep_identity::Fingerprint>,
-) -> Option<Refusal> {
+    signer: Option<&skep_identity::Fingerprint>,
+) -> Option<CredentialRefusal> {
     nullify_refusal(g, world, identity, op, principal)
         .or_else(|| mint_home_refusal(g, world, op, principal))
-        .or_else(|| board_state_refusal(g, world, identity, op, principal, key))
+        .or_else(|| board_state_refusal(g, world, identity, op, principal, signer))
 }
 
-// ── precheck — slots (3)–(8), under gate.write() (AUTH-3.15–3.19) ────────
+// ── precheck — slots (3)–(8), under the write lock (AUTH-3.15–3.19) ──────
 
 /// The owned span form of one would-be deposit, built from the frame
 /// VERBATIM (AUTH-3.17): `home` verbatim, `from`/`to`/`ty` as
@@ -418,12 +418,12 @@ impl DepositSpans {
 /// write (the fold reads the same slot and reaches the same verdict), with
 /// no slot (4)–(8) and no fold feed.
 pub(crate) fn precheck(
-    _g: &GateWrite<'_>,
+    _g: &LockWrite<'_>,
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
-    key: Option<&skep_identity::Fingerprint>,
-) -> Result<Option<Effect>, Refusal> {
+    signer: Option<&skep_identity::Fingerprint>,
+) -> Result<Option<Effect>, CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
     let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
@@ -432,7 +432,7 @@ pub(crate) fn precheck(
             debug_assert!(false, "classify answered NotCredential on a classified deposit");
             return Ok(None);
         }
-        Verdict::Inert(i) => return Err(Refusal::Inert(i)),
+        Verdict::Inert(i) => return Err(CredentialRefusal::Inert(i)),
         Verdict::Honored(e) => e,
     };
     // (4) — undecodable_key: a valid-hex non-point key can never sign; the
@@ -447,17 +447,17 @@ pub(crate) fn precheck(
     };
     match &effect {
         Effect::Enroll { added, .. } if !keys_decodable(added) => {
-            return Err(Refusal::UndecodableKey)
+            return Err(CredentialRefusal::UndecodableKey)
         }
         Effect::Genesis { keys, .. } if !keys_decodable(keys) => {
-            return Err(Refusal::UndecodableKey)
+            return Err(CredentialRefusal::UndecodableKey)
         }
         _ => {}
     }
     // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt.
     if let Effect::Enroll { account, added } = &effect {
         if identity.key_set(account).enrolled().count() + added.len() > ENROLLED_CAP {
-            return Err(Refusal::TooManyEnrolled);
+            return Err(CredentialRefusal::TooManyEnrolled);
         }
     }
     // (6) — the anchor gate (AUTH-3.20–3.23): an anchor retirement or a
@@ -477,8 +477,8 @@ pub(crate) fn precheck(
     };
     if let Some(account) = anchor_act {
         let set = identity.key_set(account);
-        if !key.is_some_and(|k| set.is_anchor(k)) {
-            return Err(Refusal::AnchorSessionRequired);
+        if !signer.is_some_and(|fp| set.is_anchor(fp)) {
+            return Err(CredentialRefusal::AnchorSessionRequired);
         }
     }
     // (7)/(8) — the mode-disjoint board-state slots.
@@ -486,13 +486,13 @@ pub(crate) fn precheck(
     if claimed {
         // (7) — arm-blind: Genesis is NOT exempt here; a bare genesis
         // plant on a claimed board dies at this slot.
-        if key.is_none() {
-            return Err(Refusal::SignedSessionRequired);
+        if signer.is_none() {
+            return Err(CredentialRefusal::SignedSessionRequired);
         }
     } else if !matches!(effect, Effect::Genesis { .. } | Effect::Claim { .. }) {
         // (8) — the pre-claim admission gate's deposit cell, evaluated on
         // the slot-(3) preview: only the ceremony's own deposits pass.
-        return Err(Refusal::ClaimFirst);
+        return Err(CredentialRefusal::ClaimFirst);
     }
     Ok(Some(effect))
 }

@@ -1,8 +1,8 @@
 //! The AUTH session layer and write-path gates (spec parts 03/04/06): the
 //! two origin sets and their publication, the challenge/response handshake,
-//! the sessions store and per-request resolution, the write gate with the
-//! pinned refusal producers, and the identity fold the daemon composes
-//! BESIDE the engine.
+//! the sessions store and per-request resolution, the credential write lock
+//! and the pinned refusal producers it scopes, and the identity fold the
+//! daemon composes BESIDE the engine.
 //!
 //! Custody-agnostic by ruling (D1): nothing here knows where a private key
 //! lives — the handshake verifies signatures over bytes, deposits commit
@@ -10,8 +10,9 @@
 //!
 //! The identity fold is DERIVED state: rebuilt from the recovered world at
 //! open (`fold::canonical_identity`) and advanced from every committed
-//! credential deposit at runtime, under the write gate. It is never
-//! persisted by this crate — the journal remains the one source of truth.
+//! credential deposit at runtime, under the credential write lock. It is
+//! never persisted by this crate — the journal remains the one source of
+//! truth.
 
 pub(crate) mod fold;
 pub(crate) mod policy;
@@ -85,12 +86,13 @@ impl AuthConfig {
 }
 
 /// The whole auth state one daemon holds: config, the two ephemeral stores,
-/// the write gate, the identity fold, and the credential idempotency memo.
+/// the credential write lock, the identity fold, and the credential
+/// idempotency memo.
 pub(crate) struct AuthState {
     pub cfg: AuthConfig,
     pub challenges: Challenges,
     pub sessions: Sessions,
-    pub gate: WriteGate,
+    pub credential_lock: CredentialLock,
     pub fold: IdentityFold,
     pub memo: CredMemo,
 }
@@ -104,7 +106,7 @@ impl AuthState {
             cfg: AuthConfig::new(opts),
             challenges: Challenges::new(CHALLENGE_CAP),
             sessions: Sessions::new(),
-            gate: WriteGate::new(),
+            credential_lock: CredentialLock::new(),
             fold: IdentityFold::seeded(fold::canonical_identity(world)),
             memo: CredMemo::new(),
         }
@@ -123,7 +125,7 @@ impl AuthState {
     /// the deposit's own commit is visible in.
     pub fn commit_tail(
         &self,
-        _g: &GateWrite<'_>,
+        _g: &LockWrite<'_>,
         world_post: &World,
         dep: &LinkDeposit<'_>,
         sid: SessionId,
@@ -138,33 +140,39 @@ impl AuthState {
     }
 }
 
-// ── the write gate (AUTH-3.1–3.3) ────────────────────────────────────────
+// ── the credential write lock (AUTH-3.1–3.3) ─────────────────────────────
 
-/// The write gate: serializes credential-changing writes against every
-/// other session-authenticated write. Writer-preferring by requirement
-/// (AUTH-3.2); `parking_lot::RwLock` satisfies it (task-fair: a waiting
-/// writer blocks new readers), which is the existence proof AUTH-7.18
-/// records — the REQUIREMENT binds, not the crate.
-pub(crate) struct WriteGate(parking_lot::RwLock<()>);
+/// The credential write lock: serializes credential-changing writes against
+/// every other session-authenticated write. Writer-preferring by
+/// requirement (AUTH-3.2); `parking_lot::RwLock` satisfies it (task-fair: a
+/// waiting writer blocks new readers), which is the existence proof
+/// AUTH-7.18 records — the REQUIREMENT binds, not the crate.
+///
+/// `auth/` holds exactly this one lock, so its guards are unqualified.
+/// What the lock SCOPES is a different thing and wears a different word:
+/// the refusal rules it serializes are the GATES (`publish_gate`,
+/// `pre_claim_gate`, the precheck's ordered slots), which is wire.md's
+/// term for a rule that refuses a write.
+pub(crate) struct CredentialLock(parking_lot::RwLock<()>);
 
 /// The read guard, newtyped so a function whose contract is "under the read
 /// lock" names it in its arguments (AUTH-3.3).
-pub(crate) struct GateRead<'a>(#[allow(dead_code)] parking_lot::RwLockReadGuard<'a, ()>);
+pub(crate) struct LockRead<'a>(#[allow(dead_code)] parking_lot::RwLockReadGuard<'a, ()>);
 
 /// The write guard — the credential path's.
-pub(crate) struct GateWrite<'a>(#[allow(dead_code)] parking_lot::RwLockWriteGuard<'a, ()>);
+pub(crate) struct LockWrite<'a>(#[allow(dead_code)] parking_lot::RwLockWriteGuard<'a, ()>);
 
-impl WriteGate {
-    pub fn new() -> WriteGate {
-        WriteGate(parking_lot::RwLock::new(()))
+impl CredentialLock {
+    pub fn new() -> CredentialLock {
+        CredentialLock(parking_lot::RwLock::new(()))
     }
 
-    pub fn read(&self) -> GateRead<'_> {
-        GateRead(self.0.read())
+    pub fn read(&self) -> LockRead<'_> {
+        LockRead(self.0.read())
     }
 
-    pub fn write(&self) -> GateWrite<'_> {
-        GateWrite(self.0.write())
+    pub fn write(&self) -> LockWrite<'_> {
+        LockWrite(self.0.write())
     }
 }
 

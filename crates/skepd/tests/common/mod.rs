@@ -30,9 +30,9 @@ pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key
 /// seeds so a reopened board verifies against the same keys.
-pub const OWNER_PRINCIPAL: u64 = 900;
-pub const OWNER_ACCOUNT: &str = "1.0.1";
-pub const OWNER_DOC1: &str = "1.0.1.0.1";
+pub const CLAIMANT_PRINCIPAL: u64 = 900;
+pub const CLAIMANT_ACCOUNT: &str = "1.0.1";
+pub const CLAIMANT_DOC1: &str = "1.0.1.0.1";
 pub const DEVICE_SEED: [u8; 32] = [7; 32];
 pub const ANCHOR_SEED: [u8; 32] = [8; 32];
 
@@ -95,20 +95,20 @@ pub fn claim_board(port: u16) {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
     let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
-    assert_eq!(prefix, OWNER_ACCOUNT, "the ceremony must be the board's first delegate");
+    assert_eq!(prefix, CLAIMANT_ACCOUNT, "the ceremony must be the board's first delegate");
     let v = op(
         port,
         Some(&boot),
-        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{OWNER_PRINCIPAL}}}"#),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{CLAIMANT_PRINCIPAL}}}"#),
     );
     expect_resp(&v, "ack_addr");
-    let owner = open_session(port, OWNER_PRINCIPAL);
+    let claimant = open_session(port, CLAIMANT_PRINCIPAL);
     let v = op(
         port,
-        Some(&owner),
-        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+        Some(&claimant),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
-    assert_eq!(acked_addr(&v), OWNER_DOC1, "the home mint is doc 1");
+    assert_eq!(acked_addr(&v), CLAIMANT_DOC1, "the home mint is doc 1");
     // The enrollment record — the anchor and the device key — as ONE ATOM.
     let record = encode_enroll(&[
         Enrollment::new(pubkey_of(&anchor_key()), true, Some("paper-a".into()))
@@ -120,28 +120,28 @@ pub fn claim_board(port: u16) {
     let atom = serde_json::to_string(&Value::String(record_text)).expect("json string");
     let v = op(
         port,
-        Some(&owner),
+        Some(&claimant),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}]}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
-    let atom_addr = format!("{OWNER_DOC1}.0.1.1");
+    let atom_addr = format!("{CLAIMANT_DOC1}.0.1.1");
     let v = op(
         port,
-        Some(&owner),
+        Some(&claimant),
         &format!(
-            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
     // The claim, from a session SIGNED by the device key (step 5).
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{OWNER_ACCOUNT}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
+            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
         ),
     );
     expect_resp(&v, "ack_addr");

@@ -46,8 +46,9 @@
 //! succeed, writes get M10's own `Unauthenticated`, and a token naming a
 //! binding this daemon has closed carries `Skepd-Session: closed` back.
 //! `auth/` owns the rest and this file holds none of it: the two origin
-//! sets and their publication, the handshake, the write gate, the ordered
-//! refusal producers, and the identity fold rebuilt beside the engine.
+//! sets and their publication, the handshake, the credential write lock,
+//! the ordered refusal producers, and the identity fold rebuilt beside the
+//! engine.
 //! What this file adds is the two write sequences that call them in their
 //! pinned order, and the `/session` and `/health` marshals. Tokens are
 //! uptime-scoped; the daemon binds 127.0.0.1 only.
@@ -129,7 +130,8 @@ use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
-    deposits_credential_link, op_shape_refusal, plain_refusal, DepositSpans, Refusal,
+    deposits_credential_link, op_shape_refusal, plain_refusal, CredentialRefusal,
+    DepositSpans,
 };
 use crate::auth::session::{
     handshake, parse_session_body, resolve, Actor, GuestReason, SessionEntry, Token,
@@ -691,7 +693,7 @@ pub struct Daemon {
     febe: Operation<World>,
     codec: JsonCodec,
     /// The AUTH session layer: config, the challenge and session stores,
-    /// the write gate, the identity fold, the credential memo.
+    /// the credential write lock, the identity fold, the credential memo.
     auth: AuthState,
     /// The permanently retired session every guest request runs under.
     guest: SessionId,
@@ -841,13 +843,13 @@ impl Daemon {
             ("POST", "/op-at") => self.post_op_at(req),
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => {
-                let authed = self.authenticate(req);
-                with_signal(self.get_changes(req.query.as_deref()), authed.closed)
+                let resolved = self.authenticate(req);
+                with_signal(self.get_changes(req.query.as_deref()), resolved.closed)
             }
             #[cfg(feature = "observe")]
             ("GET", "/dump") => {
-                let authed = self.authenticate(req);
-                with_signal(self.get_dump(req.query.as_deref()), authed.closed)
+                let resolved = self.authenticate(req);
+                with_signal(self.get_dump(req.query.as_deref()), resolved.closed)
             }
             #[cfg(feature = "client")]
             ("GET", "/") => {
@@ -865,11 +867,11 @@ impl Daemon {
     /// resolution run before dispatch on every token-accepting route. The
     /// resolved actor is handed to dispatch; the write sequences re-resolve
     /// at their own sites against the snapshot their gates stand on.
-    fn authenticate(&self, req: &HttpRequest) -> Authed {
+    fn authenticate(&self, req: &HttpRequest) -> Resolved {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
         let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
-        Authed { actor, closed }
+        Resolved { actor, closed }
     }
 
     /// Close one token's binding in BOTH stores — the sessions map and M10
@@ -926,7 +928,7 @@ impl Daemon {
             Instant::now(),
         );
         match outcome {
-            Ok((principal, key)) => {
+            Ok((principal, signer)) => {
                 // Every POST /session mints a DISTINCT SessionId, principal
                 // 0 included (AUTH-4.40; M10's bootstrap_session mints
                 // fresh per call — confirmed as-built, AUTH-6.35).
@@ -938,7 +940,7 @@ impl Daemon {
                 let token = self
                     .auth
                     .sessions
-                    .open(SessionEntry { sid, principal, key }, &mut OsEntropy);
+                    .open(SessionEntry { sid, principal, signer }, &mut OsEntropy);
                 Reply::json(
                     200,
                     obj(vec![
@@ -960,22 +962,22 @@ impl Daemon {
     /// an unknown or already-dead one resolves Guest and its 204 carries
     /// `Skepd-Session: closed`.
     fn post_session_close(&self, req: &HttpRequest) -> Reply {
-        let authed = self.authenticate(req);
-        if let Actor::Principal(_) = &authed.actor {
+        let resolved = self.authenticate(req);
+        if let Actor::Principal(_) = &resolved.actor {
             if let Some(t) = req.session_token.as_deref().and_then(Token::parse) {
                 self.close_binding(&t);
             }
         }
-        with_signal(Reply { status: 204, body: None, headers: Vec::new() }, authed.closed)
+        with_signal(Reply { status: 204, body: None, headers: Vec::new() }, resolved.closed)
     }
 
     /// `POST /op` — one frame in, one marshaled answer out; the HTTP
     /// exchange is the correlation envelope. The frame is either the
     /// daemon-served `key_set` read, an M10 read (no lock, the actor's
     /// session), or a write, which runs one of the two pinned write
-    /// sequences (AUTH-3.35 / AUTH-3.37) under the write gate.
+    /// sequences (AUTH-3.35 / AUTH-3.37) under the credential write lock.
     fn post_op(&self, req: &HttpRequest) -> Reply {
-        let authed = self.authenticate(req);
+        let resolved = self.authenticate(req);
         let reply = match self.codec.parse_daemon(&req.body) {
             Err(e) => self.op_reply(&self.codec.unparseable(e)),
             Ok(DaemonOp::KeySet { account }) => {
@@ -989,11 +991,11 @@ impl Daemon {
             }
             Ok(DaemonOp::Febe(freq)) => match write_meta(&freq.op) {
                 // Reads execute directly and take no lock (AUTH-3.36).
-                None => self.op_reply(&self.febe.execute(self.actor_sid(&authed.actor), *freq)),
-                Some(meta) => self.write_sequence(&authed, meta, *freq, req),
+                None => self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *freq)),
+                Some(meta) => self.write_sequence(&resolved, meta, *freq, req),
             },
         };
-        with_signal(reply, authed.closed)
+        with_signal(reply, resolved.closed)
     }
 
     /// The session a request's dispatch runs under: the actor's, or the
@@ -1011,13 +1013,13 @@ impl Daemon {
     /// off the op's own type slot), the plain path for everything else.
     fn write_sequence(
         &self,
-        authed: &Authed,
+        resolved: &Resolved,
         meta: FrameMeta,
         freq: Request,
         req: &HttpRequest,
     ) -> Reply {
         if deposits_credential_link(&freq.op) {
-            self.credential_sequence(authed, meta, freq, req)
+            self.credential_sequence(resolved, meta, freq, req)
         } else {
             self.plain_sequence(meta, freq, req)
         }
@@ -1063,18 +1065,19 @@ impl Daemon {
     /// commit can intervene between what the gates read and what the
     /// execute they gate runs against.
     ///
-    /// The auth gate is the CALLER's: the two sequences hold different
-    /// guard types (read for the plain path, write for the credential
-    /// path), and holding one is the half this signature cannot state.
+    /// The credential lock is the CALLER's: the two sequences hold
+    /// different guard types (read for the plain path, write for the
+    /// credential path), and holding one is the half this signature cannot
+    /// state.
     fn locked_state(
         &self,
         _serial: &parking_lot::MutexGuard<'_, ()>,
         req: &HttpRequest,
-    ) -> (Snapshot<World>, IdentityState, Authed) {
+    ) -> (Snapshot<World>, IdentityState, Resolved) {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
         let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
-        (snap, identity, Authed { actor, closed })
+        (snap, identity, Resolved { actor, closed })
     }
 
     /// The answer every Guest arm gives: execute under the permanently
@@ -1085,16 +1088,16 @@ impl Daemon {
         self.op_reply(&self.febe.execute(self.guest, freq))
     }
 
-    /// The PLAIN sequence (AUTH-3.35): gate.read → the serialization lock →
-    /// [`Daemon::locked_state`] (the head snapshot, the fold beside it, and
-    /// this site's own resolve) → `plain_refusal`'s ordered producers →
-    /// execute. The serial lock is taken before the snapshot so the gates'
-    /// answers and the execute they gate stand on one committed state; the
-    /// producers' ORDER is `plain_refusal`'s, not this site's.
+    /// The PLAIN sequence (AUTH-3.35): the read lock → the serialization
+    /// lock → [`Daemon::locked_state`] (the head snapshot, the fold beside
+    /// it, and this site's own resolve) → `plain_refusal`'s ordered
+    /// producers → execute. The serial lock is taken before the snapshot so
+    /// the gates' answers and the execute they gate stand on one committed
+    /// state; the producers' ORDER is `plain_refusal`'s, not this site's.
     fn plain_sequence(&self, meta: FrameMeta, freq: Request, req: &HttpRequest) -> Reply {
-        let _g = self.auth.gate.read();
+        let _g = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
-        let (snap, identity, Authed { actor, closed }) = self.locked_state(&serial, req);
+        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
             Actor::Principal(e) => e,
             Actor::Guest(_) => return with_signal(self.guest_reply(freq), closed),
@@ -1105,7 +1108,7 @@ impl Daemon {
             &identity,
             &freq.op,
             entry.principal,
-            entry.key.as_ref(),
+            entry.signer.as_ref(),
         ) {
             let op_name = crate::codec::op_name(meta.kind);
             return with_signal(credential_refused(op_name, &r), closed);
@@ -1118,12 +1121,12 @@ impl Daemon {
 
     /// The CREDENTIAL sequence (AUTH-3.37): the pre-lock actor is
     /// `authenticate`'s; `op_shape_refusal` runs ahead of the lock; then
-    /// gate.write → serial → [`Daemon::locked_state`] → recall → precheck →
-    /// execute → the fold step, the memo, and the claim-flip tail — all
-    /// under the write guard.
+    /// the write lock → serial → [`Daemon::locked_state`] → recall →
+    /// precheck → execute → the fold step, the memo, and the claim-flip
+    /// tail — all under the write guard.
     fn credential_sequence(
         &self,
-        authed: &Authed,
+        resolved: &Resolved,
         meta: FrameMeta,
         freq: Request,
         req: &HttpRequest,
@@ -1133,18 +1136,18 @@ impl Daemon {
         // execute nothing (AUTH-3.38). No `with_signal` here: this arm
         // reads the HEAD resolution, whose death signal `post_op`'s outer
         // wrap already carries.
-        if let Actor::Guest(_) = authed.actor {
+        if let Actor::Guest(_) = resolved.actor {
             return self.guest_reply(freq);
         }
         // 2 — slots (1)–(2), ahead of the lock (AUTH-3.5).
         if let Some(r) = op_shape_refusal(&freq.op) {
             return credential_refused(op_name, &r);
         }
-        // 3 — the write lock, the serialization lock, the locked snapshot,
-        // and this site's OWN resolution.
-        let _g = self.auth.gate.write();
+        // 3 — the credential write lock, the serialization lock, the locked
+        // snapshot, and this site's OWN resolution.
+        let _g = self.auth.credential_lock.write();
         let serial = self.writes.serial_lock();
-        let (snap, identity, Authed { actor, closed }) = self.locked_state(&serial, req);
+        let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
             Actor::Principal(e) => e,
             // 4 — the only reachable arms are Unknown | EntryDead
@@ -1170,14 +1173,15 @@ impl Daemon {
             // exactly what a silent arm here would ship. Same treatment
             // `precheck` gives its own `NotCredential` line.
             debug_assert!(false, "a classified deposit is an address-form MakeLink");
-            return with_signal(credential_refused(op_name, &Refusal::ResolvedFrom), closed);
+            let r = CredentialRefusal::ResolvedFrom;
+            return with_signal(credential_refused(op_name, &r), closed);
         };
         match crate::auth::policy::precheck(
             &_g,
             snap.world(),
             &identity,
             &dep,
-            entry.key.as_ref(),
+            entry.signer.as_ref(),
         ) {
             Err(r) => return with_signal(credential_refused(op_name, &r), closed),
             Ok(_effect) => {}
@@ -1234,8 +1238,8 @@ impl Daemon {
     /// frame is a transport-level 400 before anything runs; an unparseable
     /// frame gets the same `unparseable` rejection `/op` gives it.
     fn post_op_at(&self, req: &HttpRequest) -> Reply {
-        let authed = self.authenticate(req);
-        with_signal(self.op_at_reply(&req.body), authed.closed)
+        let resolved = self.authenticate(req);
+        with_signal(self.op_at_reply(&req.body), resolved.closed)
     }
 
     fn op_at_reply(&self, body: &[u8]) -> Reply {
@@ -1373,9 +1377,9 @@ impl Daemon {
     }
 }
 
-/// The route-level authentication outcome: the resolved actor and whether
+/// How one request's session resolved: the actor it acts as, and whether
 /// this response owes the `Skepd-Session: closed` header.
-struct Authed {
+struct Resolved {
     actor: Actor,
     closed: bool,
 }
@@ -1393,7 +1397,7 @@ fn with_signal(mut reply: Reply, closed: bool) -> Reply {
 /// (AUTH-3.54): `code: credential_refused`, `disposition: permanent`
 /// uniformly, `detail` the machine token. The op field names the refused
 /// op, exactly as M10's rejections do.
-fn credential_refused(op_name: &str, r: &Refusal) -> Reply {
+fn credential_refused(op_name: &str, r: &CredentialRefusal) -> Reply {
     Reply::bodied(
         200,
         "application/json",

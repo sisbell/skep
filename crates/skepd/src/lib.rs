@@ -14,9 +14,10 @@
 //!   assert.
 //! * `auth/` — the AUTH session layer (wire v7): the two origin sets, the
 //!   challenge/response handshake, the sessions store and per-request
-//!   resolution, the write gate with its ordered refusal producers, and the
-//!   identity fold this daemon composes BESIDE the engine (derived state,
-//!   rebuilt at open, never persisted here).
+//!   resolution, the credential write lock and the ordered refusal
+//!   producers it scopes, and the identity fold this daemon composes
+//!   BESIDE the engine (derived state, rebuilt at open, never persisted
+//!   here).
 //! * [`Daemon`] — the state and the socket-free router: `GET /challenge`,
 //!   `POST /session`, `POST /session/close`, `POST /op`, `POST /op-at`
 //!   (any READ frame answered as of a committed

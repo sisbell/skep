@@ -98,7 +98,7 @@ impl WritePath {
     /// sequences, which must take their world snapshot AFTER no further
     /// commit can intervene (the gates' answers and the execute they gate
     /// then stand on one committed state). Lock order is fixed at the
-    /// caller: the auth gate first, then this, never inverted.
+    /// caller: the credential lock first, then this, never inverted.
     ///
     /// CALLER CONTRACT, and the half [`WritePath`] cannot hold for them:
     /// take the snapshot the gates read under THIS guard, and pass the

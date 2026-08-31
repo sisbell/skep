@@ -79,7 +79,7 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let bare = open_session(port, OWNER_PRINCIPAL);
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
     // Refuse: a bare write homed in the published doc 1 (ordinal 2 — the
     // one legal insert slot after the ceremony's atom, so the gate is what
     // refuses it, not the arrangement's bounds).
@@ -87,18 +87,18 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
         port,
         Some(&bare),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"]}}"#
         ),
     );
     assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
     // Refuse: a bare flagless version of the published doc 1.
-    let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{OWNER_DOC1}"}}"#));
+    let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
     assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
     // Accept: a bare DRAFT mint and a write homed in it.
     let v = op(
         port,
         Some(&bare),
-        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     let draft = acked_addr(&v);
     let v = op(
@@ -111,12 +111,12 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     expect_resp(&v, "ack_addr");
     // Accept: the SIGNED session writes the SAME position into the
     // published home.
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"]}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -161,7 +161,7 @@ fn handshake_lifecycle_and_the_400_vs_401_boundary() {
     let sd = spawn(dir.path());
     let port = sd.port();
     let origin = format!("http://127.0.0.1:{port}");
-    let p = OWNER_PRINCIPAL;
+    let p = CLAIMANT_PRINCIPAL;
     let (st, body) = http(port, "GET", &format!("/challenge?principal={p}"), None, b"");
     assert_eq!(st, 200);
     let ch = json(&body);
@@ -187,7 +187,7 @@ fn handshake_lifecycle_and_the_400_vs_401_boundary() {
     let v = op(
         port,
         Some(&token),
-        &format!(r#"{{"op":"create_new_document","account":"{OWNER_ACCOUNT}"}}"#),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     expect_resp(&v, "ack_addr");
     // A REUSED nonce is the one permanent 401, byte-identical.
@@ -213,7 +213,7 @@ fn close_is_idempotent_and_the_dead_token_signals() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let (st, headers, _) = http_full(port, "POST", "/session/close", Some(&signed), b"");
     assert_eq!(st, 204);
     assert!(
@@ -251,7 +251,7 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     // The set holds 2 (the ceremony's genesis — exempt from the cap by
     // arm). An enroll of 15 more would land at 17 > 16: refused, whole.
     let too_many: Vec<SigningKey> = (0..15).map(distinct_key).collect();
@@ -261,16 +261,16 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
             ),
         );
         expect_resp(&v, "ack_addr");
-        let addr = format!("{OWNER_DOC1}.0.1.{atom_ordinal}");
+        let addr = format!("{CLAIMANT_DOC1}.0.1.{atom_ordinal}");
         op(
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{addr}"]}},"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+                r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
             ),
         )
     };
@@ -283,7 +283,7 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     let v = deposit(4, &enroll_atom(&refs[14..]));
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
     // key_set shows exactly 16 enrolled.
-    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
     assert_eq!(v["enrolled"].as_array().expect("enrolled").len(), 16);
     sd.shutdown();
@@ -304,14 +304,14 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
 
     // One fresh credential-typed link in the owner's own doc 1.
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}]}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}]}}"#,
             enroll_atom(&[&distinct_key(3)])
         ),
     );
@@ -320,7 +320,7 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":{{"addrs":["{OWNER_DOC1}.0.1.2"]}},"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{CLAIMANT_DOC1}.0.1.2"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
         ),
     );
     let credential = acked_addr(&v);
@@ -329,7 +329,7 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
     let v = op(
         port,
         Some(&signed),
-        &format!(r#"{{"op":"nullify","home":"{OWNER_DOC1}","target":"{credential}"}}"#),
+        &format!(r#"{{"op":"nullify","home":"{CLAIMANT_DOC1}","target":"{credential}"}}"#),
     );
     assert_eq!(rejected_detail(&v), "credential_refused:nullify_not_retraction");
 
@@ -349,7 +349,7 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
     let v = op(
         port,
         Some(&stranger),
-        &format!(r#"{{"op":"nullify","home":"{OWNER_DOC1}","target":"{credential}"}}"#),
+        &format!(r#"{{"op":"nullify","home":"{CLAIMANT_DOC1}","target":"{credential}"}}"#),
     );
     let rej = expect_resp(&v, "rejected");
     assert_eq!(
@@ -375,7 +375,7 @@ fn key_set_reads_head_and_history_identically() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
     let enrolled = v["enrolled"].as_array().expect("enrolled");
     assert_eq!(enrolled.len(), 2, "the ceremony's anchor + device key");
@@ -402,7 +402,7 @@ fn key_set_reads_head_and_history_identically() {
         "/op-at",
         None,
         format!(
-            r#"{{"at":2,"frame":{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}}}"#
+            r#"{{"at":2,"frame":{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}}}"#
         )
         .as_bytes(),
     );
@@ -434,7 +434,7 @@ fn health_auth_publishes_the_pair_and_no_mode() {
     );
     claim_board(port);
     let a = json(&get(port, "/health").1)["auth"].clone();
-    assert_eq!(a["claimant"].as_str(), Some(OWNER_ACCOUNT), "the claim flips the claimant");
+    assert_eq!(a["claimant"].as_str(), Some(CLAIMANT_ACCOUNT), "the claim flips the claimant");
     assert_eq!(
         a["signed_origins"].as_array().expect("signed").len(),
         0,
@@ -453,7 +453,7 @@ fn restart_recovers_the_identity_fold() {
     let before = {
         let sd = spawn(dir.path());
         let port = sd.port();
-        let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+        let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
         assert_eq!(v["resp"].as_str(), Some("key_set"));
         sd.shutdown();
         v
@@ -461,7 +461,7 @@ fn restart_recovers_the_identity_fold() {
     let sd = spawn(dir.path()); // recovery; claim_board sees claimed and skips
     let port = sd.port();
     assert!(claimed(port), "the claimant survives restart");
-    let after = op(port, None, &format!(r#"{{"op":"key_set","account":"{OWNER_ACCOUNT}"}}"#));
+    let after = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
     assert_eq!(
         before["enrolled"], after["enrolled"],
         "the rebuilt key table equals the live fold's"
@@ -469,12 +469,12 @@ fn restart_recovers_the_identity_fold() {
     // The recovered fold verifies a fresh signed handshake, and the signed
     // session writes into the published home (ordinal 2 — the one legal
     // insert slot after the ceremony's atom).
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"]}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -490,16 +490,16 @@ fn op_shape_slots_fire_ahead_of_the_lock() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let emit = format!(
-        r#"{{"op":"emit","home":"{OWNER_DOC1}","ty":[{{"start":"{T_ENROLL}","width":"0.0.0.0.0.0.0.0.1"}}],"from":"{OWNER_ACCOUNT}","to":[]}}"#
+        r#"{{"op":"emit","home":"{CLAIMANT_DOC1}","ty":[{{"start":"{T_ENROLL}","width":"0.0.0.0.0.0.0.0.1"}}],"from":"{CLAIMANT_ACCOUNT}","to":[]}}"#
     );
     let v = op(port, Some(&signed), &emit);
     assert_eq!(rejected_detail(&v), "credential_refused:emit_not_make_link");
     let v = op(port, None, &emit);
     assert_eq!(v["code"].as_str(), Some("unauthenticated"), "slot 0 masks slot 1: {v}");
     let vspec_from = format!(
-        r#"{{"op":"make_link","home":"{OWNER_DOC1}","from":[{{"source":"{OWNER_DOC1}","span":{{"start":"1.1","width":"0.1"}}}}],"to":{{"addrs":["{OWNER_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+        r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":[{{"source":"{CLAIMANT_DOC1}","span":{{"start":"1.1","width":"0.1"}}}}],"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
     );
     let v = op(port, Some(&signed), &vspec_from);
     assert_eq!(rejected_detail(&v), "credential_refused:resolved_from");

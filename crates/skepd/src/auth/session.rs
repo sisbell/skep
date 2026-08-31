@@ -138,10 +138,10 @@ impl Challenges {
         nonce
     }
 
-    /// SINGLE-USE: removes the entry from BOTH structures whether or not it
-    /// validates (AUTH-4.21); true iff present, unexpired, and issued for
-    /// `principal`.
-    pub fn take(&self, nonce: &Nonce, principal: PrincipalId, now: Instant) -> bool {
+    /// SINGLE-USE: the burn (AUTH-4.21) — removes the entry from BOTH
+    /// structures whether or not it validates; true iff present, unexpired,
+    /// and issued for `principal`.
+    pub fn burn(&self, nonce: &Nonce, principal: PrincipalId, now: Instant) -> bool {
         let mut g = self.inner.lock();
         let entry = g.map.remove(nonce);
         g.order.retain(|n| n != nonce);
@@ -170,21 +170,22 @@ impl Token {
 }
 
 /// One live session's binding: the M10 session, the named principal, and
-/// the key that established it (`None` = bare bind).
+/// the fingerprint of the enrolled key that established it (`None` = a
+/// bare bind, which signs nothing).
 #[derive(Debug, Clone)]
 pub(crate) struct SessionEntry {
     pub sid: SessionId,
     pub principal: PrincipalId,
-    pub key: Option<Fingerprint>,
+    pub signer: Option<Fingerprint>,
 }
 
 impl SessionEntry {
     /// The key testimony of a write this session commits (AUTH-4.48): the
     /// establishing key's fingerprint hex, or `"bare"` for a bare bind.
-    /// Lives here because the key does — a write path that must name the
-    /// testimony asks the binding rather than re-deriving the rule.
+    /// Lives here because the signer does — a write path that must name
+    /// the testimony asks the binding rather than re-deriving the rule.
     pub fn testimony(&self) -> String {
-        match &self.key {
+        match &self.signer {
             Some(fp) => fp.to_hex(),
             None => "bare".to_string(),
         }
@@ -205,12 +206,14 @@ pub(crate) enum Lookup {
 /// declined knob — lazy eviction at presentation, `/session/close`, and
 /// restart are the reclaim mechanisms, AUTH-1.53).
 pub(crate) struct Sessions {
-    map: parking_lot::RwLock<HashMap<Token, SessionEntry>>,
+    /// Token → the binding it names — the contents, not the container:
+    /// `close_binding` and `SessionEntry`'s own doc both say *binding*.
+    bindings: parking_lot::RwLock<HashMap<Token, SessionEntry>>,
 }
 
 impl Sessions {
     pub fn new() -> Sessions {
-        Sessions { map: parking_lot::RwLock::new(HashMap::new()) }
+        Sessions { bindings: parking_lot::RwLock::new(HashMap::new()) }
     }
 
     /// Mint a fresh token for `e`: [`SESSION_TOKEN_BITS`] of CSPRNG output
@@ -219,7 +222,7 @@ impl Sessions {
         let mut raw = [0u8; SESSION_TOKEN_BYTES];
         rng.fill_bytes(&mut raw);
         let token = Token(raw);
-        self.map.write().insert(token.clone(), e);
+        self.bindings.write().insert(token.clone(), e);
         token
     }
 
@@ -228,7 +231,7 @@ impl Sessions {
     pub fn lookup(&self, t: Option<&Token>) -> Lookup {
         match t {
             None => Lookup::NoToken,
-            Some(t) => match self.map.read().get(t) {
+            Some(t) => match self.bindings.read().get(t) {
                 None => Lookup::Unknown,
                 Some(e) => Lookup::Found(e.clone()),
             },
@@ -238,7 +241,7 @@ impl Sessions {
     /// Returns the closed entry — the `sid` the M10 close needs, with no
     /// second lookup.
     pub fn close(&self, t: &Token) -> Option<SessionEntry> {
-        self.map.write().remove(t)
+        self.bindings.write().remove(t)
     }
 }
 
@@ -332,10 +335,10 @@ pub(crate) fn resolve(
     match lookup {
         Lookup::NoToken => Actor::Guest(GuestReason::NoToken),
         Lookup::Unknown => Actor::Guest(GuestReason::Unknown),
-        Lookup::Found(entry) => match entry.key {
-            Some(k) => {
+        Lookup::Found(entry) => match entry.signer {
+            Some(fp) => {
                 let live = key_subject(world, identity, entry.principal)
-                    .is_some_and(|a| identity.key_set(&a).contains(&k));
+                    .is_some_and(|a| identity.key_set(&a).contains(&fp));
                 if live {
                     Actor::Principal(entry)
                 } else {
@@ -452,8 +455,8 @@ fn find_signer(set: &KeySet, payload: &[u8], sig: &[u8; 64]) -> Option<Fingerpri
 }
 
 /// The handshake (AUTH-4.36/4.37): the signed arm's pinned order — origin
-/// set, take (burns), key subject, key set, payload, find_signer — and the
-/// bare arm's one predicate. Every failure is the same unit refusal.
+/// set, burn, key subject, key set, payload, find_signer — and the bare
+/// arm's one predicate. Every failure is the same unit refusal.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handshake(
     cfg: &AuthConfig,
@@ -480,7 +483,7 @@ pub(crate) fn handshake(
             }
             // 3 — the burn: unknown, expired, wrong-principal, reused all
             // die here, and the entry is gone either way.
-            if !challenges.take(&nonce, principal, now) {
+            if !challenges.burn(&nonce, principal, now) {
                 return Err(SessionRejected);
             }
             // 4/5 — the subject and its set.
@@ -536,13 +539,13 @@ mod tests {
         let mut rng = super::super::OsEntropy;
         let now = Instant::now();
         let n = ch.issue(PrincipalId(7), now, &mut rng);
-        assert!(!ch.take(&n, PrincipalId(8), now), "wrong principal refuses");
-        assert!(!ch.take(&n, PrincipalId(7), now), "and the entry burned with it");
+        assert!(!ch.burn(&n, PrincipalId(8), now), "wrong principal refuses");
+        assert!(!ch.burn(&n, PrincipalId(7), now), "and the entry burned with it");
         let n2 = ch.issue(PrincipalId(7), now, &mut rng);
-        assert!(!ch.take(&n2, PrincipalId(7), now + CHALLENGE_TTL), "expiry refuses");
+        assert!(!ch.burn(&n2, PrincipalId(7), now + CHALLENGE_TTL), "expiry refuses");
         let n3 = ch.issue(PrincipalId(7), now, &mut rng);
-        assert!(ch.take(&n3, PrincipalId(7), now + Duration::from_secs(1)));
-        assert!(!ch.take(&n3, PrincipalId(7), now + Duration::from_secs(1)), "single use");
+        assert!(ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)));
+        assert!(!ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)), "single use");
     }
 
     /// AUTH-4.20 — the cap evicts oldest-first.
@@ -554,8 +557,8 @@ mod tests {
         let a = ch.issue(PrincipalId(1), now, &mut rng);
         let b = ch.issue(PrincipalId(1), now, &mut rng);
         let c = ch.issue(PrincipalId(1), now, &mut rng);
-        assert!(!ch.take(&a, PrincipalId(1), now), "the oldest was evicted");
-        assert!(ch.take(&b, PrincipalId(1), now));
-        assert!(ch.take(&c, PrincipalId(1), now));
+        assert!(!ch.burn(&a, PrincipalId(1), now), "the oldest was evicted");
+        assert!(ch.burn(&b, PrincipalId(1), now));
+        assert!(ch.burn(&c, PrincipalId(1), now));
     }
 }

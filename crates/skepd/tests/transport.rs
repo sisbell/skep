@@ -340,6 +340,7 @@ fn the_body_cap_is_scoped_to_the_routes_that_carry_frames() {
 /// inside it wrong and `/health` unreachable, since reaching it needs a
 /// worker. Necessarily slow: it waits the deadline out.
 #[test]
+#[ignore = "timing test - gate-full only"]
 fn a_paced_peer_is_refused_at_the_transfer_deadline() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());

@@ -146,6 +146,7 @@ fn shutdown_with_open_streams_is_bounded_and_closes_them() {
 /// the wrong bytes, or none, looked exactly like one behaving. Deliberately
 /// slow: it waits out the daemon's 15 s cadence.
 #[test]
+#[ignore = "timing test - gate-full only"]
 fn a_silent_stream_is_kept_alive_by_the_documented_ka_comment() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());

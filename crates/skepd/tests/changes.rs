@@ -15,17 +15,41 @@ use common::*;
 use serde_json::Value;
 
 /// The scripted flow behind the wire.md examples. Positions are pinned by
-/// the stores' record counts: `delegate` commits 2 records (position 2),
-/// `create_new_document` 1 (position 3), a two-byte `insert` 5 — two mints,
-/// two content writes, one placement — (position 8), `make_link` 3 — mint,
-/// link, seat — (position 11). If an ack below drifts, a store changed its
-/// transaction shape and wire.md §The change feed must be re-pinned.
+/// the stores' record counts: `delegate` commits 2 records (position 14),
+/// the home mint 1 (position 15) — MINT-FIRST (RES-26): the account's doc 1
+/// is born published, where bare writes are gated by design, so the flow
+/// writes a SECOND, private document — that mint 1 (position 16), a
+/// two-byte `insert` 5 — two mints, two content writes, one placement —
+/// (position 21), `make_link` 3 — mint, link, seat — (position 24). If an
+/// ack below drifts, a store changed its transaction shape and wire.md
+/// §The change feed must be re-pinned.
 /// The head the claim ceremony leaves behind (`common::claim_board`):
 /// delegate (2 records), the home mint (1), the one-atom insert (3), the
 /// genesis link (3), the claim link (3) — twelve records, and the base
 /// every seeded position below sits on. Lane 3.2 re-pins wire.md's
 /// change-feed examples onto these numbers.
 const CEREMONY_HEAD: u64 = 12;
+
+/// The ceremony's own commit positions (the record counts above,
+/// cumulative): delegate, the home mint, the record insert, the genesis
+/// link, the claim link.
+const CEREMONY_ATS: [u64; 5] = [2, 3, 6, 9, 12];
+
+/// [`seed_flow`]'s commit positions on the ceremony's base: delegate, the
+/// home mint, the private second mint, the insert, the make_link.
+const SEEDED_ATS: [u64; 5] = [
+    CEREMONY_HEAD + 2,
+    CEREMONY_HEAD + 3,
+    CEREMONY_HEAD + 4,
+    CEREMONY_HEAD + 9,
+    CEREMONY_HEAD + 12,
+];
+
+/// Every committed position a claimed, seeded board holds: the ceremony's
+/// five commits, then the seeded five.
+fn all_ats() -> Vec<u64> {
+    CEREMONY_ATS.iter().chain(SEEDED_ATS.iter()).copied().collect()
+}
 
 fn seed_flow(port: u16) -> String {
     let boot = open_session(port, 0);
@@ -51,9 +75,16 @@ fn seed_flow(port: u16) -> String {
         Some(&s1),
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
-    let doc = acked_addr(&v);
-    assert_eq!(doc, "1.0.2.0.1", "first document address drifted; re-pin the examples");
+    assert_eq!(acked_addr(&v), "1.0.2.0.1", "the home mint is doc 1; re-pin the examples");
     assert_eq!(acked_at(&v), CEREMONY_HEAD + 3, "create_new_document is a 1-record commit");
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
+    );
+    let doc = acked_addr(&v);
+    assert_eq!(doc, "1.0.2.0.2", "second document address drifted; re-pin the examples");
+    assert_eq!(acked_at(&v), CEREMONY_HEAD + 4, "create_new_document is a 1-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -61,7 +92,7 @@ fn seed_flow(port: u16) -> String {
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
         ),
     );
-    assert_eq!(acked_at(&v), CEREMONY_HEAD + 8, "a 2-value insert is a 5-record commit");
+    assert_eq!(acked_at(&v), CEREMONY_HEAD + 9, "a 2-value insert is a 5-record commit");
     let v = op(
         port,
         Some(&s1),
@@ -69,14 +100,14 @@ fn seed_flow(port: u16) -> String {
             concat!(
                 r#"{{"op":"make_link","home":"{d}","#,
                 r#""from":[{{"source":"{d}","span":{{"start":"1.1","width":"0.2"}}}}],"#,
-                r#""to":{{"addrs":["{d}"]}},"ty":{{"addrs":["1.0.2.0.1.0.3.1"]}}}}"#
+                r#""to":{{"addrs":["{d}"]}},"ty":{{"addrs":["{d}.0.3.1"]}}}}"#
             ),
             d = doc
         ),
     );
     assert_eq!(
         acked_at(&v),
-        CEREMONY_HEAD + 11,
+        CEREMONY_HEAD + 12,
         "make_link is a 3-record commit (mint + link + seat)"
     );
     doc
@@ -180,7 +211,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let doc = seed_flow(port);
 
     // Reads and rejected writes are not in the feed: issue both, then
-    // assert the feed holds exactly the four committed writes.
+    // assert the feed holds exactly the five committed writes.
     let v = op(
         port,
         None,
@@ -206,13 +237,13 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let (st, body) = changes_raw(port, &format!("since={b}"));
     assert_eq!(st, 200);
     let v = json(&body);
-    assert_eq!(entry_ats(&v), vec![b + 2, b + 3, b + 8, b + 11]);
+    assert_eq!(entry_ats(&v), SEEDED_ATS.to_vec());
     let entries = v["changes"].as_array().expect("changes");
     assert_eq!(entries[0]["op"].as_str(), Some("delegate"));
     assert_eq!(entries[0]["docs"], serde_json::json!([]), "delegate names no doc");
-    assert_eq!(entries[3]["op"].as_str(), Some("make_link"));
+    assert_eq!(entries[4]["op"].as_str(), Some("make_link"));
     assert_eq!(
-        entries[3]["docs"],
+        entries[4]["docs"],
         serde_json::json!([doc]),
         "a link write names its home doc"
     );
@@ -224,7 +255,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let times: Vec<u64> =
         entries.iter().map(|e| e["time"].as_u64().expect("live entries carry times")).collect();
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "times monotone in position: {times:?}");
-    assert_eq!(v["last"].as_u64(), Some(b + 11));
+    assert_eq!(v["last"].as_u64(), Some(b + 12));
     assert_eq!(v["more"], Value::Bool(false));
 
     // Determinism: the same question answers byte-identically.
@@ -236,17 +267,20 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(entry_ats(&v), vec![b + 2, b + 3]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
     let v = changes_ok(port, &format!("since={}&limit=2", b + 3));
-    assert_eq!(entry_ats(&v), vec![b + 8, b + 11]);
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
+    assert_eq!(entry_ats(&v), vec![b + 4, b + 9]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 9), Some(true)));
+    let v = changes_ok(port, &format!("since={}&limit=2", b + 9));
+    assert_eq!(entry_ats(&v), vec![b + 12]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
 
     // `since` is a fence, not a position: an interior number pages cleanly.
     let v = changes_ok(port, &format!("since={}", b + 5));
-    assert_eq!(entry_ats(&v), vec![b + 8, b + 11]);
+    assert_eq!(entry_ats(&v), vec![b + 9, b + 12]);
 
     // since ≥ head: empty, `last` echoes `since`.
-    let v = changes_ok(port, &format!("since={}", b + 11));
+    let v = changes_ok(port, &format!("since={}", b + 12));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
-    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 11), Some(false)));
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
     let v = changes_ok(port, "since=999");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!(v["last"].as_u64(), Some(999));
@@ -283,7 +317,9 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let second = op(port, Some(&s1), &frame);
     assert_eq!(acked_at(&second), at5, "the retry re-acks the original commit");
     let v = changes_ok(port, "since=0");
-    assert_eq!(entry_ats(&v), vec![2, 3, 8, 11, at5], "one entry per commit, retries excluded");
+    let mut with_retry = all_ats();
+    with_retry.push(at5);
+    assert_eq!(entry_ats(&v), with_retry, "one entry per commit, retries excluded");
 
     sd.shutdown();
 }
@@ -297,15 +333,16 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    seed_flow(port); // four committed writes: 2, 3, 8, 11
+    seed_flow(port);
+    let total = all_ats().len(); // the ceremony's five commits + the seeded five
 
     for limit in [1usize, 2, 4095, 4096] {
         let (st, body) = changes_raw(port, &format!("since=0&limit={limit}"));
         assert_eq!(st, 200, "limit={limit} is in range: {}", String::from_utf8_lossy(&body));
         assert_eq!(
             entry_ats(&json(&body)).len(),
-            limit.min(4),
-            "limit={limit} caps the page at min(limit, the four committed writes)"
+            limit.min(total),
+            "limit={limit} caps the page at min(limit, the committed writes)"
         );
     }
     for limit in ["0", "4097", "18446744073709551616"] {
@@ -372,6 +409,10 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         );
         acked_addr(&v)
     };
+    // MINT-FIRST (RES-26): the first mint is the account's doc 1, born
+    // published, where bare writes are gated by design — the rows below
+    // write the later, private mints.
+    create();
     let doc_a = create();
     let doc_b = create();
     let v = op(
@@ -517,14 +558,16 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 
     // ── torn tail: a partial trailing record is truncated at open; the
-    //    daemon comes up and the feed is unchanged ──
+    //    daemon comes up and the feed is unchanged. (The fragment's number
+    //    must not prefix any REAL record's `{"at":N,` — every committed
+    //    position here is ≤ 24.) ──
     {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
             .append(true)
             .open(&sidecar_path)
             .expect("append to commits.log");
-        f.write_all(b"{\"at\":9").expect("write the torn tail");
+        f.write_all(b"{\"at\":9999").expect("write the torn tail");
         drop(f);
         let sd = spawn(dir.path());
         let port = sd.port();
@@ -532,12 +575,12 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         assert_eq!(st, 200);
         assert_eq!(body, before, "a torn sidecar tail must not change the feed");
         let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
-        assert!(!contents.contains("{\"at\":9"), "the torn tail was truncated on open");
+        assert!(!contents.contains("{\"at\":9999"), "the torn tail was truncated on open");
         sd.shutdown();
     }
 
     // ── lost record: drop the last whole record (the make_link entry at
-    //    11). Reopen: the position is reconstructed as a BARE entry — the
+    //    24). Reopen: the position is reconstructed as a BARE entry — the
     //    daemon reports null, never a wrong value — while earlier entries
     //    keep their recorded metadata verbatim. ──
     {
@@ -549,19 +592,17 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let sd = spawn(dir.path());
         let port = sd.port();
         let v = changes_ok(port, "since=0");
-        assert_eq!(entry_ats(&v), vec![2, 3, 8, 11]);
+        assert_eq!(entry_ats(&v), all_ats());
         let entries = v["changes"].as_array().expect("changes");
+        let (tail, kept) = entries.split_last().expect("ten entries");
         assert!(
-            entries[3]["op"].is_null()
-                && entries[3]["docs"].is_null()
-                && entries[3]["time"].is_null(),
-            "a lost record answers bare nulls: {}",
-            entries[3]
+            tail["op"].is_null() && tail["docs"].is_null() && tail["time"].is_null(),
+            "a lost record answers bare nulls: {tail}"
         );
         let old: Value = serde_json::from_slice(&before).expect("json");
         assert_eq!(
-            entries[..3],
-            old["changes"].as_array().expect("changes")[..3],
+            kept,
+            &old["changes"].as_array().expect("changes")[..kept.len()],
             "surviving records keep their metadata verbatim"
         );
         // The head's record is bare, so head_time honestly answers null.
@@ -620,7 +661,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
     );
     assert_eq!(
         entry_ats(&json(&body)),
-        vec![2, 3, 8, 11],
+        all_ats(),
         "and the feed still enumerates every committed write"
     );
     // The metadata survives too: the walk re-covers only what is uncovered,
@@ -781,7 +822,7 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         let port = sd.port();
         let doc = seed_flow(port);
         let v = changes_ok(port, "since=0");
-        assert_eq!(entry_ats(&v), vec![2, 3, 8, 11], "the feed starts with every position");
+        assert_eq!(entry_ats(&v), all_ats(), "the feed starts with every position");
         assert!(v["changes"][0]["op"].is_string(), "and with real metadata");
         let s1 = open_session(port, 1);
         let bulk = "z".repeat(8192);

@@ -35,6 +35,16 @@ fn sibling_insert_rejects_not_owner_with_the_document_in_site_addr() {
     let s1 = open_session(port, 1);
     let s2 = open_session(port, 2);
 
+    // MINT-FIRST (RES-26): an account's first document is its doc 1, born
+    // published, where a bare owner write is gated by design — the probe
+    // document is a second, private mint.
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(r#"{{"op":"create_new_document","account":"{account1}"}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+
     // Principal 1's document, with content.
     let v = op(
         port,
@@ -109,6 +119,21 @@ fn foreign_nullify_target_rejects_not_owner_naming_the_link() {
     let account2 = delegate(2);
     let s1 = open_session(port, 1);
     let s2 = open_session(port, 2);
+
+    // MINT-FIRST (RES-26): each account's doc 1 is born published, so the
+    // working documents below are second, private mints.
+    let v = op(
+        port,
+        Some(&s1),
+        &format!(r#"{{"op":"create_new_document","account":"{account1}"}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let v = op(
+        port,
+        Some(&s2),
+        &format!(r#"{{"op":"create_new_document","account":"{account2}"}}"#),
+    );
+    expect_resp(&v, "ack_addr");
 
     // Principal 1's document holds a link (ghost-name typed, no content
     // needed); principal 2 owns a home of its own.

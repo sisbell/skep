@@ -43,6 +43,16 @@ use serde_json::Value;
 //     sanctioned "propose a change" path for links: allowed.
 //   * guest (no token) and stale-token (token from a daemon lifetime that
 //     has ended) never reach a store: M10's `unauthenticated`, permanent.
+//   * RES-26, the public-permanent gate: an account's doc 1 is born
+//     published (rule 1's home-mint law), and a BARE owner write homed
+//     there refuses `credential_refused signed_session_required` — the
+//     publish row's owner cell. ω and M10 stand AHEAD of the gate, so the
+//     foreign and guest cells keep their own verdicts. The success half —
+//     the same write class from a SIGNED session — is asserted beside each
+//     walk (`signed_owner_writes_doc1`): only the claimant's account holds
+//     enrolled keys, so it is the account that can sign. Every OTHER row
+//     runs against second, private mints, where bare sessions keep their
+//     standing (CLAIMED-PERMISSIVE local trust).
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Column order — indexes into every row's `expect` array.
@@ -52,6 +62,8 @@ const COLS: [&str; 6] =
 const OK: &str = "ok";
 const NOT_OWNER: &str = "not_owner";
 const UNAUTHENTICATED: &str = "unauthenticated";
+/// The RES-26 refusal, `code:detail` (the `auth_wire` convention).
+const SIGNED_REQUIRED: &str = "credential_refused:signed_session_required";
 
 struct Row {
     label: &'static str,
@@ -67,6 +79,11 @@ const MATRIX: &[Row] = &[
     Row { label: "fork",                  expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── arrangement writes (target: a document owned by `owner`) ──
     Row { label: "insert",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
+    // ── the publish gate (RES-26): the same insert homed in the owner's
+    //    PUBLISHED doc 1 — the one cell where the bare owner is refused ──
+    Row { label: "insert (published doc 1)",
+                                          expect: [SIGNED_REQUIRED,
+                                                       NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "delete",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "rearrange",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "copy (foreign dest)",   expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
@@ -120,8 +137,12 @@ struct Fixture {
     /// The owner's account — the one every `create_new_document` and
     /// `delegate` cell aims at, whoever the calling column is.
     owner_account: String,
+    /// X's doc 1 — born PUBLISHED (RES-26's home-mint law) and never
+    /// written by any cell: the publish row's target.
+    pub_doc: String,
     /// One document owned by each caller, indexed like the first four
-    /// columns: [owner, sibling, child, parent].
+    /// columns: [owner, sibling, child, parent] — each a SECOND mint,
+    /// born private, so the bare columns keep their standing.
     own_doc: [String; 4],
     insert_doc: String,
     delete_doc: String,
@@ -216,6 +237,14 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
     let x = &tokens.owner;
     let acc_c = delegate(port, x, &acc_x, P_CHILD);
 
+    // MINT-FIRST (RES-26): each account's first mint is its doc 1, born
+    // published under rule 1's home-mint law. X's is kept as the publish
+    // row's target; every working document below is a second, private mint.
+    let pub_doc = create_doc(port, x, &acc_x);
+    create_doc(port, &tokens.by_col[1], &acc_s);
+    create_doc(port, &tokens.by_col[2], &acc_c);
+    create_doc(port, p, &acc_p);
+
     let own_doc = [
         create_doc(port, x, &acc_x),
         create_doc(port, &tokens.by_col[1], &acc_s),
@@ -237,6 +266,7 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
 
     Fixture {
         owner_account: acc_x,
+        pub_doc,
         own_doc,
         insert_doc,
         delete_doc,
@@ -254,7 +284,13 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
 fn verdict(v: &Value) -> String {
     match v["resp"].as_str() {
         Some("ack") | Some("ack_addr") | Some("ack_edit") => OK.to_string(),
-        Some("rejected") => v["code"].as_str().unwrap_or("?").to_string(),
+        // The daemon-originated family carries its refusal token in
+        // `detail`; the cell asserts both (`code:detail`, as `auth_wire`
+        // spells it). Store rejections stand on the code alone.
+        Some("rejected") => match (v["code"].as_str().unwrap_or("?"), v["detail"].as_str()) {
+            ("credential_refused", Some(d)) => format!("credential_refused:{d}"),
+            (code, _) => code.to_string(),
+        },
         other => format!("resp:{other:?}"),
     }
 }
@@ -297,6 +333,10 @@ fn run_cell(
         "insert" => format!(
             r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
             fixture.insert_doc
+        ),
+        "insert (published doc 1)" => format!(
+            r#"{{"op":"insert","doc":"{}","at":{{"subspace":"1","ordinal":"1"}},"values":["z"]}}"#,
+            fixture.pub_doc
         ),
         "delete" => format!(
             r#"{{"op":"delete","doc":"{}","p":{{"subspace":"1","ordinal":"1"}},"width":"1"}}"#,
@@ -413,6 +453,28 @@ fn walk_matrix(
     println!("{walk}: {} rows × {} columns = {cells} cells, all verdicts match", MATRIX.len(), COLS.len());
 }
 
+/// The publish row's signed-session arm: the same write class the bare
+/// owner cell refuses is ACCEPTED from a signed session. Asserted against
+/// the claimant's own published home — the one account with enrolled keys
+/// (the matrix principals hold none, which is exactly why their column is
+/// the refusal). Walked each life: the enrollment derives from the
+/// registry, so a post-restart handshake must still sign in and land.
+fn signed_owner_writes_doc1(port: u16, walk: &str) {
+    let frame = format!(
+        r#"{{"op":"insert","doc":"{OWNER_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["z"]}}"#
+    );
+    let bare = open_session(port, OWNER_PRINCIPAL);
+    let v = op(port, Some(&bare), &frame);
+    assert_eq!(
+        verdict(&v),
+        SIGNED_REQUIRED,
+        "{walk}: the claimant's bare write into its published home: {v}"
+    );
+    let signed = open_signed_session(port, OWNER_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &frame);
+    assert_eq!(verdict(&v), OK, "{walk}: the same write, signed, lands: {v}");
+}
+
 // ── the tests ────────────────────────────────────────────────────────────
 
 /// The matrix, walked twice around a restart. Life 0 exists only to mint a
@@ -433,7 +495,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         tok
     };
 
-    // Life 1: fixture + first walk.
+    // Life 1: fixture + first walk, then the publish row's signed arm.
     let (fixture, stale1) = {
         let sd = spawn(dir.path());
         let port = sd.port();
@@ -441,18 +503,22 @@ fn authorization_matrix_holds_and_survives_restart() {
         let tokens = open_tokens(port);
         let fixture = build_fixture(port, &boot, &tokens, &counters);
         walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
+        signed_owner_writes_doc1(port, "walk 1");
         let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
     };
 
-    // Life 2: recovery, fresh sessions, full re-walk. The stale column now
-    // carries life 1's owner token — once the legitimate owner, now dead.
+    // Life 2: recovery, fresh sessions, full re-walk — the signed arm
+    // included, on a handshake freshly bound against the recovered
+    // registry. The stale column now carries life 1's owner token — once
+    // the legitimate owner, now dead.
     {
         let sd = spawn(dir.path());
         let port = sd.port();
         let tokens = open_tokens(port);
         walk_matrix(port, &fixture, &tokens, &stale1, &counters, "walk 2 (post-restart)");
+        signed_owner_writes_doc1(port, "walk 2 (post-restart)");
         sd.shutdown();
     }
 }

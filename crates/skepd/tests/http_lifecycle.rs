@@ -15,7 +15,11 @@ use common::*;
 use serde_json::Value;
 
 /// Bootstrap the standard working chain: π₀ session → next prefix under
-/// node [1] → delegate principal 1 → its session + account.
+/// node [1] → delegate principal 1 → its session + account, with the
+/// account's home already minted. MINT-FIRST (RES-26): the first mint is
+/// the account's doc 1, born published, where bare writes are gated by
+/// design — so every document these tests create and write is a later,
+/// private mint.
 fn delegate_first_principal(port: u16) -> (String, String) {
     let boot = open_session(port, 0);
     let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
@@ -29,7 +33,9 @@ fn delegate_first_principal(port: u16) -> (String, String) {
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":1}}"#),
     );
     let account = acked_addr(&v);
-    (open_session(port, 1), account)
+    let s1 = open_session(port, 1);
+    create_doc(port, &s1, &account);
+    (s1, account)
 }
 
 fn create_doc(port: u16, session: &str, account: &str) -> String {
@@ -93,6 +99,8 @@ fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
     let account2 = acked_addr(&v);
     let s2 = open_session(port, 2);
 
+    // account2's home mint — the same MINT-FIRST discipline as account1's.
+    create_doc(port, &s2, &account2);
     let doc2 = create_doc(port, &s2, &account2);
     expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
     expect_resp(&insert_at(port, &s1, &doc1, 12, r#"" and more""#), "ack_addr");

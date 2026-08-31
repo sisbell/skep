@@ -38,6 +38,15 @@ fn world_survives_a_restart() {
         let s1 = open_session(port, 1);
         stale_token = s1.clone();
 
+        // MINT-FIRST (RES-26): the account's first mint is its doc 1, born
+        // published, where bare writes are gated by design — the suite's
+        // writes run in a second, private document.
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+        );
+        expect_resp(&v, "ack_addr");
         let v = op(
             port,
             Some(&s1),
@@ -158,6 +167,14 @@ fn a_dropped_server_releases_the_journal_lock() {
         );
         let account = acked_addr(&v);
         let s1 = open_session(port, 1);
+        // MINT-FIRST (RES-26): doc 1 is born published; write a second,
+        // private document instead.
+        let v = op(
+            port,
+            Some(&s1),
+            &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+        );
+        expect_resp(&v, "ack_addr");
         let v = op(
             port,
             Some(&s1),

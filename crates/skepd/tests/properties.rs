@@ -312,6 +312,10 @@ fn setup(port: u16) -> Shadow {
         links: Vec::new(),
     };
     for pi in 0..3 {
+        // MINT-FIRST (RES-26): the account's first mint is its doc 1, born
+        // published, where bare writes are gated by design. The home stays
+        // out of the shadow; every pooled document is a later, private mint.
+        create_doc(port, &shadow.principals[pi].token, &shadow.principals[pi].account);
         let addr = create_doc(port, &shadow.principals[pi].token, &shadow.principals[pi].account);
         shadow.docs.push(DocShadow { addr, content: Vec::new(), seats: 0, owner: pi });
         shadow.principals[pi].docs.push(shadow.docs.len() - 1);

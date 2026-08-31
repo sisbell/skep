@@ -72,6 +72,10 @@ fn seed(port: u16) -> Scenario {
         (acked_addr(&v), acked_at(&v))
     };
 
+    // MINT-FIRST (RES-26): the account's first mint is its doc 1, born
+    // published, where bare writes are gated by design. The home is minted
+    // and left alone; the scenario's documents are later, private mints.
+    create(&account);
     let (doc1, at_c1) = create(&account);
     let (_, at_i1) = insert(&doc1, 1, "alpha");
     let (doc2, at_c2) = create(&account);

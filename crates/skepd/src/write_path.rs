@@ -293,7 +293,7 @@ impl FrameMeta {
 
 /// What the change feed will say about one write: the op kind, the
 /// affected documents, and the session that committed it. The
-/// frame-derived stage of a `commits.log` entry — [`crate::sidecar::Meta`]
+/// frame-derived stage of a `commits.log` entry — [`crate::sidecar::CommitMeta`]
 /// is the next one, completed at record time with the committed position
 /// and the wall-clock time. Reachable only through
 /// [`FrameMeta::attributed`], which is what lets

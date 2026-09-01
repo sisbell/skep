@@ -26,13 +26,13 @@ fn distinct_key(n: u8) -> SigningKey {
     SigningKey::from_bytes(&seed)
 }
 
-fn pubkey(sk: &SigningKey) -> PublicKey {
+fn public_key_of(sk: &SigningKey) -> PublicKey {
     PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
 }
 
 /// The fingerprint hex `key_set` publishes for a signing key.
 fn fingerprint_hex(sk: &SigningKey) -> String {
-    Fingerprint::of(&pubkey(sk)).to_hex()
+    Fingerprint::of(&public_key_of(sk)).to_hex()
 }
 
 /// Arbitrary record text as its atom JSON fragment — the escape every
@@ -52,7 +52,7 @@ fn enroll_atom(keys: &[&SigningKey]) -> String {
 fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
     let entries: Vec<Enrollment> = keys
         .iter()
-        .map(|(sk, anchor)| Enrollment::new(pubkey(sk), *anchor, None).expect("no label"))
+        .map(|(sk, anchor)| Enrollment::new(public_key_of(sk), *anchor, None).expect("no label"))
         .collect();
     json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
 }
@@ -64,7 +64,7 @@ fn enroll_atom_with_trailing_non_point(n: usize) -> String {
     let real: Vec<SigningKey> = (0..n as u8).map(distinct_key).collect();
     let mut entries: Vec<Enrollment> = real
         .iter()
-        .map(|sk| Enrollment::new(pubkey(sk), false, None).expect("no label"))
+        .map(|sk| Enrollment::new(public_key_of(sk), false, None).expect("no label"))
         .collect();
     let bad = PublicKey::parse("ed25519", &non_point_hex())
         .expect("64 hex parses — the fold admits syntax and never decodes the point");
@@ -453,8 +453,8 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     // The set holds 2 (the ceremony's genesis — exempt from the cap by
     // arm). An enroll of 15 more would land at 17 > 16: refused, whole.
-    let too_many: Vec<SigningKey> = (0..15).map(distinct_key).collect();
-    let refs: Vec<&SigningKey> = too_many.iter().collect();
+    let extra_keys: Vec<SigningKey> = (0..15).map(distinct_key).collect();
+    let record_keys: Vec<&SigningKey> = extra_keys.iter().collect();
     let enroll = |atom_ordinal: u64, atom: &str| {
         let v = op(
             port,
@@ -473,13 +473,13 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
             ),
         )
     };
-    let v = enroll(2, &enroll_atom(&refs));
+    let v = enroll(2, &enroll_atom(&record_keys));
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
     // 14 more (16 total) clears the cap exactly.
-    let v = enroll(3, &enroll_atom(&refs[..14]));
+    let v = enroll(3, &enroll_atom(&record_keys[..14]));
     expect_resp(&v, "ack_addr");
     // …and the 17th key alone now refuses.
-    let v = enroll(4, &enroll_atom(&refs[14..]));
+    let v = enroll(4, &enroll_atom(&record_keys[14..]));
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
     // key_set shows exactly 16 enrolled.
     let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
@@ -551,24 +551,24 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
             ),
         )
     };
-    let enrolled = || -> usize {
+    let enrolled_count = || -> usize {
         let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
         assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
         v["enrolled"].as_array().expect("enrolled").len()
     };
 
     let keys: Vec<SigningKey> = (0..=GENESIS_KEY_CAP as u8).map(distinct_key).collect();
-    let refs: Vec<&SigningKey> = keys.iter().collect();
+    let record_keys: Vec<&SigningKey> = keys.iter().collect();
 
     // One key past the cap: refused, and it seeds nothing.
-    let v = genesis(1, &refs);
+    let v = genesis(1, &record_keys);
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
-    assert_eq!(enrolled(), 0, "the refused genesis seeded nothing");
+    assert_eq!(enrolled_count(), 0, "the refused genesis seeded nothing");
 
     // Exactly the cap: admitted, and the whole record lands.
-    let v = genesis(2, &refs[..GENESIS_KEY_CAP]);
+    let v = genesis(2, &record_keys[..GENESIS_KEY_CAP]);
     expect_resp(&v, "ack_addr");
-    assert_eq!(enrolled(), GENESIS_KEY_CAP, "a genesis AT the cap seeds every key");
+    assert_eq!(enrolled_count(), GENESIS_KEY_CAP, "a genesis AT the cap seeds every key");
 
     sd.shutdown();
 }
@@ -627,7 +627,7 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
             ),
         )
     };
-    let enrolled = || -> usize {
+    let enrolled_count = || -> usize {
         let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
         assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
         v["enrolled"].as_array().expect("enrolled").len()
@@ -641,7 +641,7 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
         "credential_refused:undecodable_key",
         "a record AT the cap has every key decoded, wherever the bad one sits"
     );
-    assert_eq!(enrolled(), 0, "and it seeded nothing");
+    assert_eq!(enrolled_count(), 0, "and it seeded nothing");
 
     // PAST the cap: the count refuses before the trailing key is reached.
     let v = genesis_with_bad_tail(2, GENESIS_KEY_CAP + 3);
@@ -650,7 +650,7 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
         "credential_refused:too_many_enrolled",
         "past the cap the count answers, so the decode never runs the tail"
     );
-    assert_eq!(enrolled(), 0);
+    assert_eq!(enrolled_count(), 0);
 
     sd.shutdown();
 }
@@ -828,7 +828,7 @@ fn a_credential_homed_outside_doc_1_refuses_not_doc_one() {
         &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     let draft = acked_addr(&v);
-    let deposit_in_draft = |ordinal: u64, atom: &str| -> Value {
+    let enroll_in_draft = |ordinal: u64, atom: &str| -> Value {
         let v = op(
             port,
             Some(&signed),
@@ -848,13 +848,13 @@ fn a_credential_homed_outside_doc_1_refuses_not_doc_one() {
 
     // A WELL-FORMED record in the wrong home: the pin answers.
     assert_eq!(
-        rejected_detail(&deposit_in_draft(1, &enroll_atom(&[&distinct_key(7)]))),
+        rejected_detail(&enroll_in_draft(1, &enroll_atom(&[&distinct_key(7)]))),
         "credential_refused:not_doc_one"
     );
     // The same wrong home with an unparseable record answers the PAYLOAD
     // fault instead — the parse precedes the pin.
     assert_eq!(
-        rejected_detail(&deposit_in_draft(2, &json_atom("nonsense"))),
+        rejected_detail(&enroll_in_draft(2, &json_atom("nonsense"))),
         "credential_refused:malformed_payload:bad_header"
     );
 
@@ -993,26 +993,29 @@ fn health_auth_publishes_the_pair_and_no_mode() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
-    let a = json(&get(port, "/health").1)["auth"].clone();
-    assert!(a["claimant"].is_null(), "unclaimed: claimant null");
-    assert_eq!(a["local_trust"].as_bool(), Some(true), "the Phase A default");
-    assert!(a.get("mode").is_none(), "NO .mode field — clients derive the mode");
-    let origins = a["origins"].as_array().expect("origins");
+    let auth = json(&get(port, "/health").1)["auth"].clone();
+    assert!(auth["claimant"].is_null(), "unclaimed: claimant null");
+    assert_eq!(auth["local_trust"].as_bool(), Some(true), "the Phase A default");
+    assert!(auth.get("mode").is_none(), "NO .mode field — clients derive the mode");
+    let origins = auth["origins"].as_array().expect("origins");
     let dialed = format!("http://127.0.0.1:{port}");
     assert!(origins.iter().any(|o| o.as_str() == Some(dialed.as_str())), "{origins:?}");
     assert_eq!(
-        a["signed_origins"], a["origins"],
+        auth["signed_origins"], auth["origins"],
         "unclaimed: the signed set IS the bare set"
     );
     claim_board(port);
-    let a = json(&get(port, "/health").1)["auth"].clone();
-    assert_eq!(a["claimant"].as_str(), Some(CLAIMANT_ACCOUNT), "the claim flips the claimant");
+    let auth = json(&get(port, "/health").1)["auth"].clone();
+    assert_eq!(auth["claimant"].as_str(), Some(CLAIMANT_ACCOUNT), "the claim flips the claimant");
     assert_eq!(
-        a["signed_origins"].as_array().expect("signed").len(),
+        auth["signed_origins"].as_array().expect("signed").len(),
         0,
         "claimed with no configured origin: the signed set drops to configured alone"
     );
-    assert!(!a["origins"].as_array().expect("bare").is_empty(), "the bare set keeps the defaults");
+    assert!(
+        !auth["origins"].as_array().expect("bare").is_empty(),
+        "the bare set keeps the defaults"
+    );
     sd.shutdown();
 }
 
@@ -1162,8 +1165,8 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     let anchor_token = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
 
     // Trigger 1 — an ANCHOR retirement from a non-anchor session refuses.
-    let record = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]));
-    let v = deposit(port, &device_token, &record, T_RETIRE);
+    let anchor_retire = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]));
+    let v = deposit(port, &device_token, &anchor_retire, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // …and a BARE session never satisfies it either (§Credential refusals),
     // which is slot (6) answering ahead of slot (7)'s
@@ -1171,22 +1174,24 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     // the signed session's, since a bare write into the published home dies
     // at the publish gate before the credential path is reached at all.
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    let v = deposit(port, &bare, &record, T_RETIRE);
+    let v = deposit(port, &bare, &anchor_retire, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
 
     // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
     let fresh = distinct_key(9);
-    let flagged = record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]));
-    let v = deposit(port, &device_token, &flagged, T_ENROLL);
+    let flagged_enroll =
+        record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]));
+    let v = deposit(port, &device_token, &flagged_enroll, T_ENROLL);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // The same enrollment UNFLAGGED passes, so the gate is the FLAG and not
     // the act.
-    let plain = record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]));
-    expect_resp(&deposit(port, &device_token, &plain, T_ENROLL), "ack_addr");
+    let plain_enroll =
+        record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]));
+    expect_resp(&deposit(port, &device_token, &plain_enroll, T_ENROLL), "ack_addr");
 
     // The anchor's own session retires the device key.
-    let retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]));
-    expect_resp(&deposit(port, &anchor_token, &retire, T_RETIRE), "ack_addr");
+    let device_retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]));
+    expect_resp(&deposit(port, &anchor_token, &device_retire, T_RETIRE), "ack_addr");
 
     // key_set moves the fingerprint from enrolled to retired.
     let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
@@ -1306,9 +1311,9 @@ fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
 
     // /health publishes the pair the mode derives from — there is no
     // `.mode` field, so this is what a client reads it off.
-    let a = json(&get(port, "/health").1)["auth"].clone();
-    assert_eq!(a["local_trust"].as_bool(), Some(false));
-    assert!(!a["claimant"].is_null(), "claimed + !local_trust IS enforcing: {a}");
+    let auth = json(&get(port, "/health").1)["auth"].clone();
+    assert_eq!(auth["local_trust"].as_bool(), Some(false));
+    assert!(!auth["claimant"].is_null(), "claimed + !local_trust IS enforcing: {auth}");
 
     sd.shutdown();
 }

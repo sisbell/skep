@@ -75,7 +75,7 @@ fn read_text(port: u16, doc: &str, width: u64) -> String {
 }
 
 #[test]
-fn lifecycle_session_create_insert_retrieve_makelink_findlinks() {
+fn writes_read_back_and_their_links_are_discoverable() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();

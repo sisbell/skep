@@ -69,7 +69,7 @@ const SIDECAR_FILE: &str = "commits.log";
 /// six more combinations, and this file has a meaning for neither the
 /// half-recorded position nor the record that remembers when but not what.
 #[derive(Clone, Debug)]
-pub(crate) enum Meta {
+pub(crate) enum CommitMeta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
     /// an invented value.
     Bare,
@@ -82,7 +82,7 @@ pub(crate) enum Meta {
     Recorded { op: String, docs: Vec<String>, time: u64, key: Option<String> },
 }
 
-impl Meta {
+impl CommitMeta {
     /// One `GET /changes` entry: the position and all three fields, a bare
     /// position's rendering as explicit `null`s — the crash-honesty rule of
     /// this file, expressed where the rule is stated rather than at the
@@ -92,8 +92,8 @@ impl Meta {
     /// while a client reading the wire is owed the field it asked about.
     pub fn into_entry(self, at: u64) -> Value {
         let (docs, op, time, key) = match self {
-            Meta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
-            Meta::Recorded { op, docs, time, key } => (
+            CommitMeta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
+            CommitMeta::Recorded { op, docs, time, key } => (
                 Value::Array(docs.into_iter().map(Value::String).collect()),
                 Value::String(op),
                 Value::Number(time.into()),
@@ -112,16 +112,16 @@ impl Meta {
     /// The recorded wall-clock time, or `None` for a bare position.
     fn time(&self) -> Option<u64> {
         match self {
-            Meta::Bare => None,
-            Meta::Recorded { time, .. } => Some(*time),
+            CommitMeta::Bare => None,
+            CommitMeta::Recorded { time, .. } => Some(*time),
         }
     }
 }
 
 /// One replayed file record.
 #[derive(Debug)]
-enum Rec {
-    Entry(u64, Meta),
+enum Record {
+    Entry(u64, CommitMeta),
     /// The smallest `since` this feed can honor — see [`Inner::min_since`].
     MinSince(u64),
 }
@@ -137,7 +137,7 @@ pub(crate) enum ChangesAnswer {
     /// The entries in `(since, head]`, oldest first, capped at `limit`;
     /// `last` is the final entry's position (or `since` echoed when the
     /// page is empty) and `more` says whether entries remain past it.
-    Page { entries: Vec<(u64, Meta)>, last: u64, more: bool },
+    Page { entries: Vec<(u64, CommitMeta)>, last: u64, more: bool },
 }
 
 pub(crate) struct Sidecar {
@@ -147,7 +147,7 @@ pub(crate) struct Sidecar {
 struct Inner {
     file: File,
     /// Every enumerable position above `min_since`, in order.
-    entries: BTreeMap<u64, Meta>,
+    entries: BTreeMap<u64, CommitMeta>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or
     /// unreadable journal) and `/changes` answers 410. Deliberately not
@@ -226,10 +226,10 @@ impl Sidecar {
         let mut min_since = 0u64;
         for rec in records {
             match rec {
-                Rec::Entry(at, meta) => {
+                Record::Entry(at, meta) => {
                     entries.insert(at, meta);
                 }
-                Rec::MinSince(s) => min_since = min_since.max(s),
+                Record::MinSince(s) => min_since = min_since.max(s),
             }
         }
         let head = engine.kernel().current_seq().0;
@@ -257,8 +257,8 @@ impl Sidecar {
             // folds into holds the plain name.
             let (bare, walk_min_since) = reconstruct(engine, low, head);
             for &at in &bare {
-                entries.insert(at, Meta::Bare);
-                file.write_all(&entry_line(at, &Meta::Bare))?;
+                entries.insert(at, CommitMeta::Bare);
+                file.write_all(&entry_line(at, &CommitMeta::Bare))?;
             }
             if let Some(walked) = walk_min_since {
                 min_since = min_since.max(walked);
@@ -284,7 +284,7 @@ impl Sidecar {
             entries = entries.split_off(&min_since.saturating_add(1));
             file = rewrite(dir, &entries, min_since)?;
         }
-        let last_time = entries.values().filter_map(Meta::time).max().unwrap_or(0);
+        let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
         Ok(Sidecar {
             inner: Mutex::new(Inner { file, entries, min_since, open_head: head, last_time }),
         })
@@ -321,7 +321,7 @@ impl Sidecar {
             .unwrap_or(0);
         let time = now.max(inner.last_time);
         inner.last_time = time;
-        let meta = Meta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
+        let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
         // Reported without `eprintln!`, which PANICS when the stderr write
@@ -348,7 +348,7 @@ impl Sidecar {
                 inner.entries.range(inner.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
             return ChangesAnswer::Reclaimed { floor };
         }
-        let entries: Vec<(u64, Meta)> = match since.checked_add(1) {
+        let entries: Vec<(u64, CommitMeta)> = match since.checked_add(1) {
             Some(start) => {
                 inner.entries.range(start..).take(limit).map(|(k, v)| (*k, v.clone())).collect()
             }
@@ -387,7 +387,7 @@ impl Sidecar {
     /// unrecorded until the reopen walk covers it as a bare entry, after
     /// which this honestly answers `None`.
     pub fn head_time(&self) -> Option<u64> {
-        self.inner.lock().entries.values().next_back().and_then(Meta::time)
+        self.inner.lock().entries.values().next_back().and_then(CommitMeta::time)
     }
 }
 
@@ -425,7 +425,7 @@ fn retention_floor(engine: &Engine) -> Option<u64> {
 /// per data dir. It is not cleaned up: a crash or an I/O failure between
 /// the create and the rename leaves it until the next compaction truncates
 /// it, which is the price of the rename being the only atomic step.
-fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Result<File> {
+fn rewrite(dir: &Path, entries: &BTreeMap<u64, CommitMeta>, min_since: u64) -> io::Result<File> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut out = Vec::new();
@@ -457,7 +457,7 @@ fn rewrite(dir: &Path, entries: &BTreeMap<u64, Meta>, min_since: u64) -> io::Res
 /// `Daemon::open`, before the listener is bound, where a loop that did not
 /// terminate would be a daemon that never starts.
 fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
-    let mut found = vec![head];
+    let mut boundaries = vec![head];
     let mut boundary = head;
     let mut min_since = None;
     // The descent's own guard: `probe` exists only when there is a position
@@ -468,7 +468,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
         match engine.world_at(Seq(probe)) {
             Ok(_) => {
                 boundary = probe;
-                found.push(boundary);
+                boundaries.push(boundary);
             }
             Err(HistoryError::NotABoundary { nearest }) => {
                 // M2's `nearest` is the boundary BELOW the probe, which is
@@ -481,7 +481,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
                     break;
                 }
                 boundary = nearest.0;
-                found.push(boundary);
+                boundaries.push(boundary);
             }
             Err(_) => {
                 min_since = Some(probe);
@@ -489,14 +489,14 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
             }
         }
     }
-    found.reverse();
-    (found, min_since)
+    boundaries.reverse();
+    (boundaries, min_since)
 }
 
 /// Parse whole newline-terminated records; trust ends at the first line
 /// that is torn (no `\n`) or does not parse. Returns the records and the
 /// byte offset after the last whole one.
-fn parse_records(bytes: &[u8]) -> (Vec<Rec>, usize) {
+fn parse_records(bytes: &[u8]) -> (Vec<Record>, usize) {
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < bytes.len() {
@@ -516,16 +516,16 @@ fn parse_records(bytes: &[u8]) -> (Vec<Rec>, usize) {
 /// `floor` — and both read, because an unparseable line ends trust in
 /// everything after it.
 ///
-/// The three entry fields are read TOGETHER, because [`Meta`] has only two
+/// The three entry fields are read TOGETHER, because [`CommitMeta`] has only two
 /// states: all three present is a recorded position, all three absent (or
 /// `null`) is a bare one, and a line carrying some of them is not a line
 /// this daemon wrote — so trust ends there exactly as at an unparseable
 /// one, and the reopen walk re-covers the position as bare.
-fn parse_line(line: &[u8]) -> Option<Rec> {
+fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let m = v.as_object()?;
     if let Some(s) = m.get("min_since").or_else(|| m.get("floor")) {
-        return Some(Rec::MinSince(s.as_u64()?));
+        return Some(Record::MinSince(s.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;
     // Each field is read THROUGH the same lookup that decides it is
@@ -538,8 +538,8 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
         Some(v) => Some(v),
     };
     let meta = match (field("op"), field("docs"), field("time")) {
-        (None, None, None) => Meta::Bare,
-        (Some(op), Some(docs), Some(time)) => Meta::Recorded {
+        (None, None, None) => CommitMeta::Bare,
+        (Some(op), Some(docs), Some(time)) => CommitMeta::Recorded {
             op: op.as_str()?.to_string(),
             docs: docs
                 .as_array()?
@@ -556,16 +556,16 @@ fn parse_line(line: &[u8]) -> Option<Rec> {
         },
         _ => return None,
     };
-    Some(Rec::Entry(at, meta))
+    Some(Record::Entry(at, meta))
 }
 
 /// `{"at":N}` for a bare position; `{"at":N,"docs":[…],"op":"…","time":T}`
 /// for a recorded one. Built through the codec's key-sorting device, so a
 /// line is the same bytes whatever backs serde_json's map — which is what
 /// lets `GET /changes` answer byte-identically across a restart.
-fn entry_line(at: u64, meta: &Meta) -> Vec<u8> {
+fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
     let mut pairs = vec![("at", Value::Number(at.into()))];
-    if let Meta::Recorded { op, docs, time, key } = meta {
+    if let CommitMeta::Recorded { op, docs, time, key } = meta {
         pairs.push(("op", Value::String(op.clone())));
         pairs.push((
             "docs",
@@ -605,7 +605,7 @@ mod tests {
     /// that will replay it.
     #[test]
     fn lines_are_key_sorted_and_replay_as_written() {
-        let meta = Meta::Recorded {
+        let meta = CommitMeta::Recorded {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_000,
@@ -617,7 +617,7 @@ mod tests {
         );
         // A pre-feature recorded line carries no `key` field at all —
         // omitted in the file, replayed as `None` below.
-        let pre_feature = Meta::Recorded {
+        let pre_feature = CommitMeta::Recorded {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_001,
@@ -627,19 +627,19 @@ mod tests {
             entry_line(9, &pre_feature),
             b"{\"at\":9,\"docs\":[\"1.0.1.0.1\"],\"op\":\"insert\",\"time\":1700000000001}\n"
         );
-        assert_eq!(entry_line(3, &Meta::Bare), b"{\"at\":3}\n");
+        assert_eq!(entry_line(3, &CommitMeta::Bare), b"{\"at\":3}\n");
         assert_eq!(min_since_line(2048), b"{\"min_since\":2048}\n");
 
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(&entry_line(8, &meta));
         file.extend_from_slice(&entry_line(9, &pre_feature));
-        file.extend_from_slice(&entry_line(3, &Meta::Bare));
+        file.extend_from_slice(&entry_line(3, &CommitMeta::Bare));
         file.extend_from_slice(&min_since_line(2048));
-        let (recs, end) = parse_records(&file);
-        assert_eq!(end, file.len(), "every whole line is trusted");
-        assert_eq!(recs.len(), 4);
-        match &recs[0] {
-            Rec::Entry(at, Meta::Recorded { op, docs, time, key }) => {
+        let (records, valid_end) = parse_records(&file);
+        assert_eq!(valid_end, file.len(), "every whole line is trusted");
+        assert_eq!(records.len(), 4);
+        match &records[0] {
+            Record::Entry(at, CommitMeta::Recorded { op, docs, time, key }) => {
                 assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
                 assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
                 assert_eq!(key.as_deref(), Some("bare"), "testimony replays as written");
@@ -647,19 +647,19 @@ mod tests {
             other => panic!("first line is a recorded entry: {other:?}"),
         }
         assert!(
-            matches!(&recs[1], Rec::Entry(9, Meta::Recorded { key: None, .. })),
+            matches!(&records[1], Record::Entry(9, CommitMeta::Recorded { key: None, .. })),
             "a pre-feature line replays with no testimony: {:?}",
-            recs[1]
+            records[1]
         );
         assert!(
-            matches!(recs[2], Rec::Entry(3, Meta::Bare)),
+            matches!(records[2], Record::Entry(3, CommitMeta::Bare)),
             "third line is a bare entry: {:?}",
-            recs[2]
+            records[2]
         );
         assert!(
-            matches!(recs[3], Rec::MinSince(2048)),
+            matches!(records[3], Record::MinSince(2048)),
             "fourth line names the smallest admissible since: {:?}",
-            recs[3]
+            records[3]
         );
     }
 
@@ -670,18 +670,18 @@ mod tests {
     fn both_spellings_of_the_min_since_record_replay() {
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(b"{\"floor\":2048}\n");
-        file.extend_from_slice(&entry_line(2049, &Meta::Bare));
-        let (recs, end) = parse_records(&file);
-        assert_eq!(end, file.len(), "the `floor` spelling does not end trust");
+        file.extend_from_slice(&entry_line(2049, &CommitMeta::Bare));
+        let (records, valid_end) = parse_records(&file);
+        assert_eq!(valid_end, file.len(), "the `floor` spelling does not end trust");
         assert!(
-            matches!(recs[0], Rec::MinSince(2048)),
+            matches!(records[0], Record::MinSince(2048)),
             "a `floor` line is a min-since record: {:?}",
-            recs[0]
+            records[0]
         );
         assert!(
-            matches!(recs[1], Rec::Entry(2049, _)),
+            matches!(records[1], Record::Entry(2049, _)),
             "the line behind it still replays: {:?}",
-            recs[1]
+            records[1]
         );
     }
 
@@ -692,15 +692,15 @@ mod tests {
     #[test]
     fn a_half_recorded_line_ends_trust() {
         let mut file: Vec<u8> = Vec::new();
-        file.extend_from_slice(&entry_line(1, &Meta::Bare));
+        file.extend_from_slice(&entry_line(1, &CommitMeta::Bare));
         file.extend_from_slice(b"{\"at\":2,\"op\":\"insert\"}\n");
-        file.extend_from_slice(&entry_line(3, &Meta::Bare));
-        let (recs, end) = parse_records(&file);
-        assert_eq!(recs.len(), 1, "trust ends at the half-recorded line");
-        assert_eq!(end, entry_line(1, &Meta::Bare).len(), "and truncation cuts there");
+        file.extend_from_slice(&entry_line(3, &CommitMeta::Bare));
+        let (records, valid_end) = parse_records(&file);
+        assert_eq!(records.len(), 1, "trust ends at the half-recorded line");
+        assert_eq!(valid_end, entry_line(1, &CommitMeta::Bare).len(), "and truncation cuts there");
         // A `null`-valued field is absence, not a half record.
-        let (recs, _) = parse_records(b"{\"at\":4,\"docs\":null,\"op\":null,\"time\":null}\n");
-        assert!(matches!(recs.as_slice(), [Rec::Entry(4, Meta::Bare)]));
+        let (records, _) = parse_records(b"{\"at\":4,\"docs\":null,\"op\":null,\"time\":null}\n");
+        assert!(matches!(records.as_slice(), [Record::Entry(4, CommitMeta::Bare)]));
     }
 
     /// The wire entry names every field, a bare position's as explicit
@@ -711,7 +711,7 @@ mod tests {
     /// record reads it exactly as a bare position does.
     #[test]
     fn wire_entries_null_what_the_file_line_omits() {
-        let meta = Meta::Recorded {
+        let meta = CommitMeta::Recorded {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_000,
@@ -721,7 +721,7 @@ mod tests {
             serde_json::to_string(&meta.into_entry(8)).expect("json"),
             r#"{"at":8,"docs":["1.0.1.0.1"],"key":"bare","op":"insert","time":1700000000000}"#
         );
-        let pre_feature = Meta::Recorded {
+        let pre_feature = CommitMeta::Recorded {
             op: "insert".into(),
             docs: vec!["1.0.1.0.1".into()],
             time: 1_700_000_000_000,
@@ -732,7 +732,7 @@ mod tests {
             r#"{"at":8,"docs":["1.0.1.0.1"],"key":null,"op":"insert","time":1700000000000}"#
         );
         assert_eq!(
-            serde_json::to_string(&Meta::Bare.into_entry(3)).expect("json"),
+            serde_json::to_string(&CommitMeta::Bare.into_entry(3)).expect("json"),
             r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#
         );
     }

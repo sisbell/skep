@@ -44,7 +44,7 @@ pub fn anchor_key() -> SigningKey {
     SigningKey::from_bytes(&ANCHOR_SEED)
 }
 
-fn pubkey_of(sk: &SigningKey) -> PublicKey {
+fn public_key_of(sk: &SigningKey) -> PublicKey {
     PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
 }
 
@@ -111,9 +111,9 @@ pub fn claim_board(port: u16) {
     assert_eq!(acked_addr(&v), CLAIMANT_DOC1, "the home mint is doc 1");
     // The enrollment record — the anchor and the device key — as ONE ATOM.
     let record = encode_enroll(&[
-        Enrollment::new(pubkey_of(&anchor_key()), true, Some("paper-a".into()))
+        Enrollment::new(public_key_of(&anchor_key()), true, Some("paper-a".into()))
             .expect("a legal label"),
-        Enrollment::new(pubkey_of(&device_key()), false, Some("notebook".into()))
+        Enrollment::new(public_key_of(&device_key()), false, Some("notebook".into()))
             .expect("a legal label"),
     ]);
     let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
@@ -188,7 +188,7 @@ pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     serve(daemon, 0, 4).expect("bind an ephemeral port")
 }
 
-/// Client-side socket deadline: a daemon that wedges must fail the exchange
+/// Client-side socket timeout: a daemon that wedges must fail the exchange
 /// loudly (panic with context) rather than hang the whole gate, whose log
 /// would then carry no failure name at all. Generous — a healthy op is
 /// milliseconds even under fsync.

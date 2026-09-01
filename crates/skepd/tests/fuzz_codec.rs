@@ -71,7 +71,7 @@ fn codec_parse_arbitrary_bytes_never_panics_and_roundtrips() {
 }
 
 #[test]
-fn codec_grammar_mutation_single_response() {
+fn a_mutated_frame_never_panics_and_answers_one_documented_shape() {
     let corpus = frame_corpus();
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());

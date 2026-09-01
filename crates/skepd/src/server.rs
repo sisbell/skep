@@ -923,6 +923,25 @@ impl Daemon {
         with_signal(f(&resolved), resolved.closed)
     }
 
+    /// Log the config-lockout warnings (AUTH-4.9–4.11) to stderr — at
+    /// startup, and again at the claim flip, which RES-30 requires
+    /// unconditionally. One method because the three are one obligation:
+    /// WHICH warnings apply is [`crate::auth::startup_warnings`]'s, but the
+    /// claim reading they are computed against and the stream they go to
+    /// are this daemon's, and [`serve`] would otherwise reach two levels
+    /// into [`crate::auth::AuthState`] to spell them.
+    ///
+    /// `at_claim` only labels the line. The claim itself is READ from the
+    /// fold rather than supplied, so no caller can hand this method a fact
+    /// the daemon can answer.
+    fn log_config_warnings(&self, at_claim: bool) {
+        let claimed = self.auth.fold.snapshot().claimant().is_some();
+        let when = if at_claim { " (at claim)" } else { "" };
+        for w in startup_warnings(&self.auth.cfg, claimed) {
+            let _ = writeln!(std::io::stderr(), "skepd: warning{when}: {w}");
+        }
+    }
+
     /// Close one token's binding in BOTH stores — the sessions map and M10
     /// — plus the credential memo. [`Daemon::resolve_actor`]'s eviction arm
     /// and `/session/close` share it.
@@ -1237,15 +1256,14 @@ impl Daemon {
             let r = CredentialRefusal::ResolvedFrom;
             return with_signal(credential_refused(meta.kind, &r), closed);
         };
-        match crate::auth::policy::precheck(
+        if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
             &identity,
             &dep,
             entry.signer.as_ref(),
         ) {
-            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
-            Ok(_effect) => {}
+            return with_signal(credential_refused(meta.kind, &r), closed);
         }
         // 7 — execute (commit-record-announce under the held serial lock).
         let req_id = freq.id.clone();
@@ -1276,9 +1294,7 @@ impl Daemon {
                 &ack,
             );
             if flipped {
-                for w in startup_warnings(&self.auth.cfg, true) {
-                    let _ = writeln!(std::io::stderr(), "skepd: warning (at claim): {w}");
-                }
+                self.log_config_warnings(true);
             }
         }
         with_signal(op_answer(ack), closed)
@@ -1727,17 +1743,15 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     let port = listener.local_addr()?.port();
     // The auth surface derives its origin sets from the BOUND port, and the
     // startup warnings are logged here — the one thing the glue does with
-    // the config before serving (AUTH-4.11).
+    // the config before serving (AUTH-4.11). AFTER the bind, and not before:
+    // the port-change arm compares each configured origin against the bound
+    // port's loopback defaults, so on an unbound config every configured
+    // loopback origin would warn.
     daemon.bind_auth_port(port).expect(
         "serve binds the auth port once; a pre-bound daemon has two callers \
          disagreeing about the number every live session's origin set derives from",
     );
-    {
-        let claimed = daemon.auth.fold.snapshot().claimant().is_some();
-        for w in startup_warnings(&daemon.auth.cfg, claimed) {
-            let _ = writeln!(std::io::stderr(), "skepd: warning: {w}");
-        }
-    }
+    daemon.log_config_warnings(false);
     let stop = Arc::new(AtomicBool::new(false));
     let subscribers = Arc::new(Subscribers::new());
     // Spawned FALLIBLY, and named: `thread::spawn` panics when the OS

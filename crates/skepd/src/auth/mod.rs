@@ -22,9 +22,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::OnceLock;
 
+use ed25519_dalek::VerifyingKey;
 use rand_core::{CryptoRng, RngCore};
 use skep_febe::{ReqId, SessionId};
-use skep_identity::LinkDeposit;
+use skep_identity::{LinkDeposit, PublicKey};
 
 use crate::World;
 use fold::{CredMemo, IdentityFold};
@@ -211,6 +212,31 @@ impl RngCore for OsEntropy {
 }
 
 impl CryptoRng for OsEntropy {}
+
+// ── the signature seam (AUTH-2.2, AUTH-2.99) ─────────────────────────────
+
+/// The verifier for one enrolled key, or `None` when its raw form is not a
+/// canonical Ed25519 point — THE place this crate turns a
+/// [`skep_identity::PublicKey`] into a verifier.
+///
+/// One function because two callers must agree: [`session::verify`] is what
+/// a signature actually meets, and [`policy::precheck`]'s slot (4)
+/// (`undecodable_key`) refuses a deposit BECAUSE such a key could never
+/// sign — a courtesy that holds only while the two decode alike. A stricter
+/// deposit test refuses an enrollment that would have worked; a laxer one
+/// seats a key that occupies a slot against [`policy::MAX_ENROLLED_KEYS`]
+/// and is walked by `find_signer` on every handshake attempt, permanently,
+/// since retiring it needs an anchor session of that account.
+///
+/// `from_bytes` is the canonical point decode (the crate pick is argued in
+/// `Cargo.toml`), and the 32-byte width is what refuses a key of another
+/// algorithm rather than reading its bytes as an Ed25519 one — the one
+/// place `skep_identity::ALGS` would be consulted if this crate ever
+/// verified a second.
+pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
+    let raw = <[u8; 32]>::try_from(key.raw()).ok()?;
+    VerifyingKey::from_bytes(&raw).ok()
+}
 
 // ── origins (AUTH-4.1–4.8) ───────────────────────────────────────────────
 

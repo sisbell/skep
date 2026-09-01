@@ -4,7 +4,6 @@
 
 use std::sync::LazyLock;
 
-use ed25519_dalek::VerifyingKey;
 use skep_address::{checked_inc, validate, Address, Level, Nat, Span, Tumbler};
 use skep_febe::Op;
 use skep_identity::{
@@ -83,16 +82,22 @@ pub(crate) fn identity_types() -> &'static TypeAddrs {
     &TYPES
 }
 
-/// A slot's spans in M7's own deposited form: `enc(addrs)` for the
+/// One address-form slot in M7's own deposited form — `enc(addrs)`. The
+/// ONE spelling, so [`deposits_credential_link`]'s classification and
+/// [`DepositSpans::of`]'s deposit read a type slot through the same call:
+/// two of the three readings the obligation on that classifier rests on
+/// become one, and only the rebuild's (M7's stored slot) stays separate.
+fn addr_spans(addrs: &[Address]) -> Vec<Span> {
+    enc(addrs.iter()).spans().cloned().collect()
+}
+
+/// A slot's spans in M7's own deposited form: [`addr_spans`] for the
 /// address form; `None` for `Resolve` — a resolved slot can never name a
 /// credential type (the allocation above), so classification never
 /// resolves.
 fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
     match s {
-        SlotArg::Addrs(addrs) => {
-            let spans: Vec<Span> = enc(addrs.iter()).spans().cloned().collect();
-            identity_types().kind_of(&spans)
-        }
+        SlotArg::Addrs(addrs) => identity_types().kind_of(&addr_spans(addrs)),
         SlotArg::Resolve(_) => None,
     }
 }
@@ -106,15 +111,17 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// OBLIGATION, and the one this predicate cannot check: `true` for exactly
 /// the deposits [`precheck`]'s classify and
 /// [`crate::auth::fold::canonical_identity`] will read as credential-typed.
-/// All three read the type slot's spans — this one and [`DepositSpans::of`]
-/// through `enc(addrs)`, the rebuild through M7's stored slot, which
-/// records `enc` verbatim — and the subspace-3 allocation above is what
-/// keeps a `Resolve` slot out of the codomain. A FALSE NEGATIVE is the
-/// divergence this module cannot detect: the deposit commits through the
-/// plain path with no gate and no fold step, so the world holds a
-/// credential the live fold never saw, `key_set` answers one thing until
-/// restart and another after it, and nothing reports either. A false
-/// positive reaches [`precheck`]'s `Ok(None)` defect arm.
+/// All three read the type slot's spans, and two of the three readings are
+/// structural rather than claimed — this one and [`DepositSpans::of`] both
+/// go through [`addr_spans`], the one spelling of `enc(addrs)`. Only the
+/// rebuild's stays a claim: it reads M7's stored slot, which records `enc`
+/// verbatim. The subspace-3 allocation above is what keeps a `Resolve` slot
+/// out of the codomain. A FALSE NEGATIVE is the divergence this module
+/// cannot detect: the deposit commits through the plain path with no gate
+/// and no fold step, so the world holds a credential the live fold never
+/// saw, `key_set` answers one thing until restart and another after it, and
+/// nothing reports either. A false positive reaches [`precheck`]'s defect
+/// arm at the classify line.
 pub(crate) fn deposits_credential_link(op: &Op) -> bool {
     match op {
         Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
@@ -434,17 +441,17 @@ impl DepositSpans {
     /// (1), `EditLink` at slot (2), a `Nullify` is `nullify_refusal`'s).
     pub fn of(op: &Op) -> Option<DepositSpans> {
         let Op::MakeLink { home, from, to, ty } = op else { return None };
-        let addrs_spans = |s: &SlotArg| -> Option<Vec<Span>> {
+        let slot = |s: &SlotArg| -> Option<Vec<Span>> {
             match s {
-                SlotArg::Addrs(a) => Some(enc(a.iter()).spans().cloned().collect()),
+                SlotArg::Addrs(a) => Some(addr_spans(a)),
                 SlotArg::Resolve(_) => None,
             }
         };
         Some(DepositSpans {
             home: home.clone(),
-            from: addrs_spans(from)?,
-            to: addrs_spans(to)?,
-            ty: addrs_spans(ty)?,
+            from: slot(from)?,
+            to: slot(to)?,
+            ty: slot(ty)?,
         })
     }
 
@@ -453,21 +460,22 @@ impl DepositSpans {
     }
 }
 
-/// The precheck's answer: the refusal, or the previewed effect. The effect
-/// is returned rather than consumed — the caller reads only the `Ok`/`Err`
-/// discriminant, because the committed tail re-derives from the same
+/// The precheck's answer: the refusal, or nothing. The previewed effect is
+/// deliberately NOT returned — the committed tail re-derives from the same
 /// deposit under the same guard
-/// ([`crate::auth::fold::IdentityFold::step_committed`]), so feeding it
-/// forward would be a second path to one state change.
+/// ([`crate::auth::fold::IdentityFold::step_committed`]), so handing it
+/// forward would be a second path to one state change, and a signature
+/// that offers it invites exactly that.
 ///
-/// `Ok(None)` is AUTH-3.19's defect arm — `NotCredential` at the classify
-/// line is unreachable by construction (the classifier that chose this
-/// path reads the same spans through the same `enc`); if reached, this
-/// assert fires, the write passes with no slot (4)–(8), and the caller
-/// runs the committed tail like any other, where the fold's own step
-/// reaches the same `NotCredential` verdict and does not advance — so
-/// AUTH-3.19's "no fold feed" holds of the OUTCOME and not of the CALL,
-/// and in a debug build `step_committed`'s assert fires second.
+/// The `Ok` taken at the classify line is AUTH-3.19's defect arm —
+/// `NotCredential` there is unreachable by construction (the classifier
+/// that chose this path reads the same spans through the same
+/// [`addr_spans`]); if reached, this assert fires, the write passes with
+/// no slot (4)–(8), and the caller runs the committed tail like any other,
+/// where the fold's own step reaches the same `NotCredential` verdict and
+/// does not advance — so AUTH-3.19's "no fold feed" holds of the OUTCOME
+/// and not of the CALL, and in a debug build `step_committed`'s assert
+/// fires second.
 ///
 /// `world` and `identity` MUST be the pair taken under the write guard for
 /// this request; the guard argument is that contract's cheap half.
@@ -477,27 +485,24 @@ pub(crate) fn precheck(
     identity: &IdentityState,
     dep: &DepositSpans,
     signer: Option<&skep_identity::Fingerprint>,
-) -> Result<Option<Effect>, CredentialRefusal> {
+) -> Result<(), CredentialRefusal> {
     // (3) — the classify preview's verdict (AUTH-2.57): the fold's own
     // order — kind, home account, publication, the per-kind arm.
     let verdict = identity.classify(identity_types(), &WorldCtx(world), &dep.deposit());
     let effect = match verdict {
         Verdict::NotCredential => {
             debug_assert!(false, "classify answered NotCredential on a classified deposit");
-            return Ok(None);
+            return Ok(());
         }
         Verdict::Inert(i) => return Err(CredentialRefusal::Inert(i)),
         Verdict::Honored(e) => e,
     };
     // (4) — undecodable_key: a valid-hex non-point key can never sign; the
-    // fold accepts syntax, the daemon extends the courtesy.
+    // fold accepts syntax, the daemon extends the courtesy. The decode is
+    // the SAME one `super::session::verify` performs, so the courtesy is
+    // exact rather than an approximation of it.
     let keys_decodable = |keys: &[skep_identity::Enrolled]| {
-        keys.iter().all(|e| {
-            <[u8; 32]>::try_from(e.key.raw())
-                .ok()
-                .and_then(|raw| VerifyingKey::from_bytes(&raw).ok())
-                .is_some()
-        })
+        keys.iter().all(|e| super::verifying_key(&e.key).is_some())
     };
     match &effect {
         Effect::Enroll { added, .. } if !keys_decodable(added) => {
@@ -558,7 +563,7 @@ pub(crate) fn precheck(
         // the slot-(3) preview: only the ceremony's own deposits pass.
         return Err(CredentialRefusal::ClaimFirst);
     }
-    Ok(Some(effect))
+    Ok(())
 }
 
 /// The five reserved subtree spans overlap nothing the credential types

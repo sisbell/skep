@@ -79,9 +79,11 @@ serde_json.workspace = true
 # Operation::execute is Sync, so worker threads are the whole concurrency
 # story.
 #
-# Non-poisoning locks: the session map, the subscriber registry, and the
-# commit-stream condvar behind GET /events (the same totality argument M10 §7
-# makes).
+# Non-poisoning locks, used for EVERY lock this crate holds (the same
+# totality argument M10 §7 makes): a panic under one releases it with the
+# data as it stands, which is what serve_connection's unwind note rests on.
+# Deliberately no inventory here — a list in a manifest goes stale in silence
+# while the argument does not.
 parking_lot.workspace = true
 
 [dev-dependencies]

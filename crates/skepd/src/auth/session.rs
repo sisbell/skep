@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::Signature;
 use rand_core::CryptoRng;
 use serde_json::Value;
 use skep_febe::SessionId;
@@ -442,12 +442,12 @@ pub(crate) fn session_payload(origin: &Origin, nonce_hex: &str, p: PrincipalId) 
 }
 
 /// AUTH-4.32 — Ed25519 strict verification (`verify_strict` semantics);
-/// false on an undecodable key or signature; never panics.
+/// false on an undecodable key or signature; never panics. The decode is
+/// [`super::verifying_key`]'s, which is what keeps this and the precheck's
+/// `undecodable_key` slot answering alike.
 fn verify(key: &skep_identity::PublicKey, payload: &[u8], sig: &[u8; 64]) -> bool {
-    let raw: &[u8] = key.raw();
-    let Ok(raw32) = <[u8; 32]>::try_from(raw) else { return false };
-    let Ok(vk) = VerifyingKey::from_bytes(&raw32) else { return false };
-    vk.verify_strict(payload, &Signature::from_bytes(sig)).is_ok()
+    super::verifying_key(key)
+        .is_some_and(|vk| vk.verify_strict(payload, &Signature::from_bytes(sig)).is_ok())
 }
 
 /// AUTH-4.33 — try EVERY enrolled key in fingerprint order — no cutoff,

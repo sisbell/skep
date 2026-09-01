@@ -148,10 +148,11 @@ pub fn claim_board(port: u16) {
     assert!(claimed(port), "the claim link flips the board claimed");
 }
 
-/// Spawn a daemon and CLAIM its board: under the pre-claim admission gate
-/// (RES-27) an unclaimed daemon runs nothing but the ceremony, so every
-/// suite about ordinary op semantics runs post-claim (CLAIMED-PERMISSIVE —
-/// local trust stays the default, so the suites' bare sessions still bind).
+/// Spawn with the local-trust flag NAMED and the board left UNCLAIMED —
+/// [`spawn`]'s first half, and the one way to reach ENFORCING, which is
+/// `local_trust: false` plus a claim. The flag is fixed at open and the
+/// claim is the only runtime transition into that mode, so a caller that
+/// wants it runs the ceremony itself.
 ///
 /// A claimed board's signed arm accepts ONLY the configured origins
 /// (AUTH-4.3's claim-time drop), and a production claimed board is launched
@@ -159,16 +160,24 @@ pub fn claim_board(port: u16) {
 /// that shape. Origins carry the port, and configuration happens at open,
 /// before any listener exists: reserve an ephemeral port first, configure
 /// the loopback origin the suites dial, then serve on the reserved port.
-pub fn spawn(dir: &Path) -> Skepd {
+pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
     let reserved = TcpListener::bind(("127.0.0.1", 0)).expect("reserve an ephemeral port");
     let port = reserved.local_addr().expect("reserved local addr").port();
     let origin =
         Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
-    let opts = AuthOptions { origins: vec![origin], ..AuthOptions::default() };
+    let opts = AuthOptions { local_trust, origins: vec![origin] };
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
     // The reservation held through the slow open; only the rebind gap races.
     drop(reserved);
-    let sd = serve(daemon, port, 4).expect("bind the reserved port");
+    serve(daemon, port, 4).expect("bind the reserved port")
+}
+
+/// Spawn a daemon and CLAIM its board: under the pre-claim admission gate
+/// (RES-27) an unclaimed daemon runs nothing but the ceremony, so every
+/// suite about ordinary op semantics runs post-claim (CLAIMED-PERMISSIVE —
+/// local trust stays the default, so the suites' bare sessions still bind).
+pub fn spawn(dir: &Path) -> Skepd {
+    let sd = spawn_configured(dir, true);
     claim_board(sd.port());
     sd
 }
@@ -260,6 +269,32 @@ pub fn raw_exchange(port: u16, raw: &[u8]) -> (u16, Vec<(String, String)>, Vec<u
     parse_response(&bytes, "raw exchange")
 }
 
+/// One exchange carrying an `Origin` header — the one request header this
+/// suite otherwise never sends, and the one the bare-bind rule reads
+/// (wire.md §Sessions). Written verbatim through [`raw_exchange`], so
+/// [`http_full`]'s signature stays as it is.
+pub fn http_with_origin(
+    port: u16,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    origin: &str,
+    body: &[u8],
+) -> (u16, Vec<(String, String)>, Vec<u8>) {
+    let mut head = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\
+         Origin: {origin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
+        body.len()
+    );
+    if let Some(tok) = token {
+        head.push_str(&format!("Skepd-Session: {tok}\r\n"));
+    }
+    head.push_str("\r\n");
+    let mut bytes = head.into_bytes();
+    bytes.extend_from_slice(body);
+    raw_exchange(port, &bytes)
+}
+
 /// One HTTP exchange; returns (status, body bytes).
 pub fn http(
     port: u16,
@@ -338,13 +373,27 @@ pub struct Sse {
 
 impl Sse {
     pub fn connect(port: u16) -> Sse {
+        Sse::open(port, None).0
+    }
+
+    /// [`Sse::connect`] presenting a token, with the stream HEAD handed
+    /// back: `/events` is the one route whose death signal rides a stream
+    /// head rather than a reply (wire.md §Sessions), written once, at open.
+    pub fn connect_with_token(port: u16, token: &str) -> (Sse, String) {
+        Sse::open(port, Some(token))
+    }
+
+    fn open(port: u16, token: Option<&str>) -> (Sse, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect /events");
         stream.set_read_timeout(Some(Duration::from_millis(100))).expect("read timeout");
-        stream
-            .write_all(
-                b"GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n\r\n",
-            )
-            .expect("write /events request");
+        let mut req = String::from(
+            "GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\nAccept: text/event-stream\r\n",
+        );
+        if let Some(tok) = token {
+            req.push_str(&format!("Skepd-Session: {tok}\r\n"));
+        }
+        req.push_str("\r\n");
+        stream.write_all(req.as_bytes()).expect("write /events request");
         let mut sse = Sse { stream, buf: Vec::new() };
         let head = sse.read_until(b"\r\n\r\n");
         let head = String::from_utf8(head).expect("ascii stream head");
@@ -362,6 +411,12 @@ impl Sse {
             "the event stream carries the CORS header: {head}"
         );
         assert!(
+            lower.contains("access-control-expose-headers: skepd-session"),
+            "the stream head exposes the death signal it may carry — without \
+             it a page on a configured origin cannot read `Skepd-Session: \
+             closed` and sees a dead token behave as a silent guest: {head}"
+        );
+        assert!(
             lower.contains("connection: close"),
             "the event stream declares Connection: close (wire.md §Transport): {head}"
         );
@@ -371,7 +426,7 @@ impl Sse {
              delivers nothing until close, so the stream looks dead while the \
              daemon is healthy: {head}"
         );
-        sse
+        (sse, head)
     }
 
     /// Read (appending to the persistent buffer) until `delim`; returns the

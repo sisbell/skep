@@ -174,6 +174,14 @@ fn requests_outside_the_http_subset_are_refused_malformed_http() {
             "two Expect headers",
             b"POST /op HTTP/1.1\r\nExpect: 100-continue\r\nExpect: nonsense\r\n\r\n".to_vec(),
         ),
+        // The fourth header this daemon reads, and the one the bare-bind
+        // rule turns on: taking the last would let a page name an admitted
+        // origin after naming its own.
+        (
+            "two Origin headers",
+            b"POST /op HTTP/1.1\r\nOrigin: https://evil.example\r\norigin: http://127.0.0.1\r\n\r\n"
+                .to_vec(),
+        ),
     ];
     for (what, raw) in cases {
         let (status, headers, body) = raw_exchange(port, &raw);

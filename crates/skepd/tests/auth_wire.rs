@@ -9,7 +9,7 @@ mod common;
 use common::*;
 use ed25519_dalek::SigningKey;
 use serde_json::Value;
-use skep_identity::{encode_enroll, Enrollment, PublicKey};
+use skep_identity::{encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey};
 
 fn distinct_key(n: u8) -> SigningKey {
     let mut seed = [n; 32];
@@ -21,14 +21,63 @@ fn pubkey(sk: &SigningKey) -> PublicKey {
     PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
 }
 
+/// The fingerprint hex `key_set` publishes for a signing key.
+fn fingerprint_hex(sk: &SigningKey) -> String {
+    Fingerprint::of(&pubkey(sk)).to_hex()
+}
+
 /// One enroll record (device-flagged keys) as its atom JSON fragment.
 fn enroll_atom(keys: &[&SigningKey]) -> String {
+    let flagged: Vec<(&SigningKey, bool)> = keys.iter().map(|sk| (*sk, false)).collect();
+    enroll_atom_flagged(&flagged)
+}
+
+/// One enroll record with the anchor flag named per key.
+fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
     let entries: Vec<Enrollment> = keys
         .iter()
-        .map(|sk| Enrollment::new(pubkey(sk), false, None).expect("no label"))
+        .map(|(sk, anchor)| Enrollment::new(pubkey(sk), *anchor, None).expect("no label"))
         .collect();
     let text = String::from_utf8(encode_enroll(&entries)).expect("utf-8");
     serde_json::to_string(&Value::String(text)).expect("json string")
+}
+
+/// One retire record naming fingerprints, as its atom JSON fragment.
+fn retire_atom(fps: &[&str]) -> String {
+    let parsed: Vec<Fingerprint> =
+        fps.iter().map(|h| Fingerprint::parse_hex(h).expect("64 hex")).collect();
+    let text = String::from_utf8(encode_retire(&parsed)).expect("utf-8");
+    serde_json::to_string(&Value::String(text)).expect("json string")
+}
+
+/// Land one credential record atom at `ordinal` of the claimant's doc 1 and
+/// answer its address. The atom is an ORDINARY write into a published home,
+/// so it needs a session the publish gate admits — a signed one on a
+/// claimed board. Kept apart from [`deposit`] for exactly that reason: the
+/// two writes meet different gates, and only the second is the credential
+/// path's.
+fn record_atom(port: u16, signed: &str, ordinal: u64, atom: &str) -> String {
+    let v = op(
+        port,
+        Some(signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    format!("{CLAIMANT_DOC1}.0.1.{ordinal}")
+}
+
+/// The deposit naming an already-landed record — the credential write under
+/// test, and the one the precheck's ordered slots judge.
+fn deposit(port: u16, token: &str, atom_addr: &str, ty: &str) -> Value {
+    op(
+        port,
+        Some(token),
+        &format!(
+            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{ty}"]}}}}"#
+        ),
+    )
 }
 
 fn rejected_detail(v: &Value) -> String {
@@ -503,5 +552,441 @@ fn op_shape_slots_fire_ahead_of_the_lock() {
     );
     let v = op(port, Some(&signed), &vspec_from);
     assert_eq!(rejected_detail(&v), "credential_refused:resolved_from");
+    sd.shutdown();
+}
+
+/// The `Origin` header at the wire — the bare-bind rule's other conjunct,
+/// and the fence wire.md's `Access-Control-Allow-Origin: *` rests on
+/// (§Cross-origin access: a foreign page's POST is fenced by the daemon,
+/// not by what the browser lets it read back). No other test in this suite
+/// sends the header, so the path from `read_request` to `bare_bind_allowed`
+/// was carried by nothing: with it cut, `origin` is `None` everywhere and
+/// every foreign origin is admitted.
+///
+/// The second half is the rule the three-valued answer exists for: a
+/// refused origin runs THAT REQUEST as a guest and the binding LIVES — no
+/// death, no signal.
+#[test]
+fn the_origin_header_fences_the_bare_bind_without_killing_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let dialed = format!("http://127.0.0.1:{port}");
+    let sibling = format!("http://localhost:{port}"); // a loopback default
+    let bare_body = format!("{{\"principal\":{CLAIMANT_PRINCIPAL}}}");
+    let draft = format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#);
+
+    // POST /session, bare: the dialed origin and its loopback sibling bind;
+    // a foreign one is the ONE 401.
+    for ok in [&dialed, &sibling] {
+        let (st, _, body) =
+            http_with_origin(port, "POST", "/session", None, ok, bare_body.as_bytes());
+        assert_eq!(st, 200, "'{ok}' is in the bare set: {}", String::from_utf8_lossy(&body));
+    }
+    for bad in ["https://evil.example", "null", "http://127.0.0.1:9999"] {
+        let (st, _, body) =
+            http_with_origin(port, "POST", "/session", None, bad, bare_body.as_bytes());
+        assert_eq!(st, 401, "'{bad}' is outside the bare set: {}", String::from_utf8_lossy(&body));
+        assert_eq!(json(&body)["error"].as_str(), Some("session_rejected"));
+    }
+
+    // A LIVE bare session, presented from a foreign origin: that request
+    // runs as a guest…
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let (st, headers, body) = http_with_origin(
+        port,
+        "POST",
+        "/op",
+        Some(&bare),
+        "https://evil.example",
+        draft.as_bytes(),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(
+        json(&body)["code"].as_str(),
+        Some("unauthenticated"),
+        "a bare session off the bare set writes nothing: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        header(&headers, "Skepd-Session").is_none(),
+        "refused-for-this-request is NOT death: the entry lives and nothing signals"
+    );
+    // …and the SAME token still writes, which is what makes the line above
+    // a statement about the request rather than about the session.
+    expect_resp(&op(port, Some(&bare), &draft), "ack_addr");
+    let (st, _, body) =
+        http_with_origin(port, "POST", "/op", Some(&bare), &dialed, draft.as_bytes());
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&body));
+    expect_resp(&json(&body), "ack_addr");
+
+    sd.shutdown();
+}
+
+/// Retirement, whole: the anchor gate on both its triggers, and the session
+/// death a retirement produces. `T_RETIRE` was declared and used by no
+/// test, so the retire kind, `anchor_session_required`, and one of the four
+/// documented ways a session ends were all unwatched — on the path that IS
+/// credential revocation.
+#[test]
+fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let device_fp = fingerprint_hex(&device_key());
+    let anchor_fp = fingerprint_hex(&anchor_key());
+    let s_dev = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let s_anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+
+    // Trigger 1 — an ANCHOR retirement from a non-anchor session refuses.
+    let record = record_atom(port, &s_dev, 2, &retire_atom(&[&anchor_fp]));
+    let v = deposit(port, &s_dev, &record, T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
+    // …and a BARE session never satisfies it either (§Credential refusals),
+    // which is slot (6) answering ahead of slot (7)'s
+    // `signed_session_required` — the order wire.md pins. The record atom is
+    // the signed session's, since a bare write into the published home dies
+    // at the publish gate before the credential path is reached at all.
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let v = deposit(port, &bare, &record, T_RETIRE);
+    assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
+
+    // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
+    let fresh = distinct_key(9);
+    let flagged = record_atom(port, &s_dev, 3, &enroll_atom_flagged(&[(&fresh, true)]));
+    let v = deposit(port, &s_dev, &flagged, T_ENROLL);
+    assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
+    // The same enrollment UNFLAGGED passes, so the gate is the FLAG and not
+    // the act.
+    let plain = record_atom(port, &s_dev, 4, &enroll_atom_flagged(&[(&fresh, false)]));
+    expect_resp(&deposit(port, &s_dev, &plain, T_ENROLL), "ack_addr");
+
+    // The anchor's own session retires the device key.
+    let retire = record_atom(port, &s_anchor, 5, &retire_atom(&[&device_fp]));
+    expect_resp(&deposit(port, &s_anchor, &retire, T_RETIRE), "ack_addr");
+
+    // key_set moves the fingerprint from enrolled to retired.
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let names = |field: &str| -> Vec<String> {
+        v[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("{field}: {v}"))
+            .iter()
+            .map(|e| e["fingerprint"].as_str().expect("fp").to_string())
+            .collect()
+    };
+    assert!(!names("enrolled").contains(&device_fp), "the retired key leaves enrolled: {v}");
+    assert!(names("retired").contains(&device_fp), "and appears retired: {v}");
+    assert!(names("enrolled").contains(&anchor_fp), "the anchor is untouched: {v}");
+
+    // THE POINT: the session that key established is dead — closed and
+    // signalled, not silently a guest.
+    let (st, headers, body) = http_full(
+        port,
+        "POST",
+        "/op",
+        Some(&s_dev),
+        format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#).as_bytes(),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(
+        json(&body)["code"].as_str(),
+        Some("unauthenticated"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        header(&headers, "Skepd-Session"),
+        Some("closed"),
+        "a retirement kills the sessions its key established"
+    );
+    // And no NEW session can be established with it: the handshake reads
+    // the same enrolled set.
+    let (st, body) =
+        http(port, "GET", &format!("/challenge?principal={CLAIMANT_PRINCIPAL}"), None, b"");
+    assert_eq!(st, 200);
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+    let origin = format!("http://127.0.0.1:{port}");
+    let sig = sign_session(&device_key(), &origin, &nonce, CLAIMANT_PRINCIPAL);
+    let (st, _) = http(
+        port,
+        "POST",
+        "/session",
+        None,
+        format!(
+            "{{\"principal\":{CLAIMANT_PRINCIPAL},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+        )
+        .as_bytes(),
+    );
+    assert_eq!(st, 401, "a retired key signs nothing");
+
+    // The anchor's own session is untouched by the retirement it made.
+    let v = op(
+        port,
+        Some(&s_anchor),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+
+    sd.shutdown();
+}
+
+/// ENFORCING (§Identity) — the mode no other test instantiates, and the
+/// claim flip as the one runtime transition that reaches it, since
+/// `--local-trust` is fixed at open and pre-claim the flag is not consulted.
+///
+/// The load-bearing half is that a bare binding DIES rather than being
+/// refused: `BareBind::ModeRefused` maps to `EntryDead` and
+/// `RequestRefused` to a live entry, which is the whole reason that enum
+/// has three arms, and no test at any level had covered the first.
+#[test]
+fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_configured(dir.path(), false);
+    let port = sd.port();
+    // Pre-claim the flag is not consulted, so the bare bind binds and the
+    // ceremony — which is bare work until its last step — runs.
+    let bare = open_session(port, 0);
+    expect_resp(&op(port, Some(&bare), r#"{"op":"next_account_prefix","parent":"1"}"#), "maybe_addr");
+    claim_board(port);
+    assert!(claimed(port));
+
+    // The flip retires it: closed and signalled, not a live entry refused
+    // for this request.
+    let (st, headers, body) =
+        http_full(port, "POST", "/op", Some(&bare), br#"{"op":"register_node","addr":"1.7"}"#);
+    assert_eq!(st, 200);
+    assert_eq!(
+        json(&body)["code"].as_str(),
+        Some("unauthenticated"),
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_eq!(
+        header(&headers, "Skepd-Session"),
+        Some("closed"),
+        "ENFORCING kills a bare entry at presentation; it does not merely refuse it"
+    );
+
+    // No new bare session opens…
+    let (st, body) = http(port, "POST", "/session", None, br#"{"principal":0}"#);
+    assert_eq!(st, 401, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(json(&body)["error"].as_str(), Some("session_rejected"));
+    // …and the signed arm is unaffected: only signed sessions write.
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+
+    // /health publishes the pair the mode derives from — there is no
+    // `.mode` field, so this is what a client reads it off.
+    let a = json(&get(port, "/health").1)["auth"].clone();
+    assert_eq!(a["local_trust"].as_bool(), Some(false));
+    assert!(!a["claimant"].is_null(), "claimed + !local_trust IS enforcing: {a}");
+
+    sd.shutdown();
+}
+
+/// wire.md §Sessions fixes the death signal's routes as a table: six carry
+/// it, four are token-blind. Two rows were watched. The negative half
+/// matters as much — `/health` is what a client polls, and a signal there
+/// says a session died that did not.
+#[test]
+fn the_death_signal_rides_exactly_the_documented_routes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    // A token whose binding this daemon has closed.
+    let dead = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (st, _, _) = http_full(port, "POST", "/session/close", Some(&dead), b"");
+    assert_eq!(st, 204);
+
+    let signalled = |method: &str, path: &str, body: &[u8]| -> Option<String> {
+        let (_, headers, _) = http_full(port, method, path, Some(&dead), body);
+        header(&headers, "Skepd-Session").map(str::to_string)
+    };
+
+    let mut carries: Vec<(&str, &str, &[u8])> = vec![
+        ("POST", "/op", br#"{"op":"next_account_prefix","parent":"1"}"#),
+        ("POST", "/op-at", br#"{"at":0,"frame":{"op":"next_account_prefix","parent":"1"}}"#),
+        ("GET", "/changes?since=0", b""),
+        ("POST", "/session/close", b""),
+    ];
+    #[cfg(feature = "observe")]
+    carries.push(("GET", "/dump", b""));
+    for (method, path, body) in carries {
+        assert_eq!(
+            signalled(method, path, body).as_deref(),
+            Some("closed"),
+            "{method} {path} carries the death signal"
+        );
+    }
+
+    // Token-blind: presenting the same dead token changes nothing.
+    let blind: [(&str, &str, &[u8]); 3] = [
+        ("GET", "/health", b""),
+        ("GET", "/challenge?principal=1", b""),
+        ("POST", "/session", br#"{"principal":1}"#),
+    ];
+    for (method, path, body) in blind {
+        assert_eq!(
+            signalled(method, path, body),
+            None,
+            "{method} {path} is token-blind: no signal, however dead the token"
+        );
+    }
+
+    // `/events` — the one signal that rides a STREAM HEAD rather than a
+    // reply, written once, at open.
+    let (mut stream, head) = Sse::connect_with_token(port, &dead);
+    assert!(
+        head.to_ascii_lowercase().contains("skepd-session: closed"),
+        "a dead token meets the signal on the stream's own head: {head}"
+    );
+    stream.expect_commit(); // and the stream still serves
+    let live = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let (mut alive, head) = Sse::connect_with_token(port, &live);
+    assert!(
+        !head.to_ascii_lowercase().contains("skepd-session: closed"),
+        "a live token's stream head carries no death signal: {head}"
+    );
+    alive.expect_commit();
+
+    sd.shutdown();
+}
+
+/// AUTH-4.33 / wire.md §Sessions: every enrolled key is tried in
+/// fingerprint order, "no cutoff, ever". Every signed handshake in this
+/// suite signs with the device key, and whether that key sorts first is an
+/// accident of SHA-256 over two fixed seeds — so a cutoff-after-first was
+/// caught by chance or not at all. The signer is CHOSEN here from
+/// `key_set`'s own published order, which makes both ends instances of the
+/// law whatever the seeds hash to.
+#[test]
+fn every_enrolled_key_signs_including_the_last_in_fingerprint_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    let fps: Vec<String> = v["enrolled"]
+        .as_array()
+        .expect("enrolled")
+        .iter()
+        .map(|e| e["fingerprint"].as_str().expect("fp").to_string())
+        .collect();
+    assert_eq!(fps.len(), 2, "the ceremony enrolls the anchor and the device key: {v}");
+    let by_fp = |want: &str| -> SigningKey {
+        for k in [anchor_key(), device_key()] {
+            if fingerprint_hex(&k) == want {
+                return k;
+            }
+        }
+        panic!("{want} is one of the ceremony's keys");
+    };
+    for (which, fp) in [("first", &fps[0]), ("last", &fps[1])] {
+        let token = open_signed_session(port, CLAIMANT_PRINCIPAL, &by_fp(fp));
+        let v = op(
+            port,
+            Some(&token),
+            &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+        );
+        assert_eq!(
+            v["resp"].as_str(),
+            Some("ack_addr"),
+            "{which}-in-fingerprint-order established a session that writes: {v}"
+        );
+    }
+    sd.shutdown();
+}
+
+/// The ONE 401 (AUTH-6.5), over the FAMILY of causes rather than one point:
+/// every handshake failure answers the same bytes, because the whole design
+/// of `SessionRejected` is that a client learns nothing about WHICH check
+/// failed. Each row is a different arm of `handshake`.
+///
+/// Expiry is the one cause deliberately omitted: reaching it needs the 60 s
+/// TTL, and a sleeping test is the wrong trade.
+#[test]
+fn every_handshake_failure_answers_the_same_401_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let p = CLAIMANT_PRINCIPAL;
+    let origin = format!("http://127.0.0.1:{port}");
+    let nonce_for = |principal: u64| {
+        let (st, body) =
+            http(port, "GET", &format!("/challenge?principal={principal}"), None, b"");
+        assert_eq!(st, 200);
+        json(&body)["nonce"].as_str().expect("nonce").to_string()
+    };
+    let signed = |principal: u64, nonce: &str, org: &str, sk: &SigningKey| {
+        let sig = sign_session(sk, org, nonce, principal);
+        format!(
+            "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{org}\",\"sig\":\"{sig}\"}}"
+        )
+    };
+
+    // The nonce this row reuses must first be SPENT on a success.
+    let reused = nonce_for(p);
+    let (st, _) = http(
+        port,
+        "POST",
+        "/session",
+        None,
+        signed(p, &reused, &origin, &device_key()).as_bytes(),
+    );
+    assert_eq!(st, 200, "the first use of a nonce succeeds");
+
+    let rows: Vec<(&str, String)> = vec![
+        (
+            "an origin outside the signed set",
+            signed(p, &nonce_for(p), "https://evil.example", &device_key()),
+        ),
+        ("an unknown nonce", signed(p, &"ab".repeat(32), &origin, &device_key())),
+        ("a reused nonce", signed(p, &reused, &origin, &device_key())),
+        ("a nonce issued for another principal", signed(p, &nonce_for(p + 1), &origin, &device_key())),
+        (
+            "a principal with no account",
+            signed(p + 77, &nonce_for(p + 77), &origin, &device_key()),
+        ),
+        (
+            "a signature from an unenrolled key",
+            signed(p, &nonce_for(p), &origin, &distinct_key(21)),
+        ),
+        (
+            "principal 0, whose subject is the claimant, signing with a foreign key",
+            signed(0, &nonce_for(0), &origin, &distinct_key(22)),
+        ),
+    ];
+    for (what, body) in rows {
+        let (st, headers, body) = http_full(port, "POST", "/session", None, body.as_bytes());
+        assert_eq!(st, 401, "{what}");
+        assert_eq!(
+            String::from_utf8(body).expect("utf-8"),
+            r#"{"error":"session_rejected"}"#,
+            "{what}: one code, byte-identical, no detail"
+        );
+        assert!(header(&headers, "Skepd-Session").is_none(), "{what}: /session is token-blind");
+    }
+    // The BARE arm answers the same bytes: its refusal needs an origin
+    // outside the bare set, which only the header can supply.
+    let (st, _, body) = http_with_origin(
+        port,
+        "POST",
+        "/session",
+        None,
+        "https://evil.example",
+        format!("{{\"principal\":{p}}}").as_bytes(),
+    );
+    assert_eq!(st, 401);
+    assert_eq!(
+        String::from_utf8(body).expect("utf-8"),
+        r#"{"error":"session_rejected"}"#,
+        "the bare arm's refusal is the same one code"
+    );
+
     sd.shutdown();
 }

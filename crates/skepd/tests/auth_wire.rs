@@ -3,11 +3,20 @@
 //! Genesis exempt), the publish and pre-claim gates' accept AND refuse
 //! cells, `key_set` on `/op` and `/op-at`, `/health.auth`, and restart
 //! carrying the identity fold back (recovery = the canonical rebuild).
+//!
+//! And the refusals a credential deposit can be handed, which is where the
+//! one-way doors are: the claim's three eligibility laws (keyless,
+//! first-wins, tier) — each of which, once wrong, is unrecoverable because
+//! a claimant never moves — the home pin and the precedence that decides
+//! which token a wrong-home deposit gets, the `malformed_payload:<sub>`
+//! join this crate composes rather than delegates, `undecodable_key`, and
+//! the credential idempotency memo, whose contract differs from M10's on
+//! exactly one point (the hit is kind-BLIND).
 
 mod common;
 
 use common::*;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use skep_identity::{encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey};
 
@@ -26,6 +35,13 @@ fn fingerprint_hex(sk: &SigningKey) -> String {
     Fingerprint::of(&pubkey(sk)).to_hex()
 }
 
+/// Arbitrary record text as its atom JSON fragment — the escape every
+/// record atom in this file takes, so a payload no parser admits is written
+/// the same way a well-formed one is.
+fn json_atom(text: &str) -> String {
+    serde_json::to_string(&Value::String(text.to_string())).expect("json string")
+}
+
 /// One enroll record (device-flagged keys) as its atom JSON fragment.
 fn enroll_atom(keys: &[&SigningKey]) -> String {
     let flagged: Vec<(&SigningKey, bool)> = keys.iter().map(|sk| (*sk, false)).collect();
@@ -38,16 +54,14 @@ fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
         .iter()
         .map(|(sk, anchor)| Enrollment::new(pubkey(sk), *anchor, None).expect("no label"))
         .collect();
-    let text = String::from_utf8(encode_enroll(&entries)).expect("utf-8");
-    serde_json::to_string(&Value::String(text)).expect("json string")
+    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
 }
 
 /// One retire record naming fingerprints, as its atom JSON fragment.
 fn retire_atom(fps: &[&str]) -> String {
     let parsed: Vec<Fingerprint> =
         fps.iter().map(|h| Fingerprint::parse_hex(h).expect("64 hex")).collect();
-    let text = String::from_utf8(encode_retire(&parsed)).expect("utf-8");
-    serde_json::to_string(&Value::String(text)).expect("json string")
+    json_atom(&String::from_utf8(encode_retire(&parsed)).expect("utf-8"))
 }
 
 /// Land one credential record atom at `ordinal` of the claimant's doc 1 and
@@ -71,13 +85,55 @@ fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str) -> Strin
 /// The deposit naming an already-landed record — the credential write under
 /// test, and the one the precheck's ordered slots judge.
 fn deposit(port: u16, token: &str, atom_addr: &str, ty: &str) -> Value {
+    op(port, Some(token), &deposit_frame(None, atom_addr, ty))
+}
+
+/// [`deposit`]'s frame, optionally carrying an idempotency `id` — spelled
+/// out because the credential memo is keyed on that field, so a test about
+/// the memo must set it and a test about the slots must not.
+fn deposit_frame(id: Option<&str>, atom_addr: &str, ty: &str) -> String {
+    let id = id.map(|id| format!(r#""id":"{id}","#)).unwrap_or_default();
+    format!(
+        r#"{{"op":"make_link",{id}"home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{ty}"]}}}}"#
+    )
+}
+
+/// The claim ceremony's own last step, parameterized: `from` names the
+/// claiming account, `to` is empty, and the deposit carries no payload at
+/// all (AUTH-2.48), so — unlike [`deposit`] — it needs no record atom.
+/// Every eligibility law refuses exactly this frame.
+fn claim_deposit(port: u16, token: &str, doc1: &str, account: &str) -> Value {
     op(
         port,
         Some(token),
         &format!(
-            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{ty}"]}}}}"#
+            r#"{{"op":"make_link","home":"{doc1}","from":{{"addrs":["{account}"]}},"to":{{"addrs":[]}},"ty":{{"addrs":["{T_CLAIM}"]}}}}"#
         ),
     )
+}
+
+/// Delegate a fresh account under `parent` from `by`'s session, mint its
+/// doc 1 (the MINT-FIRST home), and answer `(account, doc 1, a session
+/// bound to it)` — the seat every claim-eligibility cell below is judged
+/// against.
+fn seat_account(port: u16, by: &str, parent: &str, id: u64) -> (String, String, String) {
+    let v = op(port, Some(by), &format!(r#"{{"op":"next_account_prefix","parent":"{parent}"}}"#));
+    let account =
+        expect_resp(&v, "maybe_addr")["addr"].as_str().expect("a delegable prefix").to_string();
+    let v = op(
+        port,
+        Some(by),
+        &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":{id}}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let session = open_session(port, id);
+    let v = op(
+        port,
+        Some(&session),
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    let doc1 = acked_addr(&v);
+    (account, doc1, session)
 }
 
 fn rejected_detail(v: &Value) -> String {
@@ -116,6 +172,85 @@ fn pre_claim_gate_admits_only_the_ceremony() {
     // …and the same ordinary write commits once claimed.
     let v = op(port, Some(&boot), r#"{"op":"register_node","addr":"1.2"}"#);
     expect_resp(&v, "ack_addr");
+    sd.shutdown();
+}
+
+/// The claim's KEYLESS law (wire.md §The claim ceremony: only an account
+/// "with a non-empty key set" may claim), and the first of the three
+/// one-way doors the ceremony carries.
+///
+/// The failure is unrecoverable rather than merely wrong. A claimant is set
+/// once and never moves (I6), so a board claimed by a keyless account can
+/// never establish a signed session for it: `signed_origins` drops to the
+/// configured set, `--local-trust off` then admits nothing at all, and no
+/// enrollment can reach that account either, since slot (7) is arm-blind
+/// and its own genesis would need the signed session it cannot have.
+#[test]
+fn a_keyless_top_level_account_cannot_claim_the_board() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // UNCLAIMED and never claimed by the ceremony: this account must be the
+    // board's first delegate, which is the seat `claim_board` would take.
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    let (account, doc1, session) = seat_account(port, &boot, "1", 701);
+
+    let v = claim_deposit(port, &session, &doc1, &account);
+    assert_eq!(rejected_detail(&v), "credential_refused:claimant_keyless");
+    assert!(
+        !claimed(port),
+        "and the board is still unclaimed — the refusal is the whole point, since \
+         a claimant that cannot sign is permanent"
+    );
+    sd.shutdown();
+}
+
+/// The claim's FIRST-WINS law (wire.md §The claim ceremony: "first claim
+/// wins, permanently"). The frame is the ceremony's own, byte for byte, so
+/// what refuses it is the board's state and nothing about the deposit.
+#[test]
+fn first_claim_wins_permanently() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    let v = claim_deposit(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT);
+    assert_eq!(rejected_detail(&v), "credential_refused:already_claimed");
+    assert_eq!(
+        json(&get(port, "/health").1)["auth"]["claimant"].as_str(),
+        Some(CLAIMANT_ACCOUNT),
+        "and the claimant did not move"
+    );
+    sd.shutdown();
+}
+
+/// The claim's TIER law (wire.md §The claim ceremony: only a "top-level
+/// (bootstrap-delegated) account" may claim) — and, in the same answer, the
+/// order the fold pins among the three: the delegator test runs AHEAD of
+/// first-wins (AUTH-2.68), so on a CLAIMED board a nested account's claim
+/// answers `claimant_not_top_level` and never `already_claimed`.
+#[test]
+fn only_a_bootstrap_delegated_account_can_claim() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // A sub-account UNDER the claimant: its delegator is an account
+    // principal rather than the bootstrap one, so its tier is the law's.
+    let (nested, nested_doc1, nested_session) =
+        seat_account(port, &signed, CLAIMANT_ACCOUNT, 702);
+
+    let v = claim_deposit(port, &nested_session, &nested_doc1, &nested);
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:claimant_not_top_level",
+        "the delegator test precedes first-wins, so this is not already_claimed"
+    );
+    assert_eq!(
+        json(&get(port, "/health").1)["auth"]["claimant"].as_str(),
+        Some(CLAIMANT_ACCOUNT)
+    );
     sd.shutdown();
 }
 
@@ -419,6 +554,212 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
     let v = genesis(2, &refs[..GENESIS_KEY_CAP]);
     expect_resp(&v, "ack_addr");
     assert_eq!(enrolled(), GENESIS_KEY_CAP, "a genesis AT the cap seeds every key");
+
+    sd.shutdown();
+}
+
+/// The credential idempotency memo (wire.md §Correlation and idempotency):
+/// the ORIGINAL acknowledgment, byte-identical, with no re-execution; the
+/// hit KIND-BLIND on the `id` alone; and the memo per session.
+///
+/// Its absence is not silence but a wrong answer that looks right. A client
+/// that lost an ack and retries meets a deposit that re-executes and
+/// classifies `nothing_changed` — a PERMANENT-disposition refusal for a
+/// write that in fact committed — so the client concludes its enrollment
+/// failed. And the kind-blindness is the opposite of M10's op-kind-matched
+/// memo one route away, so the module runs two memos whose rules differ on
+/// exactly this point.
+///
+/// What (c) does NOT prove, said here rather than left to be inferred: a
+/// reopened session carries a fresh `SessionId`, so no exchange can tell
+/// "purged when its session closed" from "keyed by session". The purge
+/// half of the contract is unobservable from the wire and stays unwatched.
+#[test]
+fn a_credential_retry_replays_the_original_ack_kind_blind_and_per_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let record = record_atom(port, &signed, 2, &enroll_atom(&[&distinct_key(5)]));
+    let frame = deposit_frame(Some("k1"), &record, T_ENROLL);
+
+    let (st, first) = http(port, "POST", "/op", Some(&signed), frame.as_bytes());
+    assert_eq!(st, 200, "{}", String::from_utf8_lossy(&first));
+    expect_resp(&json(&first), "ack_addr");
+
+    // (a) Byte-identical — and that IS the proof no execution happened: a
+    // re-executed identical enroll adds no key and answers
+    // `nothing_changed`, so an equal ack could not have come from one.
+    let (_, again) = http(port, "POST", "/op", Some(&signed), frame.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&again),
+        String::from_utf8_lossy(&first),
+        "the ORIGINAL ack, byte-identical"
+    );
+
+    // (b) KIND-BLIND — the id alone. A RETIRE deposit under the same id
+    // answers the enroll's ack; executed, it would read that enrollment
+    // record as a retirement and answer `malformed_payload:bad_header`.
+    let other = deposit_frame(Some("k1"), &record, T_RETIRE);
+    let (_, blind) = http(port, "POST", "/op", Some(&signed), other.as_bytes());
+    assert_eq!(
+        String::from_utf8_lossy(&blind),
+        String::from_utf8_lossy(&first),
+        "the hit is on the id, not on the frame or its kind"
+    );
+
+    // (c) PER-SESSION: another session recalls nothing, so the identical
+    // frame executes — and answers what a re-execution answers.
+    let second = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&second), &frame);
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:nothing_changed",
+        "another session's memo is empty, so the deposit re-executes"
+    );
+
+    // (d) A refusal is never memoized: after one under `kr`, the same id
+    // carries the next frame through.
+    let bad = record_atom(port, &signed, 3, &json_atom("nonsense"));
+    let v = op(port, Some(&signed), &deposit_frame(Some("kr"), &bad, T_ENROLL));
+    assert_eq!(rejected_detail(&v), "credential_refused:malformed_payload:bad_header");
+    let good = record_atom(port, &signed, 4, &enroll_atom(&[&distinct_key(6)]));
+    expect_resp(&op(port, Some(&signed), &deposit_frame(Some("kr"), &good, T_ENROLL)), "ack_addr");
+
+    sd.shutdown();
+}
+
+/// The payload family's `malformed_payload:<sub>` join (wire.md §Credential
+/// refusals) — the one wire detail this crate COMPOSES rather than
+/// delegates. `Inert::token()` answers the bare `malformed_payload`, and
+/// the sub exists only because `CredentialRefusal::token()` carries an arm
+/// of its own for it; the two arms look redundant, and collapsing them
+/// emits a token that is not in the documented set at all, on the family
+/// that tells an operator WHY their record was rejected.
+#[test]
+fn a_malformed_record_names_its_payload_fault_after_the_join() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    // The header is byte-exact, so a record that is not one dies at line 1.
+    let bad_header = record_atom(port, &signed, 2, &json_atom("nonsense"));
+    assert_eq!(
+        rejected_detail(&deposit(port, &signed, &bad_header, T_ENROLL)),
+        "credential_refused:malformed_payload:bad_header"
+    );
+    // A PARAMETERIZED sub — two colons, and the 1-based line number the
+    // document fixes (the header is line 1, so a bad first key line is 2).
+    let bad_line = record_atom(port, &signed, 3, &json_atom("skep-enroll v1\nnope"));
+    assert_eq!(
+        rejected_detail(&deposit(port, &signed, &bad_line, T_ENROLL)),
+        "credential_refused:malformed_payload:bad_line:2"
+    );
+
+    sd.shutdown();
+}
+
+/// Thirty-two bytes that are valid hex and are NOT a canonical Ed25519
+/// point, derived from the verifier's own answer rather than hardcoded:
+/// roughly half of all 32-byte strings fail decompression, and the panic
+/// below is what keeps a search that finds nothing from passing silently.
+fn non_point_hex() -> String {
+    for n in 0u8..=255 {
+        if VerifyingKey::from_bytes(&[n; 32]).is_err() {
+            return hex(&[n; 32]);
+        }
+    }
+    panic!("no non-point among the 256 constant-byte candidates");
+}
+
+/// wire.md §Credential refusals: a valid-hex key that decodes to no
+/// Ed25519 point is "refused at enrollment rather than discovered at a
+/// handshake". The fold is syntax-only by contract (AUTH-1.4 — the curve
+/// point is never decoded), so such a record parses and classifies
+/// honored: `precheck`'s slot (4) is the ONLY thing standing between it
+/// and a permanently seated key that occupies a slot against the enrolled
+/// cap and that `find_signer` walks on every unauthenticated handshake
+/// attempt — retirable only by an anchor session of that account.
+#[test]
+fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+
+    let key = PublicKey::parse("ed25519", &non_point_hex())
+        .expect("64 hex parses — the fold admits syntax and never decodes the point");
+    let text = String::from_utf8(encode_enroll(&[
+        Enrollment::new(key, false, None).expect("no label")
+    ]))
+    .expect("utf-8");
+    let record = record_atom(port, &signed, 2, &json_atom(&text));
+    assert_eq!(
+        rejected_detail(&deposit(port, &signed, &record, T_ENROLL)),
+        "credential_refused:undecodable_key"
+    );
+
+    // …and it seated nothing: the set is still the ceremony's two.
+    let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
+    assert_eq!(v["enrolled"].as_array().expect("enrolled").len(), 2, "{v}");
+
+    sd.shutdown();
+}
+
+/// The home pin (RES-17, wire.md §The claim ceremony): a credential link
+/// homed in any document of its account other than doc 1 refuses
+/// `not_doc_one` — which is what confines an account's credential state to
+/// one address, and what two of `policy.rs`'s arguments (`is_published_v1`'s
+/// agreement with the fold's constant, and `key_set`'s one home) rest on.
+///
+/// The second cell is the precedence AUTH-2.127 pins and the only place it
+/// is observable: the payload is parsed BEFORE the pin, so a wrong-home
+/// deposit whose record is unparseable answers `malformed_payload`, never
+/// `not_doc_one`.
+#[test]
+fn a_credential_homed_outside_doc_1_refuses_not_doc_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // A DRAFT of the claimant's — a document of its account that is not
+    // doc 1. Home anchoring puts the record atom in the same document.
+    let v = op(
+        port,
+        Some(&signed),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+    );
+    let draft = acked_addr(&v);
+    let deposit_in_draft = |ordinal: u64, atom: &str| -> Value {
+        let v = op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+            ),
+        );
+        expect_resp(&v, "ack_addr");
+        op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"make_link","home":"{draft}","from":{{"addrs":["{draft}.0.1.{ordinal}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            ),
+        )
+    };
+
+    // A WELL-FORMED record in the wrong home: the pin answers.
+    assert_eq!(
+        rejected_detail(&deposit_in_draft(1, &enroll_atom(&[&distinct_key(7)]))),
+        "credential_refused:not_doc_one"
+    );
+    // The same wrong home with an unparseable record answers the PAYLOAD
+    // fault instead — the parse precedes the pin.
+    assert_eq!(
+        rejected_detail(&deposit_in_draft(2, &json_atom("nonsense"))),
+        "credential_refused:malformed_payload:bad_header"
+    );
 
     sd.shutdown();
 }

@@ -63,7 +63,7 @@ const OK: &str = "ok";
 const NOT_OWNER: &str = "not_owner";
 const UNAUTHENTICATED: &str = "unauthenticated";
 /// The RES-26 refusal, `code:detail` (the `auth_wire` convention).
-const SIGNED_REQUIRED: &str = "credential_refused:signed_session_required";
+const SIGNED_SESSION_REQUIRED: &str = "credential_refused:signed_session_required";
 
 struct Row {
     label: &'static str,
@@ -82,7 +82,7 @@ const MATRIX: &[Row] = &[
     // ── the publish gate (RES-26): the same insert homed in the owner's
     //    PUBLISHED doc 1 — the one cell where the bare owner is refused ──
     Row { label: "insert (published doc 1)",
-                                          expect: [SIGNED_REQUIRED,
+                                          expect: [SIGNED_SESSION_REQUIRED,
                                                        NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "delete",                expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "rearrange",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
@@ -467,7 +467,7 @@ fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
     let v = op(port, Some(&bare), &frame);
     assert_eq!(
         verdict(&v),
-        SIGNED_REQUIRED,
+        SIGNED_SESSION_REQUIRED,
         "{walk}: the claimant's bare write into its published home: {v}"
     );
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());

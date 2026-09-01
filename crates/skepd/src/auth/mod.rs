@@ -45,14 +45,19 @@ pub struct AuthOptions {
     /// when true; ENFORCING when false. Pre-claim the flag is not consulted
     /// (AUTH-4.26's mode conjunct short-circuits on `!claimed`).
     pub local_trust: bool,
-    /// The configured origin set — the signed arm's whole set once claimed;
+    /// The CONFIGURED origin set — the signed arm's whole set once claimed;
     /// unioned with the loopback defaults on the bare arm.
-    pub origins: Vec<Origin>,
+    ///
+    /// Deliberately not `origins`: `/health` publishes a field of that name
+    /// (AUTH-6.13) and it is the BARE set — configured ∪ the three loopback
+    /// defaults — so copying that field back into this one re-admits the
+    /// defaults the claim-time drop exists to remove.
+    pub configured: Vec<Origin>,
 }
 
 impl Default for AuthOptions {
     fn default() -> AuthOptions {
-        AuthOptions { local_trust: true, origins: Vec::new() }
+        AuthOptions { local_trust: true, configured: Vec::new() }
     }
 }
 
@@ -72,7 +77,7 @@ impl AuthConfig {
     fn new(opts: AuthOptions) -> AuthConfig {
         AuthConfig {
             local_trust: opts.local_trust,
-            configured: opts.origins.into_iter().collect(),
+            configured: opts.configured.into_iter().collect(),
             port: OnceLock::new(),
         }
     }
@@ -499,10 +504,10 @@ mod tests {
         assert_eq!(at_80, ["http://127.0.0.1", "http://[::1]", "http://localhost"]);
     }
 
-    fn cfg_with(port: u16, local_trust: bool, origins: &[&str]) -> AuthConfig {
+    fn cfg_with(port: u16, local_trust: bool, configured: &[&str]) -> AuthConfig {
         let cfg = AuthConfig::new(AuthOptions {
             local_trust,
-            origins: origins.iter().map(|s| Origin::parse(s).expect("canonical")).collect(),
+            configured: configured.iter().map(|s| Origin::parse(s).expect("canonical")).collect(),
         });
         cfg.bind_port(port).expect("a fresh config binds once");
         cfg

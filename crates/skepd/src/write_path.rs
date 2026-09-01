@@ -271,7 +271,7 @@ pub(crate) struct FrameMeta {
 
 impl FrameMeta {
     /// Attribute this write to the session committing it — the key
-    /// testimony from [`crate::auth::session::SessionEntry::testimony`].
+    /// testimony from [`crate::auth::session::SessionBinding::testimony`].
     pub fn attributed(self, key: String) -> WriteMeta {
         WriteMeta { kind: self.kind, docs: self.docs, key }
     }

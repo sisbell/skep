@@ -179,7 +179,9 @@ fn main() {
     };
     // Genesis-or-recover; every EngineError is an operator condition
     // (corrupt journal, bad checkpoint) — report and stop.
-    let opts = AuthOptions { local_trust: args.local_trust, origins: args.origins.clone() };
+    // `--origin` names the CONFIGURED set — the flag's own vocabulary and
+    // the field's meet here, at the one line that carries them across.
+    let opts = AuthOptions { local_trust: args.local_trust, configured: args.origins.clone() };
     let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {

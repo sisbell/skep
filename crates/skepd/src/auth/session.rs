@@ -173,13 +173,13 @@ impl Token {
 /// the fingerprint of the enrolled key that established it (`None` = a
 /// bare bind, which signs nothing).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionEntry {
+pub(crate) struct SessionBinding {
     pub sid: SessionId,
     pub principal: PrincipalId,
     pub signer: Option<Fingerprint>,
 }
 
-impl SessionEntry {
+impl SessionBinding {
     /// The key testimony of a write this session commits (AUTH-4.48): the
     /// establishing key's fingerprint hex, or `"bare"` for a bare bind.
     /// Lives here because the signer does — a write path that must name
@@ -198,18 +198,18 @@ impl SessionEntry {
 pub(crate) enum Lookup {
     NoToken,
     Unknown,
-    Found(SessionEntry),
+    Found(SessionBinding),
 }
 
-/// The sessions store: token → entry, exclusion scoped to the map access —
-/// `lookup` shared, `open`/`close` exclusive, no guard crossing `resolve`
+/// The sessions store: token → binding, exclusion scoped to the map access
+/// — `lookup` shared, `open`/`close` exclusive, no guard crossing `resolve`
 /// (AUTH-4.24; RES-33). Process-lifetime, no cap, no TTL (AUTH-7.15's
 /// declined knob — lazy eviction at presentation, `/session/close`, and
 /// restart are the reclaim mechanisms, AUTH-1.53).
 pub(crate) struct Sessions {
     /// Token → the binding it names — the contents, not the container:
-    /// `close_binding` and `SessionEntry`'s own doc both say *binding*.
-    bindings: parking_lot::RwLock<HashMap<Token, SessionEntry>>,
+    /// `close_binding` and `SessionBinding`'s own doc both say *binding*.
+    bindings: parking_lot::RwLock<HashMap<Token, SessionBinding>>,
 }
 
 impl Sessions {
@@ -217,13 +217,13 @@ impl Sessions {
         Sessions { bindings: parking_lot::RwLock::new(HashMap::new()) }
     }
 
-    /// Mint a fresh token for `e`: [`SESSION_TOKEN_BITS`] of CSPRNG output
-    /// per call (AUTH-4.23).
-    pub fn open(&self, e: SessionEntry, rng: &mut impl CryptoRng) -> Token {
+    /// Mint a fresh token for `binding`: [`SESSION_TOKEN_BITS`] of CSPRNG
+    /// output per call (AUTH-4.23).
+    pub fn open(&self, binding: SessionBinding, rng: &mut impl CryptoRng) -> Token {
         let mut raw = [0u8; SESSION_TOKEN_BYTES];
         rng.fill_bytes(&mut raw);
         let token = Token(raw);
-        self.bindings.write().insert(token.clone(), e);
+        self.bindings.write().insert(token.clone(), binding);
         token
     }
 
@@ -234,32 +234,32 @@ impl Sessions {
             None => Lookup::NoToken,
             Some(t) => match self.bindings.read().get(t) {
                 None => Lookup::Unknown,
-                Some(e) => Lookup::Found(e.clone()),
+                Some(b) => Lookup::Found(b.clone()),
             },
         }
     }
 
-    /// Returns the closed entry — the `sid` the M10 close needs, with no
+    /// Returns the closed binding — the `sid` the M10 close needs, with no
     /// second lookup.
-    pub fn close(&self, t: &Token) -> Option<SessionEntry> {
+    pub fn close(&self, t: &Token) -> Option<SessionBinding> {
         self.bindings.write().remove(t)
     }
 }
 
 /// The resolved actor of one request (AUTH-4.25). The glue
-/// closes-and-signals on `Unknown | EntryDead` ONLY; `NoToken` has nothing
-/// to close; a `RequestRefused` entry lives untouched.
+/// closes-and-signals on `Unknown | BindingDead` ONLY; `NoToken` has nothing
+/// to close; a `RequestRefused` binding lives untouched.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Actor {
     Guest(GuestReason),
-    Principal(SessionEntry),
+    Principal(SessionBinding),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GuestReason {
     NoToken,
     Unknown,
-    EntryDead,
+    BindingDead,
     RequestRefused,
 }
 
@@ -337,19 +337,19 @@ pub(crate) fn resolve(
     match lookup {
         Lookup::NoToken => Actor::Guest(GuestReason::NoToken),
         Lookup::Unknown => Actor::Guest(GuestReason::Unknown),
-        Lookup::Found(entry) => match entry.signer {
+        Lookup::Found(binding) => match binding.signer {
             Some(fp) => {
-                let live = key_subject(world, identity, entry.principal)
+                let live = key_subject(world, identity, binding.principal)
                     .is_some_and(|a| identity.key_set(a).contains(&fp));
                 if live {
-                    Actor::Principal(entry)
+                    Actor::Principal(binding)
                 } else {
-                    Actor::Guest(GuestReason::EntryDead)
+                    Actor::Guest(GuestReason::BindingDead)
                 }
             }
             None => match bare_bind_allowed(cfg, peer, origin_hdr, claimed) {
-                BareBind::Allowed => Actor::Principal(entry),
-                BareBind::ModeRefused => Actor::Guest(GuestReason::EntryDead),
+                BareBind::Allowed => Actor::Principal(binding),
+                BareBind::ModeRefused => Actor::Guest(GuestReason::BindingDead),
                 BareBind::RequestRefused => Actor::Guest(GuestReason::RequestRefused),
             },
         },
@@ -519,7 +519,7 @@ mod tests {
     /// set is exactly the three loopback defaults and every membership
     /// answer below is the defaults' own.
     fn cfg_at(port: u16, local_trust: bool) -> AuthConfig {
-        let cfg = AuthConfig::new(AuthOptions { local_trust, origins: Vec::new() });
+        let cfg = AuthConfig::new(AuthOptions { local_trust, configured: Vec::new() });
         cfg.bind_port(port).expect("a fresh config binds once");
         cfg
     }
@@ -619,7 +619,7 @@ mod tests {
     /// AUTH-4.25/4.28 — the `Lookup` → `Actor` map, arm by arm. `resolve`
     /// decides whether a request may write at all, and every arm but
     /// `Principal` answers with a REASON the glue dispatches on: only
-    /// `Unknown` and `EntryDead` close the binding.
+    /// `Unknown` and `BindingDead` close the binding.
     #[test]
     fn resolve_maps_every_lookup_arm_to_its_actor() {
         let engine = Engine::open(KernelConfig {
@@ -646,7 +646,7 @@ mod tests {
             "an unknown token: the glue closes and signals"
         );
 
-        let bare = SessionEntry {
+        let bare = SessionBinding {
             sid: febe.open_session(PrincipalId(7)),
             principal: PrincipalId(7),
             signer: None,
@@ -664,7 +664,7 @@ mod tests {
 
         // A signed binding whose key no account holds is DEAD — the arm the
         // glue closes on, and the one a retirement produces.
-        let signed = SessionEntry {
+        let signed = SessionBinding {
             signer: Fingerprint::parse_hex(&"ab".repeat(32)),
             ..bare
         };
@@ -674,7 +674,7 @@ mod tests {
         for peer in [Peer::Loopback, Peer::Remote] {
             assert_eq!(
                 go(Lookup::Found(signed.clone()), peer, Some("https://evil.example")),
-                Actor::Guest(GuestReason::EntryDead),
+                Actor::Guest(GuestReason::BindingDead),
                 "{peer:?}: a signer no key set holds is dead"
             );
         }

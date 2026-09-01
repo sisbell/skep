@@ -695,7 +695,7 @@ fn the_origin_header_fences_the_bare_bind_without_killing_it() {
     );
     assert!(
         header(&headers, "Skepd-Session").is_none(),
-        "refused-for-this-request is NOT death: the entry lives and nothing signals"
+        "refused-for-this-request is NOT death: the binding lives and nothing signals"
     );
     // …and the SAME token still writes, which is what makes the line above
     // a statement about the request rather than about the session.
@@ -821,8 +821,8 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
 /// `--local-trust` is fixed at open and pre-claim the flag is not consulted.
 ///
 /// The load-bearing half is that a bare binding DIES rather than being
-/// refused: `BareBind::ModeRefused` maps to `EntryDead` and
-/// `RequestRefused` to a live entry, which is the whole reason that enum
+/// refused: `BareBind::ModeRefused` maps to `BindingDead` and
+/// `RequestRefused` to a live binding, which is the whole reason that enum
 /// has three arms, and no test at any level had covered the first.
 #[test]
 fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
@@ -836,7 +836,7 @@ fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
     claim_board(port);
     assert!(claimed(port));
 
-    // The flip retires it: closed and signalled, not a live entry refused
+    // The flip retires it: closed and signalled, not a live binding refused
     // for this request.
     let (st, headers, body) =
         http_full(port, "POST", "/op", Some(&bare), br#"{"op":"register_node","addr":"1.7"}"#);
@@ -850,7 +850,7 @@ fn the_claim_flip_into_enforcing_kills_every_bare_binding() {
     assert_eq!(
         header(&headers, "Skepd-Session"),
         Some("closed"),
-        "ENFORCING kills a bare entry at presentation; it does not merely refuse it"
+        "ENFORCING kills a bare binding at presentation; it does not merely refuse it"
     );
 
     // No new bare session opens…

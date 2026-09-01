@@ -2,6 +2,7 @@
 //! session token and store, per-request resolution, and the handshake.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::Signature;
@@ -154,8 +155,19 @@ impl Challenges {
 /// The opaque session token: 128 bits of fresh CSPRNG output, wire form 32
 /// lowercase hex. `parse` admits ONLY what `to_wire` emits and the pair is
 /// injective (AUTH-4.17). Compared exactly, never logged.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Token([u8; SESSION_TOKEN_BYTES]);
+
+/// The bytes are the credential, so they do not appear here: this type's
+/// contract is "compared exactly, never logged", and a DERIVED `Debug` is
+/// what turns that into "never logged, except through `{:?}`". The same
+/// treatment [`crate::HttpRequest`] gives the token it carries, and the
+/// reason [`Sessions`] derives no `Debug` at all.
+impl fmt::Debug for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Token(<redacted>)")
+    }
+}
 
 impl Token {
     pub fn to_wire(&self) -> String {
@@ -539,7 +551,10 @@ mod tests {
     #[test]
     fn token_parse_admits_only_to_wire_output() {
         let t = Token([0xab; 16]);
-        assert_eq!(Token::parse(&t.to_wire()), Some(t.clone()));
+        // Compared through `to_wire`, which is injective (AUTH-4.17), so
+        // this is the same property — and a failure names the wire form
+        // rather than the two `<redacted>`s `Token`'s own `Debug` prints.
+        assert_eq!(Token::parse(&t.to_wire()).map(|p| p.to_wire()), Some(t.to_wire()));
         assert!(Token::parse("nonsense").is_none());
         assert!(Token::parse(&t.to_wire().to_uppercase()).is_none());
         // The old daemon's prefix.suffix shape is refused — AUTH-7.25 names

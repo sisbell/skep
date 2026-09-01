@@ -122,6 +122,13 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// saw, `key_set` answers one thing until restart and another after it, and
 /// nothing reports either. A false positive reaches [`precheck`]'s defect
 /// arm at the classify line.
+///
+/// EXHAUSTIVE with no `_` arm, the treatment [`crate::write_path::write_meta`]
+/// already gives the read/write partition: the non-deposit arm is written
+/// out, so a new `Op` fails to compile here until someone decides whether it
+/// can carry a credential type slot. A wildcard would default that decision
+/// to `false` — the false negative above, which is the one answer this
+/// module cannot detect being wrong.
 pub(crate) fn deposits_credential_link(op: &Op) -> bool {
     match op {
         Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
@@ -130,7 +137,44 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
             identity_types().kind_of(&spans).is_some()
         }
         Op::EditLink { successor, .. } => slotarg_kind(&successor.ty).is_some(),
-        _ => false,
+        // Every other op deposits no link at all, so none can be
+        // credential-typed — including `Nullify`, whose class is
+        // `nullify_refusal`'s under the read lock.
+        Op::CreateNewDocument { .. }
+        | Op::Delegate { .. }
+        | Op::RegisterNode { .. }
+        | Op::Fork
+        | Op::NextAccountPrefix { .. }
+        | Op::PrincipalPrefix { .. }
+        | Op::Insert { .. }
+        | Op::Delete { .. }
+        | Op::Copy { .. }
+        | Op::Rearrange { .. }
+        | Op::Version { .. }
+        | Op::Nullify { .. }
+        | Op::AssertSup { .. }
+        | Op::ReadLink { .. }
+        | Op::FollowLink { .. }
+        | Op::RetrieveV { .. }
+        | Op::RetrieveDocVSpan { .. }
+        | Op::RetrieveDocVSpanSet { .. }
+        | Op::ShowOrigin { .. }
+        | Op::ShowDeletions { .. }
+        | Op::Compare { .. }
+        | Op::FindDocsContaining { .. }
+        | Op::Image { .. }
+        | Op::FindLinksV { .. }
+        | Op::FindLinksFtt { .. }
+        | Op::CountV { .. }
+        | Op::CountFtt { .. }
+        | Op::WindowV { .. }
+        | Op::WindowFtt { .. }
+        | Op::RetrieveEndsets { .. }
+        | Op::Project { .. }
+        | Op::DiscoverableFrom { .. }
+        | Op::DeleteOrphans { .. }
+        | Op::InClaims { .. }
+        | Op::OutClaims { .. } => false,
     }
 }
 
@@ -390,6 +434,10 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
             .m3()
             .principal_prefix(principal)
             .is_some_and(|prefix| *doc == doc_1_of(prefix)),
+        // Fail-CLOSED, which is why this arm may be a wildcard where
+        // `deposits_credential_link`'s may not: a new op defaults to
+        // `claim_first` and costs its author one decision, rather than
+        // defaulting to admission on an unclaimed board.
         _ => false,
     };
     if admitted {

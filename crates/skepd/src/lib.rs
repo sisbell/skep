@@ -101,6 +101,11 @@ pub use history::ReconstructPermit;
 /// the server on a thread it owns depends on `Skepd: Send`, and no signature
 /// states it — so a private field that is not `Send` would revoke it with no
 /// public name changing. This is where that fails to compile instead.
+///
+/// Every type this crate DEFINES and exports is listed. The four it
+/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`] — are
+/// not: those promises are upstream's to keep, and `Daemon: Send + Sync`
+/// already pins the ones this crate transitively rests on.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Skepd>();
@@ -112,4 +117,11 @@ const _: fn() = || {
     assert_send_sync::<HttpRequest>();
     assert_send_sync::<Routed>();
     assert_send_sync::<ReconstructPermit<'static>>();
+    // The AUTH round's arrivals. `AuthOptions` is the value a caller builds
+    // and hands to `Daemon::open_with`, plausibly across a thread boundary;
+    // the other three ride in and out of that surface.
+    assert_send_sync::<AuthOptions>();
+    assert_send_sync::<Origin>();
+    assert_send_sync::<NotCanonical>();
+    assert_send_sync::<Peer>();
 };

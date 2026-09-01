@@ -146,7 +146,9 @@ use crate::codec::{
 };
 use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::ChangesAnswer;
-use crate::write_path::{op_is_read, write_meta, FrameMeta, StreamStep, WritePath};
+use crate::write_path::{
+    op_is_read, write_meta, FrameMeta, SerialGuard, StreamStep, WritePath,
+};
 
 pub use crate::auth::session::Peer;
 
@@ -215,7 +217,13 @@ const CORS_MAX_AGE_SECS: &str = "86400";
 /// than this daemon's own CRLF bytes, so a caller serving replies over a
 /// transport of its own supplies them however that transport spells a
 /// header instead of parsing a framing only this crate's writer can use.
-pub const UNIVERSAL_HEADERS: [(&str, &str); 3] = [
+///
+/// A SLICE and not an array on purpose: the length would otherwise be part
+/// of the type this crate promises, and this set is not a fixed triple —
+/// it grew once already, when the death signal's exposure joined it, and a
+/// caller who had written the count into a signature of their own would
+/// have broken on a change that adds a header.
+pub const UNIVERSAL_HEADERS: &[(&str, &str)] = &[
     ("Access-Control-Allow-Origin", "*"),
     // AUTH-6.12: `Skepd-Session` is not CORS-safelisted, so without this a
     // client on a configured non-loopback origin could not read the death
@@ -1154,7 +1162,7 @@ impl Daemon {
     /// [`Daemon::resolve_at_head`] states.
     fn locked_state(
         &self,
-        _serial: &parking_lot::MutexGuard<'_, ()>,
+        _serial: &SerialGuard<'_>,
         req: &HttpRequest,
     ) -> (Snapshot<World>, IdentityState, Resolved) {
         let snap = self.engine.kernel().snapshot();

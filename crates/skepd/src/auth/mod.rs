@@ -64,9 +64,11 @@ impl Default for AuthOptions {
 /// The resolved configuration the auth surface reads: options plus the
 /// BOUND port, which exists only once the listener does. `serve` sets it;
 /// a socket-free embedder that wants origin-set behavior calls
-/// [`crate::Daemon::bind_auth_port`] itself. Until set, the port reads 0 —
-/// origin membership then admits only what an explicit `--origin` names,
-/// which is the honest degenerate for a daemon that is not serving.
+/// [`crate::Daemon::bind_auth_port`] itself. Until set there is no port and
+/// so no loopback defaults — origin membership then admits only what an
+/// explicit `--origin` names, which is the honest degenerate for a daemon
+/// that is not serving, and which [`AuthConfig::port`] says in its type
+/// rather than through a sentinel every reader has to carve around.
 pub(crate) struct AuthConfig {
     pub local_trust: bool,
     pub configured: BTreeSet<Origin>,
@@ -82,18 +84,24 @@ impl AuthConfig {
         }
     }
 
-    /// `Err(port)` when a port is already bound. The value is set ONCE, so
-    /// a second bind would otherwise be a silent no-op — and the origin
-    /// sets every live session was established against derive from it, so
-    /// two callers disagreeing about the number must not be quiet.
-    /// [`crate::serve`] and a socket-free embedder are the two, and they
-    /// are exclusive by design.
+    /// `Err` carries the port ALREADY BOUND — the number every live
+    /// session's origin set was established against, which is what a caller
+    /// disagreeing about it needs to be told. The value is set ONCE, so a
+    /// second bind would otherwise be a silent no-op. [`crate::serve`] and a
+    /// socket-free embedder are the two callers, and they are exclusive by
+    /// design.
     pub fn bind_port(&self, port: u16) -> Result<(), u16> {
-        self.port.set(port)
+        self.port
+            .set(port)
+            .map_err(|_| self.port().expect("set once, so a refusal means one is bound"))
     }
 
-    pub fn port(&self) -> u16 {
-        self.port.get().copied().unwrap_or(0)
+    /// The bound port, or `None` while no listener exists. An `Option`
+    /// rather than a zero: port 0 is not a port this daemon can serve on,
+    /// and a sentinel would make every reader of a derived origin carve the
+    /// case out for itself.
+    pub fn port(&self) -> Option<u16> {
+        self.port.get().copied()
     }
 }
 
@@ -291,11 +299,14 @@ impl Origin {
         let port = match port_text {
             None => default,
             Some(p) => {
-                if p.is_empty() || p.len() > 5 || p.starts_with('0') || !p.bytes().all(|b| b.is_ascii_digit()) {
+                // The two conditions std does NOT perform: a leading zero
+                // is not canonical, and `u16::from_str` would accept a
+                // leading `+`. Emptiness and the range are its own — an
+                // empty or over-65535 port fails the parse below.
+                if p.starts_with('0') || !p.bytes().all(|b| b.is_ascii_digit()) {
                     return None;
                 }
-                let n: u32 = p.parse().ok()?;
-                let n = u16::try_from(n).ok()?;
+                let n: u16 = p.parse().ok()?;
                 // Canonical form omits the scheme's default port.
                 if n == default {
                     return None;
@@ -308,12 +319,11 @@ impl Origin {
 
     /// Build the canonical origin from parts — the loopback defaults'
     /// constructor. The SECOND mint site, so it owes what [`Origin::parse`]
-    /// admits: canonical by construction for every port this daemon
-    /// SERVES on, and not for port 0, which `parse` refuses. That is the
-    /// unbound [`AuthConfig`]'s honest degenerate, where the three defaults
-    /// are deliberately unmatchable because no request's `Origin` header
-    /// can parse to a port-0 origin. The assert is what keeps the two mint
-    /// sites in step for every other input.
+    /// admits, and the assert is what keeps the two in step: every origin
+    /// built here is one the front door would accept. Reached only for a
+    /// port a listener is bound to, which is why the claim needs no
+    /// exception ([`loopback_defaults`] has no port to build from until
+    /// then).
     fn from_parts(https: bool, host: &str, port: u16) -> Origin {
         let scheme = if https { "https" } else { "http" };
         let default = if https { 443 } else { 80 };
@@ -323,7 +333,7 @@ impl Origin {
             format!("{scheme}://{host}:{port}")
         };
         debug_assert!(
-            port == 0 || Origin::parse(&canonical).is_some(),
+            Origin::parse(&canonical).is_some(),
             "from_parts built an origin the front door refuses: {canonical}"
         );
         Origin { canonical, https, host: host.to_string(), port }
@@ -387,8 +397,12 @@ fn host_is_canonical(host: &str) -> bool {
 const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
 
 /// The bound port's three loopback origins, canonical members, DERIVED from
-/// the port — never configured, never stored (AUTH-4.1, AUTH-4.2).
-pub(crate) fn loopback_defaults(port: u16) -> BTreeSet<Origin> {
+/// the port — never configured, never stored (AUTH-4.1, AUTH-4.2). An
+/// unbound config has no port, so it has no defaults: the set is empty
+/// rather than three members at a port nothing can serve on, which is the
+/// same honest degenerate stated once, in the type.
+pub(crate) fn loopback_defaults(port: Option<u16>) -> BTreeSet<Origin> {
+    let Some(port) = port else { return BTreeSet::new() };
     LOOPBACK_HOSTS.iter().map(|h| Origin::from_parts(false, h, port)).collect()
 }
 
@@ -490,18 +504,48 @@ mod tests {
     }
 
     /// AUTH-4.1 — the defaults are the three loopback origins of the bound
-    /// port, canonical (port omitted at 80).
+    /// port, canonical (port omitted at 80) — and an UNBOUND config has
+    /// none, which is the honest degenerate stated in the type: the
+    /// alternative is three members at a port no listener serves and no
+    /// `Origin` header can name.
     #[test]
     fn loopback_defaults_are_the_three_canonical_members() {
         let at_8642: Vec<String> =
-            loopback_defaults(8642).iter().map(|o| o.as_str().to_string()).collect();
+            loopback_defaults(Some(8642)).iter().map(|o| o.as_str().to_string()).collect();
         assert_eq!(
             at_8642,
             ["http://127.0.0.1:8642", "http://[::1]:8642", "http://localhost:8642"]
         );
         let at_80: Vec<String> =
-            loopback_defaults(80).iter().map(|o| o.as_str().to_string()).collect();
+            loopback_defaults(Some(80)).iter().map(|o| o.as_str().to_string()).collect();
         assert_eq!(at_80, ["http://127.0.0.1", "http://[::1]", "http://localhost"]);
+        assert!(loopback_defaults(None).is_empty(), "an unbound config derives no defaults");
+    }
+
+    /// [`AuthConfig::bind_port`] refuses a second bind and names the port
+    /// already bound — the number every live session's origin set was
+    /// established against, which is what the second caller needs told.
+    #[test]
+    fn a_second_bind_is_refused_and_names_the_bound_port() {
+        let cfg = cfg_with(8642, true, &[]);
+        assert_eq!(cfg.port(), Some(8642));
+        assert_eq!(cfg.bind_port(9999), Err(8642), "the bound port, not the refused one");
+        assert_eq!(cfg.port(), Some(8642), "and the binding did not move");
+    }
+
+    /// An unbound config has no port, so its bare set is `configured`
+    /// alone — no unmatchable members, and nothing `/health` publishes that
+    /// [`Origin::parse`] would refuse if an operator copied it back.
+    #[test]
+    fn an_unbound_config_derives_no_origins() {
+        let cfg = AuthConfig::new(AuthOptions {
+            local_trust: true,
+            configured: vec![Origin::parse("https://board.example").expect("canonical")],
+        });
+        assert_eq!(cfg.port(), None);
+        let bare = bare_origins(&cfg);
+        assert_eq!(bare.len(), 1, "configured alone: {bare:?}");
+        assert!(bare.contains(&Origin::parse("https://board.example").unwrap()));
     }
 
     fn cfg_with(port: u16, local_trust: bool, configured: &[&str]) -> AuthConfig {

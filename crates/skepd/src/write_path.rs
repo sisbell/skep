@@ -44,6 +44,20 @@ use crate::sidecar::{ChangesAnswer, Sidecar};
 /// interval.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
+/// The write-serialization guard, newtyped so a function whose contract is
+/// "under the serialization lock" names it in its arguments — the device
+/// `auth/`'s [`crate::auth::LockRead`]/[`crate::auth::LockWrite`] already
+/// are. A bare `MutexGuard<'_, ()>` is satisfied by a guard over ANY
+/// `Mutex<()>`, so the parameter would say "some unit lock is held" where
+/// the contract says "this one is" — unambiguous only while the crate holds
+/// exactly one, in a daemon whose body cap already anticipates a second
+/// write path (the media round's blob route) by name.
+///
+/// The honest limit is [`WritePath::serial_lock`]'s, unchanged: the guard
+/// proves the lock is held and proves nothing about where the caller's
+/// snapshot came from.
+pub(crate) struct SerialGuard<'a>(#[allow(dead_code)] parking_lot::MutexGuard<'a, ()>);
+
 /// The write path: the serialization point, the commit-metadata sidecar
 /// behind it, and the commit stream in front of it.
 ///
@@ -105,8 +119,8 @@ impl WritePath {
     /// guard on to [`WritePath::commit_under`] rather than dropping it —
     /// nothing here can check either, and a snapshot taken outside it lets
     /// a commit land between what a gate read and what it gated.
-    pub fn serial_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.serial.lock()
+    pub fn serial_lock(&self) -> SerialGuard<'_> {
+        SerialGuard(self.serial.lock())
     }
 
     /// One write, whole, under a serialization guard the CALLER already
@@ -134,7 +148,7 @@ impl WritePath {
     /// signed write.
     pub fn commit_under(
         &self,
-        _serial: &parking_lot::MutexGuard<'_, ()>,
+        _serial: &SerialGuard<'_>,
         meta: WriteMeta,
         execute: impl FnOnce() -> Response,
     ) -> Response {

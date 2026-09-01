@@ -53,17 +53,21 @@
 #![forbid(unsafe_code)]
 
 mod codec;
+mod idem;
 mod lower;
 mod op;
 mod operation;
 mod reject;
 mod response;
+mod session;
+mod successor;
 
 pub use codec::{Codec, ParseError};
-pub use op::{Op, OpKind, ReqId, Request, SessionId, SuccessorSpec};
+pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec};
 pub use operation::Operation;
 pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
+pub use session::SessionId;
 // The two-form endset slot (M7-defined; the 2026-08-16 amendment): names
 // `Op::MakeLink`'s three slots and `SuccessorSpec`'s type slot, re-exported
 // so the transport spells one crate.

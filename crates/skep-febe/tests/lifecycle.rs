@@ -377,6 +377,30 @@ fn rejection_surface() {
     assert_eq!(rej.code, RejectCode::IllFormedSpec);
     assert_eq!(rej.disposition, Disposition::Permanent);
 
+    // The same guard on the other fault a successor spec can carry: a source
+    // M3 does not know resolves to ⟨⟩, so it is refused instead of committed
+    // as an empty slot — and hinted Reorder, since a client that arrives
+    // ahead of its own CREATENEWDOCUMENT may reissue (§4).
+    let unregistered =
+        skep_arrangement::VSpec { source: a(&[1, 0, 1, 0, 78]), span: vspan(1, 1, 1) };
+    let rej = rejected(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original: ghost_link(&d, 99),
+            successor: SuccessorSpec {
+                from: vec![unregistered],
+                to: vec![],
+                ty: SlotArg::Addrs(vec![d.clone()]),
+            },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        },
+    ));
+    assert_eq!(rej.op, OpKind::EditLink);
+    assert_eq!(rej.code, RejectCode::SourceNotRegistered);
+    assert_eq!(rej.disposition, Disposition::Reorder);
+
     // The as-built [K_sup] emit fence lowers to DcViolation (report: drift):
     // supersession claims write only via AssertSup/EditLink.
     let mk = || Op::MakeLink {

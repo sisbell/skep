@@ -5,6 +5,7 @@
 use skep_address::Address;
 use skep_retrieval::{Operand, SpecFault};
 
+use crate::codec::ParseError;
 use crate::op::OpKind;
 use crate::response::Response;
 
@@ -91,7 +92,6 @@ pub enum RejectCode {
     NotDescendantOfBootstrap,
     NotFresh,
     // ── M5 arrangement ──
-    BadPosition,
     EmptyContent,
     Content,
     EmptySource,
@@ -137,6 +137,21 @@ pub enum RejectCode {
 /// frontier, never on a well-formed request against a healthy store.
 const GATE_DETAIL: &str = "inc-gate tripped: corrupted frontier — operator condition";
 
+/// The standing-explanation policy — the second total lookup off the flat
+/// code, beside [`disposition_of`] (§5). A code whose meaning is the same
+/// sentence every time it fires carries that sentence here rather than at
+/// whichever call site happened to raise it; everything else carries no
+/// detail unless a call site threads one (`Rejection::with_detail`).
+///
+/// `Gate` is the one such code today: it signals store corruption — an
+/// operator condition — never client error.
+fn fixed_detail(code: RejectCode) -> Option<&'static str> {
+    match code {
+        RejectCode::Gate => Some(GATE_DETAIL),
+        _ => None,
+    }
+}
+
 /// The disposition policy — a single total lookup off the flat code (§5).
 /// Returns exactly the explicit `Reorder`/`Retry`/`Halt` cases and defaults
 /// everything else to `Permanent` (the catch-all is the DESIGNED shape here:
@@ -169,12 +184,37 @@ pub(crate) fn disposition_of(code: RejectCode) -> Disposition {
 }
 
 impl Rejection {
-    /// Build a classified rejection: disposition recomputed from the flat
-    /// code; `Gate` is the one code carrying a FIXED M10 detail (it signals
-    /// store corruption — an operator condition — never client error; §5).
+    /// Build a classified rejection: both per-code policies applied off the
+    /// flat code — the disposition from [`disposition_of`], any standing
+    /// explanation from [`fixed_detail`] (§5).
     pub(crate) fn classified(op: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
-        let detail = matches!(code, RejectCode::Gate).then(|| GATE_DETAIL.to_string());
+        let detail = fixed_detail(code).map(str::to_string);
         Rejection { op, code, disposition: disposition_of(code), site, detail }
+    }
+
+    /// The rejection for a frame that never parsed into an [`Op`] — the one
+    /// rejection M10 cannot raise for itself, since [`Operation::execute`]
+    /// takes an already-parsed [`Request`] and so has no `Op` and no
+    /// `OpKind` from `Op::kind()`. The transport's [`Codec`] impl calls this
+    /// on its own `parse` failure and marshals the result like any other
+    /// response, which is how a malformed frame still gets exactly one
+    /// answer (Invariants, never-silent).
+    ///
+    /// Classification stays M10's: the code is `Malformed` and the
+    /// disposition is whatever the table says `Malformed` disposes to, so an
+    /// unparseable frame is advised exactly as every other `Malformed` is.
+    /// `e.detail` rides through as the message.
+    ///
+    /// [`Op`]: crate::Op
+    /// [`Codec`]: crate::Codec
+    /// [`Operation::execute`]: crate::Operation::execute
+    /// [`Request`]: crate::Request
+    pub fn unparseable(e: ParseError) -> Rejection {
+        let r = Rejection::classified(OpKind::Unparseable, RejectCode::Malformed, None);
+        match e.detail {
+            Some(d) => r.with_detail(d),
+            None => r,
+        }
     }
 
     /// Attach a detail message (the `Durability` arm threads the underlying
@@ -253,5 +293,18 @@ mod tests {
         assert_eq!(g.detail.as_deref(), Some(GATE_DETAIL));
         let other = Rejection::classified(OpKind::CreateNewDocument, RejectCode::NotOwner, None);
         assert!(other.detail.is_none());
+    }
+
+    /// The parse-failure rejection is classified by the same table as every
+    /// other `Malformed`, and carries the codec's cause when it has one.
+    #[test]
+    fn unparseable_is_classified_here() {
+        let r = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
+        assert_eq!(r.op, OpKind::Unparseable);
+        assert_eq!(r.code, RejectCode::Malformed);
+        assert_eq!(r.disposition, disposition_of(RejectCode::Malformed));
+        assert_eq!(r.detail.as_deref(), Some("unknown op"));
+        let bare = Rejection::unparseable(ParseError { detail: None });
+        assert!(bare.detail.is_none());
     }
 }

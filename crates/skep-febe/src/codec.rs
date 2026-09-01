@@ -10,10 +10,13 @@ use crate::response::Response;
 /// A [`Codec::parse`] failure never reaches `Operation::execute` (which takes
 /// an already-parsed [`Request`]), so it has no `Op` and no `OpKind` from
 /// `Op::kind()`. The TRANSPORT surfaces it through M10's never-silent model
-/// by building `Response::Rejected(Rejection { op: OpKind::Unparseable,
-/// code: Malformed, disposition: Permanent, site: None, detail })` and
+/// by wrapping [`Rejection::unparseable`] in `Response::Rejected` and
 /// marshaling that via [`Codec::marshal`] — the one never-silent obligation
-/// outside M10's exhaustive-dispatch enforcement (Invariants).
+/// outside M10's exhaustive-dispatch enforcement (Invariants). The
+/// classification is M10's either way: the constructor applies the same code
+/// and disposition table every other rejection goes through.
+///
+/// [`Rejection::unparseable`]: crate::Rejection::unparseable
 ///
 /// A marshaled frame carries **no correlation id** (§8): the transport's own
 /// envelope, not the codec's frame, pairs each reply with the in-flight

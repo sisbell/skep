@@ -1,17 +1,13 @@
 //! The lifecycle entry ([`Operation::execute`]) and the two static dispatch
 //! tables (§1–§4): parse → authorize → linearize → commit-gate → marshal →
-//! surface, plus the ephemeral session binding (§6) and the idempotency
-//! cache (§7).
+//! surface. The lifecycle's order lives here; the two pieces of state it
+//! consults belong to their own cards — [`crate::session::Sessions`] for the
+//! ephemeral binding (§6), [`crate::idem::IdemCache`] for the committed-write
+//! retry memo (§7).
 
-use std::collections::HashMap;
-use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use lru::LruCache;
-use parking_lot::Mutex;
-
-use skep_address::{Address, Nat, Span};
-use skep_arrangement::{Caller, HasM5, M5Rec, M5State, Run, VSpec};
+use skep_arrangement::{Caller, HasM5, M5Rec};
 use skep_content::{ContentWrite, HasContent};
 use skep_discovery::{
     count_ftt_on, count_v_on, delete_orphans_on, discoverable_from_on, findlinks_ftt_on,
@@ -19,44 +15,35 @@ use skep_discovery::{
     window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::{enc, Endset, HasLinks, Link, LinkRec, SlotArg};
+use skep_links::{enc, HasLinks, Link, LinkRec, SlotArg};
 use skep_namespace::{HasM3, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
-use crate::lower::{map_read, Lower};
-use crate::op::{Op, OpKind, ReqId, Request, SessionId};
+use crate::idem::IdemCache;
+use crate::lower::{map_read, map_txn, Lower};
+use crate::op::{Op, OpKind, Request};
 use crate::reject::{reject, reject1, RejectCode, Rejection};
 use crate::response::Response;
+use crate::session::{SessionId, Sessions};
+use crate::successor::endset_from_vspecs;
 use crate::Stores;
 
-/// The idempotency LRU's capacity.
-// OPEN DECISION: the interface pins `Operation::new(stores)` with NO
-// `idem_capacity` parameter, while the design (§7 / Core data model / Open
-// build decision 3) calls for an explicit construction-time knob with "no
-// implicit default". The interface is the higher authority for the public
-// surface, so the knob is absent and this crate-fixed default bounds the LRU
-// instead — surfaced in the build report as an interface↔design conflict.
-const DEFAULT_IDEM_CAPACITY: usize = 1024;
-
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
-/// substrate state and **no** `im` structure — its fields are ephemeral
-/// connection state (`sessions`), a best-effort committed-write retry memo
-/// (`idem`), and a recomputable poison hint; none is ever snapshotted or
-/// replayed, which is why this is the one module that legitimately departs
+/// substrate state and **no** `im` structure — its fields are the ephemeral
+/// connection state ([`Sessions`]), a best-effort committed-write retry memo
+/// ([`IdemCache`]), and a recomputable poison hint; none is ever snapshotted
+/// or replayed, which is why this is the one module that legitimately departs
 /// from the `im`-everywhere convention (§Core data model).
 pub struct Operation<W: WorldState> {
     /// Borrowed authority: the binary's factory (M2/M3/M5/M7 own real state).
     stores: Box<dyn Stores<W>>,
-    /// Ephemeral authoritative connection state — retired only by
-    /// [`Operation::close_session`] (§6). Non-poisoning lock (§7): a panic
-    /// while held must not break `execute`'s Total contract.
-    sessions: Mutex<HashMap<SessionId, PrincipalId>>,
-    /// Ephemeral session-id counter — ids unique within one uptime (§6).
-    next_session: AtomicU64,
-    /// Hint: best-effort committed-write retry memo, keyed per-session
-    /// (§7/item-4); purged on `close_session` (§6); lost on restart — a
-    /// post-restart retry re-executes (duplicate, by design — ASN-0134 §A7).
-    idem: Mutex<LruCache<(SessionId, ReqId), Cached>>,
+    /// Which principal each open session speaks for — retired only by
+    /// [`Operation::close_session`] (§6).
+    sessions: Sessions,
+    /// Hint: the committed-write retry memo (§7), purged on `close_session`
+    /// (§6) and lost on restart — a post-restart retry re-executes
+    /// (duplicate, by design — ASN-0134 §A7).
+    idem: IdemCache,
     /// Hint: recomputable by attempting `transact`; latched by the first
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
     poisoned: AtomicBool,
@@ -80,24 +67,6 @@ impl WriteCtx {
     }
 }
 
-/// The committed-write essence + the op-kind that produced it; trivially
-/// `Clone` (`OpKind`/`Seq`: `Copy`, `Address`: `Clone`). The op-kind tag lets
-/// `idem_get` reject a `ReqId` reused across op-kinds (miss → re-execute), so
-/// a wrong-shaped ack is never served. The cache's value type — NOT a whole
-/// [`Response`] (§7).
-#[derive(Clone)]
-struct Cached {
-    op: OpKind,
-    essence: AckEssence,
-}
-
-#[derive(Clone)]
-enum AckEssence {
-    Ack { at: Seq },
-    AckAddr { addr: Address, at: Seq },
-    AckEdit { successor: Address, claim: Address, at: Seq },
-}
-
 impl<W> Operation<W>
 where
     W: WorldState + HasM3 + HasM5 + HasLinks + HasContent,
@@ -110,48 +79,39 @@ where
     /// holds neither the kernel nor the registry directly (§9). We reach the
     /// kernel via `stores.kernel()` and acquire each store driver per-op.
     ///
-    /// The idempotency LRU is bounded at a crate-fixed default capacity: the
+    /// The idempotency memo is bounded at a crate-fixed default capacity: the
     /// design's explicit `idem_capacity` construction knob conflicts with the
     /// interface's one-argument `new`, and the interface wins (see
-    /// `DEFAULT_IDEM_CAPACITY`).
+    /// [`IdemCache`]).
     pub fn new(stores: Box<dyn Stores<W>>) -> Self {
-        let cap = NonZeroUsize::new(DEFAULT_IDEM_CAPACITY).expect("capacity is a nonzero constant");
         Operation {
             stores,
-            sessions: Mutex::new(HashMap::new()),
-            next_session: AtomicU64::new(1),
-            idem: Mutex::new(LruCache::new(cap)),
+            sessions: Sessions::new(),
+            idem: IdemCache::new(),
             poisoned: AtomicBool::new(false),
         }
     }
 
     // ── session binding (M10-owned, ephemeral — §6) ──
 
-    /// Record the binding and return a fresh `SessionId` minted from an
-    /// atomic counter — unique within one M10 uptime (reset on restart;
-    /// clients re-authenticate). The caller (transport) supplies the
-    /// authenticated `PrincipalId`; unforgeability of the id is the
-    /// transport's precondition (§6): it must inject `s` from the
-    /// connection's authenticated binding, never read it off the wire.
+    /// Record the binding and return a fresh `SessionId`, unique within one
+    /// M10 uptime (reset on restart; clients re-authenticate). The caller
+    /// (transport) supplies the authenticated `PrincipalId`; unforgeability
+    /// of the id is the transport's precondition (§6): it must inject `s`
+    /// from the connection's authenticated binding, never read it off the
+    /// wire.
     pub fn open_session(&self, principal: PrincipalId) -> SessionId {
-        let s = SessionId(self.next_session.fetch_add(1, Ordering::Relaxed));
-        self.sessions.lock().insert(s, principal);
-        s
+        self.sessions.open(principal)
     }
 
-    /// Drop the binding AND purge the session's idem entries (§6/§7) — the
-    /// two locks taken sequentially, never nested; a linear sweep of the
-    /// bounded LRU. The id is retired permanently (never reissued within the
-    /// uptime). Calling this on connection drop is a transport obligation:
-    /// nothing else retires a binding.
+    /// Retire the binding AND the session's memoized acks (§6/§7): a
+    /// retired session can neither authorize a write nor replay one. The two
+    /// collaborators are asked in turn, their locks never nested. Calling
+    /// this on connection drop is a transport obligation: nothing else
+    /// retires a binding.
     pub fn close_session(&self, s: SessionId) {
-        self.sessions.lock().remove(&s);
-        let mut g = self.idem.lock();
-        let dead: Vec<(SessionId, ReqId)> =
-            g.iter().filter(|(k, _)| k.0 == s).map(|(k, _)| k.clone()).collect();
-        for k in dead {
-            g.pop(&k);
-        }
+        self.sessions.close(s);
+        self.idem.purge_session(s);
     }
 
     /// A session bound to `BOOTSTRAP_PRINCIPAL`, so the first
@@ -164,10 +124,10 @@ where
 
     /// THE lifecycle entry (§1). Total: always yields a `Response` to send
     /// (rejections are a `Response` variant) — totality leans on the
-    /// non-poisoning `parking_lot::Mutex` locks (§7) and the step-(b)
-    /// read/write split, which hands each write arm a PROVEN-bound principal
-    /// so no dispatch arm unwraps an `Option`. Reentrant & `Sync` — the
-    /// transport may call it concurrently for pipelined requests (§8).
+    /// non-poisoning locks its two state collaborators hold (§7) and on the
+    /// step-(b) read/write split, which hands each write arm a PROVEN-bound
+    /// principal so no dispatch arm unwraps an `Option`. Reentrant & `Sync`
+    /// — the transport may call it concurrently for pipelined requests (§8).
     ///
     /// Caller precondition (§6, non-forgeability): `s` MUST originate in the
     /// transport's connection state, never a wire-supplied value.
@@ -175,11 +135,11 @@ where
         let Request { id, op } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
         // (a) idempotency: a repeated (s, id) whose op-kind matches returns
-        //     the rebuilt committed-write ack, never re-executing. Keyed
+        //     the memoized committed-write ack, never re-executing. Keyed
         //     (s, id) — a replay under a DIFFERENT session misses (§7).
         if let Some(id) = &id {
-            if let Some(r) = self.idem_get(s, id, kind) {
-                return r;
+            if let Some(ack) = self.idem.get(s, id, kind) {
+                return ack.into();
             }
         }
         // (b)+(c) gate, SPLIT on the is_write/is_read partition so each
@@ -192,8 +152,8 @@ where
             if self.poisoned.load(Ordering::Relaxed) {
                 return reject(kind, RejectCode::Poisoned); // disposition_of ⇒ Halt
             }
-            let bound = self.sessions.lock().get(&s).copied(); // (b) lock drops at this `;`
-            match bound {
+            match self.sessions.principal_of(s) {
+                // (b) the one place authority can fail
                 Some(principal) => self.dispatch_write(WriteCtx { principal }, op),
                 None => return reject(kind, RejectCode::Unauthenticated), // ⇒ Permanent
             }
@@ -201,14 +161,13 @@ where
             self.dispatch_read(op) // reads tolerate an unbound session
         }
         .unwrap_or_else(Response::Rejected);
-        // (d) cache ONLY a committed-write ack — never a Rejected (a
-        //     Reorder/Retry reissue MUST re-execute) nor a read (a cached
-        //     read replays a stale snapshot). idem_put stores a small Cached
-        //     essence (§7), not the Response.
-        if let Some(id) = id {
-            if resp.is_committed_write() {
-                self.idem_put(s, &id, kind, &resp);
-            }
+        // (d) memoize ONLY a committed-write ack. `as_ack` is what decides —
+        //     a Rejected and a read answer both yield None, so neither can
+        //     be replayed (a Reorder/Retry reissue MUST re-execute; a cached
+        //     read would replay a stale snapshot). The memo holds that small
+        //     ack, not the Response (§7).
+        if let (Some(id), Some(ack)) = (id, resp.as_ack()) {
+            self.idem.put(s, &id, kind, ack);
         }
         resp
     }
@@ -352,15 +311,15 @@ where
             // hazard). One operation ⇒ still one M2 transaction.
             Op::EditLink { original, successor, d_s, d_a } => {
                 let snap = self.stores.kernel().snapshot();
-                let m5 = snap.world().m5();
-                let from = endset_from_vspecs(m5, &successor.from)?;
-                let to = endset_from_vspecs(m5, &successor.to)?;
+                let (m3, m5) = (snap.world().m3(), snap.world().m5());
+                let from = endset_from_vspecs(m3, m5, &successor.from)?;
+                let to = endset_from_vspecs(m3, m5, &successor.to)?;
                 let ty = match &successor.ty {
                     // TYPE is the successor's one two-form slot (§4):
                     // address-denoting or content-resolved; M7 owns the
                     // slot-shape/schema verdict inside editlink.
                     SlotArg::Addrs(a) => enc(a),
-                    SlotArg::Resolve(v) => endset_from_vspecs(m5, v)?,
+                    SlotArg::Resolve(v) => endset_from_vspecs(m3, m5, v)?,
                 };
                 let link = Link::triple(from, to, ty);
                 let (succ, claim, at) = self
@@ -404,160 +363,144 @@ where
 
     // ── read dispatch (§1/§2) ──
 
-    /// The static table for the read half: every arm takes ONE snapshot
-    /// in-arm and reads through the snapshot-based surfaces (`Query::new`
-    /// for M6; M8's pure `*_on` twins, never the self-snapshotting handles —
-    /// Conflicts resolved #5), so M10 reports the exact `as_of = snap.seq()`
-    /// (V1) and any multi-constituent verdict discharges MIC clause 6 by
-    /// construction (A3/V2). Reads hold no lock against writers, are
-    /// zero-step (A1), and have no commit-before-ack obligation. No
-    /// principal, no session. Exhaustive over `Op` with the complementary
-    /// (write) half as one explicit rejecting |-list — see `dispatch_write`.
+    /// The static table for the read half. THIS function pins the one
+    /// snapshot every arm answers against, and takes `as_of` from it once:
+    /// a read is a single linearization point, M10 reports exactly that
+    /// point (V1), and any multi-constituent verdict discharges MIC clause 6
+    /// by construction (A3/V2) — properties of the pinning, not of each arm
+    /// remembering to do it.
+    ///
+    /// With the snapshot in hand the arms reach only the snapshot-based
+    /// surfaces: `Query::new` for M6, and M8's pure `*_on` twins rather than
+    /// the self-snapshotting `LinkQuery` handle (Conflicts resolved #5),
+    /// whose second snapshot would answer from one position while `as_of`
+    /// named another. Reads hold no lock against writers, are zero-step
+    /// (A1), and have no commit-before-ack obligation. No principal, no
+    /// session. Exhaustive over `Op` with the complementary (write) half as
+    /// one explicit rejecting |-list — see `dispatch_write`.
     fn dispatch_read(&self, op: Op) -> Result<Response, Rejection> {
         let kind = op.kind();
+        let snap = self.stores.kernel().snapshot();
+        let as_of = snap.seq();
         match op {
             // ── namespace reads (→ M3, §2): the M3-internal frontier/
             //    registry values Delegate/CreateNewDocument demand. Total —
             //    Option<Address>, no fault path.
             Op::NextAccountPrefix { parent } => {
-                let snap = self.stores.kernel().snapshot();
                 let addr = snap.world().m3().next_account_prefix(&parent);
-                Ok(Response::MaybeAddr { addr, as_of: snap.seq() })
+                Ok(Response::MaybeAddr { addr, as_of })
             }
             // Takes an explicit wire id, not the session's bound principal —
             // deliberate (§2): a prefix is public, immutable registry data,
             // and the read path is principal-free by construction.
             Op::PrincipalPrefix { id } => {
-                let snap = self.stores.kernel().snapshot();
                 let addr = snap.world().m3().principal_prefix(id).cloned();
-                Ok(Response::MaybeAddr { addr, as_of: snap.seq() })
+                Ok(Response::MaybeAddr { addr, as_of })
             }
             // ── raw link reads (→ M7, §2): no driver handle — straight off
             //    the one snapshot.
             Op::ReadLink { a } => {
-                let snap = self.stores.kernel().snapshot();
                 let link = snap.world().links().readlink(&a).cloned();
-                Ok(Response::LinkValue { link, as_of: snap.seq() })
+                Ok(Response::LinkValue { link, as_of })
             }
             // Carries its own Result in-band, deliberately (§2): M7 defines
             // ⟨⟩ ≠ ⊥ as two ANSWERS of FOLLOWLINK; lowering Invalid to a
             // Rejection would erase an unforgeable distinction. Contrast
             // Project, where M8's NotALink IS a precondition failure.
             Op::FollowLink { a, slot } => {
-                let snap = self.stores.kernel().snapshot();
                 let result = snap.world().links().followlink(&a, slot);
-                Ok(Response::Follow { result, as_of: snap.seq() })
+                Ok(Response::Follow { result, as_of })
             }
             // ── content/provenance reads (→ M6, §2) ──
             Op::RetrieveV { specs } => {
-                let snap = self.stores.kernel().snapshot();
                 let items =
                     Query::new(&snap).retrieve_v(&specs).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Delivery { items, as_of: snap.seq() })
+                Ok(Response::Delivery { items, as_of })
             }
             Op::RetrieveDocVSpan { doc } => {
-                let snap = self.stores.kernel().snapshot();
                 let set = Query::new(&snap).doc_vspan(&doc).map_err(|e| map_read(kind, e))?;
-                Ok(Response::SpanSet { set, as_of: snap.seq() })
+                Ok(Response::SpanSet { set, as_of })
             }
             Op::RetrieveDocVSpanSet { doc } => {
-                let snap = self.stores.kernel().snapshot();
                 let set = Query::new(&snap).doc_vspanset(&doc).map_err(|e| map_read(kind, e))?;
-                Ok(Response::SpanSet { set, as_of: snap.seq() })
+                Ok(Response::SpanSet { set, as_of })
             }
             Op::ShowOrigin { doc, span } => {
-                let snap = self.stores.kernel().snapshot();
                 let addrs =
                     Query::new(&snap).show_origin_v(&doc, &span).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Addrs { addrs, as_of: snap.seq() })
+                Ok(Response::Addrs { addrs, as_of })
             }
             Op::ShowDeletions { d_a, d_b } => {
-                let snap = self.stores.kernel().snapshot();
                 let rep =
                     Query::new(&snap).show_deletions(&d_a, &d_b).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Deletions { rep, as_of: snap.seq() })
+                Ok(Response::Deletions { rep, as_of })
             }
             Op::Compare { rho1, rho2 } => {
-                let snap = self.stores.kernel().snapshot();
                 let rep =
                     Query::new(&snap).compare(&rho1, &rho2).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Compare { rep, as_of: snap.seq() })
+                Ok(Response::Compare { rep, as_of })
             }
             Op::FindDocsContaining { regions } => {
-                let snap = self.stores.kernel().snapshot();
                 let addrs = Query::new(&snap)
                     .find_docs_containing(&regions)
                     .map_err(|e| map_read(kind, e))?;
-                Ok(Response::Addrs { addrs, as_of: snap.seq() })
+                Ok(Response::Addrs { addrs, as_of })
             }
             // ── link discovery reads (→ M8, §2): always the pure *_on twins
             //    over M10's one snapshot, never the self-snapshotting handle.
             Op::Image { d, region } => {
-                let snap = self.stores.kernel().snapshot();
                 let runs = image_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Runs { runs, as_of: snap.seq() })
+                Ok(Response::Runs { runs, as_of })
             }
             Op::FindLinksV { d, region } => {
-                let snap = self.stores.kernel().snapshot();
                 let addrs = findlinks_v_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Addrs { addrs, as_of: snap.seq() })
+                Ok(Response::Addrs { addrs, as_of })
             }
             Op::FindLinksFtt { q } => {
-                let snap = self.stores.kernel().snapshot();
                 let addrs = findlinks_ftt_on(&snap, &q); // total — no error map
-                Ok(Response::Addrs { addrs, as_of: snap.seq() })
+                Ok(Response::Addrs { addrs, as_of })
             }
             Op::CountV { d, region } => {
-                let snap = self.stores.kernel().snapshot();
                 let n = count_v_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Count { n, as_of: snap.seq() })
+                Ok(Response::Count { n, as_of })
             }
             Op::CountFtt { q } => {
-                let snap = self.stores.kernel().snapshot();
                 let n = count_ftt_on(&snap, &q); // total
-                Ok(Response::Count { n, as_of: snap.seq() })
+                Ok(Response::Count { n, as_of })
             }
             Op::WindowV { d, region, cur, n } => {
-                let snap = self.stores.kernel().snapshot();
                 let window =
                     window_v_on(&snap, &d, &region, cur, n).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Page { window, as_of: snap.seq() })
+                Ok(Response::Page { window, as_of })
             }
             Op::WindowFtt { q, cur, n } => {
-                let snap = self.stores.kernel().snapshot();
                 let window = window_ftt_on(&snap, &q, cur, n); // total
-                Ok(Response::Page { window, as_of: snap.seq() })
+                Ok(Response::Page { window, as_of })
             }
             Op::RetrieveEndsets { d, region } => {
-                let snap = self.stores.kernel().snapshot();
                 let pairs = retrieve_endsets_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Endsets { pairs, as_of: snap.seq() })
+                Ok(Response::Endsets { pairs, as_of })
             }
             Op::Project { a, slot, d } => {
-                let snap = self.stores.kernel().snapshot();
                 let set = project_on(&snap, &a, slot, &d).map_err(|e| map_read(kind, e))?;
-                Ok(Response::SpanSet { set, as_of: snap.seq() })
+                Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
-                let snap = self.stores.kernel().snapshot();
                 let val = discoverable_from_on(&snap, &a, &d).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Bool { val, as_of: snap.seq() })
+                Ok(Response::Bool { val, as_of })
             }
             Op::DeleteOrphans { d, p, width } => {
-                let snap = self.stores.kernel().snapshot();
                 let report =
                     delete_orphans_on(&snap, &d, &p, &width).map_err(|e| map_read(kind, e))?;
-                Ok(Response::Orphans { report, as_of: snap.seq() })
+                Ok(Response::Orphans { report, as_of })
             }
             Op::InClaims { y, view } => {
-                let snap = self.stores.kernel().snapshot();
                 let claims = in_claims_on(&snap, &y, view); // total
-                Ok(Response::Claims { claims, as_of: snap.seq() })
+                Ok(Response::Claims { claims, as_of })
             }
             Op::OutClaims { x, view } => {
-                let snap = self.stores.kernel().snapshot();
                 let claims = out_claims_on(&snap, &x, view); // total
-                Ok(Response::Claims { claims, as_of: snap.seq() })
+                Ok(Response::Claims { claims, as_of })
             }
             // Complementary half — see dispatch_write's twin arm (§1).
             Op::CreateNewDocument { .. }
@@ -579,116 +522,17 @@ where
 
     // ── rejection surfacing (§5) ──
 
-    /// Lower a write-path `TxnError` into a classified [`Rejection`]. A
-    /// `&self` method so the `Poisoned` arm can latch the poison flag on the
-    /// spot (read by `execute` step (c)); `Relaxed` suffices — the flag is a
-    /// hint (M2 independently returns `Poisoned` to every later write), it
-    /// only lets a write fail fast before opening a doomed transaction.
+    /// Classify a write path's `TxnError` (the [`map_txn`] table), latching
+    /// the poison hint on the way past `Poisoned` so `execute` step (c) can
+    /// fail the next write fast rather than opening a doomed transaction.
+    /// `Relaxed` suffices: the flag is a hint, and M2 independently returns
+    /// `Poisoned` to every later write whether or not this one is seen.
     fn map_txn<E: Lower>(&self, op: OpKind, e: TxnError<E>) -> Rejection {
-        match e {
-            TxnError::Rejected(inner) => {
-                let (c, s) = inner.lower();
-                Rejection::classified(op, c, s)
-            }
-            // Operators see the I/O cause behind the Retry hint.
-            TxnError::Durability(io) => Rejection::classified(op, RejectCode::Durability, None)
-                .with_detail(io.to_string()),
-            // Nothing committed, and the request itself is what M2 could not
-            // journal — so re-sending it is futile and the client is told so
-            // (Malformed ⇒ Permanent, §5), with the encoder's own account.
-            TxnError::Unencodable(cause) => Rejection::classified(op, RejectCode::Malformed, None)
-                .with_detail(cause.to_string()),
-            // Nothing committed; every record encodes, the transaction as a
-            // whole is past M2's per-transaction budget — Permanent, and the
-            // remedy travels: split the request rather than resend it.
-            TxnError::OverBudget { bytes } => {
-                Rejection::classified(op, RejectCode::TxnOverBudget, None).with_detail(format!(
-                    "transaction encodes to {bytes} bytes, over the journal's \
-                     per-transaction budget; split it"
-                ))
-            }
-            TxnError::Poisoned => {
-                self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
-                Rejection::classified(op, RejectCode::Poisoned, None)
-            }
+        if matches!(e, TxnError::Poisoned) {
+            self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
         }
+        map_txn(op, e)
     }
-
-    // ── idempotency cache (§7) ──
-
-    /// Memoize a committed-write ack as its op-kind-tagged essence, keyed
-    /// `(SessionId, ReqId)`. The call site guards `is_committed_write`; the
-    /// `_` arm is a defensive return, never a panic.
-    fn idem_put(&self, s: SessionId, id: &ReqId, op: OpKind, resp: &Response) {
-        let essence = match resp {
-            Response::Ack { at } => AckEssence::Ack { at: *at },
-            Response::AckAddr { addr, at } => {
-                AckEssence::AckAddr { addr: addr.clone(), at: *at }
-            }
-            Response::AckEdit { successor, claim, at } => AckEssence::AckEdit {
-                successor: successor.clone(),
-                claim: claim.clone(),
-                at: *at,
-            },
-            _ => return, // unreachable under the is_committed_write guard
-        };
-        self.idem.lock().put((s, id.clone()), Cached { op, essence });
-    }
-
-    /// Rebuild the cached ack — a miss on session OR op-kind mismatch (a
-    /// `ReqId` reused across op-kinds re-executes rather than serving a
-    /// wrong-shaped ack; §7). The `(SessionId, ReqId)` key confines every hit
-    /// to the session that committed the write (the pre-auth step-(a)
-    /// ordering is therefore harmless — item-4).
-    fn idem_get(&self, s: SessionId, id: &ReqId, op: OpKind) -> Option<Response> {
-        let mut g = self.idem.lock();
-        let c = g.get(&(s, id.clone()))?; // foreign session simply misses; bumps LRU recency
-        if c.op != op {
-            return None; // ReqId reused across op-kinds ⇒ miss, re-execute
-        }
-        Some(match &c.essence {
-            AckEssence::Ack { at } => Response::Ack { at: *at },
-            AckEssence::AckAddr { addr, at } => Response::AckAddr { addr: addr.clone(), at: *at },
-            AckEssence::AckEdit { successor, claim, at } => Response::AckEdit {
-                successor: successor.clone(),
-                claim: claim.clone(),
-                at: *at,
-            },
-        })
-    }
-}
-
-// ── editlink's read-assembly helpers (§4) ──
-
-/// The fallible successor-slot assembler: reject any ill-formed VSpec (M5's
-/// `resolve` clips a malformed span to ⟨⟩ silently, which would breach the
-/// never-silent contract), then the resolve→lift→assemble tail is infallible
-/// (`Run::iextent` is total — every `Run` has `width ≥ 1` and an
-/// element-level `i_start`). An empty from/to is structurally fine; M7 gates
-/// the type slot.
-fn endset_from_vspecs(m5: &M5State, specs: &[VSpec]) -> Result<Endset, Rejection> {
-    let mut spans = Vec::new();
-    for vs in specs {
-        // M10-side well-formedness (the same content-V check makelink
-        // applies): else a typed reject, not a silent ⟨⟩.
-        if !is_content_vspan(&vs.span) {
-            return Err(reject1(OpKind::EditLink, RejectCode::IllFormedSpec));
-        }
-        spans.extend(m5.resolve(&vs.source, &vs.span).iter().map(Run::iextent));
-    }
-    Ok(Endset::from_spans(spans))
-}
-
-/// The content-V well-formedness predicate makelink applies (M5/M7 reject ⟨⟩
-/// otherwise): a depth-2, content-subspace, ordinal-level V-span. Every read
-/// is fallible, so a span of any shape answers rather than faulting, which is
-/// what `execute`'s Total contract needs.
-fn is_content_vspan(span: &Span) -> bool {
-    let start = span.start();
-    let width = span.width();
-    start.len() == 2 && width.len() == 2
-        && start.get(1) == Some(&Nat::from(1u32)) // start's subspace component == s_C (= 1)
-        && width.get(1) == Some(&Nat::from(0u32)) // ordinal-level: width's subspace component == 0
 }
 
 #[cfg(test)]
@@ -696,7 +540,7 @@ mod tests {
     use std::sync::Arc;
 
     use serde::{Deserialize, Serialize};
-    use skep_address::{validate, Address, Nat, Span, Tumbler};
+    use skep_address::{validate, Address, Nat, Tumbler};
     use skep_arrangement::{HasM5, InsertError, M5Rec, M5State, VPos, Vstream};
     use skep_content::{ContentStore, ContentWrite, HasContent, Val};
     use skep_kernel::{
@@ -706,6 +550,7 @@ mod tests {
     use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
 
     use super::*;
+    use crate::op::ReqId;
     use crate::reject::Disposition;
 
     // ── a minimal assembled world (the composition contract in miniature) ──
@@ -891,117 +736,33 @@ mod tests {
         }
     }
 
-    /// §5: `Durability` threads the io::Error text (Retry hint with an
-    /// operator-visible cause); `Unencodable` threads its cause too but
-    /// disposes Permanent — the same no-op, and one no retry can fix; a typed
-    /// `Rejected(E)` lowers verbatim.
-    #[test]
-    fn map_txn_lowers_durability_and_rejected() {
-        let op = operation();
-        let rej = op.map_txn::<InsertError>(
-            OpKind::Insert,
-            TxnError::Durability(std::io::Error::other("disk gone")),
-        );
-        assert_eq!(rej.code, RejectCode::Durability);
-        assert_eq!(rej.disposition, Disposition::Retry);
-        assert!(rej.detail.as_deref().is_some_and(|d| d.contains("disk gone")));
-        let rej = op.map_txn::<InsertError>(
-            OpKind::Insert,
-            TxnError::Unencodable("record too large".into()),
-        );
-        assert_eq!(rej.code, RejectCode::Malformed);
-        assert_eq!(
-            rej.disposition,
-            Disposition::Permanent,
-            "a record M2 cannot journal must never be advertised as retryable"
-        );
-        assert!(rej
-            .detail
-            .as_deref()
-            .is_some_and(|d| d.contains("record too large")));
-        // OverBudget: its own code (never Malformed — the records are fine),
-        // Permanent per the 2026-08-21 ruling, with the accounted size and
-        // the split remedy threaded for the operator.
-        let rej = op.map_txn::<InsertError>(OpKind::Insert, TxnError::OverBudget { bytes: 99 });
-        assert_eq!(rej.code, RejectCode::TxnOverBudget);
-        assert_eq!(rej.disposition, Disposition::Permanent);
-        assert!(rej
-            .detail
-            .as_deref()
-            .is_some_and(|d| d.contains("99") && d.contains("split")));
-        let rej = op.map_txn(OpKind::Insert, TxnError::Rejected(InsertError::EmptyContent));
-        assert_eq!(rej.code, RejectCode::EmptyContent);
-        assert_eq!(rej.disposition, Disposition::Permanent);
-    }
-
-    /// §7: the cache round-trips a committed-write essence keyed
-    /// `(SessionId, ReqId)` and op-kind-matched — a foreign session or a
-    /// reused-across-kinds `ReqId` misses; `close_session` purges (§6).
-    #[test]
-    fn idem_cache_confinement_and_purge() {
-        let op = operation();
-        let s1 = op.open_session(PrincipalId(1));
-        let s2 = op.open_session(PrincipalId(2));
-        let id = ReqId(b"req-1".to_vec());
-        let ack = Response::AckAddr { addr: a(&[1, 0, 1]), at: Seq(9) };
-        op.idem_put(s1, &id, OpKind::CreateNewDocument, &ack);
-        // Same session + kind: hit, rebuilt equal.
-        match op.idem_get(s1, &id, OpKind::CreateNewDocument) {
-            Some(Response::AckAddr { addr, at }) => {
-                assert_eq!(addr, a(&[1, 0, 1]));
-                assert_eq!(at, Seq(9));
-            }
-            _ => panic!("expected a rebuilt AckAddr hit"),
-        }
-        // Foreign session: miss (cross-principal confinement, item-4).
-        assert!(op.idem_get(s2, &id, OpKind::CreateNewDocument).is_none());
-        // Op-kind mismatch: miss (wrong-shaped ack never served).
-        assert!(op.idem_get(s1, &id, OpKind::Fork).is_none());
-        // close_session purges the session's entries.
-        op.close_session(s1);
-        assert!(op.idem_get(s1, &id, OpKind::CreateNewDocument).is_none());
-    }
-
-    /// §7/§1(d): only committed-write acks are memoized — a non-ack put is a
-    /// defensive no-op, and a rejection produced through `execute` is never
-    /// cached (a Reorder/Retry reissue must re-execute).
+    /// §7/§1(d): the memo admits a committed-write acknowledgment and
+    /// nothing else. `as_ack` is what refuses the other two shapes, so
+    /// neither a rejection surfaced through `execute` (a Reorder/Retry
+    /// reissue MUST re-execute) nor a read answer (whose snapshot goes
+    /// stale) can be memoized even when the request carried an id.
     #[test]
     fn only_committed_writes_are_cached() {
         let op = operation();
         let s = op.open_session(PrincipalId(1));
+        assert!(Response::Count { n: 3, as_of: Seq(1) }.as_ack().is_none());
+        assert!(Response::Rejected(reject1(OpKind::Insert, RejectCode::Unauthenticated))
+            .as_ack()
+            .is_none());
+        // A rejected write carrying an id leaves no entry behind.
         let id = ReqId(b"req-2".to_vec());
-        op.idem_put(s, &id, OpKind::CountV, &Response::Count { n: 3, as_of: Seq(1) });
-        assert!(op.idem_get(s, &id, OpKind::CountV).is_none());
-        // A rejected write (unbound session) with an id is not cached.
         let stray = op.open_session(PrincipalId(3));
         op.close_session(stray);
         let r = op.execute(stray, Request { id: Some(id.clone()), op: insert_op() });
         assert!(matches!(r, Response::Rejected(_)));
-        assert!(op.idem_get(stray, &id, OpKind::Insert).is_none());
-        // A read with an id is not cached either (stale-snapshot hazard).
+        assert!(op.idem.get(stray, &id, OpKind::Insert).is_none());
+        // Nor does a read carrying one.
         let rid = ReqId(b"req-3".to_vec());
         let resp = op.execute(
             s,
             Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: a(&[1]) } },
         );
         assert!(matches!(resp, Response::MaybeAddr { .. }));
-        assert!(op.idem_get(s, &rid, OpKind::NextAccountPrefix).is_none());
-    }
-
-    /// §4: the content-V guard — depth-2, content-subspace (s_C = 1),
-    /// ordinal-level — answering for a span of any shape, deeper and
-    /// shallower included.
-    #[test]
-    fn content_vspan_guard() {
-        let ok = Span::new(t(&[1, 1]), t(&[0, 2])).unwrap_or_else(|_| panic!("well-formed"));
-        assert!(is_content_vspan(&ok));
-        let link_subspace = Span::new(t(&[2, 1]), t(&[0, 1])).unwrap_or_else(|_| panic!("wf"));
-        assert!(!is_content_vspan(&link_subspace));
-        let not_ordinal = Span::new(t(&[1, 1]), t(&[1, 0])).unwrap_or_else(|_| panic!("wf"));
-        assert!(!is_content_vspan(&not_ordinal));
-        let depth1 = Span::new(t(&[5]), t(&[1])).unwrap_or_else(|_| panic!("wf"));
-        assert!(!is_content_vspan(&depth1)); // shallower than depth 2
-        let depth3 = Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).unwrap_or_else(|_| panic!("wf"));
-        assert!(!is_content_vspan(&depth3));
+        assert!(op.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
     }
 }

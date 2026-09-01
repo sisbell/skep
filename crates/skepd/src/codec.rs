@@ -274,16 +274,11 @@ impl JsonCodec {
 
     /// The transport's one never-silent obligation outside M10's dispatch
     /// (M10 §Codec): a frame that failed to parse still gets exactly one
-    /// response — the `Unparseable` rejection, built HERE and marshaled like
-    /// any other.
+    /// response. M10 classifies it — the code and its disposition come from
+    /// the same table every other rejection goes through — and this crate
+    /// marshals it like any other.
     pub fn unparseable(&self, e: ParseError) -> Response {
-        Response::Rejected(Rejection {
-            op: OpKind::Unparseable,
-            code: RejectCode::Malformed,
-            disposition: Disposition::Permanent,
-            site: None,
-            detail: e.detail,
-        })
+        Response::Rejected(Rejection::unparseable(e))
     }
 }
 
@@ -1751,7 +1746,6 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::TooDeep => "too_deep",
         RejectCode::NotDescendantOfBootstrap => "not_descendant_of_bootstrap",
         RejectCode::NotFresh => "not_fresh",
-        RejectCode::BadPosition => "bad_position",
         RejectCode::EmptyContent => "empty_content",
         RejectCode::Content => "content",
         RejectCode::EmptySource => "empty_source",

@@ -1,6 +1,6 @@
-//! The parsed request model: [`Request`]/[`SessionId`]/[`ReqId`], the [`Op`]
-//! enum (one variant per FEBE operation), the [`OpKind`] fieldless echo, and
-//! the read/write partition the lifecycle gates on (§1).
+//! The parsed request model: [`Request`]/[`ReqId`], the [`Op`] enum (one
+//! variant per FEBE operation), the [`OpKind`] fieldless echo, and the
+//! read/write partition the lifecycle gates on (§1).
 
 use skep_address::{Address, Nat, Span, Tumbler};
 use skep_arrangement::{VPos, VSpec};
@@ -19,14 +19,6 @@ pub struct Request {
     /// The parsed operation.
     pub op: Op,
 }
-
-/// An M10-minted session handle (§6). The field is deliberately private:
-/// M10 mints ids from a monotonic counter (in-uptime uniqueness), and the
-/// transport injects them from the connection's authenticated binding — a
-/// `SessionId` is never read off the wire (the §6 non-forgeability
-/// precondition), so nothing outside M10 constructs one.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct SessionId(pub(crate) u64);
 
 /// The client-supplied idempotency key — client-unique within its session
 /// (§7). Half of the `(SessionId, ReqId)` cache key.

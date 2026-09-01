@@ -175,15 +175,15 @@ impl IdentityFold {
     /// as ctx. Returns whether this step flipped the board claimed — the
     /// claim-flip tail's trigger (AUTH-3.43).
     pub fn step_committed(&self, world_post: &World, dep: &LinkDeposit<'_>) -> bool {
-        let mut g = self.state.lock();
-        let was_claimed = g.claimant().is_some();
-        let (next, verdict) = g.step(identity_types(), &WorldCtx(world_post), dep);
+        let mut state = self.state.lock();
+        let was_claimed = state.claimant().is_some();
+        let (next, verdict) = state.step(identity_types(), &WorldCtx(world_post), dep);
         debug_assert!(
             matches!(verdict, Verdict::Honored(_)),
             "a committed credential deposit must fold honored (E4): {verdict:?}"
         );
-        *g = next;
-        !was_claimed && g.claimant().is_some()
+        *state = next;
+        !was_claimed && state.claimant().is_some()
     }
 }
 

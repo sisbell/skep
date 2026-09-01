@@ -26,20 +26,20 @@ use crate::World;
 /// route's per-attempt work linearly. The budget is written on
 /// [`MAX_GENESIS_KEYS`], which bounds the same quantity on the arm this
 /// cap exempts.
-pub(crate) const ENROLLED_CAP: usize = 16;
+pub(crate) const MAX_ENROLLED_KEYS: usize = 16;
 
 /// The seeding hand's own bound (daemon POLICY, the same standing as
-/// [`ENROLLED_CAP`]). RES-57 exempts `Genesis` from the ENROLLED SET's cap
-/// — an account seeded past it keeps its keys — and what is bounded here
-/// is ONE RECORD's key count, which is a different quantity: it is what
-/// [`super::session::find_signer`] walks, in full, on every signed
-/// `POST /session` attempt, and that route is unauthenticated and
+/// [`MAX_ENROLLED_KEYS`]). RES-57 exempts `Genesis` from the ENROLLED
+/// SET's cap — an account seeded past it keeps its keys — and what is
+/// bounded here is ONE RECORD's key count, which is a different quantity:
+/// it is what [`super::session::find_signer`] walks, in full, on every
+/// signed `POST /session` attempt, and that route is unauthenticated and
 /// reachable from any page.
 ///
 /// The budget is N × `verify_strict` against the two cheap requests that
 /// buy it — one `GET /challenge`, one `POST /session`, neither carrying a
-/// credential. At [`ENROLLED_CAP`] the bill is order 800 µs, commensurate
-/// with the frame parse beside it; at the record's own
+/// credential. At [`MAX_ENROLLED_KEYS`] the bill is order 800 µs,
+/// commensurate with the frame parse beside it; at the record's own
 /// [`skep_identity::MAX_RECORD_BYTES`] bound it is order 40 ms, which the
 /// worker pool cannot absorb. "No cutoff, ever" (AUTH-4.33) is what makes
 /// the cap belong HERE, at the deposit, rather than at the verification.
@@ -49,7 +49,7 @@ pub(crate) const ENROLLED_CAP: usize = 16;
 /// board dies there, while anything seeded before the claim can be retired
 /// only by an anchor session of that account — whose keys the planter
 /// chose.
-pub(crate) const MAX_GENESIS_KEYS: usize = ENROLLED_CAP;
+pub(crate) const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;
 
 /// The three credential type addresses — AUTH-7.1 horn B's allocation,
 /// recorded for the commons-seeding table (see the build report): subspace
@@ -208,7 +208,7 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 /// execute, and receives ω's own `not_owner` — indistinguishable from its
 /// non-credential answer. Pre-claim the order stands for every caller.
 pub(crate) fn nullify_refusal(
-    _g: &LockRead<'_>,
+    _lock: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
@@ -250,7 +250,7 @@ pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
 /// `None` and no arm fires. Reads the op's KIND and the PRINCIPAL and
 /// nothing else — never a fork/version source (AUTH-3.13).
 pub(crate) fn mint_home_refusal(
-    _g: &LockRead<'_>,
+    _lock: &LockRead<'_>,
     world: &World,
     op: &Op,
     principal: PrincipalId,
@@ -293,7 +293,7 @@ fn is_published_v1(world: &World, doc: &Address) -> bool {
 /// admission gate (RES-27, `claim_first`). Exact under the read guard: the
 /// claim commits only under `credential_lock.write()`.
 pub(crate) fn board_state_refusal(
-    _g: &LockRead<'_>,
+    _lock: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
@@ -391,16 +391,16 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// this request; the guard argument each producer takes is that contract's
 /// cheap half.
 pub(crate) fn plain_refusal(
-    g: &LockRead<'_>,
+    lock: &LockRead<'_>,
     world: &World,
     identity: &IdentityState,
     op: &Op,
     principal: PrincipalId,
     signer: Option<&skep_identity::Fingerprint>,
 ) -> Option<CredentialRefusal> {
-    nullify_refusal(g, world, identity, op, principal)
-        .or_else(|| mint_home_refusal(g, world, op, principal))
-        .or_else(|| board_state_refusal(g, world, identity, op, principal, signer))
+    nullify_refusal(lock, world, identity, op, principal)
+        .or_else(|| mint_home_refusal(lock, world, op, principal))
+        .or_else(|| board_state_refusal(lock, world, identity, op, principal, signer))
 }
 
 // ── precheck — slots (3)–(8), under the write lock (AUTH-3.15–3.19) ──────
@@ -447,7 +447,7 @@ impl DepositSpans {
 /// write (the fold reads the same slot and reaches the same verdict), with
 /// no slot (4)–(8) and no fold feed.
 pub(crate) fn precheck(
-    _g: &LockWrite<'_>,
+    _lock: &LockWrite<'_>,
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
@@ -486,7 +486,7 @@ pub(crate) fn precheck(
     // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt
     // from the SET's cap.
     if let Effect::Enroll { account, added } = &effect {
-        if identity.key_set(account).enrolled().count() + added.len() > ENROLLED_CAP {
+        if identity.key_set(account).enrolled().count() + added.len() > MAX_ENROLLED_KEYS {
             return Err(CredentialRefusal::TooManyEnrolled);
         }
     }

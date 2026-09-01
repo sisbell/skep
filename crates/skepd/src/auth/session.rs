@@ -127,12 +127,12 @@ impl Challenges {
         let mut raw = [0u8; 32];
         rng.fill_bytes(&mut raw);
         let nonce = Nonce(raw);
-        let mut g = self.inner.lock();
-        g.map.insert(nonce, (principal, now + CHALLENGE_TTL));
-        g.order.push_back(nonce);
-        while g.order.len() > self.cap {
-            if let Some(old) = g.order.pop_front() {
-                g.map.remove(&old);
+        let mut inner = self.inner.lock();
+        inner.map.insert(nonce, (principal, now + CHALLENGE_TTL));
+        inner.order.push_back(nonce);
+        while inner.order.len() > self.cap {
+            if let Some(old) = inner.order.pop_front() {
+                inner.map.remove(&old);
             }
         }
         nonce
@@ -142,9 +142,9 @@ impl Challenges {
     /// structures whether or not it validates; true iff present, unexpired,
     /// and issued for `principal`.
     pub fn burn(&self, nonce: &Nonce, principal: PrincipalId, now: Instant) -> bool {
-        let mut g = self.inner.lock();
-        let entry = g.map.remove(nonce);
-        g.order.retain(|n| n != nonce);
+        let mut inner = self.inner.lock();
+        let entry = inner.map.remove(nonce);
+        inner.order.retain(|n| n != nonce);
         matches!(entry, Some((p, expires)) if p == principal && now < expires)
     }
 }

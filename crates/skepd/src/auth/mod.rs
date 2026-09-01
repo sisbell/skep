@@ -32,7 +32,7 @@ use session::{Challenges, Sessions};
 
 /// The challenge store's default cap (AUTH-1.48): live nonces retained;
 /// past it the oldest is evicted. Entered into the store once, at `new`.
-pub(crate) const CHALLENGE_CAP: usize = 4096;
+pub(crate) const MAX_LIVE_NONCES: usize = 4096;
 
 /// The daemon's session-layer configuration, as the operator supplies it:
 /// the local-trust flag (Phase A default ON — a hosted image must set it
@@ -110,7 +110,7 @@ impl AuthState {
     pub fn open(opts: AuthOptions, world: &World) -> AuthState {
         AuthState {
             cfg: AuthConfig::new(opts),
-            challenges: Challenges::new(CHALLENGE_CAP),
+            challenges: Challenges::new(MAX_LIVE_NONCES),
             sessions: Sessions::new(),
             credential_lock: CredentialLock::new(),
             fold: IdentityFold::seeded(fold::canonical_identity(world)),
@@ -131,7 +131,7 @@ impl AuthState {
     /// the deposit's own commit is visible in.
     pub fn commit_tail(
         &self,
-        _g: &LockWrite<'_>,
+        _lock: &LockWrite<'_>,
         world_post: &World,
         dep: &LinkDeposit<'_>,
         sid: SessionId,

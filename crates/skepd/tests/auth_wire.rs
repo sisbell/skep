@@ -56,10 +56,10 @@ fn retire_atom(fps: &[&str]) -> String {
 /// claimed board. Kept apart from [`deposit`] for exactly that reason: the
 /// two writes meet different gates, and only the second is the credential
 /// path's.
-fn record_atom(port: u16, signed: &str, ordinal: u64, atom: &str) -> String {
+fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str) -> String {
     let v = op(
         port,
-        Some(signed),
+        Some(signed_token),
         &format!(
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
         ),
@@ -188,16 +188,16 @@ fn mint_home_first_refuses_until_the_home_exists() {
         &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":77}}"#),
     );
     expect_resp(&v, "ack_addr");
-    let s = open_session(port, 77);
-    let v = op(port, Some(&s), r#"{"op":"fork"}"#);
+    let account_token = open_session(port, 77);
+    let v = op(port, Some(&account_token), r#"{"op":"fork"}"#);
     assert_eq!(rejected_detail(&v), "credential_refused:mint_home_first");
     let v = op(
         port,
-        Some(&s),
+        Some(&account_token),
         &format!(r#"{{"op":"create_new_document","account":"{prefix}"}}"#),
     );
     expect_resp(&v, "ack_addr");
-    let v = op(port, Some(&s), r#"{"op":"fork"}"#);
+    let v = op(port, Some(&account_token), r#"{"op":"fork"}"#);
     expect_resp(&v, "ack_addr");
     sd.shutdown();
 }
@@ -205,7 +205,7 @@ fn mint_home_first_refuses_until_the_home_exists() {
 /// Challenge → signed session → op, and the strict body boundary: a reused
 /// nonce is the ONE 401; an uppercase nonce is a 400 whose nonce SURVIVES.
 #[test]
-fn handshake_lifecycle_and_the_400_vs_401_boundary() {
+fn the_handshake_lifecycle_and_a_400_that_spends_no_nonce() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -305,7 +305,7 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     // arm). An enroll of 15 more would land at 17 > 16: refused, whole.
     let too_many: Vec<SigningKey> = (0..15).map(distinct_key).collect();
     let refs: Vec<&SigningKey> = too_many.iter().collect();
-    let deposit = |atom_ordinal: u64, atom: &str| {
+    let enroll = |atom_ordinal: u64, atom: &str| {
         let v = op(
             port,
             Some(&signed),
@@ -323,13 +323,13 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
             ),
         )
     };
-    let v = deposit(2, &enroll_atom(&refs));
+    let v = enroll(2, &enroll_atom(&refs));
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
     // 14 more (16 total) clears the cap exactly.
-    let v = deposit(3, &enroll_atom(&refs[..14]));
+    let v = enroll(3, &enroll_atom(&refs[..14]));
     expect_resp(&v, "ack_addr");
     // …and the 17th key alone now refuses.
-    let v = deposit(4, &enroll_atom(&refs[14..]));
+    let v = enroll(4, &enroll_atom(&refs[14..]));
     assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
     // key_set shows exactly 16 enrolled.
     let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
@@ -373,10 +373,10 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
         &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":700}}"#),
     );
     expect_resp(&v, "ack_addr");
-    let s = open_session(port, 700);
+    let account_token = open_session(port, 700);
     let v = op(
         port,
-        Some(&s),
+        Some(&account_token),
         &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
     );
     let doc1 = acked_addr(&v);
@@ -386,7 +386,7 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
     let genesis = |ordinal: u64, keys: &[&SigningKey]| -> Value {
         let v = op(
             port,
-            Some(&s),
+            Some(&account_token),
             &format!(
                 r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}]}}"#,
                 enroll_atom(keys)
@@ -395,7 +395,7 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
         expect_resp(&v, "ack_addr");
         op(
             port,
-            Some(&s),
+            Some(&account_token),
             &format!(
                 r#"{{"op":"make_link","home":"{doc1}","from":{{"addrs":["{doc1}.0.1.{ordinal}"]}},"to":{{"addrs":["{account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
             ),
@@ -720,12 +720,12 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     let port = sd.port();
     let device_fp = fingerprint_hex(&device_key());
     let anchor_fp = fingerprint_hex(&anchor_key());
-    let s_dev = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    let s_anchor = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
+    let device_token = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let anchor_token = open_signed_session(port, CLAIMANT_PRINCIPAL, &anchor_key());
 
     // Trigger 1 — an ANCHOR retirement from a non-anchor session refuses.
-    let record = record_atom(port, &s_dev, 2, &retire_atom(&[&anchor_fp]));
-    let v = deposit(port, &s_dev, &record, T_RETIRE);
+    let record = record_atom(port, &device_token, 2, &retire_atom(&[&anchor_fp]));
+    let v = deposit(port, &device_token, &record, T_RETIRE);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // …and a BARE session never satisfies it either (§Credential refusals),
     // which is slot (6) answering ahead of slot (7)'s
@@ -738,17 +738,17 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
 
     // Trigger 2 — a post-genesis ANCHOR-FLAGGED enrollment, same gate.
     let fresh = distinct_key(9);
-    let flagged = record_atom(port, &s_dev, 3, &enroll_atom_flagged(&[(&fresh, true)]));
-    let v = deposit(port, &s_dev, &flagged, T_ENROLL);
+    let flagged = record_atom(port, &device_token, 3, &enroll_atom_flagged(&[(&fresh, true)]));
+    let v = deposit(port, &device_token, &flagged, T_ENROLL);
     assert_eq!(rejected_detail(&v), "credential_refused:anchor_session_required");
     // The same enrollment UNFLAGGED passes, so the gate is the FLAG and not
     // the act.
-    let plain = record_atom(port, &s_dev, 4, &enroll_atom_flagged(&[(&fresh, false)]));
-    expect_resp(&deposit(port, &s_dev, &plain, T_ENROLL), "ack_addr");
+    let plain = record_atom(port, &device_token, 4, &enroll_atom_flagged(&[(&fresh, false)]));
+    expect_resp(&deposit(port, &device_token, &plain, T_ENROLL), "ack_addr");
 
     // The anchor's own session retires the device key.
-    let retire = record_atom(port, &s_anchor, 5, &retire_atom(&[&device_fp]));
-    expect_resp(&deposit(port, &s_anchor, &retire, T_RETIRE), "ack_addr");
+    let retire = record_atom(port, &anchor_token, 5, &retire_atom(&[&device_fp]));
+    expect_resp(&deposit(port, &anchor_token, &retire, T_RETIRE), "ack_addr");
 
     // key_set moves the fingerprint from enrolled to retired.
     let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{CLAIMANT_ACCOUNT}"}}"#));
@@ -770,7 +770,7 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
         port,
         "POST",
         "/op",
-        Some(&s_dev),
+        Some(&device_token),
         format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#).as_bytes(),
     );
     assert_eq!(st, 200);
@@ -808,7 +808,7 @@ fn retiring_a_key_needs_an_anchor_session_and_kills_that_keys_sessions() {
     // The anchor's own session is untouched by the retirement it made.
     let v = op(
         port,
-        Some(&s_anchor),
+        Some(&anchor_token),
         &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     expect_resp(&v, "ack_addr");
@@ -1007,7 +1007,7 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
         assert_eq!(st, 200);
         json(&body)["nonce"].as_str().expect("nonce").to_string()
     };
-    let signed = |principal: u64, nonce: &str, org: &str, sk: &SigningKey| {
+    let signed_body = |principal: u64, nonce: &str, org: &str, sk: &SigningKey| {
         let sig = sign_session(sk, org, nonce, principal);
         format!(
             "{{\"principal\":{principal},\"nonce\":\"{nonce}\",\"origin\":\"{org}\",\"sig\":\"{sig}\"}}"
@@ -1021,29 +1021,32 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
         "POST",
         "/session",
         None,
-        signed(p, &reused, &origin, &device_key()).as_bytes(),
+        signed_body(p, &reused, &origin, &device_key()).as_bytes(),
     );
     assert_eq!(st, 200, "the first use of a nonce succeeds");
 
     let rows: Vec<(&str, String)> = vec![
         (
             "an origin outside the signed set",
-            signed(p, &nonce_for(p), "https://evil.example", &device_key()),
+            signed_body(p, &nonce_for(p), "https://evil.example", &device_key()),
         ),
-        ("an unknown nonce", signed(p, &"ab".repeat(32), &origin, &device_key())),
-        ("a reused nonce", signed(p, &reused, &origin, &device_key())),
-        ("a nonce issued for another principal", signed(p, &nonce_for(p + 1), &origin, &device_key())),
+        ("an unknown nonce", signed_body(p, &"ab".repeat(32), &origin, &device_key())),
+        ("a reused nonce", signed_body(p, &reused, &origin, &device_key())),
+        (
+            "a nonce issued for another principal",
+            signed_body(p, &nonce_for(p + 1), &origin, &device_key()),
+        ),
         (
             "a principal with no account",
-            signed(p + 77, &nonce_for(p + 77), &origin, &device_key()),
+            signed_body(p + 77, &nonce_for(p + 77), &origin, &device_key()),
         ),
         (
             "a signature from an unenrolled key",
-            signed(p, &nonce_for(p), &origin, &distinct_key(21)),
+            signed_body(p, &nonce_for(p), &origin, &distinct_key(21)),
         ),
         (
             "principal 0, whose subject is the claimant, signing with a foreign key",
-            signed(0, &nonce_for(0), &origin, &distinct_key(22)),
+            signed_body(0, &nonce_for(0), &origin, &distinct_key(22)),
         ),
     ];
     for (what, body) in rows {

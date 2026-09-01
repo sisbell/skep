@@ -1110,7 +1110,7 @@ impl Daemon {
     /// the gates' answers and the execute they gate stand on one committed
     /// state; the producers' ORDER is `plain_refusal`'s, not this site's.
     fn plain_sequence(&self, meta: FrameMeta, freq: Request, req: &HttpRequest) -> Reply {
-        let _g = self.auth.credential_lock.read();
+        let credential_lock = self.auth.credential_lock.read();
         let serial = self.writes.serial_lock();
         let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
@@ -1118,7 +1118,7 @@ impl Daemon {
             Actor::Guest(_) => return with_signal(self.guest_reply(freq), closed),
         };
         if let Some(r) = plain_refusal(
-            &_g,
+            &credential_lock,
             snap.world(),
             &identity,
             &freq.op,
@@ -1160,7 +1160,7 @@ impl Daemon {
         }
         // 3 — the credential write lock, the serialization lock, the locked
         // snapshot, and this site's OWN resolution.
-        let _g = self.auth.credential_lock.write();
+        let credential_lock = self.auth.credential_lock.write();
         let serial = self.writes.serial_lock();
         let (snap, identity, Resolved { actor, closed }) = self.locked_state(&serial, req);
         let entry = match actor {
@@ -1192,7 +1192,7 @@ impl Daemon {
             return with_signal(credential_refused(op_name, &r), closed);
         };
         match crate::auth::policy::precheck(
-            &_g,
+            &credential_lock,
             snap.world(),
             &identity,
             &dep,
@@ -1213,7 +1213,7 @@ impl Daemon {
             // memo entry, as one operation under the write guard.
             let post = self.engine.kernel().snapshot();
             let flipped = self.auth.commit_tail(
-                &_g,
+                &credential_lock,
                 post.world(),
                 &dep.deposit(),
                 entry.sid,

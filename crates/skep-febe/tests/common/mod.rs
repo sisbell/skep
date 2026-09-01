@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec, Vstream};
+use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
@@ -19,7 +19,7 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, World
 use skep_links::{
     enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter,
 };
-use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
+use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 // ───────────────────────── the assembled test world ─────────────────────────
@@ -175,12 +175,6 @@ pub struct KernelStores {
 impl Stores<World> for KernelStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
-    }
-    fn namespace(&self) -> Namespace<'_, World> {
-        Namespace::new(&self.kernel)
-    }
-    fn vstream(&self) -> Vstream<'_, World> {
-        Vstream::new(&self.kernel)
     }
     fn linkstore(&self) -> LinkWriter<'_, World> {
         LinkWriter::new(&self.kernel)

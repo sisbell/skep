@@ -541,13 +541,13 @@ mod tests {
 
     use serde::{Deserialize, Serialize};
     use skep_address::{validate, Address, Nat, Tumbler};
-    use skep_arrangement::{HasM5, InsertError, M5Rec, M5State, VPos, Vstream};
+    use skep_arrangement::{HasM5, InsertError, M5Rec, M5State, VPos};
     use skep_content::{ContentStore, ContentWrite, HasContent, Val};
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
     use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter};
-    use skep_namespace::{HasM3, M3Rec, M3State, Namespace, PrincipalId};
+    use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
     use super::*;
     use crate::op::ReqId;
@@ -659,12 +659,6 @@ mod tests {
         fn kernel(&self) -> &Kernel<World> {
             &self.kernel
         }
-        fn namespace(&self) -> Namespace<'_, World> {
-            Namespace::new(&self.kernel)
-        }
-        fn vstream(&self) -> Vstream<'_, World> {
-            Vstream::new(&self.kernel)
-        }
         fn linkstore(&self) -> LinkWriter<'_, World> {
             LinkWriter::new(&self.kernel)
         }
@@ -764,5 +758,33 @@ mod tests {
         );
         assert!(matches!(resp, Response::MaybeAddr { .. }));
         assert!(op.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
+    }
+
+    /// §1: the partition is written in three places — `is_read`, and each
+    /// dispatch table's complement `|`-list — and they must agree. Adding a
+    /// variant is caught by the compiler at all three; MOVING one across the
+    /// partition is not, because every match stays exhaustive: `is_read`
+    /// alone picks the table, so an op moved in that one list would route to
+    /// the table whose complement arm holds it and answer `Malformed`
+    /// forever. Feeding every op to the WRONG table pins the agreement — each
+    /// complement arm must hold exactly the ops `is_read` sends elsewhere.
+    #[test]
+    fn each_dispatch_table_rejects_exactly_the_other_half() {
+        let op = operation();
+        for (o, is_read) in crate::op::tests::all_ops() {
+            let kind = o.kind();
+            let wrong_table = if is_read {
+                op.dispatch_write(WriteCtx { principal: PrincipalId(1) }, o)
+            } else {
+                op.dispatch_read(o)
+            };
+            match wrong_table {
+                Err(rej) => {
+                    assert_eq!(rej.op, kind);
+                    assert_eq!(rej.code, RejectCode::Malformed, "{kind:?}");
+                }
+                Ok(_) => panic!("{kind:?} was answered by the table for the other half"),
+            }
+        }
     }
 }

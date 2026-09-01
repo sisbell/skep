@@ -10,7 +10,7 @@ mod common;
 use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec};
+use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM};
 use skep_links::{enc, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Region, Spec};
@@ -204,9 +204,9 @@ fn link_lifecycle() {
     // Err(Invalid) INSIDE Response::Follow, never a Rejection (§2).
     assert!(link_value(ex(&fx.op, fx.s, Op::ReadLink { a: l1.clone() })).is_some());
     assert!(link_value(ex(&fx.op, fx.s, Op::ReadLink { a: ghost_link(&d, 99) })).is_none());
-    let cov = follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: 1 }));
+    let cov = follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: FROM }));
     assert_ne!(cov.expect("slot 1 exists"), SpanSet::empty());
-    assert!(follow(ex(&fx.op, fx.s, Op::FollowLink { a: ghost_link(&d, 99), slot: 1 })).is_err());
+    assert!(follow(ex(&fx.op, fx.s, Op::FollowLink { a: ghost_link(&d, 99), slot: FROM })).is_err());
     assert!(follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: 9 })).is_err());
 
     // Region family (foundation ∩ active).
@@ -238,7 +238,7 @@ fn link_lifecycle() {
     assert_eq!(w.batch.len(), 1);
 
     // Pointwise projection & discoverability.
-    let (proj, _) = spanset(ex(&fx.op, fx.s, Op::Project { a: l1.clone(), slot: 1, d: d.clone() }));
+    let (proj, _) = spanset(ex(&fx.op, fx.s, Op::Project { a: l1.clone(), slot: FROM, d: d.clone() }));
     assert_ne!(proj, SpanSet::empty());
     assert!(boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l1.clone(), d: d.clone() })));
 
@@ -301,6 +301,49 @@ fn link_lifecycle() {
     assert!(found.contains(&l1) && found.contains(&succ) && found.contains(&e1));
     assert!(found.contains(&r) && !found.contains(&l2));
     assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 4);
+}
+
+/// §4: what M10's successor guard does NOT type. A source M3 has registered
+/// but M5 has not yet arranged passes both checks and resolves to ⟨⟩, so the
+/// successor commits with an empty FROM under an ordinary `AckEdit` — the
+/// same empty slot MAKELINK's `Resolve` form deposits off the same run list,
+/// and the boundary of what a client may conclude from a successful edit.
+#[test]
+fn an_unarranged_source_commits_an_empty_successor_slot() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let (original, _) = ack_addr(ex(
+        &fx.op,
+        fx.s,
+        Op::MakeLink {
+            home: d.clone(),
+            from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        },
+    ));
+
+    // Registered by CREATENEWDOCUMENT, arranged by nothing: M5 arranges a
+    // document only when something is written into it.
+    let fresh = create_doc(&fx);
+    let (succ, _, _) = ack_edit(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![vspec(&fresh, 1, 1)],
+                to: vec![vspec(&d, 2, 1)],
+                ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+            },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        },
+    ));
+    let link = link_value(ex(&fx.op, fx.s, Op::ReadLink { a: succ })).expect("successor is resident");
+    assert!(link.from_slot().is_empty(), "the unarranged source contributed no spans");
+    assert!(!link.to_slot().is_empty(), "the arranged source did");
 }
 
 /// §5/§6: the typed rejection surface — the session gate, the
@@ -421,7 +464,7 @@ fn rejection_surface() {
 
     // Contrast with FOLLOWLINK's in-band Invalid: Project's non-link IS a
     // precondition failure and IS lowered (§2).
-    let rej = rejected(ex(&fx.op, fx.s, Op::Project { a: start, slot: 1, d: d.clone() }));
+    let rej = rejected(ex(&fx.op, fx.s, Op::Project { a: start, slot: FROM, d: d.clone() }));
     assert_eq!(rej.code, RejectCode::NotALink);
     assert_eq!(rej.disposition, Disposition::Permanent);
 

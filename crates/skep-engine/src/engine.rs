@@ -199,13 +199,13 @@ pub struct EngineStores {
 
 impl EngineStores {
     /// Over any `Kernel<World>` — the live recovered one [`Engine`] holds, or
-    /// a throwaway kernel rooted at a reconstructed historical world. WHICH
-    /// driver constructor fills which `Stores` slot is the assembler's
-    /// knowledge, and the impl below is the one statement of it: the engine's
-    /// own `namespace`/`vstream`/`linkstore` read through this type, so a
-    /// caller that has a kernel and needs an M10 over it asks for this rather
-    /// than restating the four constructors and inheriting the next change to
-    /// them.
+    /// a throwaway kernel rooted at a reconstructed historical world. Holding
+    /// the kernel is the whole of what an assembler owes `Stores<World>`: M3's
+    /// and M5's drivers follow from it and the trait gives them, and the impl
+    /// below writes only M7's. The engine's own `namespace`/`vstream`/
+    /// `linkstore` read through this type, so a caller that has a kernel and
+    /// needs an M10 over it asks for this rather than restating the
+    /// constructors and inheriting the next change to them.
     ///
     /// PRECONDITION, and the assembler's to state because the pairing is the
     /// assembler's: `kernel`'s root must be a world that has been through
@@ -230,14 +230,6 @@ impl EngineStores {
 impl Stores<World> for EngineStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
-    }
-
-    fn namespace(&self) -> Namespace<'_, World> {
-        Namespace::new(&self.kernel)
-    }
-
-    fn vstream(&self) -> Vstream<'_, World> {
-        Vstream::new(&self.kernel)
     }
 
     fn linkstore(&self) -> LinkWriter<'_, World> {

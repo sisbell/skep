@@ -14,16 +14,31 @@ use crate::reject::{reject1, RejectCode, Rejection};
 
 /// Assemble one successor slot from its content V-specs.
 ///
-/// Every spec is checked before it is resolved, because M5's `resolve` is
-/// total: it answers ⟨⟩ for a spec it cannot honour — a malformed span, or a
-/// source that is no registered document — and depositing that ⟨⟩ would
-/// commit a successor with a silently empty slot. Both faults are typed
-/// instead: `IllFormedSpec` for a span that is not a content V-span,
-/// `SourceNotRegistered` for a source M3 does not know, which is `Reorder`
-/// and so tells a client that arrives ahead of its own CREATENEWDOCUMENT to
-/// try again.
+/// M5's `resolve` is total, and answers ⟨⟩ four ways: a span whose shape is
+/// not depth-2 ordinal-level; a document with no entry in M5's arrangement
+/// map; a subspace outside {s_C, s_L}; and a well-formed spec whose ordinal
+/// range holds nothing. A ⟨⟩ deposited into a slot is indistinguishable from
+/// a slot the caller meant to leave empty, so the two faults a client can
+/// act on are typed here, ahead of `resolve`:
 ///
-/// Past the checks the tail is infallible: `Run::iextent` is total (every
+/// * `IllFormedSpec` — the span is not a content V-span ([`is_content_vspan`]
+///   covers the shape and subspace cases together). Permanent: the request
+///   itself is what is wrong.
+/// * `SourceNotRegistered` — M3 does not know the source. This is M10's own
+///   precondition, not a restatement of anything `resolve` checks: `resolve`
+///   consults M5's arrangement map and never M3's registry. It is here
+///   because it is the fault with a remedy — `Reorder`, telling a client that
+///   arrived ahead of its own CREATENEWDOCUMENT to try again.
+///
+/// The other two ⟨⟩ sources survive the guard and are deposited as an empty
+/// slot: M5 arranges a document lazily, so a freshly created one is
+/// registered and unarranged at once, and an in-range-looking ordinal may
+/// simply hold nothing. That is deliberate — MAKELINK's `SlotArg::Resolve`
+/// slots build from the same run list and deposit the same empty endset, and
+/// an EDITLINK successor stricter than the MAKELINK it supersedes would be a
+/// different operation.
+///
+/// Past the guard the tail is infallible: `Run::iextent` is total (every
 /// `Run` has `width ≥ 1` and an element-level `i_start`). An empty from/to
 /// is structurally fine; M7 gates the type slot.
 pub(crate) fn endset_from_vspecs(
@@ -91,11 +106,12 @@ mod tests {
         assert!(!is_content_vspan(&span(&[1, 1, 1], &[0, 0, 1])));
     }
 
-    /// §4: each fault is typed and told apart — an ill-formed span is
-    /// Permanent, an unregistered source is Reorder — and neither reaches
-    /// `resolve`, whose ⟨⟩ would otherwise be deposited as an empty slot.
+    /// §4: the two faults this guard owns are typed and told apart — an
+    /// ill-formed span is Permanent, an unregistered source is Reorder — and
+    /// neither reaches `resolve`, whose ⟨⟩ would otherwise be deposited as an
+    /// empty slot.
     #[test]
-    fn every_unresolvable_spec_is_typed_before_resolve() {
+    fn the_two_faults_this_guard_owns_are_typed_before_resolve() {
         let m3 = M3State::genesis();
         let m5 = M5State::genesis();
         let doc = a(&[1, 0, 1, 0, 1]);

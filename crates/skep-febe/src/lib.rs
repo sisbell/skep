@@ -23,6 +23,23 @@
 //! realizes (ASN-0134 A1/A2/A5/A7/V1/V2/G0, and §§ of the M10 design), so a
 //! reviewer can walk from code to design without the documents open.
 //!
+//! A `§n` throughout this crate indexes `_design/module-designs/M10/design.md`
+//! §Internal design, whose sections are:
+//!
+//! 1. Dispatch & the lifecycle entry
+//! 2. The read path — M10 owns the snapshot
+//! 3. The write path — commit-before-ack falls out of the call order
+//! 4. EditLink — the one read-assembled request
+//! 5. Rejection surfacing & the disposition hint
+//! 6. Session binding & authorization pass-through
+//! 7. Idempotency cache
+//! 8. Client model — pipelining vs sequential
+//! 9. Poisoned-halt & startup
+//! 10. Cross-family composite orchestration (latent)
+//!
+//! A citation naming a section by title instead (§Public interface, §Core data
+//! model, §Invariants) indexes that document's top-level headings.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * per-store operation logic (M5/M6/M7/M8) and automation (M9 ⟂ M10);
@@ -72,6 +89,11 @@ pub use session::SessionId;
 // `Op::MakeLink`'s three slots and `SuccessorSpec`'s type slot, re-exported
 // so the transport spells one crate.
 pub use skep_links::SlotArg;
+// M7's slot numbering, which `Op::FollowLink`'s and `Op::Project`'s `slot`
+// index is in — re-exported for the same reason `SlotArg` is, so a caller
+// spells `FROM` from the crate it is already calling rather than a bare `1`
+// whose meaning lives elsewhere.
+pub use skep_links::{FROM, TO, TYPE};
 
 use skep_arrangement::Vstream;
 use skep_kernel::{Kernel, WorldState};
@@ -81,27 +103,39 @@ use skep_namespace::Namespace;
 /// The injected acquisition path for the three transact-driving store-driver
 /// handles (§Public interface). The binary/engine builds the one production
 /// impl; M10 names only this trait and the published handle *types*, acquiring
-/// a driver per-op (it never names a store-driver `::new`). Reads, snapshots,
-/// `current_seq`, and the latent composite go through [`Stores::kernel`].
+/// a driver per-op. Reads, snapshots, `current_seq`, and the latent composite
+/// go through [`Stores::kernel`].
+///
+/// An implementer supplies the kernel and one method. The M3 and M5 drivers
+/// follow from the kernel — `Namespace::new` and `Vstream::new` are bound by
+/// `W: WorldState` alone, exactly this trait's bound, and each handle holds
+/// nothing but the borrow — so they are given here rather than transcribed
+/// into every impl. [`Stores::linkstore`] is the one that must be written:
+/// `LinkWriter::new` requires `W: HasLinks`, which this trait does not, and it
+/// does more than hold a borrow — it takes a snapshot and clones the
+/// genesis-sealed `Arc<TypeRegistry>` off it (the as-built constructor takes
+/// no registry argument, a benign simplification of the amendment's stated
+/// shape).
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
 /// crates already publish them — `Namespace::new(&Kernel<W>)`,
-/// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>)` (the as-built
-/// `LinkWriter::new` takes no registry argument: it clones the genesis-sealed
-/// `Arc<TypeRegistry>` off a snapshot itself, a benign simplification of the
-/// amendment's stated shape). The binary — which holds the recovered kernel
-/// from M2 recovery — builds a `Stores` impl over them; M10 takes it INJECTED
-/// for decoupling/testability (an in-memory-kernel-backed `Stores` exercises
-/// the whole lifecycle with no disk/recovery), not because the constructors
-/// are unreachable.
+/// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>)`. The binary —
+/// which holds the recovered kernel from M2 recovery — builds a `Stores` impl
+/// over them; M10 takes it INJECTED for decoupling/testability (an
+/// in-memory-kernel-backed `Stores` exercises the whole lifecycle with no
+/// disk/recovery), not because the constructors are unreachable.
 pub trait Stores<W: WorldState>: Send + Sync {
     /// M2 — reads/snapshots/`current_seq`/the latent composite `transact`.
     fn kernel(&self) -> &Kernel<W>;
     /// M3 driver — borrows the held kernel for the call.
-    fn namespace(&self) -> Namespace<'_, W>;
+    fn namespace(&self) -> Namespace<'_, W> {
+        Namespace::new(self.kernel())
+    }
     /// M5 driver — borrows the held kernel for the call.
-    fn vstream(&self) -> Vstream<'_, W>;
+    fn vstream(&self) -> Vstream<'_, W> {
+        Vstream::new(self.kernel())
+    }
     /// M7 driver — borrows the kernel; holds the genesis-immutable registry.
     fn linkstore(&self) -> LinkWriter<'_, W>;
 }

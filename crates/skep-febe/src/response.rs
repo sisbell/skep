@@ -70,11 +70,11 @@ pub enum Response {
 /// `as_ack` rather than a memo silently dropped.
 #[derive(Clone)]
 pub(crate) enum Ack {
-    /// delete/copy/rearrange.
+    /// [`Response::Ack`].
     At { at: Seq },
-    /// create/insert/version/makelink/emit/nullify/sup/fork/delegate/node.
+    /// [`Response::AckAddr`].
     Addr { addr: Address, at: Seq },
-    /// editlink.
+    /// [`Response::AckEdit`].
     Edit { successor: Address, claim: Address, at: Seq },
 }
 

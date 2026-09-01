@@ -292,7 +292,7 @@ impl Op {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use skep_address::{validate, Nat, Span, Tumbler};
     use skep_discovery::SlotSpec;
@@ -320,8 +320,10 @@ mod tests {
     }
 
     /// Every variant, paired with its documented partition side (§1's
-    /// `is_read` grouping): `(op, is_read)`.
-    fn all_ops() -> Vec<(Op, bool)> {
+    /// `is_read` grouping): `(op, is_read)`. Crate-visible: the dispatch
+    /// tables' agreement with this partition is checked against the same
+    /// fixture, in `operation.rs`.
+    pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         vec![
             (Op::CreateNewDocument { account: a(&[1, 0, 1]) }, false),
             (Op::Delegate { new_prefix: t(&[1, 0, 1]), new_id: PrincipalId(1) }, false),

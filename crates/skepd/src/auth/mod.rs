@@ -143,6 +143,10 @@ impl AuthState {
     /// stored without the fold step memoizes an ack for a state the fold
     /// never reached. `world_post` is the POST-COMMIT snapshot — the ctx
     /// the deposit's own commit is visible in.
+    ///
+    /// The returned flip is [`fold::IdentityFold::step_committed`]'s, and a
+    /// COMMAND's answer for the reason stated there: it is a property of
+    /// the transition, which no read of the resulting state recovers.
     pub fn commit_tail(
         &self,
         lock: &LockWrite<'_>,

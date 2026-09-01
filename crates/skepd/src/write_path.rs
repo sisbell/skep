@@ -115,10 +115,18 @@ impl WritePath {
     /// caller: the credential lock first, then this, never inverted.
     ///
     /// CALLER CONTRACT, and the half [`WritePath`] cannot hold for them:
-    /// take the snapshot the gates read under THIS guard, and pass the
-    /// guard on to [`WritePath::commit_under`] rather than dropping it —
-    /// nothing here can check either, and a snapshot taken outside it lets
-    /// a commit land between what a gate read and what it gated.
+    /// take the snapshot the gates read under THIS guard, and run any
+    /// COMMITTING execute through [`WritePath::commit_under`] under it. A
+    /// refusal that commits nothing may simply drop the guard, which is
+    /// what every gate arm does; what must not happen is a committing
+    /// `execute` under this guard OUTSIDE `commit_under`, which would
+    /// leave the position unrecorded and unannounced. The one execute this
+    /// crate performs outside it is the guest reply, and it is safe for a
+    /// reason stated elsewhere: [`crate::server::open_guest_session`]'s
+    /// session is retired, so M10 refuses a write under it without
+    /// committing. Nothing here can check either half, and a snapshot
+    /// taken outside the guard lets a commit land between what a gate read
+    /// and what it gated.
     pub fn serial_lock(&self) -> SerialGuard<'_> {
         SerialGuard(self.serial.lock())
     }

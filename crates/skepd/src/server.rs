@@ -1069,8 +1069,17 @@ impl Daemon {
             Ok(DaemonOp::KeySet { account }) => {
                 // The one dispatcher (AUTH-6.20): the head pair — the live
                 // fold beside the head snapshot. Principal-free.
-                let snap = self.engine.kernel().snapshot();
+                //
+                // The FOLD IS READ FIRST, and that order is load-bearing:
+                // the fold is stepped AFTER its deposit commits
+                // (`commit_under` then `commit_tail`), so a fold read taken
+                // after the world read can hold a key committed past
+                // `as_of` and the answer would then be AHEAD of the
+                // position it names. Read first, every discrepancy is the
+                // one AUTH-3.36 licenses: a set at or behind its stamp,
+                // never past it.
                 let identity = self.auth.fold.snapshot();
+                let snap = self.engine.kernel().snapshot();
                 let set = key_set_of(snap.world(), &identity, &account);
                 op_answer(key_set_reply(snap.seq(), set))
             }

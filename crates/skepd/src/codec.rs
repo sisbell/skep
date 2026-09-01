@@ -204,21 +204,23 @@ impl JsonCodec {
     /// parse — [`MAX_WIRE_LIST`] elements per array, [`MAX_INSERT_VALUES`]
     /// minted values per `insert`, [`MAX_NAT_DIGITS`] per tumbler
     /// component, [`MAX_TUMBLER_COMPONENTS`] per tumbler,
-    /// [`MAX_REQ_ID_BYTES`] per idempotency id — and carries no zero-byte
+    /// [`MAX_REQ_ID_BYTES`] per idempotency id — carries no zero-byte
     /// `Val`, which [`j_atom`] renders as `{"atom": ""}` and [`p_val_form`]
     /// refuses by design (coarse granularity must be said, and a zero-byte
-    /// atom says nothing). Under all of that, `parse(marshal_request(r))`
-    /// reproduces `r` and re-marshaling the parse is byte-identical.
+    /// atom says nothing), and carries an `id`, if any, that is UTF-8,
+    /// which a `ReqId` this codec parsed always is. Under all of that,
+    /// `parse(marshal_request(r))` reproduces `r` and re-marshaling the
+    /// parse is byte-identical.
     ///
     /// Outside it, marshaling SUCCEEDS and yields a frame `parse` refuses:
     /// this is the parse side's trust-boundary obligation and this direction
     /// does not re-check it (one check, one owner). The upstream value types
     /// admit every violation — `Endset::from_spans` takes any span count,
-    /// T0(a) leaves a component's magnitude unbounded by design, and
-    /// `Val::new` takes any bytes — so a caller assembling a `Request` by
-    /// hand owes the whole precondition. A `Request` this codec produced
-    /// satisfies it by construction, which is what makes the round-trip
-    /// oracle sound.
+    /// T0(a) leaves a component's magnitude unbounded by design, `Val::new`
+    /// takes any bytes, and `ReqId`'s field is public — so a caller
+    /// assembling a `Request` by hand owes the whole precondition. A
+    /// `Request` this codec produced satisfies it by construction, which is
+    /// what makes the round-trip oracle sound.
     ///
     /// One normalization survives the precondition rather than being
     /// excluded by it: `SlotSpec::Spans` over an EMPTY endset marshals as
@@ -228,9 +230,14 @@ impl JsonCodec {
     /// re-marshaling gives `"empty"`. `parse` cannot mint that value, so a
     /// `Request` this codec produced is again unaffected.
     ///
-    /// Wire invariant: a `ReqId` is the UTF-8 bytes of the frame's `id`
-    /// string (parse can produce nothing else); an off-wire non-UTF-8 id is
-    /// rendered lossily rather than panicking.
+    /// A non-UTF-8 `id` is the one violation of this precondition that
+    /// neither round-trips nor is refused: it is rendered lossily rather
+    /// than panicking, and the frame PARSES — to a DIFFERENT `ReqId`. That
+    /// matters because `id` is an idempotency key M10 matches exactly: two
+    /// distinct non-UTF-8 ids collapse onto one replacement string, so a
+    /// retry can hit a memo entry it did not write, or miss the one it did.
+    /// A `ReqId` this codec parsed is the UTF-8 bytes of the frame's `id`
+    /// string and cannot be one.
     pub fn marshal_request(&self, req: &Request) -> Vec<u8> {
         let (name, mut pairs) = req_pairs(&req.op);
         if let Some(ReqId(bytes)) = &req.id {
@@ -353,6 +360,13 @@ pub(crate) fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// case and answers the EXISTING code `not_an_account`; a keyless account
 /// answers empty lists. Entries ride in the key set's own fingerprint
 /// order.
+///
+/// `as_of` is a BOUND and not merely a stamp: every entry is the account's
+/// set as of some position AT OR BEFORE it, never after — which is what
+/// lets a client correlate the answer with `/changes` and re-read it at
+/// `/op-at`. The caller owes the ordering that makes it true (the fold is
+/// read before the world, since the fold is stepped after its deposit
+/// commits); this function cannot check it.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
         return daemon_rejected(DaemonRejection {

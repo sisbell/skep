@@ -195,6 +195,23 @@ impl IdentityFold {
     /// non-`Honored` verdict leaves the fold unchanged —
     /// `IdentityState::step` returns its input state — and answers `false`,
     /// so the failure is closed rather than silent-and-wrong.
+    ///
+    /// The gate's verdict and this one are verdicts about two worlds — the
+    /// gate read the PRE-commit snapshot — and they agree, which is what
+    /// makes the assert checkable rather than a second, unrelated claim.
+    /// Under the serialization lock the post-commit world differs from the
+    /// one the gate read only by this write's own records, and classify
+    /// reads none of them: the record bytes at `from` are a prior write's
+    /// atom, `owner_of`/`is_account` of the home are M3 state a link
+    /// deposit does not move, and publication is a constant. So a firing
+    /// assert names a broken E4 and not a classification that shifted
+    /// underneath it.
+    ///
+    /// The bool is a COMMAND's answer, and the licensed kind: the flip is a
+    /// property of the TRANSITION rather than of the resulting state, so no
+    /// query can recover it — a caller would have to clone the fold either
+    /// side of the step, under the same guard, to learn what this returns
+    /// for nothing.
     pub fn step_committed(
         &self,
         _lock: &LockWrite<'_>,
@@ -267,10 +284,14 @@ impl CredMemo {
     /// calls under the READ lock (the plain sequence), under the write lock
     /// (the credential sequence), and under neither (the route level) — so
     /// a write guard here would be unsatisfiable from the first and a
-    /// self-deadlock from the second. Both interleavings against `store`
-    /// are benign: purge-then-store leaves an entry no live token names,
-    /// and store-then-purge loses a memoization for a session already dead,
-    /// whose retry resolves Guest and never reaches [`CredMemo::recall`].
+    /// self-deadlock from the second. Of the two interleavings against
+    /// `store`, purge-then-store leaves an entry no live token names —
+    /// benign for the ANSWER, since that `SessionId` is gone and nothing
+    /// can recall it, and permanent for RETENTION, since this method is
+    /// keyed by session and nothing else removes an entry; and
+    /// store-then-purge merely loses a memoization for a session already
+    /// dead, whose retry resolves Guest and never reaches
+    /// [`CredMemo::recall`].
     pub fn purge(&self, sid: SessionId) {
         self.sessions.lock().remove(&sid);
     }

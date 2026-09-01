@@ -326,6 +326,9 @@ pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
 /// `key_subject` (AUTH-3.11); a subject that is not an account answers
 /// `None` and no arm fires. Reads the op's KIND and the PRINCIPAL and
 /// nothing else — never a fork/version source (AUTH-3.13).
+///
+/// `world` MUST be the snapshot taken under the read guard for this
+/// request; the guard argument is that contract's cheap half.
 pub(crate) fn mint_home_refusal(
     _lock: &LockRead<'_>,
     world: &World,
@@ -369,6 +372,9 @@ fn is_published_v1(world: &World, doc: &Address) -> bool {
 /// (RES-26, `signed_session_required`); in UNCLAIMED the pre-claim
 /// admission gate (RES-27, `claim_first`). Exact under the read guard: the
 /// claim commits only under `credential_lock.write()`.
+///
+/// `world` and `identity` MUST be the pair taken under the read guard for
+/// this request; the guard argument is that contract's cheap half.
 pub(crate) fn board_state_refusal(
     _lock: &LockRead<'_>,
     world: &World,

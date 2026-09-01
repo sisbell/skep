@@ -102,6 +102,19 @@ fn slotarg_kind(s: &SlotArg) -> Option<CredentialKind> {
 /// deposit-shaped ops whose type slot names a credential type; a `Nullify`
 /// deposits nothing (its class is `nullify_refusal`'s, under the read
 /// lock).
+///
+/// OBLIGATION, and the one this predicate cannot check: `true` for exactly
+/// the deposits [`precheck`]'s classify and
+/// [`crate::auth::fold::canonical_identity`] will read as credential-typed.
+/// All three read the type slot's spans — this one and [`DepositSpans::of`]
+/// through `enc(addrs)`, the rebuild through M7's stored slot, which
+/// records `enc` verbatim — and the subspace-3 allocation above is what
+/// keeps a `Resolve` slot out of the codomain. A FALSE NEGATIVE is the
+/// divergence this module cannot detect: the deposit commits through the
+/// plain path with no gate and no fold step, so the world holds a
+/// credential the live fold never saw, `key_set` answers one thing until
+/// restart and another after it, and nothing reports either. A false
+/// positive reaches [`precheck`]'s `Ok(None)` defect arm.
 pub(crate) fn deposits_credential_link(op: &Op) -> bool {
     match op {
         Op::MakeLink { ty, .. } => slotarg_kind(ty).is_some(),
@@ -440,12 +453,24 @@ impl DepositSpans {
     }
 }
 
-/// The precheck's answer: the refusal, or the previewed effect the caller
-/// feeds forward (the fold step and the claim-flip tail read it).
+/// The precheck's answer: the refusal, or the previewed effect. The effect
+/// is returned rather than consumed — the caller reads only the `Ok`/`Err`
+/// discriminant, because the committed tail re-derives from the same
+/// deposit under the same guard
+/// ([`crate::auth::fold::IdentityFold::step_committed`]), so feeding it
+/// forward would be a second path to one state change.
+///
 /// `Ok(None)` is AUTH-3.19's defect arm — `NotCredential` at the classify
-/// line is unreachable by construction; if reached, assert and PASS the
-/// write (the fold reads the same slot and reaches the same verdict), with
-/// no slot (4)–(8) and no fold feed.
+/// line is unreachable by construction (the classifier that chose this
+/// path reads the same spans through the same `enc`); if reached, this
+/// assert fires, the write passes with no slot (4)–(8), and the caller
+/// runs the committed tail like any other, where the fold's own step
+/// reaches the same `NotCredential` verdict and does not advance — so
+/// AUTH-3.19's "no fold feed" holds of the OUTCOME and not of the CALL,
+/// and in a debug build `step_committed`'s assert fires second.
+///
+/// `world` and `identity` MUST be the pair taken under the write guard for
+/// this request; the guard argument is that contract's cheap half.
 pub(crate) fn precheck(
     _lock: &LockWrite<'_>,
     world: &World,

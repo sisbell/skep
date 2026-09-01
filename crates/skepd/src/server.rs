@@ -466,21 +466,33 @@ pub enum Routed {
 /// PRECONDITION on every field, established by [`read_request`] and owed by
 /// any other caller of [`Daemon::route`]: `method` is the uppercase token;
 /// `path` is the request target with its query AND its `?` removed; `query`
-/// is what followed that `?`, without it; `body` is exactly the declared
-/// `Content-Length` bytes, and at most [`body_cap`] of `path` of them.
-/// Routing does not re-check them — it cannot tell a caller's mistake from a
-/// client's request — so a violation is answered honestly for the request as
-/// given and misleadingly for the one intended: a `path` still carrying its
-/// query is an unknown path (`404`), a lowercase `method` matches no arm
-/// (`405`), and a `query` still carrying its `?` names a parameter called
-/// `?since`.
+/// is what followed that `?`, without it; `session_token` and `origin` are
+/// the `Skepd-Session` and `Origin` header values VERBATIM, or `None` when
+/// the header is absent — never normalized and never defaulted; `peer` is
+/// the transport's own answer about the remote address of THIS connection;
+/// `body` is exactly the declared `Content-Length` bytes, and at most
+/// [`body_cap`] of `path` of them.
 ///
-/// The cap is the OUTERMOST bound on what a frame allocates, and the one
-/// clause a caller cannot discharge by inspection: every JSON-carrying route
-/// builds the whole `serde_json` tree before any codec cap runs, so a body
-/// admitted past it buys roughly twenty times its size in transient heap —
-/// for a frame the codec is then about to refuse. [`read_request`] enforces
-/// it on the declared `Content-Length`, before a byte is read.
+/// Routing re-checks none of them — it cannot tell a caller's mistake from a
+/// client's request — and what a violation costs is not uniform. The first
+/// three and the last are answered honestly for the request as given and
+/// misleadingly for the one intended: a `path` still carrying its query is
+/// an unknown path (`404`), a lowercase `method` matches no arm (`405`), a
+/// `query` still carrying its `?` names a parameter called `?since`.
+/// `origin` and `peer` are different in kind: a violation there is a SILENT
+/// WIDENING of the one privilege this daemon grants without a signature. An
+/// absent `origin` reads as "no `Origin` header", which
+/// [`crate::auth::bare_bind_allowed`] admits, so a caller that does not
+/// forward the header removes the daemon-side fence; and a `peer` reported
+/// `Loopback` for a socket that is not one hands the bare bind to the
+/// network.
+///
+/// The body cap is the OUTERMOST bound on what a frame allocates, and the
+/// one clause a caller cannot discharge by inspection: every JSON-carrying
+/// route builds the whole `serde_json` tree before any codec cap runs, so a
+/// body admitted past it buys roughly twenty times its size in transient
+/// heap — for a frame the codec is then about to refuse. [`read_request`]
+/// enforces it on the declared `Content-Length`, before a byte is read.
 pub struct HttpRequest {
     /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
     pub method: String,
@@ -811,11 +823,20 @@ impl Daemon {
     ///
     /// A COMMAND, not a query. `POST /op` commits to the journal, records
     /// the change-feed entry, and announces the commit; `POST /session`
-    /// mints an M10 session and may retire an evicted one. So routing one
-    /// write frame twice COMMITS TWICE unless the frame carries an
-    /// idempotency `id` (wire.md §Correlation and idempotency) — a
-    /// speculative retry after a timeout duplicates the insert or mints a
-    /// second document. The remaining routes are queries.
+    /// mints an M10 session; `GET /challenge` mints a nonce into the
+    /// bounded challenge store and evicts the oldest past
+    /// [`crate::auth::MAX_LIVE_NONCES`] — a GET that is not safe, and whose
+    /// eviction can spend another caller's outstanding nonce;
+    /// `POST /session/close` retires a binding. And EVERY token-accepting
+    /// route (`/op`, `/op-at`, `/changes`, `/dump`, `/session/close`, and
+    /// `/events` on the accept path) can retire one, because
+    /// [`Daemon::resolve_actor`]'s death arm closes the binding a dead or
+    /// unknown token names — in this daemon's map, in M10, and in the
+    /// credential memo. So routing one write frame twice COMMITS TWICE
+    /// unless the frame carries an idempotency `id` (wire.md §Correlation
+    /// and idempotency) — a speculative retry after a timeout duplicates
+    /// the insert or mints a second document. The only routes that alter
+    /// nothing are `GET /health` and, in `client` builds, `GET /`.
     ///
     /// What the caller owes on the way in is [`HttpRequest`]'s field
     /// precondition, which routing cannot check; what a [`Reply`] is not on
@@ -870,6 +891,12 @@ impl Daemon {
     /// resolution run before dispatch on every token-accepting route. The
     /// resolved actor is handed to dispatch; the write sequences re-resolve
     /// at their own sites against the snapshot their gates stand on.
+    ///
+    /// A COMMAND: `resolve_actor`'s death arm retires the binding a dead or
+    /// unknown token names, in this daemon's map, in M10 and in the
+    /// credential memo. Idempotent — a second resolution of the same token
+    /// finds `Unknown` and closes nothing — which is what makes running it
+    /// at the route level and again under the lock harmless.
     fn authenticate(&self, req: &HttpRequest) -> Resolved {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
@@ -1084,6 +1111,12 @@ impl Daemon {
     /// different guard types (read for the plain path, write for the
     /// credential path), and holding one is the half this signature cannot
     /// state.
+    ///
+    /// A COMMAND: [`Daemon::resolve_actor`]'s death arm retires the binding
+    /// a dead or unknown token names, in this daemon's map, in M10 and in
+    /// the credential memo — so this is not a pure read of the locked
+    /// state, despite the name. Idempotent, for the reason
+    /// [`Daemon::authenticate`] states.
     fn locked_state(
         &self,
         _serial: &parking_lot::MutexGuard<'_, ()>,
@@ -1211,6 +1244,15 @@ impl Daemon {
             // 8 — the committed tail (AUTH-3.43): the fold step from the
             // committed deposit against the post-commit snapshot, and the
             // memo entry, as one operation under the write guard.
+            //
+            // The guard is a SHAPE test standing in for "this write
+            // committed", on two premises: only an address-form `MakeLink`
+            // reaches here ([`DepositSpans::of`] is `Some` for nothing
+            // else), and M10 acks a committed `make_link` with `AckAddr`.
+            // If either failed, a committed deposit would skip this tail
+            // and the live fold would fall SILENTLY behind the world until
+            // restart, with `/op`'s `key_set` and `/op-at`'s at the head
+            // disagreeing meanwhile.
             let post = self.engine.kernel().snapshot();
             let flipped = self.auth.commit_tail(
                 &credential_lock,

@@ -169,9 +169,8 @@ const MAX_TUMBLER_COMPONENTS: usize = 256;
 /// 256 bytes is far above any key a client needs — a UUID is 36 characters,
 /// a hex-encoded 256-bit value 64, and this suite's own keys are `"retry-1"`,
 /// `"k1"`, `"w17"` — and puts the retained bill at a quarter megabyte
-/// against M10's 1024 cache entries, commensurate with the session table's
-/// own bounded retention ([`crate::server`]'s `MAX_LIVE_SESSIONS`) rather
-/// than four orders above it.
+/// against M10's 1024 cache entries, rather than the four orders above that
+/// the body cap alone would admit.
 const MAX_REQ_ID_BYTES: usize = 256;
 
 /// The daemon's JSON codec — stateless; one instance serves every client.

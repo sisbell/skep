@@ -131,14 +131,14 @@ impl AuthState {
     /// the deposit's own commit is visible in.
     pub fn commit_tail(
         &self,
-        _lock: &LockWrite<'_>,
+        lock: &LockWrite<'_>,
         world_post: &World,
         dep: &LinkDeposit<'_>,
         sid: SessionId,
         id: Option<ReqId>,
         ack: &[u8],
     ) -> bool {
-        let flipped = self.fold.step_committed(world_post, dep);
+        let flipped = self.fold.step_committed(lock, world_post, dep);
         if let Some(id) = id {
             self.memo.store(sid, id, ack.to_vec());
         }

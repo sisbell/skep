@@ -25,6 +25,7 @@ use skep_links::{HasLinks, View};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
 use super::policy::identity_types;
+use super::LockWrite;
 use crate::World;
 
 // ── the world-fact seam ──────────────────────────────────────────────────
@@ -170,11 +171,23 @@ impl IdentityFold {
         self.state.lock().clone()
     }
 
-    /// Advance from one COMMITTED deposit (the credential path's, under
-    /// `credential_lock.write()`): step the fold with the post-commit world
-    /// as ctx. Returns whether this step flipped the board claimed — the
-    /// claim-flip tail's trigger (AUTH-3.43).
-    pub fn step_committed(&self, world_post: &World, dep: &LinkDeposit<'_>) -> bool {
+    /// Advance from one COMMITTED deposit — the credential path's, under
+    /// the write guard it names in its arguments (AUTH-3.3): step the fold
+    /// with the post-commit world as ctx. Returns whether this step flipped
+    /// the board claimed — the claim-flip tail's trigger (AUTH-3.43).
+    ///
+    /// PRECONDITION: `dep` was committed by this write and classified
+    /// `Honored` under the gate (E4), and `world_post` is the post-commit
+    /// snapshot. The assert is what makes that premise loud; in release a
+    /// non-`Honored` verdict leaves the fold unchanged —
+    /// `IdentityState::step` returns its input state — and answers `false`,
+    /// so the failure is closed rather than silent-and-wrong.
+    pub fn step_committed(
+        &self,
+        _lock: &LockWrite<'_>,
+        world_post: &World,
+        dep: &LinkDeposit<'_>,
+    ) -> bool {
         let mut state = self.state.lock();
         let was_claimed = state.claimant().is_some();
         let (next, verdict) = state.step(identity_types(), &WorldCtx(world_post), dep);

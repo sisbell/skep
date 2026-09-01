@@ -338,6 +338,91 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
     sd.shutdown();
 }
 
+/// The daemon's `MAX_GENESIS_KEYS`, restated so that moving it is a visible
+/// decision — the discipline `SMALL_BODY_CAP` and `HEAD_CAP` already keep
+/// in the transport suite.
+const GENESIS_KEY_CAP: usize = 16;
+
+/// The seeding hand's own record cap, both ends. RES-57 exempts `Genesis`
+/// from the enrolled SET's cap, so what is bounded here is a different
+/// quantity: ONE RECORD's key count — which is what the handshake walks in
+/// full, with no cutoff (AUTH-4.33), on every signed `POST /session`
+/// attempt, and that route is unauthenticated and reachable from any page.
+///
+/// PRE-CLAIM, because that is the reachable window and the permanent one:
+/// slot (7) is arm-blind, so a bare genesis plant on a claimed board dies
+/// there, while anything seeded before the claim can be retired only by an
+/// anchor session of that account — whose keys the planter chose.
+///
+/// The at-cap half is load-bearing: a `>` that became a `>=` would refuse
+/// a seeding a deployment legitimately performs.
+#[test]
+fn a_genesis_record_meets_its_key_cap_at_both_ends() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+
+    // A fresh KEYLESS account, seeded through the ceremony's own admitted
+    // shapes: the delegate from principal 0, then its home mint.
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let account = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":700}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let s = open_session(port, 700);
+    let v = op(
+        port,
+        Some(&s),
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    let doc1 = acked_addr(&v);
+
+    // One genesis attempt: the record atom into the account's own doc 1
+    // (the genesis registry), then the deposit naming it.
+    let genesis = |ordinal: u64, keys: &[&SigningKey]| -> Value {
+        let v = op(
+            port,
+            Some(&s),
+            &format!(
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}]}}"#,
+                enroll_atom(keys)
+            ),
+        );
+        expect_resp(&v, "ack_addr");
+        op(
+            port,
+            Some(&s),
+            &format!(
+                r#"{{"op":"make_link","home":"{doc1}","from":{{"addrs":["{doc1}.0.1.{ordinal}"]}},"to":{{"addrs":["{account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            ),
+        )
+    };
+    let enrolled = || -> usize {
+        let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
+        assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
+        v["enrolled"].as_array().expect("enrolled").len()
+    };
+
+    let keys: Vec<SigningKey> = (0..=GENESIS_KEY_CAP as u8).map(distinct_key).collect();
+    let refs: Vec<&SigningKey> = keys.iter().collect();
+
+    // One key past the cap: refused, and it seeds nothing.
+    let v = genesis(1, &refs);
+    assert_eq!(rejected_detail(&v), "credential_refused:too_many_enrolled");
+    assert_eq!(enrolled(), 0, "the refused genesis seeded nothing");
+
+    // Exactly the cap: admitted, and the whole record lands.
+    let v = genesis(2, &refs[..GENESIS_KEY_CAP]);
+    expect_resp(&v, "ack_addr");
+    assert_eq!(enrolled(), GENESIS_KEY_CAP, "a genesis AT the cap seeds every key");
+
+    sd.shutdown();
+}
+
 /// The NULLIFY class (AUTH-3.7–3.9) and RES-32's entitlement scope in one
 /// producer: a credential-typed link's retraction is refused
 /// `nullify_not_retraction` to the owner of the home it would land in, and

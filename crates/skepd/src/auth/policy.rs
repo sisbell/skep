@@ -19,8 +19,37 @@ use crate::World;
 
 /// The enrolled-set cap (RES-57, AUTH-3.57): daemon POLICY — a
 /// config-visible constant, never a fold constant — `Enroll` arm only,
-/// `Genesis` exempt. Raisable later without format consequence.
+/// `Genesis` exempt. Raisable later without format consequence — but not
+/// without CPU consequence: the enrolled set is what
+/// [`super::session::handshake`] walks in full on every signed
+/// `POST /session` attempt, so raising this raises that unauthenticated
+/// route's per-attempt work linearly. The budget is written on
+/// [`MAX_GENESIS_KEYS`], which bounds the same quantity on the arm this
+/// cap exempts.
 pub(crate) const ENROLLED_CAP: usize = 16;
+
+/// The seeding hand's own bound (daemon POLICY, the same standing as
+/// [`ENROLLED_CAP`]). RES-57 exempts `Genesis` from the ENROLLED SET's cap
+/// — an account seeded past it keeps its keys — and what is bounded here
+/// is ONE RECORD's key count, which is a different quantity: it is what
+/// [`super::session::find_signer`] walks, in full, on every signed
+/// `POST /session` attempt, and that route is unauthenticated and
+/// reachable from any page.
+///
+/// The budget is N × `verify_strict` against the two cheap requests that
+/// buy it — one `GET /challenge`, one `POST /session`, neither carrying a
+/// credential. At [`ENROLLED_CAP`] the bill is order 800 µs, commensurate
+/// with the frame parse beside it; at the record's own
+/// [`skep_identity::MAX_RECORD_BYTES`] bound it is order 40 ms, which the
+/// worker pool cannot absorb. "No cutoff, ever" (AUTH-4.33) is what makes
+/// the cap belong HERE, at the deposit, rather than at the verification.
+///
+/// The pre-claim window is the reachable one and the exposure is
+/// permanent: slot (7) is arm-blind, so a bare genesis plant on a claimed
+/// board dies there, while anything seeded before the claim can be retired
+/// only by an anchor session of that account — whose keys the planter
+/// chose.
+pub(crate) const MAX_GENESIS_KEYS: usize = ENROLLED_CAP;
 
 /// The three credential type addresses — AUTH-7.1 horn B's allocation,
 /// recorded for the commons-seeding table (see the build report): subspace
@@ -454,9 +483,19 @@ pub(crate) fn precheck(
         }
         _ => {}
     }
-    // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt.
+    // (5) — the enrolled-set cap (RES-57): Enroll arm only, Genesis exempt
+    // from the SET's cap.
     if let Effect::Enroll { account, added } = &effect {
         if identity.key_set(account).enrolled().count() + added.len() > ENROLLED_CAP {
+            return Err(CredentialRefusal::TooManyEnrolled);
+        }
+    }
+    // (5, second arm) — the seeding hand's own record ([`MAX_GENESIS_KEYS`]):
+    // a different quantity from the set's cap, and the one every signed
+    // handshake attempt walks. Refused in the SAME vocabulary, which is
+    // honest for it and adds no wire code.
+    if let Effect::Genesis { keys, .. } = &effect {
+        if keys.len() > MAX_GENESIS_KEYS {
             return Err(CredentialRefusal::TooManyEnrolled);
         }
     }

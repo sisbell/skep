@@ -276,7 +276,13 @@ impl Origin {
     }
 
     /// Build the canonical origin from parts — the loopback defaults'
-    /// constructor, so the members are canonical by construction.
+    /// constructor. The SECOND mint site, so it owes what [`Origin::parse`]
+    /// admits: canonical by construction for every port this daemon
+    /// SERVES on, and not for port 0, which `parse` refuses. That is the
+    /// unbound [`AuthConfig`]'s honest degenerate, where the three defaults
+    /// are deliberately unmatchable because no request's `Origin` header
+    /// can parse to a port-0 origin. The assert is what keeps the two mint
+    /// sites in step for every other input.
     fn from_parts(https: bool, host: &str, port: u16) -> Origin {
         let scheme = if https { "https" } else { "http" };
         let default = if https { 443 } else { 80 };
@@ -285,6 +291,10 @@ impl Origin {
         } else {
             format!("{scheme}://{host}:{port}")
         };
+        debug_assert!(
+            port == 0 || Origin::parse(&canonical).is_some(),
+            "from_parts built an origin the front door refuses: {canonical}"
+        );
         Origin { canonical, https, host: host.to_string(), port }
     }
 

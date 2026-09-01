@@ -901,7 +901,19 @@ impl Daemon {
             obj(vec![
                 ("nonce", Value::String(nonce.to_hex())),
                 ("principal", Value::Number(principal.into())),
-                ("ttl_ms", Value::Number(u64::try_from(CHALLENGE_TTL.as_millis()).unwrap_or(60_000).into())),
+                // A byte pin of [`CHALLENGE_TTL`], so the wire reports that
+                // constant or nothing: a fallback literal here would be a
+                // second spelling of the number the store uses, free to
+                // drift from it in silence on the one field whose whole
+                // contract is that it does not.
+                (
+                    "ttl_ms",
+                    Value::Number(
+                        u64::try_from(CHALLENGE_TTL.as_millis())
+                            .expect("CHALLENGE_TTL is seconds; its millis fit u64")
+                            .into(),
+                    ),
+                ),
             ]),
         )
     }
@@ -1853,11 +1865,20 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
     // with the data as it stands, and no structure this daemon guards is
     // mutated across a point that can unwind — the session table's map and
     // queue move together under one lock, and the sidecar appends before it
-    // inserts. The one thing a panic can cost is the tail of one write:
-    // `WritePath::commit_under` runs `execute` under the serialization
-    // lock, so a panic inside M10 after its commit leaves that position
-    // unrecorded and unannounced. The reopen walk re-covers it as a bare
-    // entry, and the next commit's announcement carries the stream past it.
+    // inserts. What a panic can cost is the tail of one write, on two
+    // cards. `WritePath::commit_under` runs `execute` under the
+    // serialization lock, so a panic inside M10 after its commit leaves
+    // that position unrecorded and unannounced; the reopen walk re-covers
+    // it as a bare entry, and the next commit's announcement carries the
+    // stream past it. A panic after a CREDENTIAL commit costs a second
+    // thing: `credential_sequence`'s tail runs after `commit_under`
+    // returns, so the live identity fold is left one deposit behind the
+    // committed world. It fails CLOSED — a key the fold does not hold
+    // establishes no session — and it heals at restart, where
+    // `crate::auth::fold::canonical_identity` rebuilds from the world.
+    // Until then `/op`'s `key_set` (the live fold) and `/op-at` at the head
+    // (the canonical rebuild) disagree, and the next `precheck` runs its
+    // slots against the short fold.
     let routed = match catch_unwind(AssertUnwindSafe(|| daemon.route(&req))) {
         Ok(r) => r,
         Err(_) => Routed::Reply(refuse(TransportError::InternalPanic, None)),

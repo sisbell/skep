@@ -1210,10 +1210,11 @@ impl Daemon {
     }
 
     /// The CREDENTIAL sequence (AUTH-3.37): the pre-lock actor is
-    /// `resolve_at_head`'s; `op_shape_refusal` runs ahead of the lock; then
-    /// the write lock → serial → [`Daemon::locked_state`] → recall →
-    /// precheck → execute → the fold step, the memo, and the claim-flip
-    /// tail — all under the write guard.
+    /// `resolve_at_head`'s; `op_shape_refusal` and the verbatim deposit —
+    /// both pure functions of the frame — run ahead of the lock; then the
+    /// write lock → serial → [`Daemon::locked_state`] → recall → precheck →
+    /// execute → the fold step, the memo, and the claim-flip tail — all
+    /// under the write guard.
     fn credential_sequence(
         &self,
         resolved: &Resolved,
@@ -1232,6 +1233,31 @@ impl Daemon {
         if let Some(r) = op_shape_refusal(&frame.op) {
             return credential_refused(meta.kind, &r);
         }
+        // 2b — the verbatim deposit (AUTH-3.17), a pure function of the
+        // frame and so built AHEAD of the lock like slots (1)–(2): its
+        // three slots are `enc(addrs)` over lists the codec caps at
+        // `MAX_WIRE_LIST` apiece, so a frame of a few hundred kilobytes
+        // names order twelve thousand spans — each two multi-component
+        // tumblers — with no reason to build them inside the serialization
+        // point. Its unreachable arm's refusal then takes no lock either,
+        // which is the property `op_shape_refusal` already claims for its
+        // own.
+        let Some(dep) = DepositSpans::of(&frame.op) else {
+            // Unreachable by construction: only a MakeLink with
+            // address-form slots classifies credential past slots (1)–(2).
+            // The assert is what makes the premise LOUD — the release
+            // answer refuses in the shape vocabulary rather than inventing
+            // one, and a `resolved_from` a caller's frame did not earn is
+            // indistinguishable from a genuine slot-(2) refusal, which is
+            // exactly what a silent arm here would ship. Same treatment
+            // `precheck` gives its own `NotCredential` line. No
+            // `with_signal`, for step 1's reason: a pre-lock refusal
+            // carries the HEAD resolution's death signal, which
+            // [`Daemon::token_route`]'s wrap already attaches.
+            debug_assert!(false, "a classified deposit is an address-form MakeLink");
+            let r = CredentialRefusal::ResolvedFrom;
+            return credential_refused(meta.kind, &r);
+        };
         // 3 — the credential write lock, the serialization lock, the locked
         // snapshot, and this site's OWN resolution.
         let credential_lock = self.auth.credential_lock.write();
@@ -1251,20 +1277,7 @@ impl Daemon {
                 return with_signal(op_answer(ack), closed);
             }
         }
-        // 6 — the precheck's ordered slots over the verbatim deposit.
-        let Some(dep) = DepositSpans::of(&frame.op) else {
-            // Unreachable by construction: only a MakeLink with
-            // address-form slots classifies credential past slots (1)–(2).
-            // The assert is what makes the premise LOUD — the release
-            // answer refuses in the shape vocabulary rather than inventing
-            // one, and a `resolved_from` a caller's frame did not earn is
-            // indistinguishable from a genuine slot-(2) refusal, which is
-            // exactly what a silent arm here would ship. Same treatment
-            // `precheck` gives its own `NotCredential` line.
-            debug_assert!(false, "a classified deposit is an address-form MakeLink");
-            let r = CredentialRefusal::ResolvedFrom;
-            return with_signal(credential_refused(meta.kind, &r), closed);
-        };
+        // 6 — the precheck's ordered slots over the deposit built at 2b.
         if let Err(r) = crate::auth::policy::precheck(
             &credential_lock,
             snap.world(),
@@ -1969,7 +1982,22 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             // hand, `resolve_at_head` before the stream OPENS (AUTH-4.44), so
             // a dead token meets `Skepd-Session: closed` on the stream's
             // own head, written once, at open.
-            let closed = daemon.resolve_at_head(&req).closed;
+            //
+            // Contained like the handler above, and for the reason
+            // `Subscribers::admit`'s spawn is fallible: this call sits in
+            // the worker's accept loop rather than inside `route`, so a
+            // panic here retires the worker for the life of the process —
+            // listener still bound, nothing replacing it, no line
+            // anywhere. Not hypothetical in a debug build: a live BARE
+            // binding presented with an `Origin` header that parses
+            // reaches `Origin::from_parts`'s debug assert through
+            // `bare_origins`. A refusal costs one stream, and dropping the
+            // socket is the clean close a budgeted refusal already gives.
+            let Ok(closed) =
+                catch_unwind(AssertUnwindSafe(|| daemon.resolve_at_head(&req).closed))
+            else {
+                return;
+            };
             subscribers.admit(Arc::clone(daemon), stream, closed);
         }
     }

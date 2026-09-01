@@ -57,6 +57,21 @@ fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
     json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
 }
 
+/// One enroll record of `n` real keys with a valid-hex NON-POINT key
+/// appended last, as its atom JSON fragment — the shape that asks where
+/// slot (4)'s decode stops, since the undecodable key sits at the end.
+fn enroll_atom_with_trailing_non_point(n: usize) -> String {
+    let real: Vec<SigningKey> = (0..n as u8).map(distinct_key).collect();
+    let mut entries: Vec<Enrollment> = real
+        .iter()
+        .map(|sk| Enrollment::new(pubkey(sk), false, None).expect("no label"))
+        .collect();
+    let bad = PublicKey::parse("ed25519", &non_point_hex())
+        .expect("64 hex parses — the fold admits syntax and never decodes the point");
+    entries.push(Enrollment::new(bad, false, None).expect("no label"));
+    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
+}
+
 /// One retire record naming fingerprints, as its atom JSON fragment.
 fn retire_atom(fps: &[&str]) -> String {
     let parsed: Vec<Fingerprint> =
@@ -554,6 +569,88 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
     let v = genesis(2, &refs[..GENESIS_KEY_CAP]);
     expect_resp(&v, "ack_addr");
     assert_eq!(enrolled(), GENESIS_KEY_CAP, "a genesis AT the cap seeds every key");
+
+    sd.shutdown();
+}
+
+/// Where slot (4)'s point decode stops. The decode is per key and the key
+/// count is the RECORD's, bounded upstream at 64 KiB and so at order 800
+/// keys — held under the credential write lock and the serialization lock,
+/// bought by one small deposit. So the decode is bounded at one key past
+/// the cap slot (5) applies, and the two ends of that bound are:
+///
+/// AT the cap, every key is decoded wherever the undecodable one sits —
+/// the load-bearing half, since a shorter bound would miss a trailing bad
+/// key and SEAT it, which is the permanent harm slot (4) exists to
+/// prevent. Past the cap, the count refuses first and the trailing key is
+/// never reached, which is the one answer this bound moves: `undecodable`
+/// becomes `too_many_enrolled`, both true, both permanent, both refusals.
+#[test]
+fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let account = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":703}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let account_token = open_session(port, 703);
+    let v = op(
+        port,
+        Some(&account_token),
+        &format!(r#"{{"op":"create_new_document","account":"{account}"}}"#),
+    );
+    let doc1 = acked_addr(&v);
+
+    // One genesis attempt whose record's LAST key is a valid-hex non-point.
+    let genesis_with_bad_tail = |ordinal: u64, real_keys: usize| -> Value {
+        let v = op(
+            port,
+            Some(&account_token),
+            &format!(
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}]}}"#,
+                enroll_atom_with_trailing_non_point(real_keys)
+            ),
+        );
+        expect_resp(&v, "ack_addr");
+        op(
+            port,
+            Some(&account_token),
+            &format!(
+                r#"{{"op":"make_link","home":"{doc1}","from":{{"addrs":["{doc1}.0.1.{ordinal}"]}},"to":{{"addrs":["{account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            ),
+        )
+    };
+    let enrolled = || -> usize {
+        let v = op(port, None, &format!(r#"{{"op":"key_set","account":"{account}"}}"#));
+        assert_eq!(v["resp"].as_str(), Some("key_set"), "{v}");
+        v["enrolled"].as_array().expect("enrolled").len()
+    };
+
+    // AT the cap: 15 real keys plus the bad one is exactly the cap, so the
+    // count admits it and slot (4) must still reach the last key.
+    let v = genesis_with_bad_tail(1, GENESIS_KEY_CAP - 1);
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:undecodable_key",
+        "a record AT the cap has every key decoded, wherever the bad one sits"
+    );
+    assert_eq!(enrolled(), 0, "and it seeded nothing");
+
+    // PAST the cap: the count refuses before the trailing key is reached.
+    let v = genesis_with_bad_tail(2, GENESIS_KEY_CAP + 3);
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:too_many_enrolled",
+        "past the cap the count answers, so the decode never runs the tail"
+    );
+    assert_eq!(enrolled(), 0);
 
     sd.shutdown();
 }

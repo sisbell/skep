@@ -50,6 +50,19 @@ pub(crate) const MAX_ENROLLED_KEYS: usize = 16;
 /// chose.
 pub(crate) const MAX_GENESIS_KEYS: usize = MAX_ENROLLED_KEYS;
 
+/// The most keys slot (4) point-decodes: ONE past the cap slot (5) applies.
+/// A record past that cap is refused whatever the rest decode to, so every
+/// decode beyond it is work an over-cap frame buys and never spends — order
+/// 800 decompressions at the record's own upstream
+/// [`skep_identity::MAX_RECORD_BYTES`], order 10 µs each, held under
+/// `credential_lock.write()` AND the serialization lock, bought by a
+/// 150-byte deposit naming one pre-inserted atom.
+///
+/// The two caps are equal by definition today. If they ever diverge this
+/// must be the LARGER, or an over-cap record on the larger arm re-opens the
+/// same bill.
+const MAX_DECODED_KEYS: usize = MAX_GENESIS_KEYS + 1;
+
 /// The three credential type addresses — AUTH-7.1 horn B's allocation,
 /// recorded for the commons-seeding table (see the build report): subspace
 /// 3 of the ghost document `1.1.0.1.0.1`, ordinals 1–3 in the order
@@ -548,9 +561,18 @@ pub(crate) fn precheck(
     // (4) — undecodable_key: a valid-hex non-point key can never sign; the
     // fold accepts syntax, the daemon extends the courtesy. The decode is
     // the SAME one `super::session::verify` performs, so the courtesy is
-    // exact rather than an approximation of it.
+    // exact rather than an approximation of it. It is BOUNDED by
+    // [`MAX_DECODED_KEYS`] — the discipline [`crate::codec`]'s `room`
+    // states, applied to the one slot whose input this module cannot cap.
+    //
+    // CONSEQUENCE: a record that is BOTH over-cap and carries an
+    // undecodable key past [`MAX_ENROLLED_KEYS`] answers
+    // `too_many_enrolled` where the slot order alone would say
+    // `undecodable_key`. It is refused either way, permanently, in the same
+    // vocabulary and by the same function; what changes is which of two
+    // true things it is told.
     let keys_decodable = |keys: &[skep_identity::Enrolled]| {
-        keys.iter().all(|e| super::verifying_key(&e.key).is_some())
+        keys.iter().take(MAX_DECODED_KEYS).all(|e| super::verifying_key(&e.key).is_some())
     };
     match &effect {
         Effect::Enroll { added, .. } if !keys_decodable(added) => {

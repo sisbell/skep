@@ -103,6 +103,19 @@ impl Candidate {
 /// `step` calls. Paid at every [`crate::Daemon::open`], and at every
 /// historical `key_set` read, which reconstructs a world and rebuilds over
 /// it under one reconstruction permit.
+///
+/// Both terms carry a multiplier the shape above does not show. The lift
+/// CLONES each link's type slot in full before `kind_of` decides, so the
+/// first pass is O(Σ spans across every type slot in the world) rather
+/// than O(links) — M7 caps one slot at [`skep_links::MAX_SLOT_SPANS`], so
+/// a store of maximal-slot links multiplies the pass by that, and the
+/// clone is discarded on every negative answer. And each `step` re-reads and
+/// re-parses its deposit's record (bounded by
+/// [`skep_identity::MAX_RECORD_BYTES`]), so the O(d²) above is O(d²)
+/// record parses. The clone is forced by `TypeAddrs::kind_of` taking
+/// `&[Span]` while `Endset` yields an iterator; an iterator-taking
+/// `kind_of` would remove it here and at [`super::policy`]'s two readings
+/// alike.
 pub(crate) fn canonical_identity(world: &World) -> IdentityState {
     let links = world.links();
     let types = identity_types();

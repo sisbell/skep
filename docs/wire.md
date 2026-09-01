@@ -785,9 +785,11 @@ address…) is answered on the same channel:
 ### Rejection codes
 
 Transport/lifecycle: `unauthenticated`, `malformed`, `durability`,
-`txn_over_budget` (the request's records all encode, but the transaction
-as a whole exceeds the kernel's per-transaction byte budget — permanent;
-split the request), `poisoned`.
+`txn_unencodable` (a record the operation staged could not be encoded
+into a journal frame at all — permanent; reissuing the same request
+stages the same record), `txn_over_budget` (the request's records all
+encode, but the transaction as a whole exceeds the kernel's
+per-transaction byte budget — permanent; split the request), `poisoned`.
 
 Credentials: `credential_refused` — the auth work's one new code,
 always `permanent`, always carrying a machine `detail` token

@@ -10,7 +10,7 @@ use skep_links::Endset;
 use skep_namespace::M3State;
 
 use crate::op::OpKind;
-use crate::reject::{reject1, RejectCode, Rejection};
+use crate::reject::{rejection, RejectCode, Rejection};
 
 /// Assemble one successor slot from its content V-specs.
 ///
@@ -49,10 +49,10 @@ pub(crate) fn endset_from_vspecs(
     let mut spans = Vec::new();
     for vs in specs {
         if !is_content_vspan(&vs.span) {
-            return Err(reject1(OpKind::EditLink, RejectCode::IllFormedSpec));
+            return Err(rejection(OpKind::EditLink, RejectCode::IllFormedSpec));
         }
         if !m3.is_registered_document(&vs.source) {
-            return Err(reject1(OpKind::EditLink, RejectCode::SourceNotRegistered));
+            return Err(rejection(OpKind::EditLink, RejectCode::SourceNotRegistered));
         }
         spans.extend(m5.resolve(&vs.source, &vs.span).iter().map(Run::iextent));
     }

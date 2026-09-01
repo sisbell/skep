@@ -33,9 +33,9 @@ fn not_owner(a: skep_address::Address) -> (RejectCode, Option<FaultSite>) {
 }
 
 /// Lower a read error into a classified [`Rejection`] (§5).
-pub(crate) fn map_read<E: Lower>(op: OpKind, e: E) -> Rejection {
+pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
     let (c, s) = e.lower();
-    Rejection::classified(op, c, s)
+    Rejection::classified(kind, c, s)
 }
 
 /// Lower a write path's `TxnError` into a classified [`Rejection`] (§5): the
@@ -43,30 +43,36 @@ pub(crate) fn map_read<E: Lower>(op: OpKind, e: E) -> Rejection {
 /// transaction-level outcomes into M10's own codes.
 ///
 /// Each of those four says something different about reissuing, and says it
-/// in the disposition, with the cause threaded where an operator needs it:
-/// `Durability` is the one `Retry` (the I/O text rides along, so the hint
-/// has a reason attached); `Unencodable` is `Permanent`, since the request
-/// itself is what M2 could not journal; `TxnOverBudget` is `Permanent` with
-/// the remedy — split the request — because no retry shrinks a transaction;
+/// in the disposition, with the cause threaded where an operator needs it.
+/// `Durability` is the one `Retry` — the I/O text rides along, so the hint
+/// has a reason attached. The two encoding refusals are both `Permanent`,
+/// and each carries its own code because they ask different things of an
+/// operator: `TxnUnencodable` names records M2's serializer refused (the
+/// records are staged by the owning store, so the same request re-presented
+/// stages the same record — nothing the client can reframe), while
+/// `TxnOverBudget` names records that all encode but overrun the journal's
+/// per-transaction budget, and carries the remedy — split the request.
 /// `Poisoned` is `Halt`.
-pub(crate) fn map_txn<E: Lower>(op: OpKind, e: TxnError<E>) -> Rejection {
+pub(crate) fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
     match e {
         TxnError::Rejected(inner) => {
             let (c, s) = inner.lower();
-            Rejection::classified(op, c, s)
+            Rejection::classified(kind, c, s)
         }
         TxnError::Durability(io) => {
-            Rejection::classified(op, RejectCode::Durability, None).with_detail(io.to_string())
+            Rejection::classified(kind, RejectCode::Durability, None).with_detail(io.to_string())
         }
         TxnError::Unencodable(cause) => {
-            Rejection::classified(op, RejectCode::Malformed, None).with_detail(cause.to_string())
+            Rejection::classified(kind, RejectCode::TxnUnencodable, None)
+                .with_detail(cause.to_string())
         }
-        TxnError::OverBudget { bytes } => Rejection::classified(op, RejectCode::TxnOverBudget, None)
-            .with_detail(format!(
+        TxnError::OverBudget { bytes } => {
+            Rejection::classified(kind, RejectCode::TxnOverBudget, None).with_detail(format!(
                 "transaction encodes to {bytes} bytes, over the journal's \
                  per-transaction budget; split it"
-            )),
-        TxnError::Poisoned => Rejection::classified(op, RejectCode::Poisoned, None),
+            ))
+        }
+        TxnError::Poisoned => Rejection::classified(kind, RejectCode::Poisoned, None),
     }
 }
 
@@ -536,7 +542,7 @@ mod tests {
     /// lowers verbatim through the store's own impl.
     #[test]
     fn txn_errors_carry_their_remedy() {
-        let rej = map_txn::<InsertError>(
+        let rej = lower_txn::<InsertError>(
             OpKind::Insert,
             TxnError::Durability(std::io::Error::other("disk gone")),
         );
@@ -544,9 +550,13 @@ mod tests {
         assert_eq!(rej.disposition, Disposition::Retry);
         assert!(rej.detail.as_deref().is_some_and(|d| d.contains("disk gone")));
 
-        let rej =
-            map_txn::<InsertError>(OpKind::Insert, TxnError::Unencodable("record too large".into()));
-        assert_eq!(rej.code, RejectCode::Malformed);
+        // Unencodable: its own code, never Malformed — the frame the client
+        // presented parsed, and the records M2 refused are the store's.
+        let rej = lower_txn::<InsertError>(
+            OpKind::Insert,
+            TxnError::Unencodable("record too large".into()),
+        );
+        assert_eq!(rej.code, RejectCode::TxnUnencodable);
         assert_eq!(
             rej.disposition,
             Disposition::Permanent,
@@ -554,19 +564,19 @@ mod tests {
         );
         assert!(rej.detail.as_deref().is_some_and(|d| d.contains("record too large")));
 
-        // OverBudget: its own code (never Malformed — the records are fine),
-        // Permanent per the 2026-08-21 ruling, with the accounted size and
-        // the split remedy threaded for the operator.
-        let rej = map_txn::<InsertError>(OpKind::Insert, TxnError::OverBudget { bytes: 99 });
+        // OverBudget: its own code (the records all encode — only the
+        // transaction is too big), Permanent per the 2026-08-21 ruling, with
+        // the accounted size and the split remedy threaded for the operator.
+        let rej = lower_txn::<InsertError>(OpKind::Insert, TxnError::OverBudget { bytes: 99 });
         assert_eq!(rej.code, RejectCode::TxnOverBudget);
         assert_eq!(rej.disposition, Disposition::Permanent);
         assert!(rej.detail.as_deref().is_some_and(|d| d.contains("99") && d.contains("split")));
 
-        let rej = map_txn::<InsertError>(OpKind::Insert, TxnError::Poisoned);
+        let rej = lower_txn::<InsertError>(OpKind::Insert, TxnError::Poisoned);
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
 
-        let rej = map_txn(OpKind::Insert, TxnError::Rejected(InsertError::EmptyContent));
+        let rej = lower_txn(OpKind::Insert, TxnError::Rejected(InsertError::EmptyContent));
         assert_eq!(rej.code, RejectCode::EmptyContent);
         assert_eq!(rej.disposition, Disposition::Permanent);
     }

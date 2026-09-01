@@ -20,9 +20,9 @@ use skep_namespace::{HasM3, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
-use crate::lower::{map_read, map_txn, Lower};
+use crate::lower::{lower_read, lower_txn, Lower};
 use crate::op::{Op, OpKind, Request};
-use crate::reject::{reject, reject1, RejectCode, Rejection};
+use crate::reject::{reject, rejection, RejectCode, Rejection};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::successor::endset_from_vspecs;
@@ -183,7 +183,8 @@ where
     /// The static table for the write half: every arm acquires a driver
     /// per-op from the factory, returns only its post-commit value (A7 is
     /// upheld structurally — M10 has nothing to put on the wire until the
-    /// driver returns at/after `lin(op)`), maps `TxnError<E>` via `map_txn`,
+    /// driver returns at/after `lin(op)`), classifies `TxnError<E>` through
+    /// [`Operation::map_txn`] so the poison hint latches on the way past,
     /// and stamps the committed `Seq`. Exhaustive over `Op` with NO `_`
     /// wildcard: the complementary (read) half is one explicit `|`-list arm
     /// rejecting `Malformed` — never a panic — so a newly added `Op` variant
@@ -357,7 +358,7 @@ where
             | Op::DiscoverableFrom { .. }
             | Op::DeleteOrphans { .. }
             | Op::InClaims { .. }
-            | Op::OutClaims { .. } => Err(reject1(kind, RejectCode::Malformed)),
+            | Op::OutClaims { .. } => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
 
@@ -414,46 +415,46 @@ where
             // ── content/provenance reads (→ M6, §2) ──
             Op::RetrieveV { specs } => {
                 let items =
-                    Query::new(&snap).retrieve_v(&specs).map_err(|e| map_read(kind, e))?;
+                    Query::new(&snap).retrieve_v(&specs).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Delivery { items, as_of })
             }
             Op::RetrieveDocVSpan { doc } => {
-                let set = Query::new(&snap).doc_vspan(&doc).map_err(|e| map_read(kind, e))?;
+                let set = Query::new(&snap).doc_vspan(&doc).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::RetrieveDocVSpanSet { doc } => {
-                let set = Query::new(&snap).doc_vspanset(&doc).map_err(|e| map_read(kind, e))?;
+                let set = Query::new(&snap).doc_vspanset(&doc).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::ShowOrigin { doc, span } => {
                 let addrs =
-                    Query::new(&snap).show_origin_v(&doc, &span).map_err(|e| map_read(kind, e))?;
+                    Query::new(&snap).show_origin_v(&doc, &span).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::ShowDeletions { d_a, d_b } => {
                 let rep =
-                    Query::new(&snap).show_deletions(&d_a, &d_b).map_err(|e| map_read(kind, e))?;
+                    Query::new(&snap).show_deletions(&d_a, &d_b).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Deletions { rep, as_of })
             }
             Op::Compare { rho1, rho2 } => {
                 let rep =
-                    Query::new(&snap).compare(&rho1, &rho2).map_err(|e| map_read(kind, e))?;
+                    Query::new(&snap).compare(&rho1, &rho2).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Compare { rep, as_of })
             }
             Op::FindDocsContaining { regions } => {
                 let addrs = Query::new(&snap)
                     .find_docs_containing(&regions)
-                    .map_err(|e| map_read(kind, e))?;
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             // ── link discovery reads (→ M8, §2): always the pure *_on twins
             //    over M10's one snapshot, never the self-snapshotting handle.
             Op::Image { d, region } => {
-                let runs = image_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
+                let runs = image_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Runs { runs, as_of })
             }
             Op::FindLinksV { d, region } => {
-                let addrs = findlinks_v_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
+                let addrs = findlinks_v_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::FindLinksFtt { q } => {
@@ -461,7 +462,7 @@ where
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::CountV { d, region } => {
-                let n = count_v_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
+                let n = count_v_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Count { n, as_of })
             }
             Op::CountFtt { q } => {
@@ -470,7 +471,7 @@ where
             }
             Op::WindowV { d, region, cur, n } => {
                 let window =
-                    window_v_on(&snap, &d, &region, cur, n).map_err(|e| map_read(kind, e))?;
+                    window_v_on(&snap, &d, &region, cur, n).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Page { window, as_of })
             }
             Op::WindowFtt { q, cur, n } => {
@@ -478,20 +479,20 @@ where
                 Ok(Response::Page { window, as_of })
             }
             Op::RetrieveEndsets { d, region } => {
-                let pairs = retrieve_endsets_on(&snap, &d, &region).map_err(|e| map_read(kind, e))?;
+                let pairs = retrieve_endsets_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Endsets { pairs, as_of })
             }
             Op::Project { a, slot, d } => {
-                let set = project_on(&snap, &a, slot, &d).map_err(|e| map_read(kind, e))?;
+                let set = project_on(&snap, &a, slot, &d).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
-                let val = discoverable_from_on(&snap, &a, &d).map_err(|e| map_read(kind, e))?;
+                let val = discoverable_from_on(&snap, &a, &d).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Bool { val, as_of })
             }
             Op::DeleteOrphans { d, p, width } => {
                 let report =
-                    delete_orphans_on(&snap, &d, &p, &width).map_err(|e| map_read(kind, e))?;
+                    delete_orphans_on(&snap, &d, &p, &width).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Orphans { report, as_of })
             }
             Op::InClaims { y, view } => {
@@ -516,22 +517,24 @@ where
             | Op::Emit { .. }
             | Op::Nullify { .. }
             | Op::AssertSup { .. }
-            | Op::EditLink { .. } => Err(reject1(kind, RejectCode::Malformed)),
+            | Op::EditLink { .. } => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
 
     // ── rejection surfacing (§5) ──
 
-    /// Classify a write path's `TxnError` (the [`map_txn`] table), latching
-    /// the poison hint on the way past `Poisoned` so `execute` step (c) can
-    /// fail the next write fast rather than opening a doomed transaction.
-    /// `Relaxed` suffices: the flag is a hint, and M2 independently returns
-    /// `Poisoned` to every later write whether or not this one is seen.
-    fn map_txn<E: Lower>(&self, op: OpKind, e: TxnError<E>) -> Rejection {
+    /// Classify a write path's `TxnError` through the [`lower_txn`] table,
+    /// latching the poison hint on the way past `Poisoned` so `execute` step
+    /// (c) can fail the next write fast rather than opening a doomed
+    /// transaction. The latch is why every write arm classifies HERE and not
+    /// through `lower_txn` directly. `Relaxed` suffices: the flag is a hint,
+    /// and M2 independently returns `Poisoned` to every later write whether
+    /// or not this one is seen.
+    fn map_txn<E: Lower>(&self, kind: OpKind, e: TxnError<E>) -> Rejection {
         if matches!(e, TxnError::Poisoned) {
             self.poisoned.store(true, Ordering::Relaxed); // LATCH (§1(c)/§9)
         }
-        map_txn(op, e)
+        lower_txn(kind, e)
     }
 }
 
@@ -740,7 +743,7 @@ mod tests {
         let op = operation();
         let s = op.open_session(PrincipalId(1));
         assert!(Response::Count { n: 3, as_of: Seq(1) }.as_ack().is_none());
-        assert!(Response::Rejected(reject1(OpKind::Insert, RejectCode::Unauthenticated))
+        assert!(Response::Rejected(rejection(OpKind::Insert, RejectCode::Unauthenticated))
             .as_ack()
             .is_none());
         // A rejected write carrying an id leaves no entry behind.

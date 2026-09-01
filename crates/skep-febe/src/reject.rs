@@ -65,6 +65,7 @@ pub enum RejectCode {
     Unauthenticated,
     Malformed,
     Durability,
+    TxnUnencodable,
     TxnOverBudget,
     Poisoned,
     // ── registration / residence (M3/M5/M7/M8) ──
@@ -161,8 +162,10 @@ fn fixed_detail(code: RejectCode) -> Option<&'static str> {
 /// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
 /// allocations), `Gate` (store corruption), `TxnOverBudget` (M2's
 /// per-transaction byte budget, ruled Permanent 2026-08-21 — no retry
-/// shrinks a transaction; the client splits it), and the recovery-steering
-/// `NotNextForm` (re-derive via `NextAccountPrefix`, a *different* request).
+/// shrinks a transaction; the client splits it), `TxnUnencodable` (a record
+/// M2's serializer refused — the same request re-presented stages the same
+/// record), and the recovery-steering `NotNextForm` (re-derive via
+/// `NextAccountPrefix`, a *different* request).
 /// The conservatively-`Permanent` state-dependent codes (`NotArranged`,
 /// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
 /// `EmptySubspace`, `DelegatorUnknown`, `NotAPrincipal`, …) are the
@@ -187,9 +190,9 @@ impl Rejection {
     /// Build a classified rejection: both per-code policies applied off the
     /// flat code — the disposition from [`disposition_of`], any standing
     /// explanation from [`fixed_detail`] (§5).
-    pub(crate) fn classified(op: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
+    pub(crate) fn classified(kind: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
         let detail = fixed_detail(code).map(str::to_string);
-        Rejection { op, code, disposition: disposition_of(code), site, detail }
+        Rejection { op: kind, code, disposition: disposition_of(code), site, detail }
     }
 
     /// The rejection for a frame that never parsed into an [`Op`] — the one
@@ -227,13 +230,13 @@ impl Rejection {
 }
 
 /// A bare `Response::Rejected` for `execute`'s steps (b)/(c) (§1/§5).
-pub(crate) fn reject(op: OpKind, code: RejectCode) -> Response {
-    Response::Rejected(reject1(op, code))
+pub(crate) fn reject(kind: OpKind, code: RejectCode) -> Response {
+    Response::Rejected(rejection(kind, code))
 }
 
 /// A bare `Rejection` for dispatch arms (§5).
-pub(crate) fn reject1(op: OpKind, code: RejectCode) -> Rejection {
-    Rejection::classified(op, code, None)
+pub(crate) fn rejection(kind: OpKind, code: RejectCode) -> Rejection {
+    Rejection::classified(kind, code, None)
 }
 
 #[cfg(test)]
@@ -268,6 +271,7 @@ mod tests {
             RejectCode::NotFresh,
             RejectCode::Gate,
             RejectCode::TxnOverBudget,
+            RejectCode::TxnUnencodable,
             RejectCode::NotNextForm,
             RejectCode::NotArranged,
             RejectCode::OutOfBounds,

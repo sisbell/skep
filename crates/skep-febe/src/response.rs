@@ -11,9 +11,9 @@ use skep_retrieval::{CompareReport, Deletions, Delivery};
 use crate::reject::Rejection;
 
 /// The marshaled response. `Response` deliberately derives **no** `Clone`
-/// (§7): the idempotency cache stores the small [`Ack`] a committed write
-/// yields, never a whole `Response`, so no transitively heavy `Clone` bound is
-/// forced onto M6's/M7's payload types.
+/// (§7): the idempotency cache stores the small [`CommittedAck`] a committed
+/// write yields, never a whole `Response`, so no transitively heavy `Clone`
+/// bound is forced onto M6's/M7's payload types.
 pub enum Response {
     /// delete/copy/rearrange — committed at `at` (A7).
     Ack { at: Seq },
@@ -58,18 +58,19 @@ pub enum Response {
     Rejected(Rejection),
 }
 
-/// What a committed write acknowledges, and the ONLY thing a lost
-/// acknowledgment can duplicate — so the only thing the idempotency cache
-/// holds (§1 step (d), §7). Cheap to `Clone` (`Seq` is `Copy`, `Address` is a
-/// tumbler), which is what lets the memo be replayed without cloning a
-/// `Response`.
+/// What a committed write acknowledges — ANY of the three acknowledging
+/// shapes, of which [`Response::Ack`] is only the barest — and the ONLY thing
+/// a lost acknowledgment can duplicate, so the only thing the idempotency
+/// cache holds (§1 step (d), §7). Cheap to `Clone` (`Seq` is `Copy`,
+/// `Address` is a tumbler), which is what lets the memo be replayed without
+/// cloning a `Response`.
 ///
 /// The three shapes are the three acknowledging `Response` variants, and the
 /// correspondence is stated in one place — [`Response::as_ack`] and the
 /// `From` impl below — so a new acknowledging shape is a compile error at
 /// `as_ack` rather than a memo silently dropped.
 #[derive(Clone)]
-pub(crate) enum Ack {
+pub(crate) enum CommittedAck {
     /// [`Response::Ack`].
     At { at: Seq },
     /// [`Response::AckAddr`].
@@ -78,12 +79,14 @@ pub(crate) enum Ack {
     Edit { successor: Address, claim: Address, at: Seq },
 }
 
-impl From<Ack> for Response {
-    fn from(a: Ack) -> Response {
+impl From<CommittedAck> for Response {
+    fn from(a: CommittedAck) -> Response {
         match a {
-            Ack::At { at } => Response::Ack { at },
-            Ack::Addr { addr, at } => Response::AckAddr { addr, at },
-            Ack::Edit { successor, claim, at } => Response::AckEdit { successor, claim, at },
+            CommittedAck::At { at } => Response::Ack { at },
+            CommittedAck::Addr { addr, at } => Response::AckAddr { addr, at },
+            CommittedAck::Edit { successor, claim, at } => {
+                Response::AckEdit { successor, claim, at }
+            }
         }
     }
 }
@@ -97,11 +100,13 @@ impl Response {
     /// EXHAUSTIVE match with NO `_` arm: a newly added `Response` variant
     /// fails to compile here, beside the catalogue it joins, and must be
     /// classified as acknowledging or not before it can ship.
-    pub(crate) fn as_ack(&self) -> Option<Ack> {
+    pub(crate) fn as_ack(&self) -> Option<CommittedAck> {
         match self {
-            Response::Ack { at } => Some(Ack::At { at: *at }),
-            Response::AckAddr { addr, at } => Some(Ack::Addr { addr: addr.clone(), at: *at }),
-            Response::AckEdit { successor, claim, at } => Some(Ack::Edit {
+            Response::Ack { at } => Some(CommittedAck::At { at: *at }),
+            Response::AckAddr { addr, at } => {
+                Some(CommittedAck::Addr { addr: addr.clone(), at: *at })
+            }
+            Response::AckEdit { successor, claim, at } => Some(CommittedAck::Edit {
                 successor: successor.clone(),
                 claim: claim.clone(),
                 at: *at,

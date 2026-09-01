@@ -1,12 +1,13 @@
 //! The best-effort retry de-duplication cache (§7): a bounded, per-uptime
-//! memo of committed-write acknowledgments keyed `(SessionId, ReqId)`.
+//! memo of committed-write acknowledgments keyed by [`IdemKey`] — the
+//! client's `ReqId` confined to the session that committed under it.
 //!
 //! A hint, never a guarantee. It is in memory only, so a post-restart retry
 //! re-executes (a duplicate, by design — ASN-0134 §A7), and it holds only
-//! what a lost acknowledgment can duplicate: the [`Ack`] of a write that
-//! already committed. Rejections and read answers are not admissible — the
-//! first must re-execute under a Reorder/Retry reissue, the second would
-//! replay a stale snapshot — and the [`Ack`] type is what makes them
+//! what a lost acknowledgment can duplicate: the [`CommittedAck`] of a write
+//! that already committed. Rejections and read answers are not admissible —
+//! the first must re-execute under a Reorder/Retry reissue, the second would
+//! replay a stale snapshot — and the [`CommittedAck`] type is what makes them
 //! inexpressible here rather than merely unwelcome.
 
 use std::num::NonZeroUsize;
@@ -15,7 +16,7 @@ use lru::LruCache;
 use parking_lot::Mutex;
 
 use crate::op::{OpKind, ReqId};
-use crate::response::Ack;
+use crate::response::CommittedAck;
 use crate::session::SessionId;
 
 /// The idempotency LRU's capacity.
@@ -27,13 +28,28 @@ use crate::session::SessionId;
 // instead — surfaced in the build report as an interface↔design conflict.
 const DEFAULT_IDEM_CAPACITY: usize = 1024;
 
+/// The session-confined idempotency key (§7). A client's `ReqId` is unique
+/// only WITHIN its session, so the session it committed under is half the
+/// key's identity rather than a field beside it.
+///
+/// That confinement is what makes the step-(a) lookup in `execute` — which
+/// runs BEFORE authentication — harmless (§7 item-4): a replay carrying
+/// another session's `ReqId` builds a different key and simply misses, so no
+/// memoized ack can cross from the principal that committed the write to one
+/// that did not.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct IdemKey {
+    session: SessionId,
+    req: ReqId,
+}
+
 /// A memoized acknowledgment plus the op-kind that produced it. The tag lets
 /// [`IdemCache::get`] miss on a `ReqId` reused across op-kinds, so a
 /// wrong-shaped ack is never served.
 #[derive(Clone)]
 struct Cached {
-    op: OpKind,
-    ack: Ack,
+    kind: OpKind,
+    ack: CommittedAck,
 }
 
 /// The memo itself (§7). Bounded by [`DEFAULT_IDEM_CAPACITY`]; eviction is
@@ -43,7 +59,7 @@ struct Cached {
 /// Non-poisoning lock (§7): a panic while the cache is held must not break
 /// `execute`'s Total contract.
 pub(crate) struct IdemCache {
-    entries: Mutex<LruCache<(SessionId, ReqId), Cached>>,
+    entries: Mutex<LruCache<IdemKey, Cached>>,
 }
 
 impl IdemCache {
@@ -52,23 +68,19 @@ impl IdemCache {
         IdemCache { entries: Mutex::new(LruCache::new(cap)) }
     }
 
-    /// Memoize one committed-write acknowledgment under `(s, id)`.
-    pub(crate) fn put(&self, s: SessionId, id: &ReqId, op: OpKind, ack: Ack) {
-        self.entries.lock().put((s, id.clone()), Cached { op, ack });
+    /// Memoize one committed-write acknowledgment under this session's key.
+    pub(crate) fn put(&self, s: SessionId, id: &ReqId, kind: OpKind, ack: CommittedAck) {
+        self.entries.lock().put(IdemKey { session: s, req: id.clone() }, Cached { kind, ack });
     }
 
-    /// The memoized acknowledgment for `(s, id)`, if it was committed under
-    /// this session for this op-kind.
-    ///
-    /// The `(SessionId, ReqId)` key confines every hit to the session that
-    /// committed the write — a replay under a different session simply
-    /// misses, which is why the pre-authentication lookup in `execute` step
-    /// (a) is harmless (§7 item-4). A `ReqId` reused across op-kinds misses
-    /// too, and re-executes.
-    pub(crate) fn get(&self, s: SessionId, id: &ReqId, op: OpKind) -> Option<Ack> {
+    /// The memoized acknowledgment this session committed under `id` for
+    /// this op-kind. A foreign session misses on the key ([`IdemKey`]); a
+    /// `ReqId` reused across op-kinds misses on the tag. Either way the
+    /// request re-executes.
+    pub(crate) fn get(&self, s: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
         let mut g = self.entries.lock();
-        let c = g.get(&(s, id.clone()))?; // foreign session misses; bumps LRU recency
-        (c.op == op).then(|| c.ack.clone())
+        let c = g.get(&IdemKey { session: s, req: id.clone() })?; // bumps LRU recency
+        (c.kind == kind).then(|| c.ack.clone())
     }
 
     /// Drop every entry this session committed — the other half of retiring
@@ -76,8 +88,8 @@ impl IdemCache {
     /// sweep of the bounded cache.
     pub(crate) fn purge_session(&self, s: SessionId) {
         let mut g = self.entries.lock();
-        let dead: Vec<(SessionId, ReqId)> =
-            g.iter().filter(|(k, _)| k.0 == s).map(|(k, _)| k.clone()).collect();
+        let dead: Vec<IdemKey> =
+            g.iter().filter(|(k, _)| k.session == s).map(|(k, _)| k.clone()).collect();
         for k in dead {
             g.pop(&k);
         }
@@ -96,9 +108,9 @@ mod tests {
         validate(t).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
 
-    /// §7: the memo round-trips an ack keyed `(SessionId, ReqId)` and
-    /// op-kind-matched — a foreign session or a reused-across-kinds `ReqId`
-    /// misses — and `purge_session` clears one session's entries only.
+    /// §7: the memo round-trips an ack keyed by [`IdemKey`] and op-kind-
+    /// matched — a foreign session or a reused-across-kinds `ReqId` misses —
+    /// and `purge_session` clears one session's entries only.
     #[test]
     fn confinement_and_purge() {
         let sessions = crate::session::Sessions::new();
@@ -106,11 +118,16 @@ mod tests {
         let s1 = sessions.open(skep_namespace::PrincipalId(1));
         let s2 = sessions.open(skep_namespace::PrincipalId(2));
         let id = ReqId(b"req-1".to_vec());
-        cache.put(s1, &id, OpKind::CreateNewDocument, Ack::Addr { addr: a(&[1, 0, 1]), at: Seq(9) });
-        cache.put(s2, &id, OpKind::Fork, Ack::Addr { addr: a(&[1, 0, 2]), at: Seq(10) });
+        cache.put(
+            s1,
+            &id,
+            OpKind::CreateNewDocument,
+            CommittedAck::Addr { addr: a(&[1, 0, 1]), at: Seq(9) },
+        );
+        cache.put(s2, &id, OpKind::Fork, CommittedAck::Addr { addr: a(&[1, 0, 2]), at: Seq(10) });
         // Same session + kind: hit, rebuilt equal.
         match cache.get(s1, &id, OpKind::CreateNewDocument) {
-            Some(Ack::Addr { addr, at }) => {
+            Some(CommittedAck::Addr { addr, at }) => {
                 assert_eq!(addr, a(&[1, 0, 1]));
                 assert_eq!(at, Seq(9));
             }

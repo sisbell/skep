@@ -305,19 +305,32 @@ fn parse_key_set(v: Value) -> PResult<DaemonOp> {
 /// `Rejection` for codes M10 does not carry (the `RejectCode` delta is out
 /// of this round's upstream reach), so the wire shape is built here — one
 /// shape on the wire either way.
-pub(crate) fn daemon_rejected(
-    op: &str,
-    code: &str,
-    disposition: &str,
-    detail: Option<String>,
-) -> Vec<u8> {
+///
+/// One value rather than three adjacent `&str`s: `op` and `code` are the
+/// same type and mean opposite things, so as arguments they sat one
+/// transposition away from a well-formed rejection naming the code as its
+/// op — the same reason [`crate::HttpRequest`] is one value rather than
+/// five. `disposition` is typed because [`disposition_name`] is the table
+/// that spells it, and `code` takes [`code_name`]'s output wherever M10
+/// carries the code.
+pub(crate) struct DaemonRejection<'a> {
+    /// The refused op's wire name: [`op_name`]'s output, or the daemon's
+    /// own name for a row M10 has no `OpKind` for.
+    pub op: &'a str,
+    /// [`code_name`]'s output, or [`CREDENTIAL_REFUSED`].
+    pub code: &'a str,
+    pub disposition: Disposition,
+    pub detail: Option<String>,
+}
+
+pub(crate) fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
     let mut pairs = vec![
         ("resp", Value::String("rejected".into())),
-        ("op", Value::String(op.into())),
-        ("code", Value::String(code.into())),
-        ("disposition", Value::String(disposition.into())),
+        ("op", Value::String(r.op.into())),
+        ("code", Value::String(r.code.into())),
+        ("disposition", Value::String(disposition_name(r.disposition).into())),
     ];
-    if let Some(d) = detail {
+    if let Some(d) = r.detail {
         pairs.push(("detail", Value::String(d)));
     }
     to_bytes(obj(pairs))
@@ -332,7 +345,12 @@ pub(crate) fn daemon_rejected(
 /// fingerprint order.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
-        return daemon_rejected("key_set", "not_an_account", "reorder", None);
+        return daemon_rejected(DaemonRejection {
+            op: "key_set",
+            code: code_name(RejectCode::NotAnAccount),
+            disposition: Disposition::Reorder,
+            detail: None,
+        });
     };
     let enrolled: Vec<Value> = set
         .enrolled()
@@ -1671,6 +1689,12 @@ fn fault_name(f: SpecFault) -> &'static str {
         SpecFault::StartTooShallow => "start_too_shallow",
     }
 }
+
+/// The one rejection code M10 does not carry, and so the one this crate
+/// spells by hand rather than through [`code_name`] (AUTH's new code,
+/// wire.md §Credential refusals). It retires the day `RejectCode` grows a
+/// variant for it.
+pub(crate) const CREDENTIAL_REFUSED: &str = "credential_refused";
 
 /// snake_case of every `RejectCode` variant — exhaustive, so a new code
 /// cannot ship without a wire name.

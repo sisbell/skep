@@ -123,7 +123,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Operation, Request, Response, SessionId};
+use skep_febe::{Codec, Disposition, Operation, Request, Response, SessionId};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
@@ -141,7 +141,8 @@ use crate::auth::{
     bare_origins, signed_origins, startup_warnings, AuthOptions, AuthState, OsEntropy,
 };
 use crate::codec::{
-    check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, JsonCodec,
+    check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
+    JsonCodec, CREDENTIAL_REFUSED,
 };
 use crate::history::{History, ReconstructPermit, Unavailable};
 use crate::sidecar::ChangesAnswer;
@@ -782,9 +783,11 @@ impl Daemon {
     /// Bind the auth surface to the served port — the origin sets and the
     /// `/health.auth` lists derive from it. [`serve`] calls this with the
     /// bound port; a socket-free embedder that wants origin behavior calls
-    /// it itself.
-    pub fn bind_auth_port(&self, port: u16) {
-        self.auth.cfg.bind_port(port);
+    /// it itself. The two are exclusive: `Err(port)` says a port is already
+    /// bound, and the number every live session's origin set was
+    /// established against is the one already there, not the one refused.
+    pub fn bind_auth_port(&self, port: u16) -> Result<(), u16> {
+        self.auth.cfg.bind_port(port)
     }
 
     /// The world as of a committed position — the same bounded replay
@@ -1202,7 +1205,7 @@ impl Daemon {
                 post.world(),
                 &dep.deposit(),
                 entry.sid,
-                req_id.as_ref(),
+                req_id,
                 &ack,
             );
             if flipped {
@@ -1401,7 +1404,12 @@ fn credential_refused(op_name: &str, r: &CredentialRefusal) -> Reply {
     Reply::bodied(
         200,
         "application/json",
-        daemon_rejected(op_name, "credential_refused", "permanent", Some(r.token())),
+        daemon_rejected(DaemonRejection {
+            op: op_name,
+            code: CREDENTIAL_REFUSED,
+            disposition: Disposition::Permanent,
+            detail: Some(r.token()),
+        }),
     )
 }
 
@@ -1655,7 +1663,10 @@ pub fn serve(daemon: Daemon, port: u16, workers: usize) -> io::Result<Skepd> {
     // The auth surface derives its origin sets from the BOUND port, and the
     // startup warnings are logged here — the one thing the glue does with
     // the config before serving (AUTH-4.11).
-    daemon.bind_auth_port(port);
+    daemon.bind_auth_port(port).expect(
+        "serve binds the auth port once; a pre-bound daemon has two callers \
+         disagreeing about the number every live session's origin set derives from",
+    );
     {
         let claimed = daemon.auth.fold.snapshot().claimant().is_some();
         for w in startup_warnings(&daemon.auth.cfg, claimed) {

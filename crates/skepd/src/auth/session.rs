@@ -34,7 +34,7 @@ const SESSION_TOKEN_BYTES: usize = SESSION_TOKEN_BITS / 8;
 /// The TCP peer's loopback-ness ALONE, no address payload (AUTH-4.14).
 /// `X-Forwarded-*` is deliberately ignored — the declined demote-only
 /// reading is recorded there and must not be re-derived.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Peer {
     Loopback,
     Remote,
@@ -172,7 +172,7 @@ impl Token {
 /// One live session's binding: the M10 session, the named principal, and
 /// the fingerprint of the enrolled key that established it (`None` = a
 /// bare bind, which signs nothing).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionEntry {
     pub sid: SessionId,
     pub principal: PrincipalId,
@@ -194,6 +194,7 @@ impl SessionEntry {
 
 /// A map lookup's three arms, constructed in ONE home so no call site can
 /// mis-map them (AUTH-4.23).
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Lookup {
     NoToken,
     Unknown,
@@ -248,6 +249,7 @@ impl Sessions {
 /// The resolved actor of one request (AUTH-4.25). The glue
 /// closes-and-signals on `Unknown | EntryDead` ONLY; `NoToken` has nothing
 /// to close; a `RequestRefused` entry lives untouched.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Actor {
     Guest(GuestReason),
     Principal(SessionEntry),
@@ -306,15 +308,15 @@ pub(crate) fn bare_bind_allowed(
 /// `BOOTSTRAP_PRINCIPAL` ↦ the claimant (None while unclaimed, so an
 /// unclaimed board's 0 signs with nothing), else the principal's own
 /// prefix; `None` for an unknown principal.
-pub(crate) fn key_subject(
-    world: &World,
-    identity: &IdentityState,
+pub(crate) fn key_subject<'a>(
+    world: &'a World,
+    identity: &'a IdentityState,
     p: PrincipalId,
-) -> Option<Address> {
+) -> Option<&'a Address> {
     if p == BOOTSTRAP_PRINCIPAL {
-        identity.claimant().cloned()
+        identity.claimant()
     } else {
-        world.m3().principal_prefix(p).cloned()
+        world.m3().principal_prefix(p)
     }
 }
 
@@ -338,7 +340,7 @@ pub(crate) fn resolve(
         Lookup::Found(entry) => match entry.signer {
             Some(fp) => {
                 let live = key_subject(world, identity, entry.principal)
-                    .is_some_and(|a| identity.key_set(&a).contains(&fp));
+                    .is_some_and(|a| identity.key_set(a).contains(&fp));
                 if live {
                     Actor::Principal(entry)
                 } else {
@@ -490,7 +492,7 @@ pub(crate) fn handshake(
             let Some(account) = key_subject(world, identity, principal) else {
                 return Err(SessionRejected);
             };
-            let set = identity.key_set(&account);
+            let set = identity.key_set(account);
             if set.is_empty() {
                 return Err(SessionRejected);
             }
@@ -506,7 +508,21 @@ pub(crate) fn handshake(
 
 #[cfg(test)]
 mod tests {
+    use skep_engine::Engine;
+    use skep_febe::Operation;
+    use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
+
+    use super::super::AuthOptions;
     use super::*;
+
+    /// A config bound at `port`, with no configured origin — so the bare
+    /// set is exactly the three loopback defaults and every membership
+    /// answer below is the defaults' own.
+    fn cfg_at(port: u16, local_trust: bool) -> AuthConfig {
+        let cfg = AuthConfig::new(AuthOptions { local_trust, origins: Vec::new() });
+        cfg.bind_port(port).expect("a fresh config binds once");
+        cfg
+    }
 
     /// AUTH-4.16 — strict lowercase nonces: the round trip is
     /// byte-identical, uppercase refuses.
@@ -546,6 +562,122 @@ mod tests {
         let n3 = ch.issue(PrincipalId(7), now, &mut rng);
         assert!(ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)));
         assert!(!ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)), "single use");
+    }
+
+    /// AUTH-4.26 — the bare-bind cells, the MODE conjunct first: a loopback
+    /// peer at an admitted origin is refused in ENFORCING, and a
+    /// non-loopback peer or an unadmitted origin is refused for THIS
+    /// REQUEST, which is not death.
+    #[test]
+    fn bare_bind_cells_answer_mode_before_request() {
+        let cfg = cfg_at(8642, true);
+        let dialed = format!("http://127.0.0.1:{}", 8642);
+        // UNCLAIMED and CLAIMED-PERMISSIVE both honor the bare bind.
+        for claimed in [false, true] {
+            assert_eq!(
+                bare_bind_allowed(&cfg, Peer::Loopback, None, claimed),
+                BareBind::Allowed,
+                "claimed={claimed}: an absent Origin is ok"
+            );
+            assert_eq!(
+                bare_bind_allowed(&cfg, Peer::Loopback, Some(&dialed), claimed),
+                BareBind::Allowed,
+                "claimed={claimed}: a loopback default is in the bare set"
+            );
+            assert_eq!(
+                bare_bind_allowed(&cfg, Peer::Remote, None, claimed),
+                BareBind::RequestRefused,
+                "claimed={claimed}: a non-loopback peer is refused for this request"
+            );
+            for bad in ["https://evil.example", "null", "http://127.0.0.1:9999"] {
+                assert_eq!(
+                    bare_bind_allowed(&cfg, Peer::Loopback, Some(bad), claimed),
+                    BareBind::RequestRefused,
+                    "claimed={claimed}: '{bad}' is not in the bare set"
+                );
+            }
+        }
+        // ENFORCING answers the MODE refusal FIRST, so a cell where both
+        // conjunct classes would fail still answers `ModeRefused`.
+        let enforcing = cfg_at(8642, false);
+        assert_eq!(
+            bare_bind_allowed(&enforcing, Peer::Loopback, Some(&dialed), true),
+            BareBind::ModeRefused,
+            "the mode conjunct is monotone and is tested first"
+        );
+        assert_eq!(
+            bare_bind_allowed(&enforcing, Peer::Remote, Some("null"), true),
+            BareBind::ModeRefused
+        );
+        assert_eq!(
+            bare_bind_allowed(&enforcing, Peer::Loopback, None, false),
+            BareBind::Allowed,
+            "pre-claim the flag is not consulted"
+        );
+    }
+
+    /// AUTH-4.25/4.28 — the `Lookup` → `Actor` map, arm by arm. `resolve`
+    /// decides whether a request may write at all, and every arm but
+    /// `Principal` answers with a REASON the glue dispatches on: only
+    /// `Unknown` and `EntryDead` close the binding.
+    #[test]
+    fn resolve_maps_every_lookup_arm_to_its_actor() {
+        let engine = Engine::open(KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        })
+        .expect("in-memory genesis cannot fail");
+        let febe = Operation::new(Box::new(engine.stores()));
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+        // Genesis: no account holds any key, so no signed binding is live.
+        let identity = IdentityState::genesis();
+        let cfg = cfg_at(8642, true);
+        let go = |lookup, peer, origin| resolve(&cfg, lookup, peer, origin, world, &identity);
+
+        assert_eq!(
+            go(Lookup::NoToken, Peer::Loopback, None),
+            Actor::Guest(GuestReason::NoToken),
+            "no token: nothing to close"
+        );
+        assert_eq!(
+            go(Lookup::Unknown, Peer::Loopback, None),
+            Actor::Guest(GuestReason::Unknown),
+            "an unknown token: the glue closes and signals"
+        );
+
+        let bare = SessionEntry {
+            sid: febe.open_session(PrincipalId(7)),
+            principal: PrincipalId(7),
+            signer: None,
+        };
+        assert_eq!(
+            go(Lookup::Found(bare.clone()), Peer::Loopback, None),
+            Actor::Principal(bare.clone()),
+            "a bare bind the mode honors resolves to its principal"
+        );
+        assert_eq!(
+            go(Lookup::Found(bare.clone()), Peer::Remote, None),
+            Actor::Guest(GuestReason::RequestRefused),
+            "a bare bind off loopback: refused for this request, and it LIVES"
+        );
+
+        // A signed binding whose key no account holds is DEAD — the arm the
+        // glue closes on, and the one a retirement produces.
+        let signed = SessionEntry {
+            signer: Fingerprint::parse_hex(&"ab".repeat(32)),
+            ..bare
+        };
+        assert!(signed.signer.is_some(), "the fixture fingerprint parses");
+        // The signed arm consults no origin and no peer — dead is dead —
+        // which is why the two cells below must answer alike.
+        for peer in [Peer::Loopback, Peer::Remote] {
+            assert_eq!(
+                go(Lookup::Found(signed.clone()), peer, Some("https://evil.example")),
+                Actor::Guest(GuestReason::EntryDead),
+                "{peer:?}: a signer no key set holds is dead"
+            );
+        }
     }
 
     /// AUTH-4.20 — the cap evicts oldest-first.

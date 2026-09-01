@@ -68,7 +68,7 @@ mod write_path;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use auth::{AuthOptions, Origin};
+pub use auth::{AuthOptions, NotCanonical, Origin};
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,

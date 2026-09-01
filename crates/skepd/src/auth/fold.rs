@@ -197,26 +197,35 @@ impl IdentityFold {
 /// with its session. Stores marshaled bytes at execute time (AUTH-7.20's
 /// first horn).
 pub(crate) struct CredMemo {
-    map: parking_lot::Mutex<HashMap<(SessionId, ReqId), Vec<u8>>>,
+    /// Session → its acks. Nested rather than keyed `(SessionId, ReqId)`,
+    /// so a recall BORROWS the id instead of cloning one to build a key
+    /// it then throws away, and a purge is one removal instead of a walk
+    /// over every session's entries.
+    sessions: parking_lot::Mutex<HashMap<SessionId, HashMap<ReqId, Vec<u8>>>>,
 }
 
 impl CredMemo {
     pub fn new() -> CredMemo {
-        CredMemo { map: parking_lot::Mutex::new(HashMap::new()) }
+        CredMemo { sessions: parking_lot::Mutex::new(HashMap::new()) }
     }
 
     pub fn recall(&self, sid: SessionId, id: &ReqId) -> Option<Vec<u8>> {
-        self.map.lock().get(&(sid, id.clone())).cloned()
+        let sessions = self.sessions.lock();
+        sessions.get(&sid)?.get(id).cloned()
     }
 
-    pub fn store(&self, sid: SessionId, id: &ReqId, ack: Vec<u8>) {
-        self.map.lock().insert((sid, id.clone()), ack);
+    /// Takes the id BY VALUE: the caller already owns one — the frame is
+    /// consumed by `execute`, so the id is cloned out ahead of that move —
+    /// and this map keeps it, so a borrow here would only turn the
+    /// caller's one clone into two.
+    pub fn store(&self, sid: SessionId, id: ReqId, ack: Vec<u8>) {
+        self.sessions.lock().entry(sid).or_default().insert(id, ack);
     }
 
     /// A closed session takes its memo entries with it — the same
     /// obligation M10's own `close_session` discharges for its cache.
     pub fn purge(&self, sid: SessionId) {
-        self.map.lock().retain(|(s, _), _| *s != sid);
+        self.sessions.lock().remove(&sid);
     }
 }
 

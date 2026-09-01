@@ -25,6 +25,12 @@ const SKEPD_WORKERS: EnvSetting = EnvSetting { var: "SKEPD_WORKERS", expected: "
 const SKEPD_LOCAL_TRUST: EnvSetting =
     EnvSetting { var: "SKEPD_LOCAL_TRUST", expected: "true or false" };
 
+/// The origin list's variable, a bare name rather than an [`EnvSetting`]:
+/// its value is a LIST, so [`from_env`] cannot carry it, and the phrase
+/// that pair exists to hold is [`skepd::NotCanonical`]'s — one home for
+/// what a canonical origin is, shared with the `--origin` flag.
+const SKEPD_ORIGIN: &str = "SKEPD_ORIGIN";
+
 /// The help text, with each default read from the constant that supplies
 /// it — so the program cannot describe a default it does not use.
 fn usage() -> String {
@@ -92,14 +98,22 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
     let mut port: Option<u16> = from_env(SKEPD_PORT)?;
     let mut workers: Option<usize> = from_env(SKEPD_WORKERS)?;
     let mut local_trust: Option<bool> = from_env(SKEPD_LOCAL_TRUST)?;
-    let mut origins: Vec<Origin> = match std::env::var("SKEPD_ORIGIN") {
-        Err(_) => Vec::new(),
+    // The one setting [`from_env`] cannot carry, being a LIST — so the
+    // two rules that helper holds are restated here and nowhere else: a
+    // variable set to bytes that are not text is refused rather than read
+    // as absent, and each element goes through [`Origin`]'s own `FromStr`.
+    let mut origins: Vec<Origin> = match std::env::var(SKEPD_ORIGIN) {
+        Err(std::env::VarError::NotPresent) => Vec::new(),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(format!("{}: the value is not UTF-8 text", SKEPD_ORIGIN))
+        }
         Ok(v) => v
             .split(',')
             .filter(|s| !s.is_empty())
             .map(|s| {
-                Origin::parse(s)
-                    .ok_or_else(|| format!("SKEPD_ORIGIN: '{s}' is not a canonical origin"))
+                s.parse::<Origin>().map_err(|e| {
+                    format!("{}: '{s}' is {e}", SKEPD_ORIGIN)
+                })
             })
             .collect::<Result<_, _>>()?,
     };
@@ -123,12 +137,9 @@ fn parse_args(argv: impl Iterator<Item = String>) -> Result<Option<Args>, String
             "--no-local-trust" => local_trust = Some(false),
             "--origin" => {
                 let v = it.next().ok_or("--origin needs a value")?;
-                origins.push(Origin::parse(&v).ok_or_else(|| {
-                    format!(
-                        "--origin: '{v}' is not a canonical origin \
-                         (scheme://host[:port], lowercase, default port omitted)"
-                    )
-                })?);
+                origins.push(
+                    v.parse::<Origin>().map_err(|e| format!("--origin: '{v}' is {e}"))?,
+                );
             }
             "--help" | "-h" => return Ok(None),
             other => return Err(format!("unknown argument '{other}'")),

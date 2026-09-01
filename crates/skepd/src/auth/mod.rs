@@ -38,7 +38,7 @@ pub(crate) const CHALLENGE_CAP: usize = 4096;
 /// the local-trust flag (Phase A default ON — a hosted image must set it
 /// AFFIRMATIVELY false, AUTH-4.57 (i)) and the configured origins
 /// (AUTH-4.7: configure what the board is actually reachable at).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthOptions {
     /// Bare binds honored on loopback after the claim (CLAIMED-PERMISSIVE)
     /// when true; ENFORCING when false. Pre-claim the flag is not consulted
@@ -76,8 +76,14 @@ impl AuthConfig {
         }
     }
 
-    pub fn bind_port(&self, port: u16) {
-        let _ = self.port.set(port);
+    /// `Err(port)` when a port is already bound. The value is set ONCE, so
+    /// a second bind would otherwise be a silent no-op — and the origin
+    /// sets every live session was established against derive from it, so
+    /// two callers disagreeing about the number must not be quiet.
+    /// [`crate::serve`] and a socket-free embedder are the two, and they
+    /// are exclusive by design.
+    pub fn bind_port(&self, port: u16) -> Result<(), u16> {
+        self.port.set(port)
     }
 
     pub fn port(&self) -> u16 {
@@ -129,7 +135,7 @@ impl AuthState {
         world_post: &World,
         dep: &LinkDeposit<'_>,
         sid: SessionId,
-        id: Option<&ReqId>,
+        id: Option<ReqId>,
         ack: &[u8],
     ) -> bool {
         let flipped = self.fold.step_committed(world_post, dep);
@@ -212,7 +218,7 @@ impl CryptoRng for OsEntropy {}
 /// trailing slash, the scheme's default port OMITTED (AUTH-4.2). `parse`
 /// admits ONLY the canonical text, so `parse(s).as_str() == s` for every
 /// admitted `s` and the handshake's already-canonical check IS this parse.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Origin {
     canonical: String,
     https: bool,
@@ -291,6 +297,36 @@ impl Origin {
 impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.canonical)
+    }
+}
+
+/// [`Origin::parse`] refused: the text is not a canonical origin. Carries
+/// no reason — the canonical form is one shape, and enumerating the ways to
+/// miss it here would be a second enumeration to keep in step with
+/// `parse`'s own doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NotCanonical;
+
+impl fmt::Display for NotCanonical {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(
+            "not a canonical origin (scheme://host[:port], lowercase, \
+             the scheme's default port omitted)",
+        )
+    }
+}
+
+impl std::error::Error for NotCanonical {}
+
+/// The ecosystem door. [`Origin::parse`] stays: its `Option` is the
+/// predicate form this module uses internally (`Origin::parse(h)
+/// .is_some_and(…)`), and `FromStr` is what a generic caller — including
+/// `main.rs`'s own `from_env<T: FromStr>` — can reach.
+impl std::str::FromStr for Origin {
+    type Err = NotCanonical;
+
+    fn from_str(s: &str) -> Result<Origin, NotCanonical> {
+        Origin::parse(s).ok_or(NotCanonical)
     }
 }
 
@@ -432,7 +468,7 @@ mod tests {
             local_trust,
             origins: origins.iter().map(|s| Origin::parse(s).expect("canonical")).collect(),
         });
-        cfg.bind_port(port);
+        cfg.bind_port(port).expect("a fresh config binds once");
         cfg
     }
 

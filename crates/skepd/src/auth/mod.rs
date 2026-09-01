@@ -140,7 +140,7 @@ impl AuthState {
     ) -> bool {
         let flipped = self.fold.step_committed(lock, world_post, dep);
         if let Some(id) = id {
-            self.memo.store(sid, id, ack.to_vec());
+            self.memo.store(lock, sid, id, ack.to_vec());
         }
         flipped
     }

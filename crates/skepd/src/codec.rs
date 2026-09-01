@@ -36,6 +36,14 @@
 //!   defined encoding: a client that cannot decode a rejection has been
 //!   silently failed.
 //!
+//! What this file renders is the OPERATION CHANNEL: M10's `Response`s, the
+//! daemon-originated rejections [`daemon_rejected`] builds, and the
+//! `key_set` row. The transport's own shapes — `/health`, `/session`,
+//! `/challenge`, `/changes` and its entries, the `{"error": …}` bodies,
+//! the commit stream's payload — are built where their state lives, and
+//! reach determinism by going through [`obj`] and [`to_bytes`] rather than
+//! by living here.
+//!
 //! Parsing strings into `skep-address` values goes through M1's validating
 //! front doors (`Tumbler::new`, `validate`, `Span::new`), so no malformed
 //! address or zero-width span survives the trust boundary.
@@ -335,13 +343,16 @@ pub(crate) fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
     to_bytes(obj(pairs))
 }
 
-/// The `key_set` answer (AUTH-6.18–6.20) — the daemon's own response
-/// shape, rendered here because every wire shape this crate emits is
-/// rendered here. `set` is [`crate::auth::fold::key_set_of`]'s answer over
-/// the `(world, identity)` pair the route holds: `None` is the
-/// not-an-account case and answers the EXISTING code `not_an_account`; a
-/// keyless account answers empty lists. Entries ride in the key set's own
-/// fingerprint order.
+/// The `key_set` answer (AUTH-6.18–6.20) — the daemon's own
+/// OPERATION-CHANNEL shape, rendered here because this is where that
+/// channel's shapes are rendered (the module doc draws the line, and the
+/// transport's own shapes sit on the other side of it).
+///
+/// `set` is [`crate::auth::fold::key_set_of`]'s answer over the
+/// `(world, identity)` pair the route holds: `None` is the not-an-account
+/// case and answers the EXISTING code `not_an_account`; a keyless account
+/// answers empty lists. Entries ride in the key set's own fingerprint
+/// order.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
         return daemon_rejected(DaemonRejection {

@@ -123,7 +123,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Disposition, Operation, Request, Response, SessionId};
+use skep_febe::{Codec, Disposition, Operation, OpKind, Request, Response, SessionId};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
 use skep_namespace::PrincipalId;
@@ -851,10 +851,12 @@ impl Daemon {
     }
 
     /// The request/response routes — every method/path pair but the event
-    /// stream, decided in one match. The token-accepting set (AUTH-4.43) —
-    /// `/op`, `/op-at`, `/changes`, `/dump`, `/session/close` here, plus
-    /// `/events` on the accept path — runs [`Daemon::authenticate`] before
-    /// dispatch; `/health` and `/` are token-blind by design.
+    /// stream, decided in one match. The token-accepting set (AUTH-4.43) is
+    /// the arms wearing [`Daemon::token_route`]: `/op`, `/op-at`,
+    /// `/changes`, `/dump` and `/session/close` here, plus `/events`, which
+    /// the accept path runs by hand because a stream is not a [`Reply`].
+    /// `/health`, `/challenge`, `/session` and `/` are token-blind by
+    /// design.
     fn reply(&self, req: &HttpRequest) -> Reply {
         match (req.method.as_str(), req.path.as_str()) {
             // CORS preflight (wire v4): 204 on any known path; an unknown
@@ -862,19 +864,17 @@ impl Daemon {
             ("OPTIONS", p) if path_is_known(p) => Reply::preflight(),
             ("GET", "/challenge") => self.get_challenge(req.query.as_deref()),
             ("POST", "/session") => self.post_session(req),
-            ("POST", "/session/close") => self.post_session_close(req),
-            ("POST", "/op") => self.post_op(req),
-            ("POST", "/op-at") => self.post_op_at(req),
+            ("POST", "/session/close") => {
+                self.token_route(req, |r| self.post_session_close(r, req))
+            }
+            ("POST", "/op") => self.token_route(req, |r| self.post_op(r, req)),
+            ("POST", "/op-at") => self.token_route(req, |_| self.op_at_reply(&req.body)),
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => {
-                let resolved = self.authenticate(req);
-                with_signal(self.get_changes(req.query.as_deref()), resolved.closed)
+                self.token_route(req, |_| self.get_changes(req.query.as_deref()))
             }
             #[cfg(feature = "observe")]
-            ("GET", "/dump") => {
-                let resolved = self.authenticate(req);
-                with_signal(self.get_dump(req.query.as_deref()), resolved.closed)
-            }
+            ("GET", "/dump") => self.token_route(req, |_| self.get_dump(req.query.as_deref())),
             #[cfg(feature = "client")]
             ("GET", "/") => {
                 Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
@@ -902,6 +902,25 @@ impl Daemon {
         let identity = self.auth.fold.snapshot();
         let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
         Resolved { actor, closed }
+    }
+
+    /// One token-accepting route (AUTH-4.43): resolve the actor against the
+    /// HEAD — which may retire the binding a dead or unknown token names —
+    /// run the handler, and attach the `Skepd-Session: closed` header the
+    /// answer may owe (AUTH-6.7). The arm that wears this IS its
+    /// declaration that the route accepts a token, so the set is a fact of
+    /// [`Daemon::reply`]'s shape rather than a list each arm keeps for
+    /// itself. `/events` is the one member that cannot: a stream is not a
+    /// [`Reply`], so the accept path runs the same pair by hand
+    /// (AUTH-4.44).
+    ///
+    /// The two write sequences wrap again, against their own LOCKED
+    /// resolution — which can find a death this one did not — and that
+    /// double is harmless by construction: [`with_signal`] attaches the
+    /// header once however many sites observed the death.
+    fn token_route(&self, req: &HttpRequest, f: impl FnOnce(&Resolved) -> Reply) -> Reply {
+        let resolved = self.authenticate(req);
+        with_signal(f(&resolved), resolved.closed)
     }
 
     /// Close one token's binding in BOTH stores — the sessions map and M10
@@ -999,18 +1018,17 @@ impl Daemon {
     }
 
     /// `POST /session/close` (AUTH-4.47): idempotent 204. Through
-    /// `authenticate`, the header falls out with no special case — a LIVE
-    /// token's 204 carries no header (the close is the person's own act);
-    /// an unknown or already-dead one resolves Guest and its 204 carries
-    /// `Skepd-Session: closed`.
-    fn post_session_close(&self, req: &HttpRequest) -> Reply {
-        let resolved = self.authenticate(req);
+    /// [`Daemon::token_route`], the header falls out with no special case —
+    /// a LIVE token's 204 carries no header (the close is the person's own
+    /// act); an unknown or already-dead one resolved Guest, so the route
+    /// closed it already and its 204 carries `Skepd-Session: closed`.
+    fn post_session_close(&self, resolved: &Resolved, req: &HttpRequest) -> Reply {
         if let Actor::Principal(_) = &resolved.actor {
             if let Some(t) = req.session_token.as_deref().and_then(Token::parse) {
                 self.close_binding(&t);
             }
         }
-        with_signal(Reply { status: 204, body: None, headers: Vec::new() }, resolved.closed)
+        Reply { status: 204, body: None, headers: Vec::new() }
     }
 
     /// `POST /op` — one frame in, one marshaled answer out; the HTTP
@@ -1018,9 +1036,8 @@ impl Daemon {
     /// daemon-served `key_set` read, an M10 read (no lock, the actor's
     /// session), or a write, which runs one of the two pinned write
     /// sequences (AUTH-3.35 / AUTH-3.37) under the credential write lock.
-    fn post_op(&self, req: &HttpRequest) -> Reply {
-        let resolved = self.authenticate(req);
-        let reply = match self.codec.parse_daemon(&req.body) {
+    fn post_op(&self, resolved: &Resolved, req: &HttpRequest) -> Reply {
+        match self.codec.parse_daemon(&req.body) {
             Err(e) => self.op_reply(&self.codec.unparseable(e)),
             Ok(DaemonOp::KeySet { account }) => {
                 // The one dispatcher (AUTH-6.20): the head pair — the live
@@ -1028,16 +1045,14 @@ impl Daemon {
                 let snap = self.engine.kernel().snapshot();
                 let identity = self.auth.fold.snapshot();
                 let set = key_set_of(snap.world(), &identity, &account);
-                let bytes = key_set_reply(snap.seq(), set);
-                Reply::bodied(200, "application/json", bytes)
+                op_answer(key_set_reply(snap.seq(), set))
             }
             Ok(DaemonOp::Febe(freq)) => match write_meta(&freq.op) {
                 // Reads execute directly and take no lock (AUTH-3.36).
                 None => self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *freq)),
-                Some(meta) => self.write_sequence(&resolved, meta, *freq, req),
+                Some(meta) => self.write_sequence(resolved, meta, *freq, req),
             },
-        };
-        with_signal(reply, resolved.closed)
+        }
     }
 
     /// The session a request's dispatch runs under: the actor's, or the
@@ -1158,8 +1173,7 @@ impl Daemon {
             entry.principal,
             entry.signer.as_ref(),
         ) {
-            let op_name = crate::codec::op_name(meta.kind);
-            return with_signal(credential_refused(op_name, &r), closed);
+            return with_signal(credential_refused(meta.kind, &r), closed);
         }
         let resp = self.writes.commit_under(&serial, meta.attributed(entry.testimony()), || {
             self.febe.execute(entry.sid, freq)
@@ -1179,17 +1193,16 @@ impl Daemon {
         freq: Request,
         req: &HttpRequest,
     ) -> Reply {
-        let op_name = crate::codec::op_name(meta.kind);
         // 1 — the pre-lock actor check: both outcomes are refusals that
         // execute nothing (AUTH-3.38). No `with_signal` here: this arm
-        // reads the HEAD resolution, whose death signal `post_op`'s outer
-        // wrap already carries.
+        // reads the HEAD resolution, whose death signal
+        // [`Daemon::token_route`]'s wrap already carries.
         if let Actor::Guest(_) = resolved.actor {
             return self.guest_reply(freq);
         }
         // 2 — slots (1)–(2), ahead of the lock (AUTH-3.5).
         if let Some(r) = op_shape_refusal(&freq.op) {
-            return credential_refused(op_name, &r);
+            return credential_refused(meta.kind, &r);
         }
         // 3 — the credential write lock, the serialization lock, the locked
         // snapshot, and this site's OWN resolution.
@@ -1206,8 +1219,8 @@ impl Daemon {
         // guards (AUTH-3.40/3.41): the ORIGINAL ack, byte-identical,
         // executing nothing.
         if let Some(id) = &freq.id {
-            if let Some(ack) = self.auth.memo.recall(entry.sid, id) {
-                return with_signal(Reply::bodied(200, "application/json", ack), closed);
+            if let Some(ack) = self.auth.memo.recall(&credential_lock, entry.sid, id) {
+                return with_signal(op_answer(ack), closed);
             }
         }
         // 6 — the precheck's ordered slots over the verbatim deposit.
@@ -1222,7 +1235,7 @@ impl Daemon {
             // `precheck` gives its own `NotCredential` line.
             debug_assert!(false, "a classified deposit is an address-form MakeLink");
             let r = CredentialRefusal::ResolvedFrom;
-            return with_signal(credential_refused(op_name, &r), closed);
+            return with_signal(credential_refused(meta.kind, &r), closed);
         };
         match crate::auth::policy::precheck(
             &credential_lock,
@@ -1231,7 +1244,7 @@ impl Daemon {
             &dep,
             entry.signer.as_ref(),
         ) {
-            Err(r) => return with_signal(credential_refused(op_name, &r), closed),
+            Err(r) => return with_signal(credential_refused(meta.kind, &r), closed),
             Ok(_effect) => {}
         }
         // 7 — execute (commit-record-announce under the held serial lock).
@@ -1268,14 +1281,13 @@ impl Daemon {
                 }
             }
         }
-        with_signal(Reply::bodied(200, "application/json", ack), closed)
+        with_signal(op_answer(ack), closed)
     }
 
-    /// One marshaled operation answer as its reply — always `200`, whatever
-    /// the `Response` says: the envelope, not the HTTP status, is the
-    /// operation protocol.
+    /// One M10 answer, marshaled, as its reply — through [`op_answer`],
+    /// which is where that channel's status is chosen.
     fn op_reply(&self, resp: &Response) -> Reply {
-        Reply::bodied(200, "application/json", self.codec.marshal(resp))
+        op_answer(self.codec.marshal(resp))
     }
 
     /// TEST HOOK (the `fuzz_support` standing: `#[doc(hidden)]`, not a
@@ -1294,11 +1306,6 @@ impl Daemon {
     /// `as_of` reporting `at`. History is not a place you can act — a write
     /// frame is a transport-level 400 before anything runs; an unparseable
     /// frame gets the same `unparseable` rejection `/op` gives it.
-    fn post_op_at(&self, req: &HttpRequest) -> Reply {
-        let resolved = self.authenticate(req);
-        with_signal(self.op_at_reply(&req.body), resolved.closed)
-    }
-
     fn op_at_reply(&self, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
@@ -1317,11 +1324,7 @@ impl Daemon {
                 match self.history.reconstruct(&self.engine, at) {
                     Ok((_permit, world)) => {
                         let identity = canonical_identity(&world);
-                        Reply::bodied(
-                            200,
-                            "application/json",
-                            key_set_reply(at, key_set_of(&world, &identity, &account)),
-                        )
+                        op_answer(key_set_reply(at, key_set_of(&world, &identity, &account)))
                     }
                     Err(e) => refuse_unavailable(e),
                 }
@@ -1450,21 +1453,29 @@ fn with_signal(mut reply: Reply, closed: bool) -> Reply {
     reply
 }
 
+/// One operation answer, already marshaled, as its reply — always `200`,
+/// whatever the answer says: the envelope, not the HTTP status, is the
+/// operation protocol. THE constructor for that channel, so a
+/// daemon-originated answer (`key_set`, a credential refusal, a memoized
+/// ack) cannot choose a status of its own — the standing [`refuse`] has on
+/// the transport channel.
+fn op_answer(bytes: Vec<u8>) -> Reply {
+    Reply::bodied(200, "application/json", bytes)
+}
+
 /// One daemon-originated credential refusal as its 200-enveloped rejection
 /// (AUTH-3.54): `code: credential_refused`, `disposition: permanent`
 /// uniformly, `detail` the machine token. The op field names the refused
-/// op, exactly as M10's rejections do.
-fn credential_refused(op_name: &str, r: &CredentialRefusal) -> Reply {
-    Reply::bodied(
-        200,
-        "application/json",
-        daemon_rejected(DaemonRejection {
-            op: op_name,
-            code: CREDENTIAL_REFUSED,
-            disposition: Disposition::Permanent,
-            detail: Some(r.token()),
-        }),
-    )
+/// op, exactly as M10's rejections do — lowered from its `OpKind` here, so
+/// the wire name comes from [`crate::codec::op_name`]'s table rather than
+/// from a caller holding one to pass on.
+fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
+    op_answer(daemon_rejected(DaemonRejection {
+        op: crate::codec::op_name(kind),
+        code: CREDENTIAL_REFUSED,
+        disposition: Disposition::Permanent,
+        detail: Some(r.token()),
+    }))
 }
 
 /// The `/challenge` query: exactly `principal=<non-negative integer>`.
@@ -1930,9 +1941,11 @@ fn serve_connection(daemon: &Arc<Daemon>, subscribers: &Subscribers, mut stream:
             let _ = write_reply(&mut stream, &reply, Instant::now() + TRANSFER_DEADLINE);
         }
         Routed::EventStream => {
-            // `/events` runs `authenticate` before the stream OPENS
-            // (AUTH-4.44): a dead token meets `Skepd-Session: closed` on
-            // the stream's own head, written once, at open.
+            // The one token-accepting route `Daemon::token_route` cannot
+            // wear, because a stream is not a `Reply`: the same pair by
+            // hand, `authenticate` before the stream OPENS (AUTH-4.44), so
+            // a dead token meets `Skepd-Session: closed` on the stream's
+            // own head, written once, at open.
             let closed = daemon.authenticate(&req).closed;
             subscribers.admit(Arc::clone(daemon), stream, closed);
         }

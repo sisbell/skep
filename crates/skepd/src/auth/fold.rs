@@ -222,21 +222,42 @@ impl CredMemo {
         CredMemo { sessions: parking_lot::Mutex::new(HashMap::new()) }
     }
 
-    pub fn recall(&self, sid: SessionId, id: &ReqId) -> Option<Vec<u8>> {
+    /// The ORIGINAL ack for this `(session, id)`, under the write guard it
+    /// names in its arguments (AUTH-3.3). The guard is the obligation, not
+    /// a decoration: AUTH-3.40/3.41 make the recall atomic with the
+    /// precheck-and-execute it guards, so a recall outside the lock lets a
+    /// concurrent credential write land between the miss and the precheck
+    /// and the retry executes twice.
+    pub fn recall(&self, _lock: &LockWrite<'_>, sid: SessionId, id: &ReqId) -> Option<Vec<u8>> {
         let sessions = self.sessions.lock();
         sessions.get(&sid)?.get(id).cloned()
     }
 
+    /// Memoize one marshaled ack, under the write guard (AUTH-3.3) —
+    /// reached through [`super::AuthState::commit_tail`], which performs
+    /// this and the fold step as one operation.
+    ///
     /// Takes the id BY VALUE: the caller already owns one — the frame is
     /// consumed by `execute`, so the id is cloned out ahead of that move —
     /// and this map keeps it, so a borrow here would only turn the
     /// caller's one clone into two.
-    pub fn store(&self, sid: SessionId, id: ReqId, ack: Vec<u8>) {
+    pub fn store(&self, _lock: &LockWrite<'_>, sid: SessionId, id: ReqId, ack: Vec<u8>) {
         self.sessions.lock().entry(sid).or_default().insert(id, ack);
     }
 
     /// A closed session takes its memo entries with it — the same
     /// obligation M10's own `close_session` discharges for its cache.
+    ///
+    /// The ONE memo method that runs outside the credential write lock,
+    /// and by necessity: it is reached from
+    /// [`crate::server::Daemon::close_binding`], which the resolution path
+    /// calls under the READ lock (the plain sequence), under the write lock
+    /// (the credential sequence), and under neither (the route level) — so
+    /// a write guard here would be unsatisfiable from the first and a
+    /// self-deadlock from the second. Both interleavings against `store`
+    /// are benign: purge-then-store leaves an entry no live token names,
+    /// and store-then-purge loses a memoization for a session already dead,
+    /// whose retry resolves Guest and never reaches [`CredMemo::recall`].
     pub fn purge(&self, sid: SessionId) {
         self.sessions.lock().remove(&sid);
     }

@@ -15,6 +15,18 @@ use crate::response::Response;
 /// an advisory Lampson hint (recomputable); `site` localizes span/operand/
 /// document faults; `detail` is an optional message (ASN-0134 rejection path,
 /// OQ8).
+///
+/// For every rejection M10 produces: `disposition == disposition_of(code)`,
+/// and `detail` is `code`'s standing explanation — the fixed sentence a code
+/// that means the same thing every time it fires carries — unless a call site
+/// threaded one of its own. [`Rejection::classified`] applies both policies
+/// off the flat code and is the constructor that holds them.
+///
+/// The fields are public, so that pairing is a property of the rejections M10
+/// builds rather than of the type: a caller assembling the struct by hand
+/// answers for it. That is why the classifying constructor and
+/// [`disposition_of`] are both published — a caller raising one of these codes
+/// on its own channel can apply M10's policy instead of transcribing it.
 #[derive(Debug)]
 pub struct Rejection {
     pub op: OpKind,
@@ -195,9 +207,14 @@ pub fn disposition_of(code: RejectCode) -> Disposition {
 
 impl Rejection {
     /// Build a classified rejection: both per-code policies applied off the
-    /// flat code — the disposition from [`disposition_of`], any standing
-    /// explanation from [`fixed_detail`] (§5).
-    pub(crate) fn classified(kind: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
+    /// flat code — the disposition from [`disposition_of`], and the standing
+    /// explanation the code carries by policy, when it carries one (§5).
+    ///
+    /// Public for the reason [`disposition_of`] is: a caller that raises one
+    /// of M10's codes on its own channel builds it here and gets the whole
+    /// classification, rather than transcribing half of it and drifting from
+    /// the rows every other rejection of that code is given.
+    pub fn classified(kind: OpKind, code: RejectCode, site: Option<FaultSite>) -> Rejection {
         let detail = fixed_detail(code).map(str::to_string);
         Rejection { op: kind, code, disposition: disposition_of(code), site, detail }
     }

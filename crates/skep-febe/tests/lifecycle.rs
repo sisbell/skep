@@ -378,6 +378,46 @@ fn a_successor_slot_at_the_budget_is_still_accepted() {
     assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "every span at the budget was deposited");
 }
 
+/// §4: the request-level refusal precedence, and what makes a successor's
+/// `site.index` readable. Every slot offends here — the slots are built
+/// `from`, then `to`, then `ty`, and the first refusal is the only answer —
+/// so an index is a position within the slot that order arrives at, and a
+/// client reading it against another slot would be pointed at the wrong spec.
+#[test]
+fn the_first_offending_successor_slot_is_the_one_that_speaks() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let unregistered =
+        skep_arrangement::VSpec { source: addr(&[1, 0, 1, 0, 78]), span: vspan(1, 1, 1) };
+    let ill_formed = skep_arrangement::VSpec { source: d.clone(), span: vspan(2, 1, 1) };
+
+    // FROM offends at index 1; TO and TYPE each offend at index 0.
+    let rej = rejected(ex(
+        &fx.febe,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![vspec(&d, 1, 1), unregistered],
+                to: vec![ill_formed.clone()],
+                ty: SlotArg::Resolve(vec![ill_formed]),
+            },
+            d_s: d.clone(),
+            d_a: d,
+        },
+    ));
+    assert_eq!(
+        rej.code,
+        RejectCode::SourceNotRegistered,
+        "FROM is built first, so FROM's fault is the one surfaced"
+    );
+    assert_eq!(
+        rej.site.expect("M10 localizes its own successor faults").index,
+        Some(1),
+        "the index is the offender's position within FROM"
+    );
+}
+
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the
 /// in-band ⟨⟩ ≠ ⊥ FOLLOWLINK contract (§2), the M8 region/descriptor/
 /// pointwise/lineage reads, EDITLINK's read-assembled successor (§4),
@@ -638,7 +678,9 @@ fn rejection_surface() {
     assert_eq!(rej.disposition, Disposition::Reorder);
 
     // M10's own editlink guard: an ill-formed (link-subspace) content VSpec
-    // is a typed IllFormedSpec, never M5's silent ⟨⟩ clip (§4).
+    // is a typed IllFormedSpec, never M5's silent ⟨⟩ clip (§4). A good spec
+    // rides ahead of it, so the reported `site.index` is the offender's
+    // position and not the only position there was.
     let ill_formed = skep_arrangement::VSpec { source: d.clone(), span: vspan(2, 1, 1) };
     let rej = rejected(ex(
         &fx.febe,
@@ -646,7 +688,7 @@ fn rejection_surface() {
         Op::EditLink {
             original: ghost_link(&d, 99),
             successor: SuccessorSpec {
-                from: vec![ill_formed],
+                from: vec![vspec(&d, 1, 1), ill_formed],
                 to: vec![],
                 ty: SlotArg::Addrs(vec![d.clone()]),
             },
@@ -657,6 +699,11 @@ fn rejection_surface() {
     assert_eq!(rej.op, OpKind::EditLink);
     assert_eq!(rej.code, RejectCode::IllFormedSpec);
     assert_eq!(rej.disposition, Disposition::Permanent);
+    assert_eq!(
+        rej.site.expect("M10 localizes its own successor faults").index,
+        Some(1),
+        "the second spec is the offender, and the rejection says which"
+    );
 
     // The same guard on the other fault a successor spec can carry: a source
     // M3 does not know resolves to ⟨⟩, so it is refused instead of committed
@@ -670,7 +717,7 @@ fn rejection_surface() {
         Op::EditLink {
             original: ghost_link(&d, 99),
             successor: SuccessorSpec {
-                from: vec![unregistered],
+                from: vec![vspec(&d, 1, 1), unregistered],
                 to: vec![],
                 ty: SlotArg::Addrs(vec![d.clone()]),
             },
@@ -681,6 +728,7 @@ fn rejection_surface() {
     assert_eq!(rej.op, OpKind::EditLink);
     assert_eq!(rej.code, RejectCode::SourceNotRegistered);
     assert_eq!(rej.disposition, Disposition::Reorder);
+    assert_eq!(rej.site.expect("M10 localizes its own successor faults").index, Some(1));
 
     // The as-built [K_sup] emit fence lowers to DcViolation (report: drift):
     // supersession claims write only via AssertSup/EditLink.

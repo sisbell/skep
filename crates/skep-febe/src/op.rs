@@ -58,7 +58,15 @@ pub enum Op {
     /// principal atomically.
     Delegate { new_prefix: Tumbler, new_id: PrincipalId },
     /// NodeBaptism admission (ASN-0047): the address is supplied by
-    /// provisioning, not minted; still requires a bound session (§6).
+    /// provisioning, not minted.
+    ///
+    /// A bound session is the ONLY gate on this path, and no module holds a
+    /// stronger one. Step (b) proves that some session is bound and nothing
+    /// further; `Namespace::register_node` takes no principal, so this arm
+    /// passes none, and `NodeError` carries no authority variant, so M3 makes
+    /// no ownership or tier check either. Any bound session, speaking for any
+    /// principal, may therefore register a node-tier entity — confining this
+    /// to provisioning is policy nobody enforces.
     RegisterNode { addr: Tumbler },
     /// Denial-as-fork (O10, account tier): a fresh EMPTY document in the
     /// caller's own account — shares NO content (the content-sharing fork is
@@ -151,6 +159,14 @@ pub enum Op {
 /// is the two-form [`SlotArg`] (formerly this crate's own `TypeArg`; the
 /// 2026-08-16 amendment unified it with M7's, which [`Op::MakeLink`]'s
 /// three slots now share).
+///
+/// REFUSAL PRECEDENCE, since a successor may be wrong in several places at
+/// once and exactly one answer comes back: the slots are built `from`, then
+/// `to`, then `ty`, and the first that refuses speaks. Within a slot the first
+/// offending spec speaks, `IllFormedSpec` ahead of `SourceNotRegistered` on
+/// it. A per-spec refusal names the offender in [`crate::FaultSite`]'s
+/// `index` — an index WITHIN the slot this order arrives at, since a
+/// `FaultSite` names no slot.
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,

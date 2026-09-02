@@ -25,8 +25,40 @@ use crate::response::Response;
 /// request's `ReqId`.
 pub trait Codec {
     /// wire → `Op` (+ id).
+    ///
+    /// **The implementer owes the request's SIZE.** M10 measures no field of
+    /// the [`Op`] it is handed: `values`, `specs`, `cuts`, `regions`,
+    /// `rho1`/`rho2`, `to`, `n` and every tumbler's components and magnitudes
+    /// reach the owning store as presented. The one list M10 measures is the
+    /// EDITLINK successor slot it builds for itself, against M7's per-slot
+    /// budget; nothing it RECEIVES is measured. So this parser is the only
+    /// bound on how large a request may be, and a costed frame — a maximal
+    /// COMPARE, an `insert` whose values outrun the transaction budget —
+    /// reaches the store exactly as it arrives.
+    ///
+    /// Shape is not the implementer's: `Address`, `Span` and `Tumbler`
+    /// validate in their own constructors (and re-enter them on deserialize),
+    /// so a parsed argument is well formed by construction and no dispatch arm
+    /// re-checks it.
+    ///
+    /// A [`Request`]'s `id` past [`MAX_REQ_ID_BYTES`] is accepted and simply
+    /// not memoized, so a retry re-executes and the client is never told. A
+    /// parser that wants it TOLD refuses the id here.
+    ///
+    /// The production instance (skepd's `JsonCodec`) enforces a per-array
+    /// element cap, a per-`insert` minted-value cap, and per-tumbler digit and
+    /// component caps. Those numbers are the transport's — each sized against
+    /// its own request-body cap — not M10 policy: a transport with a different
+    /// frame budget owes its own.
+    ///
+    /// [`Op`]: crate::Op
+    /// [`MAX_REQ_ID_BYTES`]: crate::MAX_REQ_ID_BYTES
     fn parse(&self, frame: &[u8]) -> Result<Request, ParseError>;
-    /// Typed response → wire bytes.
+    /// Typed response → wire bytes. Total by signature: there is no failure
+    /// channel, so the implementer must be able to encode EVERY [`Response`],
+    /// every `Rejected` among them. The never-silent contract rests on that
+    /// totality — an answer M10 produced and the codec cannot render is a
+    /// silence.
     fn marshal(&self, resp: &Response) -> Vec<u8>;
 }
 

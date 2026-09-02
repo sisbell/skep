@@ -43,9 +43,10 @@ pub struct Operation<W: WorldState> {
     /// Which principal each open session speaks for — retired only by
     /// [`Operation::close_session`] (§6).
     sessions: Sessions,
-    /// Hint: the committed-write retry memo (§7), purged on `close_session`
-    /// (§6) and lost on restart — a post-restart retry re-executes
-    /// (duplicate, by design — ASN-0134 §A7).
+    /// Hint: the committed-write retry memo (§7). A session's entries are
+    /// swept by [`Operation::close_session`] — those present when the sweep
+    /// runs (§6) — and the whole memo is lost on restart, so a post-restart
+    /// retry re-executes (duplicate, by design — ASN-0134 §A7).
     idem: IdemCache,
     /// Hint: recomputable by attempting `transact`; latched by the first
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
@@ -107,10 +108,24 @@ where
         self.sessions.open(principal)
     }
 
-    /// Retire the binding AND the session's memoized acks (§6/§7): a
-    /// retired session can neither authorize a write nor replay one. The two
-    /// collaborators are asked in turn, their locks never nested. Calling
-    /// this on connection drop is a transport obligation: nothing else
+    /// Retire the binding, then sweep the session's memoized acks (§6/§7).
+    /// The two collaborators are asked in turn, their locks never nested.
+    ///
+    /// The order is load-bearing, and it is what makes the first half
+    /// unconditional: `close` runs before the sweep, so the moment this
+    /// returns the id resolves to no principal for the rest of the uptime and
+    /// no write on it can ever be authorized again.
+    ///
+    /// The sweep is not atomic against a request already in flight. An
+    /// `execute` past its step-(a) lookup may deposit its ack after the sweep
+    /// has passed, and that entry then lives until eviction. What it can do is
+    /// bounded: presenting the retired id again replays one acknowledgment of
+    /// a write this session itself committed. It authorizes nothing and
+    /// commits nothing — the binding is already gone — and it cannot cross
+    /// principals, because the memo's key confines a `ReqId` to the session
+    /// that committed under it.
+    ///
+    /// Calling this on connection drop is a transport obligation: nothing else
     /// retires a binding.
     pub fn close_session(&self, s: SessionId) {
         self.sessions.close(s);
@@ -134,6 +149,15 @@ where
     ///
     /// Caller precondition (§6, non-forgeability): `s` MUST originate in the
     /// transport's connection state, never a wire-supplied value.
+    ///
+    /// Two refusals can hold at once on a write, and the contract names which
+    /// speaks: the poison gate (c) is consulted BEFORE the session gate (b),
+    /// so a write from an unbound session against a halted kernel answers
+    /// `Poisoned`/`Halt` and never `Unauthenticated`. A client is told the
+    /// engine has stopped even where its own defect is that it must
+    /// re-authenticate. Step (a) precedes both, so a retry of a write that
+    /// already committed is answered from the memo whatever either gate would
+    /// have said.
     pub fn execute(&self, s: SessionId, req: Request) -> Response {
         let Request { id, op } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
@@ -145,10 +169,12 @@ where
                 return ack.into();
             }
         }
-        // (b)+(c) gate, SPLIT on the is_write/is_read partition so each
-        //     dispatch path carries exactly the authority it needs (§1). The
-        //     write path resolves a PROVEN-bound principal HERE (the one
-        //     place it can fail); the read path takes none.
+        // (c) then (b) — in that order, which is the stated precedence when
+        //     both refusals hold — gating the write path only, since the
+        //     is_write/is_read split gives each path exactly the authority it
+        //     needs (§1). The write path resolves a PROVEN-bound principal
+        //     HERE (the one place it can fail); the read path takes neither
+        //     gate.
         let resp = if op.is_write() {
             // (c) refuse writes on a poisoned kernel; reads are still served
             //     through the else-branch (§9).
@@ -222,8 +248,10 @@ where
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
-            // No principal: the node addr is supplied by provisioning; the
-            // step-(b) bound-session gate still applied, uniformly (§6).
+            // No principal: the node addr is supplied by provisioning, and
+            // M3's `register_node` takes none. The step-(b) bound-session
+            // gate applied, uniformly (§6) — and it is the whole authority
+            // check this path gets, here or in M3 (see `Op::RegisterNode`).
             Op::RegisterNode { addr } => {
                 let (addr, at) =
                     self.stores.namespace().register_node(addr).map_err(|e| self.map_txn(kind, e))?;
@@ -325,6 +353,9 @@ where
             Op::EditLink { original, successor, d_s, d_a } => {
                 let snap = self.stores.kernel().snapshot();
                 let (m3, m5) = (snap.world().m3(), snap.world().m5());
+                // `from`, then `to`, then `ty` — the slot order IS the refusal
+                // precedence a client is promised (`SuccessorSpec`), and the
+                // `?` is what makes the first refusal the only one.
                 let from = endset_from_vspecs(m3, m5, &successor.from)?;
                 let to = endset_from_vspecs(m3, m5, &successor.to)?;
                 let ty = match &successor.ty {
@@ -810,6 +841,27 @@ mod tests {
             Response::MaybeAddr { addr, .. } => assert!(addr.is_some()),
             _ => panic!("read must still be served on a poisoned kernel"),
         }
+    }
+
+    /// §1: the precedence when both write gates would refuse. Gate (c) is
+    /// consulted before gate (b), so a write on a CLOSED session against a
+    /// latched kernel answers `Poisoned`/`Halt` — the client is told the
+    /// engine stopped, not that it must re-authenticate. Without the order
+    /// this request has two defensible answers and nothing choosing between
+    /// them.
+    #[test]
+    fn a_halted_kernel_outranks_an_unbound_session() {
+        let febe = operation();
+        let s = febe.open_session(PrincipalId(1));
+        febe.close_session(s);
+        febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned); // LATCH
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
+        assert_eq!(
+            rej.code,
+            RejectCode::Poisoned,
+            "the poison gate speaks first, so an unbound session is not what this refusal names"
+        );
+        assert_eq!(rej.disposition, Disposition::Halt);
     }
 
     /// §7/§1(d): the memo admits a committed-write acknowledgment and

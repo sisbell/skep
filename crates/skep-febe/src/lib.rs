@@ -47,7 +47,10 @@
 //!   and handles `OpenError` before constructing [`Operation`];
 //! * journaled state — M10 names no concrete `World`/`Record` and contributes
 //!   no slice, record, or fold to the engine;
-//! * the wire codec byte format ([`Codec`] is a seam the transport fills), the
+//! * the wire codec byte format, and the request-SIZE limits that travel with
+//!   it — [`Codec`] is a seam the transport fills, and its parser is the only
+//!   bound on how large a request may be, since M10 measures no field of the
+//!   `Op` it is handed ([`Codec::parse`]); the
 //!   request↔response correlation (no `ReqId` echo — §8), the `SessionId`
 //!   non-forgeability precondition and the authentication mechanism (§6), the
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
@@ -82,10 +85,12 @@ mod successor;
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use operation::Operation;
-// `disposition_of` is public for the reason the disposition is documented as
-// recomputable: a transport that raises one of M10's own codes on its own
-// channel asks the table rather than transcribing the row, so the two cannot
-// come to advise the same code differently.
+// `disposition_of` and `Rejection::classified` are public for the reason the
+// disposition is documented as recomputable: a transport that raises one of
+// M10's own codes on its own channel asks the table — or builds the whole
+// rejection through the constructor that consults it — rather than
+// transcribing the row, so the two cannot come to advise the same code
+// differently.
 pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
 pub use session::SessionId;
@@ -135,6 +140,19 @@ impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent> FebeWorld for W {}
 /// genesis-sealed `Arc<TypeRegistry>` off it (the as-built constructor takes
 /// no registry argument, a benign simplification of the amendment's stated
 /// shape).
+///
+/// PRECONDITION on the implementer: **every accessor names ONE kernel.**
+/// [`Stores::kernel`] answers with the same `Kernel<W>` on every call, and
+/// [`Stores::linkstore`] is built over that kernel. The signature does not
+/// force it — `kernel()` is consulted afresh per request, so an impl that
+/// opened a kernel per call would compile — and every coordinate M10 reports
+/// rests on it: `Operation::log_position` and every read's `as_of` come from
+/// `kernel()`, while the link writes commit through `linkstore()`. Two kernels
+/// leave those coordinates describing different logs, each store still
+/// committing before it acknowledges and the reported positions no longer
+/// meaning what this module promises. The two provided bodies satisfy it by
+/// construction; `linkstore` is the one an implementer writes, which is where
+/// the obligation lands.
 ///
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built

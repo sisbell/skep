@@ -3,9 +3,11 @@
 //! client's `ReqId` confined to the session that committed under it.
 //!
 //! A hint, never a guarantee. It is in memory only, so a post-restart retry
-//! re-executes (a duplicate, by design — ASN-0134 §A7), and it holds only
-//! what a lost acknowledgment can duplicate: the [`CommittedAck`] of a write
-//! that already committed. Rejections and read answers are not admissible —
+//! re-executes (a duplicate, by design — ASN-0134 §A7); a session's entries
+//! are swept when its binding retires, of those present when the sweep runs
+//! ([`IdemCache::purge_session`]); and it holds only what a lost
+//! acknowledgment can duplicate: the [`CommittedAck`] of a write that already
+//! committed. Rejections and read answers are not admissible —
 //! the first must re-execute under a Reorder/Retry reissue, the second would
 //! replay a stale snapshot — and the [`CommittedAck`] type is what makes them
 //! inexpressible here rather than merely unwelcome.
@@ -99,9 +101,16 @@ impl IdemCache {
         (c.kind == kind).then(|| c.ack.clone())
     }
 
-    /// Drop every entry this session committed — the other half of retiring
-    /// a binding (§6): a retired session leaves no memo behind. A linear
-    /// sweep of the bounded cache.
+    /// Drop the entries this session has committed under as of now — the
+    /// other half of retiring a binding (§6). A linear sweep of the bounded
+    /// cache.
+    ///
+    /// The sweep sees what the cache holds when it runs. A request already
+    /// past its step-(a) lookup in `execute` may [`IdemCache::put`] its ack
+    /// afterwards, and that entry then lives until eviction: one ack of a
+    /// write that session itself committed, replayable only by presenting the
+    /// retired id again, and authorizing nothing, since `close_session`
+    /// retires the binding before calling this.
     pub(crate) fn purge_session(&self, s: SessionId) {
         let mut g = self.entries.lock();
         let dead: Vec<IdemKey> =

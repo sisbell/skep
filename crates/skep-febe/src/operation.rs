@@ -18,7 +18,7 @@ use skep_discovery::{
     window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::{enc, Link, LinkRec, SlotArg, MAX_SLOT_SPANS};
+use skep_links::LinkRec;
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
@@ -28,7 +28,7 @@ use crate::op::{Op, OpKind, Request};
 use crate::reject::{reject, rejection, RejectCode, Rejection};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
-use crate::successor::endset_from_vspecs;
+use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
@@ -352,30 +352,7 @@ where
             // hazard). One operation ⇒ still one M2 transaction.
             Op::EditLink { original, successor, d_s, d_a } => {
                 let snap = self.stores.kernel().snapshot();
-                let (m3, m5) = (snap.world().m3(), snap.world().m5());
-                // `from`, then `to`, then `ty` — the slot order IS the refusal
-                // precedence a client is promised (`SuccessorSpec`), and the
-                // `?` is what makes the first refusal the only one.
-                let from = endset_from_vspecs(m3, m5, &successor.from)?;
-                let to = endset_from_vspecs(m3, m5, &successor.to)?;
-                let ty = match &successor.ty {
-                    // TYPE is the successor's one two-form slot (§4):
-                    // address-denoting or content-resolved; M7 owns the
-                    // slot-shape/schema verdict inside editlink. Both forms
-                    // are held to M7's per-slot budget HERE, where the slot
-                    // is built, and before the encoding is: `enc` turns each
-                    // ~19-byte name into a subtree span of two multi-component
-                    // tumblers, so a list bounded only by the frame is a ~26×
-                    // amplification into memory M7 would then refuse anyway.
-                    SlotArg::Addrs(a) => {
-                        if a.len() > MAX_SLOT_SPANS {
-                            return Err(rejection(kind, RejectCode::SlotTooLarge));
-                        }
-                        enc(a)
-                    }
-                    SlotArg::Resolve(v) => endset_from_vspecs(m3, m5, v)?,
-                };
-                let link = Link::triple(from, to, ty);
+                let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
                 let (succ, claim, at) = self
                     .stores
                     .linkstore()

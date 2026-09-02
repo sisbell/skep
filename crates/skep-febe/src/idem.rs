@@ -11,6 +11,12 @@
 //! the first must re-execute under a Reorder/Retry reissue, the second would
 //! replay a stale snapshot — and the [`CommittedAck`] type is what makes them
 //! inexpressible here rather than merely unwelcome.
+//!
+//! That admissibility rule is the memo's whole shape, so this is not a
+//! general per-session key/value store and offers no opaque `recall`/`store`
+//! pair: entries are engine acknowledgments, typed as such. A transport that
+//! must memoize something else — a credential frame's ack, say — holds its own
+//! memo, under its own bound, for a lifecycle it owns.
 
 use std::num::NonZeroUsize;
 

@@ -165,8 +165,9 @@ pub enum Op {
 /// `to`, then `ty`, and the first that refuses speaks. Within a slot the first
 /// offending spec speaks, `IllFormedSpec` ahead of `SourceNotRegistered` on
 /// it. A per-spec refusal names the offender in [`crate::FaultSite`]'s
-/// `index` — an index WITHIN the slot this order arrives at, since a
-/// `FaultSite` names no slot.
+/// `index` — an index WITHIN one slot, and the rejection's `detail` names
+/// which, spelled as the field above that carried it (`from`/`to`/`ty`), so
+/// the two halves of the coordinate arrive together.
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,

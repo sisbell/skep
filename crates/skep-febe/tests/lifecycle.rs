@@ -416,6 +416,11 @@ fn the_first_offending_successor_slot_is_the_one_that_speaks() {
         Some(1),
         "the index is the offender's position within FROM"
     );
+    assert_eq!(
+        rej.detail.as_deref(),
+        Some("successor slot from"),
+        "the answer says which slot that index is in, rather than leaving it to be deduced"
+    );
 }
 
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the

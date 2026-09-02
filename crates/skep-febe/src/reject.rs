@@ -362,4 +362,178 @@ mod tests {
         assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
         assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
     }
+
+    // ────────────── the disposition table over its whole domain ─────────────
+
+    /// The §5 table read off the design rather than off the code: an
+    /// EXHAUSTIVE match with no `_` arm, so every code's advice is a
+    /// deliberate row here even where the production lookup reaches it
+    /// through the designed catch-all.
+    ///
+    /// A newly added [`RejectCode`] lands in TWO places in this file: here,
+    /// and in [`ALL_CODES`].
+    fn documented_disposition(c: RejectCode) -> Disposition {
+        match c {
+            // The kernel stopped.
+            RejectCode::Poisoned => Disposition::Halt,
+            // The one transient fault: the I/O may succeed next time.
+            RejectCode::Durability => Disposition::Retry,
+            // Registration/residence: the referent may yet arrive, so a
+            // client that raced its own prerequisite may reissue.
+            RejectCode::BadTarget
+            | RejectCode::DocNotRegistered
+            | RejectCode::HomeNotRegistered
+            | RejectCode::SourceNotRegistered
+            | RejectCode::NotAnAccount
+            | RejectCode::OriginalNotResident
+            | RejectCode::EndpointNotResident
+            | RejectCode::ParentNotRegistered => Disposition::Reorder,
+            // Everything else: reissuing the identical request cannot help.
+            RejectCode::Unauthenticated
+            | RejectCode::Malformed
+            | RejectCode::TxnUnencodable
+            | RejectCode::TxnOverBudget
+            | RejectCode::NotRegistered
+            | RejectCode::NotOwner
+            | RejectCode::Gate
+            | RejectCode::DelegatorUnknown
+            | RejectCode::DuplicateId
+            | RejectCode::NotAncestor
+            | RejectCode::NotAuthorized
+            | RejectCode::NotAccountTier
+            | RejectCode::NotTopDown
+            | RejectCode::NotNextForm
+            | RejectCode::NotValid
+            | RejectCode::NotNode
+            | RejectCode::TooDeep
+            | RejectCode::NotDescendantOfBootstrap
+            | RejectCode::NotFresh
+            | RejectCode::EmptyContent
+            | RejectCode::Content
+            | RejectCode::EmptySource
+            | RejectCode::BadSpan
+            | RejectCode::DanglingSource
+            | RejectCode::EmptyResult
+            | RejectCode::NotArranged
+            | RejectCode::OutOfBounds
+            | RejectCode::EmptyWidth
+            | RejectCode::BadCutCount
+            | RejectCode::NotAscending
+            | RejectCode::EmptyContentSubspace
+            | RejectCode::NotAPrincipal
+            | RejectCode::NodeTierCrossOwner
+            | RejectCode::NotHomeLink
+            | RejectCode::AlreadySeated
+            | RejectCode::NotContentSubspace
+            | RejectCode::IllFormedSpec
+            | RejectCode::SlotTooLarge
+            | RejectCode::EmptyTypeResolution
+            | RejectCode::ShapeViolation
+            | RejectCode::RetractionClass
+            | RejectCode::NonAddressDenotingType
+            | RejectCode::SelfSupersession
+            | RejectCode::IllFormedSuccessor
+            | RejectCode::DcViolation
+            | RejectCode::NoSuchSubspace
+            | RejectCode::EmptySubspace
+            | RejectCode::DepthIncompatible
+            | RejectCode::RangeNotPresent
+            | RejectCode::MalformedSpan
+            | RejectCode::NotALink
+            | RejectCode::BadRegion => Disposition::Permanent,
+        }
+    }
+
+    /// Every code, in declaration order — the domain the policy is total
+    /// over. A newly added code lands here and in
+    /// [`documented_disposition`].
+    const ALL_CODES: [RejectCode; 62] = [
+        RejectCode::Unauthenticated,
+        RejectCode::Malformed,
+        RejectCode::Durability,
+        RejectCode::TxnUnencodable,
+        RejectCode::TxnOverBudget,
+        RejectCode::Poisoned,
+        RejectCode::HomeNotRegistered,
+        RejectCode::DocNotRegistered,
+        RejectCode::SourceNotRegistered,
+        RejectCode::ParentNotRegistered,
+        RejectCode::NotRegistered,
+        RejectCode::OriginalNotResident,
+        RejectCode::EndpointNotResident,
+        RejectCode::NotOwner,
+        RejectCode::NotAnAccount,
+        RejectCode::Gate,
+        RejectCode::DelegatorUnknown,
+        RejectCode::DuplicateId,
+        RejectCode::NotAncestor,
+        RejectCode::NotAuthorized,
+        RejectCode::NotAccountTier,
+        RejectCode::NotTopDown,
+        RejectCode::NotNextForm,
+        RejectCode::NotValid,
+        RejectCode::NotNode,
+        RejectCode::TooDeep,
+        RejectCode::NotDescendantOfBootstrap,
+        RejectCode::NotFresh,
+        RejectCode::EmptyContent,
+        RejectCode::Content,
+        RejectCode::EmptySource,
+        RejectCode::BadSpan,
+        RejectCode::DanglingSource,
+        RejectCode::EmptyResult,
+        RejectCode::NotArranged,
+        RejectCode::OutOfBounds,
+        RejectCode::EmptyWidth,
+        RejectCode::BadCutCount,
+        RejectCode::NotAscending,
+        RejectCode::EmptyContentSubspace,
+        RejectCode::NotAPrincipal,
+        RejectCode::NodeTierCrossOwner,
+        RejectCode::NotHomeLink,
+        RejectCode::AlreadySeated,
+        RejectCode::NotContentSubspace,
+        RejectCode::IllFormedSpec,
+        RejectCode::SlotTooLarge,
+        RejectCode::EmptyTypeResolution,
+        RejectCode::ShapeViolation,
+        RejectCode::RetractionClass,
+        RejectCode::NonAddressDenotingType,
+        RejectCode::BadTarget,
+        RejectCode::SelfSupersession,
+        RejectCode::IllFormedSuccessor,
+        RejectCode::DcViolation,
+        RejectCode::NoSuchSubspace,
+        RejectCode::EmptySubspace,
+        RejectCode::DepthIncompatible,
+        RejectCode::RangeNotPresent,
+        RejectCode::MalformedSpan,
+        RejectCode::NotALink,
+        RejectCode::BadRegion,
+    ];
+
+    /// §5: the policy is a TOTAL function off the flat code, and the advice
+    /// it gives for each of the 62 codes is the advice the design's table
+    /// documents — not merely the advice the catch-all happens to produce.
+    #[test]
+    fn the_disposition_table_deviates_only_where_documented() {
+        for code in ALL_CODES {
+            assert_eq!(
+                disposition_of(code),
+                documented_disposition(code),
+                "{code:?} is advised against the design's §5 table"
+            );
+        }
+    }
+
+    /// [`ALL_CODES`] is the domain the law above quantifies over, so it must
+    /// hold every code exactly once.
+    #[test]
+    fn all_codes_lists_each_code_once() {
+        for (i, a) in ALL_CODES.iter().enumerate() {
+            for b in &ALL_CODES[i + 1..] {
+                assert_ne!(a, b, "{a:?} is listed twice");
+            }
+        }
+    }
 }

@@ -717,6 +717,63 @@ mod tests {
         assert_eq!(rej.disposition, Disposition::Permanent);
     }
 
+    /// §6/§Invariants: the step-(b) gate is ONE uniform rule — a write
+    /// requires a bound session, full stop — so it holds for all fourteen
+    /// writes, `RegisterNode` (whose principal M3 ignores) included. And it
+    /// holds BEFORE any transaction, which is what the unmoved log position
+    /// witnesses: no store is reached on the way to the refusal.
+    #[test]
+    fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction() {
+        let op = operation();
+        let s = op.open_session(PrincipalId(1));
+        op.close_session(s);
+        let before = op.log_position();
+        for (o, is_read) in crate::op::tests::all_ops() {
+            if is_read {
+                continue;
+            }
+            let kind = o.kind();
+            match op.execute(s, Request { id: None, op: o }) {
+                Response::Rejected(rej) => {
+                    assert_eq!(rej.op, kind, "the rejection names the op it refused");
+                    assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?}");
+                    assert_eq!(rej.disposition, Disposition::Permanent, "{kind:?}");
+                }
+                _ => panic!("{kind:?} was answered on an unbound session"),
+            }
+        }
+        assert_eq!(
+            op.log_position(),
+            before,
+            "no write on an unbound session may reach a transaction"
+        );
+    }
+
+    /// §1/§2, the complement of the gate above: a read tolerates an unbound
+    /// session — no principal, no session. Every read arm is driven through
+    /// `execute` on an id that was never opened; each may reject for its own
+    /// reasons against a genesis world, but never for authentication. Driving
+    /// all 24 also exercises `execute`'s Total contract on the read half: an
+    /// arm that panics fails here.
+    #[test]
+    fn no_read_is_ever_rejected_for_an_unbound_session() {
+        let op = operation();
+        let never_opened = SessionId(9999);
+        for (o, is_read) in crate::op::tests::all_ops() {
+            if !is_read {
+                continue;
+            }
+            let kind = o.kind();
+            if let Response::Rejected(rej) = op.execute(never_opened, Request { id: None, op: o }) {
+                assert_ne!(
+                    rej.code,
+                    RejectCode::Unauthenticated,
+                    "{kind:?} is a read: the session gate is not its to fail"
+                );
+            }
+        }
+    }
+
     /// §5/§9: the first `TxnError::Poisoned` latches the flag inside
     /// `map_txn`; thereafter writes fail fast with Halt at step (c) while
     /// reads keep being served off the last root.
@@ -768,6 +825,45 @@ mod tests {
         );
         assert!(matches!(resp, Response::MaybeAddr { .. }));
         assert!(op.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
+    }
+
+    /// §1: step (a) runs AHEAD of the step-(c) poison gate, and that order is
+    /// what a client retrying a write it already committed depends on — it
+    /// receives the acknowledgment it lost, not the news that the kernel has
+    /// since halted. A write it has NOT committed is halted, which is what
+    /// makes the replay above a statement about the order rather than about
+    /// the latch being unset.
+    #[test]
+    fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
+        let op = operation();
+        let s = op.bootstrap_session();
+        let id = ReqId(b"node-5".to_vec());
+        let node = || Op::RegisterNode { addr: t(&[1, 5]) };
+        let (addr, at) = match op.execute(s, Request { id: Some(id.clone()), op: node() }) {
+            Response::AckAddr { addr, at } => (addr, at),
+            _ => panic!("RegisterNode under the bootstrap session commits"),
+        };
+
+        // The kernel halts AFTER that write committed.
+        op.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        assert!(op.poisoned.load(Ordering::Relaxed));
+
+        // A fresh keyed write is halted at step (c) — the gate is live.
+        let rej = rejected(op.execute(
+            s,
+            Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: t(&[1, 6]) } },
+        ));
+        assert_eq!(rej.code, RejectCode::Poisoned);
+        assert_eq!(rej.disposition, Disposition::Halt);
+
+        // The retry of the committed one is answered from the memo instead.
+        match op.execute(s, Request { id: Some(id), op: node() }) {
+            Response::AckAddr { addr: replayed, at: replayed_at } => {
+                assert_eq!(replayed, addr, "the replayed ack is the committed one");
+                assert_eq!(replayed_at, at, "…at the coordinate it committed");
+            }
+            _ => panic!("a memoized ack is served ahead of the poison gate"),
+        }
     }
 
     /// §1: the partition is written in three places — `is_read`, and each

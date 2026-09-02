@@ -21,6 +21,24 @@ fn ghost_link(doc: &skep_address::Address, ordinal: u32) -> skep_address::Addres
         .unwrap_or_else(|_| panic!("valid element position"))
 }
 
+/// A three-element document and one link over it — the starting point every
+/// EDITLINK case below needs.
+fn linked_doc(fx: &Fx) -> (skep_address::Address, skep_address::Address) {
+    let d = create_doc(fx);
+    insert3(fx, &d);
+    let (l, _) = ack_addr(ex(
+        &fx.op,
+        fx.s,
+        Op::MakeLink {
+            home: d.clone(),
+            from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
+            to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
+            ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        },
+    ));
+    (d, l)
+}
+
 /// Bootstrap provisioning and the two namespace-structure reads (§2/§6):
 /// NextAccountPrefix feeds Delegate; PrincipalPrefix resolves any principal's
 /// public prefix (None = absent); RegisterNode runs under the bootstrap
@@ -63,7 +81,7 @@ fn document_lifecycle() {
         Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span: vspan(1, 1, 3) }] },
     ));
     assert_eq!(items.0.len(), 3);
-    assert!(as_of >= at);
+    assert!(as_of >= at, "a later read sees at least the coordinate the write committed at");
 
     let (bound, _) = spanset(ex(&fx.op, fx.s, Op::RetrieveDocVSpan { doc: d.clone() }));
     assert_ne!(bound, SpanSet::empty());
@@ -92,7 +110,7 @@ fn document_lifecycle() {
             rho2: vec![Region { doc: v.clone(), spans: vec![vspan(1, 1, 2)] }],
         },
     ));
-    assert!(!rep.0.is_empty());
+    assert!(!rep.0.is_empty(), "d and its version share address-equal content");
 
     // Present-tense containers of d's first element: at least d and v.
     let holders = addrs(ex(
@@ -102,7 +120,8 @@ fn document_lifecycle() {
             regions: vec![Region { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
     ));
-    assert!(holders.contains(&d) && holders.contains(&v));
+    assert!(holders.contains(&d), "the document that allocated the element contains it");
+    assert!(holders.contains(&v), "the version that shares it contains it too");
 
     // COPY transcludes into the empty fork; its arrangement is now non-empty.
     ack(ex(&fx.op, fx.s, Op::Copy { doc: f.clone(), at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] }));
@@ -114,7 +133,7 @@ fn document_lifecycle() {
     ack(ex(&fx.op, fx.s, Op::Delete { doc: d.clone(), p: vp(1, 3), width: n(1) }));
     let rep = deletions_rep(ex(&fx.op, fx.s, Op::ShowDeletions { d_a: d.clone(), d_b: v.clone() }));
     assert_eq!(rep.a_with_b.len(), 1);
-    assert!(rep.b_with_a.is_empty());
+    assert!(rep.b_with_a.is_empty(), "nothing was deleted from the version");
 
     // REARRANGE (pivot, 3 cuts) over the remaining two elements.
     ack(ex(
@@ -123,7 +142,7 @@ fn document_lifecycle() {
         Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     ));
 
-    assert!(fx.op.log_position() >= at);
+    assert!(fx.op.log_position() >= at, "the log never regresses past a committed write (G0)");
 }
 
 /// §7: sequential lost-ack retries replay the committed ack without
@@ -178,6 +197,116 @@ fn idempotent_retry() {
     assert_eq!(rej.disposition, Disposition::Permanent);
 }
 
+/// §7/§1(d): the memo replays the acknowledgment SHAPE the write produced,
+/// not merely its coordinate. EDITLINK's ack carries two same-typed addresses
+/// — the successor link, and the claim that says it supersedes the original —
+/// and a retry that handed them back swapped would send a client to read,
+/// nullify or supersede the wrong link on the engine's own word.
+#[test]
+fn a_retried_editlink_replays_both_addresses_unswapped() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let edit = || Op::EditLink {
+        original: original.clone(),
+        successor: SuccessorSpec {
+            from: vec![vspec(&d, 1, 1)],
+            to: vec![vspec(&d, 2, 1)],
+            ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
+        },
+        d_s: d.clone(),
+        d_a: d.clone(),
+    };
+
+    let (succ, claim, at) = ack_edit(ex_id(&fx.op, fx.s, b"edit-1", edit()));
+    assert_ne!(succ, claim, "the successor and its supersession claim are two distinct links");
+    let log0 = fx.op.log_position();
+
+    let (succ2, claim2, at2) = ack_edit(ex_id(&fx.op, fx.s, b"edit-1", edit()));
+    assert_eq!(succ2, succ, "the replayed successor is the successor that committed");
+    assert_eq!(claim2, claim, "the replayed claim is the claim, not the successor again");
+    assert_eq!(at2, at, "the replayed coordinate is the one the edit committed at");
+    assert_eq!(fx.op.log_position(), log0, "a replayed ack commits nothing");
+}
+
+/// §7: the bare-`Seq` acknowledgment round-trips too. [`Response::Ack`] is the
+/// one committed shape carrying no address, and a DELETE that re-executed on
+/// a lost ack would remove a second element the client never asked to lose.
+#[test]
+fn a_retried_delete_replays_its_bare_ack() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let del = || Op::Delete { doc: d.clone(), p: vp(1, 1), width: n(1) };
+
+    let at = ack(ex_id(&fx.op, fx.s, b"del-1", del()));
+    let log0 = fx.op.log_position();
+    let (before, _) = spanset(ex(&fx.op, fx.s, Op::RetrieveDocVSpanSet { doc: d.clone() }));
+
+    let at2 = ack(ex_id(&fx.op, fx.s, b"del-1", del()));
+    assert_eq!(at2, at, "the replayed ack carries the coordinate the delete committed at");
+    assert_eq!(fx.op.log_position(), log0, "a replayed ack commits nothing");
+    let (after, _) = spanset(ex(&fx.op, fx.s, Op::RetrieveDocVSpanSet { doc: d }));
+    assert_eq!(after, before, "the remaining elements survive: the delete did not re-execute");
+}
+
+/// §4: `SuccessorSpec.ty`'s other form. `SlotArg::Addrs` builds an
+/// address-denoting (managed-relation) type slot through `enc`, and it is the
+/// only way a FEBE client gives a successor one — the content-resolved form
+/// every other case uses cannot reach it.
+#[test]
+fn an_address_denoting_successor_type_slot_is_deposited_verbatim() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let (succ, _, _) = ack_edit(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![vspec(&d, 1, 1)],
+                to: vec![vspec(&d, 2, 1)],
+                ty: SlotArg::Addrs(vec![d.clone()]),
+            },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        },
+    ));
+
+    let link =
+        link_value(ex(&fx.op, fx.s, Op::ReadLink { a: succ })).expect("the successor is resident");
+    assert_eq!(link.type_slot(), &enc([&d]), "the address names ride into TYPE verbatim");
+    assert!(!link.from_slot().is_empty(), "the content-resolved FROM is still resolved");
+}
+
+/// §4: a successor slot is built from ALL of its specs. Two non-adjacent
+/// ordinals cannot merge into one span, and `Endset::from_spans` stores what
+/// it is given, so the count is exact — a slot that kept only the last spec
+/// would name one region where the client named two, commit, and read back
+/// wrong.
+#[test]
+fn a_multi_spec_successor_slot_accumulates_every_spec() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let (succ, _, _) = ack_edit(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![vspec(&d, 1, 1), vspec(&d, 3, 1)],
+                to: vec![vspec(&d, 2, 1)],
+                ty: SlotArg::Addrs(vec![d.clone()]),
+            },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        },
+    ));
+
+    let link =
+        link_value(ex(&fx.op, fx.s, Op::ReadLink { a: succ })).expect("the successor is resident");
+    assert_eq!(link.from_slot().len(), 2, "both specs contributed a span to the slot");
+}
+
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the
 /// in-band ⟨⟩ ≠ ⊥ FOLLOWLINK contract (§2), the M8 region/descriptor/
 /// pointwise/lineage reads, EDITLINK's read-assembled successor (§4),
@@ -202,27 +331,46 @@ fn link_lifecycle() {
 
     // Raw reads: value-or-None, and FOLLOWLINK's in-band Result — absence is
     // Err(Invalid) INSIDE Response::Follow, never a Rejection (§2).
-    assert!(link_value(ex(&fx.op, fx.s, Op::ReadLink { a: l1.clone() })).is_some());
-    assert!(link_value(ex(&fx.op, fx.s, Op::ReadLink { a: ghost_link(&d, 99) })).is_none());
+    assert!(
+        link_value(ex(&fx.op, fx.s, Op::ReadLink { a: l1.clone() })).is_some(),
+        "a resident link reads back as a value"
+    );
+    assert!(
+        link_value(ex(&fx.op, fx.s, Op::ReadLink { a: ghost_link(&d, 99) })).is_none(),
+        "an address no MAKELINK minted reads back as ⊥"
+    );
     let cov = follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: FROM }));
     assert_ne!(cov.expect("slot 1 exists"), SpanSet::empty());
-    assert!(follow(ex(&fx.op, fx.s, Op::FollowLink { a: ghost_link(&d, 99), slot: FROM })).is_err());
-    assert!(follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: 9 })).is_err());
+    assert!(
+        follow(ex(&fx.op, fx.s, Op::FollowLink { a: ghost_link(&d, 99), slot: FROM })).is_err(),
+        "following a non-link answers Invalid in band"
+    );
+    assert!(
+        follow(ex(&fx.op, fx.s, Op::FollowLink { a: l1.clone(), slot: 9 })).is_err(),
+        "following a slot past the arity answers Invalid in band"
+    );
 
     // Region family (foundation ∩ active).
-    assert!(!runs(ex(&fx.op, fx.s, Op::Image { d: d.clone(), region: region.clone() })).is_empty());
+    assert!(
+        !runs(ex(&fx.op, fx.s, Op::Image { d: d.clone(), region: region.clone() })).is_empty(),
+        "the region has a V→I image"
+    );
     assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region: region.clone() })), 2);
     let found = addrs(ex(&fx.op, fx.s, Op::FindLinksV { d: d.clone(), region: region.clone() }));
-    assert!(found.contains(&l1) && found.contains(&l2));
+    assert!(found.contains(&l1), "the first link is discovered from the region");
+    assert!(found.contains(&l2), "the second link is discovered from the region");
     let w = page(ex(
         &fx.op,
         fx.s,
         Op::WindowV { d: d.clone(), region: region.clone(), cur: None, n: 1 },
     ));
     assert_eq!(w.batch.len(), 1);
-    assert!(!w.exhausted);
-    assert!(!endsets(ex(&fx.op, fx.s, Op::RetrieveEndsets { d: d.clone(), region: region.clone() }))
-        .is_empty());
+    assert!(!w.exhausted, "a window of one over two links has a next page");
+    assert!(
+        !endsets(ex(&fx.op, fx.s, Op::RetrieveEndsets { d: d.clone(), region: region.clone() }))
+            .is_empty(),
+        "the region's links report their endsets"
+    );
 
     // Descriptor family (address-keyed, home-projected, total).
     let home_q = || FourSet {
@@ -232,15 +380,22 @@ fn link_lifecycle() {
         ty: SlotSpec::Any,
     };
     let ftt = addrs(ex(&fx.op, fx.s, Op::FindLinksFtt { q: home_q() }));
-    assert!(ftt.contains(&l1) && ftt.contains(&l2));
-    assert!(count(ex(&fx.op, fx.s, Op::CountFtt { q: home_q() })) >= 2);
+    assert!(ftt.contains(&l1), "the first link is homed in d");
+    assert!(ftt.contains(&l2), "the second link is homed in d");
+    assert!(
+        count(ex(&fx.op, fx.s, Op::CountFtt { q: home_q() })) >= 2,
+        "the descriptor census counts at least the two links just made"
+    );
     let w = page(ex(&fx.op, fx.s, Op::WindowFtt { q: home_q(), cur: None, n: 1 }));
     assert_eq!(w.batch.len(), 1);
 
     // Pointwise projection & discoverability.
     let (proj, _) = spanset(ex(&fx.op, fx.s, Op::Project { a: l1.clone(), slot: FROM, d: d.clone() }));
     assert_ne!(proj, SpanSet::empty());
-    assert!(boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l1.clone(), d: d.clone() })));
+    assert!(
+        boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l1.clone(), d: d.clone() })),
+        "an active link over d's arrangement is discoverable from d"
+    );
 
     // EDITLINK: content successor assembled by M10 off a prior snapshot (§4).
     let (succ, claim1, _) = ack_edit(ex(
@@ -264,8 +419,14 @@ fn link_lifecycle() {
         ack_addr(ex(&fx.op, fx.s, Op::AssertSup { home: d.clone(), old: l1.clone(), new: l2.clone() }));
     let inc = claims(ex(&fx.op, fx.s, Op::InClaims { y: l1.clone(), view: View::Active }));
     assert_eq!(inc.len(), 2); // editlink's claim + the explicit assert_sup claim
-    assert!(inc.iter().any(|c| c.claim == claim1 && c.new == succ));
-    assert!(inc.iter().any(|c| c.claim == claim2 && c.new == l2 && c.active));
+    assert!(
+        inc.iter().any(|c| c.claim == claim1 && c.new == succ),
+        "editlink's own claim names its successor as what supersedes l1"
+    );
+    assert!(
+        inc.iter().any(|c| c.claim == claim2 && c.new == l2 && c.active),
+        "the explicit assert_sup claim names l2, and is active"
+    );
     let out = claims(ex(&fx.op, fx.s, Op::OutClaims { x: l2.clone(), view: View::Active }));
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].claim, claim2);
@@ -296,10 +457,16 @@ fn link_lifecycle() {
     // enc is the subtree-span encoding (AD), so a document-homed FROM covers
     // every content I-extent under d — and r is active.
     let (r, _) = ack_addr(ex(&fx.op, fx.s, Op::Nullify { home: d.clone(), target: l2.clone() }));
-    assert!(!boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l2.clone(), d: d.clone() })));
+    assert!(
+        !boolv(ex(&fx.op, fx.s, Op::DiscoverableFrom { a: l2.clone(), d: d.clone() })),
+        "a retracted link is no longer discoverable: the compound is reachable AND active"
+    );
     let found = addrs(ex(&fx.op, fx.s, Op::FindLinksV { d: d.clone(), region: region.clone() }));
-    assert!(found.contains(&l1) && found.contains(&succ) && found.contains(&e1));
-    assert!(found.contains(&r) && !found.contains(&l2));
+    assert!(found.contains(&l1), "l1 survives its own supersession — a claim is not a retraction");
+    assert!(found.contains(&succ), "the unseated editlink successor still stabs the index");
+    assert!(found.contains(&e1), "the pred-def tuple's endsets still cover these I-extents");
+    assert!(found.contains(&r), "the retraction tuple is itself an active link over d");
+    assert!(!found.contains(&l2), "the nullified link is filtered out of the active view");
     assert_eq!(count(ex(&fx.op, fx.s, Op::CountV { d: d.clone(), region })), 4);
 }
 
@@ -388,7 +555,7 @@ fn rejection_surface() {
     ));
     assert_eq!(rej.code, RejectCode::DocNotRegistered);
     assert_eq!(rej.disposition, Disposition::Reorder);
-    assert!(rej.site.is_none());
+    assert!(rej.site.is_none(), "M5's DocNotRegistered is fieldless, so nothing localizes it");
 
     // The canonical out-of-order retraction: BadTarget ⇒ Reorder (§5).
     let rej = rejected(ex(

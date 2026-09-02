@@ -594,4 +594,204 @@ mod tests {
         let (c, _) = CopyError::SourceNotContentSubspace.lower();
         assert_eq!(c, RejectCode::NotContentSubspace);
     }
+
+    // ─────────────── the nested-error rule as a law, not examples ───────────
+
+    /// The variant's own name, as its `Debug` spells it, up to whatever
+    /// punctuation its payload starts with.
+    fn variant_name<E: std::fmt::Debug>(e: &E) -> String {
+        let rendered = format!("{e:?}");
+        rendered.split(['(', ' ', '{']).next().unwrap_or_default().to_string()
+    }
+
+    /// The §5 rule for one flat variant: it lowers to the SAME-NAMED
+    /// [`RejectCode`] leaf. `name` is spelled by the caller because M6's
+    /// enums withhold `Debug` by upstream derive policy (they carry
+    /// `Address`); everywhere else [`same_name`] reads it off the variant.
+    fn same_named<E: Lower>(name: &str, e: E) {
+        let (code, _) = e.lower();
+        assert_eq!(
+            name,
+            format!("{code:?}"),
+            "a flat variant lowers to the same-named leaf (§5); {name} lowered to {code:?}"
+        );
+    }
+
+    fn same_name<E: Lower + std::fmt::Debug>(e: E) {
+        let name = variant_name(&e);
+        same_named(&name, e);
+    }
+
+    /// The exceptions, and the whole list of them: a flat variant whose
+    /// documented leaf is NOT its own name. Asserting the names differ is
+    /// what keeps this a list of deviations — a variant that stops deviating
+    /// belongs with the mechanical ones above.
+    fn deviates<E: Lower>(name: &str, e: E, expected: RejectCode) {
+        let (code, _) = e.lower();
+        assert_eq!(code, expected, "{name} lowers to the documented near leaf");
+        assert_ne!(
+            name,
+            format!("{code:?}"),
+            "{name} no longer deviates — move it to the same-named list"
+        );
+    }
+
+    /// §5's mechanical claim over the whole table rather than a sample of it:
+    /// EVERY flat variant of EVERY upstream error enum lowers to the leaf
+    /// with its own name, and the five documented deviations are the only
+    /// ones. Wrapper variants belong to `wrappers_recurse`.
+    #[test]
+    fn flat_variants_lower_to_the_same_named_code() {
+        // ── M3 (namespace) ──
+        same_name(MintError::HomeNotRegistered);
+        same_name(MintError::SourceNotRegistered);
+        same_name(MintError::NotAnAccount);
+        same_name(MintError::Gate(skep_address::GateViolation));
+        same_name(CreateDocumentError::NotOwner);
+        same_name(DelegateError::NotValid);
+        same_name(DelegateError::NotAccountTier);
+        same_name(DelegateError::DelegatorUnknown);
+        same_name(DelegateError::NotAncestor);
+        same_name(DelegateError::NotAuthorized);
+        same_name(DelegateError::NotTopDown);
+        same_name(DelegateError::NotFresh);
+        same_name(DelegateError::DuplicateId);
+        same_name(DelegateError::ParentNotRegistered);
+        same_name(DelegateError::NotNextForm);
+        same_name(NodeError::NotValid);
+        same_name(NodeError::NotNode);
+        same_name(NodeError::TooDeep);
+        same_name(NodeError::NotFresh);
+        same_name(NodeError::NotDescendantOfBootstrap);
+
+        // ── M4 (content) — the wholesale collapse, Open build decision 8.
+        //    M4's variant set is feature-dependent and `#[non_exhaustive]`,
+        //    which the collapse makes moot: whatever the variant, the code is
+        //    `Content`.
+        deviates(
+            "AlreadyPresent",
+            ContentError::AlreadyPresent(Tumbler::new([1u32].map(Nat::from)).expect("nonempty")),
+            RejectCode::Content,
+        );
+
+        // ── M5 (arrangement) ──
+        same_name(SeatError::NotHomeLink);
+        same_name(SeatError::AlreadySeated);
+        same_name(InsertError::DocNotRegistered);
+        same_name(InsertError::NotOwner(addr()));
+        same_name(InsertError::NotContentSubspace);
+        same_name(InsertError::OutOfBounds);
+        same_name(InsertError::EmptyContent);
+        same_name(CopyError::DocNotRegistered);
+        same_name(CopyError::NotOwner(addr()));
+        same_name(CopyError::NotContentSubspace);
+        same_name(CopyError::OutOfBounds);
+        same_name(CopyError::SourceNotRegistered);
+        same_name(CopyError::EmptySource);
+        same_name(CopyError::BadSpan);
+        same_name(CopyError::DanglingSource);
+        same_name(CopyError::EmptyResult);
+        // As-built M5 split the source-residence guard out; the design's
+        // union carries no same-named leaf.
+        deviates(
+            "SourceNotContentSubspace",
+            CopyError::SourceNotContentSubspace,
+            RejectCode::NotContentSubspace,
+        );
+        same_name(DeleteError::DocNotRegistered);
+        same_name(DeleteError::NotOwner(addr()));
+        same_name(DeleteError::NotContentSubspace);
+        same_name(DeleteError::NotArranged);
+        same_name(DeleteError::OutOfBounds);
+        same_name(DeleteError::EmptyWidth);
+        same_name(RearrangeError::DocNotRegistered);
+        same_name(RearrangeError::NotOwner(addr()));
+        same_name(RearrangeError::BadCutCount);
+        same_name(RearrangeError::NotAscending);
+        same_name(RearrangeError::NotContentSubspace);
+        same_name(RearrangeError::OutOfBounds);
+        same_name(RearrangeError::EmptyContentSubspace);
+        same_name(VersionError::SourceNotRegistered);
+        same_name(VersionError::NotAPrincipal);
+        same_name(VersionError::NodeTierCrossOwner);
+
+        // ── M7 (links) ──
+        same_name(MakeLinkError::HomeNotRegistered);
+        same_name(MakeLinkError::NotOwner(addr()));
+        same_name(MakeLinkError::IllFormedSpec);
+        same_name(MakeLinkError::SlotTooLarge);
+        same_name(MakeLinkError::EmptyTypeResolution);
+        same_name(MakeLinkError::RetractionClass);
+        // The `[K_sup]` sole-writer fence, on both enums that carry it.
+        deviates(
+            "SupersessionClass",
+            MakeLinkError::SupersessionClass,
+            RejectCode::DcViolation,
+        );
+        same_name(EmitError::HomeNotRegistered);
+        same_name(EmitError::NotOwner(addr()));
+        same_name(EmitError::NotRegistered);
+        same_name(EmitError::RetractionClass);
+        same_name(EmitError::ShapeViolation);
+        same_name(EmitError::NonAddressDenotingType);
+        same_name(EmitError::SlotTooLarge);
+        deviates("SupersessionClass", EmitError::SupersessionClass, RejectCode::DcViolation);
+        same_name(NullifyError::HomeNotRegistered);
+        same_name(NullifyError::NotOwner(addr()));
+        same_name(NullifyError::BadTarget);
+        same_name(AssertSupError::HomeNotRegistered);
+        same_name(AssertSupError::NotOwner(addr()));
+        same_name(AssertSupError::EndpointNotResident);
+        same_name(AssertSupError::SelfSupersession);
+        same_name(EditLinkError::OriginalNotResident);
+        same_name(EditLinkError::HomeNotRegistered);
+        same_name(EditLinkError::NotOwner(addr()));
+        same_name(EditLinkError::SlotTooLarge);
+        same_name(EditLinkError::IllFormedSuccessor);
+        same_name(EditLinkError::DcViolation);
+
+        // ── M6 (retrieval) — names spelled: these enums withhold `Debug` ──
+        same_named("DocNotRegistered", RetrieveError::DocNotRegistered(addr()));
+        // `MalformedSpan` covers RETRIEVEV's differently-named fault (§5).
+        deviates(
+            "MalformedSpec",
+            RetrieveError::MalformedSpec { index: 0, fault: SpecFault::NotOrdinalLevel },
+            RejectCode::MalformedSpan,
+        );
+        same_named("DocNotRegistered", ExtentError::DocNotRegistered);
+        same_named("DocNotRegistered", OriginError::DocNotRegistered);
+        same_named("NoSuchSubspace", OriginError::NoSuchSubspace);
+        same_named("EmptySubspace", OriginError::EmptySubspace);
+        same_named("DepthIncompatible", OriginError::DepthIncompatible);
+        same_named("RangeNotPresent", OriginError::RangeNotPresent);
+        same_named("MalformedSpan", OriginError::MalformedSpan(SpecFault::NotLevelUniform));
+        same_named("DocNotRegistered", DeletionsError::DocNotRegistered(addr()));
+        same_named("DocNotRegistered", CompareError::DocNotRegistered(addr()));
+        same_named(
+            "NotContentSubspace",
+            CompareError::NotContentSubspace { operand: Operand::First, region: 0, index: 0 },
+        );
+        same_named(
+            "MalformedSpan",
+            CompareError::MalformedSpan {
+                operand: Operand::First,
+                region: 0,
+                index: 0,
+                fault: SpecFault::StartNotZeroFree,
+            },
+        );
+        same_named("DocNotRegistered", FindError::DocNotRegistered(addr()));
+        same_named(
+            "MalformedSpan",
+            FindError::MalformedSpan { region: 0, index: 0, fault: SpecFault::StartTooShallow },
+        );
+
+        // ── M8 (discovery) ──
+        same_name(QueryError::DocNotRegistered);
+        same_name(QueryError::NotALink);
+        same_name(QueryError::BadRegion);
+        same_name(QueryError::NotContentSubspace);
+        same_name(QueryError::EmptyWidth);
+        same_name(QueryError::OutOfBounds);
+    }
 }

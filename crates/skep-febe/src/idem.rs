@@ -154,4 +154,43 @@ mod tests {
         assert!(cache.get(s1, &id, OpKind::CreateNewDocument).is_none());
         assert!(cache.get(s2, &id, OpKind::Fork).is_some());
     }
+
+    /// §7: the memo is BOUNDED at [`DEFAULT_IDEM_CAPACITY`] — the whole
+    /// policy, since the interface's one-argument `new` leaves no
+    /// construction-time knob — and what it drops when it overflows is the
+    /// least recently used entry. A [`IdemCache::get`] is a use, so the ack a
+    /// client just replayed outlives one nobody has asked for.
+    #[test]
+    fn the_memo_is_bounded_and_evicts_least_recently_used() {
+        let sessions = crate::session::Sessions::new();
+        let cache = IdemCache::new();
+        let s = sessions.open(skep_namespace::PrincipalId(1));
+        let id = |i: usize| ReqId(i.to_string().into_bytes());
+        let ack = |i: usize| CommittedAck::At { at: Seq(i as u64) };
+
+        let cap = DEFAULT_IDEM_CAPACITY.get();
+        for i in 0..cap {
+            cache.put(s, id(i), OpKind::Delete, ack(i));
+        }
+        // A memo filled exactly to capacity has dropped nothing — and asking
+        // for the oldest entry is what makes it the newest.
+        assert!(
+            cache.get(s, &id(0), OpKind::Delete).is_some(),
+            "a memo at capacity has evicted nothing yet"
+        );
+        // One entry past the bound: something must go.
+        cache.put(s, id(cap), OpKind::Delete, ack(cap));
+        assert!(
+            cache.get(s, &id(0), OpKind::Delete).is_some(),
+            "the entry just replayed is the most recently used, not the victim"
+        );
+        assert!(
+            cache.get(s, &id(1), OpKind::Delete).is_none(),
+            "the least recently used entry is what the bound evicts"
+        );
+        assert!(
+            cache.get(s, &id(cap), OpKind::Delete).is_some(),
+            "the entry that overflowed the bound is memoized"
+        );
+    }
 }

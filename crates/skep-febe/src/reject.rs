@@ -377,8 +377,8 @@ mod tests {
     /// over the same domain by [`ALL_CODES`].
     #[test]
     fn gate_detail_is_fixed_and_exclusive() {
-        let g = Rejection::classified(OpKind::CreateNewDocument, RejectCode::Gate, None);
-        assert_eq!(g.detail.as_deref(), Some(GATE_DETAIL));
+        let gate = Rejection::classified(OpKind::CreateNewDocument, RejectCode::Gate, None);
+        assert_eq!(gate.detail.as_deref(), Some(GATE_DETAIL));
         for code in ALL_CODES {
             if code == RejectCode::Gate {
                 continue;
@@ -394,11 +394,11 @@ mod tests {
     /// other `Malformed`, and carries the codec's cause when it has one.
     #[test]
     fn an_unparseable_frame_is_classified_by_the_same_table() {
-        let r = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
-        assert_eq!(r.op, OpKind::Unparseable);
-        assert_eq!(r.code, RejectCode::Malformed);
-        assert_eq!(r.disposition, disposition_of(RejectCode::Malformed));
-        assert_eq!(r.detail.as_deref(), Some("unknown op"));
+        let rej = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
+        assert_eq!(rej.op, OpKind::Unparseable);
+        assert_eq!(rej.code, RejectCode::Malformed);
+        assert_eq!(rej.disposition, disposition_of(RejectCode::Malformed));
+        assert_eq!(rej.detail.as_deref(), Some("unknown op"));
         let bare = Rejection::unparseable(ParseError { detail: None });
         assert!(bare.detail.is_none());
     }
@@ -412,13 +412,13 @@ mod tests {
             Box::new(e)
         }
 
-        let r = Rejection::classified(OpKind::Insert, RejectCode::Durability, None)
+        let rej = Rejection::classified(OpKind::Insert, RejectCode::Durability, None)
             .with_detail("disk gone".into());
-        let line = r.to_string();
+        let line = rej.to_string();
         assert!(line.contains("Insert") && line.contains("Durability"));
         assert!(line.contains("Retry"), "the advisory hint belongs in the line: {line}");
         assert!(line.ends_with("disk gone"));
-        assert_eq!(boxed(r).to_string(), line);
+        assert_eq!(boxed(rej).to_string(), line);
 
         let bare = Rejection::classified(OpKind::Insert, RejectCode::NotOwner, None).to_string();
         assert!(bare.contains("NotOwner") && !bare.ends_with(':'));

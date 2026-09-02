@@ -90,20 +90,20 @@ impl IdemCache {
     /// answered either way. The memo is best-effort by construction (it
     /// declines on eviction and on restart already), so an oversized key
     /// costs exactly what those cost — a re-execution on retry.
-    pub(crate) fn put(&self, s: SessionId, id: ReqId, kind: OpKind, ack: CommittedAck) {
+    pub(crate) fn put(&self, session: SessionId, id: ReqId, kind: OpKind, ack: CommittedAck) {
         if id.0.len() > MAX_REQ_ID_BYTES {
             return;
         }
-        self.entries.lock().put(IdemKey { session: s, id }, Cached { kind, ack });
+        self.entries.lock().put(IdemKey { session, id }, Cached { kind, ack });
     }
 
     /// The memoized acknowledgment this session committed under `id` for
     /// this op-kind. A foreign session misses on the key ([`IdemKey`]); a
     /// `ReqId` reused across op-kinds misses on the tag. Either way the
     /// request re-executes.
-    pub(crate) fn get(&self, s: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
+    pub(crate) fn get(&self, session: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
         let mut g = self.entries.lock();
-        let c = g.get(&IdemKey { session: s, id: id.clone() })?; // bumps LRU recency
+        let c = g.get(&IdemKey { session, id: id.clone() })?; // bumps LRU recency
         (c.kind == kind).then(|| c.ack.clone())
     }
 
@@ -117,10 +117,10 @@ impl IdemCache {
     /// write that session itself committed, replayable only by presenting the
     /// retired id again, and authorizing nothing, since `close_session`
     /// retires the binding before calling this.
-    pub(crate) fn purge_session(&self, s: SessionId) {
+    pub(crate) fn purge_session(&self, session: SessionId) {
         let mut g = self.entries.lock();
         let dead: Vec<IdemKey> =
-            g.iter().filter(|(k, _)| k.session == s).map(|(k, _)| k.clone()).collect();
+            g.iter().filter(|(k, _)| k.session == session).map(|(k, _)| k.clone()).collect();
         for k in dead {
             g.pop(&k);
         }

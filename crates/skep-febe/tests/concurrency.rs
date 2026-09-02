@@ -34,11 +34,11 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
             .map(|i| {
                 let doc = doc.clone();
                 let febe = &fx.febe;
-                let s = fx.s;
+                let user = fx.user;
                 scope.spawn(move || {
                     ack_addr(ex(
                         febe,
-                        s,
+                        user,
                         Op::Insert {
                             doc,
                             at: vp(1, 1),

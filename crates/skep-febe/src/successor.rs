@@ -42,11 +42,11 @@ use crate::reject::{FaultSite, RejectCode, Rejection};
 pub(crate) fn successor_link(
     m3: &M3State,
     m5: &M5State,
-    spec: &SuccessorSpec,
+    successor: &SuccessorSpec,
 ) -> Result<Link, Rejection> {
-    let from = endset_from_vspecs(m3, m5, FROM, &spec.from)?;
-    let to = endset_from_vspecs(m3, m5, TO, &spec.to)?;
-    let ty = match &spec.ty {
+    let from = endset_from_vspecs(m3, m5, FROM, &successor.from)?;
+    let to = endset_from_vspecs(m3, m5, TO, &successor.to)?;
+    let ty = match &successor.ty {
         SlotArg::Addrs(a) => {
             if a.len() > MAX_SLOT_SPANS {
                 return Err(slot_too_large(TYPE));

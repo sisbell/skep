@@ -51,13 +51,13 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let mut seen: Vec<OpKind> = Vec::new();
 
     // ── the document family ──
-    let r = ex(&fx.febe, fx.s, Op::CreateNewDocument { account: fx.acct.clone() });
+    let r = ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone() });
     committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
     let (d, _) = ack_addr(r);
 
     let r = ex(
         &fx.febe,
-        fx.s,
+        fx.user,
         Op::Insert {
             doc: d.clone(),
             at: vp(1, 1),
@@ -66,69 +66,69 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     );
     committed(&fx, OpKind::Insert, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.s, Op::Fork);
+    let r = ex(&fx.febe, fx.user, Op::Fork);
     committed(&fx, OpKind::Fork, &r, &mut seen);
     let (f, _) = ack_addr(r);
 
-    let r = ex(&fx.febe, fx.s, Op::Version { d_src: d.clone() });
+    let r = ex(&fx.febe, fx.user, Op::Version { d_src: d.clone() });
     committed(&fx, OpKind::Version, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.s, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
+    let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
     committed(&fx, OpKind::Copy, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.s, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) });
+    let r = ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) });
     committed(&fx, OpKind::Delete, &r, &mut seen);
 
     let r = ex(
         &fx.febe,
-        fx.s,
+        fx.user,
         Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     );
     committed(&fx, OpKind::Rearrange, &r, &mut seen);
 
     // ── the link family, on a document whose three ordinals are intact ──
-    let e = create_doc(&fx);
-    let (e_start, _) = insert3(&fx, &e);
+    let home = create_doc(&fx);
+    let (home_start, _) = insert3(&fx, &home);
     let mk = || Op::MakeLink {
-        home: e.clone(),
-        from: SlotArg::Resolve(vec![vspec(&e, 1, 1)]),
-        to: SlotArg::Resolve(vec![vspec(&e, 2, 1)]),
-        ty: SlotArg::Resolve(vec![vspec(&e, 3, 1)]),
+        home: home.clone(),
+        from: SlotArg::Resolve(vec![vspec(&home, 1, 1)]),
+        to: SlotArg::Resolve(vec![vspec(&home, 2, 1)]),
+        ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
     };
 
-    let r = ex(&fx.febe, fx.s, mk());
+    let r = ex(&fx.febe, fx.user, mk());
     committed(&fx, OpKind::MakeLink, &r, &mut seen);
     let (l1, _) = ack_addr(r);
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
 
     let r = ex(
         &fx.febe,
-        fx.s,
+        fx.user,
         Op::EditLink {
             original: l1.clone(),
             successor: SuccessorSpec {
-                from: vec![vspec(&e, 1, 1)],
-                to: vec![vspec(&e, 2, 1)],
-                ty: SlotArg::Resolve(vec![vspec(&e, 3, 1)]),
+                from: vec![vspec(&home, 1, 1)],
+                to: vec![vspec(&home, 2, 1)],
+                ty: SlotArg::Resolve(vec![vspec(&home, 3, 1)]),
             },
-            d_s: e.clone(),
-            d_a: e.clone(),
+            d_s: home.clone(),
+            d_a: home.clone(),
         },
     );
     committed(&fx, OpKind::EditLink, &r, &mut seen);
 
     let r =
-        ex(&fx.febe, fx.s, Op::AssertSup { home: e.clone(), old: l1, new: l2.clone() });
+        ex(&fx.febe, fx.user, Op::AssertSup { home: home.clone(), old: l1, new: l2.clone() });
     committed(&fx, OpKind::AssertSup, &r, &mut seen);
 
     let r = ex(
         &fx.febe,
-        fx.s,
-        Op::Emit { home: e.clone(), ty: pred_def_ty(), from: e_start, to: vec![] },
+        fx.user,
+        Op::Emit { home: home.clone(), ty: pred_def_ty(), from: home_start, to: vec![] },
     );
     committed(&fx, OpKind::Emit, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.s, Op::Nullify { home: e, target: l2 });
+    let r = ex(&fx.febe, fx.user, Op::Nullify { home, target: l2 });
     committed(&fx, OpKind::Nullify, &r, &mut seen);
 
     // ── provisioning, under the bootstrap session ──
@@ -161,18 +161,18 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let fx = setup();
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    let (v, _) = ack_addr(ex(&fx.febe, fx.s, Op::Version { d_src: d.clone() }));
+    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone() }));
     let mk = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
     };
-    let (l1, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
-    let (l2, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
+    let (l1, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.user, mk()));
     ack_addr(ex(
         &fx.febe,
-        fx.s,
+        fx.user,
         Op::AssertSup { home: d.clone(), old: l1.clone(), new: l2.clone() },
     ));
 
@@ -226,7 +226,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let head = fx.febe.log_position();
     for op in reads {
         let kind = op.kind();
-        let r = ex(&fx.febe, fx.s, op);
+        let r = ex(&fx.febe, fx.user, op);
         assert_eq!(as_of(&r), head, "{kind:?} reports the snapshot it answered from");
     }
     assert_eq!(fx.febe.log_position(), head, "no read moves the log");

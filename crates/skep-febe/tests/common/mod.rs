@@ -187,15 +187,20 @@ pub fn operation() -> Operation<World> {
 
 // ───────────────────────────── request helpers ──────────────────────────────
 
-pub fn ex(febe: &Operation<World>, s: SessionId, op: Op) -> Response {
-    febe.execute(s, Request { id: None, op })
+pub fn ex(febe: &Operation<World>, session: SessionId, op: Op) -> Response {
+    febe.execute(session, Request { id: None, op })
 }
 
-pub fn ex_id(febe: &Operation<World>, s: SessionId, id: &[u8], op: Op) -> Response {
-    febe.execute(s, Request { id: Some(ReqId(id.to_vec())), op })
+pub fn ex_id(febe: &Operation<World>, session: SessionId, id: &[u8], op: Op) -> Response {
+    febe.execute(session, Request { id: Some(ReqId(id.to_vec())), op })
 }
 
 // ─────────────────────────── response extractors ────────────────────────────
+//
+// One per `Response` variant, each named for the variant it opens, so an
+// assertion reads as the shape it expects and a wrong shape panics with the
+// name. `bool_val` is the one departure: the bare variant name is a primitive
+// type's, legal in the value namespace and unreadable.
 
 pub fn rejected(r: Response) -> Rejection {
     match r {
@@ -324,7 +329,7 @@ pub fn runs(r: Response) -> Vec<Run> {
     }
 }
 
-pub fn boolv(r: Response) -> bool {
+pub fn bool_val(r: Response) -> bool {
     match r {
         Response::Bool { val, .. } => val,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -348,7 +353,7 @@ pub fn follow(r: Response) -> Result<SpanSet, Invalid> {
     }
 }
 
-pub fn deletions_rep(r: Response) -> Deletions {
+pub fn deletions(r: Response) -> Deletions {
     match r {
         Response::Deletions { rep, .. } => rep,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -356,7 +361,7 @@ pub fn deletions_rep(r: Response) -> Deletions {
     }
 }
 
-pub fn compare_rep(r: Response) -> CompareReport {
+pub fn compare(r: Response) -> CompareReport {
     match r {
         Response::Compare { rep, .. } => rep,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
@@ -390,8 +395,8 @@ pub const USER: PrincipalId = PrincipalId(7);
 pub struct Fixture {
     pub febe: Operation<World>,
     pub boot: SessionId,
-    pub s: SessionId,
-    pub acct: Address,
+    pub user: SessionId,
+    pub account: Address,
 }
 
 pub fn setup() -> Fixture {
@@ -399,17 +404,17 @@ pub fn setup() -> Fixture {
     let boot = febe.bootstrap_session();
     let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
-    let (acct, _) = ack_addr(ex(
+    let (account, _) = ack_addr(ex(
         &febe,
         boot,
         Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
     ));
-    let s = febe.open_session(USER);
-    Fixture { febe, boot, s, acct }
+    let user = febe.open_session(USER);
+    Fixture { febe, boot, user, account }
 }
 
 pub fn create_doc(fx: &Fixture) -> Address {
-    ack_addr(ex(&fx.febe, fx.s, Op::CreateNewDocument { account: fx.acct.clone() })).0
+    ack_addr(ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone() })).0
 }
 
 /// Insert three one-byte values at the head of `doc`'s content subspace;
@@ -417,7 +422,7 @@ pub fn create_doc(fx: &Fixture) -> Address {
 pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
     ack_addr(ex(
         &fx.febe,
-        fx.s,
+        fx.user,
         Op::Insert {
             doc: doc.clone(),
             at: vp(1, 1),

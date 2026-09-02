@@ -41,20 +41,20 @@ impl Sessions {
 
     /// Record the binding and hand back a fresh id.
     pub(crate) fn open(&self, principal: PrincipalId) -> SessionId {
-        let s = SessionId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        self.bindings.lock().insert(s, principal);
-        s
+        let session = SessionId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        self.bindings.lock().insert(session, principal);
+        session
     }
 
     /// The principal this session speaks for — `None` once retired, and for
     /// an id that was never opened.
-    pub(crate) fn principal_of(&self, s: SessionId) -> Option<PrincipalId> {
-        self.bindings.lock().get(&s).copied()
+    pub(crate) fn principal_of(&self, session: SessionId) -> Option<PrincipalId> {
+        self.bindings.lock().get(&session).copied()
     }
 
     /// Retire the binding. The id is dead for the rest of the uptime.
-    pub(crate) fn close(&self, s: SessionId) {
-        self.bindings.lock().remove(&s);
+    pub(crate) fn close(&self, session: SessionId) {
+        self.bindings.lock().remove(&session);
     }
 }
 

@@ -101,9 +101,9 @@ where
     /// Record the binding and return a fresh `SessionId`, unique within one
     /// M10 uptime (reset on restart; clients re-authenticate). The caller
     /// (transport) supplies the authenticated `PrincipalId`; unforgeability
-    /// of the id is the transport's precondition (§6): it must inject `s`
-    /// from the connection's authenticated binding, never read it off the
-    /// wire.
+    /// of the id is the transport's precondition (§6): it must hold the
+    /// returned `SessionId` in the connection's authenticated state and inject
+    /// it into [`Operation::execute`], never read one off the wire.
     pub fn open_session(&self, principal: PrincipalId) -> SessionId {
         self.sessions.open(principal)
     }
@@ -127,9 +127,9 @@ where
     ///
     /// Calling this on connection drop is a transport obligation: nothing else
     /// retires a binding.
-    pub fn close_session(&self, s: SessionId) {
-        self.sessions.close(s);
-        self.idem.purge_session(s);
+    pub fn close_session(&self, session: SessionId) {
+        self.sessions.close(session);
+        self.idem.purge_session(session);
     }
 
     /// A session bound to `BOOTSTRAP_PRINCIPAL`, so the first
@@ -150,7 +150,7 @@ where
     /// Two caller preconditions, neither of which this module can check for
     /// itself:
     ///
-    /// * NON-FORGEABILITY (§6): `s` MUST originate in the transport's
+    /// * NON-FORGEABILITY (§6): `session` MUST originate in the transport's
     ///   connection state, never a wire-supplied value.
     /// * SIZE: M10 measures no field of the [`Op`] it is handed, so every
     ///   list, tumbler and magnitude in `req` reaches the owning store as
@@ -174,14 +174,14 @@ where
     /// re-authenticate. Step (a) precedes both, so a retry of a write that
     /// already committed is answered from the memo whatever either gate would
     /// have said.
-    pub fn execute(&self, s: SessionId, req: Request) -> Response {
+    pub fn execute(&self, session: SessionId, req: Request) -> Response {
         let Request { id, op } = req;
         let kind = op.kind(); // Copy; captured before dispatch moves the op
-        // (a) idempotency: a repeated (s, id) whose op-kind matches returns
-        //     the memoized committed-write ack, never re-executing. Keyed
-        //     (s, id) — a replay under a DIFFERENT session misses (§7).
+        // (a) idempotency: a repeated (session, id) whose op-kind matches
+        //     returns the memoized committed-write ack, never re-executing.
+        //     Keyed on both — a replay under a DIFFERENT session misses (§7).
         if let Some(id) = &id {
-            if let Some(ack) = self.idem.get(s, id, kind) {
+            if let Some(ack) = self.idem.get(session, id, kind) {
                 return ack.into();
             }
         }
@@ -197,7 +197,7 @@ where
             if self.poisoned.load(Ordering::Relaxed) {
                 return reject(kind, RejectCode::Poisoned); // disposition_of ⇒ Halt
             }
-            match self.sessions.principal_of(s) {
+            match self.sessions.principal_of(session) {
                 // (b) the one place authority can fail
                 Some(principal) => self.dispatch_write(WriteCtx { principal }, op),
                 None => return reject(kind, RejectCode::Unauthenticated), // ⇒ Permanent
@@ -215,7 +215,7 @@ where
         //     clones the acknowledged addresses.
         if let Some(id) = id {
             if let Some(ack) = resp.as_ack() {
-                self.idem.put(s, id, kind, ack);
+                self.idem.put(session, id, kind, ack);
             }
         }
         resp

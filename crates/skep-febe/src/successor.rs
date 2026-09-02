@@ -277,6 +277,41 @@ mod tests {
         assert_eq!(rej.site.expect("localized").index, Some(0));
     }
 
+    /// §4: the request-level precedence past its FIRST position, and the type
+    /// slot's other form. `to` is built before `ty`, so a successor offending
+    /// in both is answered about `to`; and a `Resolve`-form `ty` names TYPE —
+    /// the one of the four slot labels no other case reaches. A mislabeled
+    /// slot sends a client to edit a field it sent correctly, on the engine's
+    /// own word.
+    #[test]
+    fn the_to_slot_speaks_before_the_type_slot_and_each_names_itself() {
+        let m3 = M3State::genesis();
+        let m5 = M5State::genesis();
+        let doc = addr(&[1, 0, 1, 0, 1]);
+        let unregistered = || VSpec { source: doc.clone(), span: span(&[1, 1], &[0, 1]) };
+        let ill_formed = || VSpec { source: doc.clone(), span: span(&[2, 1], &[0, 1]) };
+
+        // TO and TYPE both offend, with DIFFERENT faults, so the answer says
+        // which slot it is about twice over — by code and by slot.
+        let both = SuccessorSpec {
+            from: vec![],
+            to: vec![unregistered()],
+            ty: SlotArg::Resolve(vec![ill_formed()]),
+        };
+        let rej = successor_link(&m3, &m5, &both).expect_err("two offending slots");
+        assert_eq!(rej.code, RejectCode::SourceNotRegistered, "TO is built before TYPE");
+        assert_eq!(rej.site.expect("localized").slot, Some(TO));
+
+        // TYPE alone, in its `Resolve` form.
+        let ty_only =
+            SuccessorSpec { from: vec![], to: vec![], ty: SlotArg::Resolve(vec![ill_formed()]) };
+        let rej = successor_link(&m3, &m5, &ty_only).expect_err("the type slot offends");
+        assert_eq!(rej.code, RejectCode::IllFormedSpec);
+        let site = rej.site.expect("localized");
+        assert_eq!(site.slot, Some(TYPE), "a Resolve-form type slot names TYPE, not its neighbour");
+        assert_eq!(site.index, Some(0));
+    }
+
     /// §4: the type slot's `Addrs` form is held to the same budget its
     /// `Resolve` sibling is, and held to it BEFORE `enc` expands each ~19-byte
     /// name into a subtree span. The site names the slot and no index: the

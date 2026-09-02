@@ -590,6 +590,7 @@ mod tests {
     use super::*;
     use crate::op::ReqId;
     use crate::reject::Disposition;
+    use crate::response::CommittedAck;
 
     // ── a minimal assembled world (the composition contract in miniature) ──
 
@@ -915,6 +916,44 @@ mod tests {
             }
             _ => panic!("a memoized ack is served ahead of the poison gate"),
         }
+    }
+
+    /// §1/§6/§7: step (a) precedes the SESSION gate, and the documented
+    /// outcome of the close/purge race. An `execute` already past its
+    /// step-(a) lookup may deposit its ack after `close_session` has swept,
+    /// and that entry then lives until eviction — so presenting the retired
+    /// id replays one acknowledgment of a write that session itself
+    /// committed, rather than answering `Unauthenticated`. It authorizes
+    /// nothing and commits nothing.
+    #[test]
+    fn a_memoized_ack_outliving_its_binding_is_replayed_not_refused() {
+        let febe = operation();
+        let s = febe.open_session(PrincipalId(1));
+        let id = ReqId(b"in-flight".to_vec());
+        // The deposit a request already past step (a) makes after the sweep.
+        febe.close_session(s);
+        febe.idem.put(
+            s,
+            id.clone(),
+            OpKind::Insert,
+            CommittedAck::Addr { addr: addr(&[1, 0, 1, 0, 1]), at: Seq(3) },
+        );
+        let before = febe.log_position();
+
+        match febe.execute(s, Request { id: Some(id), op: insert_op() }) {
+            Response::AckAddr { addr: replayed, at } => {
+                assert_eq!(replayed, addr(&[1, 0, 1, 0, 1]), "the memo answers ahead of the gate");
+                assert_eq!(at, Seq(3), "…at the coordinate it committed");
+            }
+            _ => panic!("a memoized ack is served ahead of the session gate"),
+        }
+        assert_eq!(febe.log_position(), before, "a replayed ack commits nothing");
+
+        // The binding really is gone: an unkeyed write on the same id is
+        // refused, so the replay above says something about the ORDER of the
+        // two steps and not about the session still being bound.
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
+        assert_eq!(rej.code, RejectCode::Unauthenticated);
     }
 
     /// §1: the partition is written in three places — `is_read`, and each

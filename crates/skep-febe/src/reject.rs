@@ -369,14 +369,25 @@ mod tests {
         }
     }
 
-    /// §5: `Gate` carries the fixed operator-condition detail; other codes
-    /// carry none unless threaded.
+    /// §5: `Gate` carries the fixed operator-condition detail, and it is the
+    /// only code that does — exclusivity over the whole domain, since a
+    /// standing detail added to a second code changes what every client sees
+    /// for that code, and changes rejection identity with it (`Eq` compares
+    /// `detail`). The neighbouring policy, [`disposition_of`], is checked
+    /// over the same domain by [`ALL_CODES`].
     #[test]
     fn gate_detail_is_fixed_and_exclusive() {
         let g = Rejection::classified(OpKind::CreateNewDocument, RejectCode::Gate, None);
         assert_eq!(g.detail.as_deref(), Some(GATE_DETAIL));
-        let other = Rejection::classified(OpKind::CreateNewDocument, RejectCode::NotOwner, None);
-        assert!(other.detail.is_none());
+        for code in ALL_CODES {
+            if code == RejectCode::Gate {
+                continue;
+            }
+            assert!(
+                Rejection::classified(OpKind::CreateNewDocument, code, None).detail.is_none(),
+                "{code:?} carries a standing detail; `fixed_detail` says Gate is the only one"
+            );
+        }
     }
 
     /// The parse-failure rejection is classified by the same table as every

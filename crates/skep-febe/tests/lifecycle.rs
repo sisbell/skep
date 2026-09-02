@@ -10,9 +10,11 @@ mod common;
 use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM};
+use skep_febe::{
+    Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM, MAX_REQ_ID_BYTES,
+};
 use skep_links::{enc, View, MAX_SLOT_SPANS};
-use skep_namespace::PrincipalId;
+use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::{Region, Spec};
 
 /// A link-subspace element address under `doc` that no MAKELINK ever minted.
@@ -62,6 +64,21 @@ fn bootstrap_and_namespace_reads() {
     // Node provisioning: supplied address, bootstrap session, AckAddr echo.
     let (node, _) = ack_addr(ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 2]) }));
     assert_eq!(node, addr(&[1, 2]));
+}
+
+/// §6/`Op::RegisterNode`: a bound session is the ONLY gate on node admission
+/// — `Namespace::register_node` takes no principal and `NodeError` carries no
+/// authority variant — so an ordinary delegated principal registers a node,
+/// and confining this to provisioning is policy nobody enforces. Pinned so
+/// the claim is executable rather than a paragraph: a check added anywhere on
+/// this path turns this red, which is the conversation such a check owes.
+#[test]
+fn a_node_registers_under_any_bound_session_not_only_bootstrap() {
+    let fx = setup();
+    assert_ne!(USER, BOOTSTRAP_PRINCIPAL, "fx.s speaks for an ordinary delegated principal");
+    let (node, at) = ack_addr(ex(&fx.febe, fx.s, Op::RegisterNode { addr: tum(&[1, 8]) }));
+    assert_eq!(node, addr(&[1, 8]));
+    assert_eq!(at, fx.febe.log_position(), "and it committed, like any other write");
 }
 
 /// The document family end-to-end: create/insert/retrieve with the V1
@@ -195,6 +212,37 @@ fn idempotent_retry() {
     let rej = rejected(ex_id(&fx.febe, fx.s, b"ins-1", ins()));
     assert_eq!(rej.code, RejectCode::Unauthenticated);
     assert_eq!(rej.disposition, Disposition::Permanent);
+}
+
+/// §7/[`MAX_REQ_ID_BYTES`]: the memo's SECOND door, through `execute`. An id
+/// past the bound is answered like any other — the never-silent contract is
+/// about the operation, and the operation is answered — and simply not
+/// memoized, so the retry re-executes and the client is never told. An id
+/// exactly at the bound is an ordinary key.
+#[test]
+fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
+    let fx = setup();
+    let d = create_doc(&fx);
+    let ins = || Op::Insert {
+        doc: d.clone(),
+        at: vp(1, 1),
+        values: vec![skep_content::Val::new(vec![b'y'])],
+    };
+
+    let over = vec![b'k'; MAX_REQ_ID_BYTES + 1];
+    let (first, at1) = ack_addr(ex_id(&fx.febe, fx.s, &over, ins()));
+    let log0 = fx.febe.log_position();
+    let (second, at2) = ack_addr(ex_id(&fx.febe, fx.s, &over, ins()));
+    assert_ne!(second, first, "an unmemoized retry re-executes");
+    assert!(at2 > at1);
+    assert!(fx.febe.log_position() > log0, "…and commits");
+
+    let at_cap = vec![b'k'; MAX_REQ_ID_BYTES];
+    let (a, _) = ack_addr(ex_id(&fx.febe, fx.s, &at_cap, ins()));
+    let log1 = fx.febe.log_position();
+    let (b, _) = ack_addr(ex_id(&fx.febe, fx.s, &at_cap, ins()));
+    assert_eq!(b, a, "a key at the bound is an ordinary key");
+    assert_eq!(fx.febe.log_position(), log1, "so its retry commits nothing");
 }
 
 /// §7/§1(d): the memo replays the acknowledgment SHAPE the write produced,

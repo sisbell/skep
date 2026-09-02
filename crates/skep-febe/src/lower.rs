@@ -316,8 +316,11 @@ impl Lower for EditLinkError {
             EditLinkError::HomeNotRegistered => (RejectCode::HomeNotRegistered, None),
             // Carries whichever home failed — d_s or d_a.
             EditLinkError::NotOwner(a) => not_owner(a),
-            // The successor's slots are resolve-built here in M10, so this is
-            // the same budget and the same leaf MAKELINK's slots take.
+            // M7's own restatement of the per-slot span budget over the
+            // finished successor — the same budget and the same leaf
+            // MAKELINK's slots take. M10 builds those slots and holds them to
+            // that number as it builds them (`successor::endset_from_vspecs`),
+            // so this arm answers for a successor assembled some other way.
             EditLinkError::SlotTooLarge => (RejectCode::SlotTooLarge, None),
             EditLinkError::IllFormedSuccessor => (RejectCode::IllFormedSuccessor, None),
             EditLinkError::DcViolation => (RejectCode::DcViolation, None),

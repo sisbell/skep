@@ -18,7 +18,7 @@ use skep_discovery::{
     window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::{enc, Link, LinkRec, SlotArg};
+use skep_links::{enc, Link, LinkRec, SlotArg, MAX_SLOT_SPANS};
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
@@ -325,8 +325,18 @@ where
                 let ty = match &successor.ty {
                     // TYPE is the successor's one two-form slot (§4):
                     // address-denoting or content-resolved; M7 owns the
-                    // slot-shape/schema verdict inside editlink.
-                    SlotArg::Addrs(a) => enc(a),
+                    // slot-shape/schema verdict inside editlink. Both forms
+                    // are held to M7's per-slot budget HERE, where the slot
+                    // is built, and before the encoding is: `enc` turns each
+                    // ~19-byte name into a subtree span of two multi-component
+                    // tumblers, so a list bounded only by the frame is a ~26×
+                    // amplification into memory M7 would then refuse anyway.
+                    SlotArg::Addrs(a) => {
+                        if a.len() > MAX_SLOT_SPANS {
+                            return Err(rejection(kind, RejectCode::SlotTooLarge));
+                        }
+                        enc(a)
+                    }
                     SlotArg::Resolve(v) => endset_from_vspecs(m3, m5, v)?,
                 };
                 let link = Link::triple(from, to, ty);

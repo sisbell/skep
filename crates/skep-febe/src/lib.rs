@@ -80,9 +80,13 @@ mod session;
 mod successor;
 
 pub use codec::{Codec, ParseError};
-pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec};
+pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
 pub use operation::Operation;
-pub use reject::{Disposition, FaultSite, RejectCode, Rejection};
+// `disposition_of` is public for the reason the disposition is documented as
+// recomputable: a transport that raises one of M10's own codes on its own
+// channel asks the table rather than transcribing the row, so the two cannot
+// come to advise the same code differently.
+pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
 pub use session::SessionId;
 // The two-form endset slot (M7-defined; the 2026-08-16 amendment): names

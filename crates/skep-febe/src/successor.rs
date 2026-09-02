@@ -3,10 +3,14 @@
 //! pinned BEFORE the write transaction. Recorded I-addresses are permanent,
 //! so the source document's arrangement may move underneath with no hazard,
 //! and the operation is still one M2 transaction.
+//!
+//! Building a slot here rather than in M7 means the per-slot span budget is
+//! M10's to enforce for this one request, and enforcing it means counting as
+//! the spans are produced — see [`endset_from_vspecs`].
 
 use skep_address::{content_subspace, Span};
-use skep_arrangement::{M5State, Run, VSpec};
-use skep_links::Endset;
+use skep_arrangement::{M5State, VSpec};
+use skep_links::{Endset, MAX_SLOT_SPANS};
 use skep_namespace::M3State;
 
 use crate::op::OpKind;
@@ -38,9 +42,27 @@ use crate::reject::{rejection, RejectCode, Rejection};
 /// an EDITLINK successor stricter than the MAKELINK it supersedes would be a
 /// different operation.
 ///
-/// Past the guard the tail is infallible: `Run::iextent` is total (every
-/// `Run` has `width ≥ 1` and an element-level `i_start`). An empty from/to
-/// is structurally fine; M7 gates the type slot.
+/// The slot is BOUNDED at [`MAX_SLOT_SPANS`] — M7's per-slot budget, named
+/// rather than respelled — and the count is taken AS THE SPANS ARE PRODUCED,
+/// so an over-budget slot stops accumulating instead of being built and then
+/// measured. That discipline is what makes the third fault, `SlotTooLarge`,
+/// worth typing here: a spec's expansion is not the request's size but the
+/// SOURCE document's fragmentation (one run per contiguous I-segment), so a
+/// short list of specs over a fragmented document names spans without bound,
+/// and each is two multi-component tumblers — order half a kilobyte live.
+/// M7's `editlink` holds the finished slots to the same number, but it does
+/// so inside its transaction, by which point the peak has been paid; refusing
+/// as we build costs the client nothing (the same code, the same `Permanent`
+/// disposition, the same refusal) and costs the engine one slot's worth of
+/// spans instead of every spec's.
+///
+/// What remains unbounded is ONE spec's own `resolve` vector, which is M5's
+/// allocation and one document's fragmentation — the same residual M7 carries
+/// for MAKELINK's `Resolve` slots.
+///
+/// Past the guard and under the budget the tail is infallible: `Run::iextent`
+/// is total (every `Run` has `width ≥ 1` and an element-level `i_start`). An
+/// empty from/to is structurally fine; M7 gates the type slot.
 pub(crate) fn endset_from_vspecs(
     m3: &M3State,
     m5: &M5State,
@@ -54,7 +76,12 @@ pub(crate) fn endset_from_vspecs(
         if !m3.is_registered_document(&vs.source) {
             return Err(rejection(OpKind::EditLink, RejectCode::SourceNotRegistered));
         }
-        spans.extend(m5.resolve(&vs.source, &vs.span).iter().map(Run::iextent));
+        for run in m5.resolve(&vs.source, &vs.span) {
+            if spans.len() == MAX_SLOT_SPANS {
+                return Err(rejection(OpKind::EditLink, RejectCode::SlotTooLarge));
+            }
+            spans.push(run.iextent());
+        }
     }
     Ok(Endset::from_spans(spans))
 }

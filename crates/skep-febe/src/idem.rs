@@ -15,7 +15,7 @@ use std::num::NonZeroUsize;
 use lru::LruCache;
 use parking_lot::Mutex;
 
-use crate::op::{OpKind, ReqId};
+use crate::op::{OpKind, ReqId, MAX_REQ_ID_BYTES};
 use crate::response::CommittedAck;
 use crate::session::SessionId;
 
@@ -54,9 +54,10 @@ struct Cached {
     ack: CommittedAck,
 }
 
-/// The memo itself (§7). Bounded by [`DEFAULT_IDEM_CAPACITY`]; eviction is
-/// LRU and costs only a re-execution, which is what "best effort" means
-/// here.
+/// The memo itself (§7). Bounded on BOTH axes that make up its resident
+/// size: [`DEFAULT_IDEM_CAPACITY`] entries, each holding at most
+/// [`MAX_REQ_ID_BYTES`] of client-chosen key. Eviction is LRU and costs only
+/// a re-execution, which is what "best effort" means here.
 ///
 /// Non-poisoning lock (§7): a panic while the cache is held must not break
 /// `execute`'s Total contract.
@@ -70,8 +71,21 @@ impl IdemCache {
     }
 
     /// Memoize one committed-write acknowledgment under this session's key.
-    /// Takes the `ReqId` because the key keeps it.
+    /// Takes the `ReqId` because the key keeps it — which is why an id past
+    /// [`MAX_REQ_ID_BYTES`] is declined here rather than truncated or
+    /// admitted: the key's bytes are the second factor of the memo's
+    /// retention bill, and this is the door that bounds them for every
+    /// caller, transport-parsed or hand-assembled.
+    ///
+    /// Declining is not a silence the never-silent contract forbids: that
+    /// contract is about answering an operation, and the operation is
+    /// answered either way. The memo is best-effort by construction (it
+    /// declines on eviction and on restart already), so an oversized key
+    /// costs exactly what those cost — a re-execution on retry.
     pub(crate) fn put(&self, s: SessionId, id: ReqId, kind: OpKind, ack: CommittedAck) {
+        if id.0.len() > MAX_REQ_ID_BYTES {
+            return;
+        }
         self.entries.lock().put(IdemKey { session: s, req: id }, Cached { kind, ack });
     }
 
@@ -153,6 +167,32 @@ mod tests {
         cache.purge_session(s1);
         assert!(cache.get(s1, &id, OpKind::CreateNewDocument).is_none());
         assert!(cache.get(s2, &id, OpKind::Fork).is_some());
+    }
+
+    /// §7: the memo's OTHER bound. A key is retained for the life of its
+    /// entry, so the bill is (capacity × key bytes) and both factors are
+    /// bounded here: a key past [`MAX_REQ_ID_BYTES`] is declined, one exactly
+    /// at the bound is memoized, and declining costs a re-execution — the
+    /// same thing eviction costs.
+    #[test]
+    fn an_oversized_key_is_not_memoized() {
+        let sessions = crate::session::Sessions::new();
+        let cache = IdemCache::new();
+        let s = sessions.open(skep_namespace::PrincipalId(1));
+
+        let at_cap = ReqId(vec![b'k'; MAX_REQ_ID_BYTES]);
+        cache.put(s, at_cap.clone(), OpKind::Delete, CommittedAck::At { at: Seq(1) });
+        assert!(
+            cache.get(s, &at_cap, OpKind::Delete).is_some(),
+            "a key at the bound is an ordinary key"
+        );
+
+        let over = ReqId(vec![b'k'; MAX_REQ_ID_BYTES + 1]);
+        cache.put(s, over.clone(), OpKind::Delete, CommittedAck::At { at: Seq(2) });
+        assert!(
+            cache.get(s, &over, OpKind::Delete).is_none(),
+            "a key past the bound is never retained, so a retry re-executes"
+        );
     }
 
     /// §7: the memo is BOUNDED at [`DEFAULT_IDEM_CAPACITY`] — the whole

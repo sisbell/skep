@@ -160,6 +160,11 @@ fn fixed_detail(code: RejectCode) -> Option<&'static str> {
 /// everything else to `Permanent` (the catch-all is the DESIGNED shape here:
 /// a code absent from the table is `Permanent` by construction).
 ///
+/// Public because the disposition is documented as recomputable, and a hint
+/// nobody outside the crate can recompute is one a transport transcribes
+/// instead: a caller raising one of these codes on its own channel asks here
+/// and cannot drift from the row [`Rejection::classified`] applies.
+///
 /// Named `Permanent` calls (not left to the catch-all by accident — §5):
 /// `NotRegistered` (genesis-immutable registry), `NotFresh` (append-only
 /// allocations), `Gate` (store corruption), `TxnOverBudget` (M2's
@@ -172,7 +177,7 @@ fn fixed_detail(code: RejectCode) -> Option<&'static str> {
 /// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
 /// `EmptySubspace`, `DelegatorUnknown`, `NotAPrincipal`, …) are the
 /// documented heuristic split of Open build decision 7.
-pub(crate) fn disposition_of(code: RejectCode) -> Disposition {
+pub fn disposition_of(code: RejectCode) -> Disposition {
     match code {
         RejectCode::Poisoned => Disposition::Halt,
         RejectCode::Durability => Disposition::Retry,

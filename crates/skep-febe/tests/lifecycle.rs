@@ -11,7 +11,7 @@ use common::*;
 use skep_address::{elem_addr, ElemPos, SpanSet};
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Disposition, Op, OpKind, RejectCode, SlotArg, SuccessorSpec, FROM};
-use skep_links::{enc, View};
+use skep_links::{enc, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Region, Spec};
 
@@ -305,6 +305,77 @@ fn a_multi_spec_successor_slot_accumulates_every_spec() {
     let link =
         link_value(ex(&fx.op, fx.s, Op::ReadLink { a: succ })).expect("the successor is resident");
     assert_eq!(link.from_slot().len(), 2, "both specs contributed a span to the slot");
+}
+
+/// §4: the successor slot's span budget, and where it is charged. A spec's
+/// expansion is the SOURCE document's fragmentation, not the request's size —
+/// one spec over a two-run region is two spans — so a short list of specs
+/// names spans without bound. The slot is counted as it is built, so a
+/// request past [`MAX_SLOT_SPANS`] is refused having held one slot's worth of
+/// spans rather than every spec's, and with no transaction opened.
+#[test]
+fn an_over_budget_successor_slot_is_refused_before_any_transaction() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    // Delete the middle element: the V gap closes, and what is left is two
+    // elements at non-adjacent I-addresses — a two-run arrangement.
+    ack(ex(&fx.op, fx.s, Op::Delete { doc: d.clone(), p: vp(1, 2), width: n(1) }));
+    let region = || vspan(1, 1, 2);
+    assert_eq!(
+        runs(ex(&fx.op, fx.s, Op::Image { d: d.clone(), region: vec![region()] })).len(),
+        2,
+        "the fixture is fragmented: one spec over this region resolves to two spans"
+    );
+    let two_spans = || skep_arrangement::VSpec { source: d.clone(), span: region() };
+
+    let before = fx.op.log_position();
+    let rej = rejected(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![two_spans(); MAX_SLOT_SPANS / 2 + 1],
+                to: vec![],
+                ty: SlotArg::Addrs(vec![d.clone()]),
+            },
+            d_s: d.clone(),
+            d_a: d,
+        },
+    ));
+    assert_eq!(rej.op, OpKind::EditLink);
+    assert_eq!(rej.code, RejectCode::SlotTooLarge);
+    assert_eq!(rej.disposition, Disposition::Permanent, "no retry shrinks the slot");
+    assert_eq!(fx.op.log_position(), before, "the refusal opened no transaction");
+}
+
+/// §4, the other side of that boundary: a slot of exactly [`MAX_SLOT_SPANS`]
+/// spans is the largest M7 accepts, and it is still accepted here. What the
+/// budget refuses is what M7 would refuse; the counting moves where the
+/// refusal happens, never which requests it answers.
+#[test]
+fn a_successor_slot_at_the_budget_is_still_accepted() {
+    let fx = setup();
+    let (d, original) = linked_doc(&fx);
+    let one_span = || skep_arrangement::VSpec { source: d.clone(), span: vspan(1, 1, 1) };
+
+    let (succ, _, _) = ack_edit(ex(
+        &fx.op,
+        fx.s,
+        Op::EditLink {
+            original,
+            successor: SuccessorSpec {
+                from: vec![one_span(); MAX_SLOT_SPANS],
+                to: vec![],
+                ty: SlotArg::Addrs(vec![d.clone()]),
+            },
+            d_s: d.clone(),
+            d_a: d.clone(),
+        },
+    ));
+    let link =
+        link_value(ex(&fx.op, fx.s, Op::ReadLink { a: succ })).expect("the successor is resident");
+    assert_eq!(link.from_slot().len(), MAX_SLOT_SPANS, "every span at the budget was deposited");
 }
 
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the

@@ -56,8 +56,8 @@ use skep_arrangement::{Run, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
-    Response, SlotArg, SuccessorSpec,
+    disposition_of, Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection,
+    ReqId, Request, Response, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::KeySet;
 use skep_kernel::Seq;
@@ -164,22 +164,12 @@ const MAX_NAT_DIGITS: usize = 4096;
 /// only real content.
 const MAX_TUMBLER_COMPONENTS: usize = 256;
 
-/// The most bytes one frame's idempotency `id` may carry. This daemon never
-/// interprets the id — but M10 RETAINS it: the idempotency cache is keyed
-/// `(SessionId, ReqId)`, so a committed write's key stays resident until its
-/// entry is evicted or its session is closed
-/// ([`skep_febe::Operation::close_session`] purges exactly one session's
-/// entries). Retention is therefore (cache capacity) × (this cap), and with
-/// the second factor uncapped the first would be the daemon's 8 MiB body
-/// cap: one session's worth of committed writes retains gigabytes that do
-/// not clear when the caller stops, unlike every CPU cost on this surface.
-///
-/// 256 bytes is far above any key a client needs — a UUID is 36 characters,
-/// a hex-encoded 256-bit value 64, and this suite's own keys are `"retry-1"`,
-/// `"k1"`, `"w17"` — and puts the retained bill at a quarter megabyte
-/// against M10's 1024 cache entries, rather than the four orders above that
-/// the body cap alone would admit.
-const MAX_REQ_ID_BYTES: usize = 256;
+// The most bytes one frame's idempotency `id` may carry is
+// [`MAX_REQ_ID_BYTES`], imported above. This daemon never interprets the id;
+// the bound is M10's, because the retention is M10's — the memo keeps the key
+// for the life of its entry — and its budget is written where the number is.
+// Refusing at parse is this codec's part: the client is told, and told which
+// cap it passed.
 
 /// The daemon's JSON codec — stateless; one instance serves every client.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -364,10 +354,13 @@ pub(crate) fn daemon_rejected(r: DaemonRejection<'_>) -> Vec<u8> {
 /// commits); this function cannot check it.
 pub(crate) fn key_set_reply(as_of: Seq, set: Option<&KeySet>) -> Vec<u8> {
     let Some(set) = set else {
+        // M10's own code, so M10's own advice: the table is asked rather than
+        // its row transcribed, since one code advised two ways on one wire is
+        // a divergence nothing would fail on.
         return daemon_rejected(DaemonRejection {
             op: "key_set",
             code: code_name(RejectCode::NotAnAccount),
-            disposition: Disposition::Reorder,
+            disposition: disposition_of(RejectCode::NotAnAccount),
             detail: None,
         });
     };

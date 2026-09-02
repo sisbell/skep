@@ -25,6 +25,29 @@ pub struct Request {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReqId(pub Vec<u8>);
 
+/// The most bytes one idempotency key may carry into the memo.
+///
+/// The bill this bounds is M10's, so the number is M10's. A committed write's
+/// key stays RESIDENT for the life of its cache entry — until eviction, or
+/// until [`Operation::close_session`] purges the session — so the memo's
+/// retention is (cache capacity) × (this cap), and both factors have to be
+/// finite for the product to be. With this one uncapped the other factor
+/// would be whatever body size the transport admits: one session's worth of
+/// committed writes retaining gigabytes that do not clear when the caller
+/// stops, unlike every CPU cost on this surface.
+///
+/// 256 bytes is far above any key a client needs — a UUID is 36 characters, a
+/// hex-encoded 256-bit value 64 — and puts the retained bill at a quarter
+/// megabyte against the memo's 1024 entries.
+///
+/// A transport refuses an over-long id at parse, which is the first door and
+/// the one that tells the client. [`crate::Operation`] holds the second: a key
+/// past this bound is simply not memoized, so a hand-assembled [`Request`]
+/// cannot enlarge the bill by skipping the parser.
+///
+/// [`Operation::close_session`]: crate::Operation::close_session
+pub const MAX_REQ_ID_BYTES: usize = 256;
+
 /// The parsed request — one variant per FEBE operation (args in M1/M5/M7/M8
 /// types; the principal comes from the session, never the wire).
 pub enum Op {

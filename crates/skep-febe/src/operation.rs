@@ -7,16 +7,19 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use skep_arrangement::{Caller, HasM5, M5Rec};
-use skep_content::{ContentWrite, HasContent};
+// `FebeWorld` names the accessor bound set, and its supertraits carry the
+// `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
+// is imported here by name.
+use skep_arrangement::{Caller, M5Rec};
+use skep_content::ContentWrite;
 use skep_discovery::{
     count_ftt_on, count_v_on, delete_orphans_on, discoverable_from_on, findlinks_ftt_on,
     findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
     window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::{enc, HasLinks, Link, LinkRec, SlotArg};
-use skep_namespace::{HasM3, M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_links::{enc, Link, LinkRec, SlotArg};
+use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
@@ -26,7 +29,7 @@ use crate::reject::{reject, rejection, RejectCode, Rejection};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::successor::endset_from_vspecs;
-use crate::Stores;
+use crate::{FebeWorld, Stores};
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
 /// substrate state and **no** `im` structure — its fields are the ephemeral
@@ -69,7 +72,7 @@ impl WriteCtx {
 
 impl<W> Operation<W>
 where
-    W: WorldState + HasM3 + HasM5 + HasLinks + HasContent,
+    W: FebeWorld,
     W::Record: From<M3Rec> + From<M5Rec> + From<LinkRec> + From<ContentWrite>,
 {
     /// Receive a [`Stores`] factory (built by the binary/engine, wrapping the
@@ -165,9 +168,13 @@ where
         //     a Rejected and a read answer both yield None, so neither can
         //     be replayed (a Reorder/Retry reissue MUST re-execute; a cached
         //     read would replay a stale snapshot). The memo holds that small
-        //     ack, not the Response (§7).
-        if let (Some(id), Some(ack)) = (id, resp.as_ack()) {
-            self.idem.put(s, &id, kind, ack);
+        //     ack, not the Response (§7). Nested on the id, so a request that
+        //     carried none never builds the ack it would then drop — `as_ack`
+        //     clones the acknowledged addresses.
+        if let Some(id) = id {
+            if let Some(ack) = resp.as_ack() {
+                self.idem.put(s, id, kind, ack);
+            }
         }
         resp
     }

@@ -14,7 +14,7 @@ readme = "README.md"
 # Total contract) and the bounded LRU for the committed-write-ack memo.
 # Pointedly NOT `im`: no M10 field is ever snapshotted or replayed.
 parking_lot.workspace = true
-lru = "0.12"
+lru.workspace = true
 # M1 — Address/Tumbler/Span/SpanSet/Nat for request/response payloads;
 # Tumbler::{len, get} in the editlink helper's content-V guard (§4).
 skep-address = { path = "../skep-address" }

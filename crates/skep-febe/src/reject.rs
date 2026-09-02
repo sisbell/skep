@@ -2,6 +2,8 @@
 //! deduped [`RejectCode`] union, the advisory [`Disposition`] hint and its
 //! policy table, and the localized [`FaultSite`] (§5).
 
+use std::fmt;
+
 use skep_address::Address;
 use skep_retrieval::{Operand, SpecFault};
 
@@ -229,6 +231,29 @@ impl Rejection {
     }
 }
 
+/// An operator-facing line: the op that was refused, the authoritative code,
+/// the advisory disposition, and the detail when one was threaded.
+///
+/// The codes render through their own `Debug` spelling, NOT a table of wire
+/// strings: the wire vocabulary is the transport's (skepd's `code_name`,
+/// pinned against `docs/wire.md`), and a second vocabulary here would be a
+/// second thing to keep in step. A caller that needs the wire string reads
+/// `code`, which is authoritative.
+impl fmt::Display for Rejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?} rejected: {:?} ({:?})", self.op, self.code, self.disposition)?;
+        match &self.detail {
+            Some(d) => write!(f, ": {d}"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// No `source`: the lowering table flattens each upstream error into a
+/// [`RejectCode`] and a [`FaultSite`], so a rejection holds a classification
+/// rather than the error it came from — there is nothing to return.
+impl std::error::Error for Rejection {}
+
 /// A bare `Response::Rejected` for `execute`'s steps (b)/(c) (§1/§5).
 pub(crate) fn reject(kind: OpKind, code: RejectCode) -> Response {
     Response::Rejected(rejection(kind, code))
@@ -310,5 +335,31 @@ mod tests {
         assert_eq!(r.detail.as_deref(), Some("unknown op"));
         let bare = Rejection::unparseable(ParseError { detail: None });
         assert!(bare.detail.is_none());
+    }
+
+    /// Both failure types are std errors: boxable, and rendered with the
+    /// op/code/disposition a `{}` log line needs, the detail appended when
+    /// one was threaded.
+    #[test]
+    fn both_failures_are_std_errors() {
+        fn boxed(e: impl std::error::Error + 'static) -> Box<dyn std::error::Error> {
+            Box::new(e)
+        }
+
+        let r = Rejection::classified(OpKind::Insert, RejectCode::Durability, None)
+            .with_detail("disk gone".into());
+        let line = r.to_string();
+        assert!(line.contains("Insert") && line.contains("Durability"));
+        assert!(line.contains("Retry"), "the advisory hint belongs in the line: {line}");
+        assert!(line.ends_with("disk gone"));
+        assert_eq!(boxed(r).to_string(), line);
+
+        let bare = Rejection::classified(OpKind::Insert, RejectCode::NotOwner, None).to_string();
+        assert!(bare.contains("NotOwner") && !bare.ends_with(':'));
+
+        let e = ParseError { detail: Some("unknown op".into()) };
+        assert!(e.to_string().contains("unknown op"));
+        assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
+        assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
     }
 }

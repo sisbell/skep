@@ -45,6 +45,8 @@ num-traits = "0.2"
 # sha2 — credential fingerprint hashing in skep-identity (AUTH fold).
 sha2 = "0.10"
 bincode = "1.3"
+# lru — the bounded committed-write ack memo in skep-febe (M10 idempotency).
+lru = "0.12"
 parking_lot = "0.12"
 rustc-hash = "2"
 once_cell = "1"

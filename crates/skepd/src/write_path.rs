@@ -19,10 +19,10 @@
 //! two can never come apart in the window between a commit and its record.
 //! Reads never come here and never take the lock.
 //!
-//! [`write_meta`] is also THE read/write partition — a read is exactly an
-//! `Op` the change feed has nothing to record — so the history surface and
-//! the change feed decide from one table and cannot disagree about a
-//! variant.
+//! The read/write partition is M10's, read here through [`op_is_read`]. A
+//! read is exactly an `Op` the change feed has nothing to record, so
+//! [`write_meta`] answers `None` for precisely those — an equivalence it
+//! asserts against the partition rather than assumes.
 
 use std::io;
 use std::path::Path;
@@ -334,31 +334,29 @@ pub(crate) enum AffectedDocs {
     Minted,
 }
 
-/// The [`FrameMeta`] of a write `Op` — `None` for reads, which is also
-/// THE read/write partition: [`op_is_read`] is defined as this answer's
-/// absence, so the two cannot disagree about a variant. EXHAUSTIVE with no
+/// The [`FrameMeta`] of a write `Op` — `None` for reads, which is M10's
+/// read/write partition seen from the change feed's side. EXHAUSTIVE with no
 /// `_` arm: a new `Op` fails to compile here until its change-feed entry is
-/// decided, and that one decision classifies it for the history surface
-/// too.
+/// decided.
 ///
-/// OBLIGATION, and the one this table cannot check: `Some` for exactly the
-/// ops M10 executes as writes (`Op::is_write`, `pub(crate)` there, so this
-/// table is a restatement rather than a delegation). Both tables are
-/// exhaustive over `Op` and neither is derived from the other, so a
-/// divergence compiles. A write classified here as a read runs outside
-/// [`WritePath::commit_under`]'s lock, unrecorded and unannounced: `/changes`
-/// misses that position for the rest of the uptime, `/events` never
-/// announces it, and [`crate::sidecar::Sidecar::head_time`]'s premise that
-/// every commit is recorded fails, so `/health` reports an older position's
-/// time AS the head's — the one thing that method's contract says it does
-/// not do. A read classified here as a write is refused from `/op-at` as
-/// `write_at_history`, denying a legitimate historical read. The two tables
-/// agree at 14 writes of 38, with M10's own
-/// `partition_matches_the_design_grouping` pinning that side.
+/// OBLIGATION: `Some` for exactly the ops M10 executes as writes. This
+/// table answers a second question — which documents a commit touched — so
+/// it is its own match rather than a call to [`Op::is_write`]; the assertion
+/// below is what keeps the two from drifting, since M10 owns the partition
+/// and this table only restates its shape. What a drift would cost, were it
+/// to reach a release build: a write classified here as a read runs outside
+/// [`WritePath::commit_under`]'s lock, unrecorded and unannounced —
+/// `/changes` misses that position for the rest of the uptime, `/events`
+/// never announces it, and [`crate::sidecar::Sidecar::head_time`]'s premise
+/// that every commit is recorded fails, so `/health` reports an older
+/// position's time AS the head's, the one thing that method's contract says
+/// it does not do. A read classified here as a write is refused from
+/// `/op-at` as `write_at_history`, denying a legitimate historical read.
+/// The two tables agree at 14 writes of 38.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs| Some(FrameMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
-    match op {
+    let answer = match op {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
         Op::Delegate { .. } => meta(OpKind::Delegate, AffectedDocs::Named(Vec::new())),
         Op::RegisterNode { .. } => meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new())),
@@ -406,20 +404,20 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::DeleteOrphans { .. }
         | Op::InClaims { .. }
         | Op::OutClaims { .. } => None,
-    }
+    };
+    debug_assert_eq!(
+        answer.is_some(),
+        op.is_write(),
+        "the change-feed table and M10's read/write partition disagree about this op"
+    );
+    answer
 }
 
-/// The wire's read/write partition, mirroring M10's own `Op::is_read`
-/// (crate-private there, so restated here — the one classification the
-/// history surface needs before dispatch). A read is exactly an `Op` the
-/// change feed has nothing to record: one table decides both, so an `Op`
-/// admitted to history can never be one that commits.
-///
-/// What the restatement costs — that agreeing with M10 is an unchecked
-/// obligation rather than a compiled fact — is [`write_meta`]'s to state,
-/// since that is the table which carries it.
+/// The wire's read/write partition — M10's own [`Op::is_read`], which is
+/// where the split is decided. The history surface needs it before dispatch:
+/// an `Op` admitted to `/op-at` must be one that cannot commit.
 pub(crate) fn op_is_read(op: &Op) -> bool {
-    write_meta(op).is_none()
+    op.is_read()
 }
 
 // ── the commit stream (wire v4) ──────────────────────────────────────────
@@ -504,8 +502,8 @@ mod tests {
     use super::*;
     use skep_namespace::PrincipalId;
 
-    /// The partition is one table's two faces: reads are exactly the ops
-    /// the change feed records nothing for.
+    /// Reads are exactly the ops the change feed records nothing for —
+    /// M10's partition and this table's answer, agreeing on both sides.
     #[test]
     fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
         let read = Op::Fork;

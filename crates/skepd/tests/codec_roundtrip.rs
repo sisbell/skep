@@ -84,15 +84,11 @@ fn rq(id: Option<&str>, op: Op) -> Request {
     Request { id: id.map(|s| ReqId(s.as_bytes().to_vec())), op }
 }
 
-/// Unwrap a parse by hand: upstream `ParseError` (M10, read-only) derives no
-/// `Debug`, so `Result::expect` cannot apply; surface the detail instead.
+/// Unwrap a parse, naming the frame as well as the fault — which
+/// `Result::expect` cannot do, since it sees only the error.
 fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
     codec.parse(frame).unwrap_or_else(|e| {
-        panic!(
-            "frame failed to parse ({:?}): {}",
-            e.detail,
-            String::from_utf8_lossy(frame)
-        )
+        panic!("frame failed to parse ({e}): {}", String::from_utf8_lossy(frame))
     })
 }
 
@@ -925,7 +921,7 @@ fn a_zero_width_span_is_refused_at_parse() {
         br#"{"op":"emit","home":"1.0.1.0.1","from":"1.0.1.0.1","to":[],"ty":[{"start":"1.1","width":"0.0"}]}"#,
     ];
     for frame in frames {
-        // `ParseError` derives no Debug upstream, so unwrap by hand.
+        // `Request` derives no Debug, so `expect_err` cannot apply; match.
         let err = match codec.parse(frame) {
             Err(e) => e,
             Ok(_) => {

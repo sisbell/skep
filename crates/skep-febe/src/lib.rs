@@ -61,9 +61,9 @@
 //!
 //! M10 is generic over `W` (Engine Composition Contract): it names no concrete
 //! `World`/`Record`, reaches upstream state only through the accessor traits
-//! (`HasM3`/`HasM5`/`HasLinks`/`HasContent`) via one pinned snapshot per read,
-//! and acquires the three transact-driving store drivers per-op from the
-//! injected [`Stores`] factory. The `M10 → M4` edge is type-only (design,
+//! ([`FebeWorld`] names all four) via one pinned snapshot per read, and
+//! acquires the three transact-driving store drivers per-op from the injected
+//! [`Stores`] factory. The `M10 → M4` edge is type-only (design,
 //! Conflicts resolved #4): `Val`/`ContentWrite`/`ContentError`/`HasContent`
 //! are named solely to satisfy `Vstream::insert`'s public bound.
 
@@ -95,10 +95,25 @@ pub use skep_links::SlotArg;
 // whose meaning lives elsewhere.
 pub use skep_links::{FROM, TO, TYPE};
 
-use skep_arrangement::Vstream;
+use skep_arrangement::{HasM5, Vstream};
+use skep_content::HasContent;
 use skep_kernel::{Kernel, WorldState};
-use skep_links::LinkWriter;
-use skep_namespace::Namespace;
+use skep_links::{HasLinks, LinkWriter};
+use skep_namespace::{HasM3, Namespace};
+
+/// The world the front door dispatches over: M2's fold contract plus every
+/// upstream accessor, since M10 reaches all four store slices — the widest
+/// bound set in the engine, and M10's own slice count is zero (Engine
+/// Composition Contract — no state, no record variant, no fold).
+///
+/// Named for the reason M6 names `M6World` and M7 `LinkWorld`: one word for
+/// the seam, so a consumer generic over the same world writes one bound
+/// rather than five. Blanket-implemented, so an engine that implements the
+/// accessors gets this for free; the record lift each write path needs
+/// (`W::Record: From<M3Rec>` and its three siblings) stays on the impl that
+/// requires it.
+pub trait FebeWorld: WorldState + HasM3 + HasM5 + HasLinks + HasContent {}
+impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent> FebeWorld for W {}
 
 /// The injected acquisition path for the three transact-driving store-driver
 /// handles (§Public interface). The binary/engine builds the one production

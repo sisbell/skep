@@ -195,11 +195,18 @@ impl Op {
     /// new `Op` variant fails to compile here (and at both dispatch
     /// functions) until classified, never silently defaulting into either
     /// half.
+    ///
+    /// Public because the partition is a fact about the request, not an
+    /// implementation detail of the lifecycle: a transport that serializes
+    /// or records writes must know which side an `Op` falls on BEFORE
+    /// [`Operation::execute`] takes it, and this is the one answer.
+    ///
+    /// [`Operation::execute`]: crate::Operation::execute
     //
     // The two-arm shape is load-bearing (compile-time non-exhaustiveness on a
     // new variant), so the `matches!` rewrite clippy suggests is refused.
     #[allow(clippy::match_like_matches_macro)]
-    pub(crate) fn is_read(&self) -> bool {
+    pub fn is_read(&self) -> bool {
         match self {
             Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
@@ -242,12 +249,14 @@ impl Op {
         }
     }
 
-    pub(crate) fn is_write(&self) -> bool {
+    /// The other side of [`Op::is_read`], and defined as its absence so the
+    /// two cannot disagree about a variant.
+    pub fn is_write(&self) -> bool {
         !self.is_read()
     }
 
     /// The fieldless echo — never yields [`OpKind::Unparseable`].
-    pub(crate) fn kind(&self) -> OpKind {
+    pub fn kind(&self) -> OpKind {
         match self {
             Op::CreateNewDocument { .. } => OpKind::CreateNewDocument,
             Op::Delegate { .. } => OpKind::Delegate,

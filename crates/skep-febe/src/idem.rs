@@ -19,14 +19,16 @@ use crate::op::{OpKind, ReqId};
 use crate::response::CommittedAck;
 use crate::session::SessionId;
 
-/// The idempotency LRU's capacity.
+/// The idempotency LRU's capacity, in the type [`LruCache`] demands — so
+/// nonzero is proven where the number is written, not re-proven where it is
+/// used.
 // OPEN DECISION: the interface pins `Operation::new(stores)` with NO
 // `idem_capacity` parameter, while the design (§7 / Core data model / Open
 // build decision 3) calls for an explicit construction-time knob with "no
 // implicit default". The interface is the higher authority for the public
 // surface, so the knob is absent and this crate-fixed default bounds the LRU
 // instead — surfaced in the build report as an interface↔design conflict.
-const DEFAULT_IDEM_CAPACITY: usize = 1024;
+const DEFAULT_IDEM_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is nonzero");
 
 /// The session-confined idempotency key (§7). A client's `ReqId` is unique
 /// only WITHIN its session, so the session it committed under is half the
@@ -64,13 +66,13 @@ pub(crate) struct IdemCache {
 
 impl IdemCache {
     pub(crate) fn new() -> IdemCache {
-        let cap = NonZeroUsize::new(DEFAULT_IDEM_CAPACITY).expect("capacity is a nonzero constant");
-        IdemCache { entries: Mutex::new(LruCache::new(cap)) }
+        IdemCache { entries: Mutex::new(LruCache::new(DEFAULT_IDEM_CAPACITY)) }
     }
 
     /// Memoize one committed-write acknowledgment under this session's key.
-    pub(crate) fn put(&self, s: SessionId, id: &ReqId, kind: OpKind, ack: CommittedAck) {
-        self.entries.lock().put(IdemKey { session: s, req: id.clone() }, Cached { kind, ack });
+    /// Takes the `ReqId` because the key keeps it.
+    pub(crate) fn put(&self, s: SessionId, id: ReqId, kind: OpKind, ack: CommittedAck) {
+        self.entries.lock().put(IdemKey { session: s, req: id }, Cached { kind, ack });
     }
 
     /// The memoized acknowledgment this session committed under `id` for
@@ -120,11 +122,18 @@ mod tests {
         let id = ReqId(b"req-1".to_vec());
         cache.put(
             s1,
-            &id,
+            id.clone(),
             OpKind::CreateNewDocument,
             CommittedAck::Addr { addr: a(&[1, 0, 1]), at: Seq(9) },
         );
-        cache.put(s2, &id, OpKind::Fork, CommittedAck::Addr { addr: a(&[1, 0, 2]), at: Seq(10) });
+        // The SAME id under a second session, deliberately: confinement is
+        // what makes the two entries distinct.
+        cache.put(
+            s2,
+            id.clone(),
+            OpKind::Fork,
+            CommittedAck::Addr { addr: a(&[1, 0, 2]), at: Seq(10) },
+        );
         // Same session + kind: hit, rebuilt equal.
         match cache.get(s1, &id, OpKind::CreateNewDocument) {
             Some(CommittedAck::Addr { addr, at }) => {

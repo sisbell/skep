@@ -99,27 +99,27 @@ impl From<LinkRec> for Record {
 
 // ───────────────────────────── address fixtures ─────────────────────────────
 
-pub fn t(comps: &[u32]) -> Tumbler {
+pub fn tum(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
 }
 
-pub fn a(comps: &[u32]) -> Address {
-    validate(t(comps)).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+pub fn addr(comps: &[u32]) -> Address {
+    validate(tum(comps)).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
 }
 
-pub fn n(x: u32) -> Nat {
+pub fn nat(x: u32) -> Nat {
     Nat::from(x)
 }
 
 /// The genesis bootstrap node `[1]`.
 pub fn node1() -> Address {
-    a(&[1])
+    addr(&[1])
 }
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]` (the
 /// compiled format constants for k = 1..=5).
 pub fn ra(k: u32) -> Address {
-    a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
+    addr(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }
 
 /// The shipped Supersedes class as an address-denoting type endset.
@@ -133,12 +133,12 @@ pub fn pred_def_ty() -> Endset {
 }
 
 pub fn vp(subspace: u32, ordinal: u32) -> VPos {
-    VPos { subspace: n(subspace), ordinal: n(ordinal) }
+    VPos { subspace: nat(subspace), ordinal: nat(ordinal) }
 }
 
 /// An ordinal-level depth-2 V-span `[subspace, ord] w [0, width]`.
 pub fn vspan(subspace: u32, ord: u32, width: u32) -> Span {
-    Span::new(t(&[subspace, ord]), t(&[0, width]))
+    Span::new(tum(&[subspace, ord]), tum(&[0, width]))
         .unwrap_or_else(|_| panic!("well-formed test span"))
 }
 
@@ -187,12 +187,12 @@ pub fn operation() -> Operation<World> {
 
 // ───────────────────────────── request helpers ──────────────────────────────
 
-pub fn ex(op: &Operation<World>, s: SessionId, o: Op) -> Response {
-    op.execute(s, Request { id: None, op: o })
+pub fn ex(febe: &Operation<World>, s: SessionId, op: Op) -> Response {
+    febe.execute(s, Request { id: None, op })
 }
 
-pub fn ex_id(op: &Operation<World>, s: SessionId, id: &[u8], o: Op) -> Response {
-    op.execute(s, Request { id: Some(ReqId(id.to_vec())), op: o })
+pub fn ex_id(febe: &Operation<World>, s: SessionId, id: &[u8], op: Op) -> Response {
+    febe.execute(s, Request { id: Some(ReqId(id.to_vec())), op })
 }
 
 // ─────────────────────────── response extractors ────────────────────────────
@@ -387,36 +387,36 @@ pub const USER: PrincipalId = PrincipalId(7);
 /// An `Operation` plus a bootstrap session, one delegated account under the
 /// genesis node, and an open session for its principal — all driven through
 /// the FEBE surface itself.
-pub struct Fx {
-    pub op: Operation<World>,
+pub struct Fixture {
+    pub febe: Operation<World>,
     pub boot: SessionId,
     pub s: SessionId,
     pub acct: Address,
 }
 
-pub fn setup() -> Fx {
-    let op = operation();
-    let boot = op.bootstrap_session();
-    let (prefix, _) = maybe_addr(ex(&op, boot, Op::NextAccountPrefix { parent: node1() }));
+pub fn setup() -> Fixture {
+    let febe = operation();
+    let boot = febe.bootstrap_session();
+    let (prefix, _) = maybe_addr(ex(&febe, boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node has a delegable next-form prefix");
     let (acct, _) = ack_addr(ex(
-        &op,
+        &febe,
         boot,
         Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
     ));
-    let s = op.open_session(USER);
-    Fx { op, boot, s, acct }
+    let s = febe.open_session(USER);
+    Fixture { febe, boot, s, acct }
 }
 
-pub fn create_doc(fx: &Fx) -> Address {
-    ack_addr(ex(&fx.op, fx.s, Op::CreateNewDocument { account: fx.acct.clone() })).0
+pub fn create_doc(fx: &Fixture) -> Address {
+    ack_addr(ex(&fx.febe, fx.s, Op::CreateNewDocument { account: fx.acct.clone() })).0
 }
 
 /// Insert three one-byte values at the head of `doc`'s content subspace;
 /// returns the placed run's start address and the commit `Seq`.
-pub fn insert3(fx: &Fx, doc: &Address) -> (Address, Seq) {
+pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
     ack_addr(ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::Insert {
             doc: doc.clone(),

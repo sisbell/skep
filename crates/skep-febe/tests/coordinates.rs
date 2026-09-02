@@ -30,10 +30,10 @@ fn at_of(kind: OpKind, r: &Response) -> Seq {
 /// to. Exact, and safe to state exactly — M2 mints one `Seq` per record and
 /// returns the last of the range, which is the installed root's coordinate,
 /// and a zero-step transaction returns the base seq, which is that same head.
-fn committed(fx: &Fx, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
+fn committed(fx: &Fixture, kind: OpKind, r: &Response, seen: &mut Vec<OpKind>) {
     assert_eq!(
         at_of(kind, r),
-        fx.op.log_position(),
+        fx.febe.log_position(),
         "{kind:?} acknowledged at a coordinate that is not the one it committed"
     );
     assert!(!seen.contains(&kind), "{kind:?} is covered twice");
@@ -51,12 +51,12 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let mut seen: Vec<OpKind> = Vec::new();
 
     // ── the document family ──
-    let r = ex(&fx.op, fx.s, Op::CreateNewDocument { account: fx.acct.clone() });
+    let r = ex(&fx.febe, fx.s, Op::CreateNewDocument { account: fx.acct.clone() });
     committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
     let (d, _) = ack_addr(r);
 
     let r = ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::Insert {
             doc: d.clone(),
@@ -66,21 +66,21 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     );
     committed(&fx, OpKind::Insert, &r, &mut seen);
 
-    let r = ex(&fx.op, fx.s, Op::Fork);
+    let r = ex(&fx.febe, fx.s, Op::Fork);
     committed(&fx, OpKind::Fork, &r, &mut seen);
     let (f, _) = ack_addr(r);
 
-    let r = ex(&fx.op, fx.s, Op::Version { d_src: d.clone() });
+    let r = ex(&fx.febe, fx.s, Op::Version { d_src: d.clone() });
     committed(&fx, OpKind::Version, &r, &mut seen);
 
-    let r = ex(&fx.op, fx.s, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
+    let r = ex(&fx.febe, fx.s, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
     committed(&fx, OpKind::Copy, &r, &mut seen);
 
-    let r = ex(&fx.op, fx.s, Op::Delete { doc: d.clone(), p: vp(1, 3), width: n(1) });
+    let r = ex(&fx.febe, fx.s, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) });
     committed(&fx, OpKind::Delete, &r, &mut seen);
 
     let r = ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::Rearrange { doc: d.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] },
     );
@@ -96,13 +96,13 @@ fn every_write_acks_at_the_coordinate_it_committed() {
         ty: SlotArg::Resolve(vec![vspec(&e, 3, 1)]),
     };
 
-    let r = ex(&fx.op, fx.s, mk());
+    let r = ex(&fx.febe, fx.s, mk());
     committed(&fx, OpKind::MakeLink, &r, &mut seen);
     let (l1, _) = ack_addr(r);
-    let (l2, _) = ack_addr(ex(&fx.op, fx.s, mk()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
 
     let r = ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::EditLink {
             original: l1.clone(),
@@ -118,30 +118,30 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     committed(&fx, OpKind::EditLink, &r, &mut seen);
 
     let r =
-        ex(&fx.op, fx.s, Op::AssertSup { home: e.clone(), old: l1, new: l2.clone() });
+        ex(&fx.febe, fx.s, Op::AssertSup { home: e.clone(), old: l1, new: l2.clone() });
     committed(&fx, OpKind::AssertSup, &r, &mut seen);
 
     let r = ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::Emit { home: e.clone(), ty: pred_def_ty(), from: e_start, to: vec![] },
     );
     committed(&fx, OpKind::Emit, &r, &mut seen);
 
-    let r = ex(&fx.op, fx.s, Op::Nullify { home: e, target: l2 });
+    let r = ex(&fx.febe, fx.s, Op::Nullify { home: e, target: l2 });
     committed(&fx, OpKind::Nullify, &r, &mut seen);
 
     // ── provisioning, under the bootstrap session ──
-    let (prefix, _) = maybe_addr(ex(&fx.op, fx.boot, Op::NextAccountPrefix { parent: node1() }));
+    let (prefix, _) = maybe_addr(ex(&fx.febe, fx.boot, Op::NextAccountPrefix { parent: node1() }));
     let prefix = prefix.expect("the genesis node is still delegable");
     let r = ex(
-        &fx.op,
+        &fx.febe,
         fx.boot,
         Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: PrincipalId(11) },
     );
     committed(&fx, OpKind::Delegate, &r, &mut seen);
 
-    let r = ex(&fx.op, fx.boot, Op::RegisterNode { addr: t(&[1, 4]) });
+    let r = ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 4]) });
     committed(&fx, OpKind::RegisterNode, &r, &mut seen);
 
     assert_eq!(seen.len(), 14, "the write half of the partition is 14 operations: {seen:?}");
@@ -161,17 +161,17 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let fx = setup();
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    let (v, _) = ack_addr(ex(&fx.op, fx.s, Op::Version { d_src: d.clone() }));
+    let (v, _) = ack_addr(ex(&fx.febe, fx.s, Op::Version { d_src: d.clone() }));
     let mk = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),
         to: SlotArg::Resolve(vec![vspec(&d, 2, 1)]),
         ty: SlotArg::Resolve(vec![vspec(&d, 3, 1)]),
     };
-    let (l1, _) = ack_addr(ex(&fx.op, fx.s, mk()));
-    let (l2, _) = ack_addr(ex(&fx.op, fx.s, mk()));
+    let (l1, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
+    let (l2, _) = ack_addr(ex(&fx.febe, fx.s, mk()));
     ack_addr(ex(
-        &fx.op,
+        &fx.febe,
         fx.s,
         Op::AssertSup { home: d.clone(), old: l1.clone(), new: l2.clone() },
     ));
@@ -210,7 +210,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
         Op::RetrieveEndsets { d: d.clone(), region: region() },
         Op::Project { a: l1.clone(), slot: FROM, d: d.clone() },
         Op::DiscoverableFrom { a: l1.clone(), d: d.clone() },
-        Op::DeleteOrphans { d: d.clone(), p: vp(1, 1), width: n(1) },
+        Op::DeleteOrphans { d: d.clone(), p: vp(1, 1), width: nat(1) },
         Op::InClaims { y: l1, view: View::Active },
         Op::OutClaims { x: l2, view: View::Active },
     ];
@@ -223,11 +223,11 @@ fn every_read_reports_the_log_head_as_its_as_of() {
         }
     }
 
-    let head = fx.op.log_position();
+    let head = fx.febe.log_position();
     for op in reads {
         let kind = op.kind();
-        let r = ex(&fx.op, fx.s, op);
+        let r = ex(&fx.febe, fx.s, op);
         assert_eq!(as_of(&r), head, "{kind:?} reports the snapshot it answered from");
     }
-    assert_eq!(fx.op.log_position(), head, "no read moves the log");
+    assert_eq!(fx.febe.log_position(), head, "no read moves the log");
 }

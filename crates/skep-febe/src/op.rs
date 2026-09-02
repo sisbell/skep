@@ -329,26 +329,26 @@ pub(crate) mod tests {
     use skep_address::{validate, Nat, Span, Tumbler};
     use skep_discovery::SlotSpec;
 
-    fn t(comps: &[u32]) -> Tumbler {
+    fn tum(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
     }
-    fn a(comps: &[u32]) -> Address {
-        validate(t(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
+    fn addr(comps: &[u32]) -> Address {
+        validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
     fn sp() -> Span {
-        Span::new(t(&[1, 1]), t(&[0, 1])).unwrap_or_else(|_| panic!("well-formed test span"))
+        Span::new(tum(&[1, 1]), tum(&[0, 1])).unwrap_or_else(|_| panic!("well-formed test span"))
     }
-    fn vp() -> VPos {
+    fn vpos() -> VPos {
         VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) }
     }
     fn vs() -> VSpec {
-        VSpec { source: a(&[1, 0, 1, 0, 1]), span: sp() }
+        VSpec { source: addr(&[1, 0, 1, 0, 1]), span: sp() }
     }
     fn q() -> FourSet {
         FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: SlotSpec::Any, ty: SlotSpec::Any }
     }
-    fn d() -> Address {
-        a(&[1, 0, 1, 0, 1])
+    fn doc() -> Address {
+        addr(&[1, 0, 1, 0, 1])
     }
 
     /// Every variant, paired with its documented partition side (§1's
@@ -357,60 +357,60 @@ pub(crate) mod tests {
     /// fixture, in `operation.rs`.
     pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         vec![
-            (Op::CreateNewDocument { account: a(&[1, 0, 1]) }, false),
-            (Op::Delegate { new_prefix: t(&[1, 0, 1]), new_id: PrincipalId(1) }, false),
-            (Op::RegisterNode { addr: t(&[1, 1]) }, false),
+            (Op::CreateNewDocument { account: addr(&[1, 0, 1]) }, false),
+            (Op::Delegate { new_prefix: tum(&[1, 0, 1]), new_id: PrincipalId(1) }, false),
+            (Op::RegisterNode { addr: tum(&[1, 1]) }, false),
             (Op::Fork, false),
-            (Op::NextAccountPrefix { parent: a(&[1]) }, true),
+            (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
             (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
-            (Op::Insert { doc: d(), at: vp(), values: vec![Val::new(vec![1u8])] }, false),
-            (Op::Delete { doc: d(), p: vp(), width: Nat::from(1u32) }, false),
-            (Op::Copy { doc: d(), at: vp(), specs: vec![vs()] }, false),
-            (Op::Rearrange { doc: d(), cuts: vec![vp()] }, false),
-            (Op::Version { d_src: d() }, false),
+            (Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])] }, false),
+            (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
+            (Op::Copy { doc: doc(), at: vpos(), specs: vec![vs()] }, false),
+            (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
+            (Op::Version { d_src: doc() }, false),
             (
                 Op::MakeLink {
-                    home: d(),
+                    home: doc(),
                     from: SlotArg::Resolve(vec![vs()]),
-                    to: SlotArg::Addrs(vec![d()]),
+                    to: SlotArg::Addrs(vec![doc()]),
                     ty: SlotArg::Resolve(vec![vs()]),
                 },
                 false,
             ),
-            (Op::Emit { home: d(), ty: Endset::empty(), from: d(), to: vec![] }, false),
-            (Op::Nullify { home: d(), target: d() }, false),
-            (Op::AssertSup { home: d(), old: d(), new: d() }, false),
+            (Op::Emit { home: doc(), ty: Endset::empty(), from: doc(), to: vec![] }, false),
+            (Op::Nullify { home: doc(), target: doc() }, false),
+            (Op::AssertSup { home: doc(), old: doc(), new: doc() }, false),
             (
                 Op::EditLink {
-                    original: d(),
-                    successor: SuccessorSpec { from: vec![vs()], to: vec![vs()], ty: SlotArg::Addrs(vec![d()]) },
-                    d_s: d(),
-                    d_a: d(),
+                    original: doc(),
+                    successor: SuccessorSpec { from: vec![vs()], to: vec![vs()], ty: SlotArg::Addrs(vec![doc()]) },
+                    d_s: doc(),
+                    d_a: doc(),
                 },
                 false,
             ),
-            (Op::ReadLink { a: d() }, true),
-            (Op::FollowLink { a: d(), slot: 1 }, true),
-            (Op::RetrieveV { specs: vec![Spec { doc: d(), span: sp() }] }, true),
-            (Op::RetrieveDocVSpan { doc: d() }, true),
-            (Op::RetrieveDocVSpanSet { doc: d() }, true),
-            (Op::ShowOrigin { doc: d(), span: sp() }, true),
-            (Op::ShowDeletions { d_a: d(), d_b: d() }, true),
+            (Op::ReadLink { a: doc() }, true),
+            (Op::FollowLink { a: doc(), slot: 1 }, true),
+            (Op::RetrieveV { specs: vec![Spec { doc: doc(), span: sp() }] }, true),
+            (Op::RetrieveDocVSpan { doc: doc() }, true),
+            (Op::RetrieveDocVSpanSet { doc: doc() }, true),
+            (Op::ShowOrigin { doc: doc(), span: sp() }, true),
+            (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
             (Op::Compare { rho1: vec![], rho2: vec![] }, true),
-            (Op::FindDocsContaining { regions: vec![Region { doc: d(), spans: vec![sp()] }] }, true),
-            (Op::Image { d: d(), region: vec![sp()] }, true),
-            (Op::FindLinksV { d: d(), region: vec![sp()] }, true),
+            (Op::FindDocsContaining { regions: vec![Region { doc: doc(), spans: vec![sp()] }] }, true),
+            (Op::Image { d: doc(), region: vec![sp()] }, true),
+            (Op::FindLinksV { d: doc(), region: vec![sp()] }, true),
             (Op::FindLinksFtt { q: q() }, true),
-            (Op::CountV { d: d(), region: vec![sp()] }, true),
+            (Op::CountV { d: doc(), region: vec![sp()] }, true),
             (Op::CountFtt { q: q() }, true),
-            (Op::WindowV { d: d(), region: vec![sp()], cur: None, n: 1 }, true),
+            (Op::WindowV { d: doc(), region: vec![sp()], cur: None, n: 1 }, true),
             (Op::WindowFtt { q: q(), cur: None, n: 1 }, true),
-            (Op::RetrieveEndsets { d: d(), region: vec![sp()] }, true),
-            (Op::Project { a: d(), slot: 1, d: d() }, true),
-            (Op::DiscoverableFrom { a: d(), d: d() }, true),
-            (Op::DeleteOrphans { d: d(), p: vp(), width: Nat::from(1u32) }, true),
-            (Op::InClaims { y: d(), view: View::Active }, true),
-            (Op::OutClaims { x: d(), view: View::Active }, true),
+            (Op::RetrieveEndsets { d: doc(), region: vec![sp()] }, true),
+            (Op::Project { a: doc(), slot: 1, d: doc() }, true),
+            (Op::DiscoverableFrom { a: doc(), d: doc() }, true),
+            (Op::DeleteOrphans { d: doc(), p: vpos(), width: Nat::from(1u32) }, true),
+            (Op::InClaims { y: doc(), view: View::Active }, true),
+            (Op::OutClaims { x: doc(), view: View::Active }, true),
         ]
     }
 

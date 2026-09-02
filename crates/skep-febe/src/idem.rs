@@ -42,7 +42,7 @@ const DEFAULT_IDEM_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).expect("1024
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct IdemKey {
     session: SessionId,
-    req: ReqId,
+    id: ReqId,
 }
 
 /// A memoized acknowledgment plus the op-kind that produced it. The tag lets
@@ -86,7 +86,7 @@ impl IdemCache {
         if id.0.len() > MAX_REQ_ID_BYTES {
             return;
         }
-        self.entries.lock().put(IdemKey { session: s, req: id }, Cached { kind, ack });
+        self.entries.lock().put(IdemKey { session: s, id }, Cached { kind, ack });
     }
 
     /// The memoized acknowledgment this session committed under `id` for
@@ -95,7 +95,7 @@ impl IdemCache {
     /// request re-executes.
     pub(crate) fn get(&self, s: SessionId, id: &ReqId, kind: OpKind) -> Option<CommittedAck> {
         let mut g = self.entries.lock();
-        let c = g.get(&IdemKey { session: s, req: id.clone() })?; // bumps LRU recency
+        let c = g.get(&IdemKey { session: s, id: id.clone() })?; // bumps LRU recency
         (c.kind == kind).then(|| c.ack.clone())
     }
 
@@ -119,7 +119,7 @@ mod tests {
 
     use super::*;
 
-    fn a(comps: &[u32]) -> Address {
+    fn addr(comps: &[u32]) -> Address {
         let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
         validate(t).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
@@ -128,7 +128,7 @@ mod tests {
     /// matched — a foreign session or a reused-across-kinds `ReqId` misses —
     /// and `purge_session` clears one session's entries only.
     #[test]
-    fn confinement_and_purge() {
+    fn an_entry_is_confined_to_its_session_and_kind_and_dies_with_the_session() {
         let sessions = crate::session::Sessions::new();
         let cache = IdemCache::new();
         let s1 = sessions.open(skep_namespace::PrincipalId(1));
@@ -138,7 +138,7 @@ mod tests {
             s1,
             id.clone(),
             OpKind::CreateNewDocument,
-            CommittedAck::Addr { addr: a(&[1, 0, 1]), at: Seq(9) },
+            CommittedAck::Addr { addr: addr(&[1, 0, 1]), at: Seq(9) },
         );
         // The SAME id under a second session, deliberately: confinement is
         // what makes the two entries distinct.
@@ -146,12 +146,12 @@ mod tests {
             s2,
             id.clone(),
             OpKind::Fork,
-            CommittedAck::Addr { addr: a(&[1, 0, 2]), at: Seq(10) },
+            CommittedAck::Addr { addr: addr(&[1, 0, 2]), at: Seq(10) },
         );
         // Same session + kind: hit, rebuilt equal.
         match cache.get(s1, &id, OpKind::CreateNewDocument) {
-            Some(CommittedAck::Addr { addr, at }) => {
-                assert_eq!(addr, a(&[1, 0, 1]));
+            Some(CommittedAck::Addr { addr: replayed, at }) => {
+                assert_eq!(replayed, addr(&[1, 0, 1]));
                 assert_eq!(at, Seq(9));
             }
             _ => panic!("expected a memoized Addr ack"),

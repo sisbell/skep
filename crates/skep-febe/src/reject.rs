@@ -275,7 +275,7 @@ mod tests {
 
     /// §5 disposition table: the explicit Halt/Retry/Reorder rows.
     #[test]
-    fn explicit_dispositions() {
+    fn the_explicit_rows_advise_halt_retry_and_reorder() {
         assert_eq!(disposition_of(RejectCode::Poisoned), Disposition::Halt);
         assert_eq!(disposition_of(RejectCode::Durability), Disposition::Retry);
         for code in [
@@ -295,7 +295,7 @@ mod tests {
     /// §5: the named-`Permanent` codes (invariant-forced or recovery-steering)
     /// and the conservative state-dependent bucket all land `Permanent`.
     #[test]
-    fn named_permanent_codes() {
+    fn invariant_forced_and_state_dependent_codes_are_permanent() {
         for code in [
             RejectCode::NotRegistered,
             RejectCode::NotFresh,
@@ -332,7 +332,7 @@ mod tests {
     /// The parse-failure rejection is classified by the same table as every
     /// other `Malformed`, and carries the codec's cause when it has one.
     #[test]
-    fn unparseable_is_classified_here() {
+    fn an_unparseable_frame_is_classified_by_the_same_table() {
         let r = Rejection::unparseable(ParseError { detail: Some("unknown op".into()) });
         assert_eq!(r.op, OpKind::Unparseable);
         assert_eq!(r.code, RejectCode::Malformed);

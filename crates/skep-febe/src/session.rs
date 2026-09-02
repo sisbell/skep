@@ -25,31 +25,31 @@ pub struct SessionId(pub(crate) u64);
 /// Non-poisoning lock (§7): a panic while the map is held must not break
 /// `execute`'s Total contract.
 pub(crate) struct Sessions {
-    bound: Mutex<HashMap<SessionId, PrincipalId>>,
-    next: AtomicU64,
+    bindings: Mutex<HashMap<SessionId, PrincipalId>>,
+    next_id: AtomicU64,
 }
 
 impl Sessions {
     pub(crate) fn new() -> Sessions {
-        Sessions { bound: Mutex::new(HashMap::new()), next: AtomicU64::new(1) }
+        Sessions { bindings: Mutex::new(HashMap::new()), next_id: AtomicU64::new(1) }
     }
 
     /// Record the binding and hand back a fresh id.
     pub(crate) fn open(&self, principal: PrincipalId) -> SessionId {
-        let s = SessionId(self.next.fetch_add(1, Ordering::Relaxed));
-        self.bound.lock().insert(s, principal);
+        let s = SessionId(self.next_id.fetch_add(1, Ordering::Relaxed));
+        self.bindings.lock().insert(s, principal);
         s
     }
 
     /// The principal this session speaks for — `None` once retired, and for
     /// an id that was never opened.
     pub(crate) fn principal_of(&self, s: SessionId) -> Option<PrincipalId> {
-        self.bound.lock().get(&s).copied()
+        self.bindings.lock().get(&s).copied()
     }
 
     /// Retire the binding. The id is dead for the rest of the uptime.
     pub(crate) fn close(&self, s: SessionId) {
-        self.bound.lock().remove(&s);
+        self.bindings.lock().remove(&s);
     }
 }
 

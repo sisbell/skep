@@ -34,8 +34,8 @@ fn not_owner(a: skep_address::Address) -> (RejectCode, Option<FaultSite>) {
 
 /// Lower a read error into a classified [`Rejection`] (§5).
 pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
-    let (c, s) = e.lower();
-    Rejection::classified(kind, c, s)
+    let (code, site) = e.lower();
+    Rejection::classified(kind, code, site)
 }
 
 /// Lower a write path's `TxnError` into a classified [`Rejection`] (§5): the
@@ -56,8 +56,8 @@ pub(crate) fn lower_read<E: Lower>(kind: OpKind, e: E) -> Rejection {
 pub(crate) fn lower_txn<E: Lower>(kind: OpKind, e: TxnError<E>) -> Rejection {
     match e {
         TxnError::Rejected(inner) => {
-            let (c, s) = inner.lower();
-            Rejection::classified(kind, c, s)
+            let (code, site) = inner.lower();
+            Rejection::classified(kind, code, site)
         }
         TxnError::Durability(io) => {
             Rejection::classified(kind, RejectCode::Durability, None).with_detail(io.to_string())
@@ -459,7 +459,8 @@ mod tests {
     use skep_address::{validate, Nat, Tumbler};
     use skep_retrieval::{Operand, SpecFault};
 
-    fn addr() -> skep_address::Address {
+    /// The standard test document address.
+    fn doc() -> skep_address::Address {
         validate(Tumbler::new([1u32, 0, 1, 0, 1].map(Nat::from)).expect("nonempty"))
             .unwrap_or_else(|_| panic!("T4-valid"))
     }
@@ -467,13 +468,13 @@ mod tests {
     /// §5 nested-error rule: wrappers recurse into the leaf's own impl.
     #[test]
     fn wrappers_recurse() {
-        let (c, s) = CreateDocumentError::Mint(MintError::NotAnAccount).lower();
-        assert_eq!(c, RejectCode::NotAnAccount);
-        assert!(s.is_none());
-        let (c, _) = InsertError::Mint(MintError::HomeNotRegistered).lower();
-        assert_eq!(c, RejectCode::HomeNotRegistered);
-        let (c, _) = MakeLinkError::Seat(SeatError::AlreadySeated).lower();
-        assert_eq!(c, RejectCode::AlreadySeated);
+        let (code, site) = CreateDocumentError::Mint(MintError::NotAnAccount).lower();
+        assert_eq!(code, RejectCode::NotAnAccount);
+        assert!(site.is_none());
+        let (code, _) = InsertError::Mint(MintError::HomeNotRegistered).lower();
+        assert_eq!(code, RejectCode::HomeNotRegistered);
+        let (code, _) = MakeLinkError::Seat(SeatError::AlreadySeated).lower();
+        assert_eq!(code, RejectCode::AlreadySeated);
     }
 
     /// §5: `Content(ContentError)` collapses wholesale to `Content`
@@ -483,39 +484,40 @@ mod tests {
         let e = InsertError::Content(ContentError::AlreadyPresent(
             Tumbler::new([1u32].map(Nat::from)).expect("nonempty"),
         ));
-        let (c, s) = e.lower();
-        assert_eq!(c, RejectCode::Content);
-        assert!(s.is_none());
-        assert_eq!(crate::reject::disposition_of(c), Disposition::Permanent);
+        let (code, site) = e.lower();
+        assert_eq!(code, RejectCode::Content);
+        assert!(site.is_none());
+        assert_eq!(crate::reject::disposition_of(code), Disposition::Permanent);
     }
 
     /// §5: M6 is the sole producer of a populated FaultSite; the
     /// variant-carried localization survives into it.
     #[test]
     fn m6_faults_thread_their_site() {
-        let (c, s) = RetrieveError::MalformedSpec { index: 3, fault: SpecFault::StartTooShallow }.lower();
-        assert_eq!(c, RejectCode::MalformedSpan);
-        let s = s.expect("localized");
-        assert_eq!(s.index, Some(3));
-        assert!(matches!(s.fault, Some(SpecFault::StartTooShallow)));
-        assert!(s.operand.is_none() && s.region.is_none() && s.addr.is_none());
+        let (code, site) =
+            RetrieveError::MalformedSpec { index: 3, fault: SpecFault::StartTooShallow }.lower();
+        assert_eq!(code, RejectCode::MalformedSpan);
+        let site = site.expect("localized");
+        assert_eq!(site.index, Some(3));
+        assert!(matches!(site.fault, Some(SpecFault::StartTooShallow)));
+        assert!(site.operand.is_none() && site.region.is_none() && site.addr.is_none());
 
-        let (c, s) = CompareError::MalformedSpan {
+        let (code, site) = CompareError::MalformedSpan {
             operand: Operand::Second,
             region: 1,
             index: 2,
             fault: SpecFault::NotLevelUniform,
         }
         .lower();
-        assert_eq!(c, RejectCode::MalformedSpan);
-        let s = s.expect("localized");
-        assert!(matches!(s.operand, Some(Operand::Second)));
-        assert_eq!(s.region, Some(1));
-        assert_eq!(s.index, Some(2));
+        assert_eq!(code, RejectCode::MalformedSpan);
+        let site = site.expect("localized");
+        assert!(matches!(site.operand, Some(Operand::Second)));
+        assert_eq!(site.region, Some(1));
+        assert_eq!(site.index, Some(2));
 
-        let (c, s) = FindError::DocNotRegistered(addr()).lower();
-        assert_eq!(c, RejectCode::DocNotRegistered);
-        assert_eq!(s.expect("localized").addr, Some(addr()));
+        let (code, site) = FindError::DocNotRegistered(doc()).lower();
+        assert_eq!(code, RejectCode::DocNotRegistered);
+        assert_eq!(site.expect("localized").addr, Some(doc()));
     }
 
     /// Ownership ruling (2026-08-16): every gated write enum's
@@ -523,20 +525,20 @@ mod tests {
     /// address threaded into `site.addr`.
     #[test]
     fn not_owner_threads_the_failing_address() {
-        for (c, s) in [
-            InsertError::NotOwner(addr()).lower(),
-            CopyError::NotOwner(addr()).lower(),
-            DeleteError::NotOwner(addr()).lower(),
-            RearrangeError::NotOwner(addr()).lower(),
-            MakeLinkError::NotOwner(addr()).lower(),
-            EmitError::NotOwner(addr()).lower(),
-            NullifyError::NotOwner(addr()).lower(),
-            AssertSupError::NotOwner(addr()).lower(),
-            EditLinkError::NotOwner(addr()).lower(),
+        for (code, site) in [
+            InsertError::NotOwner(doc()).lower(),
+            CopyError::NotOwner(doc()).lower(),
+            DeleteError::NotOwner(doc()).lower(),
+            RearrangeError::NotOwner(doc()).lower(),
+            MakeLinkError::NotOwner(doc()).lower(),
+            EmitError::NotOwner(doc()).lower(),
+            NullifyError::NotOwner(doc()).lower(),
+            AssertSupError::NotOwner(doc()).lower(),
+            EditLinkError::NotOwner(doc()).lower(),
         ] {
-            assert_eq!(c, RejectCode::NotOwner);
-            assert_eq!(s.expect("localized").addr, Some(addr()));
-            assert_eq!(crate::reject::disposition_of(c), Disposition::Permanent);
+            assert_eq!(code, RejectCode::NotOwner);
+            assert_eq!(site.expect("localized").addr, Some(doc()));
+            assert_eq!(crate::reject::disposition_of(code), Disposition::Permanent);
         }
     }
 
@@ -588,14 +590,14 @@ mod tests {
     /// M6's — and the as-built fence/split variants map to their documented
     /// nearest leaves.
     #[test]
-    fn m8_and_as_built_variants() {
-        let (c, s) = QueryError::DocNotRegistered.lower();
-        assert_eq!(c, RejectCode::DocNotRegistered);
-        assert!(s.is_none());
-        let (c, _) = EmitError::SupersessionClass.lower();
-        assert_eq!(c, RejectCode::DcViolation);
-        let (c, _) = CopyError::SourceNotContentSubspace.lower();
-        assert_eq!(c, RejectCode::NotContentSubspace);
+    fn m8_lowers_with_no_site_and_as_built_variants_take_near_leaves() {
+        let (code, site) = QueryError::DocNotRegistered.lower();
+        assert_eq!(code, RejectCode::DocNotRegistered);
+        assert!(site.is_none());
+        let (code, _) = EmitError::SupersessionClass.lower();
+        assert_eq!(code, RejectCode::DcViolation);
+        let (code, _) = CopyError::SourceNotContentSubspace.lower();
+        assert_eq!(code, RejectCode::NotContentSubspace);
     }
 
     // ─────────────── the nested-error rule as a law, not examples ───────────
@@ -607,11 +609,11 @@ mod tests {
         rendered.split(['(', ' ', '{']).next().unwrap_or_default().to_string()
     }
 
-    /// The §5 rule for one flat variant: it lowers to the SAME-NAMED
-    /// [`RejectCode`] leaf. `name` is spelled by the caller because M6's
-    /// enums withhold `Debug` by upstream derive policy (they carry
-    /// `Address`); everywhere else [`same_name`] reads it off the variant.
-    fn same_named<E: Lower>(name: &str, e: E) {
+    /// The §5 rule for one flat variant whose name the CALLER spells, because
+    /// M6's enums withhold `Debug` by upstream derive policy (they carry
+    /// `Address`): it lowers to the leaf of that name. Everywhere else
+    /// [`same_name`] reads the name off the variant instead.
+    fn same_name_spelled<E: Lower>(name: &str, e: E) {
         let (code, _) = e.lower();
         assert_eq!(
             name,
@@ -620,9 +622,10 @@ mod tests {
         );
     }
 
+    /// The same rule, for a variant that spells its own name through `Debug`.
     fn same_name<E: Lower + std::fmt::Debug>(e: E) {
         let name = variant_name(&e);
-        same_named(&name, e);
+        same_name_spelled(&name, e);
     }
 
     /// The exceptions, and the whole list of them: a flat variant whose
@@ -681,12 +684,12 @@ mod tests {
         same_name(SeatError::NotHomeLink);
         same_name(SeatError::AlreadySeated);
         same_name(InsertError::DocNotRegistered);
-        same_name(InsertError::NotOwner(addr()));
+        same_name(InsertError::NotOwner(doc()));
         same_name(InsertError::NotContentSubspace);
         same_name(InsertError::OutOfBounds);
         same_name(InsertError::EmptyContent);
         same_name(CopyError::DocNotRegistered);
-        same_name(CopyError::NotOwner(addr()));
+        same_name(CopyError::NotOwner(doc()));
         same_name(CopyError::NotContentSubspace);
         same_name(CopyError::OutOfBounds);
         same_name(CopyError::SourceNotRegistered);
@@ -702,13 +705,13 @@ mod tests {
             RejectCode::NotContentSubspace,
         );
         same_name(DeleteError::DocNotRegistered);
-        same_name(DeleteError::NotOwner(addr()));
+        same_name(DeleteError::NotOwner(doc()));
         same_name(DeleteError::NotContentSubspace);
         same_name(DeleteError::NotArranged);
         same_name(DeleteError::OutOfBounds);
         same_name(DeleteError::EmptyWidth);
         same_name(RearrangeError::DocNotRegistered);
-        same_name(RearrangeError::NotOwner(addr()));
+        same_name(RearrangeError::NotOwner(doc()));
         same_name(RearrangeError::BadCutCount);
         same_name(RearrangeError::NotAscending);
         same_name(RearrangeError::NotContentSubspace);
@@ -720,7 +723,7 @@ mod tests {
 
         // ── M7 (links) ──
         same_name(MakeLinkError::HomeNotRegistered);
-        same_name(MakeLinkError::NotOwner(addr()));
+        same_name(MakeLinkError::NotOwner(doc()));
         same_name(MakeLinkError::IllFormedSpec);
         same_name(MakeLinkError::SlotTooLarge);
         same_name(MakeLinkError::EmptyTypeResolution);
@@ -732,7 +735,7 @@ mod tests {
             RejectCode::DcViolation,
         );
         same_name(EmitError::HomeNotRegistered);
-        same_name(EmitError::NotOwner(addr()));
+        same_name(EmitError::NotOwner(doc()));
         same_name(EmitError::NotRegistered);
         same_name(EmitError::RetractionClass);
         same_name(EmitError::ShapeViolation);
@@ -740,41 +743,41 @@ mod tests {
         same_name(EmitError::SlotTooLarge);
         deviates("SupersessionClass", EmitError::SupersessionClass, RejectCode::DcViolation);
         same_name(NullifyError::HomeNotRegistered);
-        same_name(NullifyError::NotOwner(addr()));
+        same_name(NullifyError::NotOwner(doc()));
         same_name(NullifyError::BadTarget);
         same_name(AssertSupError::HomeNotRegistered);
-        same_name(AssertSupError::NotOwner(addr()));
+        same_name(AssertSupError::NotOwner(doc()));
         same_name(AssertSupError::EndpointNotResident);
         same_name(AssertSupError::SelfSupersession);
         same_name(EditLinkError::OriginalNotResident);
         same_name(EditLinkError::HomeNotRegistered);
-        same_name(EditLinkError::NotOwner(addr()));
+        same_name(EditLinkError::NotOwner(doc()));
         same_name(EditLinkError::SlotTooLarge);
         same_name(EditLinkError::IllFormedSuccessor);
         same_name(EditLinkError::DcViolation);
 
         // ── M6 (retrieval) — names spelled: these enums withhold `Debug` ──
-        same_named("DocNotRegistered", RetrieveError::DocNotRegistered(addr()));
+        same_name_spelled("DocNotRegistered", RetrieveError::DocNotRegistered(doc()));
         // `MalformedSpan` covers RETRIEVEV's differently-named fault (§5).
         deviates(
             "MalformedSpec",
             RetrieveError::MalformedSpec { index: 0, fault: SpecFault::NotOrdinalLevel },
             RejectCode::MalformedSpan,
         );
-        same_named("DocNotRegistered", ExtentError::DocNotRegistered);
-        same_named("DocNotRegistered", OriginError::DocNotRegistered);
-        same_named("NoSuchSubspace", OriginError::NoSuchSubspace);
-        same_named("EmptySubspace", OriginError::EmptySubspace);
-        same_named("DepthIncompatible", OriginError::DepthIncompatible);
-        same_named("RangeNotPresent", OriginError::RangeNotPresent);
-        same_named("MalformedSpan", OriginError::MalformedSpan(SpecFault::NotLevelUniform));
-        same_named("DocNotRegistered", DeletionsError::DocNotRegistered(addr()));
-        same_named("DocNotRegistered", CompareError::DocNotRegistered(addr()));
-        same_named(
+        same_name_spelled("DocNotRegistered", ExtentError::DocNotRegistered);
+        same_name_spelled("DocNotRegistered", OriginError::DocNotRegistered);
+        same_name_spelled("NoSuchSubspace", OriginError::NoSuchSubspace);
+        same_name_spelled("EmptySubspace", OriginError::EmptySubspace);
+        same_name_spelled("DepthIncompatible", OriginError::DepthIncompatible);
+        same_name_spelled("RangeNotPresent", OriginError::RangeNotPresent);
+        same_name_spelled("MalformedSpan", OriginError::MalformedSpan(SpecFault::NotLevelUniform));
+        same_name_spelled("DocNotRegistered", DeletionsError::DocNotRegistered(doc()));
+        same_name_spelled("DocNotRegistered", CompareError::DocNotRegistered(doc()));
+        same_name_spelled(
             "NotContentSubspace",
             CompareError::NotContentSubspace { operand: Operand::First, region: 0, index: 0 },
         );
-        same_named(
+        same_name_spelled(
             "MalformedSpan",
             CompareError::MalformedSpan {
                 operand: Operand::First,
@@ -783,8 +786,8 @@ mod tests {
                 fault: SpecFault::StartNotZeroFree,
             },
         );
-        same_named("DocNotRegistered", FindError::DocNotRegistered(addr()));
-        same_named(
+        same_name_spelled("DocNotRegistered", FindError::DocNotRegistered(doc()));
+        same_name_spelled(
             "MalformedSpan",
             FindError::MalformedSpan { region: 0, index: 0, fault: SpecFault::StartTooShallow },
         );

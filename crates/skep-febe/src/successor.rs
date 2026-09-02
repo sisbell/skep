@@ -111,21 +111,21 @@ mod tests {
 
     use super::*;
 
-    fn t(comps: &[u32]) -> Tumbler {
+    fn tum(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
     }
-    fn a(comps: &[u32]) -> Address {
-        validate(t(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
+    fn addr(comps: &[u32]) -> Address {
+        validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
     fn span(start: &[u32], width: &[u32]) -> Span {
-        Span::new(t(start), t(width)).unwrap_or_else(|_| panic!("well-formed test span"))
+        Span::new(tum(start), tum(width)).unwrap_or_else(|_| panic!("well-formed test span"))
     }
 
     /// §4: the content-V guard — depth-2, content-subspace (s_C), ordinal-
     /// level — answering for a span of any shape, deeper and shallower
     /// included.
     #[test]
-    fn content_vspan_guard() {
+    fn only_a_depth_two_ordinal_level_content_span_passes_the_guard() {
         assert!(is_content_vspan(&span(&[1, 1], &[0, 2])));
         assert!(!is_content_vspan(&span(&[2, 1], &[0, 1]))); // link subspace
         assert!(!is_content_vspan(&span(&[1, 1], &[1, 0]))); // not ordinal-level
@@ -141,7 +141,7 @@ mod tests {
     fn the_two_faults_this_guard_owns_are_typed_before_resolve() {
         let m3 = M3State::genesis();
         let m5 = M5State::genesis();
-        let doc = a(&[1, 0, 1, 0, 1]);
+        let doc = addr(&[1, 0, 1, 0, 1]);
 
         let ill_formed = VSpec { source: doc.clone(), span: span(&[2, 1], &[0, 1]) };
         let rej = endset_from_vspecs(&m3, &m5, &[ill_formed]).expect_err("link-subspace span");

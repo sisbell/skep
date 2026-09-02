@@ -80,8 +80,8 @@ pub(crate) enum CommittedAck {
 }
 
 impl From<CommittedAck> for Response {
-    fn from(a: CommittedAck) -> Response {
-        match a {
+    fn from(ack: CommittedAck) -> Response {
+        match ack {
             CommittedAck::At { at } => Response::Ack { at },
             CommittedAck::Addr { addr, at } => Response::AckAddr { addr, at },
             CommittedAck::Edit { successor, claim, at } => {

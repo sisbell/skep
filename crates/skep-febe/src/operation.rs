@@ -197,6 +197,11 @@ where
     /// rejecting `Malformed` — never a panic — so a newly added `Op` variant
     /// is a compile-time non-exhaustiveness error here, at `is_read`, and at
     /// `dispatch_read`.
+    ///
+    /// The coordinate a driver hands back is `at` in every arm, and
+    /// `committed_at` — the design's own word for it — in the two arms whose
+    /// operation carries an `at` of its own (a `VPos`). Those are the only
+    /// two spellings; a third would make one concept read as two.
     fn dispatch_write(&self, wc: WriteCtx, op: Op) -> Result<Response, Rejection> {
         let kind = op.kind();
         match op {
@@ -234,12 +239,12 @@ where
             // ── arrangement writes (→ M5; ω-gated in-store under the
             //    session caller — the ownership ruling, 2026-08-16) ──
             Op::Insert { doc, at, values } => {
-                let (start, at_seq) = self
+                let (start, committed_at) = self
                     .stores
                     .vstream()
                     .insert(wc.caller(), &doc, at, values)
                     .map_err(|e| self.map_txn(kind, e))?; // returns post-commit
-                Ok(Response::AckAddr { addr: start, at: at_seq }) // the exact V1 coordinate
+                Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
             }
             Op::Delete { doc, p, width } => {
                 let at = self
@@ -250,12 +255,12 @@ where
                 Ok(Response::Ack { at })
             }
             Op::Copy { doc, at, specs } => {
-                let seq = self
+                let committed_at = self
                     .stores
                     .vstream()
                     .copy(wc.caller(), &doc, at, specs)
                     .map_err(|e| self.map_txn(kind, e))?;
-                Ok(Response::Ack { at: seq })
+                Ok(Response::Ack { at: committed_at })
             }
             Op::Rearrange { doc, cuts } => {
                 let at = self
@@ -648,11 +653,11 @@ mod tests {
         }
     }
 
-    fn t(comps: &[u32]) -> Tumbler {
+    fn tum(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty")
     }
-    fn a(comps: &[u32]) -> Address {
-        validate(t(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
+    fn addr(comps: &[u32]) -> Address {
+        validate(tum(comps)).unwrap_or_else(|_| panic!("T4-valid test address"))
     }
     fn genesis_world() -> World {
         World {
@@ -690,7 +695,7 @@ mod tests {
 
     fn insert_op() -> Op {
         Op::Insert {
-            doc: a(&[1, 0, 1, 0, 1]),
+            doc: addr(&[1, 0, 1, 0, 1]),
             at: VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             values: vec![Val::new(vec![1u8])],
         }
@@ -716,12 +721,12 @@ mod tests {
     /// transaction — no store is touched.
     #[test]
     fn closed_session_write_is_unauthenticated() {
-        let op = operation();
-        let s1 = op.open_session(PrincipalId(1));
-        let s2 = op.open_session(PrincipalId(2));
+        let febe = operation();
+        let s1 = febe.open_session(PrincipalId(1));
+        let s2 = febe.open_session(PrincipalId(2));
         assert_ne!(s1, s2);
-        op.close_session(s1);
-        let rej = rejected(op.execute(s1, Request { id: None, op: insert_op() }));
+        febe.close_session(s1);
+        let rej = rejected(febe.execute(s1, Request { id: None, op: insert_op() }));
         assert_eq!(rej.op, OpKind::Insert);
         assert_eq!(rej.code, RejectCode::Unauthenticated);
         assert_eq!(rej.disposition, Disposition::Permanent);
@@ -734,16 +739,16 @@ mod tests {
     /// witnesses: no store is reached on the way to the refusal.
     #[test]
     fn every_write_on_an_unbound_session_is_unauthenticated_before_any_transaction() {
-        let op = operation();
-        let s = op.open_session(PrincipalId(1));
-        op.close_session(s);
-        let before = op.log_position();
-        for (o, is_read) in crate::op::tests::all_ops() {
+        let febe = operation();
+        let s = febe.open_session(PrincipalId(1));
+        febe.close_session(s);
+        let before = febe.log_position();
+        for (op, is_read) in crate::op::tests::all_ops() {
             if is_read {
                 continue;
             }
-            let kind = o.kind();
-            match op.execute(s, Request { id: None, op: o }) {
+            let kind = op.kind();
+            match febe.execute(s, Request { id: None, op }) {
                 Response::Rejected(rej) => {
                     assert_eq!(rej.op, kind, "the rejection names the op it refused");
                     assert_eq!(rej.code, RejectCode::Unauthenticated, "{kind:?}");
@@ -753,7 +758,7 @@ mod tests {
             }
         }
         assert_eq!(
-            op.log_position(),
+            febe.log_position(),
             before,
             "no write on an unbound session may reach a transaction"
         );
@@ -767,14 +772,14 @@ mod tests {
     /// arm that panics fails here.
     #[test]
     fn no_read_is_ever_rejected_for_an_unbound_session() {
-        let op = operation();
+        let febe = operation();
         let never_opened = SessionId(9999);
-        for (o, is_read) in crate::op::tests::all_ops() {
+        for (op, is_read) in crate::op::tests::all_ops() {
             if !is_read {
                 continue;
             }
-            let kind = o.kind();
-            if let Response::Rejected(rej) = op.execute(never_opened, Request { id: None, op: o }) {
+            let kind = op.kind();
+            if let Response::Rejected(rej) = febe.execute(never_opened, Request { id: None, op }) {
                 assert_ne!(
                     rej.code,
                     RejectCode::Unauthenticated,
@@ -789,18 +794,18 @@ mod tests {
     /// reads keep being served off the last root.
     #[test]
     fn poison_latch_halts_writes_but_reads_continue() {
-        let op = operation();
-        let s = op.open_session(PrincipalId(1));
-        let rej = op.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        let febe = operation();
+        let s = febe.open_session(PrincipalId(1));
+        let rej = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
-        assert!(op.poisoned.load(Ordering::Relaxed));
+        assert!(febe.poisoned.load(Ordering::Relaxed));
         // Write: fails fast pre-dispatch.
-        let rej = rejected(op.execute(s, Request { id: None, op: insert_op() }));
+        let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
         // Read: still served (M2 snapshots survive a poisoned kernel).
-        let resp = op.execute(s, Request { id: None, op: Op::NextAccountPrefix { parent: a(&[1]) } });
+        let resp = febe.execute(s, Request { id: None, op: Op::NextAccountPrefix { parent: addr(&[1]) } });
         match resp {
             Response::MaybeAddr { addr, .. } => assert!(addr.is_some()),
             _ => panic!("read must still be served on a poisoned kernel"),
@@ -814,27 +819,27 @@ mod tests {
     /// stale) can be memoized even when the request carried an id.
     #[test]
     fn only_committed_writes_are_cached() {
-        let op = operation();
-        let s = op.open_session(PrincipalId(1));
+        let febe = operation();
+        let s = febe.open_session(PrincipalId(1));
         assert!(Response::Count { n: 3, as_of: Seq(1) }.as_ack().is_none());
         assert!(Response::Rejected(rejection(OpKind::Insert, RejectCode::Unauthenticated))
             .as_ack()
             .is_none());
         // A rejected write carrying an id leaves no entry behind.
         let id = ReqId(b"req-2".to_vec());
-        let stray = op.open_session(PrincipalId(3));
-        op.close_session(stray);
-        let r = op.execute(stray, Request { id: Some(id.clone()), op: insert_op() });
+        let stray = febe.open_session(PrincipalId(3));
+        febe.close_session(stray);
+        let r = febe.execute(stray, Request { id: Some(id.clone()), op: insert_op() });
         assert!(matches!(r, Response::Rejected(_)));
-        assert!(op.idem.get(stray, &id, OpKind::Insert).is_none());
+        assert!(febe.idem.get(stray, &id, OpKind::Insert).is_none());
         // Nor does a read carrying one.
         let rid = ReqId(b"req-3".to_vec());
-        let resp = op.execute(
+        let resp = febe.execute(
             s,
-            Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: a(&[1]) } },
+            Request { id: Some(rid.clone()), op: Op::NextAccountPrefix { parent: addr(&[1]) } },
         );
         assert!(matches!(resp, Response::MaybeAddr { .. }));
-        assert!(op.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
+        assert!(febe.idem.get(s, &rid, OpKind::NextAccountPrefix).is_none());
     }
 
     /// §1: step (a) runs AHEAD of the step-(c) poison gate, and that order is
@@ -845,29 +850,29 @@ mod tests {
     /// the latch being unset.
     #[test]
     fn a_memoized_ack_is_replayed_on_a_poisoned_kernel() {
-        let op = operation();
-        let s = op.bootstrap_session();
+        let febe = operation();
+        let s = febe.bootstrap_session();
         let id = ReqId(b"node-5".to_vec());
-        let node = || Op::RegisterNode { addr: t(&[1, 5]) };
-        let (addr, at) = match op.execute(s, Request { id: Some(id.clone()), op: node() }) {
+        let node = || Op::RegisterNode { addr: tum(&[1, 5]) };
+        let (addr, at) = match febe.execute(s, Request { id: Some(id.clone()), op: node() }) {
             Response::AckAddr { addr, at } => (addr, at),
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
 
         // The kernel halts AFTER that write committed.
-        op.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
-        assert!(op.poisoned.load(Ordering::Relaxed));
+        febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        assert!(febe.poisoned.load(Ordering::Relaxed));
 
         // A fresh keyed write is halted at step (c) — the gate is live.
-        let rej = rejected(op.execute(
+        let rej = rejected(febe.execute(
             s,
-            Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: t(&[1, 6]) } },
+            Request { id: Some(ReqId(b"node-6".to_vec())), op: Op::RegisterNode { addr: tum(&[1, 6]) } },
         ));
         assert_eq!(rej.code, RejectCode::Poisoned);
         assert_eq!(rej.disposition, Disposition::Halt);
 
         // The retry of the committed one is answered from the memo instead.
-        match op.execute(s, Request { id: Some(id), op: node() }) {
+        match febe.execute(s, Request { id: Some(id), op: node() }) {
             Response::AckAddr { addr: replayed, at: replayed_at } => {
                 assert_eq!(replayed, addr, "the replayed ack is the committed one");
                 assert_eq!(replayed_at, at, "…at the coordinate it committed");
@@ -886,13 +891,13 @@ mod tests {
     /// complement arm must hold exactly the ops `is_read` sends elsewhere.
     #[test]
     fn each_dispatch_table_rejects_exactly_the_other_half() {
-        let op = operation();
-        for (o, is_read) in crate::op::tests::all_ops() {
-            let kind = o.kind();
+        let febe = operation();
+        for (op, is_read) in crate::op::tests::all_ops() {
+            let kind = op.kind();
             let wrong_table = if is_read {
-                op.dispatch_write(WriteCtx { principal: PrincipalId(1) }, o)
+                febe.dispatch_write(WriteCtx { principal: PrincipalId(1) }, op)
             } else {
-                op.dispatch_read(o)
+                febe.dispatch_read(op)
             };
             match wrong_table {
                 Err(rej) => {

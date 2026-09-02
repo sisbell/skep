@@ -25,7 +25,7 @@ const WRITERS: u8 = 8;
 fn concurrent_writes_each_get_their_own_linearization_point() {
     let fx = setup();
     let doc = create_doc(&fx);
-    let before = fx.op.log_position();
+    let before = fx.febe.log_position();
 
     // Each thread extracts its own `(Address, Seq)` before joining, so
     // nothing but plain data crosses back.
@@ -33,11 +33,11 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
         let handles: Vec<_> = (0..WRITERS)
             .map(|i| {
                 let doc = doc.clone();
-                let op = &fx.op;
+                let febe = &fx.febe;
                 let s = fx.s;
                 scope.spawn(move || {
                     ack_addr(ex(
-                        op,
+                        febe,
                         s,
                         Op::Insert {
                             doc,
@@ -59,10 +59,10 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
         }
     }
     assert!(
-        fx.op.log_position() > before,
+        fx.febe.log_position() > before,
         "every concurrent write committed, so the log advanced past where they started"
     );
     for (_, at) in &acks {
-        assert!(*at <= fx.op.log_position(), "no write acknowledges past the log head");
+        assert!(*at <= fx.febe.log_position(), "no write acknowledges past the log head");
     }
 }

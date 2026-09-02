@@ -24,9 +24,10 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — the four entity ops via the Namespace driver, plus the two pure
 # namespace reads (next_account_prefix / principal_prefix) off a snapshot.
 skep-namespace = { path = "../skep-namespace" }
-# M4 — TYPE-ONLY edge (design, Conflicts resolved #4): Val/ContentWrite/
-# ContentError/HasContent are named to satisfy Vstream::insert's public bound;
-# M10 calls no M4 function.
+# M4 — four names, no call (design, Conflicts resolved #4): HasContent is a
+# FebeWorld supertrait and ContentWrite the record lift Vstream::insert's bound
+# requires; Val rides in Op::Insert's payload; ContentError is lowered when M5's
+# insert refuses through InsertError::Content. M10 calls no M4 function.
 skep-content = { path = "../skep-content" }
 # M5 — the five editing/versioning ops via the Vstream driver; M5State::resolve
 # + Run::iextent assemble editlink's successor (§4).

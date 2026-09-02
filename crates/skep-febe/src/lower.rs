@@ -133,14 +133,18 @@ impl Lower for NodeError {
     }
 }
 
-// ──────────────────────── M4 (content — type-only edge) ───────────────────
+// ───────────────────── M4 (content — named, never called) ─────────────────
 
 impl Lower for ContentError {
-    /// The flagged wholesale collapse (§5, Open build decision 8): the
-    /// `M10 → M4` edge is type-only, so M4's error structure is out of scope
-    /// and every `ContentError` lowers to the single `Content` code
-    /// (disposition `Permanent` — a transient content fault is thereby
-    /// misclassified, documented, to revisit if the M4 edge is ratified).
+    /// The flagged wholesale collapse (§5, Open build decision 8): M10 calls
+    /// no M4 function, so M4's error structure is out of scope and every
+    /// `ContentError` lowers to the single `Content` code (disposition
+    /// `Permanent` — a transient content fault is thereby misclassified,
+    /// documented, to revisit if the M4 edge is ratified).
+    ///
+    /// The arm is LIVE: it is reached through `InsertError::Content` when M5's
+    /// `insert` refuses, so the structure the collapse discards is a fault a
+    /// client can meet, not a dead branch.
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         (RejectCode::Content, None)
     }

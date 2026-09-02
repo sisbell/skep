@@ -80,7 +80,8 @@ pub enum Op {
     /// not the session principal (§2).
     PrincipalPrefix { id: PrincipalId },
     // ── arrangement writes (→ M5) ──
-    /// INSERT (ASN-0116). `Val` is M4's — the type-only M10→M4 edge.
+    /// INSERT (ASN-0116). `Val` is M4's, carried in the payload verbatim —
+    /// M10 names M4's types and calls no M4 function.
     Insert { doc: Address, at: VPos, values: Vec<Val> },
     /// DELETE (ASN-0117).
     Delete { doc: Address, p: VPos, width: Nat },

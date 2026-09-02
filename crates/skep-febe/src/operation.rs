@@ -205,8 +205,13 @@ where
         resp
     }
 
-    /// Bare "where is the log?" — `stores.kernel().current_seq()`; never
-    /// regresses (the read-your-writes building block, G0).
+    /// The engine's current linearization frontier: the coordinate of the last
+    /// committed write, on the same log every `at` and `as_of` names, and
+    /// directly comparable with either. It never regresses (G0), and asking
+    /// costs no operation — nothing is dispatched, committed or snapshotted.
+    ///
+    /// What a client compares it against is [the two
+    /// coordinates](crate#the-two-coordinates).
     pub fn log_position(&self) -> Seq {
         self.stores.kernel().current_seq()
     }

@@ -10,10 +10,14 @@ use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 use crate::reject::Rejection;
 
-/// The marshaled response. `Response` deliberately derives **no** `Clone`
-/// (§7): the idempotency cache stores the small [`CommittedAck`] a committed
-/// write yields, never a whole `Response`, so no transitively heavy `Clone`
-/// bound is forced onto M6's/M7's payload types.
+/// The marshaled response. Every variant carries one coordinate — `at` on the
+/// three acknowledging shapes, `as_of` on every read answer — and what a
+/// client does with the pair is [the two coordinates](crate#the-two-coordinates).
+///
+/// `Response` deliberately derives **no** `Clone` (§7): the idempotency cache
+/// stores the small [`CommittedAck`] a committed write yields, never a whole
+/// `Response`, so no transitively heavy `Clone` bound is forced onto M6's/M7's
+/// payload types.
 pub enum Response {
     /// delete/copy/rearrange — committed at `at` (A7).
     Ack { at: Seq },

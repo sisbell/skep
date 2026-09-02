@@ -40,6 +40,31 @@
 //! A citation naming a section by title instead (§Public interface, §Core data
 //! model, §Invariants) indexes that document's top-level headings.
 //!
+//! ## The two coordinates
+//!
+//! Every answer carries one `Seq`, and which one it is says how to use it.
+//! Both are positions on the single kernel a [`Stores`] impl names, so they
+//! are points on one totally ordered, never-regressing log and compare
+//! directly:
+//!
+//! * a write's `at` is the coordinate it COMMITTED at (A1/A7) — the operation
+//!   is in the log at that position and at every later one;
+//! * a read's `as_of` is the coordinate of the snapshot it ANSWERED from
+//!   (A2/V1) — the answer reflects every write committed at or before that
+//!   position, and none after it.
+//!
+//! So a read answer whose `as_of` is at or past a write's `at` reflects that
+//! write, and that comparison is the whole protocol. A **sequential** client —
+//! one that waits for the acknowledgment before issuing the read — gets it
+//! without arithmetic: the write commits before it is acknowledged and the log
+//! never regresses, so any snapshot taken afterwards is at or past `at` (G0).
+//! A **pipelining** client has requests in flight by construction and gets no
+//! such ordering — M10 fixes one linearization point per operation and imposes
+//! none between concurrent ones (§8) — so it compares the `as_of` it receives
+//! against the `at` it is waiting for, and reissues the read until the
+//! comparison holds. [`Operation::log_position`] answers with the same
+//! frontier without issuing an operation.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * per-store operation logic (M5/M6/M7/M8) and automation (M9 ⟂ M10);
@@ -66,9 +91,11 @@
 //! `World`/`Record`, reaches upstream state only through the accessor traits
 //! ([`FebeWorld`] names all four) via one pinned snapshot per read, and
 //! acquires the three transact-driving store drivers per-op from the injected
-//! [`Stores`] factory. The `M10 → M4` edge is type-only (design,
-//! Conflicts resolved #4): `Val`/`ContentWrite`/`ContentError`/`HasContent`
-//! are named solely to satisfy `Vstream::insert`'s public bound.
+//! [`Stores`] factory. The `M10 → M4` edge names four types and calls no M4
+//! function (design, Conflicts resolved #4): `HasContent` is a [`FebeWorld`]
+//! supertrait and `ContentWrite` the record lift `Vstream::insert`'s bound
+//! requires, `Val` rides in `Op::Insert`'s payload, and `ContentError` is
+//! lowered when M5's insert refuses through `InsertError::Content`.
 
 #![forbid(unsafe_code)]
 
@@ -94,15 +121,29 @@ pub use operation::Operation;
 pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
 pub use session::SessionId;
-// The two-form endset slot (M7-defined; the 2026-08-16 amendment): names
-// `Op::MakeLink`'s three slots and `SuccessorSpec`'s type slot, re-exported
-// so the transport spells one crate.
-pub use skep_links::SlotArg;
-// M7's slot numbering, which `Op::FollowLink`'s and `Op::Project`'s `slot`
-// index is in — re-exported for the same reason `SlotArg` is, so a caller
-// spells `FROM` from the crate it is already calling rather than a bare `1`
-// whose meaning lives elsewhere.
-pub use skep_links::{FROM, TO, TYPE};
+
+// Every upstream type named on the request/response path, re-exported so a
+// caller of [`Operation::execute`] spells one crate. That is where the line
+// falls: what a CALLER must name to build a `Request` or read a `Response` is
+// nameable from `skep_febe`; what an ASSEMBLER of the engine must name —
+// `Kernel`, `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four
+// accessor traits — is not, because the binary that implements [`Stores`]
+// holds every crate by construction. A re-export claims no ownership: each
+// type's owning module stays authoritative for it, exactly as M8 re-exports
+// M7's slot numbering.
+pub use skep_address::{Address, Nat, Span, SpanSet, Tumbler}; // M1
+pub use skep_arrangement::{Run, VPos, VSpec}; // M5
+pub use skep_content::Val; // M4
+pub use skep_discovery::{Cursor, FourSet, OrphanReport, SupClaim, Window}; // M8
+pub use skep_kernel::Seq; // M2
+pub use skep_namespace::PrincipalId; // M3
+pub use skep_retrieval::{CompareReport, Deletions, Delivery, Operand, Region, Spec, SpecFault}; // M6
+// M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
+// two-form endset slot (the 2026-08-16 amendment) naming `Op::MakeLink`'s
+// three slots and `SuccessorSpec`'s type slot, and `FROM`/`TO`/`TYPE` are the
+// numbering `Op::FollowLink`'s and `Op::Project`'s `slot` index is in — so a
+// caller spells `FROM` rather than a bare `1` whose meaning lives elsewhere.
+pub use skep_links::{Endset, Invalid, Link, SlotArg, View, FROM, TO, TYPE};
 
 use skep_arrangement::{HasM5, Vstream};
 use skep_content::HasContent;

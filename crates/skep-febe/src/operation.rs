@@ -147,8 +147,24 @@ where
     /// principal so no dispatch arm unwraps an `Option`. Reentrant & `Sync`
     /// — the transport may call it concurrently for pipelined requests (§8).
     ///
-    /// Caller precondition (§6, non-forgeability): `s` MUST originate in the
-    /// transport's connection state, never a wire-supplied value.
+    /// Two caller preconditions, neither of which this module can check for
+    /// itself:
+    ///
+    /// * NON-FORGEABILITY (§6): `s` MUST originate in the transport's
+    ///   connection state, never a wire-supplied value.
+    /// * SIZE: M10 measures no field of the [`Op`] it is handed, so every
+    ///   list, tumbler and magnitude in `req` reaches the owning store as
+    ///   presented. A transport discharges this in [`Codec::parse`], where
+    ///   the obligation is stated in full; a caller that assembles an [`Op`]
+    ///   and calls HERE has no parser in between and owns the whole of it.
+    ///   Two reads are why it is worth owning: [`Op::Compare`] joins its two
+    ///   operand sets pairwise, and [`Op::RetrieveV`] concatenates per spec
+    ///   without dedup, so one whole-document spec repeated n times delivers
+    ///   n copies of the document. Nothing on this path enforces either — the
+    ///   one list M10 measures is the EDITLINK successor slot it builds for
+    ///   itself, against M7's per-slot budget.
+    ///
+    /// [`Codec::parse`]: crate::Codec::parse
     ///
     /// Two refusals can hold at once on a write, and the contract names which
     /// speaks: the poison gate (c) is consulted BEFORE the session gate (b),

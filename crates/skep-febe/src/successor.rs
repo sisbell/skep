@@ -109,9 +109,14 @@ pub(crate) fn successor_link(
 /// disposition, the same refusal) and costs the engine one slot's worth of
 /// spans instead of every spec's.
 ///
-/// What remains unbounded is ONE spec's own `resolve` vector, which is M5's
-/// allocation and one document's fragmentation — the same residual M7 carries
-/// for MAKELINK's `Resolve` slots.
+/// That budget bounds the slot's spans and nothing else, so two costs sit
+/// outside it. ONE spec's own `resolve` vector is built whole — M5's
+/// allocation, one document's fragmentation, and the same exposure M7 carries
+/// for MAKELINK's `Resolve` slots. And the count is of SPANS, not of specs: a
+/// spec that resolves to nothing pushes nothing, so the cap never sees it and
+/// the walk runs to the end of the list at one arrangement lookup per spec —
+/// which is the shape both surviving ⟨⟩ sources produce. Neither cost is
+/// bounded here; the caller's list length is what bounds them.
 ///
 /// PRECEDENCE within the slot, since several specs may be wrong and exactly
 /// one answer goes back: the specs are walked in order and the FIRST offending

@@ -38,9 +38,9 @@ use crate::session::SessionId;
 // instead — surfaced in the build report as an interface↔design conflict.
 const DEFAULT_IDEM_CAPACITY: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is nonzero");
 
-/// The session-confined idempotency key (§7). A client's `ReqId` is unique
-/// only WITHIN its session, so the session it committed under is half the
-/// key's identity rather than a field beside it.
+/// The memo's key (§7): the client's `ReqId` confined to the session that
+/// committed under it. A `ReqId` is unique only WITHIN its session, so the
+/// session is half the key's identity rather than a field beside it.
 ///
 /// That confinement is what makes the step-(a) lookup in `execute` — which
 /// runs BEFORE authentication — harmless (§7 item-4): a replay carrying

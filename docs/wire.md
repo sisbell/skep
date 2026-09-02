@@ -752,13 +752,17 @@ Fields:
   `permanent` *by design*: recover by re-deriving a fresh prefix via
   `next_account_prefix` and issuing a *different* request.
 * `site` — optional fault localization, present only when the store
-  reported one: `{"operand": "first"|"second"?, "region": n?, "index": n?,
-  "fault": "<span fault>"?, "addr": "<address>"?}`. `index`/`fault` localize
-  a malformed span in a multi-span request; `operand`/`region` localize
-  compare inputs; `addr` names the offending document in multi-document
-  lookups — and, on a `not_owner` rejection, the document (or target link)
-  that failed the ownership check. Span faults: `not_ordinal_level`,
-  `not_level_uniform`, `start_not_zero_free`, `start_too_shallow`.
+  reported one: `{"operand": "first"|"second"?, "region": n?, "slot": n?,
+  "index": n?, "fault": "<span fault>"?, "addr": "<address>"?}`.
+  `index`/`fault` localize a malformed span in a multi-span request;
+  `operand`/`region` localize compare inputs; `slot` localizes an
+  `edit_link` successor fault to one of its three slots, in the read-back
+  slot numbering (`1` = from, `2` = to, `3` = ty), so the `index` beside it
+  is a position *within* that slot; `addr` names the offending document in
+  multi-document lookups — and, on a `not_owner` rejection, the document
+  (or target link) that failed the ownership check. Span faults:
+  `not_ordinal_level`, `not_level_uniform`, `start_not_zero_free`,
+  `start_too_shallow`.
 * `detail` — optional message (always present on `unparseable`, where
   it says what failed to parse). On `credential_refused` the field is a
   MACHINE token — the code:detail convention, one pinned token per

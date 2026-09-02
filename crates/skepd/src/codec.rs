@@ -1299,6 +1299,9 @@ fn j_site(s: &FaultSite) -> Value {
     if let Some(r) = s.region {
         pairs.push(("region", j_usize(r)));
     }
+    if let Some(sl) = s.slot {
+        pairs.push(("slot", j_usize(sl)));
+    }
     if let Some(i) = s.index {
         pairs.push(("index", j_usize(i)));
     }

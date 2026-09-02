@@ -411,16 +411,13 @@ fn the_first_offending_successor_slot_is_the_one_that_speaks() {
         RejectCode::SourceNotRegistered,
         "FROM is built first, so FROM's fault is the one surfaced"
     );
+    let site = rej.site.expect("M10 localizes its own successor faults");
     assert_eq!(
-        rej.site.expect("M10 localizes its own successor faults").index,
-        Some(1),
-        "the index is the offender's position within FROM"
-    );
-    assert_eq!(
-        rej.detail.as_deref(),
-        Some("successor slot from"),
+        site.slot,
+        Some(FROM),
         "the answer says which slot that index is in, rather than leaving it to be deduced"
     );
+    assert_eq!(site.index, Some(1), "the index is the offender's position within FROM");
 }
 
 /// The link family end-to-end: MAKELINK (no dedup), raw reads with the

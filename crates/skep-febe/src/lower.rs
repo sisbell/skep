@@ -333,7 +333,12 @@ impl Lower for EditLinkError {
     }
 }
 
-// ─────────────────── M6 (retrieval — the sole FaultSite producer) ──────────
+// ────────── M6 (retrieval — the sole multi-field FaultSite producer) ───────
+//
+// operand/region/index/fault come from here and nowhere else. The site's
+// other two fields are filled elsewhere: `addr` by `not_owner` above, for
+// every ω-gated write enum, and `slot` by M10's own successor guard
+// (`crate::successor`).
 
 impl Lower for RetrieveError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
@@ -494,8 +499,11 @@ mod tests {
         assert_eq!(crate::reject::disposition_of(code), Disposition::Permanent);
     }
 
-    /// §5: M6 is the sole producer of a populated FaultSite; the
-    /// variant-carried localization survives into it.
+    /// §5: M6 is the sole producer of the multi-field localization
+    /// (operand/region/index/fault); the variant-carried coordinates survive
+    /// into the site, and the two fields M6 never fills — `addr`, which
+    /// `not_owner` threads, and `slot`, which M10's successor guard fills —
+    /// stay empty.
     #[test]
     fn m6_faults_thread_their_site() {
         let (code, site) =
@@ -505,6 +513,7 @@ mod tests {
         assert_eq!(site.index, Some(3));
         assert!(matches!(site.fault, Some(SpecFault::StartTooShallow)));
         assert!(site.operand.is_none() && site.region.is_none() && site.addr.is_none());
+        assert!(site.slot.is_none(), "a slot is an M10 successor coordinate, never an M6 one");
 
         let (code, site) = CompareError::MalformedSpan {
             operand: Operand::Second,

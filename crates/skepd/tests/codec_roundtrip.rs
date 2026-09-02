@@ -690,6 +690,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
         site: Some(FaultSite {
             operand: Some(skep_retrieval::Operand::Second),
             region: Some(0),
+            slot: Some(skep_febe::FROM),
             index: Some(2),
             fault: Some(SpecFault::StartTooShallow),
             addr: Some(d2()),
@@ -699,6 +700,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
     let v: Value = serde_json::from_slice(&codec.marshal(&resp)).expect("json");
     assert_eq!(v["site"]["operand"].as_str(), Some("second"));
     assert_eq!(v["site"]["region"].as_u64(), Some(0));
+    assert_eq!(v["site"]["slot"].as_u64(), Some(skep_febe::FROM as u64));
     assert_eq!(v["site"]["index"].as_u64(), Some(2));
     assert_eq!(v["site"]["fault"].as_str(), Some("start_too_shallow"));
     assert_eq!(v["site"]["addr"].as_str(), Some("1.0.1.0.2"));

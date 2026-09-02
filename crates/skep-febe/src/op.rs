@@ -10,18 +10,20 @@ use skep_links::{Endset, SlotArg, View};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{Region, Spec};
 
-/// One parsed FEBE request: an optional client idempotency key plus the
-/// operation. `id` is used ONLY as the per-session idempotency key
-/// (§1(a)/§7); it is never echoed on the response path (§8).
+/// One parsed FEBE request: an optional idempotency key plus the operation.
+/// `id` is used ONLY to key the retry memo (§1(a)/§7); it is never echoed on
+/// the response path (§8).
 pub struct Request {
-    /// Client idempotency key (optional; client-unique within its session).
+    /// The client's idempotency key (optional): a token the CLIENT chooses,
+    /// unique only within its own session.
     pub id: Option<ReqId>,
     /// The parsed operation.
     pub op: Op,
 }
 
-/// The client-supplied idempotency key — client-unique within its session
-/// (§7). Half of the `(SessionId, ReqId)` cache key.
+/// The client's idempotency key — chosen by the client, unique only within
+/// its session (§7), and half of the memo's key, which pairs it with the
+/// session that committed under it.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReqId(pub Vec<u8>);
 
@@ -165,10 +167,14 @@ pub enum Op {
 /// once and exactly one answer comes back: the slots are built `from`, then
 /// `to`, then `ty`, and the first that refuses speaks. Within a slot the first
 /// offending spec speaks, `IllFormedSpec` ahead of `SourceNotRegistered` on
-/// it. A per-spec refusal names the offender in [`crate::FaultSite`]'s
-/// `index` — an index WITHIN one slot, and the rejection's `detail` names
-/// which, spelled as the field above that carried it (`from`/`to`/`ty`), so
-/// the two halves of the coordinate arrive together.
+/// it. [`crate::FaultSite`] carries both halves of the coordinate: `slot`
+/// names which of the three refused, in M7's numbering ([`FROM`]/[`TO`]/
+/// [`TYPE`], the numbering [`Op::FollowLink`]'s `slot` is already in), and
+/// `index` the offending spec's position within it.
+///
+/// [`FROM`]: crate::FROM
+/// [`TO`]: crate::TO
+/// [`TYPE`]: crate::TYPE
 pub struct SuccessorSpec {
     pub from: Vec<VSpec>,
     pub to: Vec<VSpec>,

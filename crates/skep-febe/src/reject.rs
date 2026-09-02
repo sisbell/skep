@@ -36,30 +36,47 @@ pub struct Rejection {
     pub detail: Option<String>,
 }
 
-/// Advisory hint: the client may reissue under `Reorder`/`Retry`; `Halt`
-/// means the kernel stopped; anything not explicitly hinted is `Permanent`.
+/// The advisory half of a rejection: what reissuing would be worth. `code` is
+/// authoritative and this is a hint, recomputed off it by [`disposition_of`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Disposition {
+    /// Reissuing the identical request cannot help.
     Permanent,
+    /// The referent the request named may yet arrive: a client that raced its
+    /// own prerequisite may reissue once that prerequisite commits.
     Reorder,
+    /// The fault was transient — an I/O hiccup, and the operation did
+    /// nothing — so this same request may succeed unchanged.
     Retry,
+    /// The kernel stopped accepting writes. Reads are still served.
     Halt,
 }
 
 /// Where in a multi-part request a fault landed — threaded from M6's
 /// variant-carried localization (`RetrieveError::MalformedSpec{index, fault}`,
 /// COMPARE's `{operand, region, index}`, and the offending document `Address`
-/// of the multi-document `DocNotRegistered(Address)` variants), and — since
-/// the ownership ruling (2026-08-16) — from M5's and M7's
-/// `NotOwner(Address)`, whose `addr` names the document (or target link)
-/// that failed the ω check. Every other M5/M8 variant still lowers with
-/// `site = None` (§5; M8's `DocNotRegistered` is fieldless, unlike M6's).
+/// of the multi-document `DocNotRegistered(Address)` variants), from M5's and
+/// M7's `NotOwner(Address)` — the ownership ruling (2026-08-16) — whose `addr`
+/// names the document (or target link) that failed the ω check, and from
+/// M10's own EDITLINK successor guard, which fills `slot` and `index`. Every
+/// other M5/M8 variant still lowers with `site = None` (§5; M8's
+/// `DocNotRegistered` is fieldless, unlike M6's).
 #[derive(Debug, Default)]
 pub struct FaultSite {
     /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.
     pub operand: Option<Operand>,
     /// The offending region index (COMPARE / FINDDOCSCONTAINING).
     pub region: Option<usize>,
+    /// The offending link slot of an EDITLINK successor, in M7's slot
+    /// numbering — [`FROM`]/[`TO`]/[`TYPE`], re-exported by this crate — so
+    /// the `index` beside it is read as a position WITHIN that slot. Filled
+    /// by M10's successor guard, which is the only place M10 builds a slot
+    /// for itself (§4).
+    ///
+    /// [`FROM`]: crate::FROM
+    /// [`TO`]: crate::TO
+    /// [`TYPE`]: crate::TYPE
+    pub slot: Option<usize>,
     /// The offending spec/span index.
     pub index: Option<usize>,
     /// The span well-formedness fault.

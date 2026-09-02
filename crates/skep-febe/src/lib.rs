@@ -11,10 +11,12 @@
 //!
 //! M10 owns **no** per-store operation logic (M5/M6/M7/M8), **no** automation
 //! (M9 — a parallel surface, not below it), **no** ordering/durability/
-//! recovery (M2), and **no** journaled state. Its only authority is
-//! *ephemeral connection state* — which principal a session speaks for — plus
-//! the best-effort retry de-duplication cache (§6/§7 of the design). It is,
-//! concretely, a lifecycle wrapper + dispatch table + client-model adapter:
+//! recovery (M2), and **no** journaled state. It holds exactly one piece of
+//! *authoritative* state, and authoritative only for the uptime: which
+//! principal a session speaks for (§6). Everything else it holds is a **hint**
+//! that may be lost with no loss of correctness — the best-effort retry memo
+//! (§7) and the poison latch (§9). It is, concretely, a lifecycle wrapper +
+//! dispatch table + client-model adapter:
 //! the design resolves that no v1 operation needs cross-family composite
 //! orchestration (Conflicts resolved #1), so that capability is latent with
 //! zero occupants.
@@ -122,28 +124,43 @@ pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
 pub use response::Response;
 pub use session::SessionId;
 
-// Every upstream type named on the request/response path, re-exported so a
-// caller of [`Operation::execute`] spells one crate. That is where the line
-// falls: what a CALLER must name to build a `Request` or read a `Response` is
-// nameable from `skep_febe`; what an ASSEMBLER of the engine must name —
-// `Kernel`, `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four
-// accessor traits — is not, because the binary that implements [`Stores`]
-// holds every crate by construction. A re-export claims no ownership: each
-// type's owning module stays authoritative for it, exactly as M8 re-exports
-// M7's slot numbering.
+// Every upstream type or constructor named on the request/response path, plus
+// the two budgets a request is held to, re-exported so a caller of
+// [`Operation::execute`] spells one crate. That is where the line falls: what
+// a CALLER must name to build a `Request` or read a `Response` is nameable
+// from `skep_febe`; what an ASSEMBLER of the engine must name — `Kernel`,
+// `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four accessor
+// traits — is not, because the binary that implements [`Stores`] holds every
+// crate by construction. A re-export claims no ownership: each type's owning
+// module stays authoritative for it, exactly as M8 re-exports M7's slot
+// numbering.
 pub use skep_address::{Address, Nat, Span, SpanSet, Tumbler}; // M1
 pub use skep_arrangement::{Run, VPos, VSpec}; // M5
 pub use skep_content::Val; // M4
-pub use skep_discovery::{Cursor, FourSet, OrphanReport, SupClaim, Window}; // M8
+// M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
+// descriptor ops are unbuildable without it.
+pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 pub use skep_kernel::Seq; // M2
 pub use skep_namespace::PrincipalId; // M3
-pub use skep_retrieval::{CompareReport, Deletions, Delivery, Operand, Region, Spec, SpecFault}; // M6
+// M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
+// newtypes over `Vec<DeliveryItem>` and `Vec<CorrPair>`, so reading either
+// answer means naming what is inside it.
+pub use skep_retrieval::{
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, Region, Spec, SpecFault,
+};
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
 // two-form endset slot (the 2026-08-16 amendment) naming `Op::MakeLink`'s
 // three slots and `SuccessorSpec`'s type slot, and `FROM`/`TO`/`TYPE` are the
-// numbering `Op::FollowLink`'s and `Op::Project`'s `slot` index is in — so a
-// caller spells `FROM` rather than a bare `1` whose meaning lives elsewhere.
-pub use skep_links::{Endset, Invalid, Link, SlotArg, View, FROM, TO, TYPE};
+// numbering `Op::FollowLink`'s and `Op::Project`'s `slot` index is in — as is
+// [`FaultSite`]'s `slot` — so a caller spells `FROM` rather than a bare `1`
+// whose meaning lives elsewhere. `enc` rides with `Endset::from_spans`: they
+// are the two constructors of one type, one reachable as an inherent method
+// and the other only as a free function, and an address-denoting `Op::Emit`
+// type or `SlotSpec::Spans` needs the second. `MAX_SLOT_SPANS` is here for
+// the reason [`MAX_REQ_ID_BYTES`] is public: they are the two budgets that
+// govern what a request may carry, and a caller that checks both before
+// sending should not have to spell two crates to do it.
+pub use skep_links::{enc, Endset, Invalid, Link, SlotArg, View, FROM, MAX_SLOT_SPANS, TO, TYPE};
 
 use skep_arrangement::{HasM5, Vstream};
 use skep_content::HasContent;

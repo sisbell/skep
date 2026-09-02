@@ -33,7 +33,10 @@ skep-content = { path = "../skep-content" }
 # + Run::iextent assemble editlink's successor (§4).
 skep-arrangement = { path = "../skep-arrangement" }
 # M6 — the seven content/provenance queries over M10's snapshot; the sole
-# source of variant-carried FaultSite localization (§5).
+# source of the multi-field FaultSite localization (operand/region/index/
+# fault, §5). The site's other two fields come from elsewhere: `addr` from
+# every ω-gated write enum's NotOwner(Address), and `slot` from M10's own
+# successor guard.
 skep-retrieval = { path = "../skep-retrieval" }
 # M7 — the five link writes via the LinkWriter driver; readlink/followlink off a
 # snapshot; Endset/enc/Link/View for argument construction.

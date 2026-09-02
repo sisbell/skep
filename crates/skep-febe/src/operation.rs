@@ -836,7 +836,8 @@ mod tests {
         let febe = operation();
         let s = febe.open_session(PrincipalId(1));
         febe.close_session(s);
-        febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned); // LATCH
+        // Raised for the latch alone; the rejection itself answers no request.
+        let _ = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         let rej = rejected(febe.execute(s, Request { id: None, op: insert_op() }));
         assert_eq!(
             rej.code,
@@ -893,8 +894,9 @@ mod tests {
             _ => panic!("RegisterNode under the bootstrap session commits"),
         };
 
-        // The kernel halts AFTER that write committed.
-        febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
+        // The kernel halts AFTER that write committed — the latch is what this
+        // call is for, so the rejection it builds answers nothing.
+        let _ = febe.map_txn(OpKind::Insert, TxnError::<InsertError>::Poisoned);
         assert!(febe.poisoned.load(Ordering::Relaxed));
 
         // A fresh keyed write is halted at step (c) — the gate is live.

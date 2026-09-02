@@ -188,8 +188,10 @@ pub struct SuccessorSpec {
 /// `OpKind::Unparseable` (§Public interface/Codec). [`Op::kind`] produces
 /// every variant EXCEPT `Unparseable`. `Copy + PartialEq` so `execute`
 /// captures it once and threads it to both idempotency steps and every
-/// rejection, and `idem_get` can match it (§7).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// rejection, and `idem_get` can match it (§7); `Hash` so a caller may key
+/// by it — per-operation counters and sets are what a transport instruments
+/// this surface with, and only this crate can supply the impl.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum OpKind {
     CreateNewDocument,
     Delegate,
@@ -453,17 +455,20 @@ pub(crate) mod tests {
     }
 
     /// `Op::kind` is injective over the variants and never yields
-    /// `Unparseable`.
+    /// `Unparseable`. Injectivity is read off a [`HashSet`], which is the
+    /// same shape a transport keying per-operation counters uses, so the
+    /// `Hash` a caller depends on is exercised here rather than merely
+    /// derived.
+    ///
+    /// [`HashSet`]: std::collections::HashSet
     #[test]
     fn kind_is_injective_and_never_unparseable() {
-        let kinds: Vec<OpKind> = all_ops().iter().map(|(op, _)| op.kind()).collect();
-        for k in &kinds {
-            assert_ne!(*k, OpKind::Unparseable);
+        let mut seen = std::collections::HashSet::new();
+        for (op, _) in all_ops() {
+            let kind = op.kind();
+            assert_ne!(kind, OpKind::Unparseable);
+            assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
-        for (i, ka) in kinds.iter().enumerate() {
-            for kb in &kinds[i + 1..] {
-                assert_ne!(*ka, *kb);
-            }
-        }
+        assert_eq!(seen.len(), 38);
     }
 }

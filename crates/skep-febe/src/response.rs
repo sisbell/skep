@@ -18,6 +18,12 @@ use crate::reject::Rejection;
 /// stores the small [`CommittedAck`] a committed write yields, never a whole
 /// `Response`, so no transitively heavy `Clone` bound is forced onto M6's/M7's
 /// payload types.
+///
+/// `#[must_use]` on the type rather than on `execute`, so it holds for every
+/// producer: a `Response` that is built and dropped is a request that was
+/// executed — possibly committed — and never answered, which is exactly the
+/// silence the never-silent contract forbids.
+#[must_use]
 pub enum Response {
     /// delete/copy/rearrange — committed at `at` (A7).
     Ack { at: Seq },

@@ -131,10 +131,21 @@ pub use session::SessionId;
 // from `skep_febe`; what an ASSEMBLER of the engine must name — `Kernel`,
 // `WorldState`, `Namespace`, `Vstream`, `LinkWriter`, the four accessor
 // traits — is not, because the binary that implements [`Stores`] holds every
-// crate by construction. A re-export claims no ownership: each type's owning
-// module stays authoritative for it, exactly as M8 re-exports M7's slot
-// numbering.
-pub use skep_address::{Address, Nat, Span, SpanSet, Tumbler}; // M1
+// crate by construction. A constructor's ERROR type travels with it: a
+// `Result` whose failure cannot be named is one a caller can only `unwrap`.
+// A re-export claims no ownership: each type's owning module stays
+// authoritative for it, exactly as M8 re-exports M7's slot numbering.
+//
+// M1, with the constructors, because `Address` is a field of thirty-odd `Op`
+// variants and `validate` is the only way to make one: `validate`/`T4Error`
+// for an address, `Span::new`/`T12Clause` for a span, `Tumbler::new`/
+// `EmptySequence` for a tumbler, and `elem_addr`/`ElemPos`/`ElemError` for
+// the element addresses `Op::Emit`'s `from` and `Op::Nullify`'s `target`
+// take.
+pub use skep_address::{
+    elem_addr, validate, Address, ElemError, ElemPos, EmptySequence, Nat, Span, SpanSet, T4Error,
+    T12Clause, Tumbler,
+};
 pub use skep_arrangement::{Run, VPos, VSpec}; // M5
 pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
@@ -233,4 +244,42 @@ pub trait Stores<W: WorldState>: Send + Sync {
     }
     /// M7 driver — borrows the kernel; holds the genesis-immutable registry.
     fn linkstore(&self) -> LinkWriter<'_, W>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The re-export rule as a check rather than a comment: every M1 value an
+    /// `Op` carries is built through `skep_febe` alone — the constructors and
+    /// the failures they answer with, since a `Result` whose error cannot be
+    /// named is one a caller can only `unwrap`. A re-export dropped from the
+    /// block fails to compile here.
+    #[test]
+    fn a_request_payload_is_built_spelling_one_crate() {
+        let doc: Result<Tumbler, EmptySequence> = Tumbler::new([1u32, 0, 1, 0, 1].map(Nat::from));
+        let doc: Result<Address, T4Error> = validate(doc.expect("nonempty"));
+        let doc = doc.expect("T4-valid");
+
+        // `Op::Emit`'s `from` and `Op::Nullify`'s `target` are element
+        // addresses, which is the constructor this reaches for.
+        let elem: Result<Address, ElemError> = elem_addr(ElemPos {
+            doc: doc.clone(),
+            subspace: Nat::from(1u32),
+            ordinal: Nat::from(1u32),
+        });
+        assert!(elem.is_ok());
+
+        // A V-span, as every M5/M6/M8 region argument carries.
+        let span: Result<Span, T12Clause> = Span::new(
+            Tumbler::new([1u32, 1].map(Nat::from)).expect("nonempty"),
+            Tumbler::new([0u32, 1].map(Nat::from)).expect("nonempty"),
+        );
+        assert!(span.is_ok());
+        assert_ne!(SpanSet::singleton(span.expect("well formed")), SpanSet::empty());
+
+        // The one refusal a caller meets before any request is assembled.
+        let empty: Result<Tumbler, EmptySequence> = Tumbler::new([]);
+        assert!(empty.is_err(), "an empty component sequence is no tumbler");
+    }
 }

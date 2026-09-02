@@ -27,7 +27,19 @@ use crate::response::Response;
 /// answers for it. That is why the classifying constructor and
 /// [`disposition_of`] are both published — a caller raising one of these codes
 /// on its own channel can apply M10's policy instead of transcribing it.
-#[derive(Debug)]
+///
+/// A value, with value equality, so a caller may keep one (the last refusal
+/// per operation, say) and compare it against another. Equality is over all
+/// five fields, `detail` included: two rejections agreeing on op/code/
+/// disposition/site but carrying different messages are different answers to
+/// an operator, and compare unequal.
+///
+/// `#[must_use]`: a rejection is an answer owed to a client, so building one
+/// and dropping it is the silence this module exists to prevent. A site that
+/// raises one for its side effect alone — latching the poison hint on the
+/// write path — says so with `let _ =`.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     pub op: OpKind,
     pub code: RejectCode,
@@ -38,7 +50,7 @@ pub struct Rejection {
 
 /// The advisory half of a rejection: what reissuing would be worth. `code` is
 /// authoritative and this is a hint, recomputed off it by [`disposition_of`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Disposition {
     /// Reissuing the identical request cannot help.
     Permanent,
@@ -61,7 +73,7 @@ pub enum Disposition {
 /// M10's own EDITLINK successor guard, which fills `slot` and `index`. Every
 /// other M5/M8 variant still lowers with `site = None` (§5; M8's
 /// `DocNotRegistered` is fieldless, unlike M6's).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FaultSite {
     /// Which COMPARE spec-set (ρ₁/ρ₂) the fault came from.
     pub operand: Option<Operand>,
@@ -90,7 +102,11 @@ pub struct FaultSite {
 /// `Copy`, keyed by the disposition table (§5). Built mechanically: each
 /// store error enum lowers to `(RejectCode, Option<FaultSite>)` via the
 /// crate-internal `Lower` trait.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// `Hash`, so a caller may key by it: per-code counters are the first thing
+/// a transport instruments this surface with, and only this crate can supply
+/// the impl.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum RejectCode {
     // ── M10-originated ──
     Unauthenticated,
@@ -400,6 +416,46 @@ mod tests {
         assert!(e.to_string().contains("unknown op"));
         assert_eq!(boxed(e).to_string(), "unparseable frame: unknown op");
         assert_eq!(ParseError { detail: None }.to_string(), "unparseable frame");
+    }
+
+    /// A rejection is a VALUE: it clones, and it compares over all five
+    /// fields — `detail` included, since a message an operator reads is part
+    /// of the answer. And the classification vocabulary keys a map, which is
+    /// the shape a transport tallying per-code counters reaches for; the
+    /// impls have to be here, because a consumer cannot add them.
+    #[test]
+    fn a_rejection_is_a_value_and_its_codes_key_a_map() {
+        use std::collections::{HashMap, HashSet};
+
+        let site = FaultSite { slot: Some(crate::FROM), index: Some(1), ..FaultSite::default() };
+        let rej = Rejection {
+            op: OpKind::EditLink,
+            code: RejectCode::IllFormedSpec,
+            disposition: Disposition::Permanent,
+            site: Some(site),
+            detail: None,
+        };
+        assert_eq!(rej.clone(), rej, "a clone is the same answer");
+        assert_ne!(
+            rej.clone().with_detail("successor slot from".into()),
+            rej,
+            "a threaded message is part of what the client was told"
+        );
+        let elsewhere = Rejection {
+            site: Some(FaultSite { slot: Some(crate::TO), index: Some(1), ..FaultSite::default() }),
+            ..rej.clone()
+        };
+        assert_ne!(elsewhere, rej, "the same index in another slot is another fault");
+
+        let mut per_code: HashMap<RejectCode, u64> = HashMap::new();
+        for code in [RejectCode::NotOwner, RejectCode::Durability, RejectCode::NotOwner] {
+            *per_code.entry(code).or_default() += 1;
+        }
+        assert_eq!(per_code[&RejectCode::NotOwner], 2);
+        assert_eq!(per_code.len(), 2);
+
+        let advised: HashSet<Disposition> = ALL_CODES.iter().map(|c| disposition_of(*c)).collect();
+        assert_eq!(advised.len(), 4, "every disposition is the advice of some code");
     }
 
     // ────────────── the disposition table over its whole domain ─────────────

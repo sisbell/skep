@@ -227,7 +227,7 @@ where
             if stg.base().m3().entity_level(&addr).is_some() {
                 return Err(NodeError::NotFresh);
             }
-            if !prefix_contains(&bootstrap_root(), &addr) {
+            if !prefix_contains(bootstrap_root(), &addr) {
                 return Err(NodeError::NotDescendantOfBootstrap);
             }
             stg.push(M3Rec::RegisterNode { addr: addr.clone() }.into());

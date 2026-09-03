@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use skep_address::{document_of, Address, Level, Span, Tumbler};
+use skep_address::{document_of, Address, Span, Tumbler};
 use skep_content::HasContent;
 use skep_febe::{ReqId, SessionId};
 use skep_identity::{FoldCtx, IdentityState, KeySet, LinkDeposit, Owner, Values, Verdict};
@@ -57,7 +57,7 @@ impl FoldCtx for WorldCtx<'_> {
     }
 
     fn is_account(&self, a: &Address) -> bool {
-        self.0.m3().entity_level(a) == Some(Level::Account)
+        self.0.m3().is_registered_account(a)
     }
 
     /// The daemon's OTHER publication read is
@@ -312,7 +312,9 @@ pub(crate) fn key_set_of<'a>(
     identity: &'a IdentityState,
     account: &Address,
 ) -> Option<&'a KeySet> {
-    (world.m3().entity_level(account) == Some(Level::Account))
+    world
+        .m3()
+        .is_registered_account(account)
         .then(|| identity.key_set(account))
 }
 

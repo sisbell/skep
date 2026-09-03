@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{validate, Address, Level, Nat, Span, Tumbler};
+use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_febe::Op;
 use skep_identity::{
     CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
@@ -333,7 +333,7 @@ pub(crate) fn mint_home_refusal(
         return None;
     }
     let subject = world.m3().principal_prefix(principal)?;
-    if world.m3().entity_level(subject) != Some(Level::Account) {
+    if !world.m3().is_registered_account(subject) {
         return None;
     }
     if has_documents(world, subject) {

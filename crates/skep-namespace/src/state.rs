@@ -4,6 +4,8 @@
 //! sub-allocators (§3), the admission gates (§4), and the principal registry
 //! with the ω resolver (§5).
 
+use std::sync::LazyLock;
+
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{
@@ -370,10 +372,15 @@ pub struct M3State {
 pub const MAX_NODE_COMPONENTS: usize = 32;
 
 /// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds
-/// from and `register_node`'s lineage check probes against.
-pub(crate) fn bootstrap_root() -> Address {
-    let root = Tumbler::new([Nat::from(1u32)]).expect("a one-component sequence is nonempty");
-    validate(root).expect("the bootstrap root [1] is T4-valid")
+/// from and `register_node`'s lineage check probes against. `Nat` is a
+/// big-int and so cannot be `const`, so the address is built once and
+/// borrowed thereafter.
+pub(crate) fn bootstrap_root() -> &'static Address {
+    static ROOT: LazyLock<Address> = LazyLock::new(|| {
+        let root = Tumbler::new([Nat::from(1u32)]).expect("a one-component sequence is nonempty");
+        validate(root).expect("the bootstrap root [1] is T4-valid")
+    });
+    &ROOT
 }
 
 // ---------------------------------------------------------------------------
@@ -447,9 +454,8 @@ pub fn ghost_position(x: u32) -> Address {
 /// namespace fails at the first differing component and the hot paths pay a
 /// short slice comparison.
 fn is_ghost_ns(key: &NsKey) -> bool {
-    use std::sync::OnceLock;
-    static GHOST_NS: OnceLock<NsKey> = OnceLock::new();
-    key == GHOST_NS.get_or_init(|| content_ns(&ghost_home_doc()))
+    static GHOST_NS: LazyLock<NsKey> = LazyLock::new(|| content_ns(&ghost_home_doc()));
+    *key == *GHOST_NS
 }
 
 /// The allocator skip: the frontier FLOOR of `key` — [`GHOST_POSITIONS`] for
@@ -687,7 +693,7 @@ impl M3State {
         M3State {
             frontiers: im::HashMap::new(),
             nodes: im::OrdSet::unit(root.clone()),
-            principals: im::OrdMap::unit(root, BOOTSTRAP_PRINCIPAL),
+            principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
         }
     }
 
@@ -993,7 +999,7 @@ impl M3State {
     /// [`M3State::document_lock_key`]`(account)` and stages the returned
     /// [`M3Rec`].
     pub fn mint_document(&self, account: &Address) -> Result<(Address, M3Rec), MintError> {
-        if self.entity_level(account) != Some(Level::Account) {
+        if !self.is_registered_account(account) {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
         }
@@ -1089,6 +1095,19 @@ impl M3State {
     /// for M5/M7, and the ⟨⟩-vs-fail bool for M6/M8.
     pub fn is_registered_document(&self, d: &Address) -> bool {
         self.entity_level(d) == Some(Level::Document)
+    }
+
+    /// `entity_level(a) == Some(Account)` — the account-hood precondition
+    /// (P8/CND.pre): what [`M3State::mint_document`] gates on, what
+    /// `create_new_document` and `delegate` reach through it, and the
+    /// account-hood test M10's credential fold and key-set read ask. The
+    /// account twin of [`M3State::is_registered_document`], published for the
+    /// same reason: the question is asked from outside M3, and spelling it as
+    /// a comparison against an `Option<Level>` makes every caller import M1's
+    /// tier enum and choose between `.is_some()` (any entity — what
+    /// `register_node`'s freshness gate wants) and this.
+    pub fn is_registered_account(&self, a: &Address) -> bool {
+        self.entity_level(a) == Some(Level::Account)
     }
 
     /// ω's resolution step: the Π entry whose prefix is the LONGEST covering

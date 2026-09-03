@@ -480,12 +480,18 @@ fn membership_is_exact_chain_membership() {
     assert!(m3.is_registered_document(&doc));
     assert_eq!(m3.entity_level(&doc), Some(Level::Document));
     assert_eq!(m3.entity_level(&acct), Some(Level::Account));
+    // The tier predicates name the two rungs a caller outside M3 asks for,
+    // and each discriminates the other's tier.
+    assert!(m3.is_registered_account(&acct));
+    assert!(!m3.is_registered_account(&doc)); // a document is not an account
+    assert!(!m3.is_registered_account(&a(&[1]))); // nor is the bootstrap node
 
     // Exact range membership (§2): the ordinal past the frontier is out.
     assert!(!m3.is_allocated(&a(&[1, 0, 1, 0, 2])));
     assert!(!m3.is_allocated(&a(&[1, 0, 2])));
     assert_eq!(m3.entity_level(&a(&[1, 0, 1, 0, 2])), None);
     assert!(!m3.is_registered_document(&a(&[1, 0, 1, 0, 2])));
+    assert!(!m3.is_registered_account(&a(&[1, 0, 2])));
 
     // Content elements: unallocated before their mint, allocated after —
     // and NEVER entities (content/link are not in E; use is_allocated).
@@ -1641,11 +1647,14 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
 
     // The registry node 1.1, admitted under the abstract root [1]; the claim
     // ceremony's delegate (the operator at account 1); the ceremony's doc-1.
-    ns.register_node(t(&[1, 1])).expect("the registry node 1.1 is admissible");
+    ns.register_node(t(&[1, 1]))
+        .expect("the registry node 1.1 is admissible");
     let (operator, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
         .expect("the operator lands at account 1");
-    let (doc1, _) = ns.create_new_document(ID1, &operator).expect("the ceremony's doc-1");
+    let (doc1, _) = ns
+        .create_new_document(ID1, &operator)
+        .expect("the ceremony's doc-1");
     assert_eq!(
         doc1,
         ghost_home_doc(),
@@ -1672,7 +1681,10 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     for x in 1..=GHOST_POSITIONS {
-        assert!(!m3.is_allocated(&ghost_position(x)), "ghost {x} became a chain member");
+        assert!(
+            !m3.is_allocated(&ghost_position(x)),
+            "ghost {x} became a chain member"
+        );
     }
     assert!(m3.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
 
@@ -1712,7 +1724,9 @@ fn a_floored_frontier_survives_the_checkpoint_round_trip() {
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
         .expect("delegate the operator");
     let (doc1, _) = ns.create_new_document(ID1, &operator).expect("doc-1");
-    commit_mint(&k, M3State::content_lock_key(&doc1), |m3| m3.mint_content(&doc1));
+    commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
+        m3.mint_content(&doc1)
+    });
 
     let live = k.snapshot().world().m3().clone();
     let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
@@ -1751,7 +1765,10 @@ fn the_first_delegate_under_a_node_receives_account_ordinal_one() {
 
     // Under the abstract root [1], the peek and the gate agree on 1.0.1…
     let snap = k.snapshot();
-    assert_eq!(snap.world().m3().next_account_prefix(&a(&[1])), Some(a(&[1, 0, 1])));
+    assert_eq!(
+        snap.world().m3().next_account_prefix(&a(&[1])),
+        Some(a(&[1, 0, 1]))
+    );
     drop(snap);
     // …an off-by-one guess is refused as not next-form…
     assert!(matches!(

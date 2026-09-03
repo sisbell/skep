@@ -1531,6 +1531,11 @@ mod tests {
     /// `is_registered_document`, which admits only a Document. The keys are
     /// still deterministic and still distinct, which is the whole of what
     /// [`M3State::content_lock_key`] and [`M3State::link_lock_key`] promise.
+    ///
+    /// That the mints really do refuse an element — the half this test
+    /// argues rather than runs — is executed by the integration suite's
+    /// `mint_preconditions_reject_structurally`, which hands every mint an
+    /// allocated element and a node.
     #[test]
     fn a_lock_key_is_injective_even_on_an_anchor_no_mint_could_reach() {
         let element = a(&[1, 0, 1, 0, 1, 0, 1, 1]);

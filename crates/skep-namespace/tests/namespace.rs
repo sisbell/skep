@@ -407,6 +407,12 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
 #[test]
 fn mint_preconditions_reject_structurally() {
     let (k, acct, doc) = kernel_with_account_and_doc();
+    // An ALLOCATED content element, so the element-tier refusals below are
+    // refusals on TIER and not on allocation.
+    let element = commit_mint(&k, M3State::content_lock_key(&doc), |m3| {
+        m3.mint_content(&doc)
+    });
+    let node = a(&[1]); // the registered bootstrap node
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     let unregistered_doc = a(&[1, 0, 1, 0, 9]); // document-level, never registered
@@ -443,9 +449,60 @@ fn mint_preconditions_reject_structurally() {
     );
     assert_eq!(m3.mint_document(&doc).unwrap_err(), MintError::NotAnAccount);
     assert_eq!(
-        m3.mint_document(&a(&[1])).unwrap_err(),
+        m3.mint_document(&node).unwrap_err(),
         MintError::NotAnAccount
     );
+
+    // The remaining wrong tiers, and why each gate is load-bearing rather
+    // than tidy. The mints are PUBLIC and take any `&Address`, so a caller's
+    // tier mistake is refused here or not at all.
+    //
+    // A NODE home: b_C([1]) = inc([1], 2) = [1,0,1], so `content_ns([1])` IS
+    // `account_ns([1,0,1])` — same NsKey, same lock, same frontier. Ungated,
+    // a content mint under a node hands out the SUB-ACCOUNT chain's next
+    // address (§1: an alias would under-serialize a namespace and REUSE one).
+    assert_eq!(
+        m3.mint_content(&node).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    assert_eq!(
+        m3.mint_link(&node).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    // A NODE source: version_ns([1])'s c₁ is [1,1], a NODE address, which
+    // `is_allocated` answers from the node registry — so an ungated version
+    // mint would return an address that reads unallocated.
+    assert_eq!(
+        m3.mint_version(&node).unwrap_err(),
+        MintError::SourceNotRegistered
+    );
+    // An ELEMENT home: b_C(e) = e ++ [0, s_C] carries four separators and is
+    // outside T4 — `next_in`'s stated precondition. Ungated, the anchor lift
+    // `expect`s and the mint PANICS instead of refusing.
+    assert_eq!(
+        m3.mint_content(&element).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    assert_eq!(
+        m3.mint_link(&element).unwrap_err(),
+        MintError::HomeNotRegistered
+    );
+    assert_eq!(
+        m3.mint_version(&element).unwrap_err(),
+        MintError::SourceNotRegistered
+    );
+    // An ELEMENT target is the ONE live input that could reach M1's TA5a gate
+    // — document_ns(e) asks for k = 2 at the Element tier, which `checked_inc`
+    // refuses — so this gate is what keeps `MintError::Gate` the dead,
+    // defensive arm its own doc claims it is.
+    assert_eq!(
+        m3.mint_document(&element).unwrap_err(),
+        MintError::NotAnAccount
+    );
+    // The fifth mint's gate through its published face (the document and
+    // unregistered cases are pinned in
+    // `delegate_mints_the_account_and_registers_its_principal_atomically`).
+    assert!(m3.next_account_prefix(&element).is_none());
 }
 
 #[test]
@@ -928,6 +985,47 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     );
 }
 
+#[test]
+fn omega_names_the_seat_it_matched_when_two_principals_carry_one_id() {
+    // §5: `effective_owner_prefix` exists because the composition a caller
+    // would otherwise write — `principal_prefix(effective_owner(a))` — is the
+    // same answer ONLY while Π is id-injective, a PRODUCER invariant
+    // (`delegate`'s DuplicateId gate) that `apply_m3` neither re-checks nor
+    // could. Two carriers of one id is unreachable through the ops and
+    // representable in a corrupted checkpoint, so the fold is how a test
+    // reaches it — and it is the one input at which the two projections can
+    // come apart.
+    let deep_seat = a(&[1, 0, 1, 1]);
+    let seeded = World {
+        m3: M3State::genesis()
+            .apply_m3(&alloc(&[1, 0, 1]))
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: a(&[1, 0, 1]),
+                id: ID1,
+            })
+            .apply_m3(&alloc(&[1, 0, 1, 1]))
+            // The SAME id, seated again deeper — id-injectivity broken.
+            .apply_m3(&M3Rec::RegisterPrincipal {
+                prefix: deep_seat.clone(),
+                id: ID1,
+            }),
+    };
+    let m3 = seeded.m3;
+
+    // ω matches ONE entry, and both projections come off it: at the seat and
+    // beneath it, the seat reported is the seat matched — the DEEPER one,
+    // which is not what `principal_prefix(ID1)` answers here.
+    for probe in [deep_seat.clone(), a(&[1, 0, 1, 1, 0, 1])] {
+        assert_eq!(m3.effective_owner(&probe), Some(ID1), "ω's id at {probe:?}");
+        assert_eq!(
+            m3.effective_owner_prefix(&probe),
+            Some(&deep_seat),
+            "ω's seat at {probe:?} is not the entry it matched"
+        );
+        assert!(m3.is_effective_owner(ID1, &probe));
+    }
+}
+
 // ---- §B delegate ----
 
 #[test]
@@ -1263,6 +1361,10 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     assert!(!k.snapshot().world().m3().is_allocated(&slot)); // the slot, not a claim
     let (d1, _) = ns.create_new_document(ID1, &acct).expect("create 1");
     assert_eq!(d1, slot);
+    // …and the prescribed pairing answers "has this account any documents?"
+    // in both directions: the slot was unallocated above, and is a registered
+    // document now.
+    assert!(k.snapshot().world().m3().is_registered_document(&slot));
     let (d2, _) = ns.create_new_document(ID1, &acct).expect("create 2");
     assert_ne!(d2, slot);
     // The ghost home document is that rule applied to the registry node's
@@ -1392,6 +1494,20 @@ fn register_node_validates_and_admits_supplied_addresses() {
     assert_eq!(
         k.snapshot().world().m3().entity_level(&a(&at_cap)),
         Some(Level::Node)
+    );
+
+    // TooDeep precedes NotFresh: an over-cap address that is ALSO registered.
+    // `register_node` cannot reach that state — the cap refuses admission —
+    // and `apply_m3` documents it as representable, since the record door
+    // deliberately does not carry the cap (an over-cap entry is a permanent
+    // resource charge, and nothing more).
+    let seeded = World {
+        m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&too_deep) }),
+    };
+    let k3 = mem_kernel(seeded);
+    assert_eq!(
+        rejected(Namespace::new(&k3).register_node(t(&too_deep))),
+        NodeError::TooDeep
     );
 
     // NotFresh precedes NotDescendantOfBootstrap: [2] is registered AND off
@@ -1624,6 +1740,26 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
 }
 
 // ---- the ghost region (owner ruling, 2026-08-26) ----
+
+/// The region has exactly [`GHOST_POSITIONS`] names, and this assert is what
+/// says so: one ordinal past it is an ORDINARILY MINTABLE content position of
+/// a real document — the allocator floors five and no more — so a caller
+/// holding a sixth "reserved" address would dispatch on a number the mint can
+/// also issue. The `# Panics` clause, made executable.
+#[test]
+#[should_panic(expected = "the ghost region is content positions")]
+fn ghost_position_refuses_the_ordinal_past_the_region() {
+    let _ = ghost_position(GHOST_POSITIONS + 1);
+}
+
+/// The other end: a chain opens at ordinal 1, so there is no position 0 to
+/// reserve. Without the assert this still panics — but inside M1's element
+/// lift, naming the wrong contract to the crate that reads these five.
+#[test]
+#[should_panic(expected = "the ghost region is content positions")]
+fn ghost_position_refuses_the_ordinal_below_the_region() {
+    let _ = ghost_position(0);
+}
 
 /// The non-reissue guarantee, driven through the real ops — the load-bearing
 /// clause of the ghost-tumbler ruling: dispatch is by number, so the

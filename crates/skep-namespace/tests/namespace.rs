@@ -16,7 +16,7 @@ use skep_kernel::{
     WorldState,
 };
 use skep_namespace::{
-    first_document_address, ghost_doc, ghost_position, prefix_contains, CreateDocumentError,
+    first_document_address, ghost_home_doc, ghost_position, prefix_contains, CreateDocumentError,
     DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, PrincipalId,
     BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
 };
@@ -1259,9 +1259,12 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     assert_eq!(d1, slot);
     let (d2, _) = ns.create_new_document(ID1, &acct).expect("create 2");
     assert_ne!(d2, slot);
-    // The ghost home document is that rule applied to the registry operator's
-    // account — so the compiled literal and the chain rule agree.
-    assert_eq!(first_document_address(&a(&[1, 1, 0, 1])), Some(ghost_doc()));
+    // The ghost home document is that rule applied to the registry node's
+    // operator account — so the compiled literal and the chain rule agree.
+    assert_eq!(
+        first_document_address(&a(&[1, 1, 0, 1])),
+        Some(ghost_home_doc())
+    );
     // Only an account anchors a document chain.
     assert!(first_document_address(&a(&[1])).is_none());
     assert!(first_document_address(&d1).is_none());
@@ -1624,7 +1627,7 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
 /// exists; this drives the one chain that could issue a ghost tumbler from
 /// genesis to well past the region and watches every answer.
 #[test]
-fn the_content_chain_of_the_ghost_doc_never_issues_a_ghost_tumbler() {
+fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
 
@@ -1645,7 +1648,7 @@ fn the_content_chain_of_the_ghost_doc_never_issues_a_ghost_tumbler() {
     let (doc1, _) = ns.create_new_document(ID1, &operator).expect("the ceremony's doc-1");
     assert_eq!(
         doc1,
-        ghost_doc(),
+        ghost_home_doc(),
         "the ceremony's doc-1 is the ghost home document, at its ordinary ordinal"
     );
 
@@ -1658,14 +1661,14 @@ fn the_content_chain_of_the_ghost_doc_never_issues_a_ghost_tumbler() {
         assert_eq!(
             minted,
             a(&[1, 1, 0, 1, 0, 1, 0, 1, expected]),
-            "the ghost doc's content chain must start past the region and stay contiguous"
+            "the ghost home doc's content chain must start past the region and stay contiguous"
         );
     }
 
     // The exclusion is permanent, not merely initial: with the stored
     // frontier far past the region, the five still answer unallocated —
-    // nothing exists at a dispatch key, and a COPY oracle asking about one
-    // is refused. Position GHOST_POSITIONS + 1 is an ordinary member.
+    // nothing exists at a reserved type address, and a COPY oracle asking
+    // about one is refused. Position GHOST_POSITIONS + 1 is an ordinary member.
     let snap = k.snapshot();
     let m3 = snap.world().m3();
     for x in 1..=GHOST_POSITIONS {
@@ -1698,7 +1701,7 @@ fn the_content_chain_of_the_ghost_doc_never_issues_a_ghost_tumbler() {
 /// The floored frontier is ordinary recoverable state: a slice that minted
 /// past the ghost region round-trips M2's checkpoint encoding, and the
 /// recovered slice keeps both halves — members stay members, ghosts stay
-/// excluded. The frontier key's anchor is the ghost doc's content base,
+/// excluded. The frontier key's anchor is the ghost home doc's content base,
 /// which must pass the NsKeyShadow T4 door like any other key.
 #[test]
 fn a_floored_frontier_survives_the_checkpoint_round_trip() {

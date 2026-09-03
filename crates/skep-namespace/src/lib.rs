@@ -17,8 +17,8 @@
 //! Two senses of **ghost**, kept apart the same way: B3's *ghost* is an
 //! address that IS allocated and has no bytes behind it — a registered-empty
 //! document, which [`M3State::is_allocated`] answers true for — while a
-//! *ghost tumbler* is one of the reserved dispatch keys of the region below,
-//! which [`M3State::is_allocated`] answers false for, on every board,
+//! *ghost tumbler* is one of the reserved type addresses of the ghost region
+//! below, which [`M3State::is_allocated`] answers false for, on every board,
 //! forever.
 //!
 //! Four surfaces (§Public interface):
@@ -35,7 +35,7 @@
 //!   and its next value is published as the peek
 //!   [`M3State::next_account_prefix`]. Every chain issues `c_{m+1}` and so
 //!   opens at ordinal 1 on an empty frontier — except the ghost content
-//!   chain, which opens at [`GHOST_POSITIONS`] + 1 (the reserved region
+//!   chain, which opens at [`GHOST_POSITIONS`] + 1 (the ghost region
 //!   below).
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
 //!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
@@ -52,8 +52,8 @@
 //!   answers: [`prefix_contains`], which answers where an address SITS and
 //!   never who may write it, and [`first_document_address`], the slot an
 //!   account's document chain opens at.
-//! * **The reserved region** (owner ruling, 2026-08-26) — the first
-//!   [`GHOST_POSITIONS`] content positions of [`ghost_doc`], spelled by
+//! * **The ghost region** (owner ruling, 2026-08-26) — the first
+//!   [`GHOST_POSITIONS`] content positions of [`ghost_home_doc`], spelled by
 //!   [`ghost_position`]: five ghost tumblers that are compiled format
 //!   constants, which M7's `ReservedAddrs::format` reads to build its
 //!   reserved type addresses.
@@ -82,7 +82,7 @@
 //!   replay, §8);
 //! * deletion/revocation — none exists: allocations, nodes, and principals
 //!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1). The
-//!   one carve-out is the reserved region above, which is compiled format
+//!   one carve-out is the ghost region above, which is compiled format
 //!   rather than state: the skipped ordinals are never issued and never
 //!   members, on every board.
 //!
@@ -106,7 +106,7 @@ mod state;
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
 pub use state::{
-    first_document_address, ghost_doc, ghost_position, prefix_contains, M3Rec, M3State,
+    first_document_address, ghost_home_doc, ghost_position, prefix_contains, M3Rec, M3State,
     PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
 };
 

@@ -282,7 +282,7 @@ pub struct M3State {
     /// and is held as a compiled floor ([`ghost_floor`]), not as a gap in the
     /// count. So a reader enumerating a namespace's members from its count is
     /// right everywhere else and must start past the floor there — where the
-    /// skipped ordinals are M7's dispatch keys, never members.
+    /// skipped ordinals are M7's reserved type addresses, never members.
     ///
     /// Not the entity registry E (ASN-0047): E is this map's below-element
     /// part TOGETHER WITH `nodes`, which is the pair
@@ -381,19 +381,19 @@ pub(crate) fn bootstrap_root() -> Address {
 // ghost tumblers; the out-of-tree 9-space is abolished).
 // ---------------------------------------------------------------------------
 
-/// How many content positions of [`ghost_doc`] are the GHOST REGION: the
+/// How many content positions of [`ghost_home_doc`] are the GHOST REGION: the
 /// realm-global reserved type addresses M7 compiles as its format constants
 /// (`ReservedAddrs::format` builds them from [`ghost_position`], so the two
-/// crates cannot drift). A ghost tumbler is a dispatch key only — a fixed,
-/// well-known, T4-valid name at which nothing exists and nothing may ever be
-/// minted.
+/// crates cannot drift). A ghost tumbler is a reserved type address and
+/// nothing else — a fixed, well-known, T4-valid name at which nothing exists
+/// and nothing may ever be minted.
 ///
 /// M3 owes the allocation half of that sentence, and it is the load-bearing
 /// clause of the whole ruling: dispatch is by number, so a fresh content mint
 /// landing on the `retraction` value would be catastrophic. The old 9-space
 /// bought non-collision by sitting outside every admissible subtree; the
 /// ghost region sits INSIDE the docuverse, at the first five content
-/// positions of the registry operator's own doc-1, and that document is
+/// positions of doc-1 of the registry node's operator, and that document is
 /// minted into by an ordinary `register_node([1,1])` → `delegate` →
 /// `create_new_document` → INSERT sequence — so unreachability cannot be
 /// proven and an explicit allocator skip is required. The skip is
@@ -409,19 +409,20 @@ pub const GHOST_POSITIONS: u32 = 5;
 /// Both land at their ordinary ordinals: the document is REAL, only content
 /// positions 1..=[`GHOST_POSITIONS`] inside it are ghost, and its first
 /// content mint lands at position [`GHOST_POSITIONS`] + 1.
-pub fn ghost_doc() -> Address {
+pub fn ghost_home_doc() -> Address {
     let comps = [1u32, 1, 0, 1, 0, 1].into_iter().map(Nat::from);
     let t = Tumbler::new(comps).expect("a six-component sequence is nonempty");
-    validate(t).expect("the ghost document 1.1.0.1.0.1 is T4-valid by construction")
+    validate(t).expect("the ghost home document 1.1.0.1.0.1 is T4-valid by construction")
 }
 
-/// Ghost tumbler `x` of the region — M1's element address of [`ghost_doc`] at
-/// [`content_subspace`], ordinal `x`: `[1,1,0,1,0,1,0,1,x]`. The one
-/// mint-shaped spelling of the five reserved type addresses; M7's
-/// `ReservedAddrs::format` reads them here. The document and the subspace each
-/// have exactly one spelling — the document is [`ghost_doc`]'s and the
-/// subspace is M1's — so the addresses M7 dispatches on and the namespace the
-/// allocator floors ([`GHOST_POSITIONS`]) cannot come apart.
+/// Ghost tumbler `x` of the region — M1's element address of
+/// [`ghost_home_doc`] at [`content_subspace`], ordinal `x`:
+/// `[1,1,0,1,0,1,0,1,x]`. The one mint-shaped spelling of the five reserved
+/// type addresses; M7's `ReservedAddrs::format` reads them here. The document
+/// and the subspace each have exactly one spelling — the document is
+/// [`ghost_home_doc`]'s and the subspace is M1's — so the addresses M7
+/// dispatches on and the namespace the allocator floors
+/// ([`GHOST_POSITIONS`]) cannot come apart.
 ///
 /// # Panics
 ///
@@ -433,14 +434,14 @@ pub fn ghost_position(x: u32) -> Address {
         "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
     );
     elem_addr(ElemPos {
-        doc: ghost_doc(),
+        doc: ghost_home_doc(),
         subspace: content_subspace(),
         ordinal: Nat::from(x),
     })
-    .expect("ghost_doc is Document-level; s_C ≥ 1; x ≥ 1 by the assert above")
+    .expect("ghost_home_doc is Document-level; s_C ≥ 1; x ≥ 1 by the assert above")
 }
 
-/// Is `key` THE ghost content namespace — `(b_C(ghost_doc), 1)`, the one
+/// Is `key` THE ghost content namespace — `(b_C(ghost_home_doc), 1)`, the one
 /// namespace whose chain contains the five ghost tumblers? Decided by key
 /// equality against a lazily-built constant, so the compare on every other
 /// namespace fails at the first differing component and the hot paths pay a
@@ -448,7 +449,7 @@ pub fn ghost_position(x: u32) -> Address {
 fn is_ghost_ns(key: &NsKey) -> bool {
     use std::sync::OnceLock;
     static GHOST_NS: OnceLock<NsKey> = OnceLock::new();
-    key == GHOST_NS.get_or_init(|| content_ns(&ghost_doc()))
+    key == GHOST_NS.get_or_init(|| content_ns(&ghost_home_doc()))
 }
 
 /// The allocator skip: the frontier FLOOR of `key` — [`GHOST_POSITIONS`] for
@@ -606,13 +607,15 @@ fn chain_first(key: &NsKey) -> Result<Address, GateViolation> {
 }
 
 /// The address an account's FIRST document occupies — `c₁` of the
-/// `(account, 2)` chain, `A·0·1` (§1). `None` unless `account` is
+/// `(account, 2)` chain, `A·0·1` (§1), which AUTH names an account's **doc 1**
+/// (AUTH-2.126: the doc-1 form is `A·0·1`). `None` unless `account` is
 /// account-tier, because no other tier anchors a document chain: a node's
 /// `(N, 2)` chain is the ACCOUNT chain, and a document's next field is its
 /// content base.
 ///
 /// Registry-free, like [`prefix_contains`]: it names the SLOT and claims
-/// nothing about what is in it — pair it with
+/// nothing about what is in it — which is why it is spelled differently from
+/// the corpus's "doc 1", a phrase that names the document. Pair it with
 /// [`M3State::is_registered_document`] for "has this account any documents?",
 /// which is exact because the chain is contiguous from 1 (B1). It is public
 /// because the two questions asked about that chain from outside M3 — is it
@@ -749,7 +752,7 @@ impl M3State {
                 // ordinal is the effective frontier + 1 — a regressed or
                 // jumped ordinal is OUTSIDE the totality domain, never
                 // silently absorbed. The floor term matters exactly once per
-                // journal: the ghost doc's first content Allocate carries
+                // journal: the ghost home doc's first content Allocate carries
                 // ordinal GHOST_POSITIONS + 1 over an absent frontier.
                 debug_assert_eq!(
                     n,
@@ -1043,8 +1046,8 @@ impl M3State {
     /// [`Address`] type carries a positive ordinal; and an absent frontier is
     /// `m = 0`, which no positive ordinal is ≤. The ghost exclusion is
     /// permanent: the five ghost tumblers answer unallocated on every board
-    /// forever ([`ghost_floor`] — nothing exists at a dispatch key), however
-    /// far the chain past them has advanced.
+    /// forever ([`ghost_floor`] — nothing exists at a reserved type address),
+    /// however far the chain past them has advanced.
     fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
@@ -1543,7 +1546,7 @@ mod tests {
     /// consequence the integration suite checks.
     #[test]
     fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
-        let ghost_ns = content_ns(&ghost_doc());
+        let ghost_ns = content_ns(&ghost_home_doc());
         assert_eq!(ghost_floor(&ghost_ns), Nat::from(GHOST_POSITIONS));
         for x in 1..=GHOST_POSITIONS {
             let position = ghost_position(x);

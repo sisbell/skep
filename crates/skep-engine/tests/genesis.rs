@@ -16,7 +16,7 @@ use skep_arrangement::HasM5;
 use skep_content::{HasContent, Val};
 use skep_engine::{ReservedAddrs, World};
 use skep_links::{coverage_class, HasLinks, ShippedType, View};
-use skep_namespace::{ghost_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
+use skep_namespace::{ghost_home_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
 
 const SHIPPED: [ShippedType; 5] = [
     ShippedType::Retired,
@@ -171,7 +171,7 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
         .namespace()
         .create_new_document(USER, &operator)
         .expect("the ceremony's doc-1");
-    assert_eq!(doc1, ghost_doc(), "doc-1 IS the ghost home document");
+    assert_eq!(doc1, ghost_home_doc(), "doc-1 IS the ghost home document");
 
     // INSERT drives the content chain: the permascroll writes land from
     // position GHOST_POSITIONS + 1, and keep going contiguously.

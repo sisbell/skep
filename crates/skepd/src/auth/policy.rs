@@ -4,13 +4,13 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{checked_inc, validate, Address, Level, Nat, Span, Tumbler};
+use skep_address::{validate, Address, Level, Nat, Span, Tumbler};
 use skep_febe::Op;
 use skep_identity::{
     CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
 };
 use skep_links::{enc, HasLinks, SlotArg};
-use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::fold::WorldCtx;
 use super::{LockRead, LockWrite};
@@ -303,21 +303,15 @@ pub(crate) fn nullify_refusal(
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
 
-/// The account's doc-1 address: `inc(A, 2)` — the same arithmetic the
-/// identity fold pins (AUTH-2.109/2.126). Total: the fallback prefix is
-/// document-of nothing, so every comparison against it refuses.
-pub(crate) fn doc_1_of(a: &Address) -> Address {
-    checked_inc(a, 2).unwrap_or_else(|_| a.clone())
-}
-
 /// AUTH-3.68's `has_documents(account)`, built over M3's PUBLIC read
-/// surface: `is_registered_document(doc 1 of A)` — the behaviorally
-/// equivalent form AUTH-3.69 records as not-taken; taken here because the
-/// upstream M3 delta is out of this round's reach (a report finding, not
-/// an upstream edit). The equivalence holds on every input: M3 mints every
-/// account-tier document through one frontier starting at ordinal 1.
+/// surface: the account's document chain is empty iff the slot it opens at
+/// — `first_document_address(A)` — holds no registered document. Exact
+/// because that chain is contiguous from its first ordinal, which is M3's
+/// own guarantee and M3's own arithmetic. A subject that anchors no
+/// document chain answers `None` there, hence `false` here.
 pub(crate) fn has_documents(world: &World, account: &Address) -> bool {
-    world.m3().is_registered_document(&doc_1_of(account))
+    first_document_address(account)
+        .is_some_and(|first| world.m3().is_registered_document(&first))
 }
 
 /// `Some(MintHomeFirst)` iff `op` is a document-minting op OTHER than
@@ -362,9 +356,9 @@ pub(crate) fn mint_home_refusal(
 fn is_published_v1(world: &World, doc: &Address) -> bool {
     world
         .m3()
-        .effective_owner(doc)
-        .and_then(|id| world.m3().principal_prefix(id))
-        .is_some_and(|prefix| *doc == doc_1_of(prefix))
+        .effective_owner_prefix(doc)
+        .and_then(first_document_address)
+        .is_some_and(|first| first == *doc)
 }
 
 /// The plain path's one producer for the two board-state gates, dispatched
@@ -452,7 +446,8 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
         Op::Insert { doc, .. } => world
             .m3()
             .principal_prefix(principal)
-            .is_some_and(|prefix| *doc == doc_1_of(prefix)),
+            .and_then(first_document_address)
+            .is_some_and(|first| first == *doc),
         // Fail-CLOSED, which is why this arm may be a wildcard where
         // `deposits_credential_link`'s may not: a new op defaults to
         // `claim_first` and costs its author one decision, rather than

@@ -16,9 +16,9 @@ use skep_kernel::{
     WorldState,
 };
 use skep_namespace::{
-    ghost_doc, ghost_position, GHOST_POSITIONS,
-    prefix_contains, CreateDocumentError, DelegateError, HasM3, M3Rec, M3State, MintError,
-    Namespace, NodeError, PrincipalId, BOOTSTRAP_PRINCIPAL, MAX_NODE_COMPONENTS,
+    first_document_address, ghost_doc, ghost_position, prefix_contains, CreateDocumentError,
+    DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, PrincipalId,
+    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
 };
 use tempfile::tempdir;
 
@@ -719,6 +719,12 @@ fn omega_is_the_longest_covering_prefix_at_every_depth() {
     ids.push(UNKNOWN_ID);
     for x in &probes {
         assert_eq!(m3.effective_owner(x), oracle(x), "ω disagrees at {x:?}");
+        // The other projection of the same walk: the seat, not the id.
+        assert_eq!(
+            m3.effective_owner_prefix(x),
+            oracle(x).and_then(|id| pi.iter().find(|(_, i)| *i == id).map(|(p, _)| p)),
+            "ω's prefix disagrees at {x:?}"
+        );
         for id in &ids {
             assert_eq!(
                 m3.is_effective_owner(*id, x),
@@ -765,6 +771,8 @@ fn the_principal_registry_answers_one_prefix_per_principal_in_both_directions() 
             // …and ω at that very prefix names the principal back.
             assert_eq!(state.effective_owner(prefix), Some(*id));
             assert!(state.is_effective_owner(*id, prefix));
+            // The seat ω names IS the seat the registry keys it by.
+            assert_eq!(state.effective_owner_prefix(prefix), Some(prefix));
         }
         // An unknown id names no prefix, and no address answers it as ω.
         assert!(state.principal_prefix(UNKNOWN_ID).is_none());
@@ -891,11 +899,14 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     let m3 = snap.world().m3();
 
     // ω skips it and keeps the longest ADMISSIBLE cover — the account above —
-    // so a below-tier seat shadows no one, at the document or beneath it.
+    // so a below-tier seat shadows no one, at the document or beneath it. Both
+    // projections refuse it, because they share the walk that filters.
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
+    assert_eq!(m3.effective_owner_prefix(&doc), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &doc));
     let elem = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
     assert_eq!(m3.effective_owner(&elem), Some(ID1));
+    assert_eq!(m3.effective_owner_prefix(&elem), Some(&a(&[1, 0, 1])));
     assert!(!m3.is_effective_owner(ID2, &elem));
 
     // The other two readers of Π answer VERBATIM, as their docs say — the
@@ -1229,6 +1240,32 @@ fn create_new_document_authorizes_by_omega() {
     assert_eq!(k.current_seq(), before);
     let (d3, _) = ns.create_new_document(ID1, &acct).expect("create 3");
     assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+}
+
+#[test]
+fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
+    // §1: the chain's opening ordinal is M3's, so M3 names the address rather
+    // than leaving callers to rebuild `A·0·1`. The slot is nameable before
+    // anything occupies it, and the account's FIRST creation lands on it.
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    let slot = first_document_address(&acct).expect("an account anchors a document chain");
+    assert_eq!(slot, a(&[1, 0, 1, 0, 1]));
+    assert!(!k.snapshot().world().m3().is_allocated(&slot)); // the slot, not a claim
+    let (d1, _) = ns.create_new_document(ID1, &acct).expect("create 1");
+    assert_eq!(d1, slot);
+    let (d2, _) = ns.create_new_document(ID1, &acct).expect("create 2");
+    assert_ne!(d2, slot);
+    // The ghost home document is that rule applied to the registry operator's
+    // account — so the compiled literal and the chain rule agree.
+    assert_eq!(first_document_address(&a(&[1, 1, 0, 1])), Some(ghost_doc()));
+    // Only an account anchors a document chain.
+    assert!(first_document_address(&a(&[1])).is_none());
+    assert!(first_document_address(&d1).is_none());
+    assert!(first_document_address(&a(&[1, 0, 1, 0, 1, 0, 1, 1])).is_none());
 }
 
 // ---- §B fork ----

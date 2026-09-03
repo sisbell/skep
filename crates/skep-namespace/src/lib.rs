@@ -44,12 +44,14 @@
 //!   [`Namespace::fork`] \[ASN-0042 O10, account-tier case\].
 //! * **Queries** (§C) — pure reads off any M2 snapshot: allocation and
 //!   entity membership (exact chain membership, §2), the ω authorization
-//!   predicate [`M3State::is_effective_owner`] beside the owner it names
-//!   ([`M3State::effective_owner`]) \[ASN-0042 O1–O9\], id→prefix
-//!   resolution, and the next-form peek
-//!   [`M3State::next_account_prefix`] — plus the registry-free containment
-//!   test [`prefix_contains`], which answers where an address SITS and
-//!   never who may write it.
+//!   predicate [`M3State::is_effective_owner`] beside the two projections of
+//!   the owner it names ([`M3State::effective_owner`] for the id,
+//!   [`M3State::effective_owner_prefix`] for the address it is seated at)
+//!   \[ASN-0042 O1–O9\], id→prefix resolution, and the next-form peek
+//!   [`M3State::next_account_prefix`] — plus two registry-free address
+//!   answers: [`prefix_contains`], which answers where an address SITS and
+//!   never who may write it, and [`first_document_address`], the slot an
+//!   account's document chain opens at.
 //! * **The reserved region** (owner ruling, 2026-08-26) — the first
 //!   [`GHOST_POSITIONS`] content positions of [`ghost_doc`], spelled by
 //!   [`ghost_position`]: five ghost tumblers that are compiled format
@@ -104,8 +106,8 @@ mod state;
 pub use error::{CreateDocumentError, DelegateError, MintError, NodeError};
 pub use ops::Namespace;
 pub use state::{
-    ghost_doc, ghost_position, prefix_contains, M3Rec, M3State, PrincipalId, BOOTSTRAP_PRINCIPAL,
-    GHOST_POSITIONS, MAX_NODE_COMPONENTS,
+    first_document_address, ghost_doc, ghost_position, prefix_contains, M3Rec, M3State,
+    PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
 };
 
 /// The engine's **read accessor** for M3's slice (Engine Composition

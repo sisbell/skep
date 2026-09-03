@@ -49,9 +49,11 @@ impl Values for WorldCtx<'_> {
 impl FoldCtx for WorldCtx<'_> {
     fn owner_of(&self, a: &Address) -> Option<Owner> {
         let m3 = self.0.m3();
-        let id = m3.effective_owner(a)?;
-        let prefix = m3.principal_prefix(id)?.clone();
-        Some(Owner { prefix, is_bootstrap: id == BOOTSTRAP_PRINCIPAL })
+        let prefix = m3.effective_owner_prefix(a)?.clone();
+        Some(Owner {
+            prefix,
+            is_bootstrap: m3.is_effective_owner(BOOTSTRAP_PRINCIPAL, a),
+        })
     }
 
     fn is_account(&self, a: &Address) -> bool {

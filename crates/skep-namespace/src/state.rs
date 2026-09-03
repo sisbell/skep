@@ -452,11 +452,13 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 }
 
 /// The allocator skip: the frontier FLOOR of `key` — [`GHOST_POSITIONS`] for
-/// the ghost content namespace, 0 for every other. Three readers, and the
-/// guarantee needs all three: [`M3State::next_in`] mints past
-/// `max(frontier, floor)`, [`M3State::is_chain_member`] refuses ordinals at
-/// or below the floor, and [`M3State::apply_m3`]'s contiguity check expects
-/// `max(frontier, floor) + 1`.
+/// the ghost content namespace, 0 for every other. Answered as a [`Nat`],
+/// the frontier's own type, so the sites that compare against it just
+/// compare, and the ordinary zero floor is a value rather than a case.
+/// Three readers, and the guarantee needs all three: [`M3State::next_in`]
+/// mints past `max(frontier, floor)`, [`M3State::is_chain_member`] refuses
+/// ordinals at or below the floor, and [`M3State::apply_m3`]'s contiguity
+/// check expects `max(frontier, floor) + 1`.
 ///
 /// NON-REISSUE, the property this floor exists for: no mint, on any board
 /// running this format, ever yields a ghost tumbler. Every mint returns
@@ -476,11 +478,11 @@ fn is_ghost_ns(key: &NsKey) -> bool {
 /// exactly the namespace roots and the empty docuverse, every board agrees
 /// because the floor IS the format, and a checkpoint has nothing extra to
 /// carry.
-fn ghost_floor(key: &NsKey) -> u32 {
+fn ghost_floor(key: &NsKey) -> Nat {
     if is_ghost_ns(key) {
-        GHOST_POSITIONS
+        Nat::from(GHOST_POSITIONS)
     } else {
-        0
+        Nat::zero()
     }
 }
 
@@ -582,6 +584,45 @@ fn account_ns(parent: &Address) -> NsKey {
         parent: parent.tumbler().clone(),
         g: generator(parent.level(), Level::Account),
     }
+}
+
+/// `c₁` of the chain `key` names — `inc(anchor, g)`, the address its FIRST
+/// member occupies, allocated or not. THE one spelling of a chain's opening
+/// address: [`M3State::next_in`] shifts it to `c_{m+1}`, and
+/// [`first_document_address`] publishes it for the one chain a caller
+/// outside M3 has to name.
+///
+/// PRECONDITION — the anchor precondition [`M3State::next_in`] states, and
+/// which the five mints discharge by their own gates;
+/// [`first_document_address`] discharges it by cloning its anchor from an
+/// [`Address`]. The [`Generator::NextField`]/Element half is not a panic
+/// here either: `checked_inc` refuses `k = 2` at that tier and this answers
+/// [`GateViolation`].
+fn chain_first(key: &NsKey) -> Result<Address, GateViolation> {
+    let anchor = validate(key.parent.clone()).expect(
+        "chain_first precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
+    );
+    checked_inc(&anchor, key.g.inc_k())
+}
+
+/// The address an account's FIRST document occupies — `c₁` of the
+/// `(account, 2)` chain, `A·0·1` (§1). `None` unless `account` is
+/// account-tier, because no other tier anchors a document chain: a node's
+/// `(N, 2)` chain is the ACCOUNT chain, and a document's next field is its
+/// content base.
+///
+/// Registry-free, like [`prefix_contains`]: it names the SLOT and claims
+/// nothing about what is in it — pair it with
+/// [`M3State::is_registered_document`] for "has this account any documents?",
+/// which is exact because the chain is contiguous from 1 (B1). It is public
+/// because the two questions asked about that chain from outside M3 — is it
+/// empty, and is `d` its first member — are otherwise answerable only by
+/// rebuilding the chain's anchor and opening ordinal, which are M3's alone.
+pub fn first_document_address(account: &Address) -> Option<Address> {
+    (account.level() == Level::Account).then(|| {
+        chain_first(&document_ns(account))
+            .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
+    })
 }
 
 // The three key domains M3 serializes on — namespace frontiers, THE principal
@@ -740,25 +781,26 @@ impl M3State {
     /// ([`ghost_floor`] carries the non-reissue argument). NOT the membership
     /// bound — membership reads the STORED frontier and excludes the floored
     /// ordinals, because a floor that counted as members would make the five
-    /// ghost tumblers allocated without a mint.
+    /// ghost tumblers allocated without a mint. Given that exclusion the two
+    /// bounds agree, so membership stays on the stored value, which it can
+    /// borrow.
     fn effective_frontier(&self, key: &NsKey) -> Nat {
-        let m = self.frontiers.get(key).cloned().unwrap_or_else(Nat::zero);
-        let floor = ghost_floor(key);
-        if floor > 0 && m < Nat::from(floor) {
-            return Nat::from(floor);
-        }
-        m
+        self.frontiers
+            .get(key)
+            .cloned()
+            .unwrap_or_else(Nat::zero)
+            .max(ghost_floor(key))
     }
 
     /// `next(B, p, g)` in closed form (§1): the chain `S(p, g)` is
     /// `cₙ = p ++ [0]^(g−1) ++ [n]`, so the next address is
     /// `c_{m+1}` — read the count, advance the trailing ordinal, where `m` is
     /// the [`M3State::effective_frontier`] (the stored count, floored past
-    /// the ghost region for the one namespace that holds it). Pure function
-    /// of `frontiers` (B2 determinism — the natural property-test oracle).
-    /// M1's `checked_inc` is the TA5a gate ⇒ B6(ii)/(iii); routing every first
-    /// emission through it is the defensive guard (it can only fire on a
-    /// corrupted frontier).
+    /// the ghost region for the one namespace that holds it) and `c₁` is
+    /// [`chain_first`]. Pure function of `frontiers` (B2 determinism — the
+    /// natural property-test oracle). M1's `checked_inc` is the TA5a gate ⇒
+    /// B6(ii)/(iii); routing every first emission through it is the
+    /// defensive guard (it can only fire on a corrupted frontier).
     ///
     /// PRECONDITION — `key.parent` is T4-valid, and under
     /// [`Generator::NextField`] it is not Element-level (M1's TA5a admits
@@ -781,10 +823,7 @@ impl M3State {
     /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     pub(crate) fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
         let m = self.effective_frontier(key);
-        let anchor = validate(key.parent.clone()).expect(
-            "next_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
-        );
-        let c1 = checked_inc(&anchor, key.g.inc_k())?; // c1 = inc(parent, g), trailing ordinal 1
+        let c1 = chain_first(key)?; // c1 = inc(parent, g), trailing ordinal 1
         Ok(if m.is_zero() {
             c1 // first emission
         } else {
@@ -997,25 +1036,21 @@ impl M3State {
     /// `S(p, d)` canonical form; T4b unique-parse), so `a` is realized —
     /// `a ∈ {c_{floor+1}..cₘ}` — iff `floor < ordinal(a) ≤ m`, where the floor
     /// is 0 everywhere but the ghost content namespace — genuine chain
-    /// membership with NO false positives, not an approximation. The `1 ≤`
-    /// half is carried by the
-    /// [`Address`] type, since T4 forbids a trailing zero and `ordinal` reads
-    /// the last component, so the code spells the `≤ m` half and the ghost
-    /// exclusion. The exclusion is permanent: the five ghost tumblers answer
-    /// unallocated on every board forever ([`ghost_floor`] — nothing exists
-    /// at a dispatch key), however far the chain past them has advanced.
+    /// membership with NO false positives, not an approximation. The code
+    /// spells that interval, and both of its ends absorb their edge case:
+    /// where the floor is zero the lower bound is free, because T4 forbids a
+    /// trailing zero and `ordinal` reads the last component, so the
+    /// [`Address`] type carries a positive ordinal; and an absent frontier is
+    /// `m = 0`, which no positive ordinal is ≤. The ghost exclusion is
+    /// permanent: the five ghost tumblers answer unallocated on every board
+    /// forever ([`ghost_floor`] — nothing exists at a dispatch key), however
+    /// far the chain past them has advanced.
     fn is_chain_member(&self, a: &Address) -> bool {
         let Some(key) = namespace_of(a) else {
             return false; // parentless only for a 1-component node — the callers' Node arm
         };
         let n = ordinal(a.tumbler()); // &Nat — compare BY REFERENCE (BigUint is not Copy)
-        let floor = ghost_floor(&key);
-        if floor > 0 && *n <= Nat::from(floor) {
-            return false; // a ghost tumbler is never a member, mint or no mint
-        }
-        // An absent frontier is m = 0, which no positive ordinal is ≤, so the
-        // missing key needs no branch of its own.
-        self.frontiers.get(&key).is_some_and(|m| n <= m)
+        *n > ghost_floor(&key) && self.frontiers.get(&key).is_some_and(|m| n <= m)
     }
 
     /// `true` iff `a` exists in the name space — minted on a frontier in ANY
@@ -1053,11 +1088,28 @@ impl M3State {
         self.entity_level(d) == Some(Level::Document)
     }
 
+    /// ω's resolution step: the Π entry whose prefix is the LONGEST covering
+    /// prefix of `a` (§5) — THE one walk. [`M3State::effective_owner`]
+    /// projects the id, [`M3State::effective_owner_prefix`] the prefix, and
+    /// [`M3State::is_effective_owner`] compares; the cost promise and the O1a
+    /// tier filter are stated on `effective_owner`, and the `principals`
+    /// range-walk upgrade lands here once, serving all three.
+    fn omega(&self, a: &Address) -> Option<(&Address, PrincipalId)> {
+        self.principals
+            .iter()
+            .filter(|(p, _)| {
+                matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
+            })
+            .max_by_key(|(p, _)| p.tumbler().len())
+            .map(|(p, id)| (p, *id))
+    }
+
     /// ω(a): WHO owns `a` — the longest-prefix match over Π, answered as the
     /// owning id (§5; ASN-0042 O2/O3/O5). A pure prefix query — valid even
-    /// when `a` is not (yet) allocated. THE one walk: the authorization
-    /// predicate [`M3State::is_effective_owner`] is stated in terms of it, and
-    /// the `principals` range-walk upgrade lands here once, serving both.
+    /// when `a` is not (yet) allocated. One projection of the single Π walk
+    /// [`M3State::effective_owner_prefix`] shares, and the authorization
+    /// predicate [`M3State::is_effective_owner`] is stated in terms of this
+    /// one.
     ///
     /// The walk is over Π, keeping the longest covering prefix — the reference
     /// form the design names — and NEVER over `a`'s own reconstructed
@@ -1090,13 +1142,20 @@ impl M3State {
     /// [`M3State::is_effective_owner`], which settles it without naming the
     /// owner.
     pub fn effective_owner(&self, a: &Address) -> Option<PrincipalId> {
-        self.principals
-            .iter()
-            .filter(|(p, _)| {
-                matches!(p.level(), Level::Node | Level::Account) && prefix_contains(p, a)
-            })
-            .max_by_key(|(p, _)| p.tumbler().len())
-            .map(|(_, id)| *id)
+        self.omega(a).map(|(_, id)| id)
+    }
+
+    /// ω(a) as the PREFIX rather than the id: the node or account address the
+    /// effective owner is seated at (§5; ASN-0042 O2/O3). Same walk, same
+    /// tier filter, same cost as [`M3State::effective_owner`] — this is its
+    /// other projection, and it is published because the composition a caller
+    /// would otherwise write, `principal_prefix(effective_owner(a))`, is two
+    /// scans and is the same answer only while Π is id-injective, which is a
+    /// PRODUCER invariant (`delegate`'s `DuplicateId` gate) that
+    /// [`M3State::apply_m3`] neither re-checks nor could. Here the prefix IS
+    /// the entry ω matched, so the two cannot come apart.
+    pub fn effective_owner_prefix(&self, a: &Address) -> Option<&Address> {
+        self.omega(a).map(|(prefix, _)| prefix)
     }
 
     /// THE authorization predicate: is `id` the effective owner ω of `a`? An
@@ -1485,7 +1544,7 @@ mod tests {
     #[test]
     fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
         let ghost_ns = content_ns(&ghost_doc());
-        assert_eq!(ghost_floor(&ghost_ns), GHOST_POSITIONS);
+        assert_eq!(ghost_floor(&ghost_ns), Nat::from(GHOST_POSITIONS));
         for x in 1..=GHOST_POSITIONS {
             let position = ghost_position(x);
             assert_eq!(
@@ -1499,7 +1558,10 @@ mod tests {
         }
         // The floor is exactly five positions of ONE document: a sibling doc's
         // content chain carries none.
-        assert_eq!(ghost_floor(&content_ns(&a(&[1, 1, 0, 1, 0, 2]))), 0);
+        assert_eq!(
+            ghost_floor(&content_ns(&a(&[1, 1, 0, 1, 0, 2]))),
+            Nat::zero()
+        );
     }
 
     /// §6 (iv): the single probe answers "does a registered principal sit

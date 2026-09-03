@@ -170,8 +170,8 @@ impl TryFrom<u8> for Generator {
 /// distinction is recovered at *query* time from the address's own level.
 ///
 /// Off the journal a record arrives through [`M3RecShadow`], which re-checks
-/// the one standing fact T4-validity does not carry: an `Allocate` address
-/// extends a parent.
+/// the two standing facts T4-validity does not carry: an `Allocate` address
+/// extends a parent, and a `RegisterPrincipal` prefix is account-tier.
 ///
 /// A variant added HERE must be added to [`M3RecShadow`] too: `Serialize` is
 /// derived from this enum and `Deserialize` runs through the shadow, so a
@@ -205,12 +205,32 @@ pub enum M3Rec {
 /// single-component node), so the check is one length compare, and it turns a
 /// permanent applier panic into M2's ordinary decode failure.
 ///
+/// It carries the other per-record fact a seat needs, and the one whose
+/// absence fails OPEN: a `RegisterPrincipal` prefix is account-tier.
+/// `delegate` is the sole producer and its hoisted `NotAccountTier` gate
+/// stages nothing else, so the door refuses nothing M3 has ever journaled —
+/// genesis's node-tier π₀ seat is world state, passed to `Kernel::open`, not
+/// a record. The tier matters because ω's O1a filter ADMITS node tier (it
+/// must, for π₀): a node-tier seat arriving on the journal would make its
+/// carrier the effective owner of everything under that node no deeper
+/// account principal covers — including the unallocated subtree, so it could
+/// seat that node's first account, the operator seat `register_node`'s
+/// postcondition leaves to whoever owns the covering prefix. A below-tier
+/// seat is refused by every reader of Π already; this is the shape that is
+/// not.
+///
+/// The door is therefore tighter than O1a, and deliberately: a STATE-level
+/// door could not be, since genesis's seat is node-tier, so [`M3State`]'s
+/// bare-derive checkpoint path keeps that exposure and
+/// [`M3State::effective_owner`]'s tier filter is not removable. An op that
+/// ever seats a principal at a node prefix changes this door first.
+///
 /// A per-record door carries per-record facts and no others. The standing
-/// property `RegisterPrincipal` would want — id-injectivity across Π — is not
-/// one: it is a claim about the principal registry the record is about to
-/// enter, which no decoder holding a single frame can settle. That invariant
-/// has one owner, `delegate`'s `DuplicateId` gate, and this door does not
-/// share it.
+/// property `RegisterPrincipal` would want besides — id-injectivity across Π
+/// — is not one: it is a claim about the principal registry the record is
+/// about to enter, which no decoder holding a single frame can settle. That
+/// invariant has one owner, `delegate`'s `DuplicateId` gate, and this door
+/// does not share it.
 #[derive(Deserialize)]
 enum M3RecShadow {
     Allocate { addr: Address },
@@ -227,6 +247,9 @@ impl TryFrom<M3RecShadow> for M3Rec {
             }
             M3RecShadow::Allocate { addr } => Ok(M3Rec::Allocate { addr }),
             M3RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
+            M3RecShadow::RegisterPrincipal { prefix, .. } if prefix.level() != Level::Account => {
+                Err("a RegisterPrincipal prefix is account-tier (delegate's O15(iii) gate)")
+            }
             M3RecShadow::RegisterPrincipal { prefix, id } => {
                 Ok(M3Rec::RegisterPrincipal { prefix, id })
             }
@@ -322,10 +345,14 @@ pub struct M3State {
     ///   [`M3State::apply_m3`] — it is what makes the by-id scan
     ///   single-valued;
     /// * the account-tier floor (O1a) is a PRODUCER invariant too, owned by
-    ///   genesis and by `delegate`'s hoisted `NotAccountTier` gate. Only
-    ///   [`M3State::effective_owner`] re-checks it, because ω is the one
-    ///   reader whose answer to a below-tier entry would be a PASS; see the
-    ///   tier filter there.
+    ///   genesis (which seats π₀ at the node prefix `[1]`) and by `delegate`'s
+    ///   hoisted `NotAccountTier` gate. On the journal path [`M3RecShadow`]
+    ///   re-establishes it — stricter than O1a, since every seat `delegate`
+    ///   stages is account-tier exactly — but a seat can also arrive inside a
+    ///   whole [`M3State`], which decodes by bare derive because genesis's own
+    ///   seat is node-tier. So [`M3State::effective_owner`] re-checks it as
+    ///   well, ω being the one reader whose answer to a below-tier entry would
+    ///   be a PASS; see the tier filter there.
     ///
     /// The ONLY authoritative ownership state — the delegation forest is
     /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
@@ -343,7 +370,8 @@ pub struct M3State {
 /// The cap on a registered node address's component COUNT, enforced by
 /// [`crate::Namespace::register_node`] ([`crate::NodeError::TooDeep`]; §7).
 ///
-/// `nodes` is the one registry M3 cannot keep in frontier form: a namespace's
+/// `nodes` is one of the two registries M3 cannot keep in frontier form (the
+/// other is `principals` — [`MAX_PRINCIPAL_COMPONENTS`]): a namespace's
 /// realized set is a single count, but node addresses originate outside the
 /// docuverse (ASN-0047 NodeBaptism) and may be non-contiguous, so each is
 /// stored WHOLE, permanently (B0 — there is no deletion), and re-serialized
@@ -370,6 +398,39 @@ pub struct M3State {
 /// magnitudes. A magnitude bound, if a deployment wants one, belongs where
 /// the codec parses a tumbler, not here.
 pub const MAX_NODE_COMPONENTS: usize = 32;
+
+/// The cap on a principal prefix's component COUNT, enforced by
+/// [`crate::Namespace::delegate`] ([`crate::DelegateError::TooDeep`]; §6).
+///
+/// `principals` is the SECOND registry M3 cannot keep in frontier form: a
+/// prefix is stored WHOLE, permanently (O12 — there is no revocation),
+/// re-serialized into every checkpoint, ordered (so a deep entry lengthens
+/// every later range probe), and — unlike a `nodes` entry — walked by every ω
+/// query in the system. Its component count is the caller's, one per level of
+/// delegation nesting, and at ~32 bytes resident against ~2 bytes of dotted
+/// decimal to supply it is the same ~16× permanent, replicated charge
+/// [`MAX_NODE_COMPONENTS`] bounds for `nodes`.
+///
+/// The number: a prefix is `node_field ++ [0] ++ account_field`, the node
+/// field already bounded by [`MAX_NODE_COMPONENTS`], and the account field
+/// grows one component per delegation. 64 leaves 31 levels of nesting under
+/// the deepest admissible node — an order of magnitude over any authority
+/// hierarchy (operator → org → division → team → project is five) — and holds
+/// one permanent entry near 2 KB, twice the node cap's ceiling for twice its
+/// components. It also caps what an UNAUTHENTICATED deep prefix can command
+/// before `delegate` reaches its first gate, which is the half of the charge
+/// no economics bound: the full-depth `parent` clone, the
+/// nine-bytes-per-component lock key, and the transaction that takes the
+/// account-chain and global-principals keys. Depth in the registry ITSELF
+/// costs one committed delegation per level, since P8 admits only a
+/// registered parent — so a deep entry is bought, not smuggled, and what the
+/// cap bounds there is what one entry charges every later ω walk.
+///
+/// Nothing re-checks it at the record door or in the fold, for the reason the
+/// node cap is not re-checked either: that would refuse a record M3 itself
+/// wrote before the cap existed, turning a resource charge into an
+/// unreplayable journal.
+pub const MAX_PRINCIPAL_COMPONENTS: usize = 64;
 
 /// The bootstrap node root `[1]` (Σ₀) — the single definition genesis seeds
 /// from and `register_node`'s lineage check probes against. `Nat` is a
@@ -733,9 +794,13 @@ impl M3State {
     /// it and so `delegate` beneath it is refused `NotAncestor` at (i); and an
     /// over-cap entry is a permanent resource charge and nothing more.
     ///
-    /// `RegisterPrincipal` likewise has no gate of its own, and that is
-    /// deliberate rather than missing. Id-injectivity — one id ↦ at most one
-    /// principal — is a PRODUCER invariant, owned by `delegate`'s
+    /// `RegisterPrincipal`'s tier is a per-record fact, so it rides at the
+    /// door like `Allocate`'s parent: the record door admits an account-tier
+    /// prefix and nothing else, which is what `delegate` stages and what ω's
+    /// O1a filter cannot refuse on its own (node tier is a pass there, for
+    /// π₀'s sake). Id-injectivity is the fact that arm has no gate for, and
+    /// that is deliberate rather than missing: one id ↦ at most one
+    /// principal is a PRODUCER invariant, owned by `delegate`'s
     /// `DuplicateId` gate alone; the fold neither re-checks nor re-establishes
     /// it, and could not, since the property is about the whole principal
     /// registry and a fold arm sees one record. What rests on it is
@@ -1222,14 +1287,19 @@ impl M3State {
     /// path. `g` follows `parent`'s level: a node ⇒ the `(parent, 2)` account
     /// chain; an account ⇒ the `(parent, 1)` sub-account chain (the sixth
     /// chain family ASN-0042 licenses — Conflicts §8). Both yield zeros = 1.
-    /// Pure frontier read off any snapshot; `None` unless `parent` is a
-    /// REGISTERED node or account (the one monotone gate a peek can answer
-    /// honestly — E is append-only, so a `Some` answer never regresses), which
-    /// leaves `None` exactly one meaning. The returned prefix still faces
-    /// `delegate`'s full in-closure gate — two racing peeks of the same value
-    /// leave exactly one winner.
+    /// Pure frontier read off any snapshot; `None` for two reasons, and both
+    /// are monotone, so a `Some` answer never regresses: `parent` is not a
+    /// REGISTERED node or account (E is append-only), or the slot it names
+    /// would exceed [`MAX_PRINCIPAL_COMPONENTS`], which is a compiled
+    /// constant. That second refusal is here so the peek and `delegate`'s
+    /// `TooDeep` gate read one bound and no caller is handed a prefix the
+    /// gate refuses. The returned prefix still faces `delegate`'s full
+    /// in-closure gate — two racing peeks of the same value leave exactly one
+    /// winner.
     pub fn next_account_prefix(&self, parent: &Address) -> Option<Address> {
-        self.mint_account(parent).map(|(addr, _)| addr)
+        self.mint_account(parent)
+            .map(|(addr, _)| addr)
+            .filter(|addr| addr.tumbler().len() <= MAX_PRINCIPAL_COMPONENTS)
     }
 
     /// §6 (iv), concretely: because `principals` is an `OrdMap` under tumbler
@@ -1589,6 +1659,38 @@ mod tests {
             ghost_floor(&content_ns(&a(&[1, 1, 0, 1, 0, 2]))),
             Nat::zero()
         );
+    }
+
+    /// §1: [`M3State::effective_frontier`] takes a MAX, not a fallback — so a
+    /// stored frontier BELOW the floor cannot drag a mint back into the ghost
+    /// region. Only corruption or a foreign producer regresses a frontier, and
+    /// the fold's contiguity guard is a `debug_assert` and absent in release,
+    /// so the `max` is what carries non-reissue there. Built by hand rather
+    /// than folded, because folding the regressing record is what that assert
+    /// stops.
+    #[test]
+    fn the_ghost_floor_holds_against_a_regressed_frontier() {
+        let ghost_ns = content_ns(&ghost_home_doc());
+        let mut s = M3State::genesis();
+        s.frontiers.insert(ghost_ns.clone(), Nat::from(2u32));
+
+        // The mint still lands past the region, not at the stored value + 1.
+        let next = s
+            .next_in(&ghost_ns)
+            .expect("a Document's content base is T4");
+        assert_eq!(
+            *ordinal(next.tumbler()),
+            Nat::from(GHOST_POSITIONS + 1),
+            "a regressed frontier moved a mint into the ghost region"
+        );
+        // …and membership excludes all five however the frontier reads, since
+        // it compares against the floor and not against the stored count.
+        for x in 1..=GHOST_POSITIONS {
+            assert!(
+                !s.is_allocated(&ghost_position(x)),
+                "ghost {x} became a member"
+            );
+        }
     }
 
     /// §6 (iv): the single probe answers "does a registered principal sit

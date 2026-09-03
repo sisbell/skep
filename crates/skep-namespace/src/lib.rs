@@ -108,6 +108,7 @@ pub use ops::Namespace;
 pub use state::{
     first_document_address, ghost_home_doc, ghost_position, prefix_contains, M3Rec, M3State,
     PrincipalId, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
 };
 
 /// The engine's **read accessor** for M3's slice (Engine Composition

@@ -123,10 +123,11 @@ impl Error for CreateDocumentError {
 /// `zeros == 1` (§6 / Conflicts §7), PLUS id-freshness PLUS P8 PLUS next-form.
 ///
 /// The variants are declared in `delegate`'s PINNED rejection order (§6):
-/// `NotValid` and `NotAccountTier` are pure pre-work — both `Rejected` with
-/// NO transaction opened — and the rest are the in-closure gate, in the order
-/// it evaluates them. A multiply-defective input earns the FIRST applicable
-/// rejection; conformance tests and M10's error handling may rely on this.
+/// `NotValid`, `NotAccountTier` and `TooDeep` are pure pre-work — all three
+/// `Rejected` with NO transaction opened — and the rest are the in-closure
+/// gate, in the order it evaluates them. A multiply-defective input earns the
+/// FIRST applicable rejection; conformance tests and M10's error handling may
+/// rely on this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelegateError {
     /// O15(v) validity: `new_prefix` is not T4-valid.
@@ -134,6 +135,11 @@ pub enum DelegateError {
     /// O15(iii), narrowed `≤1 → ==1` and hoisted to pre-work: `new_prefix` is
     /// node-tier (zeros = 0) or document-tier (zeros ≥ 2), not account-tier.
     NotAccountTier,
+    /// `new_prefix` has more than
+    /// [`MAX_PRINCIPAL_COMPONENTS`](crate::MAX_PRINCIPAL_COMPONENTS)
+    /// components — a principal prefix names a delegation path, whose depth is
+    /// bounded by the authority hierarchy and not by the request (§6).
+    TooDeep,
     /// The delegator id names no principal (§5 scan).
     DelegatorUnknown,
     /// O15(i): the delegator's prefix is not a strict ancestor of `new_prefix`.
@@ -160,6 +166,9 @@ impl fmt::Display for DelegateError {
             DelegateError::NotValid => "delegate: new_prefix is not T4-valid (O15 v)",
             DelegateError::NotAccountTier => {
                 "delegate: new_prefix is not account-tier — zeros must be exactly 1 (O15 iii, narrowed)"
+            }
+            DelegateError::TooDeep => {
+                "delegate: new_prefix has more components than the principal registry admits"
             }
             DelegateError::DelegatorUnknown => "delegate: delegator id names no principal",
             DelegateError::NotAncestor => {

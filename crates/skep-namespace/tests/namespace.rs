@@ -18,7 +18,7 @@ use skep_kernel::{
 use skep_namespace::{
     first_document_address, ghost_home_doc, ghost_position, prefix_contains, CreateDocumentError,
     DelegateError, HasM3, M3Rec, M3State, MintError, Namespace, NodeError, PrincipalId,
-    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS,
+    BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS, MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
 use tempfile::tempdir;
 
@@ -887,44 +887,54 @@ fn omega_resolves_by_the_registry_not_by_the_probes_depth() {
 fn delegate_refuses_a_wire_deep_prefix_structurally() {
     // §6: `delegate` takes an UNVALIDATED `Tumbler` straight off the wire, and
     // T4 bounds an address's zero pattern, not its component count — so ~100 KB
-    // of dotted decimal is a 50_000-component account-tier prefix that reaches
-    // every gate in the ten-step chain under the held account-chain and global
-    // principals keys. `parent`, `account_lock_key`'s encoding,
-    // `has_principal_strictly_under`'s range probe, `is_allocated`'s
-    // decomposition and `mint_account`'s frontier read all take it whole. It
-    // must refuse structurally, without reaching an `expect`. No assertion pins
-    // a constant — a wall-clock bound is a flake; the depth is chosen so a
-    // regression to superlinear work stops the suite instead of reddening a
-    // line. Corpus seed for the fuzzing tier.
+    // of dotted decimal is a 50_000-component account-tier prefix. Each of the
+    // three wire-deep shapes is refused as PRE-WORK — on depth if account-tier,
+    // on tier if not — before the full-depth `parent` clone, the
+    // nine-bytes-per-component lock key and the transaction that takes both
+    // keys; the fourth case is the deepest ADMISSIBLE prefix, which traverses
+    // the whole gate chain and must still refuse structurally. No assertion
+    // pins a constant — a wall-clock bound is a flake; the depth is chosen so
+    // a regression to superlinear work stops the suite instead of reddening a
+    // line. Corpus seeds for the fuzzing tier.
     let (k, acct, _doc) = kernel_with_account_and_doc(); // Π = { [1]→π₀, [1,0,1]→ID1 }
     let ns = Namespace::new(&k);
     let before = k.current_seq();
 
-    // Inside the caller's OWN subtree, so (i) and (ii) pass and the deep value
-    // reaches every remaining gate: the parent 49_999 components up is not a
-    // registered account.
+    // Inside the caller's OWN subtree, and outside it: both over-cap, so
+    // neither reaches (i)'s containment fence, let alone the registry reads.
     let mut deep = vec![1u32, 0, 1];
     deep.extend(std::iter::repeat_n(1u32, 49_997));
     assert_eq!(
         rejected(ns.delegate(ID1, t(&deep), ID2)),
-        DelegateError::ParentNotRegistered
+        DelegateError::TooDeep
     );
-
-    // Outside it, the containment fence refuses first — a stranger's deep probe
-    // never reaches the registry reads at all.
     let mut foreign = vec![1u32, 0, 2];
     foreign.extend(std::iter::repeat_n(1u32, 49_997));
     assert_eq!(
         rejected(ns.delegate(ID1, t(&foreign), ID2)),
-        DelegateError::NotAncestor
+        DelegateError::TooDeep
     );
 
-    // A node-tier prefix of the same length is pure pre-work: refused with NO
-    // transaction opened, so depth never reaches a lock.
+    // A node-tier prefix of the same length is refused for its TIER, which the
+    // pinned order puts first — depth bounds the principal registry alone.
     let node_deep: Vec<u32> = std::iter::repeat_n(1u32, 50_000).collect();
     assert_eq!(
         rejected(ns.delegate(ID1, t(&node_deep), ID2)),
         DelegateError::NotAccountTier
+    );
+
+    // At the cap the prefix is admissible and traverses the WHOLE gate chain
+    // under both held keys — `parent`, `account_lock_key`'s encoding,
+    // `has_principal_strictly_under`'s range probe, `is_allocated`'s
+    // decomposition and `mint_account`'s frontier read all take it whole. That
+    // is the case the cap does not close, and it must still refuse
+    // structurally, without reaching an `expect`.
+    let mut at_cap = vec![1u32, 0, 1];
+    at_cap.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS - 3));
+    assert_eq!(t(&at_cap).len(), MAX_PRINCIPAL_COMPONENTS);
+    assert_eq!(
+        rejected(ns.delegate(ID1, t(&at_cap), ID2)),
+        DelegateError::ParentNotRegistered
     );
 
     // Nothing committed, and the account's own chain stands where it stood.
@@ -932,6 +942,41 @@ fn delegate_refuses_a_wire_deep_prefix_structurally() {
     assert_eq!(
         k.snapshot().world().m3().next_account_prefix(&acct),
         Some(a(&[1, 0, 1, 1]))
+    );
+}
+
+#[test]
+fn the_peek_and_the_delegate_gate_stop_at_the_same_nesting_depth() {
+    // §6: `MAX_PRINCIPAL_COMPONENTS` is a resource refusal on the second
+    // uncompressed registry, and the peek and the gate must read ONE bound or
+    // a caller is handed a prefix `delegate` refuses. Seeded through the fold,
+    // because reaching the cap through the op is sixty durable delegations of
+    // no additional interest — each `Allocate` here is `c₁` of a fresh chain,
+    // so the contiguity domain holds.
+    let mut deep = vec![1u32, 0];
+    deep.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS - 2));
+    let under = deep[..MAX_PRINCIPAL_COMPONENTS - 1].to_vec();
+    let m3 = M3State::genesis()
+        .apply_m3(&alloc(&under))
+        .apply_m3(&alloc(&deep));
+    assert_eq!(a(&deep).tumbler().len(), MAX_PRINCIPAL_COMPONENTS);
+
+    // One below the cap the chain still has a delegable slot…
+    assert!(m3.next_account_prefix(&a(&under)).is_some());
+    // …at the cap it has none, because the slot would be over-cap — and the
+    // parent is a registered account either way, so this `None` is the depth
+    // refusal and not the ineligible-parent one.
+    assert_eq!(m3.entity_level(&a(&deep)), Some(Level::Account));
+    assert!(m3.next_account_prefix(&a(&deep)).is_none());
+
+    // …and the gate refuses that very prefix, as pre-work: neither id below
+    // names a principal here, so only a pre-work guard can be answering.
+    let mut over = deep.clone();
+    over.push(1);
+    let k = mem_kernel(World { m3 });
+    assert_eq!(
+        rejected(Namespace::new(&k).delegate(ID1, t(&over), UNKNOWN_ID)),
+        DelegateError::TooDeep
     );
 }
 
@@ -1157,6 +1202,23 @@ fn delegate_rejection_order_is_pinned() {
     assert_eq!(
         rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1, 0, 1]), ID1)),
         DelegateError::NotAccountTier
+    );
+    // NotAccountTier precedes TooDeep: an over-cap NODE-tier prefix is refused
+    // for its tier, since depth bounds the principal registry alone — the
+    // mirror of `register_node`'s NotNode-before-TooDeep.
+    let node_over: Vec<u32> = std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS + 1).collect();
+    assert_eq!(
+        rejected(ns.delegate(UNKNOWN_ID, t(&node_over), ID1)),
+        DelegateError::NotAccountTier
+    );
+    // …then TooDeep, the last pre-work guard, which precedes DelegatorUnknown:
+    // an over-cap account-tier prefix from a caller who names no principal is
+    // refused on depth, before any registry read.
+    let mut acct_over = vec![1u32, 0];
+    acct_over.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
+    assert_eq!(
+        rejected(ns.delegate(UNKNOWN_ID, t(&acct_over), ID1)),
+        DelegateError::TooDeep
     );
     // DelegatorUnknown: the first in-closure gate.
     assert_eq!(
@@ -1525,18 +1587,20 @@ fn register_node_validates_and_admits_supplied_addresses() {
 
 #[test]
 fn pre_work_rejections_open_no_transaction() {
-    // §6/§7: `delegate`'s NotValid/NotAccountTier, `register_node`'s
+    // §6/§7: `delegate`'s NotValid/NotAccountTier/TooDeep, `register_node`'s
     // NotValid/NotNode/TooDeep and `fork`'s unknown id are decided from the
     // argument alone and reject with NO transaction opened. M2 answers a
     // nested `transact` with a panic naming the broken obligation and permits
     // `snapshot()` inside a closure (kernel §3), so calling them from inside
     // a transaction is what separates "rejected before opening one" from
     // "rejected inside one" — `current_seq` cannot, since a rejected closure
-    // draws no Seq either. `TooDeep` is here for the reason it exists: an
-    // oversized admission must cost nothing, not a lock and a transaction.
+    // draws no Seq either. Both `TooDeep`s are here for the reason they exist:
+    // an oversized request must cost nothing, not a lock and a transaction.
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
     let too_deep: Vec<u32> = std::iter::repeat_n(1u32, MAX_NODE_COMPONENTS + 1).collect();
+    let mut deep_prefix = vec![1u32, 0];
+    deep_prefix.extend(std::iter::repeat_n(1u32, MAX_PRINCIPAL_COMPONENTS));
     k.transact::<_, ()>(&[], |_stg| {
         assert_eq!(
             rejected(ns.delegate(ID1, t(&[1, 0]), ID2)),
@@ -1545,6 +1609,10 @@ fn pre_work_rejections_open_no_transaction() {
         assert_eq!(
             rejected(ns.delegate(ID1, t(&[2]), ID2)),
             DelegateError::NotAccountTier
+        );
+        assert_eq!(
+            rejected(ns.delegate(ID1, t(&deep_prefix), ID2)),
+            DelegateError::TooDeep
         );
         assert_eq!(rejected(ns.register_node(t(&[1, 0]))), NodeError::NotValid);
         assert_eq!(
@@ -1665,6 +1733,45 @@ fn journaled_types_survive_serde_round_trips() {
     assert_eq!(
         bincode::deserialize::<M3Rec>(&bare_node_frame).expect("a bare node registers"),
         M3Rec::RegisterNode { addr: a(&[7]) }
+    );
+
+    // A principal seats at an ACCOUNT prefix and nowhere else. `delegate` is
+    // the sole producer of this record and its hoisted `NotAccountTier` gate
+    // makes every one it stages account-tier — genesis's node-tier π₀ seat is
+    // world state, not a record — so the door refuses nothing M3 has written.
+    // Node tier is the shape that matters: ω's O1a filter ADMITS it, so its
+    // carrier would be the effective owner of everything under that node no
+    // deeper account principal covers, and could seat that node's first
+    // account. Below-tier seats every reader of Π refuses already.
+    for off_tier in [
+        t(&[1]),
+        t(&[1, 7]),
+        t(&[1, 0, 1, 0, 1]),
+        t(&[1, 0, 1, 0, 1, 0, 1, 1]),
+    ] {
+        let frame = bincode::serialize(&TumblerRec::RegisterPrincipal {
+            prefix: off_tier.clone(),
+            id: ID1,
+        })
+        .expect("serialize the tumbler shadow");
+        assert!(
+            bincode::deserialize::<M3Rec>(&frame).is_err(),
+            "a {off_tier:?} principal seat decoded into a record"
+        );
+    }
+    // …and the account tier decodes at both of its forms — under a node, and
+    // the sub-account chain `delegate` also stages.
+    let sub = bincode::serialize(&TumblerRec::RegisterPrincipal {
+        prefix: t(&[1, 0, 1, 1]),
+        id: ID2,
+    })
+    .expect("serialize the tumbler shadow");
+    assert_eq!(
+        bincode::deserialize::<M3Rec>(&sub).expect("a sub-account seat decodes"),
+        M3Rec::RegisterPrincipal {
+            prefix: a(&[1, 0, 1, 1]),
+            id: ID2
+        }
     );
 
     // M3State — the checkpointed slice: every field is ordinary serde (none

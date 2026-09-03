@@ -930,8 +930,9 @@ carries the optional idempotency `id`:
 
 **`delegate`** — carve `new_prefix` off your account (or node) and register
 principal `new_id` as its owner, atomically. Obtain `new_prefix` from
-`next_account_prefix`; only the owner of the parent may delegate under it.
-→ `ack_addr` (the minted account address).
+`next_account_prefix`; only the owner of the parent may delegate under it. A
+principal prefix names a delegation path, so it is capped at 64 components —
+deeper is `too_deep`. → `ack_addr` (the minted account address).
 
 <!-- wire: request delegate -->
 ```json
@@ -958,7 +959,8 @@ account. Shares **no** content: the content-sharing fork is `version`.
 ```
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
-(what `delegate` demands). → `maybe_addr` (`null` = ineligible parent).
+(what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
+next slot past the 64-component depth cap).
 
 <!-- wire: request next_account_prefix -->
 ```json

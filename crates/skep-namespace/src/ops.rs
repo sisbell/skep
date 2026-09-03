@@ -12,7 +12,10 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
 use crate::state::bootstrap_root;
-use crate::{prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS};
+use crate::{
+    prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
+    MAX_PRINCIPAL_COMPONENTS,
+};
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure mints and queries live on [`M3State`] (reached
@@ -85,20 +88,33 @@ where
     /// Callers peek that same value through
     /// [`M3State::next_account_prefix`].
     ///
-    /// Pure pre-work runs first: the validate-lift (`NotValid`) and the
+    /// Pure pre-work runs first: the validate-lift (`NotValid`), the
     /// HOISTED tier check (`NotAccountTier`) — hoisted because the lift
     /// alone does not make `parent()`/lock-key construction safe (a
-    /// 1-component node prefix is T4-valid but parentless — §6). Both
-    /// pre-work failures reject via `TxnError::Rejected` with NO transaction
-    /// opened. Every race-prone condition is then evaluated inside the
-    /// closure against `stg.base().m3()` under the held namespace +
-    /// global-principals locks; the id-freshness race is CROSS-namespace
-    /// (same `new_id`, different `new_prefix`), which only the single global
+    /// 1-component node prefix is T4-valid but parentless — §6) — and the
+    /// depth refusal (`TooDeep`). All three pre-work failures reject via
+    /// `TxnError::Rejected` with NO transaction opened. Every race-prone
+    /// condition is then evaluated inside the closure against
+    /// `stg.base().m3()` under the held namespace + global-principals locks;
+    /// the id-freshness race is CROSS-namespace (same `new_id`, different
+    /// `new_prefix`), which only the single global
     /// [`M3State::principals_lock_key`] serializes (§8).
+    ///
+    /// The depth guard is a resource refusal, not a shape one, and it is the
+    /// twin of [`Namespace::register_node`]'s: this is the other door by
+    /// which a caller's chosen component count enters a permanent,
+    /// uncompressed registry — one Π walks on every ω query besides — and
+    /// `new_prefix` arrives unvalidated off the wire, so the count is bounded
+    /// here or nowhere (see [`MAX_PRINCIPAL_COMPONENTS`]). It is placed ahead
+    /// of `parent()` and the lock key deliberately: an oversized prefix must
+    /// cost neither the full-depth clone nor the encoding nor the
+    /// transaction. How MANY delegations a session may make is the daemon's.
     ///
     /// Rejection order is PINNED (§6) and is [`DelegateError`]'s declaration
     /// order, which states it. Obtain the required next-form `new_prefix`
-    /// from [`M3State::next_account_prefix`] instead of guess-and-retry.
+    /// from [`M3State::next_account_prefix`] instead of guess-and-retry; it
+    /// answers `None` once a chain's next slot would pass the depth cap, so
+    /// the value a caller peeks is never one this op refuses.
     pub fn delegate(
         &self,
         delegator: PrincipalId,
@@ -106,11 +122,16 @@ where
         new_id: PrincipalId,
     ) -> Result<(Address, Seq), TxnError<DelegateError>> {
         // Pre-work (§6): validate-lift, then the hoisted tier check (iii) —
-        // only after it is parent() total on new_prefix.
+        // only after it is parent() total on new_prefix — then the depth
+        // refusal, ahead of the clone, the encoding and the transaction it
+        // exists to keep an oversized prefix from commanding.
         let new_prefix =
             validate(new_prefix).map_err(|_| TxnError::Rejected(DelegateError::NotValid))?;
         if new_prefix.level() != Level::Account {
             return Err(TxnError::Rejected(DelegateError::NotAccountTier));
+        }
+        if new_prefix.tumbler().len() > MAX_PRINCIPAL_COMPONENTS {
+            return Err(TxnError::Rejected(DelegateError::TooDeep));
         }
         // The chain's anchor, and with it the ONE key this op names: the lock
         // taken here and the frontier `mint_account` reads inside are the same

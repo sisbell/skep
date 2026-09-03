@@ -110,6 +110,7 @@ impl Lower for DelegateError {
             DelegateError::NotAncestor => RejectCode::NotAncestor,
             DelegateError::NotAuthorized => RejectCode::NotAuthorized,
             DelegateError::NotAccountTier => RejectCode::NotAccountTier,
+            DelegateError::TooDeep => RejectCode::TooDeep,
             DelegateError::NotTopDown => RejectCode::NotTopDown,
             DelegateError::NotFresh => RejectCode::NotFresh,
             DelegateError::NotNextForm => RejectCode::NotNextForm,
@@ -669,6 +670,7 @@ mod tests {
         same_name(CreateDocumentError::NotOwner);
         same_name(DelegateError::NotValid);
         same_name(DelegateError::NotAccountTier);
+        same_name(DelegateError::TooDeep);
         same_name(DelegateError::DelegatorUnknown);
         same_name(DelegateError::NotAncestor);
         same_name(DelegateError::NotAuthorized);

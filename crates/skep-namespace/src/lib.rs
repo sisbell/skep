@@ -14,7 +14,14 @@
 //! registry keys — [`M3State::principals_lock_key`] and
 //! [`M3State::nodes_lock_key`] — name registries, not namespaces).
 //!
-//! Three surfaces (§Public interface):
+//! Two senses of **ghost**, kept apart the same way: B3's *ghost* is an
+//! address that IS allocated and has no bytes behind it — a registered-empty
+//! document, which [`M3State::is_allocated`] answers true for — while a
+//! *ghost tumbler* is one of the reserved dispatch keys of the region below,
+//! which [`M3State::is_allocated`] answers false for, on every board,
+//! forever.
+//!
+//! Four surfaces (§Public interface):
 //!
 //! * **Frontier allocation** (§A) — pure, composable mints
 //!   ([`M3State::mint_content`] / [`M3State::mint_link`] /
@@ -26,7 +33,10 @@
 //!   under a node and the sub-account `(A, 1)` under an account — is minted
 //!   internally by [`Namespace::delegate`], the only op that allocates one,
 //!   and its next value is published as the peek
-//!   [`M3State::next_account_prefix`].
+//!   [`M3State::next_account_prefix`]. Every chain issues `c_{m+1}` and so
+//!   opens at ordinal 1 on an empty frontier — except the ghost content
+//!   chain, which opens at [`GHOST_POSITIONS`] + 1 (the reserved region
+//!   below).
 //! * **Entity operations** (§B) — the transact-driving [`Namespace`]
 //!   handle: [`Namespace::create_new_document`] \[ASN-0103\],
 //!   [`Namespace::delegate`] \[ASN-0042 O15/O17c\],
@@ -40,6 +50,15 @@
 //!   [`M3State::next_account_prefix`] — plus the registry-free containment
 //!   test [`prefix_contains`], which answers where an address SITS and
 //!   never who may write it.
+//! * **The reserved region** (owner ruling, 2026-08-26) — the first
+//!   [`GHOST_POSITIONS`] content positions of [`ghost_doc`], spelled by
+//!   [`ghost_position`]: five ghost tumblers that are compiled format
+//!   constants, which M7's `ReservedAddrs::format` reads to build its
+//!   reserved type addresses.
+//!   M3 owns the allocation half of the ruling — the allocator skips those
+//!   ordinals, so no mint on any board can ever issue one and
+//!   [`M3State::is_allocated`] answers false at all five forever — while
+//!   what each one MEANS is M7's.
 //!
 //! Spec traceability: each public item's doc-comment cites the labels it
 //! realizes (B\*, O\*, P\*, T\*, V\*, and §§ of the M3 design), so a
@@ -61,10 +80,9 @@
 //!   replay, §8);
 //! * deletion/revocation — none exists: allocations, nodes, and principals
 //!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1). The
-//!   one carve-out is the compiled GHOST REGION (owner ruling, 2026-08-26):
-//!   content positions 1..=[`GHOST_POSITIONS`] of [`ghost_doc`] — the five
-//!   reserved type addresses — are never issued and never members; the
-//!   allocator floor at [`ghost_position`]'s namespace is format, not state.
+//!   one carve-out is the reserved region above, which is compiled format
+//!   rather than state: the skipped ordinals are never issued and never
+//!   members, on every board.
 //!
 //! ## Composition
 //!

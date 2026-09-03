@@ -7,8 +7,8 @@
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{
-    checked_inc, inc, is_prefix, is_t4_valid, ordinal, parent, shift, validate, Address,
-    GateViolation, Level, Nat, Tumbler,
+    checked_inc, content_subspace, elem_addr, inc, is_prefix, is_t4_valid, ordinal, parent, shift,
+    validate, Address, ElemPos, GateViolation, Level, Nat, Tumbler,
 };
 use skep_kernel::{LockKey, Space};
 
@@ -276,6 +276,14 @@ pub struct M3State {
     /// on one namespace; namespaces are never iterated, so order is not paid
     /// for.
     ///
+    /// The count is the realized set for every namespace but the ghost content
+    /// one, whose realized set is `{c_{floor+1}..cₘ}`: the format's one
+    /// carve-out reserves the first [`GHOST_POSITIONS`] ordinals of that chain
+    /// and is held as a compiled floor ([`ghost_floor`]), not as a gap in the
+    /// count. So a reader enumerating a namespace's members from its count is
+    /// right everywhere else and must start past the floor there — where the
+    /// skipped ordinals are M7's dispatch keys, never members.
+    ///
     /// Not the entity registry E (ASN-0047): E is this map's below-element
     /// part TOGETHER WITH `nodes`, which is the pair
     /// [`M3State::is_allocated`] dispatches over and
@@ -407,10 +415,13 @@ pub fn ghost_doc() -> Address {
     validate(t).expect("the ghost document 1.1.0.1.0.1 is T4-valid by construction")
 }
 
-/// Ghost tumbler `x` of the region — content position `x` of [`ghost_doc`]:
-/// `[1,1,0,1,0,1,0,1,x]`, element-level in the content subspace (`s_C` = 1).
-/// The one mint-shaped spelling of the five reserved type addresses; M7's
-/// `ReservedAddrs::format` reads them here.
+/// Ghost tumbler `x` of the region — M1's element address of [`ghost_doc`] at
+/// [`content_subspace`], ordinal `x`: `[1,1,0,1,0,1,0,1,x]`. The one
+/// mint-shaped spelling of the five reserved type addresses; M7's
+/// `ReservedAddrs::format` reads them here. The document and the subspace each
+/// have exactly one spelling — the document is [`ghost_doc`]'s and the
+/// subspace is M1's — so the addresses M7 dispatches on and the namespace the
+/// allocator floors ([`GHOST_POSITIONS`]) cannot come apart.
 ///
 /// # Panics
 ///
@@ -421,9 +432,12 @@ pub fn ghost_position(x: u32) -> Address {
         (1..=GHOST_POSITIONS).contains(&x),
         "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
     );
-    let comps = [1u32, 1, 0, 1, 0, 1, 0, 1, x].into_iter().map(Nat::from);
-    let t = Tumbler::new(comps).expect("a nine-component sequence is nonempty");
-    validate(t).expect("a ghost position 1.1.0.1.0.1.0.1.x is T4-valid by construction")
+    elem_addr(ElemPos {
+        doc: ghost_doc(),
+        subspace: content_subspace(),
+        ordinal: Nat::from(x),
+    })
+    .expect("ghost_doc is Document-level; s_C ≥ 1; x ≥ 1 by the assert above")
 }
 
 /// Is `key` THE ghost content namespace — `(b_C(ghost_doc), 1)`, the one
@@ -980,10 +994,11 @@ impl M3State {
     /// settled by decomposing and comparing against the frontier.
     /// Membership-correctness invariant: for T4-valid `a`, `a` is *exactly*
     /// `c_{ordinal(a)}` of its decomposed `(parent, g)` namespace (ASN-0040
-    /// `S(p, d)` canonical form; T4b unique-parse), so `a ∈ {c₁..cₘ}` iff
-    /// `floor < ordinal(a) ≤ m`, where the floor is 0 everywhere but the
-    /// ghost content namespace — genuine chain membership with NO false
-    /// positives, not an approximation. The `1 ≤` half is carried by the
+    /// `S(p, d)` canonical form; T4b unique-parse), so `a` is realized —
+    /// `a ∈ {c_{floor+1}..cₘ}` — iff `floor < ordinal(a) ≤ m`, where the floor
+    /// is 0 everywhere but the ghost content namespace — genuine chain
+    /// membership with NO false positives, not an approximation. The `1 ≤`
+    /// half is carried by the
     /// [`Address`] type, since T4 forbids a trailing zero and `ordinal` reads
     /// the last component, so the code spells the `≤ m` half and the ghost
     /// exclusion. The exclusion is permanent: the five ghost tumblers answer
@@ -1460,6 +1475,31 @@ mod tests {
             M3State::content_lock_key(&element),
             M3State::content_lock_key(&doc)
         );
+    }
+
+    /// The two halves of non-reissue meet: every address M7 dispatches on is a
+    /// member of the ONE chain the allocator floors. `ghost_position` names the
+    /// five and `ghost_floor` skips a namespace; nothing else ties them, so
+    /// this asserts the tie directly rather than through the `is_allocated`
+    /// consequence the integration suite checks.
+    #[test]
+    fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
+        let ghost_ns = content_ns(&ghost_doc());
+        assert_eq!(ghost_floor(&ghost_ns), GHOST_POSITIONS);
+        for x in 1..=GHOST_POSITIONS {
+            let position = ghost_position(x);
+            assert_eq!(
+                namespace_of(&position),
+                Some(ghost_ns.clone()),
+                "ghost {x} is not in the floored namespace"
+            );
+            assert_eq!(*ordinal(position.tumbler()), Nat::from(x));
+            assert_eq!(position.level(), Level::Element);
+            assert_eq!(position.subspace(), Some(&content_subspace()));
+        }
+        // The floor is exactly five positions of ONE document: a sibling doc's
+        // content chain carries none.
+        assert_eq!(ghost_floor(&content_ns(&a(&[1, 1, 0, 1, 0, 2]))), 0);
     }
 
     /// §6 (iv): the single probe answers "does a registered principal sit

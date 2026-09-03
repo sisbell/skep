@@ -116,6 +116,11 @@ where
     /// returns the id resolves to no principal for the rest of the uptime and
     /// no write on it can ever be authorized again.
     ///
+    /// WRITES are the whole of what this retires. Reads take no session gate
+    /// ([`Operation::execute`]), so the retired id still reaches every read
+    /// arm and is answered — a transport whose logout must stop reads holds
+    /// that policy itself.
+    ///
     /// The sweep is not atomic against a request already in flight. An
     /// `execute` past its step-(a) lookup may deposit its ack after the sweep
     /// has passed, and that entry then lives until eviction. What it can do is
@@ -141,11 +146,29 @@ where
     }
 
     /// THE lifecycle entry (§1). Total: always yields a `Response` to send
-    /// (rejections are a `Response` variant) — totality leans on the
-    /// non-poisoning locks its two state collaborators hold (§7) and on the
-    /// step-(b) read/write split, which hands each write arm a PROVEN-bound
-    /// principal so no dispatch arm unwraps an `Option`. Reentrant & `Sync`
-    /// — the transport may call it concurrently for pipelined requests (§8).
+    /// (rejections are a `Response` variant). Totality rests on three things,
+    /// and only two of them are M10's — the non-poisoning locks its two state
+    /// collaborators hold (§7), and the step-(b) read/write split, which hands
+    /// each write arm a PROVEN-bound principal so no dispatch arm unwraps an
+    /// `Option`. Between them M10's own code holds no panic path. The third is
+    /// upstream: this call unwinds if a store panics beneath it, so totality
+    /// rests equally on M5's, M6's, M7's and M8's read and write paths not
+    /// panicking on honest input. What panic sites they hold guard their own
+    /// internal invariants, so no honest request reaches one — and none of
+    /// their contracts states the obligation, which is why it is written here.
+    ///
+    /// Reentrant & `Sync` — the transport may call it concurrently for
+    /// pipelined requests (§8), and that concurrency is the caller's to use.
+    /// Two requests in flight at once under one `ReqId` are two operations:
+    /// the retry memo is read at step (a) and written at step (d), with the
+    /// whole dispatch in between, so both miss and both execute (§7).
+    ///
+    /// AUTHORIZATION is the write path's. `session` is consulted at step (b)
+    /// and nowhere else: every read is dispatched against any `SessionId` —
+    /// bound, retired by [`Operation::close_session`], or never opened — and
+    /// reaches its store carrying no principal, since no read arm passes one.
+    /// A transport that requires read authorization owns the whole of it, no
+    /// module below this one performing any.
     ///
     /// Two caller preconditions, neither of which this module can check for
     /// itself:

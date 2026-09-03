@@ -89,7 +89,12 @@ pub struct FaultSite {
     /// [`TO`]: crate::TO
     /// [`TYPE`]: crate::TYPE
     pub slot: Option<usize>,
-    /// The offending spec/span index.
+    /// The offending spec/span index, counted within the innermost container
+    /// the other fields name: within the slot where `slot` is present, else
+    /// within the region `region` (and, for COMPARE, `operand`) names, else
+    /// within the request's own top-level list — RETRIEVEV's `specs`. So the
+    /// fields are read together, and an `index` alone always has exactly one
+    /// container.
     pub index: Option<usize>,
     /// The span well-formedness fault.
     pub fault: Option<SpecFault>,

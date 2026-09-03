@@ -1,5 +1,6 @@
-//! The marshaled [`Response`] — consolidated by shape; every write carries the
-//! committed `Seq`, every read the snapshot `Seq` (ASN-0134 A1/A2/V1).
+//! The marshaled [`Response`] — consolidated by shape; every acknowledged
+//! write carries the committed `Seq` and every read answer the snapshot `Seq`
+//! (ASN-0134 A1/A2/V1), while a rejection carries neither.
 
 use skep_address::{Address, SpanSet};
 use skep_arrangement::Run;
@@ -10,9 +11,16 @@ use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 use crate::reject::Rejection;
 
-/// The marshaled response. Every variant carries one coordinate — `at` on the
-/// three acknowledging shapes, `as_of` on every read answer — and what a
-/// client does with the pair is [the two coordinates](crate#the-two-coordinates).
+/// The marshaled response. Every variant but [`Response::Rejected`] carries
+/// one coordinate — `at` on the three acknowledging shapes, `as_of` on every
+/// read answer — and what a client does with the pair is [the two
+/// coordinates](crate#the-two-coordinates).
+///
+/// A rejection carries none: it names the operation it refused and how, not a
+/// position. So a client tracking the frontier across a refusal asks
+/// [`Operation::log_position`] or reissues.
+///
+/// [`Operation::log_position`]: crate::Operation::log_position
 ///
 /// `Response` deliberately derives **no** `Clone` (§7): the idempotency cache
 /// stores the small [`CommittedAck`] a committed write yields, never a whole

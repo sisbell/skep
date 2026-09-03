@@ -12,6 +12,16 @@
 //! replay a stale snapshot — and the [`CommittedAck`] type is what makes them
 //! inexpressible here rather than merely unwelcome.
 //!
+//! What it deduplicates is a SEQUENTIAL client's reissue — a retry sent after
+//! the original completed and its acknowledgment was lost. Between concurrent
+//! requests it offers nothing: `execute` reads the memo at step (a) and writes
+//! it at step (d) with the whole dispatch in between, so two requests in
+//! flight at once under one `(session, id, kind)` both miss and both execute,
+//! and `execute` invites exactly that concurrency (§8). Nothing here reserves
+//! a key for an operation still running. Nor can the absence be pinned by a
+//! test: the interleaving is nondeterministic, so an assertion that both
+//! commit would be flaky and one that either may is vacuous.
+//!
 //! That admissibility rule is the memo's whole shape, so this is not a
 //! general per-session key/value store and offers no opaque `recall`/`store`
 //! pair: entries are engine acknowledgments, typed as such. A transport that

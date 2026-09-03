@@ -2,9 +2,10 @@
 //!
 //! The engine's **front door**: each external FEBE request becomes exactly one
 //! call on the owning store/query module, gated on commit (ASN-0134 A7),
-//! stamped with its linearization coordinate (`committed_at` on every write,
-//! `as_of` on every read — A1/A2/V1), and every failure that reaches it
-//! surfaces as a *typed, classified, never-silent* rejection. One thing well:
+//! stamped with its linearization coordinate (`committed_at` on every write
+//! that commits, `as_of` on every read that answers — A1/A2/V1), and every
+//! failure that reaches it surfaces as a *typed, classified, never-silent*
+//! rejection. One thing well:
 //! the uniform request lifecycle — *parse → authorize → linearize →
 //! commit-gate → marshal → surface* — driven by a static dispatch table
 //! ([`Operation::execute`]).
@@ -67,6 +68,10 @@
 //! comparison holds. [`Operation::log_position`] answers with the same
 //! frontier without issuing an operation.
 //!
+//! A rejection is the one answer carrying no coordinate — a refused read
+//! reports no position, having answered from none — so a client tracking the
+//! frontier across a refusal asks [`Operation::log_position`] or reissues.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * per-store operation logic (M5/M6/M7/M8) and automation (M9 ⟂ M10);
@@ -82,10 +87,16 @@
 //!   non-forgeability precondition and the authentication mechanism (§6), the
 //!   concurrency policy, and reorder/retry buffering (M10 *surfaces*
 //!   `Reorder`, it does not reorder);
-//! * cross-restart exactly-once — the idempotency cache is an in-memory,
-//!   per-`(SessionId, ReqId)` hint, committed-write acks only (§7);
+//! * exactly-once, in both of the ways a client can fail to get it — the
+//!   idempotency cache is an in-memory, per-`(SessionId, ReqId)` hint holding
+//!   committed-write acks only (§7). It answers a SEQUENTIAL client's reissue
+//!   of a write whose acknowledgment was lost; it is empty after a restart,
+//!   and it offers nothing between concurrent requests, a retry issued while
+//!   its original is still in flight finding no entry and executing;
 //! * the fine-grained ownership check `ω` — the owning store's, passed through
-//!   verbatim (§6); M10 pre-checks only "is there a principal at all".
+//!   verbatim (§6); M10 pre-checks only "is there a principal at all", and
+//!   only on the write path, a read being served against any `SessionId` and
+//!   reaching its store with no principal ([`Operation::execute`]).
 //!
 //! ## Composition
 //!

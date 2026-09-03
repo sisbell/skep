@@ -24,6 +24,12 @@ pub struct Request {
 /// The client's idempotency key — chosen by the client, unique only within
 /// its session (§7), and half of the memo's key, which pairs it with the
 /// session that committed under it.
+///
+/// What the key buys is the answer to a retry sent AFTER the original's
+/// acknowledgment was lost. Two requests carrying one id concurrently are two
+/// operations, since the memo is consulted before dispatch and written after
+/// it, and a restart empties it — so this is a hint that saves a duplicate
+/// commit, never a guarantee against one.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct ReqId(pub Vec<u8>);
 

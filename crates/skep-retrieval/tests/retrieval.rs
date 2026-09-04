@@ -36,7 +36,7 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
     FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
-    MAX_COMPARE_BLOCKS,
+    MAX_COMPARE_OPERAND_BLOCKS,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -130,35 +130,35 @@ fn doc2() -> Address {
 }
 
 /// Never registered.
-fn un() -> Address {
+fn unregistered() -> Address {
     a(&[1, 0, 1, 0, 9])
 }
 
 /// A second never-registered document, so a two-document rejection can say
 /// WHICH one it named.
-fn un2() -> Address {
+fn unregistered2() -> Address {
     a(&[1, 0, 1, 0, 8])
 }
 
-/// doc1 content element k (length 8), M3's minted shape.
-fn ca(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 0, 1, k])
+/// doc1's content element at `ordinal` (length 8), M3's minted shape.
+fn ca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
 }
 
-/// doc2 content element k — doc2's OWN minted content, on a different
-/// I-chain from doc1's [`ca`].
-fn c2a(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 1, k])
+/// doc2's content element at `ordinal` — doc2's OWN minted content, on a
+/// different I-chain from doc1's [`ca`].
+fn doc2_ca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 1, ordinal])
 }
 
-/// doc1 link element k.
-fn la(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 0, 2, k])
+/// doc1's link element at `ordinal`.
+fn la(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 1, 0, 2, ordinal])
 }
 
-/// doc2 link element k.
-fn l2a(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 2, 0, 2, k])
+/// doc2's link element at `ordinal`.
+fn doc2_la(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
 }
 
 /// The version fork of doc1 (`(d_src, 1)` chain) and its length-9 content
@@ -166,8 +166,8 @@ fn l2a(k: u32) -> Address {
 fn vdoc() -> Address {
     a(&[1, 0, 1, 0, 1, 1])
 }
-fn vca(k: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 1, 0, 1, k])
+fn vca(ordinal: u32) -> Address {
+    a(&[1, 0, 1, 0, 1, 1, 0, 1, ordinal])
 }
 
 fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -199,7 +199,7 @@ fn region_spec(doc: Address, spans: Vec<Span>) -> RegionSpec {
 }
 
 /// A T12-legal but non-ordinal-level width (action point 1).
-fn lu_span() -> Span {
+fn not_ordinal_level_span() -> Span {
     Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal")
 }
 
@@ -661,19 +661,22 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
     let q = Query::new(&s);
     // Unregistered document — the error carries the offending address.
     assert!(matches!(
-        err_of(q.retrieve_v(&[spec(un(), vspan(1, 1, 1))])),
-        RetrieveError::DocNotRegistered(d) if d == un()
+        err_of(q.retrieve_v(&[spec(unregistered(), vspan(1, 1, 1))])),
+        RetrieveError::DocNotRegistered(d) if d == unregistered()
     ));
     // Registered-before-gate: an unregistered doc with a malformed span
     // still reports DocNotRegistered.
     assert!(matches!(
-        err_of(q.retrieve_v(&[spec(un(), lu_span())])),
-        RetrieveError::DocNotRegistered(d) if d == un()
+        err_of(q.retrieve_v(&[spec(unregistered(), not_ordinal_level_span())])),
+        RetrieveError::DocNotRegistered(d) if d == unregistered()
     ));
     // Each SpanFault, with index attribution (the good spec at 0 does not
     // save the request — whole-request rejection).
     assert!(matches!(
-        err_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 1)), spec(doc1(), lu_span())])),
+        err_of(q.retrieve_v(&[
+            spec(doc1(), vspan(1, 1, 1)),
+            spec(doc1(), not_ordinal_level_span())
+        ])),
         RetrieveError::MalformedSpec {
             index: 1,
             fault: SpanFault::NotOrdinalLevel
@@ -720,20 +723,26 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(matches!(
-        err_of(q.retrieve_v(&[spec(doc1(), lu_span()), spec(un(), vspan(1, 1, 1))])),
+        err_of(q.retrieve_v(&[
+            spec(doc1(), not_ordinal_level_span()),
+            spec(unregistered(), vspan(1, 1, 1))
+        ])),
         RetrieveError::MalformedSpec {
             index: 0,
             fault: SpanFault::NotOrdinalLevel
         }
     ));
     assert!(matches!(
-        err_of(q.retrieve_v(&[spec(un(), vspan(1, 1, 1)), spec(doc1(), lu_span())])),
-        RetrieveError::DocNotRegistered(d) if d == un()
+        err_of(q.retrieve_v(&[
+            spec(unregistered(), vspan(1, 1, 1)),
+            spec(doc1(), not_ordinal_level_span()),
+        ])),
+        RetrieveError::DocNotRegistered(d) if d == unregistered()
     ));
     assert!(matches!(
         err_of(q.find_docs_containing(&[
-            region_spec(doc1(), vec![lu_span()]),
-            region_spec(un(), vec![vspan(1, 1, 1)]),
+            region_spec(doc1(), vec![not_ordinal_level_span()]),
+            region_spec(unregistered(), vec![vspan(1, 1, 1)]),
         ])),
         FindError::MalformedSpan {
             region: 0,
@@ -743,8 +752,8 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     ));
     assert!(matches!(
         err_of(q.compare(
-            &[region_spec(doc1(), vec![lu_span()])],
-            &[region_spec(un(), vec![vspan(1, 1, 1)])],
+            &[region_spec(doc1(), vec![not_ordinal_level_span()])],
+            &[region_spec(unregistered(), vec![vspan(1, 1, 1)])],
         )),
         CompareError::MalformedSpan {
             operand: Operand::First,
@@ -758,9 +767,9 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     assert!(matches!(
         err_of(q.compare(
             &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
-            &[region_spec(un(), vec![])],
+            &[region_spec(unregistered(), vec![])],
         )),
-        CompareError::DocNotRegistered(d) if d == un()
+        CompareError::DocNotRegistered(d) if d == unregistered()
     ));
 }
 
@@ -806,7 +815,7 @@ fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
         )
     );
     // Link-only document: the anchor moves to [2,1].
-    seat_link(&k, &doc2(), &l2a(1)).expect("seat commits");
+    seat_link(&k, &doc2(), &doc2_la(1)).expect("seat commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.doc_vspan(&doc2()));
@@ -840,11 +849,11 @@ fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
     assert_eq!(ok_of(q.doc_vspan(&doc2())), SpanSet::empty());
     // Not registered ⇒ fail, for both.
     assert!(matches!(
-        err_of(q.doc_vspan(&un())),
+        err_of(q.doc_vspan(&unregistered())),
         ExtentError::DocNotRegistered
     ));
     assert!(matches!(
-        err_of(q.doc_vspanset(&un())),
+        err_of(q.doc_vspanset(&unregistered())),
         ExtentError::DocNotRegistered
     ));
 }
@@ -856,8 +865,8 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
     // ASN-0077 O2/O5: one origin per run (block uniformity), deduplicated,
     // tumbler-ordered; the link arity reports the home document (CL-OWN).
     let k = mem_kernel();
-    three_runs(&k); // doc2 = [c2a1][ca1, ca2][ca1]
-    seat_link(&k, &doc2(), &l2a(1)).expect("seat commits");
+    three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1]
+    seat_link(&k, &doc2(), &doc2_la(1)).expect("seat commits");
     let s = k.snapshot();
     let q = Query::new(&s);
     // Three runs, origins {doc2, doc1, doc1} → deduped, T1-sorted.
@@ -916,17 +925,17 @@ fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
     let q = Query::new(&s);
     // (i) not registered — checked first, even with a malformed span.
     assert!(matches!(
-        err_of(q.show_origin_v(&un(), &vspan(1, 1, 1))),
+        err_of(q.show_origin_v(&unregistered(), &vspan(1, 1, 1))),
         OriginError::DocNotRegistered
     ));
     assert!(matches!(
-        err_of(q.show_origin_v(&un(), &lu_span())),
+        err_of(q.show_origin_v(&unregistered(), &not_ordinal_level_span())),
         OriginError::DocNotRegistered
     ));
     // (ii/iv) malformed — before any subspace reading (a malformed span in
     // a foreign subspace is MalformedSpan, not NoSuchSubspace).
     assert!(matches!(
-        err_of(q.show_origin_v(&doc1(), &lu_span())),
+        err_of(q.show_origin_v(&doc1(), &not_ordinal_level_span())),
         OriginError::MalformedSpan(SpanFault::NotOrdinalLevel)
     ));
     let foreign_malformed = Span::new(t(&[3, 1]), t(&[1, 0])).expect("T12-legal");
@@ -1039,12 +1048,12 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
             }
         );
         assert!(matches!(
-            err_of(q.show_deletions(&un(), &doc1())),
-            DeletionsError::DocNotRegistered(d) if d == un()
+            err_of(q.show_deletions(&unregistered(), &doc1())),
+            DeletionsError::DocNotRegistered(d) if d == unregistered()
         ));
         assert!(matches!(
-            err_of(q.show_deletions(&doc1(), &un())),
-            DeletionsError::DocNotRegistered(d) if d == un()
+            err_of(q.show_deletions(&doc1(), &unregistered())),
+            DeletionsError::DocNotRegistered(d) if d == unregistered()
         ));
     }
     let vs = insert3(&k);
@@ -1128,12 +1137,12 @@ fn show_deletions_names_the_first_unregistered_document() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert_eq!(
-        err_of(q.show_deletions(&un(), &un2())),
-        DeletionsError::DocNotRegistered(un())
+        err_of(q.show_deletions(&unregistered(), &unregistered2())),
+        DeletionsError::DocNotRegistered(unregistered())
     );
     assert_eq!(
-        err_of(q.show_deletions(&un2(), &un())),
-        DeletionsError::DocNotRegistered(un2())
+        err_of(q.show_deletions(&unregistered2(), &unregistered())),
+        DeletionsError::DocNotRegistered(unregistered2())
     );
 }
 
@@ -1345,8 +1354,8 @@ fn compare_joins_on_address_equality_never_on_value() {
     // The fixture's premise, which is what makes the claim below say
     // anything: doc2's third position is its OWN address, and the bytes there
     // are byte-for-byte doc1's ca1.
-    assert_eq!(s.world().m5().point(&doc2(), &vp(1, 3)), Some(c2a(1)));
-    assert_ne!(c2a(1), ca(1));
+    assert_eq!(s.world().m5().point(&doc2(), &vp(1, 3)), Some(doc2_ca(1)));
+    assert_ne!(doc2_ca(1), ca(1));
     assert_eq!(
         ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 3, 1)), spec(doc1(), vspan(1, 1, 1))])),
         Delivery(vec![
@@ -1408,39 +1417,40 @@ fn positions(w: &World, regions: &[RegionSpec]) -> Vec<(Address, Nat, Nat, Addre
             let sub = span.start().get(1).expect("depth 2").clone();
             let from = span.start().get(2).expect("depth 2").clone();
             let end = &from + span.width().get(2).expect("ordinal-level");
-            let mut k = from;
-            while k < end {
+            let mut ordinal = from;
+            while ordinal < end {
                 let p = VPos {
                     subspace: sub.clone(),
-                    ordinal: k.clone(),
+                    ordinal: ordinal.clone(),
                 };
                 if let Some(addr) = w.m5().point(&r.doc, &p) {
-                    out.push((r.doc.clone(), sub.clone(), k.clone(), addr));
+                    out.push((r.doc.clone(), sub.clone(), ordinal.clone(), addr));
                 }
-                k += n(1);
+                ordinal += n(1);
             }
         }
     }
     out
 }
 
-/// A report expanded to the position pairs it denotes: a pair of width `w` is
-/// `w` consecutive position pairs on both feet (ASN-0122 X10). Sorted, so two
-/// expansions compare as MULTISETS and fan-out multiplicity is checked too.
-fn expand(rep: &CompareReport) -> Vec<(Address, Nat, Nat, Address, Nat, Nat)> {
+/// The position pairs a report denotes: a pair of width `w` is `w` consecutive
+/// position pairs on both feet (ASN-0122 X10), so this is the same currency as
+/// [`positions`] and the two compare directly. Sorted, so two of these compare
+/// as MULTISETS and fan-out multiplicity is checked too.
+fn position_pairs(rep: &CompareReport) -> Vec<(Address, Nat, Nat, Address, Nat, Nat)> {
     let mut out = Vec::new();
     for c in rep.iter() {
-        let mut k = n(0);
-        while k < c.width {
+        let mut offset = n(0);
+        while offset < c.width {
             out.push((
                 c.d1.clone(),
                 c.u1.subspace.clone(),
-                &c.u1.ordinal + &k,
+                &c.u1.ordinal + &offset,
                 c.d2.clone(),
                 c.u2.subspace.clone(),
-                &c.u2.ordinal + &k,
+                &c.u2.ordinal + &offset,
             ));
-            k += n(1);
+            offset += n(1);
         }
     }
     out.sort();
@@ -1498,7 +1508,11 @@ fn compare_reports_exactly_the_address_equal_position_pairs() {
         let rep = ok_of(q.compare(&rho1, &rho2));
         let want = oracle(&rho1, &rho2);
         assert_eq!(want.len(), want_pairs, "the oracle's own size");
-        assert_eq!(expand(&rep), want, "report over {rho1:?} × {rho2:?}");
+        assert_eq!(
+            position_pairs(&rep),
+            want,
+            "report over {rho1:?} × {rho2:?}"
+        );
     }
 }
 
@@ -1513,8 +1527,8 @@ fn compare_rejects_with_operand_region_index_attribution() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(matches!(
-        err_of(q.compare(&[region_spec(un(), vec![vspan(1, 1, 1)])], &[])),
-        CompareError::DocNotRegistered(d) if d == un()
+        err_of(q.compare(&[region_spec(unregistered(), vec![vspan(1, 1, 1)])], &[])),
+        CompareError::DocNotRegistered(d) if d == unregistered()
     ));
     assert!(matches!(
         err_of(q.compare(
@@ -1529,7 +1543,10 @@ fn compare_rejects_with_operand_region_index_attribution() {
     ));
     assert!(matches!(
         err_of(q.compare(
-            &[region_spec(doc1(), vec![vspan(1, 1, 1), lu_span()])],
+            &[region_spec(
+                doc1(),
+                vec![vspan(1, 1, 1), not_ordinal_level_span()]
+            )],
             &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
         )),
         CompareError::MalformedSpan {
@@ -1587,7 +1604,7 @@ fn compare_refuses_an_operand_past_its_block_budget() {
     let one = || vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
     let over = vec![region_spec(
         doc1(),
-        vec![vspan(1, 1, 1); MAX_COMPARE_BLOCKS + 1],
+        vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS + 1],
     )];
     assert_eq!(
         err_of(q.compare(&over, &one())),
@@ -1605,12 +1622,20 @@ fn compare_refuses_an_operand_past_its_block_budget() {
     // at the budget the same shape still answers, and answers completely
     // (one pair per block — a truncating cap would answer with fewer and
     // break X8).
-    let at = vec![region_spec(doc1(), vec![vspan(1, 1, 1); MAX_COMPARE_BLOCKS])];
-    assert_eq!(ok_of(q.compare(&at, &one())).len(), MAX_COMPARE_BLOCKS);
+    let at = vec![region_spec(
+        doc1(),
+        vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS],
+    )];
+    assert_eq!(
+        ok_of(q.compare(&at, &one())).len(),
+        MAX_COMPARE_OPERAND_BLOCKS
+    );
     // The refusal says which budget and how large it is, so a client sizing
     // its next request reads the number rather than guessing it.
     let e = err_of(q.compare(&over, &one()));
-    assert!(e.to_string().contains(&MAX_COMPARE_BLOCKS.to_string()));
+    assert!(e
+        .to_string()
+        .contains(&MAX_COMPARE_OPERAND_BLOCKS.to_string()));
 }
 
 #[test]
@@ -1739,8 +1764,8 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(matches!(
-        err_of(q.find_docs_containing(&[region_spec(un(), vec![vspan(1, 1, 1)])])),
-        FindError::DocNotRegistered(d) if d == un()
+        err_of(q.find_docs_containing(&[region_spec(unregistered(), vec![vspan(1, 1, 1)])])),
+        FindError::DocNotRegistered(d) if d == unregistered()
     ));
     let zeroed = Span::new(t(&[1, 0, 1]), t(&[0, 0, 1])).expect("T12-legal");
     assert!(matches!(
@@ -1754,7 +1779,7 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     assert!(matches!(
         err_of(q.find_docs_containing(&[
             region_spec(doc1(), vec![vspan(1, 1, 1)]),
-            region_spec(doc1(), vec![lu_span()]),
+            region_spec(doc1(), vec![not_ordinal_level_span()]),
         ])),
         FindError::MalformedSpan {
             region: 1,
@@ -1798,7 +1823,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&extent).expect("SpanSet serializes").is_empty());
     let dels = ok_of(q.show_deletions(&doc1(), &doc2()));
     assert!(!bincode::serialize(&dels).expect("Deletions serializes").is_empty());
-    let e = err_of(q.retrieve_v(&[spec(un(), vspan(1, 1, 1))]));
+    let e = err_of(q.retrieve_v(&[spec(unregistered(), vspan(1, 1, 1))]));
     assert!(!bincode::serialize(&e).expect("RetrieveError serializes").is_empty());
     assert!(!bincode::serialize(&SpanFault::NotOrdinalLevel)
         .expect("SpanFault serializes")
@@ -1838,7 +1863,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
             deleted_from_b_with_a: vec![]
         }
     );
-    assert_eq!(err_of(q.doc_vspan(&un())), ExtentError::DocNotRegistered);
+    assert_eq!(err_of(q.doc_vspan(&unregistered())), ExtentError::DocNotRegistered);
     assert_eq!(format!("{:?}", Operand::Second), "Second");
     assert!(!format!("{rep:?}").is_empty());
     // A delivery renders its content items by BYTE LENGTH and never by
@@ -1860,7 +1885,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!format!("{:?}", DeliveryItem::Content(val(b"secret"))).contains("secret"));
     // The registry rejection names the offending document, in M1's dotted
     // decimal — the payload the variant carries, not discarded by Display.
-    assert!(format!("{e}").contains(&un().to_string()));
+    assert!(format!("{e}").contains(&unregistered().to_string()));
 }
 
 #[test]
@@ -1888,9 +1913,9 @@ fn every_rejection_is_a_std_error() {
             .is_empty()
     );
     // A boxed rejection still renders the document its variant carries.
-    assert!(boxed(DeletionsError::DocNotRegistered(un()))
+    assert!(boxed(DeletionsError::DocNotRegistered(unregistered()))
         .to_string()
-        .contains(&un().to_string()));
+        .contains(&unregistered().to_string()));
     assert!(!boxed(CompareError::NotContentSubspace {
         operand: Operand::First,
         region: 0,

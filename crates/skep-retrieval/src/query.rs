@@ -9,10 +9,10 @@ use skep_arrangement::{ordinal_vspan, M5State, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::helpers::{
-    debug_assert_sequential_positions, dedup_addrs, gate_vspan, subspace_of, Subspace, S_C, S_L,
+    debug_assert_sequential_positions, gate_vspan, sorted_addr_set, subspace_of, Subspace, S_C, S_L,
 };
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
-use crate::{M6World, Query};
+use crate::{Query, RetrievalWorld};
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
@@ -68,7 +68,7 @@ fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
     })
 }
 
-impl<'s, W: M6World> Query<'s, W> {
+impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// RETRIEVEV (ASN-0115) — resolve, then dereference, in order (the
     /// load-bearing two-phase factoring): resolve V-spans to I-addresses
     /// (M5), then fetch values (M4, content) or pass the address through
@@ -93,24 +93,25 @@ impl<'s, W: M6World> Query<'s, W> {
     /// cap on the route, which is M10's as the request lifecycle's owner.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         let w = self.0.world();
-        let (m3, m5, c) = (w.m3(), w.m5(), w.content());
+        let (m3, m5, content) = (w.m3(), w.m5(), w.content());
         // Gate the whole request first — VSpec WELL-FORMEDNESS is the only
         // in-model failure (ASN-0115). A well-formed but depth-incompatible
         // (#start ≥ 3) spec is NOT rejected here (R6).
-        for (i, s) in specs.iter().enumerate() {
-            if !m3.is_registered_document(&s.doc) {
-                return Err(RetrieveError::DocNotRegistered(s.doc.clone()));
+        for (i, spec) in specs.iter().enumerate() {
+            if !m3.is_registered_document(&spec.doc) {
+                return Err(RetrieveError::DocNotRegistered(spec.doc.clone()));
             }
-            gate_vspan(&s.span).map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
+            gate_vspan(&spec.span)
+                .map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
         }
         let mut out = Vec::new();
-        for s in specs {
+        for spec in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. The gate
             // guarantees #start ≥ 2 and zero-free, so position 1 is the
             // subspace at any depth; classify ONCE per spec, because the
             // answer is constant over the spec's positions.
-            let sub = subspace_of(s.span.start().get(1).expect("the gate ⇒ #start ≥ 2"));
-            for run in m5.resolve(&s.doc, &s.span) {
+            let sub = subspace_of(spec.span.start().get(1).expect("the gate ⇒ #start ≥ 2"));
+            for run in m5.resolve(&spec.doc, &spec.span) {
                 // Per active position, ascending V (R3) — no dedup (R8); the
                 // run answers for its own positions.
                 for a in run.addrs() {
@@ -126,7 +127,8 @@ impl<'s, W: M6World> Query<'s, W> {
                         // admit. Widening either is what would put an
                         // address here that M4 never stored.
                         Some(Subspace::Content) => out.push(DeliveryItem::Content(
-                            c.value_at(a.tumbler())
+                            content
+                                .value_at(a.tumbler())
                                 .expect("S3★: an arranged content position has a stored value")
                                 .clone(),
                         )),
@@ -203,16 +205,16 @@ impl<'s, W: M6World> Query<'s, W> {
         }
         debug_assert_sequential_positions(m5, doc);
         let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
-        let result: SpanSet = [(&*S_C, &nc), (&*S_L, &nl)]
+        let extents: SpanSet = [(&*S_C, &nc), (&*S_L, &nl)]
             .into_iter()
             .filter(|(_, n)| !n.is_zero())
             .map(|(s, n)| ext_span(s, n))
             .collect();
         debug_assert!(
-            result.is_normalized(),
+            extents.is_normalized(),
             "W13: content-before-link, subspace-separated ⇒ already normal"
         );
-        Ok(result)
+        Ok(extents)
     }
 
     /// SHOWORIGIN over a V-span (ASN-0077, V-arity) — block-decompose, then
@@ -230,7 +232,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// WF_V v — its own check, kept distinct from the range case so a client
     /// can tell "wrong depth" from "unbound positions"), and a depth-2 span
     /// overrunning the bound prefix (`RangeNotPresent`, WF_V vi — the
-    /// depth-agnostic `resolved < ordinal(width)` test).
+    /// depth-agnostic `resolved_width < ordinal(width)` test).
     pub fn show_origin_v(&self, doc: &Address, span: &Span) -> Result<Vec<Address>, OriginError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -255,14 +257,14 @@ impl<'s, W: M6World> Query<'s, W> {
         // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
         // if the span overruns the bound prefix.
         let runs = m5.resolve(doc, span);
-        let resolved = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
+        let resolved_width = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
         // The nominal count is read via ordinal(width) — the last component,
         // which level-uniformity ties to #start — keeping the overrun test
         // depth-agnostic, not a hard-coded get(2).
-        if &resolved < ordinal(span.width()) {
+        if &resolved_width < ordinal(span.width()) {
             return Err(OriginError::RangeNotPresent); // (vi): reject, never clamp (O13)
         }
-        Ok(dedup_addrs(runs.iter().map(|r| {
+        Ok(sorted_addr_set(runs.iter().map(|r| {
             document_of(r.i_start()).expect("an element-level I-address has a Document prefix")
         })))
     }
@@ -316,9 +318,9 @@ impl<'s, W: M6World> Query<'s, W> {
         let del_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
         // CURRENT in the one document ∧ DELETED from the other, both ways.
         let deleted_from_a_with_b =
-            dedup_addrs(current_content(m5, d_b).filter(|a| del_a.denotes(a.tumbler())));
+            sorted_addr_set(current_content(m5, d_b).filter(|a| del_a.denotes(a.tumbler())));
         let deleted_from_b_with_a =
-            dedup_addrs(current_content(m5, d_a).filter(|a| del_b.denotes(a.tumbler())));
+            sorted_addr_set(current_content(m5, d_a).filter(|a| del_b.denotes(a.tumbler())));
         Ok(Deletions {
             deleted_from_a_with_b,
             deleted_from_b_with_a,

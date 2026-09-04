@@ -123,11 +123,11 @@ pub enum CompareError {
         index: usize,
         fault: SpanFault,
     },
-    /// The operand resolves to more than [`MAX_COMPARE_BLOCKS`] blocks. The
-    /// join is `|P|·|Q|`, so a per-operand budget is what bounds it; refused
-    /// before the join runs, with ρ₁ resolved first.
+    /// The operand resolves to more than [`MAX_COMPARE_OPERAND_BLOCKS`]
+    /// blocks. The join is `|P|·|Q|`, so a per-operand budget is what bounds
+    /// it; refused before the join runs, with ρ₁ resolved first.
     ///
-    /// [`MAX_COMPARE_BLOCKS`]: crate::MAX_COMPARE_BLOCKS
+    /// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
     TooManyBlocks { operand: Operand },
     /// The join reached [`MAX_COMPARE_PAIRS`] correspondences. The block
     /// budget cannot see this one: two small operands naming the same
@@ -256,8 +256,8 @@ impl fmt::Display for CompareError {
             CompareError::TooManyBlocks { operand } => write!(
                 f,
                 "compare: {operand} resolves past the {}-block operand budget \
-                 (MAX_COMPARE_BLOCKS); narrow its spans or split the request",
-                crate::MAX_COMPARE_BLOCKS
+                 (MAX_COMPARE_OPERAND_BLOCKS); narrow its spans or split the request",
+                crate::MAX_COMPARE_OPERAND_BLOCKS
             ),
             CompareError::TooManyPairs => write!(
                 f,

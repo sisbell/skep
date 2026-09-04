@@ -9,8 +9,9 @@
 //!
 //! COMPARE is the one M6 operation whose cost is SUPERLINEAR in its request —
 //! `|P|·|Q|` over two block lists a caller sizes independently — so it is the
-//! one that carries budgets of its own: [`MAX_COMPARE_BLOCKS`] per operand and
-//! [`MAX_COMPARE_PAIRS`] per report, each a refusal rather than a truncation.
+//! one that carries budgets of its own: [`MAX_COMPARE_OPERAND_BLOCKS`] per
+//! operand and [`MAX_COMPARE_PAIRS`] per report, each a refusal rather than a
+//! truncation.
 
 use std::cmp;
 
@@ -21,7 +22,7 @@ use skep_arrangement::{M5State, Run, VPos};
 use crate::error::{CompareError, Operand};
 use crate::helpers::{gate_vspan, subspace_of, Subspace};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::{M6World, Query};
+use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and so the ceiling on
 /// the join's two factors.
@@ -37,7 +38,7 @@ use crate::{M6World, Query};
 /// region×span product, whose region-set cost model the transport leaves to
 /// M6, and the multi-run expansion, where one span over a fragmented document
 /// resolves to many blocks from a single wire element.
-pub const MAX_COMPARE_BLOCKS: usize = 1 << 12;
+pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 
 /// The most correspondences one COMPARE may report, and so the ceiling on
 /// what one query makes M6 hold live.
@@ -50,12 +51,12 @@ pub const MAX_COMPARE_BLOCKS: usize = 1 << 12;
 /// also M5's `MAX_PLACED_RUNS`, the substrate's existing answer to how many
 /// runs one operation may materialize.
 ///
-/// [`MAX_COMPARE_BLOCKS`] cannot stand in for it: two operands at that budget
-/// whose spans all name ONE shared position report `MAX_COMPARE_BLOCKS²`
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
+/// budget whose spans all name ONE shared position report the SQUARE of it in
 /// pairs, so fan-out is bounded only by counting the pairs themselves.
 pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 
-impl<'s, W: M6World> Query<'s, W> {
+impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
     /// of [`RegionSpec`]s — ASN-0122's `(dᵢ, Sᵢ)`; reports address-equal
     /// correspondences (X1/X2 — value-blind, NEVER opens M4), complete under
@@ -82,7 +83,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// candidate tests over the two regions' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
     /// list, so their product is the caller's to choose and squares in it. So
-    /// each operand is capped at [`MAX_COMPARE_BLOCKS`] blocks
+    /// each operand is capped at [`MAX_COMPARE_OPERAND_BLOCKS`] blocks
     /// (`TooManyBlocks`, refused BEFORE the join runs, ρ₁ resolved first) and
     /// the report at [`MAX_COMPARE_PAIRS`] correspondences (`TooManyPairs`,
     /// refused AS THE PAIRS ARE PRODUCED, so an over-budget fan-out stops
@@ -150,15 +151,15 @@ struct Block {
     v_start: VPos,
     run: Run,
     /// One I-step past the block: the run's own exclusive reach, which is all
-    /// the half-open `lo < hi` compare needs. A `Tumbler` endpoint, because no
-    /// `Address` invariant is consumed by a comparison.
+    /// the half-open `start < reach` compare needs. A `Tumbler` endpoint,
+    /// because no `Address` invariant is consumed by a comparison.
     ///
     /// Stored rather than derived per comparison, because the exhaustive join
     /// asks for it once per CANDIDATE PAIR: deriving it is a fresh
     /// `Vec<BigUint>` with a `BigUint` clone per component, so a block whose
     /// reach is computed on demand pays `|Q|` vector allocations where one
-    /// suffices, and the budget arithmetic behind [`MAX_COMPARE_BLOCKS`] is
-    /// priced on the stored form.
+    /// suffices, and the budget arithmetic behind
+    /// [`MAX_COMPARE_OPERAND_BLOCKS`] is priced on the stored form.
     reach: Tumbler,
 }
 
@@ -196,9 +197,9 @@ impl Block {
 
 /// The region a spec-set denotes, as blocks: resolve every spec's span to its
 /// I-run blocks, reconstructing each run's V-start by accumulation. `None`
-/// when the operand reaches [`MAX_COMPARE_BLOCKS`] — refused AS THE BLOCKS ARE
-/// PRODUCED, so an over-budget operand stops resolving rather than resolving
-/// whole and then being measured.
+/// when the operand reaches [`MAX_COMPARE_OPERAND_BLOCKS`] — refused AS THE
+/// BLOCKS ARE PRODUCED, so an over-budget operand stops resolving rather than
+/// resolving whole and then being measured.
 ///
 /// V-RECONSTRUCTION LEMMA (load-bearing for X12-R1 soundness, correct ONLY
 /// under D-SEQ★): a content subspace's occupied positions are the dense
@@ -237,7 +238,7 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
                 ordinal: ord.clone(),
             };
             for run in m5.resolve(&r.doc, span) {
-                if out.len() == MAX_COMPARE_BLOCKS {
+                if out.len() == MAX_COMPARE_OPERAND_BLOCKS {
                     return None; // the operand's budget, refused as produced
                 }
                 debug_assert!(
@@ -257,9 +258,9 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
 // ── COMPARE helpers ──
 //
 // CO-CHAIN PRECONDITION: `overlap_pair` calls `ordinal_gap` — directly, and
-// through `Block::vpos_at` — only AFTER the `lo < hi` overlap guard, i.e.
-// only on runs whose I-intervals overlap. Overlapping content runs lie on ONE
-// content chain (shared origin sub-allocator ⇒ equal-length, equal prefix
+// through `Block::vpos_at` — only AFTER the `start < reach` overlap guard,
+// i.e. only on runs whose I-intervals overlap. Overlapping content runs lie on
+// ONE content chain (shared origin sub-allocator ⇒ equal-length, equal prefix
 // below the action point), so the ordinal subtraction is a TOTAL `Nat` op —
 // no borrow, no underflow. Different-chain pairs have disjoint I-intervals
 // and are rejected by the guard before any ordinal arithmetic runs.
@@ -275,27 +276,29 @@ fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
 }
 
 /// One correspondence per I-overlap of two blocks, or `None` when the
-/// I-intervals are disjoint. Each foot is asked of the block it belongs to
-/// ([`Block::vpos_at`]), so both resolve to the shared address `lo`.
+/// I-intervals are disjoint. The overlap is itself an I-interval, named the
+/// way M1 names one: inclusive `start`, exclusive `reach`. Each foot is asked
+/// of the block it belongs to ([`Block::vpos_at`]), so both resolve to the
+/// shared address `start`.
 ///
 /// The endpoints stay BORROWED across the guard, and each block's reach is
 /// the one it stored: the exhaustive join asks this of every candidate pair,
 /// and most are disjoint, so a rejected pair must build nothing and clone
 /// nothing to be compared.
 fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
-    let lo = cmp::max(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
-    let hi = cmp::min(&pb.reach, &qb.reach);
-    if lo >= hi {
+    let start = cmp::max(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
+    let reach = cmp::min(&pb.reach, &qb.reach);
+    if start >= reach {
         return None; // disjoint I-intervals ⇒ no correspondence
     }
-    // lo < hi now discharges the co-chain precondition: every ordinal_gap
-    // below is total.
+    // start < reach now discharges the co-chain precondition: every
+    // ordinal_gap below is total.
     Some(CorrPair {
         d1: pb.doc.clone(),
-        u1: pb.vpos_at(lo), // slot 1 ⇐ operand 1
+        u1: pb.vpos_at(start), // slot 1 ⇐ operand 1
         d2: qb.doc.clone(),
-        u2: qb.vpos_at(lo), // slot 2 ⇐ operand 2
-        width: ordinal_gap(hi, lo),
+        u2: qb.vpos_at(start), // slot 2 ⇐ operand 2
+        width: ordinal_gap(reach, start),
     })
 }
 
@@ -388,9 +391,9 @@ mod tests {
         Nat::from(x)
     }
 
-    /// doc1 content element k, M3's minted shape.
-    fn ca(k: u32) -> Address {
-        a(&[1, 0, 1, 0, 1, 0, 1, k])
+    /// doc1's content element at `ordinal`, M3's minted shape.
+    fn ca(ordinal: u32) -> Address {
+        a(&[1, 0, 1, 0, 1, 0, 1, ordinal])
     }
 
     fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -412,7 +415,7 @@ mod tests {
     fn overlap_pair_computes_each_foot_within_its_own_block() {
         // X12 R1: a block answers for its own V-coordinates, so each foot is
         // offset within the block it comes from and both resolve to the
-        // shared address lo.
+        // overlap's shared start address.
         let pb = block(&[1, 0, 1, 0, 1], 1, ca(1), 3); // [ca1, ca4) at V 1..
         let qb = block(&[1, 0, 1, 0, 2], 1, ca(2), 1); // [ca2, ca3) at V 1..
         // The same I-address is a different V-position in each block…
@@ -424,10 +427,10 @@ mod tests {
         let c = overlap_pair(&pb, &qb).expect("overlapping I-intervals correspond");
         assert_eq!(c.d1, a(&[1, 0, 1, 0, 1]));
         assert_eq!(c.u1.subspace, n(1));
-        assert_eq!(c.u1.ordinal, n(2)); // lo = ca2 is offset 1 within P
+        assert_eq!(c.u1.ordinal, n(2)); // start = ca2 is offset 1 within P
         assert_eq!(c.d2, a(&[1, 0, 1, 0, 2]));
         assert_eq!(c.u2.subspace, n(1));
-        assert_eq!(c.u2.ordinal, n(1)); // lo = ca2 is offset 0 within Q
+        assert_eq!(c.u2.ordinal, n(1)); // start = ca2 is offset 0 within Q
         assert_eq!(c.width, n(1));
     }
 

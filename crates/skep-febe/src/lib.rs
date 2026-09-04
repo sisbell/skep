@@ -195,7 +195,7 @@ use skep_namespace::{HasM3, Namespace};
 /// bound set in the engine, and M10's own slice count is zero (Engine
 /// Composition Contract — no state, no record variant, no fold).
 ///
-/// Named for the reason M6 names `M6World` and M7 `LinkWorld`: one word for
+/// Named for the reason M6 names `RetrievalWorld` and M7 `LinkWorld`: one word for
 /// the seam, so a consumer generic over the same world writes one bound
 /// rather than five. Blanket-implemented, so an engine that implements the
 /// accessors gets this for free; the record lift each write path needs

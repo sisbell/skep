@@ -51,10 +51,10 @@
 //! the join is `|P|·|Q|` over two block lists the caller sizes independently,
 //! so a byte cap on the request buys the square of what it bounds and no
 //! upstream gate can price it. It therefore carries its own two budgets —
-//! [`MAX_COMPARE_BLOCKS`] per operand and [`MAX_COMPARE_PAIRS`] per report,
-//! both published so a caller sizes a request against the number rather than
-//! transcribing it, and both refusals rather than truncations, so every
-//! request COMPARE answers is answered completely.
+//! [`MAX_COMPARE_OPERAND_BLOCKS`] per operand and [`MAX_COMPARE_PAIRS`] per
+//! report, both published so a caller sizes a request against the number
+//! rather than transcribing it, and both refusals rather than truncations, so
+//! every request COMPARE answers is answered completely.
 //!
 //! ## SHOWORIGIN's I-arity — de-scoped (ruling)
 //!
@@ -88,7 +88,7 @@ mod helpers;
 mod query;
 mod types;
 
-pub use compare::{MAX_COMPARE_BLOCKS, MAX_COMPARE_PAIRS};
+pub use compare::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
 pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
     SpanFault,
@@ -107,8 +107,8 @@ use skep_namespace::HasM3;
 /// The world bound M6 reads under: three upstream slices, none of its own
 /// (Engine Composition Contract — M6 contributes no slice, no record variant,
 /// no accessor trait, no fold).
-pub trait M6World: WorldState + HasM3 + HasContent + HasM5 {}
-impl<W: WorldState + HasM3 + HasContent + HasM5> M6World for W {}
+pub trait RetrievalWorld: WorldState + HasM3 + HasContent + HasM5 {}
+impl<W: WorldState + HasM3 + HasContent + HasM5> RetrievalWorld for W {}
 
 /// Stateless reader over ONE pinned snapshot. Owns nothing; holds a borrow.
 ///
@@ -117,9 +117,9 @@ impl<W: WorldState + HasM3 + HasContent + HasM5> M6World for W {}
 /// one consistent `(M, R)` root — the discharge of M2's clause 6 and the
 /// single-Σ requirement of ASN-0075/0122/0124. Reads never commit and have no
 /// commit-before-acknowledge obligation.
-pub struct Query<'s, W: M6World>(&'s Snapshot<W>);
+pub struct Query<'s, W: RetrievalWorld>(&'s Snapshot<W>);
 
-impl<'s, W: M6World> Query<'s, W> {
+impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// Bind one pinned snapshot. Build **one `Query` per logical query**.
     pub fn new(snap: &'s Snapshot<W>) -> Self {
         Query(snap)
@@ -136,7 +136,7 @@ impl<'s, W: M6World> Query<'s, W> {
 /// the world it holds is not a thing to print into a log. Hand-written
 /// because a derive would demand `W: Debug` on an impl that never touches
 /// `W`.
-impl<W: M6World> fmt::Debug for Query<'_, W> {
+impl<W: RetrievalWorld> fmt::Debug for Query<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Query")
             .field("as_of", &self.as_of())
@@ -152,9 +152,9 @@ impl<W: M6World> fmt::Debug for Query<'_, W> {
 ///
 /// Hand-written because the derives would put `W: Clone`/`W: Copy` on impls
 /// that never touch `W`, and no `WorldState` is `Copy`.
-impl<W: M6World> Clone for Query<'_, W> {
+impl<W: RetrievalWorld> Clone for Query<'_, W> {
     fn clone(&self) -> Self {
         *self
     }
 }
-impl<W: M6World> Copy for Query<'_, W> {}
+impl<W: RetrievalWorld> Copy for Query<'_, W> {}

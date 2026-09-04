@@ -75,17 +75,22 @@ pub(crate) fn gate_vspan(span: &Span) -> Result<(), SpanFault> {
     Ok(())
 }
 
-/// Deduplicate a stream of addresses and return them T1-sorted. Identity and
-/// order are both `Address`'s own — its `Eq` is tumbler equality (the level is
-/// a function of the tumbler) and its `Ord` IS the T1 tumbler order — so
-/// sorting and deduplicating is exactly dedup-by-tumbler, with no `.tumbler()`
-/// detour and no key clone.
+/// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
+/// halves are published guarantees, not conveniences: SHOWORIGIN_V answers
+/// "deduplicated origin documents in tumbler order" and SHOWDELETIONS' halves
+/// are each "the deduped, Tumbler-ordered set" (D-ORD), and this is the one
+/// place either is established.
+///
+/// Identity and order are both `Address`'s own — its `Eq` is tumbler equality
+/// (the level is a function of the tumbler) and its `Ord` IS the T1 tumbler
+/// order — so sorting and deduplicating is exactly dedup-by-tumbler, with no
+/// `.tumbler()` detour and no key clone.
 ///
 /// Used for origin DOCUMENTS (SHOWORIGIN_V) and content I-ADDRESSES
 /// (SHOWDELETIONS) alike — both are `Address`, so one neutral helper serves
-/// either (the name says "addrs", not "docs", because at the SHOWDELETIONS
-/// site the deduped elements are content addresses, not documents).
-pub(crate) fn dedup_addrs(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
+/// either (the name says "addr", not "doc", because at the SHOWDELETIONS site
+/// the deduped elements are content addresses, not documents).
+pub(crate) fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
     let mut out: Vec<Address> = it.into_iter().collect();
     out.sort_unstable(); // T1 order; the dedup below makes stability unobservable
     out.dedup();
@@ -206,11 +211,11 @@ mod tests {
     }
 
     #[test]
-    fn dedup_addrs_dedups_by_tumbler_and_sorts_in_t1_order() {
+    fn sorted_addr_set_is_deduped_and_t1_ordered() {
         let d2 = a(&[1, 0, 1, 0, 2]);
         let d1 = a(&[1, 0, 1, 0, 1]);
-        let got = dedup_addrs(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
+        let got = sorted_addr_set(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
         assert_eq!(got, vec![d1, d2]);
-        assert!(dedup_addrs(std::iter::empty()).is_empty());
+        assert!(sorted_addr_set(std::iter::empty()).is_empty());
     }
 }

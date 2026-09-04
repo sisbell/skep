@@ -809,7 +809,7 @@ Namespace/authority: `not_owner`, `not_an_account`, `gate`,
 `not_node`, `too_deep`, `not_descendant_of_bootstrap`, `not_fresh`.
 
 Arrangement: `empty_content`, `content`, `empty_source`,
-`bad_span`, `dangling_source`, `empty_result`, `not_arranged`,
+`not_ordinal_vspan`, `dangling_source`, `empty_result`, `not_arranged`,
 `out_of_bounds`, `empty_width`, `bad_cut_count`, `not_ascending`,
 `empty_content_subspace`, `not_a_principal`, `node_tier_cross_owner`,
 `not_home_link`, `already_seated`, `not_content_subspace`.

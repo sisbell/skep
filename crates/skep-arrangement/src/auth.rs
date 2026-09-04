@@ -36,17 +36,17 @@ pub enum Caller {
 }
 
 impl Caller {
-    /// Is this caller the effective owner of `a`? The ONE ownership
+    /// Is this caller the effective owner of `doc`? The ONE ownership
     /// predicate of the write surface, and it does not compute ω itself: it
     /// asks M3, whose `is_effective_owner` IS the rule (exact account match
     /// by principal id — delegation's id-injectivity makes id equality
     /// equivalent to prefix equality, and no registered owning prefix is
     /// not-owner, never a pass). One spelling of the rule, in the module
     /// that owns the registry it reads.
-    pub fn is_owner(&self, m3: &M3State, a: &Address) -> bool {
+    pub fn is_owner(&self, m3: &M3State, doc: &Address) -> bool {
         match self {
             Caller::System => true,
-            Caller::Principal(p) => m3.is_effective_owner(*p, a),
+            Caller::Principal(p) => m3.is_effective_owner(*p, doc),
         }
     }
 }

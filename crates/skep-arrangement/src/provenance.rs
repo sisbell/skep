@@ -9,7 +9,7 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 /// `d` contained the I-address `a`, and no transition removes one).
 ///
 /// APPEND-ONLY IS THE CARD, and it is structural: this type offers
-/// [`record`](Provenance::record) and reads, and NO way to drop or rewrite a
+/// [`append`](Provenance::append) and reads, and NO way to drop or rewrite a
 /// pair. That absence is why a deleted address keeps its provenance without
 /// any op having to promise it, and why R is non-recomputable from the
 /// current arrangement — a deletion contracts the arrangement and leaves R
@@ -27,8 +27,9 @@ impl Provenance {
     /// Append `spans` to `doc`'s record (persistent — the receiver is
     /// untouched). Called from the placing folds, co-located with the
     /// arrangement update they pair with, so one new state carries both
-    /// halves of J1★.
-    pub(crate) fn record(
+    /// halves of J1★. The ONLY mutator, and it only ever lengthens a
+    /// document's sequence.
+    pub(crate) fn append(
         &self,
         doc: &Address,
         spans: impl IntoIterator<Item = Span>,
@@ -92,19 +93,19 @@ mod tests {
     use crate::testutil::{ca, doc1, doc2, run, vdoc};
 
     #[test]
-    fn recording_accumulates_and_never_supersedes() {
-        // §9/P2: a second record for the same document extends the sequence —
+    fn appending_accumulates_and_never_shortens() {
+        // §9/P2: a second append for the same document extends the sequence —
         // there is no path that shortens it, which is what SHOWDELETIONS and
         // the historical candidate read both rest on.
         let p = Provenance::default();
         assert!(!p.is_recorded(&doc1()));
-        let p = p.record(&doc1(), [run(&ca(1), 2).iextent()]);
-        let p = p.record(&doc1(), [run(&ca(5), 1).iextent()]);
+        let p = p.append(&doc1(), [run(&ca(1), 2).iextent()]);
+        let p = p.append(&doc1(), [run(&ca(5), 1).iextent()]);
         assert!(p.is_recorded(&doc1()));
         assert_eq!(p.ever_contained(&doc1()).len(), 2);
         // A different document keeps its own record; the historical read walks
         // both in Tumbler order.
-        let p = p.record(&doc2(), [run(&ca(1), 1).iextent()]);
+        let p = p.append(&doc2(), [run(&ca(1), 1).iextent()]);
         let cov = SpanSet::singleton(run(&ca(1), 1).iextent());
         assert_eq!(p.docs_ever_containing(&cov), vec![doc1(), doc2()]);
         // A document that has placed nothing is absent, and reads empty.

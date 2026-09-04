@@ -65,8 +65,8 @@ pub struct Vstream<'k, W: WorldState> {
 impl<'k, W: WorldState> Vstream<'k, W> {
     /// The only constructor — M10 (and M9, for predicate-def `insert`) build
     /// a Vstream over the engine's kernel this way.
-    pub fn new(k: &'k Kernel<W>) -> Vstream<'k, W> {
-        Vstream { kernel: k }
+    pub fn new(kernel: &'k Kernel<W>) -> Vstream<'k, W> {
+        Vstream { kernel }
     }
 }
 
@@ -132,15 +132,15 @@ where
                 return Err(InsertError::OutOfBounds);
             }
             let mut runs: Vec<Run> = Vec::new();
-            for v in values {
-                let (a, m3rec) = stg.working().m3().mint_content(doc)?;
+            for value in values {
+                let (addr, m3rec) = stg.working().m3().mint_content(doc)?;
                 stg.push(m3rec.into());
-                let cw = stage_write(stg.working().content(), &a, v)?;
-                stg.push(cw.into());
+                let write = stage_write(stg.working().content(), &addr, value)?;
+                stg.push(write.into());
                 extend_or_push_run(
                     &mut runs,
                     Run {
-                        i_start: a,
+                        i_start: addr,
                         width: Nat::one(),
                     },
                 );
@@ -187,9 +187,10 @@ where
     /// source spans stay unrestricted, transclusion of anyone's content being
     /// the point of the medium) → `NotContentSubspace` → `OutOfBounds`. Then,
     /// per spec: `SourceNotRegistered`
-    /// → `BadSpan` (the span is not an ordinal-level depth-2 V-range — the one
-    /// shape `resolve` folds on, so a span COPY rejects is exactly a span
-    /// `resolve` would refuse to serve, Conflicts #7)
+    /// → `NotOrdinalVSpan` (the span fails
+    /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the one shape `resolve`
+    /// folds on, so a span COPY rejects is exactly a span `resolve` would
+    /// refuse to serve, Conflicts #7)
     /// → `SourceNotContentSubspace` (that span's subspace ≠ s_C)
     /// → `EmptySource` (ASN-0118
     /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
@@ -210,9 +211,9 @@ where
         let key = M3State::content_lock_key(doc);
         self.kernel
             .transact(&[key], |stg| {
-                let w = stg.working();
+                let world = stg.working();
                 gate_write(
-                    w.m3(),
+                    world.m3(),
                     caller,
                     doc,
                     CopyError::DocNotRegistered,
@@ -221,28 +222,28 @@ where
                 if at.subspace != content_subspace() {
                     return Err(CopyError::NotContentSubspace);
                 }
-                if !w.m5().admits_content_boundary(doc, &at.ordinal) {
+                if !world.m5().admits_content_boundary(doc, &at.ordinal) {
                     return Err(CopyError::OutOfBounds);
                 }
                 let mut runs: Vec<Run> = Vec::new();
                 for spec in specs {
-                    if !w.m3().is_registered_document(&spec.source) {
+                    if !world.m3().is_registered_document(&spec.source) {
                         return Err(CopyError::SourceNotRegistered);
                     }
                     let span = &spec.span;
-                    let Some(v) = as_ordinal_vspan(span) else {
-                        return Err(CopyError::BadSpan);
+                    let Some(vspan) = as_ordinal_vspan(span) else {
+                        return Err(CopyError::NotOrdinalVSpan);
                     };
-                    if *v.subspace != content_subspace() {
+                    if *vspan.subspace != content_subspace() {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
-                    if w.m5().content_count(&spec.source).is_zero() {
+                    if world.m5().content_count(&spec.source).is_zero() {
                         return Err(CopyError::EmptySource);
                     }
                     // Resolved BEFORE staging ⇒ a self-copy sees the pre-edit
                     // arrangement.
-                    for r in w.m5().resolve(&spec.source, span) {
-                        if !w.content().contains(r.i_start().tumbler()) {
+                    for r in world.m5().resolve(&spec.source, span) {
+                        if !world.content().contains(r.i_start().tumbler()) {
                             return Err(CopyError::DanglingSource);
                         }
                         extend_or_push_run(&mut runs, r);
@@ -310,10 +311,10 @@ where
                     return Err(DeleteError::NotContentSubspace);
                 }
                 let m5 = stg.working().m5();
-                if !m5.content_position_arranged(doc, &p.ordinal) {
+                if !m5.arranges_content_position(doc, &p.ordinal) {
                     return Err(DeleteError::NotArranged);
                 }
-                if !m5.content_range_within(doc, &p.ordinal, &width) {
+                if !m5.contains_content_range(doc, &p.ordinal, &width) {
                     return Err(DeleteError::OutOfBounds);
                 }
                 if width.is_zero() {
@@ -408,23 +409,23 @@ where
     W::Record: From<M5Rec> + From<M3Rec>, // stages M3Rec + M5Rec
 {
     /// CREATENEWVERSION (ASN-0123; §7): fork — mint a new identity (M3),
-    /// install its content arrangement as a snapshot of `d_src`'s content
+    /// install its content arrangement as a snapshot of `source`'s content
     /// subspace (the multiplicity-preserving V→I map share, V2), record
     /// provenance. Returns the new document address and the commit `Seq`.
     ///
-    /// `ω(d_src)` is pre-read off a snapshot (stable for an existing
-    /// document, per M3) to choose branch + lock: an owned fork mints
-    /// `mint_version(d_src)` under `version_lock_key(d_src)` (serializing
-    /// forks of d_src); a cross-owner fork requires an ACCOUNT-tier forker
-    /// (`zeros(pfx) == 1` — the P-tier gate, surfaced as
+    /// `ω(source)` is pre-read off a snapshot (stable for an existing
+    /// document, per M3) to choose branch + lock key: an owned fork mints
+    /// `mint_version(source)` under `version_lock_key(source)` (serializing
+    /// forks of that source); a cross-owner fork requires an ACCOUNT-tier
+    /// forker (`zeros(prefix) == 1` — the P-tier gate, surfaced as
     /// `NodeTierCrossOwner` BEFORE any mint rather than obliquely as
-    /// `Mint(NotAnAccount)`) and mints `mint_document(pfx)` under
-    /// `document_lock_key(pfx)`. Source untouched (V3); the fork diverges
+    /// `Mint(NotAnAccount)`) and mints `mint_document(prefix)` under
+    /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
     /// copy-on-write (V11).
     pub fn version(
         &self,
         principal: PrincipalId,
-        d_src: &Address,
+        source: &Address,
     ) -> Result<(Address, Seq), TxnError<VersionError>> {
         enum Branch {
             Owned,
@@ -432,32 +433,32 @@ where
         }
         let snap = self.kernel.snapshot();
         let m3 = snap.world().m3();
-        if !m3.is_registered_document(d_src) {
+        if !m3.is_registered_document(source) {
             return Err(TxnError::Rejected(VersionError::SourceNotRegistered));
         }
-        let (lock, branch) = match m3.effective_owner(d_src) {
-            Some(p) if p == principal => (M3State::version_lock_key(d_src), Branch::Owned),
+        let (key, branch) = match m3.effective_owner(source) {
+            Some(p) if p == principal => (M3State::version_lock_key(source), Branch::Owned),
             _ => {
                 // Cross-owner fork.
-                let pfx = m3
+                let prefix = m3
                     .principal_prefix(principal)
                     .cloned()
                     .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
-                if zeros(pfx.tumbler()) != 1 {
+                if zeros(prefix.tumbler()) != 1 {
                     return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
                 }
-                (M3State::document_lock_key(&pfx), Branch::Cross(pfx))
+                (M3State::document_lock_key(&prefix), Branch::Cross(prefix))
             }
         };
-        self.kernel.transact(&[lock], |stg| {
+        self.kernel.transact(&[key], |stg| {
             let (v, m3rec) = match &branch {
-                Branch::Owned => stg.working().m3().mint_version(d_src),
-                Branch::Cross(pfx) => stg.working().m3().mint_document(pfx),
+                Branch::Owned => stg.working().m3().mint_version(source),
+                Branch::Cross(prefix) => stg.working().m3().mint_document(prefix),
             }?;
             stg.push(m3rec.into());
             stg.push(
                 M5Rec::VersionSnapshot {
-                    source: d_src.clone(),
+                    source: source.clone(),
                     new: v.clone(),
                 }
                 .into(),
@@ -617,7 +618,8 @@ mod tests {
         // bytes that were never written — a reference R would then keep
         // permanently (P2) and every later RETRIEVEV would fail to resolve.
         let p1 = Caller::Principal(PrincipalId(1));
-        let whole = |count: u32| {
+        // `count` positions from doc1's first content ordinal.
+        let from_doc1 = |count: u32| {
             vec![VSpec {
                 source: doc1(),
                 span: vspan(1, 1, count),
@@ -627,7 +629,7 @@ mod tests {
         // Nothing written: the resolved run's start, ca(1), is absent.
         let k = gate_kernel(&[]);
         assert!(matches!(
-            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole(2))),
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &from_doc1(2))),
             CopyError::DanglingSource
         ));
 
@@ -635,7 +637,7 @@ mod tests {
         // without this, the rejection above could be earned by anything.
         let k = gate_kernel(&[1, 2, 3]);
         Vstream::new(&k)
-            .copy(p1, &doc2(), vp(1, 1), &whole(2))
+            .copy(p1, &doc2(), vp(1, 1), &from_doc1(2))
             .expect("a resolved run whose start is present is admitted");
         assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(2));
 
@@ -646,7 +648,7 @@ mod tests {
         // is how such a change announces itself.
         let k = gate_kernel(&[1, 2]);
         Vstream::new(&k)
-            .copy(p1, &doc2(), vp(1, 1), &whole(3))
+            .copy(p1, &doc2(), vp(1, 1), &from_doc1(3))
             .expect("the run start is present, so the run is admitted");
     }
 

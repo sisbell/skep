@@ -187,7 +187,7 @@ impl Lower for CopyError {
             CopyError::OutOfBounds => (RejectCode::OutOfBounds, None),
             CopyError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
             CopyError::EmptySource => (RejectCode::EmptySource, None),
-            CopyError::BadSpan => (RejectCode::BadSpan, None),
+            CopyError::NotOrdinalVSpan => (RejectCode::NotOrdinalVSpan, None),
             // As-built M5 splits the source-residence guard into its own
             // variant; the design's RejectCode union carries no same-named
             // leaf, so it lowers to the shared NotContentSubspace (surfaced
@@ -712,7 +712,7 @@ mod tests {
         same_name(CopyError::OutOfBounds);
         same_name(CopyError::SourceNotRegistered);
         same_name(CopyError::EmptySource);
-        same_name(CopyError::BadSpan);
+        same_name(CopyError::NotOrdinalVSpan);
         same_name(CopyError::DanglingSource);
         same_name(CopyError::TooManyRuns);
         same_name(CopyError::EmptyResult);

@@ -574,7 +574,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::EmptyContent, "empty_content"),
         (RejectCode::Content, "content"),
         (RejectCode::EmptySource, "empty_source"),
-        (RejectCode::BadSpan, "bad_span"),
+        (RejectCode::NotOrdinalVSpan, "not_ordinal_vspan"),
         (RejectCode::DanglingSource, "dangling_source"),
         (RejectCode::TooManyRuns, "too_many_runs"),
         (RejectCode::EmptyResult, "empty_result"),

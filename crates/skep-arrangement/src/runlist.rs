@@ -50,14 +50,14 @@ pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
 /// Cross-origin runs are cross-length, fail the I-adjacency test, and never
 /// coalesce — preserving the origin multiset (ASN-0118 CP11) and
 /// transclusion independence (CP4/M14).
-pub(crate) fn extend_or_push_run(runs: &mut Vec<Run>, r: Run) {
+pub(crate) fn extend_or_push_run(runs: &mut Vec<Run>, run: Run) {
     if let Some(last) = runs.last_mut() {
-        if i_adjacent(last, &r.i_start) {
-            last.width = &last.width + &r.width;
+        if i_adjacent(last, &run.i_start) {
+            last.width = &last.width + &run.width;
             return;
         }
     }
-    runs.push(r);
+    runs.push(run);
 }
 
 /// Eager coalesce (§1, Open decision #8 default): one pass accumulating
@@ -155,7 +155,7 @@ impl RunList {
         None
     }
 
-    /// `M(d)(v)` for this subspace: the I-address at ordinal `ord`, or `None`
+    /// `M(d)(p)` for this subspace: the I-address at ordinal `ord`, or `None`
     /// when unarranged (§2 point).
     pub(crate) fn point(&self, ord: &Nat) -> Option<Address> {
         let (idx, off) = self.locate(ord)?;
@@ -242,10 +242,11 @@ impl RunList {
     /// Called with `lo < hi_excl`. Every emitted run then has `width ≥ 1` and
     /// an element-level start: a run reaching the push has `v_start < hi_excl`
     /// and `lo < v_end`, and `v_start < v_end` because a run's width is at
-    /// least one, so each of `a`'s two candidates falls below each of `b`'s
-    /// and `a < b`; the start is [`Run::addr_at`](crate::Run::addr_at) of an
-    /// offset inside the run. Both `Nat` subtractions are therefore over
-    /// ordered operands and cannot underflow.
+    /// least one, so each of `first`'s two candidates falls below each of
+    /// `past`'s and `first < past`; the start is
+    /// [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run. Both
+    /// `Nat` subtractions are therefore over ordered operands and cannot
+    /// underflow.
     fn slice_runs(&self, lo: &Nat, hi_excl: &Nat) -> Vec<Run> {
         let mut out: Vec<Run> = Vec::new();
         for (v_start, run) in self.iter_runs() {
@@ -256,11 +257,11 @@ impl RunList {
             if v_end <= *lo {
                 continue;
             }
-            let a = std::cmp::max(&v_start, lo);
-            let b = std::cmp::min(&v_end, hi_excl);
+            let first = std::cmp::max(&v_start, lo); // this run's first kept ordinal
+            let past = std::cmp::min(&v_end, hi_excl); // one past its last
             out.push(Run {
-                i_start: run.addr_at(&(a - &v_start)),
-                width: b - a,
+                i_start: run.addr_at(&(first - &v_start)),
+                width: past - first,
             });
         }
         out
@@ -294,8 +295,10 @@ impl RunList {
         })
     }
 
-    /// The canonical, V-ordered run vector (maximally merged — M12).
-    pub(crate) fn runs_vec(&self) -> Vec<Run> {
+    /// The canonical, V-ordered run decomposition (maximally merged — M12).
+    /// The runs alone; [`iter_runs`](RunList::iter_runs) is the form that
+    /// also reports each run's implicit V-start.
+    pub(crate) fn runs(&self) -> Vec<Run> {
         self.0.iter().cloned().collect()
     }
 
@@ -322,9 +325,9 @@ mod tests {
         // appends merge (M12), non-adjacent stay separate.
         let l = list(vec![run(&ca(1), 3)]);
         let merged = l.splice_in(&n(4), &[run(&ca(4), 2)]); // shift(ca(1),3) = ca(4): adjacent
-        assert_eq!(merged.runs_vec(), vec![run(&ca(1), 5)]);
+        assert_eq!(merged.runs(), vec![run(&ca(1), 5)]);
         let apart = l.splice_in(&n(4), &[run(&ca(9), 1)]); // not adjacent
-        assert_eq!(apart.runs_vec(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
+        assert_eq!(apart.runs(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
         assert_eq!(apart.total_width(), n(4));
     }
 
@@ -335,7 +338,7 @@ mod tests {
         let l = list(vec![run(&ca(1), 4)]);
         let spliced = l.splice_in(&n(3), &[run(&ca(9), 1)]);
         assert_eq!(
-            spliced.runs_vec(),
+            spliced.runs(),
             vec![run(&ca(1), 2), run(&ca(9), 1), run(&ca(3), 2)]
         );
         // point: implicit positions after the shift.
@@ -352,11 +355,11 @@ mod tests {
         // here removing an interleaved foreign run rejoins ca(1..2) & ca(3..4).
         let l = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(3), 2)]);
         let out = l.remove_range(&n(3), &n(1));
-        assert_eq!(out.runs_vec(), vec![run(&ca(1), 4)]);
+        assert_eq!(out.runs(), vec![run(&ca(1), 4)]);
         // And an interior removal within one run splits then re-shifts.
         let l2 = list(vec![run(&ca(1), 5)]);
         let out2 = l2.remove_range(&n(2), &n(2));
-        assert_eq!(out2.runs_vec(), vec![run(&ca(1), 1), run(&ca(4), 2)]);
+        assert_eq!(out2.runs(), vec![run(&ca(1), 1), run(&ca(4), 2)]);
         assert_eq!(out2.total_width(), n(3));
     }
 
@@ -366,7 +369,7 @@ mod tests {
         // (shift preserves length) — a transclusion seam survives (M14/M16).
         let l = list(vec![run(&ca(1), 1)]);
         let out = l.splice_in(&n(2), &[run(&vca(1), 1)]); // vca is length 9, ca length 8
-        assert_eq!(out.runs_vec().len(), 2);
+        assert_eq!(out.runs().len(), 2);
     }
 
     #[test]

@@ -237,8 +237,10 @@ fn read_v(s: &Snapshot<World>, doc: &Address, ord: u32) -> Vec<u8> {
         .to_vec()
 }
 
-fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
-    let vs = Vstream::new(k);
+/// Leave doc1 holding `a`, `b`, `c` at content ordinals 1..3, and hand back
+/// the `Vstream` the caller goes on to drive.
+fn insert_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = Vstream::new(kernel);
     vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
         .expect("insert commits");
     vs
@@ -279,7 +281,7 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
 #[test]
 fn insert_appends_coalesce_and_interior_inserts_shift_the_suffix() {
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     // Tail append continues the frontier ⇒ I-adjacent ⇒ still one run (M12).
     let (start, _) = vs
         .insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
@@ -343,7 +345,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
     // ASN-0118 CP1/CP2: no content allocated; the destination references the
     // SOURCE's I-addresses; provenance makes the destination discoverable.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let stored_before = k.snapshot().world().content().len();
     let seq = vs
         .copy(
@@ -376,7 +378,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
     // state; the duplicate placement survives as a second run (S5/V2-style
     // multiplicity, no cross-placement coalesce of the same origin twice).
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     vs.copy(
         P1,
         &doc1(),
@@ -398,7 +400,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
 #[test]
 fn copy_rejects_each_documented_guard() {
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
@@ -418,21 +420,21 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
     ));
-    // BadSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
+    // NotOrdinalVSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
     let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu)])),
-        CopyError::BadSpan
+        CopyError::NotOrdinalVSpan
     ));
-    // BadSpan also on a T12-legal span whose WIDTH is deeper than two: its
+    // NotOrdinalVSpan also on a T12-legal span whose WIDTH is deeper than two: its
     // start is a well-formed V-position and its width position 1 is zero, so
     // the width-length clause is the only thing refusing it — and admitting
     // it would resolve five ordinals for a span reaching [1, 6, 0].
     let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), deep_width)])),
-        CopyError::BadSpan
+        CopyError::NotOrdinalVSpan
     ));
     // Content-residence guard (§5).
     assert!(matches!(
@@ -450,7 +452,7 @@ fn copy_rejects_each_documented_guard() {
     let lu_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu_link)])),
-        CopyError::BadSpan
+        CopyError::NotOrdinalVSpan
     ));
     // Residence before emptiness: doc2 is content-empty AND asked for in the
     // link subspace, and the residence check runs first.
@@ -463,7 +465,7 @@ fn copy_rejects_each_documented_guard() {
     let lu2 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), lu2)])),
-        CopyError::BadSpan
+        CopyError::NotOrdinalVSpan
     ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…
@@ -526,7 +528,7 @@ fn delete_contracts_the_arrangement_and_touches_neither_content_nor_r() {
 #[test]
 fn delete_rejects_in_documented_order() {
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.delete(P1, &un, vp(1, 1), n(1))),
@@ -604,7 +606,7 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
 #[test]
 fn rearrange_rejects_in_documented_order() {
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.rearrange(P1, &un, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
@@ -649,7 +651,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // same V→I map; later edits diverge the fork only (V3/V11); the fork's
     // shared runs are R-recorded (J1★).
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
     let (fork, _) = vs
         .version(PrincipalId(1), &doc1())
@@ -685,7 +687,7 @@ fn cross_owner_version_mints_under_the_forkers_account() {
     // ASN-0123 P-tier: principal 2 (account [1,0,2]) forks doc1 — a fresh
     // document identity under ITS account, sharing doc1's content.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let (fork, _) = vs
         .version(PrincipalId(2), &doc1())
         .expect("cross-owner fork commits");
@@ -713,7 +715,7 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
 #[test]
 fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
         rejected(vs.version(PrincipalId(1), &un)),
@@ -741,7 +743,7 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
     // NotOwner carrying doc1; each rejection is a clean no-op; the owner's
     // identical op still commits.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));
     let before = k.current_seq();
     assert!(matches!(
@@ -788,7 +790,7 @@ fn an_unregistered_document_never_yields_an_ownership_verdict() {
     // by longest registered prefix, so P1 owns [1,0,1,0,9] and would pass,
     // leaving both orders agreeing on DocNotRegistered.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     let p2 = Caller::Principal(PrincipalId(2));
     assert!(matches!(
@@ -852,7 +854,7 @@ fn ownership_is_exact_in_both_directions() {
     // the sub-delegated account's document, and the sub-account's principal
     // does not own the parent's.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let sub = Caller::Principal(PrincipalId(3)); // account [1,0,1,1], under [1,0,1]
     let subdoc = a(&[1, 0, 1, 1, 0, 1]);
     // Sub-delegated child vs the parent's doc.
@@ -876,7 +878,7 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
     // Principal 2 forks the empty doc2 into its own account (denial-as-fork,
     // O10), then transcludes P1's doc1 content into it.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));
     let (fork, _) = vs
         .version(PrincipalId(2), &doc2())
@@ -898,11 +900,11 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
 // ---- §C link seating ----
 
 #[test]
-fn seat_link_appends_guards_and_never_touches_r_and_links_survive_edits() {
+fn seating_appends_a_home_link_refuses_a_reseat_and_never_touches_r() {
     // §8: CL-OWN/CL-UNIQ; J-LV (no provenance); ASN-0117 P4 (a text delete
-    // never touches the link run-list).
+    // never touches the link run-list, checked at the close).
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let link1 = a(&[1, 0, 1, 0, 1, 0, 2, 1]);
     let link2 = a(&[1, 0, 1, 0, 1, 0, 2, 2]);
     let (seated, _) = seat_link(&k, &doc1(), &link1).expect("seat commits");
@@ -941,7 +943,7 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
     // deleter as a candidate); project is the current-containment filter —
     // both off ONE snapshot.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     vs.copy(
         P1,
         &doc2(),
@@ -979,7 +981,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     // mixed-length covers; deletions differences per class, project stays
     // total under cross-length coverage.
     let k = mem_kernel();
-    let vs = insert3(&k);
+    let vs = insert_abc(&k);
     let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
     vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")])
         .expect("fork edit commits"); // mints vca(1..2), length 9

@@ -171,18 +171,18 @@ impl Run {
     /// contiguous and a span is order-convex, so the covered subset is one
     /// contiguous offset range. TOTAL either way.
     pub(crate) fn offsets_covered_by(&self, span: &Span) -> Option<(Nat, Nat)> {
-        let ilen = self.i_start.tumbler().len();
-        if span.is_level_uniform() && span.start().len() == ilen {
+        let addr_len = self.i_start.tumbler().len();
+        if span.is_level_uniform() && span.start().len() == addr_len {
             let sub = intersect(&self.iextent(), span)
                 .expect("both operands level-uniform at one length — gate passes")?;
-            let at = |t: &Tumbler| {
-                t.get(ilen)
-                    .expect("run extent endpoints have #t == ilen")
+            let ordinal_of = |t: &Tumbler| {
+                t.get(addr_len)
+                    .expect("run extent endpoints have #t == addr_len")
                     .clone()
             };
-            let base = at(self.i_start.tumbler());
+            let base = ordinal_of(self.i_start.tumbler());
             let reach = sub.reach();
-            Some((at(sub.start()) - &base, at(&reach) - &base))
+            Some((ordinal_of(sub.start()) - &base, ordinal_of(&reach) - &base))
         } else {
             let k_lo = self.lower_bound(span.start());
             let k_hi = self.lower_bound(&span.reach());

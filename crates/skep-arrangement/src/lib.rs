@@ -67,7 +67,7 @@
 mod auth;
 mod error;
 mod ops;
-mod prov;
+mod provenance;
 mod reads;
 mod run;
 mod runlist;

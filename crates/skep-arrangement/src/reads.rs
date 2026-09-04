@@ -33,9 +33,9 @@ impl M5State {
     ///
     /// DEFENSIVE (returns ⟨⟩, cannot fault — no `Result`) unless the span is
     /// usable: a span the shared shape reader refuses — the same shape COPY's
-    /// `BadSpan` rejects on — yields ⟨⟩, and so does a shape-valid span whose
-    /// subspace ∉ {s_C, s_L}, a `DocArrangement` having exactly the content
-    /// and link run-lists. Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate
+    /// `NotOrdinalVSpan` rejects on — yields ⟨⟩, and so does a shape-valid
+    /// span whose subspace ∉ {s_C, s_L}, a `DocArrangement` having exactly the
+    /// content and link run-lists. Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate
     /// registered-empty vs unallocated via M3). A caller that must tell "bad
     /// request" from "genuinely empty" calls
     /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) itself before asking;
@@ -46,25 +46,25 @@ impl M5State {
     /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs' extents:
     /// see [`Run::iextent`].
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
-        let Some(v) = as_ordinal_vspan(span) else {
+        let Some(vspan) = as_ordinal_vspan(span) else {
             return Vec::new();
         };
         let Some(arr) = self.arrangements.get(doc) else {
             return Vec::new();
         };
-        let Some(list) = arr.list(v.subspace) else {
+        let Some(list) = arr.list(vspan.subspace) else {
             return Vec::new();
         };
-        list.resolve_range(v.ordinal, v.count)
+        list.resolve_range(vspan.ordinal, vspan.count)
     }
 
-    /// `M(d)(v)` (§2): the I-address at V-position `v`, or `None` when
-    /// `v.subspace ∉ {s_C, s_L}` (no such run-list) or the ordinal is
+    /// `M(d)(p)` (§2): the I-address at V-position `p`, or `None` when
+    /// `p.subspace ∉ {s_C, s_L}` (no such run-list) or the ordinal is
     /// unarranged. Every returned `Address` is T4-valid (synthesis routes
     /// through `validate`).
-    pub fn point(&self, doc: &Address, v: &VPos) -> Option<Address> {
+    pub fn point(&self, doc: &Address, p: &VPos) -> Option<Address> {
         let arr = self.arrangements.get(doc)?;
-        arr.list(&v.subspace)?.point(&v.ordinal)
+        arr.list(&p.subspace)?.point(&p.ordinal)
     }
 
     /// The region's I-image as a SpanSet (§2; ASN-0127 `image(W, d, Σ)`, the
@@ -87,7 +87,7 @@ impl M5State {
     pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
         self.arrangements
             .get(doc)
-            .map(|a| a.content.runs_vec())
+            .map(|arr| arr.content.runs())
             .unwrap_or_default()
     }
 
@@ -95,7 +95,7 @@ impl M5State {
     pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
         self.arrangements
             .get(doc)
-            .map(|a| a.link.runs_vec())
+            .map(|arr| arr.link.runs())
             .unwrap_or_default()
     }
 
@@ -103,7 +103,7 @@ impl M5State {
     pub fn content_count(&self, doc: &Address) -> Nat {
         self.arrangements
             .get(doc)
-            .map(|a| a.content.total_width())
+            .map(|arr| arr.content.total_width())
             .unwrap_or_else(Nat::zero)
     }
 
@@ -111,7 +111,7 @@ impl M5State {
     pub fn link_count(&self, doc: &Address) -> Nat {
         self.arrangements
             .get(doc)
-            .map(|a| a.link.total_width())
+            .map(|arr| arr.link.total_width())
             .unwrap_or_else(Nat::zero)
     }
 
@@ -125,19 +125,24 @@ impl M5State {
         *ord >= Nat::one() && *ord <= &self.content_count(doc) + &Nat::one()
     }
 
-    /// Is content ordinal `ord` ARRANGED — a position holding an I-address,
-    /// `ord ∈ [1, n_C]` (§4)? Answered off the run-list's own locate, which
-    /// is the same walk `point` uses.
-    pub(crate) fn content_position_arranged(&self, doc: &Address, ord: &Nat) -> bool {
+    /// Does `doc` ARRANGE content ordinal `ord` — is it a position holding an
+    /// I-address, `ord ∈ [1, n_C]` (§4)? Answered off the run-list's own
+    /// locate, which is the same walk `point` uses. One short of
+    /// [`admits_content_boundary`](M5State::admits_content_boundary), which
+    /// admits the append boundary as well.
+    pub(crate) fn arranges_content_position(&self, doc: &Address, ord: &Nat) -> bool {
         self.arrangements
             .get(doc)
-            .is_some_and(|a| a.content.locate(ord).is_some())
+            .is_some_and(|arr| arr.content.locate(ord).is_some())
     }
 
-    /// Does the arranged content contain the whole range `[from, from +
+    /// Does `doc`'s arranged content CONTAIN the whole range `[from, from +
     /// width)` — `from + width ≤ n_C + 1`, subtraction-free (§4)? The
     /// containment half of DELETE's admission, stated where `n_C` lives.
-    pub(crate) fn content_range_within(&self, doc: &Address, from: &Nat, width: &Nat) -> bool {
+    /// PRESENT containment, as the corpus uses the word; the historical
+    /// question belongs to
+    /// [`docs_ever_containing`](M5State::docs_ever_containing).
+    pub(crate) fn contains_content_range(&self, doc: &Address, from: &Nat, width: &Nat) -> bool {
         from + width <= &self.content_count(doc) + &Nat::one()
     }
 
@@ -145,8 +150,8 @@ impl M5State {
     /// I-extent membership over the link run-list, so a link INTERIOR to a
     /// coalesced link run is caught too. Absent doc ⇒ not seated.
     pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
-        self.arrangements.get(doc).is_some_and(|a| {
-            a.link
+        self.arrangements.get(doc).is_some_and(|arr| {
+            arr.link
                 .iter_runs()
                 .any(|(_, r)| r.iextent().contains(link.tumbler()))
         })
@@ -212,7 +217,7 @@ impl M5State {
     fn content_image(&self, doc: &Address) -> SpanSet {
         self.arrangements
             .get(doc)
-            .map(|a| a.content.image())
+            .map(|arr| arr.content.image())
             .unwrap_or_else(SpanSet::empty)
     }
 
@@ -231,11 +236,11 @@ impl M5State {
     pub fn deletions(&self, doc: &Address) -> SpanSet {
         let image = self.content_image(doc).by_level_class();
         let mut out = SpanSet::empty();
-        for (len, ever) in self.prov.ever_contained(doc).by_level_class() {
+        for (len, ever) in self.provenance.ever_contained(doc).by_level_class() {
             let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
-            let d = difference_sets(&ever, &here)
+            let deleted = difference_sets(&ever, &here)
                 .expect("per-class operands share one length class — the gate passes");
-            out = union(&out, &d);
+            out = union(&out, &deleted);
         }
         out
     }
@@ -272,7 +277,7 @@ impl M5State {
     /// concurrency for the query that composes on it are the CALLER's, and a
     /// route that carries this read owes that number.
     pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
-        self.prov.docs_ever_containing(coverage)
+        self.provenance.docs_ever_containing(coverage)
     }
 }
 
@@ -361,13 +366,13 @@ mod tests {
         assert!(s.admits_content_boundary(&doc2(), &n(1)));
         assert!(!s.admits_content_boundary(&doc2(), &n(2)));
         // Arranged positions stop one short of that boundary.
-        assert!(s.content_position_arranged(&doc1(), &n(5)));
-        assert!(!s.content_position_arranged(&doc1(), &n(6)));
-        assert!(!s.content_position_arranged(&doc1(), &n(0)));
-        assert!(!s.content_position_arranged(&doc2(), &n(1)));
+        assert!(s.arranges_content_position(&doc1(), &n(5)));
+        assert!(!s.arranges_content_position(&doc1(), &n(6)));
+        assert!(!s.arranges_content_position(&doc1(), &n(0)));
+        assert!(!s.arranges_content_position(&doc2(), &n(1)));
         // Containment: [from, from + width) must fit the arranged content.
-        assert!(s.content_range_within(&doc1(), &n(2), &n(4)));
-        assert!(!s.content_range_within(&doc1(), &n(2), &n(5)));
+        assert!(s.contains_content_range(&doc1(), &n(2), &n(4)));
+        assert!(!s.contains_content_range(&doc1(), &n(2), &n(5)));
         // Seating is I-extent membership, so an interior position of a
         // coalesced link run counts.
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
@@ -482,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn deletions_differences_per_level_class() {
+    fn deletions_subtracts_within_each_level_class() {
         // §9: iextent covers mix origin-lengths under transclusion; the
         // difference runs within each endpoint-length class and unions the
         // results — different-length addresses cannot cancel.

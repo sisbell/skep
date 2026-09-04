@@ -18,7 +18,7 @@ pub struct VPos {
 
 /// One source-span for COPY (ASN-0118): transclude `span` of `source`'s
 /// arrangement. The span must satisfy [`is_ordinal_vspan`] and lie in the
-/// content subspace (`BadSpan`/`SourceNotContentSubspace` otherwise —
+/// content subspace (`NotOrdinalVSpan`/`SourceNotContentSubspace` otherwise —
 /// Conflicts #7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct VSpec {
@@ -47,7 +47,7 @@ pub(crate) struct OrdinalVSpan<'a> {
 /// one. THE ONE DEFINITION of that shape in M5, which is why its two verdicts
 /// cannot drift apart: [`M5State::resolve`](crate::M5State::resolve) folds a
 /// span this refuses to ⟨⟩, and COPY rejects the same span as
-/// [`CopyError::BadSpan`](crate::CopyError::BadSpan).
+/// [`CopyError::NotOrdinalVSpan`](crate::CopyError::NotOrdinalVSpan).
 ///
 /// The condition is stated in full on [`is_ordinal_vspan`], the published
 /// half. Handing back the parts is what lets both callers read the subspace,

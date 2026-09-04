@@ -148,7 +148,7 @@ pub enum RejectCode {
     EmptyContent,
     Content,
     EmptySource,
-    BadSpan,
+    NotOrdinalVSpan,
     DanglingSource,
     TooManyRuns,
     EmptyResult,
@@ -524,7 +524,7 @@ mod tests {
             | RejectCode::EmptyContent
             | RejectCode::Content
             | RejectCode::EmptySource
-            | RejectCode::BadSpan
+            | RejectCode::NotOrdinalVSpan
             | RejectCode::DanglingSource
             | RejectCode::TooManyRuns
             | RejectCode::EmptyResult
@@ -594,7 +594,7 @@ mod tests {
         RejectCode::EmptyContent,
         RejectCode::Content,
         RejectCode::EmptySource,
-        RejectCode::BadSpan,
+        RejectCode::NotOrdinalVSpan,
         RejectCode::DanglingSource,
         RejectCode::TooManyRuns,
         RejectCode::EmptyResult,

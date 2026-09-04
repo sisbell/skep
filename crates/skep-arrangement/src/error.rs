@@ -32,9 +32,10 @@ pub enum InsertError {
 
 /// COPY rejection (ASN-0118; §5). Destination `at` gets the same
 /// `NotContentSubspace`/`OutOfBounds` split as INSERT; per-spec guards are
-/// `SourceNotRegistered`, `BadSpan` (fails
+/// `SourceNotRegistered`, `NotOrdinalVSpan` (fails
 /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the lossless narrowing of
-/// Conflicts #7), `SourceNotContentSubspace`
+/// Conflicts #7, and named for the predicate a caller runs to pre-validate),
+/// `SourceNotContentSubspace`
 /// (content-residence, `span.start().get(1) ≠ s_C`), `EmptySource`
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
 /// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), `TooManyRuns`
@@ -50,7 +51,7 @@ pub enum CopyError {
     OutOfBounds,
     SourceNotRegistered,
     EmptySource,
-    BadSpan,
+    NotOrdinalVSpan,
     SourceNotContentSubspace,
     DanglingSource,
     TooManyRuns,
@@ -177,7 +178,9 @@ impl fmt::Display for CopyError {
             }
             CopyError::SourceNotRegistered => "copy: a spec's source is not a registered document",
             CopyError::EmptySource => "copy: a spec's source content subspace is empty",
-            CopyError::BadSpan => "copy: a spec's span is not an ordinal-level depth-2 V-span",
+            CopyError::NotOrdinalVSpan => {
+                "copy: a spec's span is not an ordinal-level depth-2 V-span"
+            }
             CopyError::SourceNotContentSubspace => {
                 "copy: a spec's span does not lie in the content subspace s_C"
             }
@@ -234,7 +237,7 @@ impl fmt::Display for VersionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VersionError::SourceNotRegistered => {
-                f.write_str("version: d_src is not a registered document")
+                f.write_str("version: the source is not a registered document")
             }
             VersionError::NotAPrincipal => f.write_str("version: the caller id names no principal"),
             VersionError::NodeTierCrossOwner => f.write_str(

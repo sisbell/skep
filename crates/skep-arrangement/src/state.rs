@@ -5,7 +5,7 @@ use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, link_subspace, Address, Nat};
 
-use crate::prov::Provenance;
+use crate::provenance::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
 
@@ -61,7 +61,7 @@ impl DocArrangement {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
     pub(crate) arrangements: im::OrdMap<Address, DocArrangement>,
-    pub(crate) prov: Provenance,
+    pub(crate) provenance: Provenance,
 }
 
 /// M5's sole journal delta — effect-level (carries concrete
@@ -121,7 +121,7 @@ impl M5State {
     /// the lazy convention. Stating the read-modify-write once leaves each
     /// editing fold arm showing only what distinguishes it: which run-list
     /// operation it performs, and what it does to R.
-    fn with_content(
+    fn arrangements_with_content(
         &self,
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
@@ -131,8 +131,9 @@ impl M5State {
         self.arrangements.update(doc.clone(), arr)
     }
 
-    /// The link-subspace twin of [`with_content`](M5State::with_content).
-    fn with_link(
+    /// The link-subspace twin of
+    /// [`arrangements_with_content`](M5State::arrangements_with_content).
+    fn arrangements_with_link(
         &self,
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
@@ -164,22 +165,22 @@ impl M5State {
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             M5Rec::ContentPlace { doc, at, runs } => M5State {
-                arrangements: self.with_content(doc, |c| c.splice_in(at, runs)),
-                prov: self.prov.record(doc, runs.iter().map(Run::iextent)),
+                arrangements: self.arrangements_with_content(doc, |c| c.splice_in(at, runs)),
+                provenance: self.provenance.append(doc, runs.iter().map(Run::iextent)),
             },
             // §4 fold: split at `from` and `from + width`, drop the middle,
             // concat + eager coalesce. C and R untouched (NonDestruction is
             // structural — M5 has no content-reclamation path; P2 keeps every
             // R pair). A text delete never touches the link run-list (P4).
             M5Rec::ContentRemove { doc, from, width } => M5State {
-                arrangements: self.with_content(doc, |c| c.remove_range(from, width)),
-                prov: self.prov.clone(),
+                arrangements: self.arrangements_with_content(doc, |c| c.remove_range(from, width)),
+                provenance: self.provenance.clone(),
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
             M5Rec::ContentReorder { doc, cut_ordinals } => M5State {
-                arrangements: self.with_content(doc, |c| c.reorder(cut_ordinals)),
-                prov: self.prov.clone(),
+                arrangements: self.arrangements_with_content(doc, |c| c.reorder(cut_ordinals)),
+                provenance: self.provenance.clone(),
             },
             // §8 fold: append `link` at the next link V-position n_L(d) + 1
             // (the append boundary), coalescing with the prior link run if
@@ -187,7 +188,7 @@ impl M5State {
             // maximally-merged link list is a valid S8★ witness). NO R append
             // (J-LV).
             M5Rec::LinkSeat { doc, link } => M5State {
-                arrangements: self.with_link(doc, |l| {
+                arrangements: self.arrangements_with_link(doc, |l| {
                     let next = l.total_width() + Nat::from(1u32);
                     let seat = Run {
                         i_start: link.clone(),
@@ -195,7 +196,7 @@ impl M5State {
                     };
                     l.splice_in(&next, &[seat])
                 }),
-                prov: self.prov.clone(),
+                provenance: self.provenance.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
@@ -208,24 +209,24 @@ impl M5State {
             // V1's zero-content footprint with no redundant entry. Source is
             // untouched (V3); the fork diverges copy-on-write (V11).
             M5Rec::VersionSnapshot { source, new } => {
-                let src = self
+                let content = self
                     .arrangements
                     .get(source)
-                    .map(|a| a.content.clone())
+                    .map(|arr| arr.content.clone())
                     .unwrap_or_default();
-                if src.total_width().is_zero() {
+                if content.total_width().is_zero() {
                     self.clone()
                 } else {
-                    let prov = self
-                        .prov
-                        .record(new, src.iter_runs().map(|(_, run)| run.iextent()));
+                    let provenance = self
+                        .provenance
+                        .append(new, content.iter_runs().map(|(_, run)| run.iextent()));
                     let arr = DocArrangement {
-                        content: src,
+                        content,
                         link: RunList::default(),
                     };
                     M5State {
                         arrangements: self.arrangements.update(new.clone(), arr),
-                        prov,
+                        provenance,
                     }
                 }
             }
@@ -272,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn content_remove_touches_neither_content_store_semantics_nor_r() {
+    fn content_remove_contracts_the_arrangement_and_leaves_r_standing() {
         // §4: DELETE drops arrangement entries only; R keeps the pair (P2),
         // which is exactly what SHOWDELETIONS reads.
         let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
@@ -380,22 +381,26 @@ mod tests {
                 link: la(2),
             },
         ] {
-            assert_eq!(s.apply_m5(&r).prov, s.prov, "{r:?} must not append to R");
+            assert_eq!(
+                s.apply_m5(&r).provenance,
+                s.provenance,
+                "{r:?} must not append to R"
+            );
         }
         // The two that DO append, so the comparisons above cannot pass
-        // vacuously — a `prov` that had stopped changing at all would
+        // vacuously — a `provenance` that had stopped changing at all would
         // satisfy them.
         let placed = s.apply_m5(&M5Rec::ContentPlace {
             doc: doc2(),
             at: n(1),
             runs: vec![run(&ca(1), 1)],
         });
-        assert_ne!(placed.prov, s.prov);
+        assert_ne!(placed.provenance, s.provenance);
         let forked = s.apply_m5(&M5Rec::VersionSnapshot {
             source: doc1(),
             new: vdoc(),
         });
-        assert_ne!(forked.prov, s.prov);
+        assert_ne!(forked.provenance, s.provenance);
     }
 
     #[test]
@@ -408,7 +413,7 @@ mod tests {
             new: vdoc(),
         });
         assert!(s1.arrangements.get(&vdoc()).is_none());
-        assert!(!s1.prov.is_recorded(&vdoc()));
+        assert!(!s1.provenance.is_recorded(&vdoc()));
         assert_eq!(s1.content_count(&vdoc()), n(0));
     }
 

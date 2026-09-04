@@ -64,7 +64,7 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
 /// Returns the seated link address and the commit `Seq`.
 #[doc(hidden)]
 pub fn seat_link<W>(
-    k: &Kernel<W>,
+    kernel: &Kernel<W>,
     doc: &Address,
     link: &Address,
 ) -> Result<(Address, Seq), TxnError<SeatError>>
@@ -72,7 +72,7 @@ where
     W: WorldState + HasM5,
     W::Record: From<M5Rec>,
 {
-    k.transact(&[M3State::link_lock_key(doc)], |stg| {
+    kernel.transact(&[M3State::link_lock_key(doc)], |stg| {
         let rec = stage_seat_link(stg.working().m5(), doc, link)?;
         stg.push(rec.into());
         Ok(link.clone())

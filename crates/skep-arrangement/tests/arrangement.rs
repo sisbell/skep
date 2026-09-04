@@ -467,6 +467,22 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), lu2)])),
         CopyError::NotOrdinalVSpan
     ));
+    // WHICH SPEC speaks when two are defective: the list is walked, and the
+    // first spec to fail any guard decides. Here the FIRST spec's span is
+    // mis-shaped and the SECOND spec's source is unregistered; the answer is
+    // the first spec's verdict. Read the other way — guards outermost, specs
+    // within — `SourceNotRegistered` would win, since it precedes
+    // `NotOrdinalVSpan` in the per-spec order.
+    let lu3 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    assert!(matches!(
+        rejected(vs.copy(
+            P1,
+            &doc2(),
+            vp(1, 1),
+            &[spec(doc1(), lu3), spec(un.clone(), vspan(1, 1, 1))]
+        )),
+        CopyError::NotOrdinalVSpan
+    ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…
     assert!(matches!(
@@ -731,6 +747,14 @@ fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     assert!(matches!(
         rejected(vs.version(PrincipalId(0), &doc1())),
         VersionError::NodeTierCrossOwner
+    ));
+    // Which wins when both are bad: registration first, so a fork aimed at
+    // an address naming no document discloses nothing about the forker — the
+    // caller here is a principal the registry does not know, and the verdict
+    // is still about the source.
+    assert!(matches!(
+        rejected(vs.version(PrincipalId(99), &un)),
+        VersionError::SourceNotRegistered
     ));
 }
 

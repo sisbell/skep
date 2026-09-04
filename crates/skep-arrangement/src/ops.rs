@@ -97,6 +97,20 @@ where
     /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
     /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
     /// so ordinal = 1 when n_C = 0).
+    ///
+    /// COST, AND WHO OWNS IT. This op admits any `values` length: there is no
+    /// analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
+    /// and none is owed, because the size of an INSERT is the size of the
+    /// request that carries it rather than a source document's fragmentation
+    /// multiplied by a spec count. What `n` values cost is `2n + 1` staged
+    /// records — a mint and a content write apiece, plus one placement — and
+    /// `n` content addresses that are allocated permanently, M5 having no
+    /// reclamation path. M2's `MAX_TXN_BYTES` refuses the transaction past its
+    /// own ceiling, but it refuses AFTER the mints and writes are staged, so
+    /// a caller that wants the refusal to arrive before that work owes its own
+    /// cap: M10's codec sets one on the wire route (`MAX_INSERT_VALUES`), and
+    /// a route that carries this op without one owes the number.
+    ///
     /// J0/J1★ by construction: mint + write + place + provenance ride one
     /// transaction; successive `mint_content` calls read `stg.working()`, so
     /// under the held lock they advance the same frontier → contiguous
@@ -201,6 +215,30 @@ where
     /// clipping. Cross-origin runs never coalesce
     /// ([`extend_or_push_run`]'s I-adjacency guard), preserving the origin
     /// multiset (CP11).
+    ///
+    /// WHICH SPEC SPEAKS, when more than one is defective: the specs are
+    /// examined in the order given and the FIRST spec to fail any of its
+    /// guards decides, with the per-spec order above applying within that
+    /// spec. So a mis-shaped span in an earlier spec outranks an unregistered
+    /// source in a later one — the list is walked, not the guards.
+    ///
+    /// The two guards whose subject is not the request's shape but an
+    /// invariant, stated so that widening what they gate obliges widening
+    /// them:
+    ///
+    /// * `SourceNotContentSubspace` keeps LINK addresses out of content
+    ///   V-positions. It is not a formality: `resolve` serves whichever
+    ///   run-list the span's subspace numeral selects, so a link-subspace span
+    ///   resolves against the source's LINK runs, and placing those here would
+    ///   bind link addresses at content positions — links seated under an
+    ///   origin that is not this document, which CL-OWN forbids and no read
+    ///   downstream would report.
+    /// * `DanglingSource` is S3★ on the content side, and it is checked on run
+    ///   STARTS alone. Sound for the interior by induction: every address a
+    ///   source arranges was itself admitted through this gate or written by
+    ///   INSERT in the composite that placed it, so a present start implies a
+    ///   present run. The induction is over the ways an address can enter an
+    ///   arrangement — a new one obliges re-examining this check.
     pub fn copy(
         &self,
         caller: Caller,
@@ -338,6 +376,17 @@ where
     /// permutation — content, links, R untouched (a duplicate-I interval
     /// correctly yields π ≠ id with M' = M).
     ///
+    /// THE RESULTING ORDER, which is what a caller relays. With THREE cuts the
+    /// two adjacent regions `α = [c₀, c₁)` and `β = [c₁, c₂)` exchange in
+    /// place, so the arranged content reads `α`'s positions where `β`'s stood
+    /// and `β`'s where `α`'s stood. With FOUR, the outer regions
+    /// `α = [c₀, c₁)` and `β = [c₂, c₃)` exchange around `μ = [c₁, c₂)`, which
+    /// keeps its positions. Everything outside `[ord(c₀), ord(c_last))` is
+    /// untouched, and the result is a permutation of the same run multiset:
+    /// `content_count` is unchanged, no I-address enters or leaves the
+    /// arrangement, and `deletions` therefore reports exactly what it did
+    /// before (RA1/RA6).
+    ///
     /// `cuts` is borrowed, as COPY's specs are, so the caller keeps the cut
     /// sequence it asked with — to report it beside a rejection, say. The
     /// record then clones the three or four ordinals out; against a
@@ -422,6 +471,25 @@ where
     /// `Mint(NotAnAccount)`) and mints `mint_document(prefix)` under
     /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
     /// copy-on-write (V11).
+    ///
+    /// UNGATED, deliberately: this op takes no [`Caller`] and applies no ω
+    /// check, because forking a document one may not write IS the remedy the
+    /// medium offers for that denial (denial-as-fork, ASN-0042 O10). What
+    /// bounds a cross-owner fork is the forker's own tier, not the source's
+    /// ownership. `principal` is the forker's identity, not an authorization.
+    ///
+    /// Check order (which error wins): `SourceNotRegistered` first, so a fork
+    /// aimed at an address naming no document discloses nothing about who owns
+    /// it. Then the branch decides the rest — an OWNED fork has no further
+    /// rejection of its own and can fail only at the mint (`Mint`); a
+    /// CROSS-OWNER fork is `NotAPrincipal` (the id names no registered
+    /// principal) → `NodeTierCrossOwner` → `Mint`.
+    ///
+    /// EMPTY SOURCE: a source whose content subspace is empty yields a fork
+    /// that is registered and ABSENT from the arrangement map — the lazy
+    /// absent-⇒-empty convention, with no redundant entry and no provenance
+    /// (ASN-0123 V1). Every read answers for it as it does for any document
+    /// M5 has not yet touched.
     pub fn version(
         &self,
         principal: PrincipalId,

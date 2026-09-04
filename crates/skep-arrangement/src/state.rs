@@ -43,6 +43,32 @@ impl DocArrangement {
 /// arrangement (the eager-lazy split with M3). v1 has no derived-hint fields
 /// ⇒ [`rebuild_derived`](M5State::rebuild_derived) is the identity.
 ///
+/// CLASS INVARIANTS, relating the two fields. The reads state what they
+/// answer; these are what makes those answers mean it.
+///
+/// * **R is append-only.** Structural: [`Provenance`] offers
+///   [`append`](Provenance::append) and reads, and no removal, so no fold arm
+///   can shorten a document's record however the variant set grows (ASN-0047
+///   P2).
+/// * **P4★ — present containment is recorded.** For every `doc`, the current
+///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
+///   `provenance.ever_contained(doc)`. Established by the two arms that
+///   place: [`ContentPlace`](M5Rec::ContentPlace) appends exactly the
+///   iextents it splices in, and [`VersionSnapshot`](M5Rec::VersionSnapshot)
+///   appends exactly the iextents of the run-list it installs. Preserved by
+///   the other three: [`ContentRemove`](M5Rec::ContentRemove) only contracts
+///   the image, [`ContentReorder`](M5Rec::ContentReorder) permutes the same
+///   run multiset, and [`LinkSeat`](M5Rec::LinkSeat) touches the link
+///   run-list, which is no part of the content image. Splitting and
+///   coalescing move the boundaries between runs and not the addresses they
+///   cover, so the image is stable under both.
+///
+/// Two public reads mean what they say only under P4★:
+/// [`deletions`](M5State::deletions) is the deleted set rather than an
+/// arbitrary difference, and [`docs_ever_containing`](M5State::docs_ever_containing)
+/// is a superset with no false negatives — the property that makes narrowing
+/// it by [`project`](M5State::project) sound.
+///
 /// Both key by the document `Address`, which is what every caller holds and
 /// what every insertion site already had. Three consequences, and the key
 /// form was chosen for the third: an `Address` orders by its tumbler (M1's
@@ -166,7 +192,7 @@ impl M5State {
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
             M5Rec::ContentPlace { doc, at, runs } => M5State {
                 arrangements: self.arrangements_with_content(doc, |c| c.splice_in(at, runs)),
-                provenance: self.provenance.append(doc, runs.iter().map(Run::iextent)),
+                provenance: self.provenance.append(doc, runs),
             },
             // §4 fold: split at `from` and `from + width`, drop the middle,
             // concat + eager coalesce. C and R untouched (NonDestruction is
@@ -219,7 +245,7 @@ impl M5State {
                 } else {
                     let provenance = self
                         .provenance
-                        .append(new, content.iter_runs().map(|(_, run)| run.iextent()));
+                        .append(new, content.iter_runs().map(|(_, run)| run));
                     let arr = DocArrangement {
                         content,
                         link: RunList::default(),

@@ -5,25 +5,35 @@
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{intersect, shift, validate, Address, Level, Nat, Span, Tumbler};
+use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 
 /// One arrangement run: `width` consecutive I-addresses starting at
 /// `i_start`, occupying implicit consecutive V-ordinals (§Core data model —
 /// V-positions are never stored; a run's V-start is a prefix sum, which is
 /// what makes D-SEQ★/D-CTG★/D-MIN★ hold by construction).
 ///
-/// STANDING INVARIANTS: every `Run` has `width ≥ 1` AND an element-level
-/// `i_start` (`zeros = 3`), and they hold for every `Run` in the process, not
-/// merely for every one this crate minted. Fields are CRATE-PRIVATE: a
-/// foreign crate can neither build a `Run` by struct literal nor mutate one
-/// it holds — including an OWNED `Run` returned by
-/// `resolve`/`content_runs`/`link_runs` — so runs are read-only across every
-/// seam (M6/M7/M8 read via the [`i_start`](Run::i_start)/[`width`](Run::width)
-/// accessors). [`Run::new`] is the sole foreign constructor, and it is also
-/// the DESERIALIZATION path: a recovered Run re-enters it through the serde
-/// shadow below, so recovery cannot mint a Run the constructor would refuse.
-/// That is what justifies the `.expect`s in the run's own position arithmetic
-/// — they rest on the type, not on M2's checkpoint integrity.
+/// STANDING INVARIANTS: every `Run` has `width ≥ 1` AND an `i_start` that is
+/// a FULL ELEMENT POSITION — `doc·0·subspace·ordinal`, an element field of
+/// exactly two components — so its LAST COMPONENT IS THE ORDINAL. That second
+/// clause is the one the position arithmetic stands on, and element level
+/// alone does not supply it: T4b admits element fields of any length ≥ 1, so
+/// a subspace BASE `doc·0·subspace` is element-level too, and advancing its
+/// last component walks the subspace id rather than an ordinal (M1's TA7a
+/// hazard, stated on `shift`). [`Run::admits_start`] is the predicate; both
+/// invariants hold for every `Run` in the process, not merely for every one
+/// this crate minted.
+///
+/// Fields are CRATE-PRIVATE: a foreign crate can neither build a `Run` by
+/// struct literal nor mutate one it holds — including an OWNED `Run` returned
+/// by `resolve`/`content_runs`/`link_runs` — so runs are read-only across
+/// every seam (M6/M7/M8 read via the [`i_start`](Run::i_start)/
+/// [`width`](Run::width) accessors). [`Run::new`] is the sole foreign
+/// constructor, and it is also the DESERIALIZATION path: a decoded Run
+/// re-enters it through the serde shadow below, so a journalled
+/// [`ContentPlace`](crate::M5Rec::ContentPlace) cannot carry a Run the
+/// constructor would refuse. That is what justifies the `.expect`s in the
+/// run's own position arithmetic — they rest on the type, not on M2's
+/// checkpoint integrity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RunShadow")]
 pub struct Run {
@@ -33,10 +43,10 @@ pub struct Run {
 
 /// The deserialization mint path (the serde `try_from` shadow, as M1's
 /// `Address`/`Span`/`Tumbler` each carry one): decoded field-by-field, then
-/// re-entered through [`Run::new`], so a `width = 0` or a non-element start
-/// in a journal or a checkpoint is a decode failure M2 reports as corruption
-/// rather than a value that panics [`Run::iextent`] on the next fold to touch
-/// it.
+/// re-entered through [`Run::new`], so a `width = 0` or a start that is not a
+/// full element position in a journal or a checkpoint is a decode failure M2
+/// reports as corruption rather than a value that panics [`Run::iextent`] on
+/// the next fold to touch it.
 ///
 /// It reads exactly what a `Run` writes: the same two fields in the same
 /// order, and `Serialize` is derived on `Run` itself, so the shadow costs the
@@ -50,26 +60,50 @@ struct RunShadow {
 impl TryFrom<RunShadow> for Run {
     type Error = &'static str;
     fn try_from(s: RunShadow) -> Result<Run, &'static str> {
-        Run::new(s.i_start, s.width).ok_or("run: width ≥ 1 and an element-level i_start")
+        Run::new(s.i_start, s.width)
+            .ok_or("run: width ≥ 1 and a full element-position i_start (doc·0·subspace·ordinal)")
     }
 }
 
 impl Run {
+    /// May `a` start a run — is it a FULL ELEMENT POSITION
+    /// `doc·0·subspace·ordinal`? The one definition of what the position
+    /// arithmetic below requires of a start, so [`Run::new`] and the crate's
+    /// other mint sites ask one question rather than each spelling a clause.
+    ///
+    /// The element field must be EXACTLY two components. `Some` alone —
+    /// element level, `zeros(a) = 3` — is not enough: T4b admits element
+    /// fields of any length ≥ 1, so a one-component field is a subspace base
+    /// whose last component is the subspace id, and a longer one is a
+    /// subdivision T7 leaves open whose last component is not an ordinal
+    /// either. In both cases the ordinal advance of [`tumbler_at`](Run::tumbler_at)
+    /// would move something that is not an ordinal.
+    pub(crate) fn admits_start(a: &Address) -> bool {
+        a.element_field().is_some_and(|e| e.len() == 2)
+    }
+
     /// Checked constructor — the ONE door: `None` iff `width == 0` OR
-    /// `i_start` is not element-level (`zeros(i_start) ≠ 3`, equivalently
-    /// `i_start.level() ≠ Level::Element`). Every Run that is not built by
-    /// M5's own emission sites walks through here, an external producer and a
-    /// decoded journal or checkpoint alike — the serde `try_from` shadow
-    /// routes deserialization into this function. M5's own sites (run-list
-    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the folds) build
-    /// Runs with `width ≥ 1` and an element-level `i_start` STRUCTURALLY by
-    /// the in-crate struct literal — their starts are minted element
-    /// addresses or ordinal-shifts of one. Field privacy then closes the
-    /// mutate-after-obtain path: a foreign holder cannot later set
-    /// `width = 0` or swap `i_start` on any Run it obtained, owned or
-    /// borrowed.
+    /// `i_start` fails [`admits_start`](Run::admits_start). Every Run that is
+    /// not built by M5's own emission sites walks through here, an external
+    /// producer and a decoded journal or checkpoint alike — the serde
+    /// `try_from` shadow routes deserialization into this function.
+    ///
+    /// M5's own sites divide in two. The propagating ones — run-list
+    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the placing
+    /// folds — build Runs by the in-crate struct literal from a start that is
+    /// already one: a start reaching them is a minted element address or an
+    /// [`addr_at`](Run::addr_at) of one, and an ordinal shift preserves the
+    /// element field's length. The two ORIGINATING sites establish it
+    /// instead: `insert` places what `M3State::mint_content` returns, which is
+    /// `doc·0·s_C·ordinal` by construction, and the `LinkSeat` fold seats the
+    /// address `stage_seat_link` admitted, which is where the link path's
+    /// check is made.
+    ///
+    /// Field privacy then closes the mutate-after-obtain path: a foreign
+    /// holder cannot later set `width = 0` or swap `i_start` on any Run it
+    /// obtained, owned or borrowed.
     pub fn new(i_start: Address, width: Nat) -> Option<Run> {
-        if width.is_zero() || i_start.level() != Level::Element {
+        if width.is_zero() || !Run::admits_start(&i_start) {
             return None;
         }
         Some(Run { i_start, width })
@@ -88,22 +122,34 @@ impl Run {
 
     /// The tumbler at offset `k`: `i_start` advanced by `k` ordinals. Offsets
     /// `k ∈ [0, width)` are the run's own positions; `k = width` is its
-    /// exclusive reach, which is why the bound is not checked here.
+    /// exclusive reach.
+    ///
+    /// REQUIRES `k ≤ width` — the CALLER's obligation, and one nothing can
+    /// report. Past the reach the shift still yields a well-formed tumbler,
+    /// which [`addr_at`](Run::addr_at) still validates: an address outside
+    /// this run, indistinguishable from one it holds. A debug build stops on
+    /// it, because a value is the wrong answer to a broken precondition.
     ///
     /// THE ONE PLACE the raw `shift` is applied to a run, and the one place
-    /// the safety argument is made: the standing element-level invariant
-    /// (`zeros(i_start) = 3`, so the last component IS the ordinal) puts every
-    /// such shift inside M1's stated safe window, never the TA7a text→link
-    /// mis-shift of a subspace base. Consumers ask a run for its addresses
-    /// rather than re-deriving them, so the argument is discharged once.
+    /// the safety argument is made: the standing full-element-position
+    /// invariant ([`admits_start`](Run::admits_start) — an element field of
+    /// exactly two components, so the last component IS the ordinal) puts
+    /// every such shift inside M1's stated safe window, never the TA7a
+    /// text→link mis-shift of a subspace base. Consumers ask a run for its
+    /// addresses rather than re-deriving them, so the argument is discharged
+    /// once.
     pub fn tumbler_at(&self, k: &Nat) -> Tumbler {
+        debug_assert!(
+            *k <= self.width,
+            "run offset past the reach: k ≤ width is the caller's obligation"
+        );
         shift(self.i_start.tumbler(), k)
     }
 
     /// The `Address` at offset `k` — [`tumbler_at`](Run::tumbler_at)
-    /// re-validated. Ordinal-shifting a valid element I-start preserves
-    /// T4-validity, so the `.expect` flags an internal-invariant violation,
-    /// never a domain case.
+    /// re-validated, and REQUIRING `k ≤ width` as it does. Ordinal-shifting a
+    /// valid element I-start preserves T4-validity, so the `.expect` flags an
+    /// internal-invariant violation, never a domain case.
     pub fn addr_at(&self, k: &Nat) -> Address {
         validate(self.tumbler_at(k))
             .expect("ordinal shift of a valid element I-start is T4-valid by construction")
@@ -218,12 +264,24 @@ mod tests {
     use crate::testutil::{a, ca, n, t, vca};
 
     #[test]
-    fn new_rejects_width_zero_and_non_element_starts() {
-        // Interface: None ⇔ width == 0 ∨ zeros(i_start) ≠ 3.
+    fn new_rejects_width_zero_and_starts_that_are_not_full_element_positions() {
+        // Interface: None ⇔ width == 0 ∨ the element field is not exactly
+        // [subspace, ordinal].
         assert!(Run::new(ca(1), n(0)).is_none());
         assert!(Run::new(a(&[1, 0, 1, 0, 1]), n(1)).is_none()); // Document, zeros = 2
         assert!(Run::new(a(&[1, 0, 1]), n(1)).is_none()); // Account, zeros = 1
-        let r = Run::new(ca(3), n(2)).expect("element-level start with width ≥ 1 is admitted");
+        // The starts element level alone would have admitted. A SUBSPACE BASE
+        // `doc·0·s`: T4-valid, zeros = 3, `subspace()` answers — and its last
+        // component is the subspace id, so `tumbler_at(1)` would advance
+        // content → link (M1's TA7a) and `iextent` would cover the whole
+        // subspace rather than one position.
+        assert_eq!(a(&[1, 0, 1, 0, 1, 0, 1]).level(), skep_address::Level::Element);
+        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1]), n(1)).is_none()); // content base
+        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 2]), n(1)).is_none()); // link base
+        // And a field T7 leaves open to further subdivision, whose last
+        // component is not an ordinal either.
+        assert!(Run::new(a(&[1, 0, 1, 0, 1, 0, 1, 2, 3]), n(1)).is_none());
+        let r = Run::new(ca(3), n(2)).expect("a full element position with width ≥ 1 is admitted");
         assert_eq!(r.i_start(), &ca(3));
         assert_eq!(r.width(), &n(2));
     }
@@ -250,6 +308,19 @@ mod tests {
         assert_eq!(r.addr_at(&n(0)), ca(2));
         assert_eq!(r.addr_at(&n(2)), ca(4));
         assert_eq!(r.tumbler_at(&n(3)), *ca(5).tumbler());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "run offset past the reach")]
+    fn asking_a_run_past_its_reach_is_the_callers_bug_and_stops() {
+        // §A: `k ≤ width` is the caller's obligation, and past it there is no
+        // honest value to return — `addr_at(width + 2)` would be a T4-valid
+        // element address two positions OUTSIDE the run, indistinguishable
+        // from one the run holds. A precondition violation is the caller's
+        // bug, so it stops rather than answering.
+        let r = Run::new(ca(2), n(3)).expect("valid run");
+        let _ = r.addr_at(&n(5));
     }
 
     #[test]
@@ -337,6 +408,15 @@ mod tests {
         assert!(
             bincode::deserialize::<Run>(&document).is_err(),
             "a document-level start is not a run start"
+        );
+        let base = bincode::serialize(&Wire {
+            i_start: a(&[1, 0, 1, 0, 1, 0, 2]),
+            width: n(1),
+        })
+        .expect("the shadow encodes");
+        assert!(
+            bincode::deserialize::<Run>(&base).is_err(),
+            "a subspace base is element-level and still not a run start"
         );
         // The door costs the encoding nothing: a well-formed field pair
         // encodes to exactly the bytes `Run` itself writes, so the shadow is

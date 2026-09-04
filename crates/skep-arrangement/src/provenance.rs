@@ -4,6 +4,8 @@
 use serde::{Deserialize, Serialize};
 use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 
+use crate::run::Run;
+
 /// R, keyed by placing document — every content span a document has ever
 /// contained, in placement order (ASN-0047 P2: a pair `(a, d)` records that
 /// `d` contained the I-address `a`, and no transition removes one).
@@ -16,6 +18,16 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 /// standing, so SHOWDELETIONS has something to subtract from. Recovered by
 /// replay like the arrangement itself, never rebuilt.
 ///
+/// SPAN SHAPE, and it is the door that keeps it: every recorded span is a
+/// [`Run::iextent`] — level-uniform and element-level. [`append`](Provenance::append)
+/// takes RUNS and lifts them itself, so no caller can record a span of
+/// another shape, and the reads may rest on it: it is what makes
+/// [`M5State::deletions`](crate::M5State::deletions)' per-class
+/// `difference_sets` infallible, M1's set ops gating on level-uniformity as
+/// well as on length. The decode path re-establishes T12 per span but not
+/// this shape, which stays M2's checkpoint integrity — the same posture
+/// [`apply_m5`](crate::M5State::apply_m5) takes for records.
+///
 /// A single-field newtype over the mandated slice shape, so the checkpoint
 /// encoding is the map's own (bincode writes a newtype struct as its inner
 /// value), keyed by the placing document's `Address` — which orders and
@@ -24,18 +36,22 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
 
 impl Provenance {
-    /// Append `spans` to `doc`'s record (persistent — the receiver is
-    /// untouched). Called from the placing folds, co-located with the
-    /// arrangement update they pair with, so one new state carries both
+    /// Append the I-extents of `runs` to `doc`'s record (persistent — the
+    /// receiver is untouched). Called from the placing folds, co-located with
+    /// the arrangement update they pair with, so one new state carries both
     /// halves of J1★. The ONLY mutator, and it only ever lengthens a
     /// document's sequence.
-    pub(crate) fn append(
+    ///
+    /// Takes the runs rather than their spans: the lift is the one this type
+    /// admits, so performing it here makes the span-shape invariant above
+    /// true at the mutator instead of owed by each caller.
+    pub(crate) fn append<'r>(
         &self,
         doc: &Address,
-        spans: impl IntoIterator<Item = Span>,
+        runs: impl IntoIterator<Item = &'r Run>,
     ) -> Provenance {
         let mut col = self.0.get(doc).cloned().unwrap_or_default();
-        col.extend(spans);
+        col.extend(runs.into_iter().map(Run::iextent));
         Provenance(self.0.update(doc.clone(), col))
     }
 
@@ -97,16 +113,21 @@ mod tests {
         // §9/P2: a second append for the same document extends the sequence —
         // there is no path that shortens it, which is what SHOWDELETIONS and
         // the historical candidate read both rest on.
+        let (first, second, other) = (run(&ca(1), 2), run(&ca(5), 1), run(&ca(1), 1));
         let p = Provenance::default();
         assert!(!p.is_recorded(&doc1()));
-        let p = p.append(&doc1(), [run(&ca(1), 2).iextent()]);
-        let p = p.append(&doc1(), [run(&ca(5), 1).iextent()]);
+        let p = p.append(&doc1(), [&first]);
+        let p = p.append(&doc1(), [&second]);
         assert!(p.is_recorded(&doc1()));
         assert_eq!(p.ever_contained(&doc1()).len(), 2);
+        // The recorded spans are the runs' own extents — the shape the reads
+        // rest on, established by the mutator rather than by these callers.
+        let recorded: Vec<_> = p.ever_contained(&doc1()).iter().cloned().collect();
+        assert_eq!(recorded, vec![first.iextent(), second.iextent()]);
         // A different document keeps its own record; the historical read walks
         // both in Tumbler order.
-        let p = p.append(&doc2(), [run(&ca(1), 1).iextent()]);
-        let cov = SpanSet::singleton(run(&ca(1), 1).iextent());
+        let p = p.append(&doc2(), [&other]);
+        let cov = SpanSet::singleton(other.iextent());
         assert_eq!(p.docs_ever_containing(&cov), vec![doc1(), doc2()]);
         // A document that has placed nothing is absent, and reads empty.
         assert!(!p.is_recorded(&vdoc()));

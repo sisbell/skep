@@ -36,9 +36,13 @@ pub enum InsertError {
 /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the lossless narrowing of
 /// Conflicts #7, and named for the predicate a caller runs to pre-validate),
 /// `SourceNotContentSubspace`
-/// (content-residence, `span.start().get(1) ≠ s_C`), `EmptySource`
+/// (content-residence, `span.start().get(1) ≠ s_C` — the gate that keeps link
+/// addresses out of content V-positions, since `resolve` serves whichever
+/// run-list the numeral selects), `EmptySource`
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
-/// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), `TooManyRuns`
+/// `DanglingSource` (a resolved run start ∉ dom(C) — S3★, checked on starts
+/// alone and sound for the interior by induction over how an address enters
+/// an arrangement), `TooManyRuns`
 /// (the placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and
 /// `EmptyResult` (net placement empty after clipping). `NotOwner` gates the
 /// DESTINATION doc only — reading source spans stays unrestricted:
@@ -100,10 +104,10 @@ pub enum VersionError {
 }
 
 /// Link-seating rejection (ASN-0047 CL-OWN/CL-UNIQ; §8): `NotLinkAddress` —
-/// `link` is not an element address in the link subspace s_L, the shape a
-/// seated run must have; `NotHomeLink` — `origin(link) ≠ doc` (via M1's
-/// `document_of`); `AlreadySeated` — the link is already inside the doc's
-/// link-run I-extents.
+/// `link` is not a full element position `doc·0·s_L·ordinal`, the shape a
+/// seated run's start must have; `NotHomeLink` — `origin(link) ≠ doc` (via
+/// M1's `document_of`); `AlreadySeated` — the link is already inside the
+/// doc's link-run I-extents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatError {
     NotLinkAddress,
@@ -261,7 +265,7 @@ impl fmt::Display for SeatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             SeatError::NotLinkAddress => {
-                "seat: link is not an element address in the link subspace s_L"
+                "seat: link is not a full element position in the link subspace s_L"
             }
             SeatError::NotHomeLink => "seat: origin(link) is not this document (CL-OWN)",
             SeatError::AlreadySeated => "seat: the link is already seated in this document (CL-UNIQ)",

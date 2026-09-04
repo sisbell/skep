@@ -163,6 +163,16 @@ impl RunList {
         Some(run.addr_at(&off))
     }
 
+    /// Does this list hold `a` — is the address inside some run's I-extent
+    /// (§8)? The I-side twin of [`locate`](RunList::locate)/
+    /// [`point`](RunList::point), which answer the same membership question
+    /// from the V-side: an address INTERIOR to a coalesced run counts, runs
+    /// being contiguous extents rather than enumerated addresses. CL-UNIQ asks
+    /// this of a document's link list.
+    pub(crate) fn holds(&self, a: &Address) -> bool {
+        self.0.iter().any(|r| r.iextent().contains(a.tumbler()))
+    }
+
     /// [`split_runs`] over this list's runs.
     fn split_at(&self, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
         split_runs(self.0.iter(), ord)
@@ -176,6 +186,16 @@ impl RunList {
         acc.extend(new_runs.iter().cloned());
         acc.extend(right);
         RunList(coalesced(acc))
+    }
+
+    /// Add `run` after everything this list already holds — the append
+    /// boundary `total + 1`, which [`split_runs`] names, the content ops reach
+    /// through `admits_content_boundary`, and the link seat targets (§8's
+    /// `n_L(d) + 1`). Where the end IS is this list's knowledge, so a caller
+    /// meaning "after everything" says that rather than computing it.
+    /// Coalesces with the last run when I-adjacent, as any splice does.
+    pub(crate) fn append(&self, run: Run) -> RunList {
+        self.splice_in(&(self.total_width() + Nat::one()), &[run])
     }
 
     /// Remove ordinals `[from, from + width)` and close the gap (§1): split at
@@ -329,6 +349,33 @@ mod tests {
         let apart = l.splice_in(&n(4), &[run(&ca(9), 1)]); // not adjacent
         assert_eq!(apart.runs(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
         assert_eq!(apart.total_width(), n(4));
+    }
+
+    #[test]
+    fn the_list_answers_where_its_end_is_and_what_it_holds() {
+        // §1/§8: appending is stated as "after everything", so the boundary
+        // `total + 1` is computed by the list that knows its own total —
+        // including the empty case, where that boundary is ordinal 1.
+        let empty = RunList::default();
+        let one = empty.append(run(&ca(1), 1));
+        assert_eq!(one.runs(), vec![run(&ca(1), 1)]);
+        assert_eq!(one.point(&n(1)), Some(ca(1)));
+        // An I-adjacent append coalesces, a non-adjacent one opens a run, and
+        // both land past everything already arranged.
+        let merged = one.append(run(&ca(2), 1));
+        assert_eq!(merged.runs(), vec![run(&ca(1), 2)]);
+        let apart = merged.append(run(&ca(9), 1));
+        assert_eq!(apart.runs(), vec![run(&ca(1), 2), run(&ca(9), 1)]);
+        assert_eq!(apart.point(&n(3)), Some(ca(9)));
+        // Membership is over I-extents, so an address INTERIOR to a coalesced
+        // run counts — which is the whole of what CL-UNIQ asks.
+        assert!(apart.holds(&ca(1)));
+        assert!(apart.holds(&ca(2)));
+        assert!(apart.holds(&ca(9)));
+        assert!(!apart.holds(&ca(3)));
+        assert!(!empty.holds(&ca(1)));
+        // A different origin length is held by nobody here.
+        assert!(!apart.holds(&vca(1)));
     }
 
     #[test]

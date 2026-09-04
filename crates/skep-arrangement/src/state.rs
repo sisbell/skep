@@ -208,19 +208,16 @@ impl M5State {
                 arrangements: self.arrangements_with_content(doc, |c| c.reorder(cut_ordinals)),
                 provenance: self.provenance.clone(),
             },
-            // §8 fold: append `link` at the next link V-position n_L(d) + 1
-            // (the append boundary), coalescing with the prior link run if
-            // I-adjacent (sequential A_L(d) allocations are — the
-            // maximally-merged link list is a valid S8★ witness). NO R append
-            // (J-LV).
+            // §8 fold: append `link` after the link subspace's arranged
+            // positions, coalescing with the prior link run if I-adjacent
+            // (sequential A_L(d) allocations are — the maximally-merged link
+            // list is a valid S8★ witness). NO R append (J-LV).
             M5Rec::LinkSeat { doc, link } => M5State {
                 arrangements: self.arrangements_with_link(doc, |l| {
-                    let next = l.total_width() + Nat::from(1u32);
-                    let seat = Run {
+                    l.append(Run {
                         i_start: link.clone(),
                         width: Nat::from(1u32),
-                    };
-                    l.splice_in(&next, &[seat])
+                    })
                 }),
                 provenance: self.provenance.clone(),
             },

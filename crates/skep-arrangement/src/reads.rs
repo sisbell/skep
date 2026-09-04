@@ -146,15 +146,13 @@ impl M5State {
         from + width <= &self.content_count(doc) + &Nat::one()
     }
 
-    /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)?
-    /// I-extent membership over the link run-list, so a link INTERIOR to a
-    /// coalesced link run is caught too. Absent doc ⇒ not seated.
+    /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)? The
+    /// link run-list's own membership answer, so a link INTERIOR to a
+    /// coalesced link run counts as seated. Absent doc ⇒ not seated.
     pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
-        self.arrangements.get(doc).is_some_and(|arr| {
-            arr.link
-                .iter_runs()
-                .any(|(_, r)| r.iextent().contains(link.tumbler()))
-        })
+        self.arrangements
+            .get(doc)
+            .is_some_and(|arr| arr.link.holds(link))
     }
 
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by

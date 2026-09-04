@@ -4,7 +4,7 @@
 //! [`is_ordinal_vspan`] is its verdict), [`ordinal_vspan`] builds one.
 
 use num_traits::Zero;
-use skep_address::{Address, Nat, Span, Tumbler};
+use skep_address::{content_subspace, Address, Nat, Span, Tumbler};
 
 /// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth;
 /// structurally depth-2, so "depth" needs no separate check).
@@ -14,6 +14,21 @@ pub struct VPos {
     pub subspace: Nat,
     /// 1-based ordinal within the subspace.
     pub ordinal: Nat,
+}
+
+impl VPos {
+    /// Does this position name the CONTENT subspace s_C? The numeral is M1's
+    /// (T7), and naming the classification here is what keeps the four edit
+    /// ops that gate on it from each restating the comparison — the same
+    /// service [`DocArrangement::list`](crate::M5State) performs on the
+    /// run-list side, where "exactly these two subspaces exist" is answered by
+    /// the arrangement rather than by every read that routes on a numeral.
+    ///
+    /// The verdict a refusal earns stays with the op that publishes it: this
+    /// answers which subspace the position names, not what to do about it.
+    pub fn is_content(&self) -> bool {
+        self.subspace == content_subspace()
+    }
 }
 
 /// One source-span for COPY (ASN-0118): transclude `span` of `source`'s
@@ -40,6 +55,16 @@ pub(crate) struct OrdinalVSpan<'a> {
     pub(crate) ordinal: &'a Nat,
     /// How many consecutive positions the span names, `width.get(2)`.
     pub(crate) count: &'a Nat,
+}
+
+impl OrdinalVSpan<'_> {
+    /// Does this span lie in the CONTENT subspace s_C? The
+    /// [`VPos::is_content`] question asked of a span's borrowed numeral, so
+    /// COPY's two subspace gates — the destination's and the source span's —
+    /// read alike rather than one through a predicate and one raw.
+    pub(crate) fn is_content(&self) -> bool {
+        *self.subspace == content_subspace()
+    }
 }
 
 /// Read `span` as an ordinal-level depth-2 V-range — a count of positions
@@ -141,6 +166,26 @@ mod tests {
             ordinal_vspan(&vp(1, 2), &n(1)),
             ordinal_vspan(&vp(2, 1), &n(1))
         );
+    }
+
+    #[test]
+    fn a_position_says_which_subspace_it_names() {
+        // The classification the edit ops gate on, asked of the position that
+        // holds the numeral — so a position in the link subspace, or in a
+        // numeral naming neither, is not content.
+        assert!(vp(1, 2).is_content());
+        assert!(!vp(2, 1).is_content());
+        assert!(!vp(7, 1).is_content());
+        // And the span reader answers the same question off its borrowed
+        // numeral, which is what makes COPY's two subspace gates one rule.
+        let content = vspan(1, 1, 3);
+        assert!(as_ordinal_vspan(&content)
+            .expect("a well-formed vspan reads")
+            .is_content());
+        let link = vspan(2, 1, 3);
+        assert!(!as_ordinal_vspan(&link)
+            .expect("a well-formed vspan reads")
+            .is_content());
     }
 
     #[test]

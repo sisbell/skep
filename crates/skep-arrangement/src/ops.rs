@@ -21,7 +21,7 @@
 use std::fmt;
 
 use num_traits::{One, Zero};
-use skep_address::{content_subspace, zeros, Address, Nat};
+use skep_address::{Address, Nat};
 use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
@@ -139,7 +139,7 @@ where
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }
-            if at.subspace != content_subspace() {
+            if !at.is_content() {
                 return Err(InsertError::NotContentSubspace);
             }
             if !stg.working().m5().admits_content_boundary(doc, &at.ordinal) {
@@ -257,7 +257,7 @@ where
                     CopyError::DocNotRegistered,
                     CopyError::NotOwner,
                 )?;
-                if at.subspace != content_subspace() {
+                if !at.is_content() {
                     return Err(CopyError::NotContentSubspace);
                 }
                 if !world.m5().admits_content_boundary(doc, &at.ordinal) {
@@ -272,7 +272,7 @@ where
                     let Some(vspan) = as_ordinal_vspan(span) else {
                         return Err(CopyError::NotOrdinalVSpan);
                     };
-                    if *vspan.subspace != content_subspace() {
+                    if !vspan.is_content() {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
                     if world.m5().content_count(&spec.source).is_zero() {
@@ -295,8 +295,10 @@ where
                         }
                     }
                 }
-                let total = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
-                if total.is_zero() {
+                // Every `Run` has `width ≥ 1` by standing invariant, so a
+                // nonempty accumulator places at least one position: the net
+                // placement is empty exactly when nothing survived clipping.
+                if runs.is_empty() {
                     return Err(CopyError::EmptyResult);
                 }
                 stg.push(
@@ -345,7 +347,7 @@ where
                     DeleteError::DocNotRegistered,
                     DeleteError::NotOwner,
                 )?;
-                if p.subspace != content_subspace() {
+                if !p.is_content() {
                     return Err(DeleteError::NotContentSubspace);
                 }
                 let m5 = stg.working().m5();
@@ -423,7 +425,7 @@ where
                 if !cuts.windows(2).all(|w| w[0].ordinal < w[1].ordinal) {
                     return Err(RearrangeError::NotAscending);
                 }
-                if cuts.iter().any(|c| c.subspace != content_subspace()) {
+                if cuts.iter().any(|c| !c.is_content()) {
                     return Err(RearrangeError::NotContentSubspace);
                 }
                 let m5 = stg.working().m5();
@@ -465,12 +467,13 @@ where
     /// `ω(source)` is pre-read off a snapshot (stable for an existing
     /// document, per M3) to choose branch + lock key: an owned fork mints
     /// `mint_version(source)` under `version_lock_key(source)` (serializing
-    /// forks of that source); a cross-owner fork requires an ACCOUNT-tier
-    /// forker (`zeros(prefix) == 1` — the P-tier gate, surfaced as
-    /// `NodeTierCrossOwner` BEFORE any mint rather than obliquely as
-    /// `Mint(NotAnAccount)`) and mints `mint_document(prefix)` under
-    /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
-    /// copy-on-write (V11).
+    /// forks of that source); a cross-owner fork requires the forker's prefix
+    /// to be a registered ACCOUNT — M3's `is_registered_account`, which is the
+    /// predicate `mint_document` itself gates on, so the P-tier rule has one
+    /// spelling and asking it here surfaces `NodeTierCrossOwner` BEFORE any
+    /// mint rather than obliquely as `Mint(NotAnAccount)` — and mints
+    /// `mint_document(prefix)` under `document_lock_key(prefix)`. Source
+    /// untouched (V3); the fork diverges copy-on-write (V11).
     ///
     /// UNGATED, deliberately: this op takes no [`Caller`] and applies no ω
     /// check, because forking a document one may not write IS the remedy the
@@ -512,7 +515,7 @@ where
                     .principal_prefix(principal)
                     .cloned()
                     .ok_or_else(|| TxnError::Rejected(VersionError::NotAPrincipal))?;
-                if zeros(prefix.tumbler()) != 1 {
+                if !m3.is_registered_account(&prefix) {
                     return Err(TxnError::Rejected(VersionError::NodeTierCrossOwner));
                 }
                 (M3State::document_lock_key(&prefix), Branch::Cross(prefix))

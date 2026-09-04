@@ -1,14 +1,18 @@
 //! §Public interface — the request/result value types of the query surface:
-//! the four-set descriptor request ([`SlotSpec`]/[`FourSet`]), the windowing
-//! pair ([`Cursor`]/[`Window`]), the lineage and survival reports
-//! ([`SupClaim`]/[`OrphanReport`]), and the one typed rejection
-//! ([`QueryError`]). M8 journals nothing, so none of these serialize.
+//! the four-set descriptor request ([`SlotSpec`]/[`FourSet`], which reads its
+//! own slots), the windowing pair ([`Cursor`]/[`Window`]), the lineage and
+//! survival reports ([`SupClaim`]/[`OrphanReport`]), and the two typed
+//! rejections ([`QueryError`] for the query surface, [`OrphanError`] for the
+//! delete-orphan preview). M8 journals nothing, so none of these serialize.
 
 use std::error::Error;
 use std::fmt;
 
 use skep_address::Address;
 use skep_links::Endset;
+
+use crate::helpers::home_of;
+use crate::{FROM, TO, TYPE};
 
 /// Per-slot request component for the four-set descriptor query — the
 /// three-way distinction the conjunction needs (ASN-0121).
@@ -18,9 +22,10 @@ pub enum SlotSpec {
     Any,
     /// ∅ constrained-empty — the zero: annihilates the whole result (FL-EMP).
     Empty,
-    /// Populated address-spans (M7's readable [`Endset`]); MUST be NON-EMPTY —
-    /// an empty `Endset` is normalized onto the `Empty`/zero path (M7 forbids
-    /// an empty `match_links` endset).
+    /// Populated address-spans (M7's readable [`Endset`]). An EMPTY `Endset`
+    /// is accepted and read as [`SlotSpec::Empty`] — the same zero
+    /// ([`FourSet::is_unsatisfiable`] answers for both), so M7's `match_links`
+    /// is never handed an empty constraint.
     Spans(Endset),
 }
 
@@ -34,6 +39,61 @@ pub struct FourSet {
     pub from: SlotSpec,
     pub to: SlotSpec,
     pub ty: SlotSpec,
+}
+
+impl FourSet {
+    /// FL-EMP: does some slot carry the zero — an explicit
+    /// [`SlotSpec::Empty`], or a `Spans` that names nothing? Such a descriptor
+    /// matches no link whatever the other slots say.
+    pub fn is_unsatisfiable(&self) -> bool {
+        [&self.home, &self.from, &self.to, &self.ty]
+            .into_iter()
+            .any(|s| match s {
+                SlotSpec::Any => false,
+                SlotSpec::Empty => true,
+                SlotSpec::Spans(e) => e.is_empty(),
+            })
+    }
+
+    /// The constrained LINK slots as M7's AND-of-ORs takes them (FL-WILD: an
+    /// `Any` slot is omitted, never handed over as an empty constraint), or
+    /// `None` when the descriptor is unsatisfiable.
+    ///
+    /// The zero and the constraint list are answered together because they
+    /// are read off the same four slots: a slot carrying `Empty` has no
+    /// endset to hand M7, so a list built without first asking
+    /// [`FourSet::is_unsatisfiable`] would drop that slot exactly as it drops
+    /// `Any` and silently widen the query. Every endset in a `Some` list is
+    /// non-empty.
+    pub(crate) fn link_constraints(&self) -> Option<Vec<(usize, &Endset)>> {
+        if self.is_unsatisfiable() {
+            return None;
+        }
+        let mut cons = Vec::new();
+        for (slot, spec) in [(FROM, &self.from), (TO, &self.to), (TYPE, &self.ty)] {
+            if let SlotSpec::Spans(e) = spec {
+                cons.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
+            }
+        }
+        Some(cons)
+    }
+
+    /// `athome(a, H)`: does the home slot admit the link at `a`? `Any` admits
+    /// every link (FL-WILD); a `Spans` admits those whose `home(a)` its
+    /// coverage names — an ADDRESS projection, never an arrangement-presence
+    /// test (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
+    /// query); and the zero admits none, which is FL-EMP for the home slot.
+    ///
+    /// Crate-internal because it reads `home(a)` unconditionally, which every
+    /// LINK address has: the addresses reaching it come off M7's
+    /// `match_links` and are keys of the link store by construction.
+    pub(crate) fn home_admits(&self, a: &Address) -> bool {
+        match &self.home {
+            SlotSpec::Any => true,
+            SlotSpec::Empty => false,
+            SlotSpec::Spans(h) => h.covers(home_of(a).tumbler()),
+        }
+    }
 }
 
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
@@ -75,11 +135,10 @@ pub struct OrphanReport {
     pub orphaned: Vec<Address>,
 }
 
-/// The one typed rejection of the query surface. The first three arise on the
-/// region/pointwise families; the last three only on the `delete_orphans`
-/// preview, mirroring M5's `DeleteError` granularity so the rejection is
-/// actionable (`OutOfBounds` deliberately folds M5's `NotArranged` +
-/// `OutOfBounds` — jointly equivalent under the width ≥ 1 guard, §6).
+/// The typed rejection of the QUERY surface — the region and pointwise
+/// families. Exactly these three can arise there, so a caller matching them
+/// exhaustively writes no unreachable arm; the delete-orphan preview refuses
+/// on its own preconditions and carries its own [`OrphanError`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryError {
     /// `d` is not a registered document (M3) — distinct from a
@@ -92,13 +151,6 @@ pub enum QueryError {
     /// (`start[1] = s_C = 1`, `width[1] = 0`) — rejected up front so M5's
     /// silent clipping never turns the request into a different query.
     BadRegion,
-    /// `delete_orphans`: `p.subspace ≠ s_C` (mirror of M5's variant).
-    NotContentSubspace,
-    /// `delete_orphans`: `width = 0` (mirror of M5's variant).
-    EmptyWidth,
-    /// `delete_orphans`: out-of-range `(p, width)` — folds M5's `NotArranged`
-    /// (start beyond the arranged run) and `OutOfBounds` (range overrun).
-    OutOfBounds,
 }
 
 impl fmt::Display for QueryError {
@@ -109,14 +161,41 @@ impl fmt::Display for QueryError {
             QueryError::BadRegion => {
                 "query: the region is not content-subspace ordinal-level depth-2 V-spans"
             }
-            QueryError::NotContentSubspace => {
+        })
+    }
+}
+impl Error for QueryError {}
+
+/// The typed rejection of the `delete_orphans` preview, mirroring M5's
+/// `DeleteError` granularity so the refusal is actionable: the preview
+/// declines exactly the requests DELETE would decline, and names the same
+/// fault (§6 states where the two vocabularies label one refusal differently).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrphanError {
+    /// `d` is not a registered document (M3) — distinct from a
+    /// registered-but-empty `d`, which yields a defined empty report.
+    DocNotRegistered,
+    /// `p.subspace ≠ s_C` (mirror of M5's variant).
+    NotContentSubspace,
+    /// `width = 0` (mirror of M5's variant).
+    EmptyWidth,
+    /// Out-of-range `(p, width)` — folds M5's `NotArranged` (start outside
+    /// the arranged content) and `OutOfBounds` (range overrun).
+    OutOfBounds,
+}
+
+impl fmt::Display for OrphanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            OrphanError::DocNotRegistered => "query: d is not a registered document",
+            OrphanError::NotContentSubspace => {
                 "delete-orphans: p.subspace is not the content subspace s_C"
             }
-            QueryError::EmptyWidth => "delete-orphans: width must be ≥ 1",
-            QueryError::OutOfBounds => {
+            OrphanError::EmptyWidth => "delete-orphans: width must be ≥ 1",
+            OrphanError::OutOfBounds => {
                 "delete-orphans: the range is outside the arranged content (p < 1 or p + width > n_C + 1)"
             }
         })
     }
 }
-impl Error for QueryError {}
+impl Error for OrphanError {}

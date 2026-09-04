@@ -14,7 +14,7 @@ use skep_kernel::{Snapshot, WorldState};
 use skep_links::{Endset, HasLinks};
 use skep_namespace::HasM3;
 
-use crate::helpers::{check_region, stab_slots, stab_union, window_over};
+use crate::helpers::{check_region, stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::{FROM, TO, TYPE};
 
@@ -53,9 +53,9 @@ where
 }
 
 /// The shared selection index of the V-anchored family: the disjunctive
-/// ASN-0127 `findlinks(image(W,d))` ∩ the active view, as M7's native
-/// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key).
-/// F-V empty short-circuit: an empty image touches no index.
+/// ASN-0127 `findlinks(image(W,d))` ∩ the active view (View::Active internally
+/// == addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
+/// (address order — ASN-0108's permanent enumeration key).
 pub(crate) fn findlinks_v_set_on<W>(
     s: &Snapshot<W>,
     d: &Address,
@@ -64,13 +64,8 @@ pub(crate) fn findlinks_v_set_on<W>(
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
-    let w = s.world();
     let img = image_on(s, d, region)?; // gate + region-check + resolve, on THIS snap
-    if img.is_empty() {
-        return Ok(OrdSet::new());
-    }
-    let q = Endset::from_spans(img.iter().map(Run::iextent)); // coverage(q) = the image
-    Ok(stab_union(w, &q)) // View::Active internally == addressable == dom(L) ∖ nullified
+    Ok(stab_runs(s.world(), &img))
 }
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive
@@ -137,15 +132,8 @@ where
 {
     let w = s.world();
     let img = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
-    if img.is_empty() {
-        return Ok(Vec::new());
-    }
-    let q = Endset::from_spans(img.iter().map(Run::iextent));
-    let slots = stab_slots(w, &q); // per-slot stabs KEPT SEPARATE — slot i of a touches iff a ∈ slots[i-1]
-    let cand = slots[0]
-        .clone()
-        .union(slots[1].clone())
-        .union(slots[2].clone());
+    let slots = stab_runs_by_slot(w, &img); // KEPT SEPARATE — slot i of a touches iff a ∈ slots[i-1]
+    let cand = union_slots(&slots);
     let mut out: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
     for c in cand.iter() {
         let link = w.links().readlink(c).expect("stab keys are resident links");

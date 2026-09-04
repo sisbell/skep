@@ -12,7 +12,7 @@
 
 use skep_arrangement::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
 use skep_content::ContentError;
-use skep_discovery::QueryError;
+use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::TxnError;
 use skep_links::{AssertSupError, EditLinkError, EmitError, MakeLinkError, NullifyError};
 use skep_namespace::{CreateDocumentError, DelegateError, MintError, NodeError};
@@ -464,9 +464,20 @@ impl Lower for QueryError {
             QueryError::DocNotRegistered => RejectCode::DocNotRegistered,
             QueryError::NotALink => RejectCode::NotALink,
             QueryError::BadRegion => RejectCode::BadRegion,
-            QueryError::NotContentSubspace => RejectCode::NotContentSubspace,
-            QueryError::EmptyWidth => RejectCode::EmptyWidth,
-            QueryError::OutOfBounds => RejectCode::OutOfBounds,
+        };
+        (code, None)
+    }
+}
+
+impl Lower for OrphanError {
+    /// The delete-orphan preview's own refusals, fieldless like the rest of
+    /// M8's (§5).
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        let code = match self {
+            OrphanError::DocNotRegistered => RejectCode::DocNotRegistered,
+            OrphanError::NotContentSubspace => RejectCode::NotContentSubspace,
+            OrphanError::EmptyWidth => RejectCode::EmptyWidth,
+            OrphanError::OutOfBounds => RejectCode::OutOfBounds,
         };
         (code, None)
     }
@@ -824,8 +835,9 @@ mod tests {
         same_name(QueryError::DocNotRegistered);
         same_name(QueryError::NotALink);
         same_name(QueryError::BadRegion);
-        same_name(QueryError::NotContentSubspace);
-        same_name(QueryError::EmptyWidth);
-        same_name(QueryError::OutOfBounds);
+        same_name(OrphanError::DocNotRegistered);
+        same_name(OrphanError::NotContentSubspace);
+        same_name(OrphanError::EmptyWidth);
+        same_name(OrphanError::OutOfBounds);
     }
 }

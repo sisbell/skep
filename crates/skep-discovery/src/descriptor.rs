@@ -6,55 +6,30 @@
 //! `match_links` (Conflicts #1: M8 implements no combiner).
 
 use im::OrdSet;
-use skep_address::{document_of, Address};
+use skep_address::Address;
 use skep_arrangement::HasM5;
 use skep_kernel::{Snapshot, WorldState};
-use skep_links::{Endset, HasLinks, View};
+use skep_links::{HasLinks, View};
 use skep_namespace::HasM3;
 
 use crate::helpers::window_over;
-use crate::types::{Cursor, FourSet, SlotSpec, Window};
-use crate::{FROM, TO, TYPE};
+use crate::types::{Cursor, FourSet, Window};
 
-/// The conjunctive core: annihilate on any constrained-empty slot (FL-EMP —
-/// an empty `Spans` endset ≡ `Empty`, so M7's `match_links` is NEVER handed
-/// an empty `Endset`, which it forbids), drop `Any` slots (FL-WILD — omitted,
-/// never an empty constraint), and hand the constrained slots to M7's
-/// AND-of-ORs over the ACTIVE view. `[]` constraints ⇒ the whole active slice.
+/// The conjunctive core: the descriptor's constrained LINK slots handed to
+/// M7's AND-of-ORs over the ACTIVE view, and no constraints at all (`(∗,∗,∗)`)
+/// reading as the whole active slice. The descriptor reads its own slots —
+/// which are the zero, which drop out — in [`FourSet::link_constraints`]; the
+/// home slot is not a link slot and is filtered by [`FourSet::home_admits`]
+/// at each call site.
+///
+/// The unsatisfiable case returns without touching the store. M7 would answer
+/// the same way if it could be asked — `stab(slot, ⟨⟩, ·) = ∅` empties the
+/// AND — but an `Empty` slot carries no endset to ask WITH, so this is where
+/// FL-EMP is answered for the link slots, not merely where it is anticipated.
 pub(crate) fn match_core<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
-    for s in [&q.home, &q.from, &q.to, &q.ty] {
-        match s {
-            SlotSpec::Empty => return OrdSet::new(),
-            SlotSpec::Spans(e) if e.is_empty() => return OrdSet::new(),
-            _ => {}
-        }
-    }
-    let mut cons: Vec<(usize, &Endset)> = Vec::new();
-    if let SlotSpec::Spans(e) = &q.from {
-        cons.push((FROM, e)); // e non-empty (checked above)
-    }
-    if let SlotSpec::Spans(e) = &q.to {
-        cons.push((TO, e));
-    }
-    if let SlotSpec::Spans(e) = &q.ty {
-        cons.push((TYPE, e));
-    }
-    w.links().match_links(&cons, View::Active)
-}
-
-/// `athome(a, H)`: `home(a) ∈ coverage(H)` — an ADDRESS projection via M1's
-/// `document_of`, never an arrangement-presence test (CN-STAB: a
-/// reverse-orphaned link still satisfies a home-bounded query). `Empty` is
-/// already short-circuited in [`match_core`]; the arm here is defensive.
-pub(crate) fn home_ok(q: &FourSet, a: &Address) -> bool {
-    match &q.home {
-        SlotSpec::Any => true,
-        SlotSpec::Empty => false,
-        SlotSpec::Spans(h) => {
-            let doc = document_of(a)
-                .expect("a link address has zeros = 3, so its origin Document exists");
-            h.covers(doc.tumbler())
-        }
+    match q.link_constraints() {
+        None => OrdSet::new(), // FL-EMP: some slot is the zero
+        Some(cons) => w.links().match_links(&cons, View::Active),
     }
 }
 
@@ -70,7 +45,7 @@ where
 {
     match_core(s.world(), q)
         .iter()
-        .filter(|a| home_ok(q, a)) // a: &&Address derefs to home_ok's &Address
+        .filter(|a| q.home_admits(a)) // a: &&Address derefs to home_admits' &Address
         .cloned()
         .collect()
 }
@@ -82,7 +57,10 @@ pub fn count_ftt_on<W>(s: &Snapshot<W>, q: &FourSet) -> usize
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
-    match_core(s.world(), q).iter().filter(|a| home_ok(q, a)).count()
+    match_core(s.world(), q)
+        .iter()
+        .filter(|a| q.home_admits(a))
+        .count()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -95,5 +73,5 @@ where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
     let m = match_core(s.world(), q);
-    window_over(&m, cur, n, |a| home_ok(q, a))
+    window_over(&m, cur, n, |a| q.home_admits(a))
 }

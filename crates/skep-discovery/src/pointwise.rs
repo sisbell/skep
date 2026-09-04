@@ -1,7 +1,10 @@
 //! §5 — pointwise projection & discoverability (content subspace): `project`
 //! (ASN-0098 I→V, through M5's level-class-safe `project`) and
 //! `discoverable_from` (the compound "arrangement-reachable AND active" —
-//! NOT pure LP12). The per-link `classify_spans` touch test here is M8's one
+//! NOT pure LP12). The two read the active view differently, and deliberately:
+//! `discoverable_from` conjoins `is_active`, while `project` reports the
+//! recorded coverage M7's `followlink` hands over, retracted links included.
+//! The per-link `classify_spans` touch test here is M8's one
 //! pointwise span comparison — a level-gate-free order relation, total on
 //! cross-length spans, categorically distinct from the level-gated set
 //! algebra M8 avoids.
@@ -17,9 +20,17 @@ use crate::types::QueryError;
 /// I→V projection of link `a`'s `slot` into `d`'s CONTENT subspace (ASN-0098
 /// `project`).
 ///
+/// UNFILTERED — the one read here that is not narrowed to the active view.
+/// The coverage comes from M7's `followlink`, which takes no `View` and
+/// reports what is recorded, so a NULLIFIED link's slot still projects to the
+/// V-positions it covers. That is ASN-0098's `project`, which knows nothing of
+/// retraction; the filtered question — is this link reachable AND active? — is
+/// [`discoverable_from_on`], and a caller who wants "the live links reaching
+/// here" asks that or the region family, not this.
+///
 /// CONTENT-SUBSPACE ONLY — strictly weaker than ASN-0098's subspace-agnostic
 /// `project`: a link reachable solely through `d`'s LINK subspace projects ∅
-/// here (`project(a, slot, d) ≠ ∅` witnesses discoverability through content
+/// here (a non-empty projection witnesses discoverability through content
 /// only; LP12's biconditional holds only within the content subspace). The
 /// link-subspace POSITIONAL projection that would close that gap is NOT M7's
 /// BH3 (BH3 is typed reverse *lookup*, target→sources — it yields no
@@ -30,8 +41,9 @@ use crate::types::QueryError;
 /// an extra `readlink` to read arity). The returned `SpanSet` is handed back
 /// verbatim — M8 never tests the projection for emptiness; a caller probes it
 /// with `SpanSet` membership (`denotes(&[s_C, k])` over
-/// `k ∈ 1..=content_count(d)`, cross-checkable via M5's `point`) or an
-/// emptiness check (`equiv(&proj, &SpanSet::empty())`).
+/// `k ∈ 1..=content_count(d)`, cross-checkable via M5's `point`) or
+/// `SpanSet::is_empty`, which is total where the level-gated set comparisons
+/// can fault.
 pub fn project_on<W>(
     s: &Snapshot<W>,
     a: &Address,

@@ -13,7 +13,8 @@ mod common;
 use common::*;
 use skep_arrangement::HasM5;
 use skep_discovery::{
-    count_v_on, window_v_on, FourSet, LinkQuery, QueryError, SlotSpec, SupClaim, FROM, TO, TYPE,
+    count_v_on, window_v_on, FourSet, LinkQuery, OrphanError, QueryError, SlotSpec, SupClaim, FROM,
+    TO, TYPE,
 };
 use skep_links::{enc, Endset, LinkWriter, SlotArg, View};
 
@@ -45,15 +46,20 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
         Err(QueryError::DocNotRegistered)
     );
 
-    // Region gate: link-subspace, non-depth-2, and non-ordinal-width spans
-    // are all BadRegion — never a silently-clipped different query.
+    // Region gate: M5's ordinal-level depth-2 V-span shape, restricted to the
+    // content subspace — never a silently-clipped different query. The
+    // link-subspace span is a shape M5 accepts and M8's added clause refuses …
     assert_eq!(
         lq.findlinks_v(&doc1(), &[vspan(2, 1, 1)]),
         Err(QueryError::BadRegion)
     );
+    // … while a non-depth-2 span and an action-point-1 width fail the shape
+    // itself, exactly as M5's `is_ordinal_vspan` reads them.
     let deep = skep_address::Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12-valid");
+    assert!(!skep_arrangement::is_ordinal_vspan(&deep));
     assert_eq!(lq.count_v(&doc1(), &[deep]), Err(QueryError::BadRegion));
     let level_uniform = skep_address::Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-valid");
+    assert!(!skep_arrangement::is_ordinal_vspan(&level_uniform));
     assert_eq!(
         lq.count_v(&doc1(), &[level_uniform]),
         Err(QueryError::BadRegion)
@@ -303,6 +309,37 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
     assert_eq!(lq.findlinks_ftt(&q_from), vec![la2(1)]);
 }
 
+/// §3 — the descriptor answers FL-EMP off its own slots, for all four of
+/// them, without asking the store: an `Empty` slot carries no endset to ask
+/// the store WITH, so a query built from the slots alone would drop it as
+/// though it were the unit.
+#[test]
+fn the_descriptor_states_its_own_zero() {
+    assert!(!all_any().is_unsatisfiable());
+    for zero in [SlotSpec::Empty, SlotSpec::Spans(Endset::empty())] {
+        for q in [
+            FourSet {
+                home: zero.clone(),
+                ..all_any()
+            },
+            FourSet {
+                from: zero.clone(),
+                ..all_any()
+            },
+            FourSet {
+                to: zero.clone(),
+                ..all_any()
+            },
+            FourSet {
+                ty: zero.clone(),
+                ..all_any()
+            },
+        ] {
+            assert!(q.is_unsatisfiable(), "{q:?} carries the zero");
+        }
+    }
+}
+
 #[test]
 fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let k = kernel();
@@ -340,6 +377,18 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
         ..all_any()
     };
     assert_eq!(lq.findlinks_ftt(&q_h2_from), vec![la2(1)]);
+
+    // The home slot's zero admits nothing — FL-EMP for a slot that is never
+    // carried into M7's conjunction, so the descriptor answers it alone.
+    for zero in [SlotSpec::Empty, SlotSpec::Spans(Endset::empty())] {
+        let q = FourSet {
+            home: zero,
+            ..all_any()
+        };
+        assert_eq!(lq.findlinks_ftt(&q), vec![]);
+        assert_eq!(lq.count_ftt(&q), 0);
+        assert_eq!(lq.window_ftt(&q, None, 5).batch, vec![]);
+    }
 
     // The home filter is applied lazily during the window walk: pagination
     // over the home-narrowed set with the same cursor mechanism.
@@ -382,6 +431,16 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
         lq.project(&e1, FROM, &d7()),
         Err(QueryError::DocNotRegistered)
     );
+
+    // UNFILTERED — the one read here that is not narrowed to the active view.
+    // Nullifying e1 leaves its projection exactly as it was (followlink
+    // reports what is RECORDED), while discoverable_from, which conjoins
+    // is_active, flips: the two answer different questions about one link.
+    store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
+    let retracted = lq.project(&e1, FROM, &doc1()).expect("project");
+    assert_eq!(retracted, proj);
+    assert!(retracted.denotes(&t(&[1, 2])));
+    assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(false));
 }
 
 #[test]
@@ -449,30 +508,33 @@ fn delete_orphans_mirrors_delete_preconditions() {
 
     assert_eq!(
         lq.delete_orphans(&d7(), &vp(1, 1), &n(1)),
-        Err(QueryError::DocNotRegistered)
+        Err(OrphanError::DocNotRegistered)
     );
     // Check order mirrors §6: subspace, then width, then the folded bounds.
     assert_eq!(
         lq.delete_orphans(&doc1(), &vp(2, 1), &n(0)),
-        Err(QueryError::NotContentSubspace)
+        Err(OrphanError::NotContentSubspace)
     );
+    // Width ahead of bounds: an out-of-range p with width 0 is labelled
+    // EmptyWidth here where M5's DELETE, checking bounds first, says
+    // NotArranged — the same refusal under a different word (§6).
     assert_eq!(
         lq.delete_orphans(&doc1(), &vp(1, 0), &n(0)),
-        Err(QueryError::EmptyWidth)
+        Err(OrphanError::EmptyWidth)
     );
     assert_eq!(
         lq.delete_orphans(&doc1(), &vp(1, 0), &n(1)),
-        Err(QueryError::OutOfBounds)
+        Err(OrphanError::OutOfBounds)
     );
     // OutOfBounds folds M5's NotArranged (start beyond the arranged run) …
     assert_eq!(
         lq.delete_orphans(&doc1(), &vp(1, 4), &n(1)),
-        Err(QueryError::OutOfBounds)
+        Err(OrphanError::OutOfBounds)
     );
     // … and M5's OutOfBounds (range overrun).
     assert_eq!(
         lq.delete_orphans(&doc1(), &vp(1, 2), &n(3)),
-        Err(QueryError::OutOfBounds)
+        Err(OrphanError::OutOfBounds)
     );
     // Boundary acceptance: the last position, and the whole range.
     assert!(lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)).is_ok());

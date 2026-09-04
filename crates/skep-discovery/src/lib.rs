@@ -20,10 +20,21 @@
 //! **addressable-filtered**: every present-state primitive is queried with
 //! `View::Active`, so results are *foundation ∩ active* and a nullified link
 //! never surfaces (Conflicts #8 — a deliberate divergence from the unfiltered
-//! foundations of ASN-0127/0098/0108/0117). Windowing (ASN-0108) is a
-//! stateless key-cut over M7's native `OrdSet<Address>` — address order IS
-//! the permanent enumeration key (Conflicts #3), so the cursor survives
-//! orphaning and M8 pages with no index of its own.
+//! foundations of ASN-0127/0108). `delete_orphans` and `discoverable_from`
+//! filter the same way, the latter diverging from ASN-0117/0098 by conjoining
+//! `is_active` onto reachability.
+//!
+//! The ONE exception is [`project_on`], and a caller building a live-links
+//! view needs to know it: coverage reaches it through M7's `followlink`,
+//! which takes no `View` and reports what is recorded, so a retracted link
+//! still projects the V-positions it covers. That is ASN-0098's `project`
+//! unchanged; the filtered question it looks like it answers is
+//! [`discoverable_from_on`]'s.
+//!
+//! Windowing (ASN-0108) is a stateless key-cut over M7's native
+//! `OrdSet<Address>` — address order IS the permanent enumeration key
+//! (Conflicts #3), so the cursor survives orphaning and M8 pages with no
+//! index of its own.
 //!
 //! M8 does almost no span algebra — and never the level-gated kind:
 //! coverage-overlap matching goes through M7, I→V through M5, query endsets
@@ -75,7 +86,9 @@ pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{discoverable_from_on, project_on};
 pub use region::{count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on};
 pub use survival::delete_orphans_on;
-pub use types::{Cursor, FourSet, OrphanReport, QueryError, SlotSpec, SupClaim, Window};
+pub use types::{
+    Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
+};
 // The 1-based standard slot numerals every query here indexes by, re-exported
 // from the store that owns them so M8 and M7 index one set of values.
 pub use skep_links::{FROM, TO, TYPE};

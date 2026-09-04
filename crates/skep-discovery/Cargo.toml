@@ -14,11 +14,13 @@ readme = "README.md"
 # it (union / relative_complement / range) before converting to Vec<Address> at
 # the output boundary. M8 serializes nothing, so no serde feature is needed.
 im.workspace = true
-# Nat::one()/zero()/is_zero() are trait fns the region/ordinal math keeps in scope.
+# Nat::one()/is_zero() are trait fns the delete-orphan ordinal math keeps in
+# scope.
 num-traits.workspace = true
 # M1 — the value calculus: Tumbler order (the cursor cut), validate (the §G
-# Tumbler → Address lift), document_of (home projection), classify_spans (the
-# one pointwise touch test). M8 holds no address algebra of its own.
+# Tumbler → Address lift), document_of (home projection), content_subspace
+# (the s_C numeral, named where T7 is owned), classify_spans (the one pointwise
+# touch test). M8 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
 # M2 — one snapshot per operation; M8 writes nothing and owns no ordering,
 # durability, or recovery.
@@ -26,7 +28,10 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the document-existence gate on every V-anchored op.
 skep-namespace = { path = "../skep-namespace" }
 # M5 — resolve (V→I image), project (I→V content), content/link runs and counts
-# (discoverability and the delete-orphan what-if). M8 never reads R.
+# (discoverability and the delete-orphan what-if), and both halves of the
+# ordinal V-span shape (is_ordinal_vspan gates the region, ordinal_vspan builds
+# the preview's spans), so the shape M8 asks with is the shape M5 reads. M8
+# never reads R.
 skep-arrangement = { path = "../skep-arrangement" }
 # M7 — stab/match_links/type_slice (the matcher M8 presents, never reimplements),
 # readlink/followlink, is_active, reserved_type(Supersedes), enc/Endset.

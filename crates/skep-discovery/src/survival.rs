@@ -5,39 +5,44 @@
 //! a deliberate divergence from ASN-0117's `D(d,Σ)` over `dom(L)`,
 //! Conflicts #8).
 
-use im::OrdSet;
 use num_traits::{One, Zero};
-use skep_address::{Address, Nat, Span, Tumbler};
-use skep_arrangement::{HasM5, Run, VPos};
+use skep_address::{content_subspace, Address, Nat, Span};
+use skep_arrangement::{ordinal_vspan, HasM5, VPos};
 use skep_kernel::{Snapshot, WorldState};
-use skep_links::{Endset, HasLinks};
+use skep_links::HasLinks;
 use skep_namespace::HasM3;
 
-use crate::helpers::stab_union;
-use crate::types::{OrphanReport, QueryError};
+use crate::helpers::stab_runs;
+use crate::types::{OrphanError, OrphanReport};
 
-/// A single ordinal-level depth-2 V-span value `[subspace, ordinal] ×
-/// [0, width]` — no algebra. Unwrap-safe under the callers' width ≥ 1 guard:
-/// T12 holds because `actionPoint([0, w]) = 2 ≤ #start = 2`.
-fn vspan(subspace: &Nat, ordinal: &Nat, width: &Nat) -> Span {
-    let start = Tumbler::new([subspace.clone(), ordinal.clone()])
-        .expect("a two-component sequence is nonempty");
-    let disp =
-        Tumbler::new([Nat::zero(), width.clone()]).expect("a two-component sequence is nonempty");
-    Span::new(start, disp).expect("width ≥ 1 ⇒ actionPoint([0, w]) = 2 ≤ #start = 2 (T12)")
+/// `count` content positions from `ordinal`, as M5's own V-span constructor
+/// builds them — so the spans this hands `resolve` are the shape `resolve`
+/// reads. Unwrap-safe under the callers' width ≥ 1 guard, `count = 0` being
+/// the only thing M5 declines to build.
+fn content_span(ordinal: &Nat, count: &Nat) -> Span {
+    let at = VPos {
+        subspace: content_subspace(),
+        ordinal: ordinal.clone(),
+    };
+    ordinal_vspan(&at, count).expect("width ≥ 1 ⇒ count ≥ 1")
 }
 
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
 /// would drop from `d` — read-only, never the edit path.
 ///
-/// Mirrors DELETE's preconditions so the preview is of the REQUESTED delete,
-/// never a silently-clipped different one, and the rejection is actionable:
+/// Refuses exactly the requests DELETE refuses, so the preview is of the
+/// REQUESTED delete and never a silently-clipped different one:
 /// `DocNotRegistered`; non-`s_C` `p` → `NotContentSubspace`; zero `width` →
-/// `EmptyWidth`; out-of-range `(p, width)` → `OutOfBounds` — the last
-/// deliberately folding M5's `NotArranged` + `OutOfBounds`, to which the
-/// single check `p < 1 ∨ p + width > n_C + 1` is jointly equivalent under
-/// width ≥ 1 (nothing is accepted or rejected differently; only the variant
-/// label differs on the `p > n_C` case).
+/// `EmptyWidth`; and `p < 1 ∨ p + width > n_C + 1` → `OutOfBounds`, the single
+/// check to which M5's `NotArranged` + `OutOfBounds` pair is jointly
+/// equivalent under width ≥ 1.
+///
+/// The accepted set is M5's exactly. Two LABELS differ, both where M5 would
+/// say `NotArranged` (`p ∉ [1, n_C]`): this reports `OutOfBounds` when
+/// `width ≥ 1`, and `EmptyWidth` when `width = 0`, because the width check
+/// runs ahead of the bounds check here and behind it in M5. A caller relaying
+/// a refusal verbatim relays a different word for the same refusal, never a
+/// different verdict.
 ///
 /// `orphaned = findlinks(A_del) ∖ findlinks(retained)` where `retained` =
 /// the prefix + suffix content that survives plus the link runs (a text
@@ -53,36 +58,35 @@ pub fn delete_orphans_on<W>(
     d: &Address,
     p: &VPos,
     width: &Nat,
-) -> Result<OrphanReport, QueryError>
+) -> Result<OrphanReport, OrphanError>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
-        return Err(QueryError::DocNotRegistered);
+        return Err(OrphanError::DocNotRegistered);
     }
-    if p.subspace != Nat::one() {
-        return Err(QueryError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
+    if p.subspace != content_subspace() {
+        return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
     }
     let np = p.ordinal.clone();
     let nc = w.m5().content_count(d);
     if width.is_zero() {
-        return Err(QueryError::EmptyWidth); // mirror M5 EmptyWidth
+        return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
     }
     if np < Nat::one() || &np + width > &nc + Nat::one() {
-        return Err(QueryError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
+        return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
     }
 
-    let del_span = vspan(&Nat::one(), &np, width); // [s_C, np] × [0, width]
-    let a_del = w.m5().resolve(d, &del_span); // no clipping now (bounds checked)
+    let a_del = w.m5().resolve(d, &content_span(&np, width)); // no clipping now (bounds checked)
     let pre = if np > Nat::one() {
-        Some(vspan(&Nat::one(), &Nat::one(), &(&np - Nat::one())))
+        Some(content_span(&Nat::one(), &(&np - Nat::one())))
     } else {
         None
     };
     let suf_start = &np + width;
     let suf = if suf_start <= nc {
-        Some(vspan(&Nat::one(), &suf_start, &(&nc - &suf_start + Nat::one())))
+        Some(content_span(&suf_start, &(&nc - &suf_start + Nat::one())))
     } else {
         None
     };
@@ -90,16 +94,8 @@ where
     for sp in [pre, suf].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &sp));
     }
-    // The a_del QUERY endset is non-empty under the bounds check (every
-    // deleted position is arranged, so resolve returns ≥ 1 run); cand — the
-    // stab RESULT — is legitimately empty whenever no link touches the range,
-    // so its emptiness is never asserted.
-    let cand = stab_union(w, &Endset::from_spans(a_del.iter().map(Run::iextent)));
-    let surv = if retained.is_empty() {
-        OrdSet::new() // mirror findlinks_v: keep the ∅-query off M7's stab
-    } else {
-        stab_union(w, &Endset::from_spans(retained.iter().map(Run::iextent)))
-    };
+    let cand = stab_runs(w, &a_del);
+    let surv = stab_runs(w, &retained);
     Ok(OrphanReport {
         orphaned: cand.relative_complement(surv).into_iter().collect(),
     })

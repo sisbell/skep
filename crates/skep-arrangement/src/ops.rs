@@ -5,11 +5,14 @@
 //! change; M10 surfaces `TxnError::Rejected(E)` as typed rejections and
 //! acknowledges only after commit.
 //!
-//! Ownership (as amended 2026-08-16): the four edit ops take a [`Caller`]
-//! and require `caller.is_owner(m3, doc)` — the in-txn ω gate — on the
-//! document whose arrangement they write (COPY: destination only; VERSION
-//! untouched — non-owner versioning is denial-as-fork, O10, correct as
-//! built).
+//! Ownership: the four edit ops take a [`Caller`] and open with
+//! [`gate_write`] — the in-txn ω gate — on the document whose arrangement
+//! they write (COPY: destination only; VERSION is ungated, non-owner
+//! versioning being denial-as-fork, O10).
+//!
+//! WHICH ERROR WINS when several conditions fail at once is stated on each op
+//! below, and this is the only statement of it: the error types name verdicts,
+//! not precedence, and the integration suite pins what is written here.
 //!
 //! Per-op trait bounds: each impl block names exactly the slices its ops
 //! read and the records they stage, so a minimal test world can drive
@@ -21,7 +24,7 @@ use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
-use crate::auth::Caller;
+use crate::auth::{gate_write, Caller};
 use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionError};
 use crate::run::Run;
 use crate::runlist::{extend_or_push_run, extend_run};
@@ -57,11 +60,10 @@ where
     /// address (the predicate-def identity for M9) and the commit `Seq`.
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
-    /// in-txn ω gate — ownership ruling, as amended 2026-08-16) →
-    /// `EmptyContent` → `NotContentSubspace` (`at.subspace ≠ s_C`) →
-    /// `OutOfBounds` (the arrangement does not admit `at.ordinal` as a
-    /// placement boundary — Valid(First)InsertionPosition, so ordinal = 1
-    /// when n_C = 0).
+    /// in-txn ω gate) → `EmptyContent` → `NotContentSubspace`
+    /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
+    /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
+    /// so ordinal = 1 when n_C = 0).
     /// J0/J1★ by construction: mint + write + place + provenance ride one
     /// transaction; successive `mint_content` calls read `stg.working()`,
     /// so under the held lock they advance the same frontier → contiguous
@@ -76,12 +78,13 @@ where
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel.transact(&[key], |stg| {
-            if !stg.working().m3().is_registered_document(doc) {
-                return Err(InsertError::DocNotRegistered);
-            }
-            if !caller.is_owner(stg.working().m3(), doc) {
-                return Err(InsertError::NotOwner(doc.clone()));
-            }
+            gate_write(
+                stg.working().m3(),
+                caller,
+                doc,
+                InsertError::DocNotRegistered,
+                InsertError::NotOwner,
+            )?;
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }
@@ -91,19 +94,18 @@ where
             if !stg.working().m5().admits_content_boundary(doc, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
-            let mut first: Option<Address> = None;
             let mut open: Option<Run> = None;
             for v in values {
                 let (a, m3rec) = stg.working().m3().mint_content(doc)?;
                 stg.push(m3rec.into());
                 let cw = stage_write(stg.working().content(), &a, v)?;
                 stg.push(cw.into());
-                if first.is_none() {
-                    first = Some(a.clone());
-                }
                 extend_run(&mut open, a);
             }
             let run = open.expect("EmptyContent guard ⇒ at least one value ⇒ a run opened");
+            // The one run's start IS the first address minted: `extend_run`
+            // only ever widens the run it opened on that first mint.
+            let start = run.i_start().clone();
             stg.push(
                 M5Rec::ContentPlace {
                     doc: doc.clone(),
@@ -112,7 +114,7 @@ where
                 }
                 .into(),
             );
-            Ok(first.expect("at least one mint succeeded"))
+            Ok(start)
         })
     }
 }
@@ -129,11 +131,11 @@ where
     /// resolved addresses stay valid forever by content immutability (S0),
     /// so no source lock is needed.
     ///
-    /// Destination checks as INSERT (`DocNotRegistered` → `NotOwner` — the
-    /// ω gate on the DESTINATION only; source spans stay unrestricted,
-    /// transclusion of anyone's content being the point of the medium
-    /// (ownership ruling, as amended 2026-08-16) — `NotContentSubspace` →
-    /// `OutOfBounds`); per spec: `SourceNotRegistered`
+    /// Check order (which error wins). Destination first, as INSERT:
+    /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
+    /// source spans stay unrestricted, transclusion of anyone's content being
+    /// the point of the medium) → `NotContentSubspace` → `OutOfBounds`. Then,
+    /// per spec: `SourceNotRegistered`
     /// → `BadSpan` (fails [`is_ordinal_vspan`] — the one shape predicate,
     /// which `resolve` folds on, so a span COPY rejects is exactly a span
     /// `resolve` would refuse to serve, Conflicts #7)
@@ -155,12 +157,13 @@ where
         self.kernel
             .transact(&[key], |stg| {
                 let w = stg.working();
-                if !w.m3().is_registered_document(doc) {
-                    return Err(CopyError::DocNotRegistered);
-                }
-                if !caller.is_owner(w.m3(), doc) {
-                    return Err(CopyError::NotOwner(doc.clone()));
-                }
+                gate_write(
+                    w.m3(),
+                    caller,
+                    doc,
+                    CopyError::DocNotRegistered,
+                    CopyError::NotOwner,
+                )?;
                 if at.subspace != content_subspace() {
                     return Err(CopyError::NotContentSubspace);
                 }
@@ -220,10 +223,10 @@ where
     /// survival is automatic (a text delete never touches the link
     /// run-list).
     ///
-    /// Check order: `DocNotRegistered` → `NotOwner` (the ω gate —
-    /// ownership ruling, as amended 2026-08-16) → `NotContentSubspace` →
-    /// `NotArranged` (`p.ordinal ∉ [1, n_C]`) → `OutOfBounds`
-    /// (`ordinal + width − 1 > n_C`) → `EmptyWidth` (`width = 0`).
+    /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the ω
+    /// gate) → `NotContentSubspace` → `NotArranged` (`p.ordinal ∉ [1, n_C]`)
+    /// → `OutOfBounds` (`ordinal + width − 1 > n_C`) → `EmptyWidth`
+    /// (`width = 0`).
     pub fn delete(
         &self,
         caller: Caller,
@@ -234,12 +237,13 @@ where
         let key = M3State::content_lock_key(doc);
         self.kernel
             .transact(&[key], |stg| {
-                if !stg.working().m3().is_registered_document(doc) {
-                    return Err(DeleteError::DocNotRegistered);
-                }
-                if !caller.is_owner(stg.working().m3(), doc) {
-                    return Err(DeleteError::NotOwner(doc.clone()));
-                }
+                gate_write(
+                    stg.working().m3(),
+                    caller,
+                    doc,
+                    DeleteError::DocNotRegistered,
+                    DeleteError::NotOwner,
+                )?;
                 if p.subspace != content_subspace() {
                     return Err(DeleteError::NotContentSubspace);
                 }
@@ -271,8 +275,8 @@ where
     /// permutation — content, links, R untouched (a duplicate-I interval
     /// correctly yields π ≠ id with M' = M).
     ///
-    /// Check order (R-PRE): `DocNotRegistered` → `NotOwner` (the ω gate —
-    /// ownership ruling, as amended 2026-08-16) → `BadCutCount` (3|4) →
+    /// Check order (which error wins, per R-PRE): `DocNotRegistered` →
+    /// `NotOwner` (the ω gate) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
     /// `OutOfBounds` (CS5 lower bound `1 ≤ ord(c₀)` and upper bound
     /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii);
@@ -288,12 +292,13 @@ where
         let key = M3State::content_lock_key(doc);
         self.kernel
             .transact(&[key], |stg| {
-                if !stg.working().m3().is_registered_document(doc) {
-                    return Err(RearrangeError::DocNotRegistered);
-                }
-                if !caller.is_owner(stg.working().m3(), doc) {
-                    return Err(RearrangeError::NotOwner(doc.clone()));
-                }
+                gate_write(
+                    stg.working().m3(),
+                    caller,
+                    doc,
+                    RearrangeError::DocNotRegistered,
+                    RearrangeError::NotOwner,
+                )?;
                 if cuts.len() != 3 && cuts.len() != 4 {
                     return Err(RearrangeError::BadCutCount);
                 }

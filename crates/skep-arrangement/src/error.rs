@@ -1,9 +1,10 @@
-//! §Errors — the typed rejections of M5's op surface. Variant declaration
-//! order matches the design's, which is also each op's check order (the
-//! "which error wins" contract M10 and the conformance tests may rely on) —
-//! except where a document's own ordering note says otherwise (DELETE's
-//! `EmptyWidth` is checked last, REARRANGE's `EmptyContentSubspace` last, per
-//! §4/§6).
+//! §Errors — the typed rejections of M5's op surface. Each variant names one
+//! verdict and says what it means; that is the whole job of this file.
+//!
+//! WHICH ERROR WINS when several conditions fail at once is a property of the
+//! operation, not of the enum: it is stated on each op in
+//! [`ops`](crate::Vstream), which is where a caller reads it and where the
+//! integration suite pins it. Declaration order here carries no contract.
 
 use std::error::Error;
 use std::fmt;
@@ -16,9 +17,8 @@ use skep_namespace::MintError;
 /// s_C`. `OutOfBounds`: `at.ordinal ∉ [1, n_C + 1]`. (The interface
 /// document's former `BadPosition` was split into these two precise
 /// verdicts, aligned with DELETE's granularity, so M10 gets a
-/// self-describing rejection.) `NotOwner` (ownership ruling, as amended
-/// 2026-08-16) carries the document that failed the ω check, checked after
-/// registration and before every shape check.
+/// self-describing rejection.) `NotOwner` carries the document that failed
+/// the ω check.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertError {
     DocNotRegistered,
@@ -39,10 +39,8 @@ pub enum InsertError {
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
 /// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), and
 /// `EmptyResult` (net placement empty after clipping). `NotOwner` gates the
-/// DESTINATION doc only (ownership ruling, as amended 2026-08-16) — reading
-/// source spans stays unrestricted: transclusion of anyone's content is the
-/// point of the medium. (`Copy` derive dropped: the variant carries the
-/// failing `Address`.)
+/// DESTINATION doc only — reading source spans stays unrestricted:
+/// transclusion of anyone's content is the point of the medium.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     DocNotRegistered,
@@ -57,10 +55,9 @@ pub enum CopyError {
     EmptyResult,
 }
 
-/// DELETE rejection (ASN-0117; §4): registered doc, owner (ownership
-/// ruling, as amended 2026-08-16), `subspace(p) = s_C`, `p` arranged
-/// (`ordinal ∈ [1, n_C]`), containment `ordinal + width − 1 ≤ n_C`,
-/// `width ≥ 1` — checked in that order.
+/// DELETE rejection (ASN-0117; §4): the doc is registered, the caller is its
+/// owner, `subspace(p) = s_C`, `p` is arranged (`ordinal ∈ [1, n_C]`), the
+/// range is contained (`ordinal + width − 1 ≤ n_C`), and `width ≥ 1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteError {
     DocNotRegistered,
@@ -75,9 +72,8 @@ pub enum DeleteError {
 /// ascending, all subspace s_C, CS5 lower bound `1 ≤ ord(c₀)` and upper
 /// bound `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), content subspace
 /// non-empty (R-PRE(ii); with ascending in-bounds cuts an empty subspace
-/// always trips `OutOfBounds` first, so this last verdict is defensive
-/// completeness against the cited R-PRE). `NotOwner` (ownership ruling, as
-/// amended 2026-08-16) follows registration, precedes the cut checks.
+/// always trips `OutOfBounds` first, so `EmptyContentSubspace` is defensive
+/// completeness against the cited R-PRE rather than a reachable verdict).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RearrangeError {
     DocNotRegistered,

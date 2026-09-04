@@ -7,7 +7,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_namespace::{M3Rec, M3State, PrincipalId};
 
 use crate::run::Run;
-use crate::vspace::VPos;
+use crate::vspace::{ordinal_vspan, VPos};
 
 pub(crate) fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
@@ -63,7 +63,7 @@ pub(crate) fn run(start: &Address, width: u32) -> Run {
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal]` × `[0, count]`.
 pub(crate) fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
-    Span::new(t(&[subspace, ordinal]), t(&[0, count])).expect("ordinal-level V-span is T12-valid")
+    ordinal_vspan(&n(subspace), &n(ordinal), &n(count)).expect("test spans name ≥ 1 position")
 }
 
 /// A depth-2 V-position.

@@ -58,16 +58,15 @@ impl Provenance {
         self.0.contains_key(doc.tumbler())
     }
 
-    /// R⁻¹ candidate documents (§9; Conflicts #6): every document with some
-    /// placed span not `Separated` from some span of `coverage` under M1's
-    /// total, length-gate-free `classify_spans`. An overlap-SUPERSET (no
-    /// false negatives — a genuinely contained address forces order-overlap);
-    /// FINDDOCSCONTAINING narrows each candidate with
-    /// `project(d, coverage) ≠ ⟨⟩` off the same snapshot. Returns
-    /// `Vec<Address>` in distinct, deterministic Tumbler order (the `OrdMap`
-    /// walk supplies the order; the sequence shape is M5's own choice of
-    /// surface). M5 owns R and any index over it (Open decision #3: v1 scans
-    /// the map); M6 owns only the composing query.
+    /// Every document with some placed span not `Separated` from some span of
+    /// `coverage`, under M1's total, length-gate-free `classify_spans` — so a
+    /// mixed-length coverage is answered without the level-class discipline.
+    /// v1 scans the map (Open decision #3: an index over R would live here,
+    /// R's owner, not in the query that composes on it); the `OrdMap` walk is
+    /// what makes the result's Tumbler order deterministic, and the key of a
+    /// recorded document is a registered document's tumbler, hence T4-valid.
+    /// [`M5State::docs_containing`](crate::M5State::docs_containing) states
+    /// what this answer means to a caller.
     pub(crate) fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         let mut out = Vec::new();
         for (k, spans) in self.0.iter() {

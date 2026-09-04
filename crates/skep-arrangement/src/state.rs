@@ -3,19 +3,35 @@
 
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use skep_address::{Address, Nat, Tumbler};
+use skep_address::{content_subspace, link_subspace, Address, Nat, Tumbler};
 
 use crate::prov::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
 
 /// One document's POOM: the content and link run-lists (§Core data model).
-/// Exactly these two subspaces exist — an unknown subspace selects no
-/// run-list (the `resolve`/`point` defensive cases).
+/// Exactly these two subspaces exist, which is a fact about the arrangement
+/// and so is answered by [`list`](DocArrangement::list) rather than restated
+/// by each read that routes on a subspace numeral.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct DocArrangement {
     pub(crate) content: RunList,
     pub(crate) link: RunList,
+}
+
+impl DocArrangement {
+    /// The run-list `subspace` selects, or `None` when it names neither —
+    /// `s_C` and `s_L` (M1's numerals) being the only two that exist. Every
+    /// subspace-routed read folds that `None` to its own empty answer.
+    pub(crate) fn list(&self, subspace: &Nat) -> Option<&RunList> {
+        if *subspace == content_subspace() {
+            Some(&self.content)
+        } else if *subspace == link_subspace() {
+            Some(&self.link)
+        } else {
+            None
+        }
+    }
 }
 
 /// Authoritative folded state: the per-document POOM, and [`Provenance`]
@@ -81,6 +97,40 @@ impl M5State {
         M5State::default()
     }
 
+    /// The arrangements map with `doc`'s content run-list replaced by `f` of
+    /// the current one — an absent doc reading as the empty arrangement, per
+    /// the lazy convention. Stating the read-modify-write once leaves each
+    /// editing fold arm showing only what distinguishes it: which run-list
+    /// operation it performs, and what it does to R.
+    fn with_content(
+        &self,
+        doc: &Address,
+        f: impl FnOnce(&RunList) -> RunList,
+    ) -> im::OrdMap<Tumbler, DocArrangement> {
+        let mut arr = self
+            .arrangements
+            .get(doc.tumbler())
+            .cloned()
+            .unwrap_or_default();
+        arr.content = f(&arr.content);
+        self.arrangements.update(doc.tumbler().clone(), arr)
+    }
+
+    /// The link-subspace twin of [`with_content`](M5State::with_content).
+    fn with_link(
+        &self,
+        doc: &Address,
+        f: impl FnOnce(&RunList) -> RunList,
+    ) -> im::OrdMap<Tumbler, DocArrangement> {
+        let mut arr = self
+            .arrangements
+            .get(doc.tumbler())
+            .cloned()
+            .unwrap_or_default();
+        arr.link = f(&arr.link);
+        self.arrangements.update(doc.tumbler().clone(), arr)
+    }
+
     /// The pure/deterministic M2 fold (§3–§8 folds; M2's `apply` obligation),
     /// dispatched by the engine's `World::apply` from its `Record::M5`
     /// variant — on live commit and on replay alike.
@@ -102,58 +152,40 @@ impl M5State {
             // run's iextent to R IN THE SAME fold — one new M5State, one M2
             // root install, so a reader never observes M-updated-without-R
             // (J1★ ⇒ P4★/P4a; with INSERT's composite, J0 ⇒ P7a).
-            M5Rec::ContentPlace { doc, at, runs } => {
-                let k = doc.tumbler();
-                let mut arr = self.arrangements.get(k).cloned().unwrap_or_default();
-                arr.content = arr.content.splice_in(at, runs);
-                M5State {
-                    arrangements: self.arrangements.update(k.clone(), arr),
-                    prov: self.prov.record(doc, runs.iter().map(Run::iextent)),
-                }
-            }
+            M5Rec::ContentPlace { doc, at, runs } => M5State {
+                arrangements: self.with_content(doc, |c| c.splice_in(at, runs)),
+                prov: self.prov.record(doc, runs.iter().map(Run::iextent)),
+            },
             // §4 fold: split at `from` and `from + width`, drop the middle,
             // concat + eager coalesce. C and R untouched (NonDestruction is
             // structural — M5 has no content-reclamation path; P2 keeps every
             // R pair). A text delete never touches the link run-list (P4).
-            M5Rec::ContentRemove { doc, from, width } => {
-                let k = doc.tumbler();
-                let mut arr = self.arrangements.get(k).cloned().unwrap_or_default();
-                arr.content = arr.content.remove_range(from, width);
-                M5State {
-                    arrangements: self.arrangements.update(k.clone(), arr),
-                    prov: self.prov.clone(),
-                }
-            }
+            M5Rec::ContentRemove { doc, from, width } => M5State {
+                arrangements: self.with_content(doc, |c| c.remove_range(from, width)),
+                prov: self.prov.clone(),
+            },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
-            M5Rec::ContentReorder { doc, cuts } => {
-                let k = doc.tumbler();
-                let mut arr = self.arrangements.get(k).cloned().unwrap_or_default();
-                arr.content = arr.content.reorder(cuts);
-                M5State {
-                    arrangements: self.arrangements.update(k.clone(), arr),
-                    prov: self.prov.clone(),
-                }
-            }
+            M5Rec::ContentReorder { doc, cuts } => M5State {
+                arrangements: self.with_content(doc, |c| c.reorder(cuts)),
+                prov: self.prov.clone(),
+            },
             // §8 fold: append `link` at the next link V-position n_L(d) + 1
             // (the append boundary), coalescing with the prior link run if
             // I-adjacent (sequential A_L(d) allocations are — the
             // maximally-merged link list is a valid S8★ witness). NO R append
             // (J-LV).
-            M5Rec::LinkSeat { doc, link } => {
-                let k = doc.tumbler();
-                let mut arr = self.arrangements.get(k).cloned().unwrap_or_default();
-                let next = arr.link.total_width() + Nat::from(1u32);
-                let seat = Run {
-                    i_start: link.clone(),
-                    width: Nat::from(1u32),
-                };
-                arr.link = arr.link.splice_in(&next, &[seat]);
-                M5State {
-                    arrangements: self.arrangements.update(k.clone(), arr),
-                    prov: self.prov.clone(),
-                }
-            }
+            M5Rec::LinkSeat { doc, link } => M5State {
+                arrangements: self.with_link(doc, |l| {
+                    let next = l.total_width() + Nat::from(1u32);
+                    let seat = Run {
+                        i_start: link.clone(),
+                        width: Nat::from(1u32),
+                    };
+                    l.splice_in(&next, &[seat])
+                }),
+                prov: self.prov.clone(),
+            },
             // §7 fold: share `source`'s then-current content run-list into
             // `new` (structural im share — O(1)) and append each shared run
             // as provenance (run, new). This copies the V→I MAP, not the

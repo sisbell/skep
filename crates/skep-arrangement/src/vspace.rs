@@ -1,9 +1,10 @@
 //! §Request-side V-space values — the depth-2 V-position ([`VPos`]), COPY's
-//! source specification ([`VSpec`]), and the ONE predicate deciding whether a
-//! `Span` names an ordinal-level depth-2 V-range ([`is_ordinal_vspan`]).
+//! source specification ([`VSpec`]), and the ordinal-level depth-2 V-range
+//! stated once from both sides: [`is_ordinal_vspan`] recognizes one,
+//! [`ordinal_vspan`] builds one.
 
 use num_traits::Zero;
-use skep_address::{Address, Nat, Span};
+use skep_address::{Address, Nat, Span, Tumbler};
 
 /// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth;
 /// structurally depth-2, so "depth" needs no separate check).
@@ -44,10 +45,45 @@ pub fn is_ordinal_vspan(span: &Span) -> bool {
         && span.width().get(1).is_some_and(|w| w.is_zero())
 }
 
+/// `count` positions of `subspace` starting at `ordinal`, as the span
+/// [`is_ordinal_vspan`] recognizes — the constructing half of that one shape,
+/// so a producer of V-spans and its recognizer cannot come apart.
+///
+/// `None` iff `count == 0`: M1's T12 rejects a zero-width span outright, the
+/// empty designation being `SpanSet::empty()` rather than a degenerate span.
+/// Every other argument yields a span, `subspace` and `ordinal` being
+/// unconstrained naturals here — whether the subspace numeral selects a
+/// run-list is the arrangement's question, answered where it is asked.
+pub fn ordinal_vspan(subspace: &Nat, ordinal: &Nat, count: &Nat) -> Option<Span> {
+    if count.is_zero() {
+        return None;
+    }
+    let start = Tumbler::new([subspace.clone(), ordinal.clone()])
+        .expect("a two-component sequence is nonempty");
+    let width = Tumbler::new([Nat::zero(), count.clone()])
+        .expect("a two-component sequence is nonempty");
+    Some(Span::new(start, width).expect("count ≥ 1 at action point 2 ⇒ T12-valid"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{t, vspan};
+    use crate::testutil::{n, t, vspan};
+
+    #[test]
+    fn what_the_constructor_builds_the_predicate_accepts() {
+        // The two halves of one shape: anything ordinal_vspan yields is an
+        // ordinal-level depth-2 V-span, in either subspace.
+        for (sub, ord, count) in [(1u32, 1u32, 1u32), (1, 7, 4), (2, 1, 9)] {
+            let s = ordinal_vspan(&n(sub), &n(ord), &n(count)).expect("count ≥ 1");
+            assert!(is_ordinal_vspan(&s));
+            assert_eq!(s.start(), &t(&[sub, ord]));
+            assert_eq!(s.width(), &t(&[0, count]));
+        }
+        // Zero positions is not a span: ⟨⟩ designates nothing, T12 has no
+        // zero-width value to hand back.
+        assert!(ordinal_vspan(&n(1), &n(1), &n(0)).is_none());
+    }
 
     #[test]
     fn the_ordinal_vspan_shape_is_exactly_the_three_clauses() {

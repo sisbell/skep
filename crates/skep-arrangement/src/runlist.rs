@@ -83,6 +83,56 @@ fn coalesced(runs: Vec<Run>) -> im::Vector<Run> {
     out.into_iter().collect()
 }
 
+/// Split a run sequence at the ordinal boundary BEFORE `ord`: the prefix
+/// covers ordinals `[1, ord)`, the suffix `[ord, total]`. The append boundary
+/// `ord = total + 1` — INSERT/COPY's `J = N + 1` and the link-seat append
+/// `n_L(d) + 1` — returns (all, empty), so a splice concatenates at the tail
+/// (§1). `ord ≤ 1` returns (empty, all) — the defensive clamp under which a
+/// split at 0 and at 1 coincide (ASN-0119 tile-by-placement note). An
+/// interior `ord` splits the boundary run `Run(a, w) → Run(a, c),
+/// Run(a ⊕ c, w − c)` via [`Run::addr_at`](crate::Run::addr_at).
+///
+/// Over an ITERATOR, not a `RunList`: the ops that split twice (contract,
+/// clip, transpose) split a `Vec<Run>` the first split produced, and a
+/// splitter that demanded a `RunList` would make each of them rebuild one.
+fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
+    let one = Nat::one();
+    if *ord <= one {
+        return (Vec::new(), runs.cloned().collect());
+    }
+    let mut left: Vec<Run> = Vec::new();
+    let mut before = Nat::zero();
+    while let Some(run) = runs.next() {
+        let start = &before + &one; // this run's first ordinal
+        if *ord == start {
+            // Boundary before this run.
+            let mut right: Vec<Run> = vec![run.clone()];
+            right.extend(runs.cloned());
+            return (left, right);
+        }
+        let end = &before + &run.width; // this run's last ordinal
+        if *ord <= end {
+            // Interior: keep c = ord − start elements on the left
+            // (1 ≤ c ≤ width − 1 here).
+            let c = ord - &start;
+            let right_first = Run {
+                i_start: run.addr_at(&c),
+                width: &run.width - &c,
+            };
+            left.push(Run {
+                i_start: run.i_start.clone(),
+                width: c,
+            });
+            let mut right: Vec<Run> = vec![right_first];
+            right.extend(runs.cloned());
+            return (left, right);
+        }
+        left.push(run.clone());
+        before = end;
+    }
+    (left, Vec::new()) // ord ≥ total + 1: the append boundary
+}
+
 /// The per-subspace run-list (§Core data model). All mutators are persistent
 /// (`&self → RunList`); the `im::Vector` backing keeps clones O(1) (VERSION's
 /// structural fork share) while the v1 surgery below is Vec-based O(#runs).
@@ -121,52 +171,9 @@ impl RunList {
         Some(run.addr_at(&off))
     }
 
-    /// Split the run-list at the ordinal boundary BEFORE `ord`: the prefix
-    /// covers ordinals `[1, ord)`, the suffix `[ord, total]`. The append
-    /// boundary `ord = total + 1` — INSERT/COPY's `J = N + 1` and the
-    /// link-seat append `n_L(d) + 1` — returns (all, empty), so a splice
-    /// concatenates at the tail (§1). `ord ≤ 1` returns (empty, all) — the
-    /// defensive clamp under which a split at 0 and at 1 coincide (ASN-0119
-    /// tile-by-placement note). An interior `ord` splits the boundary run
-    /// `Run(a, w) → Run(a, c), Run(a ⊕ c, w − c)` via
-    /// [`Run::addr_at`](crate::Run::addr_at).
+    /// [`split_runs`] over this list's runs.
     fn split_at(&self, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
-        let one = Nat::one();
-        if *ord <= one {
-            return (Vec::new(), self.0.iter().cloned().collect());
-        }
-        let mut left: Vec<Run> = Vec::new();
-        let mut before = Nat::zero();
-        let mut iter = self.0.iter();
-        while let Some(run) = iter.next() {
-            let start = &before + &one; // this run's first ordinal
-            if *ord == start {
-                // Boundary before this run.
-                let mut right: Vec<Run> = vec![run.clone()];
-                right.extend(iter.cloned());
-                return (left, right);
-            }
-            let end = &before + &run.width; // this run's last ordinal
-            if *ord <= end {
-                // Interior: keep c = ord − start elements on the left
-                // (1 ≤ c ≤ width − 1 here).
-                let c = ord - &start;
-                let right_first = Run {
-                    i_start: run.addr_at(&c),
-                    width: &run.width - &c,
-                };
-                left.push(Run {
-                    i_start: run.i_start.clone(),
-                    width: c,
-                });
-                let mut right: Vec<Run> = vec![right_first];
-                right.extend(iter.cloned());
-                return (left, right);
-            }
-            left.push(run.clone());
-            before = end;
-        }
-        (left, Vec::new()) // ord ≥ total + 1: the append boundary
+        split_runs(self.0.iter(), ord)
     }
 
     /// Splice `new_runs` in at `ord` (§1): split, insert, concat, coalesce.
@@ -185,9 +192,8 @@ impl RunList {
     /// (ASN-0117 P2).
     pub(crate) fn remove_range(&self, from: &Nat, width: &Nat) -> RunList {
         let (mut left, rest) = self.split_at(from);
-        let rest: RunList = RunList(rest.into_iter().collect());
         // The removed range is rest-relative ordinals [1, width].
-        let (_dropped, right) = rest.split_at(&(width + &Nat::one()));
+        let (_dropped, right) = split_runs(rest.iter(), &(width + &Nat::one()));
         left.extend(right);
         RunList(coalesced(left))
     }
@@ -197,41 +203,38 @@ impl RunList {
     /// [exterior-right]` — never offset arithmetic, so the bijection is
     /// structural (no swap-α offset bug, ASN-0084 Q14). 3 cuts: pivot
     /// (α = [c₀,c₁), β = [c₁,c₂) exchange). 4 cuts: swap (α = [c₀,c₁),
-    /// μ = [c₁,c₂), β = [c₂,c₃); outer two exchange, middle stays). A cut
-    /// vector outside R-PRE is outside the fold's input class (§10) — 3|4 is
-    /// debug-asserted; release totality falls back to identity.
+    /// μ = [c₁,c₂), β = [c₂,c₃); outer two exchange, middle stays).
+    ///
+    /// Pivot and swap are ONE computation. Splitting off the exterior-right
+    /// first and then descending through the remaining cuts peels the interior
+    /// regions off right-to-left — β, then μ where there is one, then α — so
+    /// emitting them in the order they were peeled IS the exchange, whatever
+    /// the region count. A cut vector outside R-PRE is outside the fold's
+    /// input class (§10) and 3|4 is debug-asserted; the tiling is nonetheless
+    /// total for any vector — with fewer than three cuts there is no interior
+    /// region to move, so the list comes back unchanged.
     pub(crate) fn reorder(&self, cuts: &[Nat]) -> RunList {
         debug_assert!(
             matches!(cuts.len(), 3 | 4),
             "R-PRE: 3 or 4 cuts (validated at staging)"
         );
-        let as_list = |v: Vec<Run>| RunList(v.into_iter().collect());
-        match cuts {
-            [c0, c1, c2] => {
-                // Descending splits on prefixes keep absolute coordinates.
-                let (l2, ext_right) = self.split_at(c2);
-                let (l1, beta) = as_list(l2).split_at(c1);
-                let (ext_left, alpha) = as_list(l1).split_at(c0);
-                let mut out = ext_left;
-                out.extend(beta);
-                out.extend(alpha);
-                out.extend(ext_right);
-                RunList(coalesced(out))
-            }
-            [c0, c1, c2, c3] => {
-                let (l3, ext_right) = self.split_at(c3);
-                let (l2, beta) = as_list(l3).split_at(c2);
-                let (l1, mu) = as_list(l2).split_at(c1);
-                let (ext_left, alpha) = as_list(l1).split_at(c0);
-                let mut out = ext_left;
-                out.extend(beta);
-                out.extend(mu);
-                out.extend(alpha);
-                out.extend(ext_right);
-                RunList(coalesced(out))
-            }
-            _ => self.clone(),
+        let Some((last, interior_cuts)) = cuts.split_last() else {
+            return self.clone();
+        };
+        // Descending splits on the prefix keep absolute coordinates.
+        let (mut prefix, ext_right) = self.split_at(last);
+        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(interior_cuts.len());
+        for cut in interior_cuts.iter().rev() {
+            let (left, region) = split_runs(prefix.iter(), cut);
+            regions.push(region);
+            prefix = left;
         }
+        let mut out = prefix; // what lies left of the first cut
+        for region in regions {
+            out.extend(region);
+        }
+        out.extend(ext_right);
+        RunList(coalesced(out))
     }
 
     /// I-runs covering ordinals `[ord, ord + count)`, clipped to
@@ -245,8 +248,7 @@ impl RunList {
             return Vec::new();
         }
         let (left, _) = self.split_at(&hi_excl);
-        let left: RunList = RunList(left.into_iter().collect());
-        let (_, mid) = left.split_at(&lo);
+        let (_, mid) = split_runs(left.iter(), &lo);
         mid
     }
 

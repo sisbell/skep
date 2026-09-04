@@ -18,13 +18,11 @@
 //! (Conflicts #8).
 
 use num_traits::{One, Zero};
-use skep_address::{
-    content_subspace, difference_sets, link_subspace, union, Address, Nat, Span, SpanSet, Tumbler,
-};
+use skep_address::{content_subspace, difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
 use crate::state::M5State;
-use crate::vspace::{is_ordinal_vspan, VPos};
+use crate::vspace::{is_ordinal_vspan, ordinal_vspan, VPos};
 
 impl M5State {
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
@@ -52,12 +50,7 @@ impl M5State {
         let Some(arr) = self.arrangements.get(doc.tumbler()) else {
             return Vec::new();
         };
-        let sub = span.start().get(1).expect("#start == 2");
-        let list = if *sub == content_subspace() {
-            &arr.content
-        } else if *sub == link_subspace() {
-            &arr.link
-        } else {
+        let Some(list) = arr.list(span.start().get(1).expect("#start == 2")) else {
             return Vec::new();
         };
         list.resolve_range(
@@ -72,14 +65,7 @@ impl M5State {
     /// through `validate`).
     pub fn point(&self, doc: &Address, v: &VPos) -> Option<Address> {
         let arr = self.arrangements.get(doc.tumbler())?;
-        let list = if v.subspace == content_subspace() {
-            &arr.content
-        } else if v.subspace == link_subspace() {
-            &arr.link
-        } else {
-            return None;
-        };
-        list.point(&v.ordinal)
+        arr.list(&v.subspace)?.point(&v.ordinal)
     }
 
     /// V→I coverage as a SpanSet (§2): `⋃ r.iextent()` over the runs
@@ -189,12 +175,9 @@ impl M5State {
                 let Some((k_lo, k_hi)) = run.offsets_covered_by(cspan) else {
                     continue;
                 };
-                let start = Tumbler::new([content_subspace(), &v_start + &k_lo])
-                    .expect("a two-component sequence is nonempty");
-                let width = Tumbler::new([Nat::zero(), &k_hi - &k_lo])
-                    .expect("a two-component sequence is nonempty");
                 vspans.push(
-                    Span::new(start, width).expect("ordinal-level depth-2 V-span is T12-valid"),
+                    ordinal_vspan(&content_subspace(), &(&v_start + &k_lo), &(&k_hi - &k_lo))
+                        .expect("a covered offset range is nonempty (k_lo < k_hi)"),
                 );
             }
         }
@@ -244,6 +227,13 @@ impl M5State {
     /// overlap-superset the provenance record answers, which
     /// FINDDOCSCONTAINING then narrows with `project(d, coverage) ≠ ⟨⟩` off
     /// the same snapshot. Distinct, in deterministic Tumbler order.
+    ///
+    /// A SUPERSET with no false negatives: a document genuinely holding an
+    /// address of `coverage` placed a span that overlaps it in the tumbler
+    /// order, so it is always a candidate. That is what makes narrowing
+    /// sound, and it is why a caller must narrow — R is history, so a
+    /// candidate may have deleted what it once placed. Total for any
+    /// coverage, mixed-length included.
     pub fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         self.prov.docs_containing(coverage)
     }

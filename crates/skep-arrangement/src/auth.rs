@@ -50,3 +50,27 @@ impl Caller {
         }
     }
 }
+
+/// The front door every edit op opens: `doc` must be a registered document,
+/// and `caller` must be its effective owner.
+///
+/// THE ORDER IS DECIDED HERE — registration first, so a write aimed at an
+/// unregistered document never reports `NotOwner` and never discloses an
+/// ownership verdict about an address that names nothing. The verdicts stay
+/// with the caller: each op passes its own two constructors, so its error
+/// contract remains readable at its own call site.
+pub(crate) fn gate_write<E>(
+    m3: &M3State,
+    caller: Caller,
+    doc: &Address,
+    not_registered: E,
+    not_owner: impl FnOnce(Address) -> E,
+) -> Result<(), E> {
+    if !m3.is_registered_document(doc) {
+        return Err(not_registered);
+    }
+    if !caller.is_owner(m3, doc) {
+        return Err(not_owner(doc.clone()));
+    }
+    Ok(())
+}

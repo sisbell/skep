@@ -18,8 +18,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    seat_link, stage_seat_link, Caller, CopyError, DeleteError, HasM5, InsertError, M5State,
-    RearrangeError, SeatError, VPos, VSpec, VersionError, Vstream,
+    ordinal_vspan, seat_link, stage_seat_link, Caller, CopyError, DeleteError, HasM5, InsertError,
+    M5State, RearrangeError, SeatError, VPos, VSpec, VersionError, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -140,7 +140,7 @@ fn vp(subspace: u32, ordinal: u32) -> VPos {
 }
 
 fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
-    Span::new(t(&[subspace, ordinal]), t(&[0, count])).expect("ordinal-level V-span is T12-valid")
+    ordinal_vspan(&n(subspace), &n(ordinal), &n(count)).expect("test spans name ≥ 1 position")
 }
 
 fn val(b: &[u8]) -> Val {
@@ -434,6 +434,14 @@ fn copy_rejects_each_documented_guard() {
     assert!(matches!(
         rejected(vs.copy(P1, &doc1(), vp(1, 1), vec![spec(doc2(), vspan(1, 1, 1))])),
         CopyError::EmptySource
+    ));
+    // Which of the per-spec verdicts wins: doc2 is BOTH content-empty and
+    // asked for with a mis-shaped span, and the documented order puts the
+    // shape check first.
+    let lu2 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), vec![spec(doc2(), lu2)])),
+        CopyError::BadSpan
     ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…

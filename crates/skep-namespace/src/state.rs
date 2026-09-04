@@ -357,9 +357,10 @@ pub struct M3State {
     /// The ONLY authoritative ownership state — the delegation forest is
     /// recomputable (NestingByDelegation) and never stored. An `OrdMap`
     /// because the top-down check needs a descendant *range* probe (§6 (iv))
-    /// and ordering leaves the ω range-walk upgrade open — a change
-    /// [`M3State::effective_owner`] absorbs for the authorization predicate
-    /// at the same time, since that predicate is stated in terms of it.
+    /// and ordering leaves the ω range-walk upgrade open — a change the one
+    /// private `omega` walk absorbs once, serving all three of its projections
+    /// (the id, the seat, and the authorization predicate stated in terms of
+    /// the id).
     principals: im::OrdMap<Address, PrincipalId>,
 }
 
@@ -483,11 +484,11 @@ pub fn ghost_home_doc() -> Address {
     validate(t).expect("the ghost home document 1.1.0.1.0.1 is T4-valid by construction")
 }
 
-/// Ghost tumbler `x` of the region — M1's element address of
-/// [`ghost_home_doc`] at [`content_subspace`], ordinal `x`:
-/// `[1,1,0,1,0,1,0,1,x]`. The one mint-shaped spelling of the five reserved
-/// type addresses; M7's `ReservedAddrs::format` reads them here. The document
-/// and the subspace each have exactly one spelling — the document is
+/// Ghost tumbler `ordinal` of the region — M1's element address of
+/// [`ghost_home_doc`] at [`content_subspace`], at that ordinal:
+/// `[1,1,0,1,0,1,0,1,ordinal]`. The one mint-shaped spelling of the five
+/// reserved type addresses; M7's `ReservedAddrs::format` reads them here. The
+/// document and the subspace each have exactly one spelling — the document is
 /// [`ghost_home_doc`]'s and the subspace is M1's — so the addresses M7
 /// dispatches on and the namespace the allocator floors
 /// ([`GHOST_POSITIONS`]) cannot come apart.
@@ -496,17 +497,17 @@ pub fn ghost_home_doc() -> Address {
 ///
 /// Outside `1..=GHOST_POSITIONS` — the region has exactly five names, and a
 /// sixth would be an ordinarily mintable content position.
-pub fn ghost_position(x: u32) -> Address {
+pub fn ghost_position(ordinal: u32) -> Address {
     assert!(
-        (1..=GHOST_POSITIONS).contains(&x),
+        (1..=GHOST_POSITIONS).contains(&ordinal),
         "the ghost region is content positions 1..={GHOST_POSITIONS} of doc 1.1.0.1.0.1"
     );
     elem_addr(ElemPos {
         doc: ghost_home_doc(),
         subspace: content_subspace(),
-        ordinal: Nat::from(x),
+        ordinal: Nat::from(ordinal),
     })
-    .expect("ghost_home_doc is Document-level; s_C ≥ 1; x ≥ 1 by the assert above")
+    .expect("ghost_home_doc is Document-level; s_C ≥ 1; ordinal ≥ 1 by the assert above")
 }
 
 /// Is `key` THE ghost content namespace — `(b_C(ghost_home_doc), 1)`, the one
@@ -666,9 +667,9 @@ fn account_ns(parent: &Address) -> NsKey {
 /// [`Address`]. The [`Generator::NextField`]/Element half is not a panic
 /// here either: `checked_inc` refuses `k = 2` at that tier and this answers
 /// [`GateViolation`].
-fn chain_first(key: &NsKey) -> Result<Address, GateViolation> {
+fn first_in(key: &NsKey) -> Result<Address, GateViolation> {
     let anchor = validate(key.parent.clone()).expect(
-        "chain_first precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
+        "first_in precondition: a T4-valid anchor — the caller's gate, or NsKeyShadow, established it",
     );
     checked_inc(&anchor, key.g.inc_k())
 }
@@ -690,7 +691,7 @@ fn chain_first(key: &NsKey) -> Result<Address, GateViolation> {
 /// rebuilding the chain's anchor and opening ordinal, which are M3's alone.
 pub fn first_document_address(account: &Address) -> Option<Address> {
     (account.level() == Level::Account).then(|| {
-        chain_first(&document_ns(account))
+        first_in(&document_ns(account))
             .expect("an Account anchor is not Element-level, so TA5a admits k = 2")
     })
 }
@@ -748,7 +749,12 @@ impl M3State {
     /// `Π = { [1] → BOOTSTRAP_PRINCIPAL }`. `pub` — the engine seeds
     /// `Kernel::open(cfg, genesis-World)` with it; "load empty journal" and
     /// "fresh genesis" are the same code path (§7). Deterministic, per M2's
-    /// byte-identical-genesis caller contract.
+    /// byte-identical-genesis caller contract — and byte-identical ACROSS
+    /// PROCESSES because the one hash-ordered field is empty here: `nodes` and
+    /// `principals` are ordered, so the seed set is the gate. Seeding a
+    /// `frontiers` entry into this value would break that contract, and would
+    /// break it silently, since within one process the encoding is stable and
+    /// no test can see the difference.
     pub fn genesis() -> M3State {
         let root = bootstrap_root();
         M3State {
@@ -871,7 +877,7 @@ impl M3State {
     /// `c_{m+1}` — read the count, advance the trailing ordinal, where `m` is
     /// the [`M3State::effective_frontier`] (the stored count, floored past
     /// the ghost region for the one namespace that holds it) and `c₁` is
-    /// [`chain_first`]. Pure function of `frontiers` (B2 determinism — the
+    /// [`first_in`]. Pure function of `frontiers` (B2 determinism — the
     /// natural property-test oracle). M1's `checked_inc` is the TA5a gate ⇒
     /// B6(ii)/(iii); routing every first emission through it is the
     /// defensive guard (it can only fire on a corrupted frontier).
@@ -897,7 +903,7 @@ impl M3State {
     /// two owe is [`ns_lock_key`]'s injectivity, which holds for any anchor.
     pub(crate) fn next_in(&self, key: &NsKey) -> Result<Address, GateViolation> {
         let m = self.effective_frontier(key);
-        let c1 = chain_first(key)?; // c1 = inc(parent, g), trailing ordinal 1
+        let c1 = first_in(key)?; // c1 = inc(parent, g), trailing ordinal 1
         Ok(if m.is_zero() {
             c1 // first emission
         } else {
@@ -945,6 +951,14 @@ impl M3State {
     /// [`M3State::mint_version`]`(source)` — take it BEFORE the closure; the
     /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
     /// ADVANCES it.
+    ///
+    /// Total on every [`Address`], and the anchor is the argument itself, so
+    /// the key is T4-valid whatever tier arrives. What a wrong tier costs is
+    /// not well-formedness but IDENTITY: `(A, 1)` under an account is the
+    /// SUB-ACCOUNT chain's key, not a version chain's. Harmless, since a lock
+    /// key is only ever compared and the paired mint refuses that `source`
+    /// `SourceNotRegistered` a moment later — but the caller's one obligation
+    /// is to pass the SAME `source` the mint receives.
     pub fn version_lock_key(source: &Address) -> LockKey {
         ns_lock_key(&version_ns(source))
     }
@@ -953,6 +967,14 @@ impl M3State {
     /// [`M3State::mint_document`]`(account)` — take it BEFORE the closure; the
     /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
     /// ADVANCES it.
+    ///
+    /// Same shape as [`M3State::version_lock_key`]: total on every
+    /// [`Address`], T4-valid whatever tier arrives because the anchor is the
+    /// argument itself, and a wrong tier names a DIFFERENT chain — `(N, 2)`
+    /// under a node is the ACCOUNT chain's key. Harmless for the same reason,
+    /// and the caller's one obligation is the same: pass the mint's own
+    /// `account`, which it refuses `NotAnAccount` a moment later if it is
+    /// not one.
     pub fn document_lock_key(account: &Address) -> LockKey {
         ns_lock_key(&document_ns(account))
     }
@@ -1130,8 +1152,8 @@ impl M3State {
     /// `true` iff `a` exists in the name space — minted on a frontier in ANY
     /// namespace, content/link included, or, for a node, admitted by
     /// `register_node` (node addresses are never minted here — ASN-0047
-    /// NodeBaptism originates them outside the docuverse). The
-    /// referential-integrity oracle M5's COPY depends on (§2). Ghost
+    /// NodeBaptism originates them outside the docuverse). THE allocation
+    /// oracle, which §2 assigns to M5's COPY for referential integrity. Ghost
     /// principle (B3): reflects *allocation*, never byte-presence — a
     /// registered-empty document is a valid, addressable ghost; content
     /// existence is M4's separate axis. E is append-only, so a `true` answer
@@ -1156,16 +1178,19 @@ impl M3State {
         (a.level() != Level::Element && self.is_allocated(a)).then_some(a.level())
     }
 
-    /// `entity_level(d) == Some(Document)` — the edit/home precondition seam
+    /// `entity_level(a) == Some(Document)` — the edit/home precondition seam
     /// for M5/M7, and the ⟨⟩-vs-fail bool for M6/M8.
-    pub fn is_registered_document(&self, d: &Address) -> bool {
-        self.entity_level(d) == Some(Level::Document)
+    pub fn is_registered_document(&self, a: &Address) -> bool {
+        self.entity_level(a) == Some(Level::Document)
     }
 
     /// `entity_level(a) == Some(Account)` — the account-hood precondition
     /// (P8/CND.pre): what [`M3State::mint_document`] gates on, what
-    /// `create_new_document` and `delegate` reach through it, and the
-    /// account-hood test M10's credential fold and key-set read ask. The
+    /// `create_new_document` and `fork` reach through it, and the
+    /// account-hood test M10's credential fold and key-set read ask. NOT
+    /// `delegate`'s parent gate, which is the account mint's own and
+    /// admits a registered node OR account — a node parent being the ordinary
+    /// case, since the first delegate under a node has one. The
     /// account twin of [`M3State::is_registered_document`], published for the
     /// same reason: the question is asked from outside M3, and spelling it as
     /// a comparison against an `Option<Level>` makes every caller import M1's
@@ -1354,7 +1379,7 @@ mod tests {
     #[test]
     fn a_frontier_key_re_enters_through_its_t4_door() {
         #[derive(Serialize)]
-        struct RawKey {
+        struct RawNsKey {
             parent: Tumbler,
             g: u8,
         }
@@ -1372,7 +1397,7 @@ mod tests {
         // struct's own, anchor tumbler then generator numeral.
         assert_eq!(
             bytes,
-            bincode::serialize(&RawKey {
+            bincode::serialize(&RawNsKey {
                 parent: t(&[1, 0, 1]),
                 g: 2
             })
@@ -1382,7 +1407,7 @@ mod tests {
         // Anchors no `*_ns` constructor could have produced: a trailing
         // separator and a doubled one, both nonempty tumblers, neither T4.
         for bogus in [vec![1u32, 0], vec![1, 0, 0, 1]] {
-            let frame = bincode::serialize(&RawKey {
+            let frame = bincode::serialize(&RawNsKey {
                 parent: t(&bogus),
                 g: 1,
             })
@@ -1642,14 +1667,19 @@ mod tests {
     fn every_ghost_position_sits_in_the_namespace_the_floor_skips() {
         let ghost_ns = content_ns(&ghost_home_doc());
         assert_eq!(ghost_floor(&ghost_ns), Nat::from(GHOST_POSITIONS));
-        for x in 1..=GHOST_POSITIONS {
-            let position = ghost_position(x);
+        for ordinal in 1..=GHOST_POSITIONS {
+            let position = ghost_position(ordinal);
             assert_eq!(
                 namespace_of(&position),
                 Some(ghost_ns.clone()),
-                "ghost {x} is not in the floored namespace"
+                "ghost {ordinal} is not in the floored namespace"
             );
-            assert_eq!(*ordinal(position.tumbler()), Nat::from(x));
+            // M1's reader, spelled whole: the loop variable is the ordinal
+            // this address is supposed to carry.
+            assert_eq!(
+                *skep_address::ordinal(position.tumbler()),
+                Nat::from(ordinal)
+            );
             assert_eq!(position.level(), Level::Element);
             assert_eq!(position.subspace(), Some(&content_subspace()));
         }
@@ -1685,10 +1715,10 @@ mod tests {
         );
         // …and membership excludes all five however the frontier reads, since
         // it compares against the floor and not against the stored count.
-        for x in 1..=GHOST_POSITIONS {
+        for ordinal in 1..=GHOST_POSITIONS {
             assert!(
-                !s.is_allocated(&ghost_position(x)),
-                "ghost {x} became a member"
+                !s.is_allocated(&ghost_position(ordinal)),
+                "ghost {ordinal} became a member"
             );
         }
     }

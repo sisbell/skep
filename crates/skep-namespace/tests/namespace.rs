@@ -1169,11 +1169,22 @@ fn a_stale_peek_loses_and_never_re_seats_a_live_prefix() {
         rejected(ns.delegate(ID1, peek.tumbler().clone(), ID2)),
         DelegateError::NotAncestor
     );
+    // The VERBATIM retry a caller sends when its acknowledgement was lost:
+    // same delegator, same prefix, same id. It answers `NotAuthorized` too, so
+    // the code alone cannot tell a retry from a lost race.
+    assert_eq!(
+        rejected(ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)),
+        DelegateError::NotAuthorized
+    );
 
     // Neither retry moved anything: one seat, one id, one commit.
     assert_eq!(k.current_seq(), before);
     let m3 = k.snapshot().world().m3().clone();
     assert_eq!(m3.effective_owner(&peek), Some(ID1));
+    // The disambiguator `delegate`'s contract publishes: the retried id IS
+    // seated at the prefix it asked for, and the racing loser's names no
+    // principal — which is how a caller tells the two `NotAuthorized`s apart.
+    assert_eq!(m3.principal_prefix(ID1), Some(&peek));
     assert!(m3.principal_prefix(ID2).is_none());
     // …and the chain moved on, so a fresh peek names a different prefix.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
@@ -1498,6 +1509,22 @@ fn register_node_validates_and_admits_supplied_addresses() {
     ns.delegate(BOOTSTRAP_PRINCIPAL, peek.tumbler().clone(), ID1)
         .expect("delegate under the new node");
 
+    // Admission asks nothing of the address's ANCESTORS: a node address names
+    // a provisioning path originated OUTSIDE the docuverse, so `nodes` is
+    // deliberately non-contiguous and P8 is not a gate here — [1,5,7] is
+    // admitted while [1,5] is registered nowhere.
+    assert_eq!(
+        ns.register_node(t(&[1, 5, 7]))
+            .expect("a node whose parent is unregistered")
+            .0,
+        a(&[1, 5, 7])
+    );
+    assert_eq!(
+        k.snapshot().world().m3().entity_level(&a(&[1, 5, 7])),
+        Some(Level::Node)
+    );
+    assert_eq!(k.snapshot().world().m3().entity_level(&a(&[1, 5])), None);
+
     // Rejections, in the documented guard order. The first three are pure
     // pre-work (validity, level and depth read the address alone); `NotFresh`
     // reads the registry under the held key, and `NotDescendantOfBootstrap`
@@ -1566,9 +1593,9 @@ fn register_node_validates_and_admits_supplied_addresses() {
     let seeded = World {
         m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&too_deep) }),
     };
-    let k3 = mem_kernel(seeded);
+    let over_cap_k = mem_kernel(seeded);
     assert_eq!(
-        rejected(Namespace::new(&k3).register_node(t(&too_deep))),
+        rejected(Namespace::new(&over_cap_k).register_node(t(&too_deep))),
         NodeError::TooDeep
     );
 
@@ -1578,9 +1605,9 @@ fn register_node_validates_and_admits_supplied_addresses() {
     let seeded = World {
         m3: M3State::genesis().apply_m3(&M3Rec::RegisterNode { addr: a(&[2]) }),
     };
-    let k2 = mem_kernel(seeded);
+    let off_lineage_k = mem_kernel(seeded);
     assert_eq!(
-        rejected(Namespace::new(&k2).register_node(t(&[2]))),
+        rejected(Namespace::new(&off_lineage_k).register_node(t(&[2]))),
         NodeError::NotFresh
     );
 }
@@ -1673,36 +1700,36 @@ fn journaled_types_survive_serde_round_trips() {
     }
 
     // The Address payloads journal as bare, flat tumblers — the data model's
-    // form, not the in-memory type's. A shadow record carrying Tumblers
-    // encodes byte-identically, variant for variant.
+    // form, not the in-memory type's. A raw record carrying Tumblers encodes
+    // byte-identically, variant for variant.
     #[derive(Serialize)]
-    enum TumblerRec {
+    enum RawM3Rec {
         Allocate { addr: Tumbler },
         RegisterNode { addr: Tumbler },
         RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
     }
-    let shadows = [
-        TumblerRec::Allocate {
+    let raw_recs = [
+        RawM3Rec::Allocate {
             addr: t(&[1, 0, 1]),
         },
-        TumblerRec::RegisterNode { addr: t(&[1, 7]) },
-        TumblerRec::RegisterPrincipal {
+        RawM3Rec::RegisterNode { addr: t(&[1, 7]) },
+        RawM3Rec::RegisterPrincipal {
             prefix: t(&[1, 0, 1]),
             id: ID1,
         },
     ];
-    for (rec, shadow) in recs.iter().zip(&shadows) {
+    for (rec, raw) in recs.iter().zip(&raw_recs) {
         assert_eq!(
             bincode::serialize(rec).expect("serialize M3Rec"),
-            bincode::serialize(shadow).expect("serialize the tumbler shadow"),
+            bincode::serialize(raw).expect("serialize the raw shape"),
         );
     }
 
     // A tumbler that is not T4-valid cannot arrive as a record: the payload
     // re-validates on the way off the journal (M1's validating Deserialize),
     // so the fold is never handed a malformed address.
-    let malformed = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[1, 0]) })
-        .expect("serialize the tumbler shadow");
+    let malformed = bincode::serialize(&RawM3Rec::RegisterNode { addr: t(&[1, 0]) })
+        .expect("serialize the raw shape");
     assert!(bincode::deserialize::<M3Rec>(&malformed).is_err());
 
     // Nor can a PARENTLESS Allocate. [7] is T4-valid, so M1's door passes it
@@ -1711,8 +1738,8 @@ fn journaled_types_survive_serde_round_trips() {
     // at every replay from then on. M3's own door is what refuses it, before
     // the record is ever a value.
     for parentless in [t(&[7]), t(&[1])] {
-        let frame = bincode::serialize(&TumblerRec::Allocate { addr: parentless })
-            .expect("serialize the tumbler shadow");
+        let frame = bincode::serialize(&RawM3Rec::Allocate { addr: parentless })
+            .expect("serialize the raw shape");
         assert!(
             bincode::deserialize::<M3Rec>(&frame).is_err(),
             "a parentless Allocate decoded into a record"
@@ -1720,16 +1747,16 @@ fn journaled_types_survive_serde_round_trips() {
     }
     // The refusal is exactly the parentless case, not a length rule: the
     // shortest address that DOES extend a parent still decodes.
-    let shortest = bincode::serialize(&TumblerRec::Allocate { addr: t(&[1, 1]) })
-        .expect("serialize the tumbler shadow");
+    let shortest = bincode::serialize(&RawM3Rec::Allocate { addr: t(&[1, 1]) })
+        .expect("serialize the raw shape");
     assert_eq!(
         bincode::deserialize::<M3Rec>(&shortest).expect("a two-component Allocate decodes"),
         M3Rec::Allocate { addr: a(&[1, 1]) }
     );
     // …and RegisterNode is untouched by it: a one-component node is exactly
     // what that variant carries.
-    let bare_node_frame = bincode::serialize(&TumblerRec::RegisterNode { addr: t(&[7]) })
-        .expect("serialize the tumbler shadow");
+    let bare_node_frame = bincode::serialize(&RawM3Rec::RegisterNode { addr: t(&[7]) })
+        .expect("serialize the raw shape");
     assert_eq!(
         bincode::deserialize::<M3Rec>(&bare_node_frame).expect("a bare node registers"),
         M3Rec::RegisterNode { addr: a(&[7]) }
@@ -1749,11 +1776,11 @@ fn journaled_types_survive_serde_round_trips() {
         t(&[1, 0, 1, 0, 1]),
         t(&[1, 0, 1, 0, 1, 0, 1, 1]),
     ] {
-        let frame = bincode::serialize(&TumblerRec::RegisterPrincipal {
+        let frame = bincode::serialize(&RawM3Rec::RegisterPrincipal {
             prefix: off_tier.clone(),
             id: ID1,
         })
-        .expect("serialize the tumbler shadow");
+        .expect("serialize the raw shape");
         assert!(
             bincode::deserialize::<M3Rec>(&frame).is_err(),
             "a {off_tier:?} principal seat decoded into a record"
@@ -1761,13 +1788,13 @@ fn journaled_types_survive_serde_round_trips() {
     }
     // …and the account tier decodes at both of its forms — under a node, and
     // the sub-account chain `delegate` also stages.
-    let sub = bincode::serialize(&TumblerRec::RegisterPrincipal {
+    let sub_account_frame = bincode::serialize(&RawM3Rec::RegisterPrincipal {
         prefix: t(&[1, 0, 1, 1]),
         id: ID2,
     })
-    .expect("serialize the tumbler shadow");
+    .expect("serialize the raw shape");
     assert_eq!(
-        bincode::deserialize::<M3Rec>(&sub).expect("a sub-account seat decodes"),
+        bincode::deserialize::<M3Rec>(&sub_account_frame).expect("a sub-account seat decodes"),
         M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1, 1]),
             id: ID2
@@ -1881,10 +1908,13 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let ns = Namespace::new(&k);
 
     // Before any of its lineage exists, nothing exists at a ghost tumbler.
-    for x in 1..=GHOST_POSITIONS {
+    for ordinal in 1..=GHOST_POSITIONS {
         assert!(
-            !k.snapshot().world().m3().is_allocated(&ghost_position(x)),
-            "ghost {x} allocated at genesis"
+            !k.snapshot()
+                .world()
+                .m3()
+                .is_allocated(&ghost_position(ordinal)),
+            "ghost {ordinal} allocated at genesis"
         );
     }
 
@@ -1906,13 +1936,13 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
 
     // Drive the one namespace whose chain contains the five ghost tumblers:
     // every mint lands PAST the region, contiguously from GHOST_POSITIONS + 1.
-    for expected in GHOST_POSITIONS + 1..=GHOST_POSITIONS + 7 {
+    for ordinal in GHOST_POSITIONS + 1..=GHOST_POSITIONS + 7 {
         let minted = commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
             m3.mint_content(&doc1)
         });
         assert_eq!(
             minted,
-            a(&[1, 1, 0, 1, 0, 1, 0, 1, expected]),
+            a(&[1, 1, 0, 1, 0, 1, 0, 1, ordinal]),
             "the ghost home doc's content chain must start past the region and stay contiguous"
         );
     }
@@ -1923,10 +1953,10 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     // about one is refused. Position GHOST_POSITIONS + 1 is an ordinary member.
     let snap = k.snapshot();
     let m3 = snap.world().m3();
-    for x in 1..=GHOST_POSITIONS {
+    for ordinal in 1..=GHOST_POSITIONS {
         assert!(
-            !m3.is_allocated(&ghost_position(x)),
-            "ghost {x} became a chain member"
+            !m3.is_allocated(&ghost_position(ordinal)),
+            "ghost {ordinal} became a chain member"
         );
     }
     assert!(m3.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
@@ -1975,8 +2005,8 @@ fn a_floored_frontier_survives_the_checkpoint_round_trip() {
     let bytes = bincode::serialize(&live).expect("checkpoint-encode the slice");
     let recovered: M3State = bincode::deserialize(&bytes).expect("the slice re-enters");
     assert_eq!(recovered, live);
-    for x in 1..=GHOST_POSITIONS {
-        assert!(!recovered.is_allocated(&ghost_position(x)));
+    for ordinal in 1..=GHOST_POSITIONS {
+        assert!(!recovered.is_allocated(&ghost_position(ordinal)));
     }
     assert!(recovered.is_allocated(&a(&[1, 1, 0, 1, 0, 1, 0, 1, GHOST_POSITIONS + 1])));
     let (next, _) = recovered.mint_content(&doc1).expect("the chain continues");

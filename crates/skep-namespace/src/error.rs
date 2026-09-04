@@ -148,7 +148,12 @@ pub enum DelegateError {
     NotAuthorized,
     /// O15(iv): a principal already sits strictly under `new_prefix`.
     NotTopDown,
-    /// O15(v) freshness: `new_prefix` is already allocated.
+    /// O15(v) freshness: `new_prefix` is already allocated. On any state M3's
+    /// own ops can produce, `NotNextForm` below would refuse the same input —
+    /// allocated ⇒ ordinal ≤ m, while the next-form value carries m + 1 — so
+    /// this variant is what fixes the CODE a caller sees while next-form holds
+    /// prefix-injectivity; relax next-form and this gate becomes the sole
+    /// guard.
     NotFresh,
     /// `new_id` is already carried by a principal — id-injectivity, the
     /// id-axis mirror of O1b (§6).

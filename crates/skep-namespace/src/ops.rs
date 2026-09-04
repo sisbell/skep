@@ -113,8 +113,21 @@ where
     /// Rejection order is PINNED (§6) and is [`DelegateError`]'s declaration
     /// order, which states it. Obtain the required next-form `new_prefix`
     /// from [`M3State::next_account_prefix`] instead of guess-and-retry; it
-    /// answers `None` once a chain's next slot would pass the depth cap, so
-    /// the value a caller peeks is never one this op refuses.
+    /// answers `None` once a chain's next slot would pass the depth cap, so a
+    /// caller is never handed a prefix this op refuses ON DEPTH. It is a peek
+    /// and not a reservation: the rest of the gate still runs against it, and
+    /// two callers holding one peeked value leave exactly one winner.
+    ///
+    /// Returns the new account prefix — `new_prefix` itself, since next-form
+    /// admits no other — and its commit `Seq`. A RETRIED call whose first
+    /// attempt committed but whose acknowledgement was lost is REFUSED, not
+    /// duplicated: ω(`new_prefix`) is the new principal now, so (ii) answers
+    /// `NotAuthorized`. That is the same code a caller earns by losing the
+    /// race to another delegator, and the two are told apart by a published
+    /// query — [`M3State::principal_prefix`]`(new_id) == Some(new_prefix)`
+    /// iff this delegation is the one that committed. Exactly-once is M10's;
+    /// what M3 owes is that a retry allocates nothing and that its outcome is
+    /// decidable without reading this crate.
     pub fn delegate(
         &self,
         delegator: PrincipalId,
@@ -166,7 +179,12 @@ where
                 return Err(DelegateError::NotTopDown);
             }
             // (v) freshness: unallocated (T4-validity was the pre-work lift)
-            // [non-monotone].
+            // [non-monotone]. On any state M3's own ops can produce, next-form
+            // below independently refuses every allocated prefix — allocated
+            // ⇒ ordinal ≤ m, while the value it compares carries m + 1 — so on
+            // the live path this gate fixes the rejection CODE and next-form
+            // holds the invariant; relax next-form and (v) becomes the sole
+            // guard.
             if base.is_allocated(&new_prefix) {
                 return Err(DelegateError::NotFresh);
             }
@@ -207,8 +225,21 @@ where
     /// ([`MAX_NODE_COMPONENTS`] — `TooDeep`), freshness (`NotFresh` — the
     /// held coarse [`M3State::nodes_lock_key`] makes a concurrent duplicate
     /// surface typed rather than silently coalesce, §7/§8), and bootstrap
-    /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). Returns the node
-    /// address and its commit `Seq`.
+    /// lineage `[1] ≼ addr` (`NotDescendantOfBootstrap`). There is NO
+    /// parent-exists check: P8 gates the creation of docuverse entities
+    /// (`delegate`'s `ParentNotRegistered`, [`M3State::mint_document`]'s
+    /// account gate) and not admission, because a node address names a
+    /// provisioning path originated OUTSIDE the docuverse and `nodes` is
+    /// deliberately non-contiguous — `[1, 5, 7]` is admissible with `[1, 5]`
+    /// unregistered.
+    ///
+    /// Returns the node address and its commit `Seq`. A RETRIED admission
+    /// whose first attempt committed is REFUSED, not duplicated: it answers
+    /// `NotFresh`, the same code a caller earns when another provisioner
+    /// admitted that node first. The two need not be told apart —
+    /// [`M3State::entity_level`]`(addr) == Some(Level::Node)` says the node is
+    /// admitted, and admission grants no ownership (below), so WHICH call
+    /// admitted it changes nothing a caller can act on.
     ///
     /// Admission grants NO ownership: only a `RegisterNode` is staged, so no
     /// principal is seated at `addr` and ω(`addr`) stays whoever owns the

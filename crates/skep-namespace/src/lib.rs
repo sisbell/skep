@@ -75,7 +75,11 @@
 //!   addresses outside the docuverse; [`Namespace::register_node`] only
 //!   validates (Conflicts §1);
 //! * the request lifecycle and session→principal binding (M10), including
-//!   exactly-once/idempotency for retried `create_new_document`;
+//!   exactly-once/idempotency for every retried write — a retried
+//!   [`Namespace::create_new_document`] or [`Namespace::fork`] yields a second
+//!   empty document, while a retried [`Namespace::delegate`] or
+//!   [`Namespace::register_node`] is refused; each op's doc says which, and
+//!   how to tell a retry from a lost race;
 //! * address algebra (M1 — M3 holds none of its own) and
 //!   ordering/durability/recovery (M2 — M3 builds no WAL; it stages
 //!   [`M3Rec`]s through `transact` and is recovered by checkpoint-load +

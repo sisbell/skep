@@ -49,7 +49,7 @@ impl M5State {
         let Some(v) = as_ordinal_vspan(span) else {
             return Vec::new();
         };
-        let Some(arr) = self.arrangements.get(doc.tumbler()) else {
+        let Some(arr) = self.arrangements.get(doc) else {
             return Vec::new();
         };
         let Some(list) = arr.list(v.subspace) else {
@@ -63,7 +63,7 @@ impl M5State {
     /// unarranged. Every returned `Address` is T4-valid (synthesis routes
     /// through `validate`).
     pub fn point(&self, doc: &Address, v: &VPos) -> Option<Address> {
-        let arr = self.arrangements.get(doc.tumbler())?;
+        let arr = self.arrangements.get(doc)?;
         arr.list(&v.subspace)?.point(&v.ordinal)
     }
 
@@ -86,7 +86,7 @@ impl M5State {
     /// (ASN-0058 M12), the COMPARE surface for M6. Absent doc ⇒ `[]`.
     pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .map(|a| a.content.runs_vec())
             .unwrap_or_default()
     }
@@ -94,7 +94,7 @@ impl M5State {
     /// The canonical, V-ordered link run decomposition. Absent doc ⇒ `[]`.
     pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .map(|a| a.link.runs_vec())
             .unwrap_or_default()
     }
@@ -102,7 +102,7 @@ impl M5State {
     /// `n_C(d)` — the arranged content width. Absent doc ⇒ 0.
     pub fn content_count(&self, doc: &Address) -> Nat {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .map(|a| a.content.total_width())
             .unwrap_or_else(Nat::zero)
     }
@@ -110,7 +110,7 @@ impl M5State {
     /// `n_L(d)` — the arranged link width. Absent doc ⇒ 0.
     pub fn link_count(&self, doc: &Address) -> Nat {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .map(|a| a.link.total_width())
             .unwrap_or_else(Nat::zero)
     }
@@ -130,7 +130,7 @@ impl M5State {
     /// is the same walk `point` uses.
     pub(crate) fn content_position_arranged(&self, doc: &Address, ord: &Nat) -> bool {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .is_some_and(|a| a.content.locate(ord).is_some())
     }
 
@@ -145,7 +145,7 @@ impl M5State {
     /// I-extent membership over the link run-list, so a link INTERIOR to a
     /// coalesced link run is caught too. Absent doc ⇒ not seated.
     pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
-        self.arrangements.get(doc.tumbler()).is_some_and(|a| {
+        self.arrangements.get(doc).is_some_and(|a| {
             a.link
                 .iter_runs()
                 .any(|(_, r)| r.iextent().contains(link.tumbler()))
@@ -169,9 +169,16 @@ impl M5State {
     /// same-level-class intersection and the cross-class boundary search),
     /// and this method turns that offset range into a V-range by adding the
     /// run's implicit V-start. Scan of the forward content map (Open decision
-    /// #2 v1 default).
+    /// #2 v1 default), so the cost is `#runs(doc) × |coverage|` — the
+    /// product of two quantities this method does not bound. `#runs(doc)`
+    /// grows with `doc`'s own edit and transclusion history; `|coverage|` is
+    /// bounded on M7's and M8's route (an endset is capped at deposit,
+    /// `MAX_SLOT_SPANS`) and by nothing on M6's, where it is an
+    /// [`image`](M5State::image) of a region. Admission control is the
+    /// caller's, as it is for
+    /// [`docs_ever_containing`](M5State::docs_ever_containing).
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
-        let Some(arr) = self.arrangements.get(doc.tumbler()) else {
+        let Some(arr) = self.arrangements.get(doc) else {
             return SpanSet::empty();
         };
         let mut vspans: Vec<Span> = Vec::new();
@@ -204,7 +211,7 @@ impl M5State {
     /// transcluded origins — never blindly normalized, never a seam.
     fn content_image(&self, doc: &Address) -> SpanSet {
         self.arrangements
-            .get(doc.tumbler())
+            .get(doc)
             .map(|a| a.content.image())
             .unwrap_or_else(SpanSet::empty)
     }
@@ -252,6 +259,18 @@ impl M5State {
     /// order (P4★ puts every present containment in R), so it is always a
     /// candidate — which is what makes the narrowing sound. Total for any
     /// coverage, mixed-length included.
+    ///
+    /// COST, AND WHO OWNS IT. Per call: one span comparison for every pair of
+    /// (recorded span, coverage span) over the WHOLE relation, each deriving
+    /// both operands' endpoints. Neither factor is bounded here — R never
+    /// loses a member (P2), so it is the sum of every run ever placed by any
+    /// document, and `coverage` is as large as the caller's own aggregation
+    /// (M6 builds it from [`image`](M5State::image), whose size is the source
+    /// document's fragmentation). There is no index over R in v1 (Open
+    /// decision #3, which belongs here, R's owner) and no admission gate: this
+    /// method refuses nothing and bounds nothing, so admission control and
+    /// concurrency for the query that composes on it are the CALLER's, and a
+    /// route that carries this read owes that number.
     pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         self.prov.docs_ever_containing(coverage)
     }

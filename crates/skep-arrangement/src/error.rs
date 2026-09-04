@@ -37,7 +37,8 @@ pub enum InsertError {
 /// Conflicts #7), `SourceNotContentSubspace`
 /// (content-residence, `span.start().get(1) ≠ s_C`), `EmptySource`
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
-/// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), and
+/// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), `TooManyRuns`
+/// (the placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and
 /// `EmptyResult` (net placement empty after clipping). `NotOwner` gates the
 /// DESTINATION doc only — reading source spans stays unrestricted:
 /// transclusion of anyone's content is the point of the medium.
@@ -52,6 +53,7 @@ pub enum CopyError {
     BadSpan,
     SourceNotContentSubspace,
     DanglingSource,
+    TooManyRuns,
     EmptyResult,
 }
 
@@ -96,11 +98,14 @@ pub enum VersionError {
     Mint(MintError),
 }
 
-/// Link-seating rejection (ASN-0047 CL-OWN/CL-UNIQ; §8): `NotHomeLink` —
-/// `origin(link) ≠ doc` (via M1's `document_of`); `AlreadySeated` — the link
-/// is already inside the doc's link-run I-extents.
+/// Link-seating rejection (ASN-0047 CL-OWN/CL-UNIQ; §8): `NotLinkAddress` —
+/// `link` is not an element address in the link subspace s_L, the shape a
+/// seated run must have; `NotHomeLink` — `origin(link) ≠ doc` (via M1's
+/// `document_of`); `AlreadySeated` — the link is already inside the doc's
+/// link-run I-extents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SeatError {
+    NotLinkAddress,
     NotHomeLink,
     AlreadySeated,
 }
@@ -179,6 +184,7 @@ impl fmt::Display for CopyError {
             CopyError::DanglingSource => {
                 "copy: a resolved run start is not present in the content store (S3★)"
             }
+            CopyError::TooManyRuns => "copy: the placement exceeds the per-transaction run budget",
             CopyError::EmptyResult => "copy: the net placement is empty after clipping",
         })
     }
@@ -251,6 +257,9 @@ impl Error for VersionError {
 impl fmt::Display for SeatError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            SeatError::NotLinkAddress => {
+                "seat: link is not an element address in the link subspace s_L"
+            }
             SeatError::NotHomeLink => "seat: origin(link) is not this document (CL-OWN)",
             SeatError::AlreadySeated => "seat: the link is already seated in this document (CL-UNIQ)",
         })

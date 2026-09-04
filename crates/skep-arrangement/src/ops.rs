@@ -20,7 +20,7 @@
 
 use std::fmt;
 
-use num_traits::Zero;
+use num_traits::{One, Zero};
 use skep_address::{content_subspace, zeros, Address, Nat};
 use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
@@ -29,10 +29,30 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use crate::auth::{gate_write, Caller};
 use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionError};
 use crate::run::Run;
-use crate::runlist::{extend_or_push_run, extend_run};
+use crate::runlist::extend_or_push_run;
 use crate::state::M5Rec;
 use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
+
+/// The most runs one COPY may place, and so the ceiling on what one request
+/// can make M5 hold live while it decides whether to place anything at all.
+///
+/// The budget: a `Run` journals as an element `Address` and a width, about a
+/// hundred bytes as bincode writes them, so M2's `MAX_TXN_BYTES` (64 MiB)
+/// admits on the order of half a million of them and no more — past that the
+/// transaction cannot commit whatever M5 does, and the work of building it
+/// is spent for a refusal. `2^16` sits an order inside that ceiling, which
+/// keeps the LIVE heap one COPY commands to the same order as the
+/// transaction budget M2 already prices rather than several times it. The
+/// arithmetic is checked against the real encoding rather than restated here
+/// (`the_placement_budget_stays_inside_the_transaction_budget`).
+///
+/// It binds what one COPY PLACES. Resolving a single spec still materializes
+/// that spec's own runs, which the source document's fragmentation bounds;
+/// what the cap removes is the multiplication of that fragmentation by a
+/// request's spec count. A copy needing more runs than this is split by the
+/// caller, exactly as an over-budget transaction already is.
+pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)
@@ -78,10 +98,14 @@ where
     /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
     /// so ordinal = 1 when n_C = 0).
     /// J0/J1★ by construction: mint + write + place + provenance ride one
-    /// transaction; successive `mint_content` calls read `stg.working()`,
-    /// so under the held lock they advance the same frontier → contiguous
-    /// I-adjacent addresses → exactly ONE placed run ([`extend_run`] only
-    /// ever widens it).
+    /// transaction; successive `mint_content` calls read `stg.working()`, so
+    /// under the held lock they advance the same frontier → contiguous
+    /// I-adjacent addresses → [`extend_or_push_run`] coalesces them into
+    /// exactly ONE placed run, whose start is the first address minted.
+    /// The accumulator is asked rather than assumed: were the frontier ever
+    /// to hand back a non-adjacent address, the placement would be a correct
+    /// multi-run one, never a single run widened over addresses M3 never
+    /// allocated and M4 never wrote.
     pub fn insert(
         &self,
         caller: Caller,
@@ -107,23 +131,33 @@ where
             if !stg.working().m5().admits_content_boundary(doc, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
-            let mut open: Option<Run> = None;
+            let mut runs: Vec<Run> = Vec::new();
             for v in values {
                 let (a, m3rec) = stg.working().m3().mint_content(doc)?;
                 stg.push(m3rec.into());
                 let cw = stage_write(stg.working().content(), &a, v)?;
                 stg.push(cw.into());
-                extend_run(&mut open, a);
+                extend_or_push_run(
+                    &mut runs,
+                    Run {
+                        i_start: a,
+                        width: Nat::one(),
+                    },
+                );
             }
-            let run = open.expect("EmptyContent guard ⇒ at least one value ⇒ a run opened");
-            // The one run's start IS the first address minted: `extend_run`
-            // only ever widens the run it opened on that first mint.
-            let start = run.i_start().clone();
+            // The placement's start is the FIRST address minted: the
+            // accumulator only ever widens a run rightwards or opens a new
+            // one after it, so the first run's start is the first mint.
+            let start = runs
+                .first()
+                .expect("EmptyContent guard ⇒ at least one value ⇒ at least one run")
+                .i_start()
+                .clone();
             stg.push(
                 M5Rec::ContentPlace {
                     doc: doc.clone(),
                     at: at.ordinal,
-                    runs: vec![run],
+                    runs,
                 }
                 .into(),
             );
@@ -159,8 +193,11 @@ where
     /// → `SourceNotContentSubspace` (that span's subspace ≠ s_C)
     /// → `EmptySource` (ASN-0118
     /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
-    /// start — S3★, Open decision #5 default); finally `EmptyResult` when
-    /// nothing survives clipping. Cross-origin runs never coalesce
+    /// start — S3★, Open decision #5 default) → `TooManyRuns`
+    /// ([`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), refused AS THE RUNS ARE
+    /// PRODUCED so an over-budget copy stops accumulating rather than being
+    /// built and then measured); finally `EmptyResult` when nothing survives
+    /// clipping. Cross-origin runs never coalesce
     /// ([`extend_or_push_run`]'s I-adjacency guard), preserving the origin
     /// multiset (CP11).
     pub fn copy(
@@ -209,6 +246,14 @@ where
                             return Err(CopyError::DanglingSource);
                         }
                         extend_or_push_run(&mut runs, r);
+                        // Measured where the run is produced, not after the
+                        // whole spec list has been folded: the accumulator
+                        // is what a request's spec count multiplies, and a
+                        // refusal that arrives at the end has already been
+                        // paid for.
+                        if runs.len() > MAX_PLACED_RUNS {
+                            return Err(CopyError::TooManyRuns);
+                        }
                     }
                 }
                 let total = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
@@ -603,6 +648,62 @@ mod tests {
         Vstream::new(&k)
             .copy(p1, &doc2(), vp(1, 1), &whole(3))
             .expect("the run start is present, so the run is admitted");
+    }
+
+    #[test]
+    fn copy_refuses_a_placement_past_the_run_budget_before_building_it() {
+        // §5: the runs one COPY places are bounded, and the bound binds the
+        // ACCUMULATOR rather than the request — a spec list is a multiplier,
+        // so a small request can name an unbounded placement. Here 65_537
+        // single-position specs against a one-address source: each resolves
+        // to `run(ca(1), 1)`, which is never I-adjacent to the run before it
+        // (`shift(ca(1), 1) = ca(2)`), so every one of them pushes.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let k = gate_kernel(&[1, 2, 3]);
+        let one = VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 1),
+        };
+        let over: Vec<VSpec> = std::iter::repeat_with(|| one.clone())
+            .take(MAX_PLACED_RUNS + 1)
+            .collect();
+        assert!(matches!(
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &over)),
+            CopyError::TooManyRuns
+        ));
+        // Nothing was placed: the refusal happens inside the closure, before
+        // a record is staged, so the destination is untouched.
+        assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
+        // And the cap refuses only what is past it — an ordinary copy still
+        // commits, so the assertion above is not earned by refusing COPY.
+        Vstream::new(&k)
+            .copy(p1, &doc2(), vp(1, 1), &over[..3])
+            .expect("a placement inside the budget commits");
+        assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(3));
+    }
+
+    #[test]
+    fn the_placement_budget_stays_inside_the_transaction_budget() {
+        // MAX_PLACED_RUNS is a number with an argument behind it, and the
+        // argument is about M2's encoding — so it is measured against that
+        // encoding rather than remembered. A full placement must still be a
+        // transaction M2 could accept: a cap above the journal's own ceiling
+        // would be no cap at all, since the work would be done and then
+        // refused downstream, which is the cost the cap exists to refuse.
+        const SAMPLE: usize = 64;
+        let runs: Vec<Run> = (1..=SAMPLE as u32).map(|k| run(&ca(2 * k), 1)).collect();
+        let rec = M5Rec::ContentPlace {
+            doc: doc1(),
+            at: n(1),
+            runs,
+        };
+        let per_run = bincode::serialize(&rec).expect("the record encodes").len() / SAMPLE;
+        let full = MAX_PLACED_RUNS as u64 * per_run as u64;
+        assert!(
+            full < skep_kernel::MAX_TXN_BYTES,
+            "a full placement encodes to ~{full} bytes, past M2's {}",
+            skep_kernel::MAX_TXN_BYTES
+        );
     }
 
     #[test]

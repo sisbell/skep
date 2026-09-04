@@ -3,7 +3,7 @@
 
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use skep_address::{content_subspace, link_subspace, Address, Nat, Tumbler};
+use skep_address::{content_subspace, link_subspace, Address, Nat};
 
 use crate::prov::Provenance;
 use crate::run::Run;
@@ -39,19 +39,28 @@ impl DocArrangement {
 /// state recovered by replay — NOT a recomputable hint (ASN-0047 P3);
 /// provenance is the append-only history housed next to it, and it is a type
 /// of its own whose surface offers no removal, so the permanence R promises
-/// holds by construction. Both key by the document's `Tumbler` —
-/// M5's choice of key form, not a constraint from M1, which orders `Address`
-/// itself — so every `&Address` method converts with `doc.tumbler()`.
-/// `arrangements` is sparse: an absent doc ⇒ empty arrangement (the
-/// eager-lazy split with M3). v1 has no derived-hint fields ⇒
-/// [`rebuild_derived`](M5State::rebuild_derived) is the identity.
+/// holds by construction. `arrangements` is sparse: an absent doc ⇒ empty
+/// arrangement (the eager-lazy split with M3). v1 has no derived-hint fields
+/// ⇒ [`rebuild_derived`](M5State::rebuild_derived) is the identity.
+///
+/// Both key by the document `Address`, which is what every caller holds and
+/// what every insertion site already had. Three consequences, and the key
+/// form was chosen for the third: an `Address` orders by its tumbler (M1's
+/// `Ord` delegates), so the map's iteration order — and with it the
+/// determinism of [`docs_ever_containing`](M5State::docs_ever_containing) and
+/// the class order of [`deletions`](M5State::deletions) — is the tumbler
+/// order; an `Address` serializes AS its bare tumbler, so the checkpoint
+/// encoding is a map of flat tumblers exactly as the data model prescribes;
+/// and an `Address` re-validates on the way in (M1's `try_from` shadow), so a
+/// key that is not T4-valid is a decode failure M2 reports as corruption
+/// rather than a value some later read has to assert about.
 ///
 /// Serialization needs the `im` crate's `serde` feature and
 /// `Tumbler: Serialize/DeserializeOwned` (M1's `num-bigint` serde feature) —
 /// both carried by this crate's dependencies (Build precondition).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
-    pub(crate) arrangements: im::OrdMap<Tumbler, DocArrangement>,
+    pub(crate) arrangements: im::OrdMap<Address, DocArrangement>,
     pub(crate) prov: Provenance,
 }
 
@@ -116,14 +125,10 @@ impl M5State {
         &self,
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
-    ) -> im::OrdMap<Tumbler, DocArrangement> {
-        let mut arr = self
-            .arrangements
-            .get(doc.tumbler())
-            .cloned()
-            .unwrap_or_default();
+    ) -> im::OrdMap<Address, DocArrangement> {
+        let mut arr = self.arrangements.get(doc).cloned().unwrap_or_default();
         arr.content = f(&arr.content);
-        self.arrangements.update(doc.tumbler().clone(), arr)
+        self.arrangements.update(doc.clone(), arr)
     }
 
     /// The link-subspace twin of [`with_content`](M5State::with_content).
@@ -131,14 +136,10 @@ impl M5State {
         &self,
         doc: &Address,
         f: impl FnOnce(&RunList) -> RunList,
-    ) -> im::OrdMap<Tumbler, DocArrangement> {
-        let mut arr = self
-            .arrangements
-            .get(doc.tumbler())
-            .cloned()
-            .unwrap_or_default();
+    ) -> im::OrdMap<Address, DocArrangement> {
+        let mut arr = self.arrangements.get(doc).cloned().unwrap_or_default();
         arr.link = f(&arr.link);
-        self.arrangements.update(doc.tumbler().clone(), arr)
+        self.arrangements.update(doc.clone(), arr)
     }
 
     /// The pure/deterministic M2 fold (§3–§8 folds; M2's `apply` obligation),
@@ -209,7 +210,7 @@ impl M5State {
             M5Rec::VersionSnapshot { source, new } => {
                 let src = self
                     .arrangements
-                    .get(source.tumbler())
+                    .get(source)
                     .map(|a| a.content.clone())
                     .unwrap_or_default();
                 if src.total_width().is_zero() {
@@ -223,7 +224,7 @@ impl M5State {
                         link: RunList::default(),
                     };
                     M5State {
-                        arrangements: self.arrangements.update(new.tumbler().clone(), arr),
+                        arrangements: self.arrangements.update(new.clone(), arr),
                         prov,
                     }
                 }
@@ -406,7 +407,7 @@ mod tests {
             source: doc2(),
             new: vdoc(),
         });
-        assert!(s1.arrangements.get(vdoc().tumbler()).is_none());
+        assert!(s1.arrangements.get(&vdoc()).is_none());
         assert!(!s1.prov.is_recorded(&vdoc()));
         assert_eq!(s1.content_count(&vdoc()), n(0));
     }

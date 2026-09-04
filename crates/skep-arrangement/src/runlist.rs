@@ -40,30 +40,13 @@ pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
     shift(left.i_start.tumbler(), &left.width) == *right_start.tumbler()
 }
 
-/// Single-address INSERT accumulation (§1): `None ⇒` open a width-1 run;
-/// `Some(r)` with `r` I-extending to `a` ⇒ widen in place. Under INSERT's
-/// held content lock every `mint_content` advances the same frontier, so
-/// each `a` is I-adjacent to the open run; this only ever widens it and the
-/// loop closes with exactly one run.
-pub(crate) fn extend_run(open: &mut Option<Run>, a: Address) {
-    match open {
-        None => {
-            *open = Some(Run {
-                i_start: a,
-                width: Nat::one(),
-            });
-        }
-        Some(r) => {
-            debug_assert!(
-                i_adjacent(r, &a),
-                "INSERT's held-lock mints must be I-adjacent to the open run"
-            );
-            r.width = &r.width + &Nat::one();
-        }
-    }
-}
-
-/// COPY's run accumulator (§1): widen the last run iff I-adjacent, else push.
+/// The placing ops' run accumulator (§1): widen the last run iff I-adjacent,
+/// else push. THE ONE PLACE a placement's runs are accumulated, so the merge
+/// condition is applied by the element that owns it and no caller decides
+/// for itself that two addresses belong to one run — an address that is not
+/// I-adjacent to the open run opens a new one, rather than widening a run
+/// over the addresses between them.
+///
 /// Cross-origin runs are cross-length, fail the I-adjacency test, and never
 /// coalesce — preserving the origin multiset (ASN-0118 CP11) and
 /// transclusion independence (CP4/M14).
@@ -247,19 +230,57 @@ impl RunList {
         RunList(coalesced(out))
     }
 
-    /// I-runs covering ordinals `[ord, ord + count)`, clipped to
-    /// `[1, total]` — accept-and-intersect: out-of-range is silently dropped
+    /// The runs covering ordinals `[lo, hi_excl)`, the boundary runs clipped
+    /// — MATERIALIZING ONLY THE ANSWER. One prefix-sum walk that skips the
+    /// runs left of `lo`, stops at the first run at or past `hi_excl`, and
+    /// clones nothing outside the range: the cost of a read is the size of
+    /// what it returns, not the size of the list it reads from. That matters
+    /// because a resolution's caller is a per-spec loop — COPY's, M7's slot
+    /// endsets, M6's RETRIEVEV — so any per-call term proportional to the
+    /// SOURCE's fragmentation is multiplied by the request's spec count.
+    ///
+    /// Called with `lo < hi_excl`. Every emitted run then has `width ≥ 1` and
+    /// an element-level start: a run reaching the push has `v_start < hi_excl`
+    /// and `lo < v_end`, and `v_start < v_end` because a run's width is at
+    /// least one, so each of `a`'s two candidates falls below each of `b`'s
+    /// and `a < b`; the start is [`Run::addr_at`](crate::Run::addr_at) of an
+    /// offset inside the run. Both `Nat` subtractions are therefore over
+    /// ordered operands and cannot underflow.
+    fn slice_runs(&self, lo: &Nat, hi_excl: &Nat) -> Vec<Run> {
+        let mut out: Vec<Run> = Vec::new();
+        for (v_start, run) in self.iter_runs() {
+            if v_start >= *hi_excl {
+                break;
+            }
+            let v_end = &v_start + &run.width; // the first ordinal past this run
+            if v_end <= *lo {
+                continue;
+            }
+            let a = std::cmp::max(&v_start, lo);
+            let b = std::cmp::min(&v_end, hi_excl);
+            out.push(Run {
+                i_start: run.addr_at(&(a - &v_start)),
+                width: b - a,
+            });
+        }
+        out
+    }
+
+    /// I-runs covering ordinals `[ord, ord + count)`, clipped to the arranged
+    /// range — accept-and-intersect: out-of-range is silently dropped
     /// (ASN-0118). V-ordered by construction.
+    ///
+    /// The upper clip needs no `total_width`: no run reaches past `total + 1`,
+    /// so clipping each run at `hi_excl` already drops everything beyond the
+    /// arrangement, and asking for the total would be a second walk of the
+    /// whole list to learn a bound the walk enforces anyway.
     pub(crate) fn resolve_range(&self, ord: &Nat, count: &Nat) -> Vec<Run> {
-        let total = self.total_width();
         let lo = std::cmp::max(ord.clone(), Nat::one());
-        let hi_excl = std::cmp::min(ord + count, &total + &Nat::one());
+        let hi_excl = ord + count;
         if lo >= hi_excl {
             return Vec::new();
         }
-        let (left, _) = self.split_at(&hi_excl);
-        let (_, mid) = split_runs(left.iter(), &lo);
-        mid
+        self.slice_runs(&lo, &hi_excl)
     }
 
     /// Iterate `(v_start, run)` pairs — the implicit V-start is the running
@@ -419,5 +440,26 @@ mod tests {
         assert_eq!(l.resolve_range(&n(2), &n(10)), vec![run(&ca(2), 2)]);
         assert_eq!(l.resolve_range(&n(0), &n(2)), vec![run(&ca(1), 1)]); // lo clamps to 1
         assert!(l.resolve_range(&n(4), &n(2)).is_empty());
+        // A narrow resolution over a FRAGMENTED list answers with the one run
+        // it names and nothing else, and it names the right one from each
+        // position in the list — first, middle, last. The interesting half is
+        // what the answer costs: it is the size of the answer, not the size
+        // of the list, which is why a per-spec loop over a heavily
+        // transcluded source does not multiply that source's fragmentation
+        // by its spec count.
+        let frag = list(vec![run(&ca(1), 1), run(&vca(1), 1), run(&ca(5), 1)]);
+        assert_eq!(frag.resolve_range(&n(1), &n(1)), vec![run(&ca(1), 1)]);
+        assert_eq!(frag.resolve_range(&n(2), &n(1)), vec![run(&vca(1), 1)]);
+        assert_eq!(frag.resolve_range(&n(3), &n(1)), vec![run(&ca(5), 1)]);
+        // …and a range spanning the seams clips both boundary runs.
+        let wide = list(vec![run(&ca(1), 3), run(&vca(1), 3), run(&ca(9), 3)]);
+        assert_eq!(
+            wide.resolve_range(&n(3), &n(5)),
+            vec![run(&ca(3), 1), run(&vca(1), 3), run(&ca(9), 1)]
+        );
+        // Over-reach past the last arranged ordinal is still dropped without
+        // the total ever being computed.
+        assert_eq!(wide.resolve_range(&n(8), &n(99)), vec![run(&ca(10), 2)]);
+        assert!(wide.resolve_range(&n(10), &n(99)).is_empty());
     }
 }

@@ -80,7 +80,7 @@ pub(crate) mod testutil;
 
 pub use auth::Caller;
 pub use error::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
-pub use ops::Vstream;
+pub use ops::{Vstream, MAX_PLACED_RUNS};
 pub use run::Run;
 pub use seat::{seat_link, stage_seat_link};
 pub use state::{M5Rec, M5State};

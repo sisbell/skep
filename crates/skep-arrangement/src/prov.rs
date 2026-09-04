@@ -2,7 +2,7 @@
 //! has ever contained, and the historical read that answers off it.
 
 use serde::{Deserialize, Serialize};
-use skep_address::{classify_spans, validate, Address, Span, SpanRel, SpanSet, Tumbler};
+use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 
 /// R, keyed by placing document — every content span a document has ever
 /// contained, in placement order (ASN-0047 P2: a pair `(a, d)` records that
@@ -18,9 +18,10 @@ use skep_address::{classify_spans, validate, Address, Span, SpanRel, SpanSet, Tu
 ///
 /// A single-field newtype over the mandated slice shape, so the checkpoint
 /// encoding is the map's own (bincode writes a newtype struct as its inner
-/// value).
+/// value), keyed by the placing document's `Address` — which orders and
+/// serializes as its bare tumbler, and re-validates on the way back in.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Provenance(im::OrdMap<Tumbler, im::Vector<Span>>);
+pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
 
 impl Provenance {
     /// Append `spans` to `doc`'s record (persistent — the receiver is
@@ -32,10 +33,9 @@ impl Provenance {
         doc: &Address,
         spans: impl IntoIterator<Item = Span>,
     ) -> Provenance {
-        let k = doc.tumbler();
-        let mut col = self.0.get(k).cloned().unwrap_or_default();
+        let mut col = self.0.get(doc).cloned().unwrap_or_default();
         col.extend(spans);
-        Provenance(self.0.update(k.clone(), col))
+        Provenance(self.0.update(doc.clone(), col))
     }
 
     /// R↾doc: the iextent cover of content spans `doc` has ever contained —
@@ -44,7 +44,7 @@ impl Provenance {
     /// mixed-length; it never crosses a module seam.
     pub(crate) fn ever_contained(&self, doc: &Address) -> SpanSet {
         self.0
-            .get(doc.tumbler())
+            .get(doc)
             .map(|v| v.iter().cloned().collect())
             .unwrap_or_else(SpanSet::empty)
     }
@@ -55,7 +55,7 @@ impl Provenance {
     /// needs a way to ask.
     #[cfg(test)]
     pub(crate) fn is_recorded(&self, doc: &Address) -> bool {
-        self.0.contains_key(doc.tumbler())
+        self.0.contains_key(doc)
     }
 
     /// Every document with some placed span not `Separated` from some span of
@@ -63,21 +63,23 @@ impl Provenance {
     /// mixed-length coverage is answered without the level-class discipline.
     /// v1 scans the map (Open decision #3: an index over R would live here,
     /// R's owner, not in the query that composes on it); the `OrdMap` walk is
-    /// what makes the result's Tumbler order deterministic, and the key of a
-    /// recorded document is a registered document's tumbler, hence T4-valid.
+    /// what makes the result's tumbler order deterministic, and a key is
+    /// already the placing document's `Address`, so the answer is assembled
+    /// rather than reconstructed.
+    ///
+    /// COST, since nothing here bounds it: one `classify_spans` per (recorded
+    /// span × coverage span) over the WHOLE relation, each deriving both
+    /// operands' endpoints, and R only ever grows (P2).
     /// [`M5State::docs_ever_containing`](crate::M5State::docs_ever_containing)
-    /// states what this answer means to a caller.
+    /// states what this answer means to a caller, and who owns that bound.
     pub(crate) fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         let mut out = Vec::new();
-        for (k, spans) in self.0.iter() {
+        for (doc, spans) in self.0.iter() {
             let hit = spans
                 .iter()
                 .any(|p| coverage.iter().any(|c| classify_spans(p, c) != SpanRel::Separated));
             if hit {
-                out.push(
-                    validate(k.clone())
-                        .expect("prov keys are registered-document tumblers (T4-valid)"),
-                );
+                out.push(doc.clone());
             }
         }
         out

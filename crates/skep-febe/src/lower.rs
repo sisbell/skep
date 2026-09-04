@@ -156,6 +156,7 @@ impl Lower for ContentError {
 impl Lower for SeatError {
     fn lower(self) -> (RejectCode, Option<FaultSite>) {
         let code = match self {
+            SeatError::NotLinkAddress => RejectCode::NotLinkAddress,
             SeatError::NotHomeLink => RejectCode::NotHomeLink,
             SeatError::AlreadySeated => RejectCode::AlreadySeated,
         };
@@ -193,6 +194,7 @@ impl Lower for CopyError {
             // in the build report as upstream drift).
             CopyError::SourceNotContentSubspace => (RejectCode::NotContentSubspace, None),
             CopyError::DanglingSource => (RejectCode::DanglingSource, None),
+            CopyError::TooManyRuns => (RejectCode::TooManyRuns, None),
             CopyError::EmptyResult => (RejectCode::EmptyResult, None),
         }
     }
@@ -696,6 +698,7 @@ mod tests {
         );
 
         // ── M5 (arrangement) ──
+        same_name(SeatError::NotLinkAddress);
         same_name(SeatError::NotHomeLink);
         same_name(SeatError::AlreadySeated);
         same_name(InsertError::DocNotRegistered);
@@ -711,6 +714,7 @@ mod tests {
         same_name(CopyError::EmptySource);
         same_name(CopyError::BadSpan);
         same_name(CopyError::DanglingSource);
+        same_name(CopyError::TooManyRuns);
         same_name(CopyError::EmptyResult);
         // As-built M5 split the source-residence guard out; the design's
         // union carries no same-named leaf.

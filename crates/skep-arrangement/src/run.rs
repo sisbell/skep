@@ -13,32 +13,58 @@ use skep_address::{intersect, shift, validate, Address, Level, Nat, Span, Tumble
 /// what makes D-SEQ★/D-CTG★/D-MIN★ hold by construction).
 ///
 /// STANDING INVARIANTS: every `Run` has `width ≥ 1` AND an element-level
-/// `i_start` (`zeros = 3`). Fields are CRATE-PRIVATE: a foreign crate can
-/// neither build a `Run` by struct literal nor mutate one it holds —
-/// including an OWNED `Run` returned by `resolve`/`content_runs`/`link_runs`
-/// — so runs are read-only across every seam (M6/M7/M8 read via the
-/// [`i_start`](Run::i_start)/[`width`](Run::width) accessors). [`Run::new`]
-/// is therefore the sole foreign CONSTRUCTOR. The one field-by-field bypass
-/// is derived `Deserialize`: a *recovered* Run's shape rests on M2 checkpoint
-/// integrity (the same trust posture as all of recovery), not the type
-/// system. On that basis the invariants hold for every
-/// minted-or-validly-recovered Run — which is exactly what justifies the
-/// `.expect`s in the run's own position arithmetic below.
+/// `i_start` (`zeros = 3`), and they hold for every `Run` in the process, not
+/// merely for every one this crate minted. Fields are CRATE-PRIVATE: a
+/// foreign crate can neither build a `Run` by struct literal nor mutate one
+/// it holds — including an OWNED `Run` returned by
+/// `resolve`/`content_runs`/`link_runs` — so runs are read-only across every
+/// seam (M6/M7/M8 read via the [`i_start`](Run::i_start)/[`width`](Run::width)
+/// accessors). [`Run::new`] is the sole foreign constructor, and it is also
+/// the DESERIALIZATION path: a recovered Run re-enters it through the serde
+/// shadow below, so recovery cannot mint a Run the constructor would refuse.
+/// That is what justifies the `.expect`s in the run's own position arithmetic
+/// — they rest on the type, not on M2's checkpoint integrity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RunShadow")]
 pub struct Run {
     pub(crate) i_start: Address,
     pub(crate) width: Nat,
 }
 
+/// The deserialization mint path (the serde `try_from` shadow, as M1's
+/// `Address`/`Span`/`Tumbler` each carry one): decoded field-by-field, then
+/// re-entered through [`Run::new`], so a `width = 0` or a non-element start
+/// in a journal or a checkpoint is a decode failure M2 reports as corruption
+/// rather than a value that panics [`Run::iextent`] on the next fold to touch
+/// it.
+///
+/// It reads exactly what a `Run` writes: the same two fields in the same
+/// order, and `Serialize` is derived on `Run` itself, so the shadow costs the
+/// encoding nothing.
+#[derive(Deserialize)]
+struct RunShadow {
+    i_start: Address,
+    width: Nat,
+}
+
+impl TryFrom<RunShadow> for Run {
+    type Error = &'static str;
+    fn try_from(s: RunShadow) -> Result<Run, &'static str> {
+        Run::new(s.i_start, s.width).ok_or("run: width ≥ 1 and an element-level i_start")
+    }
+}
+
 impl Run {
-    /// Checked constructor — the seam guard for an EXTERNAL producer (none in
-    /// v1): `None` iff `width == 0` OR `i_start` is not element-level
-    /// (`zeros(i_start) ≠ 3`, equivalently `i_start.level() ≠
-    /// Level::Element`). M5's own emission sites (run-list split/coalesce,
-    /// `resolve`, `content_runs`/`link_runs`, the folds) build Runs with
-    /// `width ≥ 1` and an element-level `i_start` STRUCTURALLY by the
-    /// in-crate struct literal — their starts are minted element addresses or
-    /// ordinal-shifts of one. Field privacy then closes the
+    /// Checked constructor — the ONE door: `None` iff `width == 0` OR
+    /// `i_start` is not element-level (`zeros(i_start) ≠ 3`, equivalently
+    /// `i_start.level() ≠ Level::Element`). Every Run that is not built by
+    /// M5's own emission sites walks through here, an external producer and a
+    /// decoded journal or checkpoint alike — the serde `try_from` shadow
+    /// routes deserialization into this function. M5's own sites (run-list
+    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the folds) build
+    /// Runs with `width ≥ 1` and an element-level `i_start` STRUCTURALLY by
+    /// the in-crate struct literal — their starts are minted element
+    /// addresses or ordinal-shifts of one. Field privacy then closes the
     /// mutate-after-obtain path: a foreign holder cannot later set
     /// `width = 0` or swap `i_start` on any Run it obtained, owned or
     /// borrowed.
@@ -280,5 +306,49 @@ mod tests {
         assert_eq!(back, r);
         assert_eq!(back.i_start(), &ca(7));
         assert_eq!(back.width(), &n(4));
+    }
+
+    #[test]
+    fn decoding_a_run_re_enters_the_constructor() {
+        // §A: the invariants the position arithmetic's `.expect`s stand on
+        // are the TYPE's, so the decode path is the constructor. A field pair
+        // no `Run::new` would admit is refused as a decode failure — which
+        // M2 reports as checkpoint corruption — rather than admitted as a
+        // value that panics `iextent` on the next fold to touch it.
+        //
+        // The bytes are made by encoding the shadow, which is the exact
+        // field-by-field form a corrupt journal would present.
+        #[derive(Serialize)]
+        struct Wire {
+            i_start: Address,
+            width: Nat,
+        }
+        let zero = bincode::serialize(&Wire {
+            i_start: ca(7),
+            width: n(0),
+        })
+        .expect("the shadow encodes");
+        assert!(bincode::deserialize::<Run>(&zero).is_err(), "width 0 is not a run");
+        let document = bincode::serialize(&Wire {
+            i_start: a(&[1, 0, 1, 0, 1]),
+            width: n(1),
+        })
+        .expect("the shadow encodes");
+        assert!(
+            bincode::deserialize::<Run>(&document).is_err(),
+            "a document-level start is not a run start"
+        );
+        // The door costs the encoding nothing: a well-formed field pair
+        // encodes to exactly the bytes `Run` itself writes, so the shadow is
+        // a check on the decode path and not a second wire format.
+        let good = Run::new(ca(7), n(4)).expect("valid run");
+        assert_eq!(
+            bincode::serialize(&Wire {
+                i_start: ca(7),
+                width: n(4)
+            })
+            .expect("the shadow encodes"),
+            bincode::serialize(&good).expect("the run encodes")
+        );
     }
 }

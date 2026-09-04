@@ -150,6 +150,7 @@ pub enum RejectCode {
     EmptySource,
     BadSpan,
     DanglingSource,
+    TooManyRuns,
     EmptyResult,
     NotArranged,
     OutOfBounds,
@@ -159,6 +160,7 @@ pub enum RejectCode {
     EmptyContentSubspace,
     NotAPrincipal,
     NodeTierCrossOwner,
+    NotLinkAddress,
     NotHomeLink,
     AlreadySeated,
     NotContentSubspace,
@@ -524,6 +526,7 @@ mod tests {
             | RejectCode::EmptySource
             | RejectCode::BadSpan
             | RejectCode::DanglingSource
+            | RejectCode::TooManyRuns
             | RejectCode::EmptyResult
             | RejectCode::NotArranged
             | RejectCode::OutOfBounds
@@ -533,6 +536,7 @@ mod tests {
             | RejectCode::EmptyContentSubspace
             | RejectCode::NotAPrincipal
             | RejectCode::NodeTierCrossOwner
+            | RejectCode::NotLinkAddress
             | RejectCode::NotHomeLink
             | RejectCode::AlreadySeated
             | RejectCode::NotContentSubspace
@@ -558,7 +562,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 62] = [
+    const ALL_CODES: [RejectCode; 64] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -592,6 +596,7 @@ mod tests {
         RejectCode::EmptySource,
         RejectCode::BadSpan,
         RejectCode::DanglingSource,
+        RejectCode::TooManyRuns,
         RejectCode::EmptyResult,
         RejectCode::NotArranged,
         RejectCode::OutOfBounds,
@@ -601,6 +606,7 @@ mod tests {
         RejectCode::EmptyContentSubspace,
         RejectCode::NotAPrincipal,
         RejectCode::NodeTierCrossOwner,
+        RejectCode::NotLinkAddress,
         RejectCode::NotHomeLink,
         RejectCode::AlreadySeated,
         RejectCode::NotContentSubspace,

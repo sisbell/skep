@@ -330,6 +330,74 @@ mod tests {
     }
 
     #[test]
+    fn version_snapshot_leaves_the_forks_link_subspace_empty() {
+        // ASN-0123 V2: what the fork receives is the source's CONTENT map,
+        // restricted — the link subspace does not travel with it. Carrying
+        // it would seat, in the fork, links whose origin is the SOURCE
+        // document: the state CL-OWN forbids and `stage_seat_link` will not
+        // create, reachable then only through versioning.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+        assert_eq!(s.link_count(&doc1()), n(2));
+        let s = s.apply_m5(&M5Rec::VersionSnapshot {
+            source: doc1(),
+            new: vdoc(),
+        });
+        // The content map is shared…
+        assert_eq!(s.content_runs(&vdoc()), s.content_runs(&doc1()));
+        // …and the link subspace is not.
+        assert_eq!(s.link_count(&vdoc()), n(0));
+        assert!(s.link_runs(&vdoc()).is_empty());
+        // Both subspaces of the source are untouched (V3).
+        assert_eq!(s.link_count(&doc1()), n(2));
+        assert_eq!(s.content_count(&doc1()), n(2));
+    }
+
+    #[test]
+    fn only_placement_and_version_append_to_r() {
+        // §4/§6/§8: DELETE, REARRANGE and link seating leave R alone — P2 is
+        // about never LOSING a pair, and J-LV uncouples link placement from R
+        // altogether. No public read can witness this: R's denotation is the
+        // set-union of its pairs, so a redundant append answers every query
+        // identically and shows up only as unbounded growth. The record has
+        // to be compared directly.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 4)]);
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        for r in [
+            M5Rec::ContentRemove {
+                doc: doc1(),
+                from: n(2),
+                width: n(1),
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(1), n(2), n(3)],
+            },
+            M5Rec::LinkSeat {
+                doc: doc1(),
+                link: la(2),
+            },
+        ] {
+            assert_eq!(s.apply_m5(&r).prov, s.prov, "{r:?} must not append to R");
+        }
+        // The two that DO append, so the comparisons above cannot pass
+        // vacuously — a `prov` that had stopped changing at all would
+        // satisfy them.
+        let placed = s.apply_m5(&M5Rec::ContentPlace {
+            doc: doc2(),
+            at: n(1),
+            runs: vec![run(&ca(1), 1)],
+        });
+        assert_ne!(placed.prov, s.prov);
+        let forked = s.apply_m5(&M5Rec::VersionSnapshot {
+            source: doc1(),
+            new: vdoc(),
+        });
+        assert_ne!(forked.prov, s.prov);
+    }
+
+    #[test]
     fn version_snapshot_of_an_empty_source_leaves_the_fork_absent() {
         // §7: n = 0 ⇒ no provenance append AND no arrangements entry — the
         // lazy absent-⇒-empty convention stays clean.

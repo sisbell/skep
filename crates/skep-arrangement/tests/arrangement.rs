@@ -425,6 +425,15 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu)])),
         CopyError::BadSpan
     ));
+    // BadSpan also on a T12-legal span whose WIDTH is deeper than two: its
+    // start is a well-formed V-position and its width position 1 is zero, so
+    // the width-length clause is the only thing refusing it — and admitting
+    // it would resolve five ordinals for a span reaching [1, 6, 0].
+    let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12-legal");
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), deep_width)])),
+        CopyError::BadSpan
+    ));
     // Content-residence guard (§5).
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(2, 1, 1))])),
@@ -435,9 +444,22 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(1, 1, 1))])),
         CopyError::EmptySource
     ));
-    // Which of the per-spec verdicts wins: doc2 is BOTH content-empty and
-    // asked for with a mis-shaped span, and the documented order puts the
-    // shape check first.
+    // Which of the per-spec verdicts wins, in each documented pair.
+    // Shape before residence: this span is BOTH mis-shaped (action-point-1)
+    // and in the link subspace, and the shape check runs first.
+    let lu_link = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu_link)])),
+        CopyError::BadSpan
+    ));
+    // Residence before emptiness: doc2 is content-empty AND asked for in the
+    // link subspace, and the residence check runs first.
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(2, 1, 1))])),
+        CopyError::SourceNotContentSubspace
+    ));
+    // Shape before emptiness: doc2 is BOTH content-empty and asked for with
+    // a mis-shaped span.
     let lu2 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), lu2)])),
@@ -454,6 +476,11 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[])),
         CopyError::EmptyResult
     ));
+    // The ninth guard, `DanglingSource`, is not reachable from here: every
+    // address this engine arranges was written by INSERT in the same
+    // composite, and `M5Rec` cannot be built in a foreign crate. It is
+    // pinned in-crate, against a world whose arrangement and content store
+    // are seeded apart (`ops::tests`).
 }
 
 // ---- §B DELETE ----
@@ -518,6 +545,13 @@ fn delete_rejects_in_documented_order() {
     assert!(matches!(
         rejected(vs.delete(P1, &doc1(), vp(1, 1), n(0))),
         DeleteError::EmptyWidth
+    ));
+    // Which wins when both the position and the width are bad: the position
+    // check runs first, so an unarranged ordinal is reported as such even
+    // when the width is zero.
+    assert!(matches!(
+        rejected(vs.delete(P1, &doc1(), vp(1, 9), n(0))),
+        DeleteError::NotArranged
     ));
 }
 
@@ -591,6 +625,18 @@ fn rearrange_rejects_in_documented_order() {
         rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 5)])),
         RearrangeError::OutOfBounds
     ));
+    // Which wins, in each documented pair. Count before ascent: two cuts,
+    // descending.
+    assert!(matches!(
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 1)])),
+        RearrangeError::BadCutCount
+    ));
+    // Ascent before subspace: three cuts, out of order, with the middle one
+    // in the link subspace.
+    assert!(matches!(
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(2, 1), vp(1, 3)])),
+        RearrangeError::NotAscending
+    ));
 }
 
 // ---- §B VERSION ----
@@ -602,6 +648,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     // shared runs are R-recorded (J1★).
     let k = mem_kernel();
     let vs = insert3(&k);
+    seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
     let (fork, _) = vs
         .version(PrincipalId(1), &doc1())
         .expect("owned fork commits");
@@ -612,6 +659,11 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
         assert_eq!(m5.content_runs(&fork), m5.content_runs(&doc1()));
         let cov = SpanSet::singleton(m5.content_runs(&doc1())[0].iextent());
         assert_eq!(m5.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
+        // V2: the snapshot is of the CONTENT subspace. The source's seated
+        // link stays the source's — carried over it would sit in the fork
+        // under an origin that is not the fork, which CL-OWN forbids.
+        assert_eq!(m5.link_count(&fork), n(0));
+        assert_eq!(m5.link_count(&doc1()), n(1));
     }
     // Edit the fork: its content chain mints LENGTH-9 elements; the source
     // is untouched.
@@ -714,9 +766,81 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
         )),
         CopyError::NotOwner(d) if d == doc1()
     ));
+    // The ω gate precedes every shape check INSERT makes: an empty value
+    // list from a non-owner is refused as NotOwner, not as EmptyContent.
+    assert!(matches!(
+        rejected(vs.insert(p2, &doc1(), vp(1, 1), vec![])),
+        InsertError::NotOwner(d) if d == doc1()
+    ));
     assert_eq!(k.current_seq(), before, "ownership rejections leave no state change");
     vs.delete(P1, &doc1(), vp(1, 1), n(1))
         .expect("the owner's delete still commits");
+}
+
+#[test]
+fn an_unregistered_document_never_yields_an_ownership_verdict() {
+    // `gate_write`'s order, and the reason for it: a write aimed at an
+    // address that names no document is refused for that, and the caller
+    // learns nothing about who would have owned it. The caller MUST be one
+    // that fails the ω check — ω of an unregistered address still resolves
+    // by longest registered prefix, so P1 owns [1,0,1,0,9] and would pass,
+    // leaving both orders agreeing on DocNotRegistered.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let un = a(&[1, 0, 1, 0, 9]);
+    let p2 = Caller::Principal(PrincipalId(2));
+    assert!(matches!(
+        rejected(vs.insert(p2, &un, vp(1, 1), vec![val(b"x")])),
+        InsertError::DocNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.delete(p2, &un, vp(1, 1), n(1))),
+        DeleteError::DocNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.rearrange(p2, &un, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        RearrangeError::DocNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.copy(
+            p2,
+            &un,
+            vp(1, 1),
+            &[VSpec {
+                source: doc1(),
+                span: vspan(1, 1, 1),
+            }]
+        )),
+        CopyError::DocNotRegistered
+    ));
+}
+
+#[test]
+fn the_system_caller_bypasses_the_owner_check_but_not_registration() {
+    // `Caller::System` is the in-process automation path (M9's rule firings
+    // and predicate-def writes), exempt from ω by architecture rather than
+    // by omission — it carries no principal, so ω could never match it. The
+    // exemption is exactly one check wide: registration still gates.
+    let k = mem_kernel();
+    let vs = Vstream::new(&k);
+    let (start, _) = vs
+        .insert(Caller::System, &doc1(), vp(1, 1), vec![val(b"s")])
+        .expect("the automation path writes without a principal");
+    assert_eq!(start, ca(1));
+    assert_eq!(
+        k.snapshot().world().m5().point(&doc1(), &vp(1, 1)),
+        Some(ca(1))
+    );
+    // And into a document owned by a different principal — the exemption is
+    // not "System happens to own this one".
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    vs.insert(Caller::System, &subdoc, vp(1, 1), vec![val(b"s")])
+        .expect("no document's ω restricts the automation path");
+    // Registration is not waived.
+    assert!(matches!(
+        rejected(vs.insert(Caller::System, &a(&[1, 0, 1, 0, 9]), vp(1, 1), vec![val(b"x")])),
+        InsertError::DocNotRegistered
+    ));
 }
 
 #[test]

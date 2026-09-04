@@ -427,14 +427,30 @@ mod tests {
     //! The design's per-op-bound claim, verified literally: a MINIMAL test
     //! world — `HasM5 + HasM3`, `Record = M5Rec` (the identity `From`) —
     //! drives `delete` and `rearrange`; no content store, no `From<M3Rec>`.
+    //!
+    //! And COPY's content-side referential gate (S3★), which needs a world
+    //! whose arrangement and content store can be seeded INDEPENDENTLY — a
+    //! state no engine reaches, every arranged address there having been
+    //! written by INSERT in the same composite.
 
     use serde::{Deserialize, Serialize};
+    use skep_content::ContentStore;
     use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig};
     use skep_namespace::M3State;
 
     use super::*;
     use crate::state::M5State;
-    use crate::testutil::{ca, doc1, n, run, seeded_m3, vp};
+    use crate::testutil::{ca, doc1, doc2, n, run, seeded_m3, vp, vspan};
+
+    /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
+    /// verbatim, per M2's transact contract).
+    fn rejected<T, E: fmt::Debug>(r: Result<T, TxnError<E>>) -> E {
+        match r {
+            Err(TxnError::Rejected(e)) => e,
+            Err(other) => panic!("expected TxnError::Rejected, got {other:?}"),
+            Ok(_) => panic!("expected TxnError::Rejected, got Ok"),
+        }
+    }
 
     #[derive(Clone, Serialize, Deserialize)]
     struct MiniWorld {
@@ -481,6 +497,112 @@ mod tests {
         // reason the impl is written out rather than derived.
         let k = mini_kernel();
         assert_eq!(format!("{:?}", Vstream::new(&k)), "Vstream");
+    }
+
+    /// A world carrying a content store beside the arrangement — the one
+    /// slice `MiniWorld` deliberately lacks, kept a separate type so the
+    /// per-op-bound claim `MiniWorld` witnesses stays witnessed.
+    #[derive(Clone, Serialize, Deserialize)]
+    struct GateWorld {
+        m3: M3State,
+        content: ContentStore,
+        m5: M5State,
+    }
+
+    impl WorldState for GateWorld {
+        type Record = M5Rec;
+        fn apply(&self, r: &M5Rec) -> GateWorld {
+            GateWorld {
+                m3: self.m3.clone(),
+                content: self.content.clone(),
+                m5: self.m5.apply_m5(r),
+            }
+        }
+    }
+    impl HasM3 for GateWorld {
+        fn m3(&self) -> &M3State {
+            &self.m3
+        }
+    }
+    impl HasContent for GateWorld {
+        fn content(&self) -> &ContentStore {
+            &self.content
+        }
+    }
+    impl HasM5 for GateWorld {
+        fn m5(&self) -> &M5State {
+            &self.m5
+        }
+    }
+
+    /// doc1 arranged as `run(ca(1), 3)`, with the content store holding the
+    /// bytes of exactly `present`. The two halves of S3★ are set apart from
+    /// each other, which is what lets one test say which of them COPY reads.
+    fn gate_kernel(present: &[u32]) -> Kernel<GateWorld> {
+        let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
+            doc: doc1(),
+            at: n(1),
+            runs: vec![run(&ca(1), 3)],
+        });
+        let mut content = ContentStore::default();
+        for &k in present {
+            let cw = stage_write(&content, &ca(k), Val::new(&b"x"[..]))
+                .expect("each seeded address is written once");
+            content = content.apply_write(&cw);
+        }
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        Kernel::open(
+            cfg,
+            GateWorld {
+                m3: seeded_m3(),
+                content,
+                m5,
+            },
+        )
+        .expect("in-memory open")
+    }
+
+    #[test]
+    fn copy_rejects_a_source_run_whose_start_is_absent_from_the_content_store() {
+        // §5/S3★: COPY asserts each resolved run start ∈ dom(C) before
+        // placing it, so a transclusion cannot manufacture a reference to
+        // bytes that were never written — a reference R would then keep
+        // permanently (P2) and every later RETRIEVEV would fail to resolve.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let whole = |count: u32| {
+            vec![VSpec {
+                source: doc1(),
+                span: vspan(1, 1, count),
+            }]
+        };
+
+        // Nothing written: the resolved run's start, ca(1), is absent.
+        let k = gate_kernel(&[]);
+        assert!(matches!(
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole(2))),
+            CopyError::DanglingSource
+        ));
+
+        // The identical COPY against a store that holds the bytes commits —
+        // without this, the rejection above could be earned by anything.
+        let k = gate_kernel(&[1, 2, 3]);
+        Vstream::new(&k)
+            .copy(p1, &doc2(), vp(1, 1), &whole(2))
+            .expect("a resolved run whose start is present is admitted");
+        assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(2));
+
+        // Open decision #5's default, pinned: the gate reads run STARTS and
+        // relies on the source's own S3★ for the interior. ca(3) is absent,
+        // yet the width-3 run starting at the present ca(1) is admitted —
+        // widening the gate to every address of a run turns this red, which
+        // is how such a change announces itself.
+        let k = gate_kernel(&[1, 2]);
+        Vstream::new(&k)
+            .copy(p1, &doc2(), vp(1, 1), &whole(3))
+            .expect("the run start is present, so the run is admitted");
     }
 
     #[test]

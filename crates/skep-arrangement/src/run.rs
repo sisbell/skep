@@ -258,6 +258,16 @@ mod tests {
         // …and none of the fork's length-9 elements.
         let forked = Run::new(vca(1), n(2)).expect("valid run");
         assert_eq!(forked.offsets_covered_by(&base), None);
+        // The fallback's OTHER entry condition: a span at the run's own
+        // endpoint length that is not level-uniform. M1's `intersect` gates
+        // on uniformity as well as on length, so this span would fault the
+        // same-class branch — and it covers only PART of the run, which is
+        // the contiguous-subset half of the claim. `[ca(3), [2])` opens at
+        // the run's second position and reaches past its last.
+        let partial = Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
+        assert_eq!(partial.start().len(), r.i_start.tumbler().len());
+        assert!(!partial.is_level_uniform());
+        assert_eq!(r.offsets_covered_by(&partial), Some((n(1), n(3))));
     }
 
     #[test]

@@ -364,6 +364,55 @@ mod tests {
     }
 
     #[test]
+    fn reorder_tiles_by_placement_for_every_admissible_cut_vector() {
+        // ASN-0119/ASN-0084 Q14: the tiling is a law over the whole
+        // R-PRE-admissible input class, and at n_C = 5 that class is small
+        // enough to exhaust — the strictly ascending 3- and 4-subsets of the
+        // admissible boundaries [1, n_C + 1], 20 + 15 = 35 vectors. The two
+        // worked examples above test two of them; the swap-α offset bug this
+        // construction exists to avoid is exactly the kind that survives a
+        // chosen example. The expectation is built by slicing a plain address
+        // vector, never by a second run-list, so it cannot inherit the
+        // implementation's mistake, and the result is read positionally, so
+        // it does not depend on how the runs decompose.
+        let base: Vec<Address> = (1u32..=5).map(ca).collect();
+        let l = list(vec![run(&ca(1), 5)]);
+        let read = |l: &RunList| -> Vec<Address> {
+            (1..=5).map(|i| l.point(&n(i)).expect("arranged")).collect()
+        };
+        let mut checked = 0usize;
+        for a in 1..=6usize {
+            for b in a + 1..=6 {
+                for c in b + 1..=6 {
+                    // Pivot: [c₀, c₁) and [c₁, c₂) exchange in place.
+                    let want = [&base[..a - 1], &base[b - 1..c - 1], &base[a - 1..b - 1], &base[c - 1..]]
+                        .concat();
+                    let out = l.reorder(&[n(a as u32), n(b as u32), n(c as u32)]);
+                    assert_eq!(read(&out), want, "pivot at {a}, {b}, {c}");
+                    assert_eq!(out.total_width(), n(5), "pivot at {a}, {b}, {c} permutes");
+                    checked += 1;
+                    for d in c + 1..=6 {
+                        // Swap: the outer regions exchange, the middle stays.
+                        let want = [
+                            &base[..a - 1],
+                            &base[c - 1..d - 1],
+                            &base[b - 1..c - 1],
+                            &base[a - 1..b - 1],
+                            &base[d - 1..],
+                        ]
+                        .concat();
+                        let out = l.reorder(&[n(a as u32), n(b as u32), n(c as u32), n(d as u32)]);
+                        assert_eq!(read(&out), want, "swap at {a}, {b}, {c}, {d}");
+                        assert_eq!(out.total_width(), n(5), "swap at {a}, {b}, {c}, {d} permutes");
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 35, "every admissible 3- and 4-cut vector at n_C = 5");
+    }
+
+    #[test]
     fn resolve_range_clips_accept_and_intersect() {
         // ASN-0118: out-of-range silently dropped; V-ordered result.
         let l = list(vec![run(&ca(1), 3)]);

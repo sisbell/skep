@@ -257,3 +257,48 @@ impl fmt::Display for SeatError {
     }
 }
 impl Error for SeatError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::t;
+
+    #[test]
+    fn wrapping_errors_name_their_own_layer_and_delegate_the_cause() {
+        // The terse `Display` on the wrapping variants is affordable only
+        // because the cause is reachable through `source`, so a reporter
+        // walking the chain prints it exactly once. That chain is the whole
+        // justification, and it is what this pins.
+        let m = MintError::HomeNotRegistered;
+        let e = InsertError::Mint(m);
+        assert_eq!(e.to_string(), "insert: content mint failed");
+        // Compared against the inner error's OWN message, never against M3's
+        // literal text: M3 may reword freely, and the claim here is that the
+        // cause arrives, not what it says.
+        assert_eq!(
+            e.source().expect("the mint failure is the cause").to_string(),
+            m.to_string()
+        );
+
+        let v = VersionError::Mint(m);
+        assert_eq!(v.to_string(), "version: identity mint failed");
+        assert_eq!(
+            v.source().expect("the mint failure is the cause").to_string(),
+            m.to_string()
+        );
+
+        let c = ContentError::AlreadyPresent(t(&[1, 0, 1, 0, 1, 0, 1, 1]));
+        let w = InsertError::Content(c.clone());
+        assert_eq!(w.to_string(), "insert: content write rejected");
+        assert_eq!(
+            w.source().expect("the write refusal is the cause").to_string(),
+            c.to_string()
+        );
+
+        // The unwrapped verdicts are the end of the chain: they describe
+        // themselves and wrap nothing.
+        assert!(InsertError::EmptyContent.source().is_none());
+        assert!(VersionError::NotAPrincipal.source().is_none());
+        assert!(CopyError::EmptyResult.source().is_none());
+    }
+}

@@ -154,6 +154,13 @@ mod tests {
         assert!(!is_ordinal_vspan(&shallow));
         let deep = Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12");
         assert!(!is_ordinal_vspan(&deep));
+        // #width ≠ 2 alone, with the other two clauses satisfied. T12 admits
+        // this span — action point 2 ≤ #start 2 — and its start is a
+        // well-formed V-position with a zero at width position 1, so only
+        // `#width == 2` stands between it and being read as five ordinals
+        // from [1, 1]. Its reach is [1, 6, 0]: it names something else.
+        let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12: action point 2 ≤ #start");
+        assert!(!is_ordinal_vspan(&deep_width));
         // A level-uniform [m, n] width with m > 0 is action-point-1.
         let level_uniform = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
         assert!(!is_ordinal_vspan(&level_uniform));

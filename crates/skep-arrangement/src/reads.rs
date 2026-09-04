@@ -289,6 +289,12 @@ mod tests {
         assert!(s.resolve(&doc1(), &short).is_empty());
         let deep = Span::new(t(&[1, 1, 1]), t(&[0, 0, 1])).expect("T12");
         assert!(s.resolve(&doc1(), &deep).is_empty());
+        // #width ≠ 2 alone: T12 admits this span (action point 2 ≤ #start 2),
+        // its start is a well-formed V-position and its width position 1 is
+        // zero, so only the width-length clause refuses it. Served, it would
+        // resolve five content ordinals for a span whose reach is [1, 6, 0].
+        let deep_width = Span::new(t(&[1, 1]), t(&[0, 5, 0])).expect("T12: action point 2 ≤ #start");
+        assert!(s.resolve(&doc1(), &deep_width).is_empty());
         // Non-ordinal width [m, n] with m > 0 (action-point-1).
         let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12");
         assert!(s.resolve(&doc1(), &lu).is_empty());
@@ -297,6 +303,20 @@ mod tests {
         assert!(s.resolve(&doc1(), &odd).is_empty());
         // Absent doc.
         assert!(s.resolve(&doc2(), &vspan(1, 1, 1)).is_empty());
+    }
+
+    #[test]
+    fn resolve_serves_the_link_subspace_off_its_own_run_list() {
+        // §2: the span's subspace numeral selects the run-list, so a link
+        // span resolves against the LINK runs — which is what makes COPY's
+        // `SourceNotContentSubspace` a needed guard rather than a formality,
+        // and what M7 relies on when it builds a slot endset.
+        let s = arranged();
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+        assert_eq!(s.resolve(&doc1(), &vspan(2, 1, 2)), vec![run(&la(1), 2)]);
+        // Clipped to n_L, exactly as the content side is.
+        assert!(s.resolve(&doc1(), &vspan(2, 3, 1)).is_empty());
     }
 
     #[test]
@@ -386,9 +406,44 @@ mod tests {
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].start(), &t(&[1, 1]));
         assert_eq!(spans[0].width(), &t(&[0, 3]));
+        // Same-length but NOT level-uniform — M1's length-gated `intersect`
+        // faults on it, so it takes the fallback too, and `project`'s
+        // fault-free claim covers it. `[ca(3), [2])` opens inside the
+        // length-8 run and reaches past every address either run holds, so
+        // it takes that run's last position and all of the transcluded one:
+        // ordinals 3, 4, 5, coalesced into one span.
+        let cross = Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
+        assert!(!cross.is_level_uniform());
+        let got = s.project(&doc1(), &SpanSet::singleton(cross));
+        let spans: Vec<Span> = got.iter().cloned().collect();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start(), &t(&[1, 3]));
+        assert_eq!(spans[0].width(), &t(&[0, 3]));
         // Absent doc ⇒ ⟨⟩; empty coverage ⇒ ⟨⟩.
         assert!(s.project(&doc2(), &one).is_empty());
         assert!(s.project(&doc1(), &SpanSet::empty()).is_empty());
+    }
+
+    #[test]
+    fn project_reports_content_positions_only() {
+        // §2/BH3: I→V projection is the CONTENT subspace's, by construction —
+        // link reverse-discovery is M7's. A link-subspace coverage has no
+        // footprint here, and mixing one into a content coverage adds
+        // nothing: the answer is the content footprint alone. The link
+        // addresses share the content addresses' length class, so this is
+        // decided by the run-lists consulted, not by a length mismatch.
+        let s = arranged();
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+        let links = run(&la(1), 2).iextent();
+        assert_eq!(links.start().len(), ca(1).tumbler().len());
+        assert!(s.project(&doc1(), &SpanSet::singleton(links.clone())).is_empty());
+        let mixed: SpanSet = vec![run(&ca(2), 1).iextent(), links].into_iter().collect();
+        let got = s.project(&doc1(), &mixed);
+        let spans: Vec<Span> = got.iter().cloned().collect();
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start(), &t(&[1, 2]));
+        assert_eq!(spans[0].width(), &t(&[0, 1]));
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
-use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
+use skep_arrangement::{ordinal_vspan, M5State, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::helpers::{
@@ -43,9 +43,29 @@ fn ext_span(s: &Nat, n: &Nat) -> Span {
 /// `CURRENT` is a set and this is an enumeration WITH MULTIPLICITY: an
 /// address placed at two V-positions of `d` by intra-document transclusion is
 /// yielded twice, so callers dedup.
-fn current_content(m5: &M5State, d: &Address) -> Vec<Address> {
-    let runs = m5.content_runs(d);
-    runs.iter().flat_map(Run::addrs).collect()
+///
+/// LAZY, and that is the point rather than a style: `d`'s arrangement binds
+/// one content position per byte the document was written with, and each
+/// position enumerated is an OWNED `Address` — a `Vec<Nat>` of element
+/// components, order hundreds of bytes and a handful of allocations. Handing
+/// back a `Vec` would make the peak live heap of a two-document combine the
+/// size of both documents, from a request naming two addresses and nothing
+/// else; streaming makes it the size of the part the caller's filter keeps.
+/// Each run's positions are enumerated by the run that owns them, exactly as
+/// [`Query::retrieve_v`] does — spelled out here rather than delegated to
+/// `Run::addrs`, which borrows the run it walks and so cannot outlive the
+/// run-list this iterator consumes.
+fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
+    m5.content_runs(d).into_iter().flat_map(|run| {
+        let mut k = Nat::zero();
+        std::iter::from_fn(move || {
+            (k < *run.width()).then(|| {
+                let a = run.addr_at(&k);
+                k = &k + &Nat::one();
+                a
+            })
+        })
+    })
 }
 
 impl<'s, W: M6World> Query<'s, W> {
@@ -61,6 +81,16 @@ impl<'s, W: M6World> Query<'s, W> {
     /// spec-set ⇒ `Ok(empty)`. Delivery is one item per active V-position
     /// (R3 exactness, R8 no-dedup), per-spec concatenation in submitted
     /// order (R5), ascending-V within, no merge, no global sort.
+    ///
+    /// COST IS THE ANSWER'S SIZE, AND THE ANSWER'S SIZE IS A PRODUCT M6 MAY
+    /// NOT NARROW. The delivery is `Σᵢ |σᵢ ∩ [1, n_Sᵢ]|` items, so `k` specs
+    /// each naming a whole document deliver `k · n_C` items — one `Arc` clone
+    /// per item, never a byte copy, but one item nonetheless — and `k` is the
+    /// caller's. R3 forbids delivering fewer, R5 forbids reordering into
+    /// something cheaper and R8 forbids collapsing the repeats, so no refusal
+    /// M6 could add here would leave RETRIEVEV the operation ASN-0115
+    /// specifies. The only cap that closes it is a spec-count or response-size
+    /// cap on the route, which is M10's as the request lifecycle's owner.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
         let w = self.0.world();
         let (m3, m5, c) = (w.m3(), w.m5(), w.content());
@@ -85,6 +115,16 @@ impl<'s, W: M6World> Query<'s, W> {
                 // run answers for its own positions.
                 for a in run.addrs() {
                     match sub {
+                        // S3★ — an arranged content position has an M4 value
+                        // — is kept on M5's WRITE path, and this read is
+                        // where a regression in it would surface. The two
+                        // sites that keep it: `insert` rides mint, write and
+                        // place in one transaction, and `copy` places only
+                        // runs its `SourceNotContentSubspace` (no link
+                        // address at a content position) and per-run
+                        // `DanglingSource` (M4 holds the run's start) guards
+                        // admit. Widening either is what would put an
+                        // address here that M4 never stored.
                         Some(Subspace::Content) => out.push(DeliveryItem::Content(
                             c.value_at(a.tumbler())
                                 .expect("S3★: an arranged content position has a stored value")
@@ -245,14 +285,21 @@ impl<'s, W: M6World> Query<'s, W> {
     /// the deduped, Tumbler-ordered set of the EXISTING I-addresses
     /// (D-IDENT — never copies; D-ORD).
     ///
-    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
+    /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
     /// it is not bounded by the answer either. No span narrows the request, so
     /// both documents are enumerated WHOLE: the work is
     /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|`, paid in full
     /// even when the two share nothing and both halves come back empty. M6
     /// owns no admission control and no refusal for it: capping request rate
     /// and concurrency for a route carrying this read is M10's, as the request
-    /// lifecycle's owner.
+    /// lifecycle's owner — and a request-size cap is no help here, this
+    /// request being two addresses whatever the documents behind them hold.
+    ///
+    /// MEMORY IS THE ANSWER'S. [`current_content`] streams, so what is held
+    /// live is the deduped halves and one address at a time, not a
+    /// materialized copy of either document's position list. The worst case
+    /// is therefore the honest one: two documents where each has deleted what
+    /// the other still holds, whose answer genuinely is that many addresses.
     pub fn show_deletions(
         &self,
         d_a: &Address,
@@ -268,16 +315,10 @@ impl<'s, W: M6World> Query<'s, W> {
         let del_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
         let del_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
         // CURRENT in the one document ∧ DELETED from the other, both ways.
-        let deleted_from_a_with_b = dedup_addrs(
-            current_content(m5, d_b)
-                .into_iter()
-                .filter(|a| del_a.denotes(a.tumbler())),
-        );
-        let deleted_from_b_with_a = dedup_addrs(
-            current_content(m5, d_a)
-                .into_iter()
-                .filter(|a| del_b.denotes(a.tumbler())),
-        );
+        let deleted_from_a_with_b =
+            dedup_addrs(current_content(m5, d_b).filter(|a| del_a.denotes(a.tumbler())));
+        let deleted_from_b_with_a =
+            dedup_addrs(current_content(m5, d_a).filter(|a| del_b.denotes(a.tumbler())));
         Ok(Deletions {
             deleted_from_a_with_b,
             deleted_from_b_with_a,
@@ -311,12 +352,20 @@ impl<'s, W: M6World> Query<'s, W> {
     /// members ⇔ empty denotation), the predicate the design's M1-seam ask
     /// named (landed in the built M1).
     ///
-    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT. The candidate scan is
-    /// `|coverage|` — the union of the region images, itself unbounded in the
-    /// spans a caller may name — against the whole of M5's R⁻¹ index, and the
-    /// filter runs one `project` per candidate. M6 owns no admission control
-    /// and no refusal for it: capping request size, rate and concurrency for a
-    /// route carrying this read is M10's, as the request lifecycle's owner.
+    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT, in three factors and not
+    /// one. `|coverage|` is the union of the region images, itself unbounded
+    /// in the spans a caller may name; the candidate scan is that coverage
+    /// against the whole of M5's R⁻¹ index; and the filter is one `project`
+    /// per candidate, each itself `#runs(d) · |coverage|` in the CANDIDATE's
+    /// own fragmentation — a factor the request never names and M6 never sees.
+    /// So the work is `|candidates| · #runs(d) · |coverage|`.
+    ///
+    /// It is LINEAR in the request, unlike COMPARE's join, which is why a
+    /// request-size cap would bound it proportionally and no budget is taken
+    /// here. That cap is unassigned rather than delegated: M6 hands request
+    /// size, rate and concurrency to M10 as the request lifecycle's owner, and
+    /// M10's codec records that the cost model of a REGION SET is M6's rather
+    /// than its own. One of the two must take the number.
     pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());

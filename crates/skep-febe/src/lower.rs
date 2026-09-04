@@ -422,6 +422,14 @@ impl Lower for CompareError {
                     ..FaultSite::default()
                 }),
             ),
+            // The two budget refusals. `TooManyBlocks` is one operand's, so
+            // the operand rides the site; `TooManyPairs` is the report's and
+            // belongs to neither.
+            CompareError::TooManyBlocks { operand } => (
+                RejectCode::TooManyBlocks,
+                Some(FaultSite { operand: Some(operand), ..FaultSite::default() }),
+            ),
+            CompareError::TooManyPairs => (RejectCode::TooManyPairs, None),
         }
     }
 }
@@ -803,6 +811,8 @@ mod tests {
             index: 0,
             fault: SpanFault::StartNotZeroFree,
         });
+        same_name(CompareError::TooManyBlocks { operand: Operand::First });
+        same_name(CompareError::TooManyPairs);
         same_name(FindError::DocNotRegistered(doc()));
         same_name(FindError::MalformedSpan {
             region: 0,

@@ -104,6 +104,11 @@ pub enum DeletionsError {
 /// plus the operand tag; the registry fault carries the offending document
 /// instead, which locates it just as unambiguously. Per span, the
 /// content-subspace residence check runs BEFORE the well-formedness gate.
+///
+/// The last two are the budget refusals COMPARE's superlinear join needs, and
+/// are the only rejections here that name no defect in the request's SHAPE —
+/// only its size. Both name the budget they passed, so a client learns which
+/// dimension to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CompareError {
     DocNotRegistered(Address),
@@ -118,6 +123,18 @@ pub enum CompareError {
         index: usize,
         fault: SpanFault,
     },
+    /// The operand resolves to more than [`MAX_COMPARE_BLOCKS`] blocks. The
+    /// join is `|P|·|Q|`, so a per-operand budget is what bounds it; refused
+    /// before the join runs, with ρ₁ resolved first.
+    ///
+    /// [`MAX_COMPARE_BLOCKS`]: crate::MAX_COMPARE_BLOCKS
+    TooManyBlocks { operand: Operand },
+    /// The join reached [`MAX_COMPARE_PAIRS`] correspondences. The block
+    /// budget cannot see this one: two small operands naming the same
+    /// position fan out to their product.
+    ///
+    /// [`MAX_COMPARE_PAIRS`]: crate::MAX_COMPARE_PAIRS
+    TooManyPairs,
 }
 
 /// FINDDOCSCONTAINING rejection (ASN-0124): every named document must be
@@ -235,6 +252,18 @@ impl fmt::Display for CompareError {
             } => write!(
                 f,
                 "compare: {operand} region {region} span {index} is malformed: {fault}"
+            ),
+            CompareError::TooManyBlocks { operand } => write!(
+                f,
+                "compare: {operand} resolves past the {}-block operand budget \
+                 (MAX_COMPARE_BLOCKS); narrow its spans or split the request",
+                crate::MAX_COMPARE_BLOCKS
+            ),
+            CompareError::TooManyPairs => write!(
+                f,
+                "compare: the report passes {} correspondences (MAX_COMPARE_PAIRS); \
+                 narrow the two regions",
+                crate::MAX_COMPARE_PAIRS
             ),
         }
     }

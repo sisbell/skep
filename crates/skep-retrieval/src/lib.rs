@@ -38,6 +38,24 @@
 //! model" is the borrowed [`Snapshot`], the returned value types, and
 //! per-query transients dropped at return.
 //!
+//! ## What M6 refuses for size, and what it does not
+//!
+//! Six of the seven operations cost what their answer costs, or what the
+//! documents they name cost, and M6 bounds neither: capping request size,
+//! rate and concurrency for a route carrying a read is M10's, as the request
+//! lifecycle's owner, and each operation whose cost outruns its answer says so
+//! on its own card ([`Query::show_deletions`], [`Query::find_docs_containing`],
+//! [`Query::retrieve_v`]).
+//!
+//! COMPARE is the exception, because its cost is SUPERLINEAR in its request:
+//! the join is `|P|·|Q|` over two block lists the caller sizes independently,
+//! so a byte cap on the request buys the square of what it bounds and no
+//! upstream gate can price it. It therefore carries its own two budgets —
+//! [`MAX_COMPARE_BLOCKS`] per operand and [`MAX_COMPARE_PAIRS`] per report,
+//! both published so a caller sizes a request against the number rather than
+//! transcribing it, and both refusals rather than truncations, so every
+//! request COMPARE answers is answered completely.
+//!
 //! ## SHOWORIGIN's I-arity — de-scoped (ruling)
 //!
 //! Only the V-arity ships ([`Query::show_origin_v`]). The I-arity needs an
@@ -70,6 +88,7 @@ mod helpers;
 mod query;
 mod types;
 
+pub use compare::{MAX_COMPARE_BLOCKS, MAX_COMPARE_PAIRS};
 pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
     SpanFault,

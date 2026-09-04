@@ -176,12 +176,16 @@ pub enum RejectCode {
     IllFormedSuccessor,
     DcViolation,
     // ── M6 content/provenance read (MalformedSpan also covers
-    //    RetrieveError::MalformedSpec) ──
+    //    RetrieveError::MalformedSpec; the last two are COMPARE's own budget
+    //    refusals, its join being the one read whose cost squares in the
+    //    request) ──
     NoSuchSubspace,
     EmptySubspace,
     DepthIncompatible,
     RangeNotPresent,
     MalformedSpan,
+    TooManyBlocks,
+    TooManyPairs,
     // ── M8 link discovery read ──
     NotALink,
     BadRegion,
@@ -554,6 +558,8 @@ mod tests {
             | RejectCode::DepthIncompatible
             | RejectCode::RangeNotPresent
             | RejectCode::MalformedSpan
+            | RejectCode::TooManyBlocks
+            | RejectCode::TooManyPairs
             | RejectCode::NotALink
             | RejectCode::BadRegion => Disposition::Permanent,
         }
@@ -562,7 +568,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 64] = [
+    const ALL_CODES: [RejectCode; 66] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -625,13 +631,16 @@ mod tests {
         RejectCode::DepthIncompatible,
         RejectCode::RangeNotPresent,
         RejectCode::MalformedSpan,
+        RejectCode::TooManyBlocks,
+        RejectCode::TooManyPairs,
         RejectCode::NotALink,
         RejectCode::BadRegion,
     ];
 
     /// §5: the policy is a TOTAL function off the flat code, and the advice
-    /// it gives for each of the 62 codes is the advice the design's table
-    /// documents — not merely the advice the catch-all happens to produce.
+    /// it gives for every code in [`ALL_CODES`] is the advice the design's
+    /// table documents — not merely the advice the catch-all happens to
+    /// produce.
     #[test]
     fn the_disposition_table_deviates_only_where_documented() {
         for code in ALL_CODES {

@@ -11,8 +11,10 @@
 //! reject-never-clamp admissibility, the exact-extent boundary included
 //! (WF_V/O13); the cross-document SHOWDELETIONS combine (D-IDENT/D-ORD);
 //! COMPARE's address-equal join — per-block feet, overlap widths, fan-out
-//! completeness, region confinement, the four-component presentation, and the
-//! whole relation against an independent per-position oracle;
+//! completeness, region confinement, the four-component presentation, the
+//! whole relation against an independent per-position oracle, and the two
+//! budgets that refuse (never truncate) a request whose `|P|·|Q|` outruns
+//! them;
 //! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
 //! every region span's coverage; that a query answers from the snapshot it
 //! pinned and never mutates; and the derive policy M10 marshals against.
@@ -34,6 +36,7 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
     FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
+    MAX_COMPARE_BLOCKS,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -1568,6 +1571,66 @@ fn compare_rejects_with_operand_region_index_attribution() {
             fault: SpanFault::StartTooShallow
         }
     ));
+}
+
+#[test]
+fn compare_refuses_an_operand_past_its_block_budget() {
+    // The join is |P|·|Q| and BOTH factors are the request's: a region names
+    // a span list and a spec-set names a region list, each capped separately
+    // upstream, so their product is capped by nothing upstream. Each operand
+    // is refused on its own, and the refusal names WHICH — a client cannot
+    // narrow the operand it was not told about.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let one = || vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
+    let over = vec![region_spec(
+        doc1(),
+        vec![vspan(1, 1, 1); MAX_COMPARE_BLOCKS + 1],
+    )];
+    assert_eq!(
+        err_of(q.compare(&over, &one())),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
+    assert_eq!(
+        err_of(q.compare(&one(), &over)),
+        CompareError::TooManyBlocks {
+            operand: Operand::Second
+        }
+    );
+    // The cap refuses only what is PAST it, and refuses the request WHOLE:
+    // at the budget the same shape still answers, and answers completely
+    // (one pair per block — a truncating cap would answer with fewer and
+    // break X8).
+    let at = vec![region_spec(doc1(), vec![vspan(1, 1, 1); MAX_COMPARE_BLOCKS])];
+    assert_eq!(ok_of(q.compare(&at, &one())).len(), MAX_COMPARE_BLOCKS);
+    // The refusal says which budget and how large it is, so a client sizing
+    // its next request reads the number rather than guessing it.
+    let e = err_of(q.compare(&over, &one()));
+    assert!(e.to_string().contains(&MAX_COMPARE_BLOCKS.to_string()));
+}
+
+#[test]
+fn compare_refuses_a_fanout_past_its_pair_budget() {
+    // 257 × 257 = 66,049 pairs from 514 blocks — an operand count the block
+    // budget admits many times over. Fan-out is bounded ONLY by counting the
+    // pairs as they are produced, which is why the second budget exists and
+    // why the first cannot stand in for it.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let side = |n: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); n])];
+    assert_eq!(
+        err_of(q.compare(&side(257), &side(257))),
+        CompareError::TooManyPairs
+    );
+    // Under the budget, the same shape reports the FULL cross-product (X8):
+    // the cap refuses, and never thins a report it admits.
+    assert_eq!(ok_of(q.compare(&side(16), &side(16))).len(), 256);
 }
 
 // ---- §E FINDDOCSCONTAINING ----

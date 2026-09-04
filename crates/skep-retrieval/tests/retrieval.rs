@@ -895,8 +895,8 @@ fn compare_rejects_with_operand_region_index_attribution() {
 
 #[test]
 fn find_docs_containing_filters_to_present_tense_containers() {
-    // ASN-0124 FD-SOUND: docs_containing's historical superset is narrowed
-    // by the project filter to CURRENT holders; the raw coverage union may
+    // ASN-0124 FD-SOUND: docs_ever_containing's historical superset is
+    // narrowed by the project filter to CURRENT holders; the raw union may
     // be mixed-length (M5 owns the level-class discipline); bare identities,
     // tumbler-ordered.
     let k = mem_kernel();

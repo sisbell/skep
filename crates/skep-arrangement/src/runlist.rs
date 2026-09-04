@@ -21,12 +21,21 @@ use skep_address::{shift, Address, Nat, SpanSet};
 
 use crate::run::Run;
 
-/// The §1 I-adjacency guard — the COMPLETE and SAFE coalesce condition:
-/// `shift(a₁, w₁) == a₂` implies same origin (ASN-0058 M16a) and excludes
-/// shared-I-extent (M14a); it is vacuously false across origin-lengths
-/// (`shift` preserves length), so cross-length runs never merge — never
-/// across an origin seam (M16), never collapsing a transclusion (M14).
-/// **Never coalesce on value** (S4).
+/// I-adjacency (ASN-0058): `a₂ = a₁ + w₁`, the I-extent of the right run
+/// immediately following the left's.
+///
+/// THE WHOLE RESIDUAL MERGE TEST. ASN-0058's merge condition (M7) is a
+/// conjunction — two blocks may merge iff they are both V-adjacent
+/// (`v₂ = v₁ + w₁`) and I-adjacent — and the first conjunct is discharged by
+/// the representation: consecutive entries of an implicit-position run-list
+/// occupy consecutive V-ordinals, so every neighbouring pair this guard is
+/// asked about is already V-adjacent (§1 — the same representation choice
+/// that makes D-SEQ★/D-CTG★/D-MIN★ hold). I-adjacency is therefore all that
+/// remains to test — and it is also the SAFE half: `shift(a₁, w₁) == a₂`
+/// implies same origin (M16a) and excludes shared-I-extent (M14a), and it is
+/// vacuously false across origin-lengths (`shift` preserves length), so
+/// cross-length runs never merge — never across an origin seam (M16), never
+/// collapsing a transclusion (M14). **Never coalesce on value** (S4).
 pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
     shift(left.i_start.tumbler(), &left.width) == *right_start.tumbler()
 }
@@ -198,33 +207,34 @@ impl RunList {
         RunList(coalesced(left))
     }
 
-    /// Cut-determined, value-blind transpose (§1; ASN-0119): split at each cut
-    /// ordinal and **tile by placement** — `[exterior-left][β][μ?][α]
-    /// [exterior-right]` — never offset arithmetic, so the bijection is
-    /// structural (no swap-α offset bug, ASN-0084 Q14). 3 cuts: pivot
-    /// (α = [c₀,c₁), β = [c₁,c₂) exchange). 4 cuts: swap (α = [c₀,c₁),
-    /// μ = [c₁,c₂), β = [c₂,c₃); outer two exchange, middle stays).
+    /// Cut-determined, value-blind transpose (§1; ASN-0119): split at each of
+    /// the cut sequence's ordinals `ord(cⱼ)` and **tile by placement** —
+    /// `[exterior-left][β][μ?][α][exterior-right]` — never offset arithmetic,
+    /// so the bijection is structural (no swap-α offset bug, ASN-0084 Q14).
+    /// 3 ordinals: pivot (α = [c₀,c₁), β = [c₁,c₂) exchange). 4: swap
+    /// (α = [c₀,c₁), μ = [c₁,c₂), β = [c₂,c₃); outer two exchange, middle
+    /// stays).
     ///
     /// Pivot and swap are ONE computation. Splitting off the exterior-right
-    /// first and then descending through the remaining cuts peels the interior
-    /// regions off right-to-left — β, then μ where there is one, then α — so
-    /// emitting them in the order they were peeled IS the exchange, whatever
-    /// the region count. A cut vector outside R-PRE is outside the fold's
-    /// input class (§10) and 3|4 is debug-asserted; the tiling is nonetheless
-    /// total for any vector — with fewer than three cuts there is no interior
-    /// region to move, so the list comes back unchanged.
-    pub(crate) fn reorder(&self, cuts: &[Nat]) -> RunList {
+    /// first and then descending through the remaining ordinals peels the
+    /// interior regions off right-to-left — β, then μ where there is one, then
+    /// α — so emitting them in the order they were peeled IS the exchange,
+    /// whatever the region count. A cut sequence outside R-PRE is outside the
+    /// fold's input class (§10) and 3|4 is debug-asserted; the tiling is
+    /// nonetheless total for any vector — with fewer than three ordinals there
+    /// is no interior region to move, so the list comes back unchanged.
+    pub(crate) fn reorder(&self, cut_ordinals: &[Nat]) -> RunList {
         debug_assert!(
-            matches!(cuts.len(), 3 | 4),
-            "R-PRE: 3 or 4 cuts (validated at staging)"
+            matches!(cut_ordinals.len(), 3 | 4),
+            "R-PRE: 3 or 4 cut ordinals (validated at staging)"
         );
-        let Some((last, interior_cuts)) = cuts.split_last() else {
+        let Some((last, interior)) = cut_ordinals.split_last() else {
             return self.clone();
         };
         // Descending splits on the prefix keep absolute coordinates.
         let (mut prefix, ext_right) = self.split_at(last);
-        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(interior_cuts.len());
-        for cut in interior_cuts.iter().rev() {
+        let mut regions: Vec<Vec<Run>> = Vec::with_capacity(interior.len());
+        for cut in interior.iter().rev() {
             let (left, region) = split_runs(prefix.iter(), cut);
             regions.push(region);
             prefix = left;

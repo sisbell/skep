@@ -320,11 +320,11 @@ where
                 if m5.content_count(doc).is_zero() {
                     return Err(RearrangeError::EmptyContentSubspace);
                 }
-                let ords: Vec<Nat> = cuts.into_iter().map(|c| c.ordinal).collect();
+                let cut_ordinals: Vec<Nat> = cuts.into_iter().map(|c| c.ordinal).collect();
                 stg.push(
                     M5Rec::ContentReorder {
                         doc: doc.clone(),
-                        cuts: ords,
+                        cut_ordinals,
                     }
                     .into(),
                 );

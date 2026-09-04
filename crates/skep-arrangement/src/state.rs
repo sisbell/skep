@@ -72,9 +72,12 @@ pub enum M5Rec {
     /// DELETE: contract + reseat (no C, no R — ASN-0117 P0/P2).
     #[non_exhaustive]
     ContentRemove { doc: Address, from: Nat, width: Nat },
-    /// REARRANGE: 3|4 cut ordinals, tile-by-placement (no C, no R).
+    /// REARRANGE: the 3|4 ORDINALS of the cut sequence, tile-by-placement (no
+    /// C, no R). A cut is a V-position (ASN-0119); the record carries
+    /// `ord(cⱼ)` for each, the subspace being fixed to s_C by the op's own
+    /// validation.
     #[non_exhaustive]
-    ContentReorder { doc: Address, cuts: Vec<Nat> },
+    ContentReorder { doc: Address, cut_ordinals: Vec<Nat> },
     /// MAKELINK seating (no R — J-LV).
     #[non_exhaustive]
     LinkSeat { doc: Address, link: Address },
@@ -166,8 +169,8 @@ impl M5State {
             },
             // §6 fold: split at cut ordinals, tile by placement. Pure
             // permutation — C, L, R untouched (ASN-0119 RA1/RA6).
-            M5Rec::ContentReorder { doc, cuts } => M5State {
-                arrangements: self.with_content(doc, |c| c.reorder(cuts)),
+            M5Rec::ContentReorder { doc, cut_ordinals } => M5State {
+                arrangements: self.with_content(doc, |c| c.reorder(cut_ordinals)),
                 prov: self.prov.clone(),
             },
             // §8 fold: append `link` at the next link V-position n_L(d) + 1
@@ -251,11 +254,11 @@ mod tests {
         let s1 = place(&s0, &doc1(), 1, vec![run(&ca(1), 3)]);
         assert_eq!(s1.content_count(&doc1()), n(3));
         assert!(s1.content_runs(&doc1()) == vec![run(&ca(1), 3)]);
-        // ever_placed ∖ image is empty right after a place…
+        // ever_contained ∖ image is empty right after a place…
         assert!(s1.deletions(&doc1()).is_empty());
-        // …and the R side is visible through docs_containing.
+        // …and the R side is visible through docs_ever_containing.
         let cov = skep_address::SpanSet::singleton(run(&ca(1), 3).iextent());
-        assert_eq!(s1.docs_containing(&cov), vec![doc1()]);
+        assert_eq!(s1.docs_ever_containing(&cov), vec![doc1()]);
         // Purity: the receiver was untouched.
         assert_eq!(s0.content_count(&doc1()), n(0));
     }
@@ -272,7 +275,7 @@ mod tests {
         });
         assert_eq!(s.content_count(&doc1()), n(3));
         assert!(s.content_runs(&doc1()) == vec![run(&ca(1), 1), run(&ca(4), 2)]);
-        // The deleted iextent [ca(2), ca(4)) is ever-placed minus image.
+        // The deleted iextent [ca(2), ca(4)) is ever-contained minus image.
         let d = s.deletions(&doc1());
         let spans: Vec<_> = d.iter().cloned().collect();
         assert_eq!(spans.len(), 1);
@@ -281,7 +284,7 @@ mod tests {
         // R permanence: the placing doc is still a candidate for the deleted
         // region.
         let cov = skep_address::SpanSet::singleton(spans[0].clone());
-        assert_eq!(s.docs_containing(&cov), vec![doc1()]);
+        assert_eq!(s.docs_ever_containing(&cov), vec![doc1()]);
     }
 
     #[test]
@@ -296,7 +299,7 @@ mod tests {
         assert_eq!(s.content_count(&doc1()), n(0));
         // J-LV: no provenance from link seating.
         let cov = skep_address::SpanSet::singleton(run(&la(1), 2).iextent());
-        assert!(s.docs_containing(&cov).is_empty());
+        assert!(s.docs_ever_containing(&cov).is_empty());
     }
 
     #[test]
@@ -314,7 +317,7 @@ mod tests {
         assert!(s.content_runs(&vdoc()) == s.content_runs(&doc1()));
         // Fork provenance recorded (a candidate for the shared region).
         let cov = skep_address::SpanSet::singleton(run(&ca(1), 2).iextent());
-        assert_eq!(s.docs_containing(&cov), vec![doc1(), vdoc()]);
+        assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
         // Source untouched (V3).
         assert!(s.content_runs(&doc1()) == vec![run(&ca(1), 2), run(&ca(1), 2)]);
     }

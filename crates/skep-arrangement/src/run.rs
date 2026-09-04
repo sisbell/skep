@@ -100,7 +100,7 @@ impl Run {
     /// outside the domain of M1's length-gated set ops — `intersect`,
     /// `difference_sets`, `normalize` and `canonical_key` each fault
     /// `LevelMismatch` on mixed operands. A consumer that aggregates iextents
-    /// (M7's slot endsets, M6's coverage unions) must partition by endpoint
+    /// (M7's slot endsets, M6's region images) must partition by endpoint
     /// length, operate within each class, and combine the per-class results:
     /// in particular a coverage-class dedup key is ONE `canonical_key` PER
     /// level class, never one over the raw aggregate.

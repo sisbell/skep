@@ -30,8 +30,8 @@ skep-namespace = { path = "../skep-namespace" }
 # M4 — value_at, RETRIEVEV's content delivery ONLY; COMPARE/extents/
 # containment/deletions never open it.
 skep-content = { path = "../skep-content" }
-# M5 — the workhorse: resolve/point/counts/runs/resolve_coverage/project/
-# docs_containing/deletions, plus VPos (re-exported through M6's surface).
+# M5 — the workhorse: resolve/point/counts/runs/image/project/
+# docs_ever_containing/deletions, plus VPos (re-exported through M6's surface).
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]

@@ -267,13 +267,13 @@ fn insert_mints_writes_places_and_returns_the_run_start() {
     assert_eq!(runs[0].width(), &n(3));
     assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(2)));
     assert_eq!(read_v(&s, &doc1(), 2), b"b".to_vec());
-    // resolve_coverage is the centralized iextent lift.
-    let cov = m5.resolve_coverage(&doc1(), &vspan(1, 1, 3));
+    // image is the centralized iextent lift.
+    let cov = m5.image(&doc1(), &vspan(1, 1, 3));
     assert!(cov.denotes(ca(1).tumbler()));
     assert!(cov.denotes(ca(3).tumbler()));
     assert!(!cov.denotes(ca(4).tumbler()));
     // J1★ off the same snapshot: the placement is already in R.
-    assert_eq!(m5.docs_containing(&cov), vec![doc1()]);
+    assert_eq!(m5.docs_ever_containing(&cov), vec![doc1()]);
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
     assert_eq!(read_v(&s, &doc2(), 2), b"b".to_vec());
     // Both the origin and the transcluder are R-candidates for the region.
     let cov = SpanSet::singleton(runs[0].iextent());
-    assert_eq!(m5.docs_containing(&cov), vec![doc1(), doc2()]);
+    assert_eq!(m5.docs_ever_containing(&cov), vec![doc1(), doc2()]);
 }
 
 #[test]
@@ -611,7 +611,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
         let m5 = s.world().m5();
         assert!(m5.content_runs(&fork) == m5.content_runs(&doc1()));
         let cov = SpanSet::singleton(m5.content_runs(&doc1())[0].iextent());
-        assert_eq!(m5.docs_containing(&cov), vec![doc1(), vdoc()]);
+        assert_eq!(m5.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
     }
     // Edit the fork: its content chain mints LENGTH-9 elements; the source
     // is untouched.
@@ -793,7 +793,7 @@ fn seat_link_appends_guards_and_never_touches_r_and_links_survive_edits() {
         assert_eq!(m5.point(&doc1(), &vp(2, 2)), Some(link2.clone()));
         // J-LV: link placement is uncoupled from R.
         let cov = SpanSet::singleton(runs[0].iextent());
-        assert!(m5.docs_containing(&cov).is_empty());
+        assert!(m5.docs_ever_containing(&cov).is_empty());
         // The pure step reports the same guards off the snapshot slice.
         assert!(stage_seat_link(m5, &doc1(), &link1).is_err());
         assert!(stage_seat_link(m5, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 3])).is_ok());
@@ -811,7 +811,7 @@ fn seat_link_appends_guards_and_never_touches_r_and_links_survive_edits() {
 
 #[test]
 fn finddocscontaining_composes_candidates_with_the_project_filter() {
-    // §9: docs_containing is the historical overlap-superset (P2 keeps the
+    // §9: docs_ever_containing is the historical superset (P2 keeps the
     // deleter as a candidate); project is the current-containment filter —
     // both off ONE snapshot.
     let k = mem_kernel();
@@ -834,8 +834,9 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
         Span::from_endpoints(ca(1).tumbler().clone(), ca(4).tumbler())
             .expect("well-formed I-extent"),
     );
-    // Candidate superset: both docs ever placed the region.
-    assert_eq!(m5.docs_containing(&region), vec![doc1(), doc2()]);
+    // Candidate superset: both docs have ever contained the region, doc1 as
+    // FD-GHOST's ghost.
+    assert_eq!(m5.docs_ever_containing(&region), vec![doc1(), doc2()]);
     // Current-containment narrows to doc2.
     assert!(m5.project(&doc1(), &region).is_empty());
     assert!(!m5.project(&doc2(), &region).is_empty());
@@ -880,8 +881,8 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         assert_eq!(runs.len(), 2); // cross-length runs never coalesce
         assert_eq!(runs[0].i_start(), &ca(1));
         assert_eq!(runs[1].i_start(), &vca(1));
-        // resolve_coverage hands back the RAW mixed-length cover.
-        let cov = m5.resolve_coverage(&doc2(), &vspan(1, 1, 4));
+        // image hands back the RAW mixed-length cover.
+        let cov = m5.image(&doc2(), &vspan(1, 1, 4));
         let lens: Vec<usize> = cov.iter().map(|s| s.start().len()).collect();
         assert_eq!(lens, vec![8, 9]);
         // project is fault-free under a cross-length prefix cover: doc1's
@@ -919,7 +920,7 @@ fn reads_fold_an_absent_document_to_empty_results() {
     assert!(m5
         .project(&doc2(), &SpanSet::singleton(subtree_of(doc2().tumbler())))
         .is_empty());
-    assert!(m5.docs_containing(&SpanSet::empty()).is_empty());
+    assert!(m5.docs_ever_containing(&SpanSet::empty()).is_empty());
 }
 
 // ---- M2-driven recovery: checkpoint load + tail replay ----

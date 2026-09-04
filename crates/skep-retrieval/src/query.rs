@@ -275,17 +275,18 @@ impl<'s, W: M6World> Query<'s, W> {
         Ok(Deletions { a_with_b, b_with_a })
     }
 
-    /// FINDDOCSCONTAINING (ASN-0124) — resolve, then a present-tense filter
-    /// over M5's R⁻¹ superset: phase 1 unions each region span's
-    /// `resolve_coverage` (raw, possibly mixed-length — M5's
-    /// `docs_containing`/`project` apply the level-class discipline
+    /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — resolve, then a
+    /// present-tense filter over M5's historical superset: phase 1 unions each
+    /// region span's `image` (raw, possibly mixed-length — M5's
+    /// `docs_ever_containing`/`project` apply the level-class discipline
     /// INTERNALLY, so M6 passes the raw union straight through and owns no
     /// level-class discipline anywhere); phase 2 narrows the tumbler-ordered
     /// candidate superset with `project(d, coverage)` non-emptiness — the
-    /// present-tense soundness filter (FD-SOUND), the only difference between
-    /// the live answer and the historical "ever-contained" one. Returns bare
-    /// deduplicated identities, tumbler-ordered — no positions, no counts
-    /// (FD codomain; current HOLDERS, distinct from SHOWORIGIN's allocators).
+    /// present-tense soundness filter (FD-SOUND), which is what separates this
+    /// live answer from M5's `docs_ever_containing` (FD-HIST), the two
+    /// differing exactly by FD-GHOST's ghosts. Returns bare deduplicated
+    /// identities, tumbler-ordered — no positions, no counts (FD codomain;
+    /// current HOLDERS, distinct from SHOWORIGIN's allocators).
     ///
     /// Every named document must be registered and every region span
     /// well-formed (Err otherwise — a malformed span would silently
@@ -316,13 +317,13 @@ impl<'s, W: M6World> Query<'s, W> {
                     fault: f,
                 })?;
                 // Raw mixed-length cover; union is concatenation.
-                coverage = union(&coverage, &m5.resolve_coverage(&r.doc, span));
+                coverage = union(&coverage, &m5.image(&r.doc, span));
             }
         }
-        // Phase 2: R⁻¹ superset (tumbler-ordered, level-classes handled
-        // inside M5), narrowed by the present-tense filter — one
+        // Phase 2: the historical superset (tumbler-ordered, level-classes
+        // handled inside M5), narrowed by the present-tense filter — one
         // `project` per candidate.
-        let candidates = m5.docs_containing(&coverage);
+        let candidates = m5.docs_ever_containing(&coverage);
         Ok(candidates
             .into_iter()
             .filter(|d| !m5.project(d, &coverage).is_empty()) // FD-SOUND

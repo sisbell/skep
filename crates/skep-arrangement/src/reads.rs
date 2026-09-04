@@ -1,18 +1,18 @@
-//! §D/§E — arrangement reads (resolve/point/coverage/project), the content
+//! §D/§E — arrangement reads (resolve/point/image/project), the content
 //! subspace's admission predicates, and the provenance reads
-//! (deletions/docs_containing), pure over any M2 snapshot (§2, §9).
+//! (deletions/docs_ever_containing), pure over any M2 snapshot (§2, §9).
 //!
-//! **Level-class discipline** (§2): a SpanSet aggregated across runs —
-//! coverage footprints, the internal `content_image`, a document's
-//! `ever_placed` record — is in general MIXED-LENGTH (transclusion mixes
-//! origin lengths), and M1's length-gated set ops fault `LevelMismatch` on
-//! mixed operands. Where geometry is needed, M5 partitions each operand into
-//! level-classes by endpoint length (`SpanSet::by_level_class`), runs the M1
-//! op within each class, and unions the per-class results; where
-//! overlap/membership suffices it uses the total `classify_spans`/`contains`.
-//! The discipline is ENCAPSULATED behind the query methods
-//! ([`M5State::project`], [`M5State::deletions`]) and OWED by whoever
-//! aggregates run extents themselves — [`M5State::resolve_coverage`]'s raw
+//! **Level-class discipline** (§2): a SpanSet aggregated across runs — a
+//! region image, an endset's coverage, the internal `content_image`, a
+//! document's `ever_contained` record — is in general MIXED-LENGTH
+//! (transclusion mixes origin lengths), and M1's length-gated set ops fault
+//! `LevelMismatch` on mixed operands. Where geometry is needed, M5 partitions
+//! each operand into level-classes by endpoint length
+//! (`SpanSet::by_level_class`), runs the M1 op within each class, and unions
+//! the per-class results; where overlap/membership suffices it uses the total
+//! `classify_spans`/`contains`. The discipline is ENCAPSULATED behind the
+//! query methods ([`M5State::project`], [`M5State::deletions`]) and OWED by
+//! whoever aggregates run extents themselves — [`M5State::image`]'s raw
 //! cover, and the runs [`M5State::resolve`] hands back for a caller to lift.
 //! Both routes reach [`Run::iextent`], where the obligation is stated
 //! (Conflicts #8).
@@ -68,16 +68,18 @@ impl M5State {
         arr.list(&v.subspace)?.point(&v.ordinal)
     }
 
-    /// V→I coverage as a SpanSet (§2): `⋃ r.iextent()` over the runs
-    /// [`resolve`](M5State::resolve) returns — the aggregate M6's
-    /// FINDDOCSCONTAINING feeds to [`docs_containing`](M5State::docs_containing),
-    /// lifted here so the query does not re-derive it. `union` (concatenation)
-    /// only ⇒ total, never faults, NOT normalized; possibly mixed-length when
-    /// `span` covers transcluded runs, so it is consumed under the level-class
-    /// discipline (the hazard is stated on [`Run::iextent`], which every
-    /// aggregator of run extents reaches, whether or not it comes through
-    /// here).
-    pub fn resolve_coverage(&self, doc: &Address, span: &Span) -> SpanSet {
+    /// The region's I-image as a SpanSet (§2; ASN-0127 `image(W, d, Σ)`, the
+    /// addresses `doc`'s arrangement maps the V-region `span` onto):
+    /// `⋃ r.iextent()` over the runs [`resolve`](M5State::resolve) returns —
+    /// the aggregate M6's FINDDOCSCONTAINING feeds to
+    /// [`docs_ever_containing`](M5State::docs_ever_containing) and to
+    /// [`project`](M5State::project), lifted here so the query does not
+    /// re-derive it. `union` (concatenation) only ⇒ total, never faults, NOT
+    /// normalized; possibly mixed-length when `span` covers transcluded runs,
+    /// so it is consumed under the level-class discipline (the hazard is
+    /// stated on [`Run::iextent`], which every aggregator of run extents
+    /// reaches, whether or not it comes through here).
+    pub fn image(&self, doc: &Address, span: &Span) -> SpanSet {
         self.resolve(doc, span).into_iter().map(|r| r.iextent()).collect()
     }
 
@@ -154,10 +156,14 @@ impl M5State {
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by
     /// construction (link reverse-discovery is M7's BH3; there is no subspace
     /// argument): the V-positions of `doc` whose content I-address falls in
-    /// `coverage` (a link footprint, possibly fragmented and mixed-length),
-    /// as depth-2 V-spans, normalized. TOTAL — the level-class discipline is
-    /// applied internally, so the call is fault-free for any coverage,
-    /// including cross-length prefix/subtree spans.
+    /// `coverage` — an I-address cover, either an endset's coverage (M7/M8) or
+    /// a region [`image`](M5State::image) (M6), possibly fragmented and
+    /// mixed-length — as depth-2 V-spans, normalized. The result is the
+    /// FOOTPRINT those addresses have in `doc` (ASN-0119's `project`), which
+    /// is why a footprint interrupted in V-space comes back as several spans.
+    /// TOTAL — the level-class discipline is applied internally, so the call
+    /// is fault-free for any coverage, including cross-length prefix/subtree
+    /// spans.
     ///
     /// Per content run × coverage span: the run reports which of its offsets
     /// the span covers ([`Run::offsets_covered_by`], which owns both the
@@ -200,9 +206,10 @@ impl M5State {
             .unwrap_or_else(SpanSet::empty)
     }
 
-    /// SHOWDELETIONS primitive (§9; ASN-0047 P2): what `doc` ever placed,
-    /// minus its current content image, computed PER LEVEL-CLASS — both
-    /// operands are iextent-covers that mix origin-lengths when `doc`
+    /// SHOWDELETIONS primitive (§9; ASN-0047 P2; ASN-0075's
+    /// `DELETED(a, d) ≡ (a, d) ∈ R ∧ a ∉ ran(M(d))`): what `doc` has ever
+    /// contained, minus its current content image, computed PER LEVEL-CLASS —
+    /// both operands are iextent-covers that mix origin-lengths when `doc`
     /// transcludes across heterogeneous-depth documents, so each is
     /// partitioned by endpoint length (M1's `by_level_class`),
     /// `difference_sets` runs within each class, and the per-class results
@@ -214,7 +221,7 @@ impl M5State {
     pub fn deletions(&self, doc: &Address) -> SpanSet {
         let image = self.content_image(doc).by_level_class();
         let mut out = SpanSet::empty();
-        for (len, ever) in self.prov.ever_placed(doc).by_level_class() {
+        for (len, ever) in self.prov.ever_contained(doc).by_level_class() {
             let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
             let d = difference_sets(&ever, &here)
                 .expect("per-class operands share one length class — the gate passes");
@@ -223,19 +230,27 @@ impl M5State {
         out
     }
 
-    /// R⁻¹ candidate documents (§9; Conflicts #6) — the historical
-    /// overlap-superset the provenance record answers, which
-    /// FINDDOCSCONTAINING then narrows with `project(d, coverage) ≠ ⟨⟩` off
-    /// the same snapshot. Distinct, in deterministic Tumbler order.
+    /// R⁻¹ candidate documents (§9; ASN-0124 FD-HIST, the ProvenanceQuery
+    /// `finddocs_R`; Conflicts #6) — the documents that have EVER contained an
+    /// address of `coverage`, which is what the provenance record can answer
+    /// and all it can answer. Distinct, in deterministic Tumbler order.
+    ///
+    /// HISTORY, NOT CONTAINMENT, and the two are different questions the
+    /// corpus keeps apart: present containment is `finddocs` (FD-FIND), whose
+    /// members each carry a live witness (FD-SOUND), and it is a SUBSET of
+    /// this answer (FD-SUPER). The difference is FD-GHOST's `ghosts` —
+    /// documents that held queried material at some past boundary and hold
+    /// none of it now — which is why a caller wanting present containment must
+    /// narrow, with `project(d, coverage) ≠ ⟨⟩` off the same snapshot
+    /// (M6's FINDDOCSCONTAINING).
     ///
     /// A SUPERSET with no false negatives: a document genuinely holding an
     /// address of `coverage` placed a span that overlaps it in the tumbler
-    /// order, so it is always a candidate. That is what makes narrowing
-    /// sound, and it is why a caller must narrow — R is history, so a
-    /// candidate may have deleted what it once placed. Total for any
+    /// order (P4★ puts every present containment in R), so it is always a
+    /// candidate — which is what makes the narrowing sound. Total for any
     /// coverage, mixed-length included.
-    pub fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
-        self.prov.docs_containing(coverage)
+    pub fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
+        self.prov.docs_ever_containing(coverage)
     }
 }
 
@@ -337,10 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_coverage_is_the_concatenated_iextent_lift() {
+    fn image_is_the_concatenated_iextent_lift() {
         // §2: ⋃ r.iextent(), total, not normalized, possibly mixed-length.
         let s = arranged();
-        let cov = s.resolve_coverage(&doc1(), &vspan(1, 1, 5));
+        let cov = s.image(&doc1(), &vspan(1, 1, 5));
         let spans: Vec<Span> = cov.iter().cloned().collect();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].start().len(), 8);
@@ -413,23 +428,42 @@ mod tests {
     }
 
     #[test]
-    fn docs_containing_is_a_deterministic_overlap_superset() {
+    fn docs_ever_containing_is_a_deterministic_overlap_superset() {
         // §9: not-Separated candidates (Adjacent included — a harmless
         // superset member the project filter removes), distinct keys, Tumbler
         // order.
         let s = place(&M5State::genesis(), &doc2(), 1, vec![run(&ca(1), 2)]);
         let s = place(&s, &doc1(), 1, vec![run(&ca(1), 2)]);
         let cov = SpanSet::singleton(run(&ca(1), 1).iextent());
-        assert_eq!(s.docs_containing(&cov), vec![doc1(), doc2()]);
+        assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), doc2()]);
         // Adjacent (touching, no shared position) still lands in the
         // candidate superset.
         let adj = SpanSet::singleton(run(&ca(3), 1).iextent());
-        assert_eq!(s.docs_containing(&adj), vec![doc1(), doc2()]);
+        assert_eq!(s.docs_ever_containing(&adj), vec![doc1(), doc2()]);
         // Separated does not.
         let sep = SpanSet::singleton(run(&ca(9), 1).iextent());
-        assert!(s.docs_containing(&sep).is_empty());
+        assert!(s.docs_ever_containing(&sep).is_empty());
         // A cross-length cover never faults (classify_spans is gate-free).
         let deep = SpanSet::singleton(subtree_of(a(&[1, 0, 1, 0, 1]).tumbler()));
-        assert_eq!(s.docs_containing(&deep), vec![doc1(), doc2()]);
+        assert_eq!(s.docs_ever_containing(&deep), vec![doc1(), doc2()]);
+    }
+
+    #[test]
+    fn ever_containing_keeps_a_ghost_the_present_tense_filter_drops() {
+        // ASN-0124 FD-GHOST: doc1 places and then deletes what doc2 still
+        // holds. The historical answer keeps doc1 (FD-RMONO — R never loses a
+        // member); `project` is the present witness that separates them, and
+        // the gap between the two answers IS `ghosts`.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+        let s = place(&s, &doc2(), 1, vec![run(&ca(1), 2)]);
+        let s = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(1),
+            width: n(2),
+        });
+        let cov = SpanSet::singleton(run(&ca(1), 2).iextent());
+        assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), doc2()]);
+        assert!(s.project(&doc1(), &cov).is_empty()); // the ghost
+        assert!(!s.project(&doc2(), &cov).is_empty()); // the live container
     }
 }

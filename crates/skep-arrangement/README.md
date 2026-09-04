@@ -11,9 +11,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Editing composites** — insert, copy (transclusion — the copied
   spans keep their origin identity), delete, rearrange; each a
   kernel transaction composing namespace mints and content writes.
-- **Versioning** — fork and version create documents whose
-  arrangements share history with their sources; provenance is
-  structural, not recorded metadata.
+- **Versioning** — VERSION forks a document: the fork's arrangement
+  starts as a snapshot of the source's content map, the source
+  untouched, and the two diverge copy-on-write. An owned fork's
+  ancestry is carried by the identity itself, readable by truncation;
+  a cross-owner fork's identity is severed from the source's, and what
+  records the relationship is provenance.
+- **Provenance (R)** — the append-only record of which addresses a
+  document has ever contained, including a fork's shared ones. It is
+  recorded, not recomputable: an arrangement that no longer holds an
+  address cannot tell you it once did, which is what makes deletions
+  and "who has ever contained this" answerable at all.
 - **`resolve` / `project`** — V→I image and I→V occurrences, the
   reads every query layer builds on.
 

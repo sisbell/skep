@@ -37,8 +37,9 @@
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
-//! * the R relation and its reverse index `docs_containing` (M5 — co-located
-//!   with R's authoritative state); content bytes (M4); arrangements (M5);
+//! * the R relation and its reverse index `docs_ever_containing` (M5 —
+//!   co-located with R's authoritative state); content bytes (M4);
+//!   arrangements (M5);
 //! * authorization / owner resolution (`effective_owner`) — M10's; SHOWORIGIN
 //!   reports origin *documents*, not owners;
 //! * link-side discovery (M8); the request lifecycle, dispatch, and

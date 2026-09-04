@@ -66,7 +66,7 @@ pub trait FoldCtx: Values {
     /// the implementor's alone.
     fn owner_of(&self, a: &Address) -> Option<Owner>;
 
-    /// AUTH-2.33 — M3 `entity_level(a) == Some(Account)`.
+    /// AUTH-2.33 — M3 `is_registered_account(a)`.
     fn is_account(&self, a: &Address) -> bool;
 
     /// AUTH-2.34 — the document's BIRTH state: publication is at birth and no

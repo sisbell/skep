@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use skep_arrangement::{Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
-    count_ftt_on, count_v_on, delete_orphans_on, discoverable_from_on, findlinks_ftt_on,
-    findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on,
+    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
+    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
 use skep_links::LinkRec;
@@ -561,7 +561,8 @@ where
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
-                let val = discoverable_from_on(&snap, &a, &d).map_err(|e| lower_read(kind, e))?;
+                let val = addressably_discoverable_from_on(&snap, &a, &d)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Bool { val, as_of })
             }
             Op::DeleteOrphans { d, p, width } => {

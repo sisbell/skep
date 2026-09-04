@@ -16,12 +16,13 @@ use crate::helpers::stab_runs;
 use crate::region::content_vspan;
 use crate::types::{OrphanError, OrphanReport};
 
-/// `count` content positions from `ordinal`, built through the query
-/// surface's own V-span constructor — so the spans this hands `resolve` are
-/// the shape `resolve` reads and the shape the region gate accepts.
-/// Unwrap-safe: the subspace is `s_C` here by construction, and the callers'
-/// width ≥ 1 guard excludes `count = 0`, the only other thing declined.
-fn content_span(ordinal: &Nat, count: &Nat) -> Span {
+/// [`content_vspan`] at a bare content `ordinal`: `count` positions from it,
+/// built through the query surface's own V-span constructor — so the spans
+/// this hands `resolve` are the shape `resolve` reads and the shape the
+/// region gate accepts. Total where the published constructor is partial: the
+/// subspace is `s_C` here by construction, and the callers' width ≥ 1 guard
+/// excludes `count = 0`, the only other thing declined.
+fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
     let at = VPos {
         subspace: content_subspace(),
         ordinal: ordinal.clone(),
@@ -80,15 +81,15 @@ where
         return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
     }
 
-    let a_del = w.m5().resolve(d, &content_span(&np, width)); // no clipping now (bounds checked)
+    let a_del = w.m5().resolve(d, &content_vspan_at(&np, width)); // no clipping now (bounds checked)
     let pre = if np > Nat::one() {
-        Some(content_span(&Nat::one(), &(&np - Nat::one())))
+        Some(content_vspan_at(&Nat::one(), &(&np - Nat::one())))
     } else {
         None
     };
     let suf_start = &np + width;
     let suf = if suf_start <= nc {
-        Some(content_span(&suf_start, &(&nc - &suf_start + Nat::one())))
+        Some(content_vspan_at(&suf_start, &(&nc - &suf_start + Nat::one())))
     } else {
         None
     };

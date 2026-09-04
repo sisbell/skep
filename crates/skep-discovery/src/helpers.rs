@@ -18,7 +18,7 @@ use crate::{FROM, TO, TYPE};
 /// per-slot read misses nothing (§1). Nothing in M8 can check that — `stab`
 /// is per-slot and M8 owns no index — so it is stated once, here, and every
 /// slot-indexed read reaches the store through this list.
-pub(crate) const STANDARD_SLOTS: [usize; 3] = [FROM, TO, TYPE];
+pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 
 /// The links whose coverage overlaps `runs`, PAIRED with the slot each set
 /// was stabbed at and kept SEPARATE (slot attribution reads them — §4), so
@@ -40,13 +40,13 @@ pub(crate) fn stab_runs_by_slot<W: HasLinks>(
     runs: &[Run],
 ) -> [(usize, OrdSet<Address>); 3] {
     if runs.is_empty() {
-        return STANDARD_SLOTS.map(|i| (i, OrdSet::new()));
+        return V1_SLOTS.map(|i| (i, OrdSet::new()));
     }
     let q = Endset::from_spans(runs.iter().map(Run::iextent)); // coverage(q) = the runs
-    STANDARD_SLOTS.map(|i| (i, w.links().stab(i, &q, View::Active)))
+    V1_SLOTS.map(|i| (i, w.links().stab(i, &q, View::Active)))
 }
 
-/// The disjunctive ASN-0127 `findlinks(I)` core: OR across the standard slots
+/// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots
 /// (M7 has no slot-collapsed primitive). `im`'s sets are persistent, so
 /// collapsing a borrowed triple costs sharing, not copies.
 pub(crate) fn union_slots(slots: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Address> {
@@ -70,7 +70,9 @@ pub(crate) fn home_of(a: &Address) -> Address {
 }
 
 /// The one windowing combinator (ASN-0108) driving both `window_v` and
-/// `window_ftt`: a stateless key-cut over the matched set in address order.
+/// `window_ftt`: a stateless key-cut over `candidates` in address order,
+/// admitting those `keep` accepts. A family whose match IS its candidate set
+/// (the region family) passes `keep = |_| true`.
 ///
 /// * Resume is `range(Excluded(cursor)..)` — a key-cut, never an exact-match
 ///   scan, so the cursor survives orphaning by construction (W8), and no
@@ -78,12 +80,12 @@ pub(crate) fn home_of(a: &Address) -> Address {
 /// * `n` is clamped to ≥ 1 (W9 totality): an unclamped `n = 0` would yield
 ///   `exhausted = (0 < 0) = false` with an empty batch and an unchanged
 ///   cursor — a silent non-terminating signal.
-/// * `keep` applies a post-filter LAZILY during the range walk (the FTT home
-///   filter), so a narrow query never materializes the full filtered set.
+/// * `keep` applies a post-filter LAZILY during the range walk (the FTT
+///   residence test), so a narrow query never materializes the filtered set.
 /// * `exhausted = batch.len() < n` (a short window, zero included, W9);
 ///   `next` = the ≺-max of the batch, else the cursor unchanged.
 pub(crate) fn window_over(
-    matched: &OrdSet<Address>,
+    candidates: &OrdSet<Address>,
     cur: Cursor,
     n: usize,
     keep: impl Fn(&Address) -> bool,
@@ -93,7 +95,7 @@ pub(crate) fn window_over(
         None => Unbounded,
         Some(c) => Excluded(c.clone()),
     };
-    let batch: Vec<Address> = matched
+    let batch: Vec<Address> = candidates
         .range((lo, Unbounded))
         .filter(|a| keep(a)) // a: &&Address → deref to &Address
         .take(n)

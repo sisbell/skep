@@ -12,9 +12,9 @@ use skep_namespace::HasM3;
 
 use crate::types::{Cursor, FourSet, OrphanError, OrphanReport, QueryError, SupClaim, Window};
 use crate::{
-    count_ftt_on, count_v_on, delete_orphans_on, discoverable_from_on, findlinks_ftt_on,
-    findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on, retrieve_endsets_on,
-    window_ftt_on, window_v_on,
+    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
+    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on,
 };
 
 /// The read-only query/presentation handle over the link subsystem (M8). Owns
@@ -42,8 +42,8 @@ where
     }
 
     // ── Content-region discovery (V-anchored, present-tense, doc-gated;
-    //    disjunctive over slots; every result is foundation ∩ View::Active =
-    //    addressable, so nullified links never appear) ──
+    //    disjunctive over slots; every result is the selection index
+    //    `findlinks_V ∩ addressable`, so nullified links never appear) ──
 
     /// The I-runs `region` resolves to through `d`'s live arrangement
     /// (ASN-0127 image). See [`image_on`].
@@ -114,10 +114,14 @@ where
         project_on(&self.kernel.snapshot(), a, slot, d)
     }
 
-    /// Is link `a` reachable through `d`'s arrangement AND active? Compound,
-    /// NOT pure LP12. See [`discoverable_from_on`].
-    pub fn discoverable_from(&self, a: &Address, d: &Address) -> Result<bool, QueryError> {
-        discoverable_from_on(&self.kernel.snapshot(), a, d)
+    /// Is link `a` discoverable from `d` (LP12) AND addressable? See
+    /// [`addressably_discoverable_from_on`].
+    pub fn addressably_discoverable_from(
+        &self,
+        a: &Address,
+        d: &Address,
+    ) -> Result<bool, QueryError> {
+        addressably_discoverable_from_on(&self.kernel.snapshot(), a, d)
     }
 
     // ── Pre-edit link-survival (read-only; never touches the edit path) ──

@@ -1,9 +1,11 @@
 //! §5 — pointwise projection & discoverability (content subspace): `project`
 //! (ASN-0098 I→V, through M5's level-class-safe `project`) and
-//! `discoverable_from` (the compound "arrangement-reachable AND active" —
-//! NOT pure LP12). The two read the active view differently, and deliberately:
-//! `discoverable_from` conjoins `is_active`, while `project` reports the
-//! recorded coverage M7's `followlink` hands over, retracted links included.
+//! `addressably_discoverable_from` (ASN-0098's LP12 discoverability narrowed
+//! to ASN-0121/0132's addressable population, `dom(L) ∖ nullified`). The two
+//! read the active view differently, and deliberately:
+//! `addressably_discoverable_from` conjoins `is_active`, while `project`
+//! reports the recorded coverage M7's `followlink` hands over, retracted
+//! links included.
 //! The per-link `classify_spans` touch test here is M8's one
 //! pointwise span comparison — a level-gate-free order relation, total on
 //! cross-length spans, categorically distinct from the level-gated set
@@ -24,9 +26,10 @@ use crate::types::QueryError;
 /// The coverage comes from M7's `followlink`, which takes no `View` and
 /// reports what is recorded, so a NULLIFIED link's slot still projects to the
 /// V-positions it covers. That is ASN-0098's `project`, which knows nothing of
-/// retraction; the filtered question — is this link reachable AND active? — is
-/// [`discoverable_from_on`], and a caller who wants "the live links reaching
-/// here" asks that or the region family, not this.
+/// retraction; the addressable-narrowed question — is this link discoverable
+/// AND active? — is [`addressably_discoverable_from_on`], and a caller who
+/// wants "the live links reaching here" asks that or the region family, not
+/// this.
 ///
 /// CONTENT-SUBSPACE ONLY — strictly weaker than ASN-0098's subspace-agnostic
 /// `project`: a link reachable solely through `d`'s LINK subspace projects ∅
@@ -85,11 +88,14 @@ fn touches(e: &Endset, runs: &[Run]) -> bool {
     })
 }
 
-/// NOT pure LP12 — active-filtered (Conflicts #8). The compound
-/// "arrangement-reachable AND active": a nullified-but-reachable link returns
-/// `Ok(false)` where LP12 (which predates retraction) would call it
-/// discoverable. For raw LP12 compose M7's `followlink` + M5's `project`
-/// yourself.
+/// Is `a` discoverable from `d` AND addressable? Both halves are the corpus's
+/// own words in their corpus senses: `discoverable_from` is ASN-0098's LP12
+/// (arrangement-reachable, derived and per-document), and `addressable` is
+/// ASN-0121/0132's population `dom(L) ∖ nullified`. Their conjunction is
+/// STRICTLY stronger than LP12 alone (Conflicts #8) — a nullified-but-
+/// reachable link is discoverable and not addressable, so it answers
+/// `Ok(false)`. Bare LP12, which predates retraction, is M7's `followlink`
+/// composed with M5's `project`.
 ///
 /// Tests LP12's characterisation directly per link —
 /// `∃ i : coverage(Σ.L(a).eᵢ) ∩ ran(M(d)) ≠ ∅` over BOTH subspaces
@@ -104,7 +110,11 @@ fn touches(e: &Endset, runs: &[Run]) -> bool {
 /// empty `d` short-circuits to `Ok(false)` (nothing is reachable; `touches`
 /// over an empty run list is vacuously false, so the early-out is cheap, not
 /// a correctness guard).
-pub fn discoverable_from_on<W>(s: &Snapshot<W>, a: &Address, d: &Address) -> Result<bool, QueryError>
+pub fn addressably_discoverable_from_on<W>(
+    s: &Snapshot<W>,
+    a: &Address,
+    d: &Address,
+) -> Result<bool, QueryError>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
 {
@@ -114,7 +124,7 @@ where
     }
     let link = w.links().readlink(a).ok_or(QueryError::NotALink)?;
     if !w.links().is_active(a) {
-        return Ok(false); // the ACTIVE half of the compound (Conflicts #8)
+        return Ok(false); // the ADDRESSABLE half (Conflicts #8)
     }
     let full: Vec<Run> = w
         .m5()

@@ -18,11 +18,13 @@
 //! 0131) and the **descriptor family** (address-keyed, conjunctive,
 //! link-store-local, monotone absent retraction — ASN-0121/0132). Both are
 //! **addressable-filtered**: every present-state primitive is queried with
-//! `View::Active`, so results are *foundation ∩ active* and a nullified link
-//! never surfaces (Conflicts #8 — a deliberate divergence from the unfiltered
-//! foundations of ASN-0127/0108). `delete_orphans` and `discoverable_from`
-//! filter the same way, the latter diverging from ASN-0117/0098 by conjoining
-//! `is_active` onto reachability.
+//! `View::Active`, so a result is the selection index ASN-0131 writes
+//! `sel = findlinks ∩ addressable` and a nullified link never surfaces
+//! (Conflicts #8 — a deliberate divergence from the unfiltered foundations of
+//! ASN-0127/0108). `delete_orphans` and
+//! [`addressably_discoverable_from_on`] narrow the same way, the latter
+//! diverging from ASN-0117/0098 by conjoining `is_active` onto LP12
+//! discoverability.
 //!
 //! Two reads depart from that, and a caller building a live-links view needs
 //! both:
@@ -30,8 +32,8 @@
 //! * [`project_on`] is UNFILTERED — coverage reaches it through M7's
 //!   `followlink`, which takes no `View` and reports what is recorded, so a
 //!   retracted link still projects the V-positions it covers. That is
-//!   ASN-0098's `project` unchanged; the filtered question it looks like it
-//!   answers is [`discoverable_from_on`]'s.
+//!   ASN-0098's `project` unchanged; the addressable-narrowed question it
+//!   looks like it answers is [`addressably_discoverable_from_on`]'s.
 //! * the lineage family ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
 //!   so the caller chooses: `Active` yields the operative graph, `Audit` the
 //!   full history including nullified claims, each disclosing its own
@@ -48,8 +50,8 @@
 //! M8 does almost no span algebra — and never the level-gated kind:
 //! coverage-overlap matching goes through M7, I→V through M5, query endsets
 //! through `Run::iextent` + `Endset::from_spans`; the lone pointwise span
-//! comparison is `discoverable_from`'s level-gate-free `classify_spans`
-//! touch test (§5).
+//! comparison is `addressably_discoverable_from`'s level-gate-free
+//! `classify_spans` touch test (§5).
 //!
 //! ## Boundary — deliberately NOT owned here
 //!
@@ -95,7 +97,7 @@ mod types;
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
 pub use handle::LinkQuery;
 pub use lineage::{in_claims_on, out_claims_on};
-pub use pointwise::{discoverable_from_on, project_on};
+pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
     content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
 };

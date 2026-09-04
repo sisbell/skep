@@ -60,6 +60,13 @@ impl FourSet {
     /// FL-EMP: does some slot carry the zero — an explicit
     /// [`SlotSpec::Empty`], or a `Spans` that names nothing? Such a descriptor
     /// matches no link whatever the other slots say.
+    ///
+    /// This is what separates the two zeros ASN-0132 keeps apart: a `0` from
+    /// [`crate::count_ftt_on`] over a satisfiable descriptor asserts that no
+    /// addressable link satisfies `q` (CN-ZERO), while a `0` over an
+    /// unsatisfiable one says only that the REQUEST names nothing. Same
+    /// number, different assertion — and this answers the second off the
+    /// descriptor's own slots, with no store read at all.
     pub fn is_unsatisfiable(&self) -> bool {
         [&self.home, &self.from, &self.to, &self.ty]
             .into_iter()
@@ -93,16 +100,17 @@ impl FourSet {
         Some(cons)
     }
 
-    /// `athome(a, H)`: does the home slot admit the link at `a`? `Any` admits
-    /// every link (FL-WILD); a `Spans` admits those whose `home(a)` its
-    /// coverage names — an ADDRESS projection, never an arrangement-presence
-    /// test (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
+    /// `athome(a, H)` — ASN-0121/0132's residence test, the companion of
+    /// `touch`: does the home slot admit the link at `a`? `Any` admits every
+    /// link (FL-WILD); a `Spans` admits those whose `home(a)` its coverage
+    /// names — an ADDRESS projection, never an arrangement-presence test
+    /// (CN-STAB: a reverse-orphaned link still satisfies a home-bounded
     /// query); and the zero admits none, which is FL-EMP for the home slot.
     ///
     /// Crate-internal because it reads `home(a)` unconditionally, which every
     /// LINK address has: the addresses reaching it come off M7's
     /// `match_links` and are keys of the link store by construction.
-    pub(crate) fn home_admits(&self, a: &Address) -> bool {
+    pub(crate) fn at_home(&self, a: &Address) -> bool {
         match &self.home {
             SlotSpec::Any => true,
             SlotSpec::Empty => false,

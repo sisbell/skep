@@ -1,9 +1,9 @@
 //! §1/§2/§4 — the content-region discovery family (V-anchored, present-tense,
 //! doc-gated, disjunctive over slots): `image` (V→I), `findlinks_v`,
-//! `count_v`, `window_v`, and RETRIEVEENDSETS. Every result is
-//! *foundation ∩ View::Active* = addressable — nullified links never surface
-//! (Conflicts #8, a deliberate divergence from ASN-0127/0108's unfiltered
-//! `findlinks_V`/`Match`).
+//! `count_v`, `window_v`, and RETRIEVEENDSETS. Every result is ASN-0131's
+//! selection index `sel = findlinks_V ∩ addressable`, read out four ways —
+//! nullified links never surface (Conflicts #8, a deliberate divergence from
+//! ASN-0127/0108's unfiltered `findlinks_V`/`Match`).
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the family that judges a region is the
@@ -114,8 +114,9 @@ where
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive
 /// across slots `{FROM, TO, TYPE}` — exact by the v1 arity-3 invariant).
-/// result = foundation ∩ active (`View::Active`) — nullified links never
-/// surface; diverges from ASN-0127's UNFILTERED `findlinks_V` (Conflicts #8).
+/// result = `findlinks_V ∩ addressable` (`View::Active`) — nullified links
+/// never surface; diverges from ASN-0127's UNFILTERED `findlinks_V`
+/// (Conflicts #8).
 pub fn findlinks_v_on<W>(
     s: &Snapshot<W>,
     d: &Address,
@@ -127,9 +128,11 @@ where
     Ok(findlinks_v_set_on(s, d, region)?.iter().cloned().collect())
 }
 
-/// Present-tense census of region-reaching links; result = foundation ∩
-/// active. Non-monotone (ASN-0127 D-NONMONO); a `0` asserts present
-/// unreachability over the active view, not history (D-ZERO).
+/// Present-tense census of region-reaching links; the cardinality of
+/// `findlinks_V ∩ addressable`. Non-monotone (ASN-0127 D-NONMONO); a `0`
+/// asserts present unreachability over the active view, not history (D-ZERO)
+/// — the region family's zero, distinct from [`crate::count_ftt_on`]'s
+/// store-wide CN-ZERO.
 pub fn count_v_on<W>(s: &Snapshot<W>, d: &Address, region: &[Span]) -> Result<usize, QueryError>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
@@ -138,8 +141,9 @@ where
 }
 
 /// Windowed enumeration of the region family (ASN-0108, the
-/// `Match = findlinks_V` reading); result = foundation ∩ active — nullified
-/// links never surface. `n = 0` is clamped to 1 (the API is total, W9).
+/// `Match = findlinks_V` reading); result = `findlinks_V ∩ addressable` —
+/// nullified links never surface. `n = 0` is clamped to 1 (the API is total,
+/// W9).
 pub fn window_v_on<W>(
     s: &Snapshot<W>,
     d: &Address,

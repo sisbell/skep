@@ -4,7 +4,7 @@
 //! stateless key-cut windowing (clamp, exhaustion, cursor-survives-orphaning),
 //! RETRIEVEENDSETS' identity-withholding whole-endset pinned-order read-out,
 //! the FTT unit/zero/conjunction algebra and the home address-projection
-//! filter, projection and the compound discoverability, the delete-orphan
+//! filter, projection and addressable discoverability, the delete-orphan
 //! preview's M5-mirroring preconditions and last-witness report, the flipped
 //! lineage probes with the residence gate, and the snapshot twins.
 
@@ -149,7 +149,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
         Ok(vec![la(1), la(2)])
     );
 
-    // foundation ∩ active: a nullified link never surfaces, even though its
+    // findlinks_V ∩ addressable: a nullified link never surfaces, even though its
     // coverage still reaches the region. (Homed in doc2 so the retraction
     // tuple's own enc({doc2}) from-fill stays off doc1's content.)
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
@@ -400,6 +400,100 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     assert!(w2.exhausted);
 }
 
+/// §3 — CN-ENUM: one `sat` consumed by every read-out, so the count, the
+/// enumeration and the windowed drain cannot disagree about which links match.
+/// The home-constrained descriptors are the load-bearing cases: they are the
+/// only ones where the residence post-filter narrows the candidate set, so a
+/// read-out that evaluated the candidates instead of `sat` would answer wide
+/// here and nowhere else.
+#[test]
+fn ftt_count_enumeration_and_window_read_out_one_sat() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    for q in [
+        FourSet::any(),
+        FourSet {
+            home: SlotSpec::Spans(enc(&[doc1()])),
+            ..FourSet::any()
+        },
+        FourSet {
+            home: SlotSpec::Spans(enc(&[doc2()])),
+            ..FourSet::any()
+        },
+        FourSet {
+            home: SlotSpec::Spans(enc(&[doc1()])),
+            from: SlotSpec::Spans(enc(&[ca(1)])),
+            ..FourSet::any()
+        },
+        FourSet {
+            home: SlotSpec::Empty,
+            ..FourSet::any()
+        },
+    ] {
+        let enumerated = lq.findlinks_ftt(&q);
+        assert_eq!(lq.count_ftt(&q), enumerated.len(), "count = |enum| for {q:?}");
+
+        // The same set again, drained one link at a time through the cursor.
+        let mut drained: Vec<_> = Vec::new();
+        let mut cur = None;
+        loop {
+            let w = lq.window_ftt(&q, cur, 1);
+            drained.extend(w.batch.iter().cloned());
+            cur = w.next;
+            if w.exhausted {
+                break;
+            }
+        }
+        assert_eq!(drained, enumerated, "the window drains sat for {q:?}");
+    }
+}
+
+/// §3 — the two zeros ASN-0132 keeps apart: `count_v`'s D-ZERO asserts present
+/// unreachability through one document, `count_ftt`'s CN-ZERO a verdict over
+/// the whole addressable store. A link homed in a document that arranges
+/// nothing shows they are different assertions about one world — the region
+/// census says nothing reaches there, the descriptor census counts the link.
+#[test]
+fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // D-ZERO: nothing reaches doc2's region — it arranges nothing.
+    assert_eq!(lq.count_v(&doc2(), &[vspan(1, 1, 5)]), Ok(0));
+    // CN-ZERO over the same link: the store's census finds it, unreachable or
+    // not (CN-STAB — the descriptor family asks no arrangement question).
+    let q_home2 = FourSet {
+        home: SlotSpec::Spans(enc(&[doc2()])),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.count_ftt(&q_home2), 1);
+    // And CN-ZERO proper, over a home no link resides in: a store-wide
+    // verdict, not present unreachability.
+    let q_home_none = FourSet {
+        home: SlotSpec::Spans(enc(&[d7()])),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.count_ftt(&q_home_none), 0);
+    assert!(!q_home_none.is_unsatisfiable()); // the request names something
+}
+
 // ─────────────── §5 — projection & discoverability ───────────────
 
 #[test]
@@ -434,17 +528,18 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
 
     // UNFILTERED — the one read here that is not narrowed to the active view.
     // Nullifying e1 leaves its projection exactly as it was (followlink
-    // reports what is RECORDED), while discoverable_from, which conjoins
-    // is_active, flips: the two answer different questions about one link.
+    // reports what is RECORDED), while addressably_discoverable_from, which
+    // conjoins is_active, flips: the two answer different questions about one
+    // link.
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
     let retracted = lq.project(&e1, FROM, &doc1()).expect("project");
     assert_eq!(retracted, proj);
     assert!(retracted.denotes(&t(&[1, 2])));
-    assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(false));
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(false));
 }
 
 #[test]
-fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
+fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k);
@@ -452,9 +547,9 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
-    assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(true));
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(true));
     // Registered-but-empty d: nothing is reachable.
-    assert_eq!(lq.discoverable_from(&e1, &doc2()), Ok(false));
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc2()), Ok(false));
 
     // The LINK-subspace half of LP12: a supersession claim's slots cover only
     // link addresses, which are seated in doc1's link runs by makelink.
@@ -477,23 +572,24 @@ fn discoverable_from_is_reachable_and_active_over_both_subspaces() {
         )
         .expect("makelink succeeds");
     let (claim, _) = store.assert_sup(SYS, &doc2(), &m1, &m2).expect("assert_sup succeeds");
-    assert_eq!(lq.discoverable_from(&claim, &doc1()), Ok(true));
+    assert_eq!(lq.addressably_discoverable_from(&claim, &doc1()), Ok(true));
     // The claim is homed in doc2 but reaches nothing arranged there
     // (assert_sup never seats).
-    assert_eq!(lq.discoverable_from(&claim, &doc2()), Ok(false));
+    assert_eq!(lq.addressably_discoverable_from(&claim, &doc2()), Ok(false));
 
-    // Compound "reachable AND active", NOT pure LP12: nullified-but-reachable
-    // answers Ok(false) — and a nullified link is still a link (it passes the
-    // residence gate rather than erring NotALink).
+    // LP12 conjoined with addressability: a nullified-but-reachable link is
+    // discoverable and not addressable, so it answers Ok(false) — and a
+    // nullified link is still a link (it passes the residence gate rather
+    // than erring NotALink).
     store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
-    assert_eq!(lq.discoverable_from(&e1, &doc1()), Ok(false));
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(false));
 
     assert_eq!(
-        lq.discoverable_from(&ca(1), &doc1()),
+        lq.addressably_discoverable_from(&ca(1), &doc1()),
         Err(QueryError::NotALink)
     );
     assert_eq!(
-        lq.discoverable_from(&e1, &d7()),
+        lq.addressably_discoverable_from(&e1, &d7()),
         Err(QueryError::DocNotRegistered)
     );
 }

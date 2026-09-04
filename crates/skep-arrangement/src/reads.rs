@@ -1,49 +1,30 @@
-//! §D/§E — arrangement reads (resolve/point/coverage/project) and provenance
-//! reads (deletions/docs_containing), pure over any M2 snapshot (§2, §9).
+//! §D/§E — arrangement reads (resolve/point/coverage/project), the content
+//! subspace's admission predicates, and the provenance reads
+//! (deletions/docs_containing), pure over any M2 snapshot (§2, §9).
 //!
 //! **Level-class discipline** (§2): a SpanSet aggregated across runs —
-//! coverage footprints, the internal `content_image`/`ever_placed` — is in
-//! general MIXED-LENGTH (transclusion mixes origin lengths), and M1's
-//! length-gated set ops fault `LevelMismatch` on mixed operands. Where
-//! geometry is needed, M5 partitions each operand into level-classes by
-//! endpoint length, runs the M1 op within each class, and unions the
-//! per-class results; where overlap/membership suffices it uses the total
-//! `classify_spans`/`contains`. The discipline is ENCAPSULATED behind the M6
-//! query methods ([`M5State::project`], [`M5State::deletions`]) and EXPOSED
-//! on exactly one seam — [`M5State::resolve_coverage`], whose raw cover
-//! carries the consume-under-the-discipline contract (Conflicts #8).
-
-use std::collections::BTreeMap;
+//! coverage footprints, the internal `content_image`, a document's
+//! `ever_placed` record — is in general MIXED-LENGTH (transclusion mixes
+//! origin lengths), and M1's length-gated set ops fault `LevelMismatch` on
+//! mixed operands. Where geometry is needed, M5 partitions each operand into
+//! level-classes by endpoint length (`SpanSet::by_level_class`), runs the M1
+//! op within each class, and unions the per-class results; where
+//! overlap/membership suffices it uses the total `classify_spans`/`contains`.
+//! The discipline is ENCAPSULATED behind the query methods
+//! ([`M5State::project`], [`M5State::deletions`]) and OWED by whoever
+//! aggregates run extents themselves — [`M5State::resolve_coverage`]'s raw
+//! cover, and the runs [`M5State::resolve`] hands back for a caller to lift.
+//! Both routes reach [`Run::iextent`], where the obligation is stated
+//! (Conflicts #8).
 
 use num_traits::{One, Zero};
 use skep_address::{
-    classify_spans, difference_sets, intersect, shift, union, validate, Address, Nat, Span,
-    SpanRel, SpanSet, Tumbler,
+    content_subspace, difference_sets, link_subspace, union, Address, Nat, Span, SpanSet, Tumbler,
 };
 
-use crate::error::VPos;
 use crate::run::Run;
 use crate::state::M5State;
-use crate::{s_c, s_l};
-
-/// Boundary search over a run's offsets (§2 project, cross-class fallback):
-/// the least `k ∈ [0, width]` with `shift(i_start, k) ≥ bound`. Monotone in
-/// `k` (TS1 strict order), so binary search applies; total across lengths
-/// (`Tumbler`'s order is defined over all of the carrier).
-fn lower_bound(run: &Run, bound: &Tumbler) -> Nat {
-    let mut lo = Nat::zero();
-    let mut hi = run.width().clone();
-    let two = Nat::from(2u32);
-    while lo < hi {
-        let mid = (&lo + &hi) / &two;
-        if shift(run.i_start().tumbler(), &mid) >= *bound {
-            hi = mid;
-        } else {
-            lo = &mid + &Nat::one();
-        }
-    }
-    lo
-}
+use crate::vspace::{is_ordinal_vspan, VPos};
 
 impl M5State {
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
@@ -52,30 +33,29 @@ impl M5State {
     /// `span.start().get(1)`, count from `span.width().get(2)`.
     ///
     /// DEFENSIVE (returns ⟨⟩, cannot fault — no `Result`) unless the span is
-    /// usable — the COMPLETE guard is `#start == 2 ∧ #width == 2 ∧
-    /// span.width().get(1) == 0`; in particular `#start ≠ 2` (both < 2 and
-    /// > 2), `#width ≠ 2`, or a non-ordinal width (a level-uniform `[m, n]`
-    /// with m > 0 is action-point-1, making `get(2)` the wrong extraction)
-    /// each yield ⟨⟩. A shape-valid span whose subspace `start().get(1)` ∉
-    /// {s_C, s_L} likewise yields ⟨⟩ — a `DocArrangement` has exactly the
-    /// content and link run-lists. Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate
-    /// registered-empty vs unallocated via M3). The guard is published as
-    /// COMPLETE precisely so M6 can pre-validate request-built V-spans and
-    /// distinguish "bad request" from "genuinely empty" up front.
+    /// usable: a span failing [`is_ordinal_vspan`] — the shared, complete
+    /// shape predicate, which COPY's `BadSpan` rejects on — yields ⟨⟩, and so
+    /// does a shape-valid span whose subspace `start().get(1)` ∉ {s_C, s_L},
+    /// a `DocArrangement` having exactly the content and link run-lists.
+    /// Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate registered-empty vs unallocated
+    /// via M3). A caller that must tell "bad request" from "genuinely empty"
+    /// calls the predicate itself before asking; M6's own request gate is
+    /// deliberately WEAKER (ASN-0115 well-formedness, `#start ≥ 2`), leaving
+    /// depth compatibility to this defensive fold.
+    ///
+    /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs' extents:
+    /// see [`Run::iextent`].
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
-        if span.start().len() != 2
-            || span.width().len() != 2
-            || !span.width().get(1).is_some_and(|w| w.is_zero())
-        {
+        if !is_ordinal_vspan(span) {
             return Vec::new();
         }
         let Some(arr) = self.arrangements.get(doc.tumbler()) else {
             return Vec::new();
         };
         let sub = span.start().get(1).expect("#start == 2");
-        let list = if *sub == s_c() {
+        let list = if *sub == content_subspace() {
             &arr.content
-        } else if *sub == s_l() {
+        } else if *sub == link_subspace() {
             &arr.link
         } else {
             return Vec::new();
@@ -92,9 +72,9 @@ impl M5State {
     /// through `validate`).
     pub fn point(&self, doc: &Address, v: &VPos) -> Option<Address> {
         let arr = self.arrangements.get(doc.tumbler())?;
-        let list = if v.subspace == s_c() {
+        let list = if v.subspace == content_subspace() {
             &arr.content
-        } else if v.subspace == s_l() {
+        } else if v.subspace == link_subspace() {
             &arr.link
         } else {
             return None;
@@ -103,16 +83,14 @@ impl M5State {
     }
 
     /// V→I coverage as a SpanSet (§2): `⋃ r.iextent()` over the runs
-    /// [`resolve`](M5State::resolve) returns — the centralized correct lift,
-    /// so M7's MAKELINK never re-derives `iextent`. `union` (concatenation)
+    /// [`resolve`](M5State::resolve) returns — the aggregate M6's
+    /// FINDDOCSCONTAINING feeds to [`docs_containing`](M5State::docs_containing),
+    /// lifted here so the query does not re-derive it. `union` (concatenation)
     /// only ⇒ total, never faults, NOT normalized; possibly mixed-length when
-    /// `span` covers transcluded runs — consume under the level-class
-    /// discipline. In particular, because a transcluded endset's I-coverage
-    /// is mixed-length and M1's `canonical_key` is length-gated, M7 MUST form
-    /// its coverage-class dedup key PER LEVEL-CLASS (one `canonical_key` per
-    /// endpoint-length partition, the per-class results combined), never by a
-    /// single `canonical_key` over the raw cover — which would fault
-    /// `LevelMismatch`.
+    /// `span` covers transcluded runs, so it is consumed under the level-class
+    /// discipline (the hazard is stated on [`Run::iextent`], which every
+    /// aggregator of run extents reaches, whether or not it comes through
+    /// here).
     pub fn resolve_coverage(&self, doc: &Address, span: &Span) -> SpanSet {
         self.resolve(doc, span).into_iter().map(|r| r.iextent()).collect()
     }
@@ -150,6 +128,43 @@ impl M5State {
             .unwrap_or_else(Nat::zero)
     }
 
+    /// Does the content subspace admit `ord` as a PLACEMENT boundary —
+    /// `1 ≤ ord ≤ n_C + 1` (§1/§3)? The arrangement's own admission rule,
+    /// asked rather than re-derived, so the append boundary (and the
+    /// `ord = 1` case at `n_C = 0`, ASN-0116's FirstInsertionPosition) has one
+    /// definition for INSERT, COPY and REARRANGE's cuts to share. The verdict
+    /// each op reports for a refusal stays with that op's error type.
+    pub(crate) fn admits_content_boundary(&self, doc: &Address, ord: &Nat) -> bool {
+        *ord >= Nat::one() && *ord <= &self.content_count(doc) + &Nat::one()
+    }
+
+    /// Is content ordinal `ord` ARRANGED — a position holding an I-address,
+    /// `ord ∈ [1, n_C]` (§4)? Answered off the run-list's own locate, which
+    /// is the same walk `point` uses.
+    pub(crate) fn content_position_arranged(&self, doc: &Address, ord: &Nat) -> bool {
+        self.arrangements
+            .get(doc.tumbler())
+            .is_some_and(|a| a.content.locate(ord).is_some())
+    }
+
+    /// Does the arranged content contain the whole range `[from, from +
+    /// width)` — `from + width ≤ n_C + 1`, subtraction-free (§4)? The
+    /// containment half of DELETE's admission, stated where `n_C` lives.
+    pub(crate) fn content_range_within(&self, doc: &Address, from: &Nat, width: &Nat) -> bool {
+        from + width <= &self.content_count(doc) + &Nat::one()
+    }
+
+    /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)?
+    /// I-extent membership over the link run-list, so a link INTERIOR to a
+    /// coalesced link run is caught too. Absent doc ⇒ not seated.
+    pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
+        self.arrangements.get(doc.tumbler()).is_some_and(|a| {
+            a.link
+                .iter_runs()
+                .any(|(_, r)| r.iextent().contains(link.tumbler()))
+        })
+    }
+
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by
     /// construction (link reverse-discovery is M7's BH3; there is no subspace
     /// argument): the V-positions of `doc` whose content I-address falls in
@@ -158,58 +173,23 @@ impl M5State {
     /// applied internally, so the call is fault-free for any coverage,
     /// including cross-length prefix/subtree spans.
     ///
-    /// Per content run × coverage span: a level-uniform span of the run's
-    /// I-extent length is intersected with M1 (`intersect`, within one level
-    /// class) and the I-sub-extent maps at equal offset to a V-sub-range;
-    /// any other span — different length, or same-length but non-uniform
-    /// (which `intersect` would fault on) — falls back to the total
-    /// order-convex membership boundary search ([`lower_bound`]). Scan of the
-    /// forward content map (Open decision #2 v1 default).
+    /// Per content run × coverage span: the run reports which of its offsets
+    /// the span covers ([`Run::offsets_covered_by`], which owns both the
+    /// same-level-class intersection and the cross-class boundary search),
+    /// and this method turns that offset range into a V-range by adding the
+    /// run's implicit V-start. Scan of the forward content map (Open decision
+    /// #2 v1 default).
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
         let Some(arr) = self.arrangements.get(doc.tumbler()) else {
             return SpanSet::empty();
         };
         let mut vspans: Vec<Span> = Vec::new();
         for (v_start, run) in arr.content.iter_runs() {
-            let ilen = run.i_start().tumbler().len();
             for cspan in coverage.iter() {
-                let seg: Option<(Nat, Nat)> =
-                    if cspan.is_level_uniform() && cspan.start().len() == ilen {
-                        match intersect(&run.iextent(), cspan)
-                            .expect("both operands level-uniform at one length — gate passes")
-                        {
-                            None => None,
-                            Some(sub) => {
-                                // The intersection lies inside the run's
-                                // extent, so both endpoints share the run's
-                                // prefix; offsets are last-component
-                                // differences.
-                                let at = |t: &Tumbler| {
-                                    t.get(ilen)
-                                        .expect("run extent endpoints have #t == ilen")
-                                        .clone()
-                                };
-                                let base = at(run.i_start().tumbler());
-                                let reach = sub.reach();
-                                Some((at(sub.start()) - &base, at(&reach) - &base))
-                            }
-                        }
-                    } else {
-                        // Cross-class (or non-uniform) fallback: the run's
-                        // addresses are contiguous and a span is order-convex,
-                        // so the contained subset is one contiguous index
-                        // range [k_lo, k_hi).
-                        let k_lo = lower_bound(run, cspan.start());
-                        let reach = cspan.reach();
-                        let k_hi = lower_bound(run, &reach);
-                        if k_lo < k_hi {
-                            Some((k_lo, k_hi))
-                        } else {
-                            None
-                        }
-                    };
-                let Some((k_lo, k_hi)) = seg else { continue };
-                let start = Tumbler::new([s_c(), &v_start + &k_lo])
+                let Some((k_lo, k_hi)) = run.offsets_covered_by(cspan) else {
+                    continue;
+                };
+                let start = Tumbler::new([content_subspace(), &v_start + &k_lo])
                     .expect("a two-component sequence is nonempty");
                 let width = Tumbler::new([Nat::zero(), &k_hi - &k_lo])
                     .expect("a two-component sequence is nonempty");
@@ -226,16 +206,6 @@ impl M5State {
             .expect("depth-2 V-spans share one level class")
     }
 
-    /// R↾doc (M5-INTERNAL — the `deletions` operand, Conflicts #8): the
-    /// iextent cover of content spans ever placed by `doc`. Raw and possibly
-    /// mixed-length; it never crosses a module seam.
-    fn ever_placed(&self, doc: &Address) -> SpanSet {
-        self.prov_by_doc
-            .get(doc.tumbler())
-            .map(|v| v.iter().cloned().collect())
-            .unwrap_or_else(SpanSet::empty)
-    }
-
     /// The current content-image cover (M5-INTERNAL — the SHOWDELETIONS
     /// operand consumed only by `deletions`, §2/§9): `⋃ r.iextent()` over the
     /// content runs. Union (concatenation) only; possibly mixed-length across
@@ -247,64 +217,35 @@ impl M5State {
             .unwrap_or_else(SpanSet::empty)
     }
 
-    /// SHOWDELETIONS primitive (§9; ASN-0047 P2): `ever_placed(doc) ∖
-    /// content_image(doc)`, computed PER LEVEL-CLASS inside M5 — both
+    /// SHOWDELETIONS primitive (§9; ASN-0047 P2): what `doc` ever placed,
+    /// minus its current content image, computed PER LEVEL-CLASS — both
     /// operands are iextent-covers that mix origin-lengths when `doc`
-    /// transcludes across heterogeneous-depth documents, so M5 partitions
-    /// each by endpoint length, runs `difference_sets` within each class, and
-    /// unions the results. Per-class is also the correct semantics:
-    /// different-length addresses are distinct and cannot cancel. M6 reads
+    /// transcludes across heterogeneous-depth documents, so each is
+    /// partitioned by endpoint length (M1's `by_level_class`),
+    /// `difference_sets` runs within each class, and the per-class results
+    /// are unioned. Per-class is also the correct semantics:
+    /// different-length addresses are distinct and cannot cancel. Classes
+    /// ascend by endpoint length, the partition being ordered. M6 reads
     /// SHOWDELETIONS straight off this — neither operand crosses the
     /// boundary. Fault-free.
     pub fn deletions(&self, doc: &Address) -> SpanSet {
-        let ever = self.ever_placed(doc);
-        let image = self.content_image(doc);
-        let mut ever_by: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
-        for s in ever.iter() {
-            ever_by.entry(s.start().len()).or_default().push(s.clone());
-        }
-        let mut image_by: BTreeMap<usize, Vec<Span>> = BTreeMap::new();
-        for s in image.iter() {
-            image_by.entry(s.start().len()).or_default().push(s.clone());
-        }
+        let image = self.content_image(doc).by_level_class();
         let mut out = SpanSet::empty();
-        for (len, spans) in ever_by {
-            let e: SpanSet = spans.into_iter().collect();
-            let i: SpanSet = image_by
-                .remove(&len)
-                .map(|v| v.into_iter().collect())
-                .unwrap_or_else(SpanSet::empty);
-            let d = difference_sets(&e, &i)
+        for (len, ever) in self.prov.ever_placed(doc).by_level_class() {
+            let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
+            let d = difference_sets(&ever, &here)
                 .expect("per-class operands share one length class — the gate passes");
             out = union(&out, &d);
         }
         out
     }
 
-    /// R⁻¹ candidate documents (§9; Conflicts #6): every document with some
-    /// placed span not `Separated` from some span of `coverage` under M1's
-    /// total, length-gate-free `classify_spans`. An overlap-SUPERSET (no
-    /// false negatives — a genuinely contained address forces order-overlap);
-    /// FINDDOCSCONTAINING narrows each candidate with
-    /// `project(d, coverage) ≠ ⟨⟩` off the same snapshot. Returns
-    /// `Vec<Address>` in distinct, deterministic Tumbler order (the `OrdMap`
-    /// walk supplies the order; the sequence shape is M5's own choice of
-    /// surface). M5 owns R and any index over it (Open decision
-    /// #3: v1 scans `prov_by_doc`); M6 owns only the composing query.
+    /// R⁻¹ candidate documents (§9; Conflicts #6) — the historical
+    /// overlap-superset the provenance record answers, which
+    /// FINDDOCSCONTAINING then narrows with `project(d, coverage) ≠ ⟨⟩` off
+    /// the same snapshot. Distinct, in deterministic Tumbler order.
     pub fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
-        let mut out = Vec::new();
-        for (k, spans) in self.prov_by_doc.iter() {
-            let hit = spans
-                .iter()
-                .any(|p| coverage.iter().any(|c| classify_spans(p, c) != SpanRel::Separated));
-            if hit {
-                out.push(
-                    validate(k.clone())
-                        .expect("prov keys are registered-document tumblers (T4-valid)"),
-                );
-            }
-        }
-        out
+        self.prov.docs_containing(coverage)
     }
 }
 
@@ -357,6 +298,38 @@ mod tests {
         let s = arranged();
         let got = s.resolve(&doc1(), &vspan(1, 2, 10));
         assert!(got == vec![run(&ca(2), 2), run(&vca(1), 2)]);
+    }
+
+    #[test]
+    fn the_arrangement_states_which_positions_it_admits() {
+        // §1/§3/§4/§8: the placement boundary, the arranged position, the
+        // containment of a range and the seating of a link are all facts
+        // about the arrangement, so the arrangement answers them.
+        let s = arranged(); // n_C = 5
+        assert!(s.admits_content_boundary(&doc1(), &n(1)));
+        assert!(s.admits_content_boundary(&doc1(), &n(6))); // the append boundary
+        assert!(!s.admits_content_boundary(&doc1(), &n(0)));
+        assert!(!s.admits_content_boundary(&doc1(), &n(7)));
+        // An empty document admits ordinal 1 and nothing else.
+        assert!(s.admits_content_boundary(&doc2(), &n(1)));
+        assert!(!s.admits_content_boundary(&doc2(), &n(2)));
+        // Arranged positions stop one short of that boundary.
+        assert!(s.content_position_arranged(&doc1(), &n(5)));
+        assert!(!s.content_position_arranged(&doc1(), &n(6)));
+        assert!(!s.content_position_arranged(&doc1(), &n(0)));
+        assert!(!s.content_position_arranged(&doc2(), &n(1)));
+        // Containment: [from, from + width) must fit the arranged content.
+        assert!(s.content_range_within(&doc1(), &n(2), &n(4)));
+        assert!(!s.content_range_within(&doc1(), &n(2), &n(5)));
+        // Seating is I-extent membership, so an interior position of a
+        // coalesced link run counts.
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
+        assert_eq!(s.link_runs(&doc1()).len(), 1);
+        assert!(s.seats_link(&doc1(), &la(1)));
+        assert!(s.seats_link(&doc1(), &la(2)));
+        assert!(!s.seats_link(&doc1(), &la(3)));
+        assert!(!s.seats_link(&doc2(), &la(1)));
     }
 
     #[test]

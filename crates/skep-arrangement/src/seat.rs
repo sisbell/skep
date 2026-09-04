@@ -12,9 +12,9 @@ use crate::HasM5;
 /// Append an already-allocated home link `link` at doc's next link
 /// V-position (§8; ASN-0047 CL-OWN/CL-UNIQ/J-LV). SEMANTICS-BLIND: trusts M7
 /// that `link ∈ dom(L)` (M5 never reads M7 — no back-edge); M5 checks only
-/// CL-OWN (`origin(link) = doc`, via M1's `document_of`) and CL-UNIQ (not
-/// already seated — I-extent membership over the link run-list, which also
-/// catches a link interior to a coalesced link run). Returns the delta; M7
+/// CL-OWN (`origin(link) = doc`, via M1's `document_of`) and CL-UNIQ, which
+/// the arrangement answers for itself (a link interior to a coalesced link
+/// run counts as seated). Returns the delta; M7
 /// lifts via `.into()` and stages it inside MAKELINK's K.λ + K.μ⁺_L
 /// transaction. The fold appends at `n_L(d) + 1` and records NO provenance
 /// (J-LV).
@@ -22,11 +22,7 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
     if document_of(link).as_ref() != Some(doc) {
         return Err(SeatError::NotHomeLink);
     }
-    if m5
-        .link_runs(doc)
-        .iter()
-        .any(|r| r.iextent().contains(link.tumbler()))
-    {
+    if m5.seats_link(doc, link) {
         return Err(SeatError::AlreadySeated);
     }
     Ok(M5Rec::LinkSeat {

@@ -3,8 +3,9 @@
 
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use skep_address::{Address, Nat, Span, Tumbler};
+use skep_address::{Address, Nat, Tumbler};
 
+use crate::prov::Provenance;
 use crate::run::Run;
 use crate::runlist::RunList;
 
@@ -17,15 +18,16 @@ pub(crate) struct DocArrangement {
     pub(crate) link: RunList,
 }
 
-/// Authoritative folded state: per-document POOM + provenance. The
-/// arrangement is authoritative MUTABLE state recovered by replay — NOT a
-/// recomputable hint (ASN-0047 P3); R is append-only and non-recomputable
-/// from the current arrangement (P2 keeps deleted pairs) but recovered by the
-/// same replay. Both maps key by the document's `Tumbler` — M5's choice of
-/// key form, not a constraint from M1, which orders `Address` itself — so
-/// every `&Address` method converts with `doc.tumbler()`. `arrangements` is
-/// sparse: an absent doc ⇒ empty arrangement (the eager-lazy split with M3).
-/// v1 has no derived-hint fields ⇒
+/// Authoritative folded state: the per-document POOM, and [`Provenance`]
+/// co-located beside it (ASN-0075). The arrangement is authoritative MUTABLE
+/// state recovered by replay — NOT a recomputable hint (ASN-0047 P3);
+/// provenance is the append-only history housed next to it, and it is a type
+/// of its own whose surface offers no removal, so the permanence R promises
+/// holds by construction. Both key by the document's `Tumbler` —
+/// M5's choice of key form, not a constraint from M1, which orders `Address`
+/// itself — so every `&Address` method converts with `doc.tumbler()`.
+/// `arrangements` is sparse: an absent doc ⇒ empty arrangement (the
+/// eager-lazy split with M3). v1 has no derived-hint fields ⇒
 /// [`rebuild_derived`](M5State::rebuild_derived) is the identity.
 ///
 /// Serialization needs the `im` crate's `serde` feature and
@@ -34,7 +36,7 @@ pub(crate) struct DocArrangement {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct M5State {
     pub(crate) arrangements: im::OrdMap<Tumbler, DocArrangement>,
-    pub(crate) prov_by_doc: im::OrdMap<Tumbler, im::Vector<Span>>,
+    pub(crate) prov: Provenance,
 }
 
 /// M5's sole journal delta — effect-level (carries concrete
@@ -104,13 +106,9 @@ impl M5State {
                 let k = doc.tumbler();
                 let mut arr = self.arrangements.get(k).cloned().unwrap_or_default();
                 arr.content = arr.content.splice_in(at, runs);
-                let mut col = self.prov_by_doc.get(k).cloned().unwrap_or_default();
-                for r in runs {
-                    col.push_back(r.iextent());
-                }
                 M5State {
                     arrangements: self.arrangements.update(k.clone(), arr),
-                    prov_by_doc: self.prov_by_doc.update(k.clone(), col),
+                    prov: self.prov.record(doc, runs.iter().map(Run::iextent)),
                 }
             }
             // §4 fold: split at `from` and `from + width`, drop the middle,
@@ -123,7 +121,7 @@ impl M5State {
                 arr.content = arr.content.remove_range(from, width);
                 M5State {
                     arrangements: self.arrangements.update(k.clone(), arr),
-                    prov_by_doc: self.prov_by_doc.clone(),
+                    prov: self.prov.clone(),
                 }
             }
             // §6 fold: split at cut ordinals, tile by placement. Pure
@@ -134,7 +132,7 @@ impl M5State {
                 arr.content = arr.content.reorder(cuts);
                 M5State {
                     arrangements: self.arrangements.update(k.clone(), arr),
-                    prov_by_doc: self.prov_by_doc.clone(),
+                    prov: self.prov.clone(),
                 }
             }
             // §8 fold: append `link` at the next link V-position n_L(d) + 1
@@ -153,7 +151,7 @@ impl M5State {
                 arr.link = arr.link.splice_in(&next, &[seat]);
                 M5State {
                     arrangements: self.arrangements.update(k.clone(), arr),
-                    prov_by_doc: self.prov_by_doc.clone(),
+                    prov: self.prov.clone(),
                 }
             }
             // §7 fold: share `source`'s then-current content run-list into
@@ -175,18 +173,16 @@ impl M5State {
                 if src.total_width().is_zero() {
                     self.clone()
                 } else {
-                    let nk = new.tumbler();
-                    let mut col = self.prov_by_doc.get(nk).cloned().unwrap_or_default();
-                    for (_, run) in src.iter_runs() {
-                        col.push_back(run.iextent());
-                    }
+                    let prov = self
+                        .prov
+                        .record(new, src.iter_runs().map(|(_, run)| run.iextent()));
                     let arr = DocArrangement {
                         content: src,
                         link: RunList::default(),
                     };
                     M5State {
-                        arrangements: self.arrangements.update(nk.clone(), arr),
-                        prov_by_doc: self.prov_by_doc.update(nk.clone(), col),
+                        arrangements: self.arrangements.update(new.tumbler().clone(), arr),
+                        prov,
                     }
                 }
             }
@@ -301,7 +297,7 @@ mod tests {
             new: vdoc(),
         });
         assert!(s1.arrangements.get(vdoc().tumbler()).is_none());
-        assert!(s1.prov_by_doc.get(vdoc().tumbler()).is_none());
+        assert!(!s1.prov.is_recorded(&vdoc()));
         assert_eq!(s1.content_count(&vdoc()), n(0));
     }
 

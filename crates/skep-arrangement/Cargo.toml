@@ -11,7 +11,8 @@ readme = "README.md"
 [dependencies]
 # The design's mandated slice shapes (§Core data model): persistent im
 # collections for the two authoritative slices — arrangements keyed by Tumbler
-# (im::OrdMap) and prov_by_doc (im::OrdMap of im::Vector<Span>) — plus the
+# (im::OrdMap) and the provenance record (im::OrdMap of im::Vector<Span>,
+# behind the Provenance type that keeps it append-only) — plus the
 # RunList's v1 physical backing im::Vector<Run> (Open build decision #1
 # default). The serde feature because both slices are fully serialized in
 # checkpoints (no skip-serialize; rebuild_derived is identity).

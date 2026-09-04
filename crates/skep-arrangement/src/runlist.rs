@@ -17,21 +17,9 @@
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{shift, validate, Address, Nat, SpanSet};
+use skep_address::{shift, Address, Nat, SpanSet};
 
 use crate::run::Run;
-
-/// Address synthesis through `validate` (§1): every within-run I-address M5
-/// synthesizes — the boundary split, `resolve_range`, `point` — recovers its
-/// `Address` via `validate(shift(…))`. Shifting a valid element address by an
-/// ordinal offset preserves T4-validity, so the `.expect` flags an
-/// internal-invariant violation, never a domain case. The raw `shift` is
-/// SAFE — not the TA7a text→link hazard — because every `i_start` is a full
-/// element position (`zeros = 3`, ordinal last), M1's stated safe window.
-pub(crate) fn synth_addr(base: &Address, off: &Nat) -> Address {
-    validate(shift(base.tumbler(), off))
-        .expect("ordinal shift of a valid element I-start is T4-valid by construction")
-}
 
 /// The §1 I-adjacency guard — the COMPLETE and SAFE coalesce condition:
 /// `shift(a₁, w₁) == a₂` implies same origin (ASN-0058 M16a) and excludes
@@ -80,22 +68,17 @@ pub(crate) fn extend_or_push_run(runs: &mut Vec<Run>, r: Run) {
     runs.push(r);
 }
 
-/// Eager coalesce (§1, Open decision #8 default): one pass merging adjacent
-/// runs iff I-adjacent. Behaviorally identical to seam-only coalescing given
-/// the inductive invariant (the resident list is always maximally merged, so
-/// only touched seams can newly merge); a full pass cannot miss a seam. The
-/// resident form is then the unique maximally-merged decomposition
+/// Eager coalesce (§1, Open decision #8 default): one pass accumulating
+/// through [`extend_or_push_run`], so the merge condition is applied by the
+/// one element that owns it. Behaviorally identical to seam-only coalescing
+/// given the inductive invariant (the resident list is always maximally
+/// merged, so only touched seams can newly merge); a full pass cannot miss a
+/// seam. The resident form is then the unique maximally-merged decomposition
 /// (ASN-0058 M12), so queries read run structure directly.
 fn coalesced(runs: Vec<Run>) -> im::Vector<Run> {
     let mut out: Vec<Run> = Vec::with_capacity(runs.len());
     for run in runs {
-        if let Some(last) = out.last_mut() {
-            if i_adjacent(last, &run.i_start) {
-                last.width = &last.width + &run.width;
-                continue;
-            }
-        }
-        out.push(run);
+        extend_or_push_run(&mut out, run);
     }
     out.into_iter().collect()
 }
@@ -135,7 +118,7 @@ impl RunList {
     pub(crate) fn point(&self, ord: &Nat) -> Option<Address> {
         let (idx, off) = self.locate(ord)?;
         let run = self.0.get(idx).expect("locate returns an in-range index");
-        Some(synth_addr(&run.i_start, &off))
+        Some(run.addr_at(&off))
     }
 
     /// Split the run-list at the ordinal boundary BEFORE `ord`: the prefix
@@ -145,7 +128,8 @@ impl RunList {
     /// concatenates at the tail (§1). `ord ≤ 1` returns (empty, all) — the
     /// defensive clamp under which a split at 0 and at 1 coincide (ASN-0119
     /// tile-by-placement note). An interior `ord` splits the boundary run
-    /// `Run(a, w) → Run(a, c), Run(a ⊕ c, w − c)` via [`synth_addr`].
+    /// `Run(a, w) → Run(a, c), Run(a ⊕ c, w − c)` via
+    /// [`Run::addr_at`](crate::Run::addr_at).
     fn split_at(&self, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
         let one = Nat::one();
         if *ord <= one {
@@ -168,7 +152,7 @@ impl RunList {
                 // (1 ≤ c ≤ width − 1 here).
                 let c = ord - &start;
                 let right_first = Run {
-                    i_start: synth_addr(&run.i_start, &c),
+                    i_start: run.addr_at(&c),
                     width: &run.width - &c,
                 };
                 left.push(Run {

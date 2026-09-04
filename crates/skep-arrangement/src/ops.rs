@@ -15,18 +15,19 @@
 //! read and the records they stage, so a minimal test world can drive
 //! `delete`/`rearrange` with `HasM5 + HasM3` and `From<M5Rec>` alone.
 
-use num_traits::{One, Zero};
-use skep_address::{zeros, Address, Nat};
+use num_traits::Zero;
+use skep_address::{content_subspace, zeros, Address, Nat};
 use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
 use crate::auth::Caller;
-use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VPos, VSpec, VersionError};
+use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionError};
 use crate::run::Run;
 use crate::runlist::{extend_or_push_run, extend_run};
 use crate::state::M5Rec;
-use crate::{s_c, HasM5};
+use crate::vspace::{is_ordinal_vspan, VPos, VSpec};
+use crate::HasM5;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
 /// engine's kernel. The pure reads live on [`M5State`](crate::M5State)
@@ -58,8 +59,9 @@ where
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
     /// in-txn ω gate — ownership ruling, as amended 2026-08-16) →
     /// `EmptyContent` → `NotContentSubspace` (`at.subspace ≠ s_C`) →
-    /// `OutOfBounds` (`at.ordinal ∉ [1, n_C + 1]` — the
-    /// Valid(First)InsertionPosition guard, ordinal = 1 when n_C = 0).
+    /// `OutOfBounds` (the arrangement does not admit `at.ordinal` as a
+    /// placement boundary — Valid(First)InsertionPosition, so ordinal = 1
+    /// when n_C = 0).
     /// J0/J1★ by construction: mint + write + place + provenance ride one
     /// transaction; successive `mint_content` calls read `stg.working()`,
     /// so under the held lock they advance the same frontier → contiguous
@@ -83,12 +85,10 @@ where
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }
-            if at.subspace != s_c() {
+            if at.subspace != content_subspace() {
                 return Err(InsertError::NotContentSubspace);
             }
-            let n_c = stg.working().m5().content_count(doc);
-            let hi = &n_c + &Nat::one();
-            if at.ordinal < Nat::one() || at.ordinal > hi {
+            if !stg.working().m5().admits_content_boundary(doc, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
             let mut first: Option<Address> = None;
@@ -134,8 +134,10 @@ where
     /// transclusion of anyone's content being the point of the medium
     /// (ownership ruling, as amended 2026-08-16) — `NotContentSubspace` →
     /// `OutOfBounds`); per spec: `SourceNotRegistered`
-    /// → `BadSpan` (the ordinal-level depth-2 guard — identical to
-    /// `resolve`'s complete guard, Conflicts #7) → `SourceNotContentSubspace`
+    /// → `BadSpan` (fails [`is_ordinal_vspan`] — the one shape predicate,
+    /// which `resolve` folds on, so a span COPY rejects is exactly a span
+    /// `resolve` would refuse to serve, Conflicts #7)
+    /// → `SourceNotContentSubspace`
     /// (`span.start().get(1) ≠ s_C`) → `EmptySource` (ASN-0118
     /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
     /// start — S3★, Open decision #5 default); finally `EmptyResult` when
@@ -159,12 +161,10 @@ where
                 if !caller.is_owner(w.m3(), doc) {
                     return Err(CopyError::NotOwner(doc.clone()));
                 }
-                if at.subspace != s_c() {
+                if at.subspace != content_subspace() {
                     return Err(CopyError::NotContentSubspace);
                 }
-                let n_c = w.m5().content_count(doc);
-                let hi = &n_c + &Nat::one();
-                if at.ordinal < Nat::one() || at.ordinal > hi {
+                if !w.m5().admits_content_boundary(doc, &at.ordinal) {
                     return Err(CopyError::OutOfBounds);
                 }
                 let mut runs: Vec<Run> = Vec::new();
@@ -173,13 +173,10 @@ where
                         return Err(CopyError::SourceNotRegistered);
                     }
                     let span = &spec.span;
-                    if span.start().len() != 2
-                        || span.width().len() != 2
-                        || !span.width().get(1).is_some_and(|w| w.is_zero())
-                    {
+                    if !is_ordinal_vspan(span) {
                         return Err(CopyError::BadSpan);
                     }
-                    if span.start().get(1) != Some(&s_c()) {
+                    if span.start().get(1) != Some(&content_subspace()) {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
                     if w.m5().content_count(&spec.source).is_zero() {
@@ -243,15 +240,14 @@ where
                 if !caller.is_owner(stg.working().m3(), doc) {
                     return Err(DeleteError::NotOwner(doc.clone()));
                 }
-                if p.subspace != s_c() {
+                if p.subspace != content_subspace() {
                     return Err(DeleteError::NotContentSubspace);
                 }
-                let n_c = stg.working().m5().content_count(doc);
-                if p.ordinal < Nat::one() || p.ordinal > n_c {
+                let m5 = stg.working().m5();
+                if !m5.content_position_arranged(doc, &p.ordinal) {
                     return Err(DeleteError::NotArranged);
                 }
-                // ordinal + width − 1 ≤ n_C, subtraction-free.
-                if &p.ordinal + &width > &n_c + &Nat::one() {
+                if !m5.content_range_within(doc, &p.ordinal, &width) {
                     return Err(DeleteError::OutOfBounds);
                 }
                 if width.is_zero() {
@@ -304,15 +300,19 @@ where
                 if !cuts.windows(2).all(|w| w[0].ordinal < w[1].ordinal) {
                     return Err(RearrangeError::NotAscending);
                 }
-                if cuts.iter().any(|c| c.subspace != s_c()) {
+                if cuts.iter().any(|c| c.subspace != content_subspace()) {
                     return Err(RearrangeError::NotContentSubspace);
                 }
-                let n_c = stg.working().m5().content_count(doc);
-                let hi = &n_c + &Nat::one();
-                if cuts[0].ordinal < Nat::one() || cuts[cuts.len() - 1].ordinal > hi {
+                let m5 = stg.working().m5();
+                // Strict ascent is established above, so asking the
+                // arrangement about the first and last cut settles CS5 for
+                // every cut between them.
+                if !m5.admits_content_boundary(doc, &cuts[0].ordinal)
+                    || !m5.admits_content_boundary(doc, &cuts[cuts.len() - 1].ordinal)
+                {
                     return Err(RearrangeError::OutOfBounds);
                 }
-                if n_c.is_zero() {
+                if m5.content_count(doc).is_zero() {
                     return Err(RearrangeError::EmptyContentSubspace);
                 }
                 let ords: Vec<Nat> = cuts.into_iter().map(|c| c.ordinal).collect();

@@ -1,0 +1,113 @@
+//! §A/§9 — the append-only content-provenance relation R: what each document
+//! has ever placed, and the candidate read that answers off it.
+
+use serde::{Deserialize, Serialize};
+use skep_address::{classify_spans, validate, Address, Span, SpanRel, SpanSet, Tumbler};
+
+/// R, keyed by placing document — every content span a document has ever
+/// placed, in placement order (ASN-0047 P2).
+///
+/// APPEND-ONLY IS THE CARD, and it is structural: this type offers
+/// [`record`](Provenance::record) and reads, and NO way to drop or rewrite a
+/// pair. That absence is why a deleted address keeps its provenance without
+/// any op having to promise it, and why R is non-recomputable from the
+/// current arrangement — a deletion contracts the arrangement and leaves R
+/// standing, so SHOWDELETIONS has something to subtract from. Recovered by
+/// replay like the arrangement itself, never rebuilt.
+///
+/// A single-field newtype over the mandated slice shape, so the checkpoint
+/// encoding is the map's own (bincode writes a newtype struct as its inner
+/// value).
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Provenance(im::OrdMap<Tumbler, im::Vector<Span>>);
+
+impl Provenance {
+    /// Append `spans` to `doc`'s record (persistent — the receiver is
+    /// untouched). Called from the placing folds, co-located with the
+    /// arrangement update they pair with, so one new state carries both
+    /// halves of J1★.
+    pub(crate) fn record(
+        &self,
+        doc: &Address,
+        spans: impl IntoIterator<Item = Span>,
+    ) -> Provenance {
+        let k = doc.tumbler();
+        let mut col = self.0.get(k).cloned().unwrap_or_default();
+        for s in spans {
+            col.push_back(s);
+        }
+        Provenance(self.0.update(k.clone(), col))
+    }
+
+    /// R↾doc: the iextent cover of content spans ever placed by `doc` — the
+    /// `deletions` operand (Conflicts #8). Raw and possibly mixed-length; it
+    /// never crosses a module seam.
+    pub(crate) fn ever_placed(&self, doc: &Address) -> SpanSet {
+        self.0
+            .get(doc.tumbler())
+            .map(|v| v.iter().cloned().collect())
+            .unwrap_or_else(SpanSet::empty)
+    }
+
+    /// Has `doc` a record at all? Distinguishes ABSENT from empty, which the
+    /// reads deliberately do not (both answer ⟨⟩) — the empty-source fork's
+    /// "no redundant entry" claim is about the map, so the test that pins it
+    /// needs a way to ask.
+    #[cfg(test)]
+    pub(crate) fn is_recorded(&self, doc: &Address) -> bool {
+        self.0.contains_key(doc.tumbler())
+    }
+
+    /// R⁻¹ candidate documents (§9; Conflicts #6): every document with some
+    /// placed span not `Separated` from some span of `coverage` under M1's
+    /// total, length-gate-free `classify_spans`. An overlap-SUPERSET (no
+    /// false negatives — a genuinely contained address forces order-overlap);
+    /// FINDDOCSCONTAINING narrows each candidate with
+    /// `project(d, coverage) ≠ ⟨⟩` off the same snapshot. Returns
+    /// `Vec<Address>` in distinct, deterministic Tumbler order (the `OrdMap`
+    /// walk supplies the order; the sequence shape is M5's own choice of
+    /// surface). M5 owns R and any index over it (Open decision #3: v1 scans
+    /// the map); M6 owns only the composing query.
+    pub(crate) fn docs_containing(&self, coverage: &SpanSet) -> Vec<Address> {
+        let mut out = Vec::new();
+        for (k, spans) in self.0.iter() {
+            let hit = spans
+                .iter()
+                .any(|p| coverage.iter().any(|c| classify_spans(p, c) != SpanRel::Separated));
+            if hit {
+                out.push(
+                    validate(k.clone())
+                        .expect("prov keys are registered-document tumblers (T4-valid)"),
+                );
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::{ca, doc1, doc2, run, vdoc};
+
+    #[test]
+    fn recording_accumulates_and_never_supersedes() {
+        // §9/P2: a second record for the same document extends the sequence —
+        // there is no path that shortens it, which is what SHOWDELETIONS and
+        // the historical candidate read both rest on.
+        let p = Provenance::default();
+        assert!(!p.is_recorded(&doc1()));
+        let p = p.record(&doc1(), [run(&ca(1), 2).iextent()]);
+        let p = p.record(&doc1(), [run(&ca(5), 1).iextent()]);
+        assert!(p.is_recorded(&doc1()));
+        assert_eq!(p.ever_placed(&doc1()).len(), 2);
+        // A different document keeps its own record; the candidate read walks
+        // both in Tumbler order.
+        let p = p.record(&doc2(), [run(&ca(1), 1).iextent()]);
+        let cov = SpanSet::singleton(run(&ca(1), 1).iextent());
+        assert_eq!(p.docs_containing(&cov), vec![doc1(), doc2()]);
+        // A document that has placed nothing is absent, and reads empty.
+        assert!(!p.is_recorded(&vdoc()));
+        assert!(p.ever_placed(&vdoc()).is_empty());
+    }
+}

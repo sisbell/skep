@@ -1,9 +1,11 @@
 //! §A — the `Run` value: one contiguous I-extent placed in an arrangement,
-//! and the ONE admissible Run→Span lift ([`Run::iextent`]).
+//! the run's own position arithmetic ([`Run::tumbler_at`]/[`Run::addr_at`],
+//! [`Run::offsets_covered_by`]), and the ONE admissible Run→Span lift
+//! ([`Run::iextent`]).
 
-use num_traits::Zero;
+use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{shift, Address, Level, Nat, Span};
+use skep_address::{intersect, shift, validate, Address, Level, Nat, Span, Tumbler};
 
 /// One arrangement run: `width` consecutive I-addresses starting at
 /// `i_start`, occupying implicit consecutive V-ordinals (§Core data model —
@@ -20,8 +22,8 @@ use skep_address::{shift, Address, Level, Nat, Span};
 /// is derived `Deserialize`: a *recovered* Run's shape rests on M2 checkpoint
 /// integrity (the same trust posture as all of recovery), not the type
 /// system. On that basis the invariants hold for every
-/// minted-or-validly-recovered Run — which is exactly what justifies
-/// `iextent`'s `.expect`.
+/// minted-or-validly-recovered Run — which is exactly what justifies the
+/// `.expect`s in the run's own position arithmetic below.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub(crate) i_start: Address,
@@ -58,36 +60,114 @@ impl Run {
         &self.width
     }
 
+    /// The tumbler at offset `k`: `i_start` advanced by `k` ordinals. Offsets
+    /// `k ∈ [0, width)` are the run's own positions; `k = width` is its
+    /// exclusive reach, which is why the bound is not checked here.
+    ///
+    /// THE ONE PLACE the raw `shift` is applied to a run, and the one place
+    /// the safety argument is made: the standing element-level invariant
+    /// (`zeros(i_start) = 3`, so the last component IS the ordinal) puts every
+    /// such shift inside M1's stated safe window, never the TA7a text→link
+    /// mis-shift of a subspace base. Consumers ask a run for its addresses
+    /// rather than re-deriving them, so the argument is discharged once.
+    pub fn tumbler_at(&self, k: &Nat) -> Tumbler {
+        shift(self.i_start.tumbler(), k)
+    }
+
+    /// The `Address` at offset `k` — [`tumbler_at`](Run::tumbler_at)
+    /// re-validated. Ordinal-shifting a valid element I-start preserves
+    /// T4-validity, so the `.expect` flags an internal-invariant violation,
+    /// never a domain case.
+    pub fn addr_at(&self, k: &Nat) -> Address {
+        validate(self.tumbler_at(k))
+            .expect("ordinal shift of a valid element I-start is T4-valid by construction")
+    }
+
     /// The ONE admissible Run→Span lift: the level-uniform, element-level
-    /// I-extent `[i_start, shift(i_start, width))`. Centralized (public) so
-    /// no consumer re-derives it and none writes the malformed
-    /// `Span(i_start, [0, width])` — an element-level start against a depth-2
-    /// width gives `#start ≠ #width`, faulting every downstream
+    /// I-extent `[i_start, shift(i_start, width))` — the run's own endpoints,
+    /// offset 0 and offset `width`. Centralized (public) so no consumer
+    /// re-derives it and none writes the malformed `Span(i_start, [0, width])`
+    /// — an element-level start against a depth-2 width gives
+    /// `#start ≠ #width`, faulting every downstream
     /// `intersect`/`difference`/`normalize` with `LevelMismatch`.
     ///
-    /// TOTAL given the two standing invariants: `width ≥ 1` makes `shift`
-    /// advance (`start < reach`, TS4) and length-preserving
-    /// (`#start = #reach`), so `from_endpoints` cannot fault; the
-    /// element-level `i_start` makes that raw `shift` land on the ordinal
-    /// field, not the text→link separator (M1's stated safe window for raw
-    /// `shift` — TA7a). A SpanSet aggregating iextents across
-    /// origin-documents is mixed-length — consume it under the level-class
-    /// discipline (see [`M5State::resolve_coverage`]).
+    /// TOTAL given the two standing invariants: `width ≥ 1` makes the reach
+    /// advance (`start < reach`, TS4) and the shift is length-preserving
+    /// (`#start = #reach`), so `from_endpoints` cannot fault.
     ///
-    /// [`M5State::resolve_coverage`]: crate::M5State::resolve_coverage
+    /// MIXED-LENGTH HAZARD: iextents of runs from different origin documents
+    /// have different endpoint lengths, so any SpanSet aggregating them is
+    /// outside the domain of M1's length-gated set ops — `intersect`,
+    /// `difference_sets`, `normalize` and `canonical_key` each fault
+    /// `LevelMismatch` on mixed operands. A consumer that aggregates iextents
+    /// (M7's slot endsets, M6's coverage unions) must partition by endpoint
+    /// length, operate within each class, and combine the per-class results:
+    /// in particular a coverage-class dedup key is ONE `canonical_key` PER
+    /// level class, never one over the raw aggregate.
     pub fn iextent(&self) -> Span {
-        Span::from_endpoints(
-            self.i_start.tumbler().clone(),
-            &shift(self.i_start.tumbler(), &self.width),
-        )
-        .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
+        Span::from_endpoints(self.tumbler_at(&Nat::zero()), &self.tumbler_at(&self.width))
+            .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
+    }
+
+    /// The half-open offset range `[k_lo, k_hi)` of this run's positions that
+    /// `span` covers, or `None` when it covers none — the I→V question asked
+    /// of the run that owns the arithmetic (§2 project).
+    ///
+    /// Two branches, one answer. A span that is level-uniform at the run's own
+    /// endpoint length is intersected with M1 (`intersect`, both operands
+    /// inside one level class); the intersection lies within the run's extent,
+    /// so both endpoints share the run's prefix and the offsets are
+    /// last-component differences. Any other span — a different length, or the
+    /// same length but non-uniform, either of which `intersect` would fault on
+    /// — takes the total membership boundary search: the run's addresses are
+    /// contiguous and a span is order-convex, so the covered subset is one
+    /// contiguous offset range. TOTAL either way.
+    pub(crate) fn offsets_covered_by(&self, span: &Span) -> Option<(Nat, Nat)> {
+        let ilen = self.i_start.tumbler().len();
+        if span.is_level_uniform() && span.start().len() == ilen {
+            let sub = intersect(&self.iextent(), span)
+                .expect("both operands level-uniform at one length — gate passes")?;
+            let at = |t: &Tumbler| {
+                t.get(ilen)
+                    .expect("run extent endpoints have #t == ilen")
+                    .clone()
+            };
+            let base = at(self.i_start.tumbler());
+            let reach = sub.reach();
+            Some((at(sub.start()) - &base, at(&reach) - &base))
+        } else {
+            let k_lo = self.lower_bound(span.start());
+            let k_hi = self.lower_bound(&span.reach());
+            (k_lo < k_hi).then_some((k_lo, k_hi))
+        }
+    }
+
+    /// The least offset `k ∈ [0, width]` with `tumbler_at(k) ≥ bound`.
+    /// Monotone in `k` (TS1 strict order), so binary search applies; total
+    /// across lengths, because `Tumbler`'s order is defined over all of the
+    /// carrier.
+    fn lower_bound(&self, bound: &Tumbler) -> Nat {
+        let mut lo = Nat::zero();
+        let mut hi = self.width.clone();
+        let two = Nat::from(2u32);
+        while lo < hi {
+            let mid = (&lo + &hi) / &two;
+            if self.tumbler_at(&mid) >= *bound {
+                hi = mid;
+            } else {
+                lo = &mid + &Nat::one();
+            }
+        }
+        lo
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use skep_address::subtree_of;
+
     use super::*;
-    use crate::testutil::{a, ca, n};
+    use crate::testutil::{a, ca, n, t, vca};
 
     #[test]
     fn new_rejects_width_zero_and_non_element_starts() {
@@ -111,6 +191,36 @@ mod tests {
         assert!(s.contains(ca(2).tumbler()));
         assert!(s.contains(ca(4).tumbler()));
         assert!(!s.contains(ca(5).tumbler())); // half-open
+    }
+
+    #[test]
+    fn a_run_answers_for_its_own_positions() {
+        // §A: offset 0 is the start, offset k the k-th position, offset width
+        // the exclusive reach — and addr_at re-validates what tumbler_at
+        // advances.
+        let r = Run::new(ca(2), n(3)).expect("valid run");
+        assert_eq!(r.addr_at(&n(0)), ca(2));
+        assert_eq!(r.addr_at(&n(2)), ca(4));
+        assert_eq!(r.tumbler_at(&n(3)), *ca(5).tumbler());
+    }
+
+    #[test]
+    fn offsets_covered_by_answers_in_both_branches() {
+        // §2: a same-length level-uniform cover goes through M1's intersect;
+        // any other cover takes the total boundary search. Both name the
+        // run's own half-open offset range.
+        let r = Run::new(ca(2), n(3)).expect("valid run"); // ca(2), ca(3), ca(4)
+        let inner = Run::new(ca(3), n(1)).expect("valid run").iextent();
+        assert_eq!(r.offsets_covered_by(&inner), Some((n(1), n(2))));
+        let apart = Run::new(ca(9), n(1)).expect("valid run").iextent();
+        assert_eq!(r.offsets_covered_by(&apart), None);
+        // Cross-length fallback: doc1's content-base subtree covers every
+        // length-8 ca(·)…
+        let base = subtree_of(&t(&[1, 0, 1, 0, 1, 0, 1]));
+        assert_eq!(r.offsets_covered_by(&base), Some((n(0), n(3))));
+        // …and none of the fork's length-9 elements.
+        let forked = Run::new(vca(1), n(2)).expect("valid run");
+        assert_eq!(forked.offsets_covered_by(&base), None);
     }
 
     #[test]

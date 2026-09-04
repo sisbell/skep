@@ -6,8 +6,8 @@
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_namespace::{M3Rec, M3State, PrincipalId};
 
-use crate::error::VPos;
 use crate::run::Run;
+use crate::vspace::VPos;
 
 pub(crate) fn t(comps: &[u32]) -> Tumbler {
     Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")

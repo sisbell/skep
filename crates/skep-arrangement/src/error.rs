@@ -1,5 +1,4 @@
-//! §Errors & helper types — the typed rejections of M5's op surface, plus
-//! the two request-side helper values (`VPos`, `VSpec`). Variant declaration
+//! §Errors — the typed rejections of M5's op surface. Variant declaration
 //! order matches the design's, which is also each op's check order (the
 //! "which error wins" contract M10 and the conformance tests may rely on) —
 //! except where a document's own ordering note says otherwise (DELETE's
@@ -9,29 +8,9 @@
 use std::error::Error;
 use std::fmt;
 
-use skep_address::{Address, Nat, Span};
+use skep_address::Address;
 use skep_content::ContentError;
 use skep_namespace::MintError;
-
-/// A depth-2 V-position `[subspace, ordinal]` (m = 2 — ASN-0036 S8-depth;
-/// structurally depth-2, so "depth" needs no separate check).
-#[derive(Clone, Debug)]
-pub struct VPos {
-    /// s_C = 1 (content) or s_L = 2 (link), per ASN-0047.
-    pub subspace: Nat,
-    /// 1-based ordinal within the subspace.
-    pub ordinal: Nat,
-}
-
-/// One source-span for COPY (ASN-0118): transclude `span` of `source`'s
-/// arrangement. The span must be an ordinal-level depth-2 V-span in the
-/// content subspace (`BadSpan`/`SourceNotContentSubspace` otherwise —
-/// Conflicts #7).
-#[derive(Clone, Debug)]
-pub struct VSpec {
-    pub source: Address,
-    pub span: Span,
-}
 
 /// INSERT rejection (ASN-0116; §3). `NotContentSubspace`: `at.subspace ≠
 /// s_C`. `OutOfBounds`: `at.ordinal ∉ [1, n_C + 1]`. (The interface
@@ -53,8 +32,9 @@ pub enum InsertError {
 
 /// COPY rejection (ASN-0118; §5). Destination `at` gets the same
 /// `NotContentSubspace`/`OutOfBounds` split as INSERT; per-spec guards are
-/// `SourceNotRegistered`, `BadSpan` (not an ordinal-level depth-2 V-span —
-/// the lossless narrowing of Conflicts #7), `SourceNotContentSubspace`
+/// `SourceNotRegistered`, `BadSpan` (fails
+/// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the lossless narrowing of
+/// Conflicts #7), `SourceNotContentSubspace`
 /// (content-residence, `span.start().get(1) ≠ s_C`), `EmptySource`
 /// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
 /// `DanglingSource` (a resolved run start ∉ dom(C) — S3★), and

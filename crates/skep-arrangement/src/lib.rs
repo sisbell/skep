@@ -67,25 +67,24 @@
 mod auth;
 mod error;
 mod ops;
+mod prov;
 mod reads;
 mod run;
 mod runlist;
 mod seat;
 mod state;
+mod vspace;
 
 #[cfg(test)]
 pub(crate) mod testutil;
 
 pub use auth::Caller;
-pub use error::{
-    CopyError, DeleteError, InsertError, RearrangeError, SeatError, VPos, VSpec, VersionError,
-};
+pub use error::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
 pub use ops::Vstream;
 pub use run::Run;
 pub use seat::{seat_link, stage_seat_link};
 pub use state::{M5Rec, M5State};
-
-use skep_address::Nat;
+pub use vspace::{is_ordinal_vspan, VPos, VSpec};
 
 /// The engine's **read accessor** for M5's slice (Engine Composition
 /// Contract): the engine implements this for its concrete world
@@ -98,27 +97,9 @@ pub trait HasM5 {
     fn m5(&self) -> &M5State;
 }
 
-// Subspace convention (ASN-0047): s_C = 1 (content), s_L = 2 (link);
-// V-positions are depth-2 tumblers [subspace, ordinal] (m = 2, ASN-0036
-// S8-depth / ASN-0084 scope).
-//
-// OPEN DECISION (drift-forced): the design draws these constants from
-// skep-kernel ("the Engine Composition Contract pins subspace constants
-// there"), but the built skep-kernel declares only the `Space` lock-key tag
-// enum — no subspace numerals — and an upstream crate is never edited from
-// here. Following the workspace precedent (M4's crate-local `S_C_SUBSPACE`;
-// M3's inc-arithmetic encoding of the same convention), the axiom-pinned
-// values are defined M5-locally. Value-equality across the system still holds:
-// every producer derives the numerals from the one ASN-0047 convention, and
-// M3's minted element field `[s_C|s_L, k]` is the shape these are compared
-// against.
-
-/// `s_C` = 1 — the content-subspace numeral (ASN-0047; M1's T7 convention).
-pub(crate) fn s_c() -> Nat {
-    Nat::from(1u32)
-}
-
-/// `s_L` = 2 — the link-subspace numeral (ASN-0047; M1's T7 convention).
-pub(crate) fn s_l() -> Nat {
-    Nat::from(2u32)
-}
+// Subspace convention (ASN-0047): V-positions are depth-2 tumblers
+// [subspace, ordinal] (m = 2, ASN-0036 S8-depth / ASN-0084 scope), and the
+// two subspace numerals themselves are M1's — T7 is M1's axiom, so M5 routes
+// content from link through `skep_address::content_subspace` /
+// `link_subspace` rather than restating the values it compares M3's minted
+// element field `[s_C|s_L, k]` against.

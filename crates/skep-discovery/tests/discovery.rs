@@ -1,15 +1,21 @@
 //! M8 contract tests over a real kernel (InMemory), stating what the design
-//! and interface assert: the doc-then-region gate order and the defined-empty
-//! result, image dedup, disjunctive + active-filtered region discovery, the
-//! stateless key-cut windowing (clamp, exhaustion, cursor-survives-orphaning),
-//! RETRIEVEENDSETS' identity-withholding whole-endset pinned-order read-out,
-//! the FTT unit/zero/conjunction algebra and the home address-projection
-//! filter, projection and addressable discoverability, the delete-orphan
-//! preview's M5-mirroring preconditions and last-witness report, the flipped
-//! lineage probes with the residence gate, the snapshot twins, and — because
-//! this file is a crate of its own — the promises M8 makes to a consumer
-//! rather than to itself: one named world bound, the standard traits its
-//! values carry, and rejection enums that stay exhaustively matchable.
+//! and interface assert: the doc-then-region gate order, checked on every
+//! entry point that inherits it, and the defined-empty result; image dedup
+//! and the region-span-then-V order it returns in; disjunctive +
+//! active-filtered region discovery; the stateless key-cut windowing (clamp,
+//! exhaustion, cursor-survives-orphaning) and the one selection index its
+//! three read-outs share; RETRIEVEENDSETS' identity-withholding whole-endset
+//! pinned-order read-out; the FTT unit/zero/conjunction algebra, the home
+//! address-projection filter and its prefix-coverage reach; the two families'
+//! zeros and their two stabilities; projection, its content-subspace-only
+//! narrowing, and addressable discoverability; the delete-orphan preview
+//! measured against the DELETE it previews, over that operation's whole
+//! accepted domain and against M5's own admission; the flipped lineage probes
+//! with the residence gate, the claim's own home attribution and the
+//! endpoints it reads out as recorded; the snapshot twins; and — because this
+//! file is a crate of its own — the promises M8 makes to a consumer rather
+//! than to itself: one named world bound, the standard traits its values
+//! carry, and rejection enums that stay exhaustively matchable.
 
 mod common;
 
@@ -17,13 +23,14 @@ use std::collections::HashSet;
 
 use common::*;
 use skep_address::{Address, Span};
-use skep_arrangement::HasM5;
+use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
-    content_vspan, count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, LinkQuery,
-    OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM, TO, TYPE,
+    content_vspan, count_ftt_on, count_v_on, delete_orphans_on, window_v_on, DiscoveryWorld,
+    FourSet, LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM,
+    TO, TYPE,
 };
-use skep_kernel::Snapshot;
-use skep_links::{enc, Endset, LinkWriter, SlotArg, View};
+use skep_kernel::{Kernel, Snapshot};
+use skep_links::{enc, Endset, HasLinks, LinkWriter, SlotArg, View};
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
 
@@ -35,10 +42,10 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
 
     // Unregistered d → DocNotRegistered, even with a bad region: the document
     // gate is the first act, the region gate second.
-    assert!(matches!(
+    assert_eq!(
         lq.image(&d7(), &[vspan(2, 1, 1)]),
         Err(QueryError::DocNotRegistered)
-    ));
+    );
     assert_eq!(
         lq.retrieve_endsets(&d7(), &[vspan(1, 1, 1)]),
         Err(QueryError::DocNotRegistered)
@@ -91,6 +98,52 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     assert!(lq.image(&doc1(), &[]).expect("empty region is defined").is_empty());
 }
 
+/// One region-family entry point reduced to the refusal it answers with, so
+/// the gate rule can be stated once and applied to all five.
+type RegionRefusal<'a> = Box<dyn Fn(&Address, &[Span]) -> Option<QueryError> + 'a>;
+
+/// §1 — the gate order `image_on` states is inherited by the four operations
+/// that compose it, so it is checked on all five entry points rather than on
+/// the one whose doc-comment carries the sentence. An entry point that
+/// swallowed an unregistered `d` into an empty answer, or that read the
+/// region before the registry, would be invisible to a test of `image` alone.
+#[test]
+fn every_region_entry_point_answers_both_gates_in_order() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let lq = LinkQuery::new(&k);
+
+    // Each entry point reduced to its refusal, so the rule below is stated
+    // once rather than transcribed five times.
+    let entries: Vec<(&str, RegionRefusal<'_>)> = vec![
+        ("image", Box::new(|d, r| lq.image(d, r).err())),
+        ("findlinks_v", Box::new(|d, r| lq.findlinks_v(d, r).err())),
+        ("count_v", Box::new(|d, r| lq.count_v(d, r).err())),
+        ("window_v", Box::new(|d, r| lq.window_v(d, r, None, 3).err())),
+        (
+            "retrieve_endsets",
+            Box::new(|d, r| lq.retrieve_endsets(d, r).err()),
+        ),
+    ];
+    for (name, refusal) in &entries {
+        assert_eq!(
+            refusal(&d7(), &[vspan(1, 1, 1)]),
+            Some(QueryError::DocNotRegistered),
+            "{name}: an unregistered d is refused"
+        );
+        assert_eq!(
+            refusal(&doc1(), &[vspan(2, 1, 1)]),
+            Some(QueryError::BadRegion),
+            "{name}: a non-content-subspace region is refused"
+        );
+        assert_eq!(
+            refusal(&d7(), &[vspan(2, 1, 1)]),
+            Some(QueryError::DocNotRegistered),
+            "{name}: the document gate is the FIRST act"
+        );
+    }
+}
+
 #[test]
 fn image_resolves_dedups_and_clips() {
     let k = kernel();
@@ -98,21 +151,49 @@ fn image_resolves_dedups_and_clips() {
     let lq = LinkQuery::new(&k);
 
     // Ordinary V→I resolution.
-    assert!(lq.image(&doc1(), &[vspan(1, 1, 2)]).expect("image") == vec![run(&ca(1), 2)]);
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 2)]),
+        Ok(vec![run(&ca(1), 2)])
+    );
     // Exact-equal repeats are deduped at the boundary (Run: Eq).
-    assert!(
-        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]).expect("image")
-            == vec![run(&ca(1), 2)]
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
+        Ok(vec![run(&ca(1), 2)])
     );
     // Overlapping INPUT spans may still yield partially-overlapping runs —
     // the dedup claim is exact-equality only, not an address-disjoint
     // partition.
-    assert!(
-        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]).expect("image")
-            == vec![run(&ca(1), 2), run(&ca(2), 2)]
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 2, 2)]),
+        Ok(vec![run(&ca(1), 2), run(&ca(2), 2)])
     );
     // Out-of-range tails are the arrangement intersection (W ∩ dom M(d)).
-    assert!(lq.image(&doc1(), &[vspan(1, 2, 99)]).expect("image") == vec![run(&ca(2), 2)]);
+    assert_eq!(lq.image(&doc1(), &[vspan(1, 2, 99)]), Ok(vec![run(&ca(2), 2)]));
+}
+
+/// §1 — the I-runs come back in REGION-SPAN order, and in V-order within each
+/// span. Two INSERTs at V-position 1 seat the later-minted addresses at the
+/// earlier V-positions, so V-order runs DESCENDING in address here: a sort or
+/// an ordered-set dedup would reverse both expected values below, and a
+/// one-INSERT fixture — where region order, V-order and address order all
+/// coincide — cannot see the difference.
+#[test]
+fn image_returns_runs_in_region_span_order_then_v_order() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3); // V 1..3 → ca(1..3)
+    seed_content(&k, &doc1(), 3); // inserted AT V 1: ca(4..6) take V 1..3, ca(1..3) shift to V 4..6
+    let lq = LinkQuery::new(&k);
+
+    // One span, two runs: V-order within the span.
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 6)]),
+        Ok(vec![run(&ca(4), 3), run(&ca(1), 3)])
+    );
+    // Two spans, one run each: the order the caller's region asked in.
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 4, 1)]),
+        Ok(vec![run(&ca(4), 1), run(&ca(1), 1)])
+    );
 }
 
 #[test]
@@ -207,6 +288,95 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let w4 = lq.window_v(&doc1(), &region, Some(la(2)), 5).expect("window");
     assert_eq!(w4.batch, vec![la(3)]);
     assert!(w4.exhausted);
+}
+
+/// §2 — one selection index, read out three ways: `count_v`, `findlinks_v`
+/// and `window_v` at EVERY batch size answer off the same
+/// `findlinks_V ∩ addressable`, so they cannot disagree about which links
+/// touch a region (W4/W5 — no continuously-matching link duplicated or
+/// skipped). The descriptor family states this over five descriptors; the
+/// region family is entitled to the law rather than to one hand-picked
+/// pagination, so this walks five regions × every batch size from the clamp
+/// at 0 through one past the set.
+#[test]
+fn region_count_enumeration_and_window_read_out_one_selection_index() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    // Varied slot reach, so the regions below select different subsets …
+    for (from, to) in [
+        (ca(1), ca(101)),
+        (ca(2), ca(3)),
+        (ca(3), ca(101)),
+        (ca(1), ca(2)),
+    ] {
+        store
+            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
+            .expect("emit succeeds");
+    }
+    // … and one retracted link reaching position 2, which no read-out may
+    // surface.
+    let (dead, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds");
+
+    // The law is not vacuous: the wide region selects all four live links and
+    // none of the retracted one.
+    assert_eq!(
+        lq.findlinks_v(&doc1(), &[vspan(1, 1, 3)]),
+        Ok(vec![la(1), la(2), la(3), la(4)])
+    );
+
+    for region in [
+        vec![],
+        vec![vspan(1, 1, 1)],
+        vec![vspan(1, 2, 1)],
+        vec![vspan(1, 1, 3)],
+        vec![vspan(1, 1, 1), vspan(1, 3, 1)],
+    ] {
+        let enumerated = lq.findlinks_v(&doc1(), &region).expect("findlinks_v");
+        assert!(
+            !enumerated.contains(&dead),
+            "a nullified link never surfaces: {region:?}"
+        );
+        assert_eq!(
+            lq.count_v(&doc1(), &region),
+            Ok(enumerated.len()),
+            "count = |enum| for {region:?}"
+        );
+
+        // n = 0 is the clamp (W9); n = |enumerated| is the equal case, where
+        // the batch exactly drains the set and one further call is owed to
+        // report exhaustion.
+        for n in 0..=enumerated.len() + 1 {
+            let mut drained: Vec<Address> = Vec::new();
+            let mut cur = None;
+            // Every clamped batch admits at least one link, so a drain of
+            // `len` links owes at most `len + 1` calls; a budget turns the
+            // silent non-terminating signal an unclamped `n = 0` produces
+            // into a failure rather than a hang.
+            let mut budget = enumerated.len() + 1;
+            loop {
+                let w = lq.window_v(&doc1(), &region, cur, n).expect("window");
+                drained.extend(w.batch.iter().cloned());
+                cur = w.next;
+                if w.exhausted {
+                    break;
+                }
+                budget -= 1;
+                assert!(
+                    budget > 0,
+                    "window_v never reported exhaustion for {region:?} at n = {n}"
+                );
+            }
+            assert_eq!(
+                drained, enumerated,
+                "the window drains sel for {region:?} at n = {n}"
+            );
+        }
+    }
 }
 
 // ───────────────────────── §4 — RETRIEVEENDSETS ─────────────────────────
@@ -407,6 +577,47 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     assert!(w2.exhausted);
 }
 
+/// §3 — `athome` is PREFIX COVERAGE, not address equality: the constraint's
+/// coverage must name `home(a)`, and `enc` builds a subtree span. So an
+/// ACCOUNT names every link homed under it — the query M10 passes through
+/// from the wire unaltered, and the one a rewrite to equality would silently
+/// answer `[]` for. Every other home test here names a document address,
+/// where coverage and equality agree.
+#[test]
+fn ftt_home_is_prefix_coverage_not_address_equality() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // The account both documents hang under admits the links homed in each.
+    let account = FourSet {
+        home: SlotSpec::Spans(enc(&[a(&[1, 0, 1])])),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.findlinks_ftt(&account), vec![la(1), la(2), la2(1)]);
+    assert_eq!(lq.count_ftt(&account), 3);
+
+    // And the relation has a direction: an address UNDER doc1 is not a prefix
+    // of it, so its coverage names no link's home — a satisfiable request
+    // with an empty answer, not the zero.
+    let under = FourSet {
+        home: SlotSpec::Spans(enc(&[ca(1)])),
+        ..FourSet::any()
+    };
+    assert!(!under.is_unsatisfiable(), "the request names something");
+    assert_eq!(lq.findlinks_ftt(&under), vec![]);
+}
+
 /// §3 — CN-ENUM: one `sat` consumed by every read-out, so the count, the
 /// enumeration and the windowed drain cannot disagree about which links match.
 /// The home-constrained descriptors are the load-bearing cases: they are the
@@ -465,6 +676,10 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
         }
         assert_eq!(drained, enumerated, "the window drains sat for {q:?}");
     }
+
+    // `n = 0` is clamped to 1 on this family too (W9 totality) — the drain
+    // above never reaches the clamp, since it pages at 1.
+    assert_eq!(lq.window_ftt(&FourSet::any(), None, 0).batch, vec![la(1)]);
 }
 
 /// §3 — the two zeros ASN-0132 keeps apart: `count_v`'s D-ZERO asserts present
@@ -499,6 +714,40 @@ fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
     };
     assert_eq!(lq.count_ftt(&q_home_none), 0);
     assert!(!q_home_none.is_unsatisfiable()); // the request names something
+}
+
+/// §3 — the two families' documented STABILITY, which is a different
+/// distinction from the two zeros above: `count_v` is non-monotone
+/// (D-NONMONO — an arrangement change alone drops it), while `count_ftt` is
+/// monotone absent retraction (CN-MONO — nothing but a nullification shrinks
+/// it). One delete, no retraction anywhere, separates them; every other drop
+/// in this suite is caused by a nullification, which BOTH families honour.
+#[test]
+fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let region = [vspan(1, 1, 2)];
+    let homed_here = FourSet {
+        home: SlotSpec::Spans(enc(&[doc1()])),
+        ..FourSet::any()
+    };
+    assert_eq!(lq.count_v(&doc1(), &region), Ok(1));
+    assert_eq!(lq.count_ftt(&homed_here), 1);
+
+    // The link's only witness in doc1 leaves the arrangement. The link is not
+    // retracted, and it is still resident.
+    Vstream::new(&k)
+        .delete(SYS, &doc1(), vp(1, 1), n(1))
+        .expect("delete succeeds");
+    assert!(k.snapshot().world().links().is_active(&la(1)));
+
+    assert_eq!(lq.count_v(&doc1(), &region), Ok(0)); // present unreachability
+    assert_eq!(lq.count_ftt(&homed_here), 1); // existence, unchanged
 }
 
 // ─────────────── §5 — projection & discoverability ───────────────
@@ -543,6 +792,37 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     assert_eq!(retracted, proj);
     assert!(retracted.denotes(&t(&[1, 2])));
     assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(false));
+}
+
+/// §5 — `project` is CONTENT-SUBSPACE ONLY, strictly weaker than ASN-0098's
+/// subspace-agnostic `project`: a link reachable solely through `d`'s LINK
+/// subspace projects ∅. That is the reason `project` and
+/// `addressably_discoverable_from` are two functions, so the case is stated
+/// as the pair answering oppositely off one state. The ∅ cases beside it are
+/// coverage that lands nowhere at all; this is coverage that lands squarely
+/// in `d`, in the other subspace — which the second assertion is what
+/// witnesses.
+#[test]
+fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subspace() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let (m1, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (m2, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    // The claim's F and G cover m1 and m2 — link addresses makelink SEATED in
+    // doc1's link runs, and nothing of doc1's content.
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &m1, &m2)
+        .expect("assert_sup succeeds");
+
+    assert!(lq.project(&claim, FROM, &doc1()).expect("project").is_empty());
+    assert!(lq.project(&claim, TO, &doc1()).expect("project").is_empty());
+    assert_eq!(lq.addressably_discoverable_from(&claim, &doc1()), Ok(true));
 }
 
 #[test]
@@ -678,6 +958,178 @@ fn delete_orphans_reports_active_last_witness_losses() {
     assert_eq!(k.snapshot().world().m5().content_count(&doc1()), n(3));
 }
 
+/// The survival fixture, rebuilt per case: the preview is read off one kernel
+/// and the DELETE that follows mutates it, so each `(p, width)` owns its own
+/// world. Every witness shape the `orphaned` identity's three retained terms
+/// answer for is present — a prefix-only witness, a suffix-only one, a split
+/// one, a LINK-subspace one, a link reaching nothing doc1 arranges, and a
+/// retracted one.
+fn survival_world() -> Kernel<World> {
+    let k = kernel();
+    seed_content(&k, &doc1(), 4); // V 1..4 → ca(1..4)
+    {
+        let store = LinkWriter::new(&k);
+        let make = |from: Address, to: Address| {
+            store
+                .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
+                .expect("emit succeeds")
+                .0
+        };
+        make(ca(1), ca(2)); // la(1): positions 1 and 2
+        make(ca(4), ca(4)); // la(2): position 4 alone
+        make(ca(1), ca(4)); // la(3): positions 1 and 4 — witnesses on both sides
+        make(ca(2), la(1)); // la(4): position 2, and doc1's LINK subspace
+        make(ca(101), ca(102)); // la(5): reaches nothing doc1 arranges
+        let dead = make(ca(3), ca(3)); // la(6): position 3 …
+        store.nullify(SYS, &doc2(), &dead).expect("nullify succeeds"); // … then retracted
+    }
+    k
+}
+
+/// §6 — the preview is a preview OF THE DELETE: over the whole accepted
+/// domain of a four-position document, the links it names as orphaned are
+/// exactly the links that stop being addressably discoverable from `d` once
+/// that delete is performed. Ten cases, because each of the identity's three
+/// retained terms — the prefix, the suffix, and the link runs a text delete
+/// never touches — is load-bearing only at particular `(p, width)`, and the
+/// suite's hand-picked cases left two of the three unwatched.
+#[test]
+fn delete_orphans_previews_exactly_what_the_delete_drops() {
+    let mut ever_orphaned = false;
+    for p in 1..=4u32 {
+        for width in 1..=(5 - p) {
+            let k = survival_world();
+            let lq = LinkQuery::new(&k);
+
+            let preview = lq
+                .delete_orphans(&doc1(), &vp(1, p), &n(width))
+                .expect("the accepted domain");
+            ever_orphaned |= !preview.orphaned.is_empty();
+            // What doc1 reaches now, in the ascending address order
+            // `orphaned` also carries.
+            let before: Vec<Address> = lq
+                .findlinks_ftt(&FourSet::any())
+                .into_iter()
+                .filter(|a| lq.addressably_discoverable_from(a, &doc1()) == Ok(true))
+                .collect();
+
+            Vstream::new(&k)
+                .delete(SYS, &doc1(), vp(1, p), n(width))
+                .expect("the request the preview accepted");
+
+            let dropped: Vec<Address> = before
+                .into_iter()
+                .filter(|a| lq.addressably_discoverable_from(a, &doc1()) == Ok(false))
+                .collect();
+            assert_eq!(
+                preview.orphaned, dropped,
+                "preview of DELETE [{p}, {p}+{width}) on doc1"
+            );
+        }
+    }
+    assert!(
+        ever_orphaned,
+        "the fixture must orphan something, else the law above is vacuous"
+    );
+}
+
+/// §6 — a link witnessed by content the delete RETAINS AHEAD of it survives.
+/// The prefix term of `retained` is the only thing that says so, and no case
+/// in the suite's example test has a prefix witness.
+#[test]
+fn delete_orphans_keeps_a_link_witnessed_by_the_retained_prefix() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // Deleting position 3 takes the link's TO witness; its FROM witness is in
+    // the retained prefix, so the link keeps its reach.
+    assert_eq!(
+        lq.delete_orphans(&doc1(), &vp(1, 3), &n(1)),
+        Ok(OrphanReport { orphaned: vec![] })
+    );
+    // Deleting everything takes both, so the prefix term cannot be
+    // over-retaining either.
+    assert_eq!(
+        lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
+        Ok(OrphanReport {
+            orphaned: vec![la(1)]
+        })
+    );
+}
+
+/// §6 — a text delete never touches the link subspace, so a link whose only
+/// witness in `d` is a LINK address stays reachable however much content
+/// goes. The `link_runs` term of `retained` is the only thing that says so.
+#[test]
+fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_never_touches() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let (seated, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![seated]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // Both links reach position 1, and the whole content goes. Only la(2)
+    // keeps a witness — la(1), which makelink seated in doc1's link runs.
+    assert_eq!(
+        lq.delete_orphans(&doc1(), &vp(1, 1), &n(3)),
+        Ok(OrphanReport {
+            orphaned: vec![la(1)]
+        })
+    );
+}
+
+/// §6 — "the accepted set is M5's exactly" is a cross-module equality, and
+/// the suite checked it from one side only: eight hand-picked points on M8's
+/// own error contract, every one of which would still pass if M5's DELETE
+/// admission moved. This asks BOTH, over a grid that visits requests nobody
+/// chose — an overrun from every start, the `p + width = n_C + 1` equality,
+/// the zero width at an out-of-range start, the link subspace, an empty
+/// document and an unregistered one. Verdicts only: the two vocabularies
+/// label one refusal differently by design, and the example test above is
+/// what pins WHICH word.
+#[test]
+fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
+    for doc in [doc1(), doc2(), d7()] {
+        for subspace in 1..=2u32 {
+            for ordinal in 0..=4u32 {
+                for width in 0..=4u32 {
+                    // An accepted delete mutates the arrangement, so each
+                    // case gets its own world.
+                    let k = kernel();
+                    seed_content(&k, &doc1(), 3); // n_C(doc1) = 3; doc2 stays empty
+                    let preview = delete_orphans_on(
+                        &k.snapshot(),
+                        &doc,
+                        &vp(subspace, ordinal),
+                        &n(width),
+                    );
+                    let done = Vstream::new(&k).delete(
+                        SYS,
+                        &doc,
+                        vp(subspace, ordinal),
+                        n(width),
+                    );
+                    assert_eq!(
+                        preview.is_ok(),
+                        done.is_ok(),
+                        "preview and DELETE disagree on {doc:?} ({subspace},{ordinal}) width {width}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 // ─────────────── §7 — archival supersession lineage ───────────────
 
 #[test]
@@ -722,6 +1174,91 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert_eq!(audit.len(), 1);
     assert_eq!(audit[0].claim, claim);
     assert!(!audit[0].active);
+}
+
+/// §7 — `home` is the CLAIM's own attribution (EL8b), never an endpoint's.
+/// `assert_sup` requires ω on the home and on nothing else, so a claim can be
+/// asserted in a document its endpoints do not live in — the one shape where
+/// a home read off the claim and a home read off `old` (which sits three
+/// lines away in the same read-out) disagree. Every other lineage fixture
+/// asserts in the document the endpoints were minted in, where the right
+/// answer and the wrong one coincide.
+#[test]
+fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let (e1, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (e2, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (claim, _) = store
+        .assert_sup(SYS, &doc2(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    assert_eq!(claim, la2(1), "the claim is minted in doc2's link chain");
+
+    assert_eq!(
+        lq.in_claims(&e1, View::Active),
+        vec![SupClaim {
+            claim,
+            old: e1,
+            new: e2,
+            home: doc2(), // NOT doc1, where both endpoints are homed
+            active: true,
+        }]
+    );
+}
+
+/// §7 — the view filters CLAIMS, never their endpoints: under any view a
+/// claim's `old`/`new` are the addresses it NAMES, read out as recorded, so a
+/// live claim can name a nullified link and `active` stays the claim's own.
+/// And the enumeration's gate is RESIDENCE, not activity — a nullified link
+/// is still resident, so it is still a legal probe key. Every other lineage
+/// case nullifies the claim; neither promise is watched by that.
+#[test]
+fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let (e1, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (e2, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (claim, _) = store
+        .assert_sup(SYS, &doc1(), &e1, &e2)
+        .expect("assert_sup succeeds");
+    store.nullify(SYS, &doc2(), &e2).expect("nullify succeeds");
+
+    // The premise: the ENDPOINT is retracted, and the claim naming it is not.
+    let snap = k.snapshot();
+    assert!(!snap.world().links().is_active(&e2));
+    assert!(snap.world().links().is_active(&claim));
+
+    assert_eq!(
+        lq.in_claims(&e1, View::Active),
+        vec![SupClaim {
+            claim: claim.clone(),
+            old: e1,
+            new: e2.clone(),
+            home: doc1(),
+            active: true,
+        }]
+    );
+    // A nullified link is resident, so it is still a legal probe key: the
+    // gate is residence, not activity.
+    assert_eq!(
+        lq.out_claims(&e2, View::Active)
+            .into_iter()
+            .map(|c| c.claim)
+            .collect::<Vec<_>>(),
+        vec![claim]
+    );
 }
 
 /// §7 — the lineage read-out is in ascending CLAIM-address order, the same

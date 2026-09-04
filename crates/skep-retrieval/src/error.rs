@@ -4,7 +4,7 @@
 //! error wins" contract the conformance tests rely on).
 //!
 //! Derive policy: all six operation enums derive `Clone + Debug + PartialEq +
-//! Eq + Serialize`; the payload-free [`SpecFault`]/[`Operand`] additionally
+//! Eq + Serialize`; the payload-free [`SpanFault`]/[`Operand`] additionally
 //! derive `Copy`. `DocNotRegistered` carries the offending document wherever
 //! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
 //! FINDDOCSCONTAINING); the interface declares ExtentError's and OriginError's
@@ -21,12 +21,12 @@ use std::fmt;
 use serde::Serialize;
 use skep_address::Address;
 
-/// VSpec well-formedness faults (ASN-0115): the four ways a request span
-/// fails the `gate_vspec` gate. `StartTooShallow` is `#start < 2`; a
+/// Span well-formedness faults (ASN-0115): the four ways a request span fails
+/// the span half of the V-spec gate. `StartTooShallow` is `#start < 2`; a
 /// well-formed `#start ≥ 3` span is NOT a fault here — depth-compatibility is
 /// consulting-state, not well-formedness (§Conflicts resolved 8).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
-pub enum SpecFault {
+pub enum SpanFault {
     /// Width does not act at its deepest component (not ordinal-level).
     NotOrdinalLevel,
     /// `#start ≠ #width` (not level-uniform).
@@ -50,12 +50,12 @@ pub enum Operand {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum RetrieveError {
     DocNotRegistered(Address),
-    MalformedSpec { index: usize, fault: SpecFault },
+    MalformedSpec { index: usize, fault: SpanFault },
 }
 
 /// RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET rejection (ASN-0112/0113 W-pre):
-/// unallocated document. Payload-free per the interface (the document is the
-/// request's one argument).
+/// the document is not registered. Payload-free per the interface (the
+/// document is the request's one argument).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum ExtentError {
     DocNotRegistered,
@@ -66,7 +66,7 @@ pub enum ExtentError {
 /// cause ("wrong-depth span" is never conflated with "unbound positions").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum OriginError {
-    /// WF_V(i): the document is unallocated.
+    /// The document is not a registered document (WF_V(i)'s `d ∈ Σ.E_doc`).
     DocNotRegistered,
     /// The span's start subspace is ∉ {s_C, s_L} — distinct from a real but
     /// empty subspace.
@@ -78,8 +78,8 @@ pub enum OriginError {
     DepthIncompatible,
     /// WF_V(vi): a depth-2 span naming positions not all currently bound.
     RangeNotPresent,
-    /// WF_V(ii/iv): the span fails VSpec well-formedness.
-    MalformedSpan(SpecFault),
+    /// WF_V(ii/iv): the span fails span well-formedness.
+    MalformedSpan(SpanFault),
 }
 
 /// SHOWDELETIONS rejection (ASN-0075): both documents must be registered;
@@ -106,7 +106,7 @@ pub enum CompareError {
         operand: Operand,
         region: usize,
         index: usize,
-        fault: SpecFault,
+        fault: SpanFault,
     },
 }
 
@@ -120,19 +120,19 @@ pub enum FindError {
     MalformedSpan {
         region: usize,
         index: usize,
-        fault: SpecFault,
+        fault: SpanFault,
     },
 }
 
-impl fmt::Display for SpecFault {
+impl fmt::Display for SpanFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            SpecFault::NotOrdinalLevel => {
+            SpanFault::NotOrdinalLevel => {
                 "span width does not act at its deepest component (not ordinal-level)"
             }
-            SpecFault::NotLevelUniform => "span start and width lengths differ (not level-uniform)",
-            SpecFault::StartNotZeroFree => "span start carries a zero component (not zero-free)",
-            SpecFault::StartTooShallow => "span start has fewer than 2 components (#start < 2)",
+            SpanFault::NotLevelUniform => "span start and width lengths differ (not level-uniform)",
+            SpanFault::StartNotZeroFree => "span start carries a zero component (not zero-free)",
+            SpanFault::StartTooShallow => "span start has fewer than 2 components (#start < 2)",
         })
     }
 }

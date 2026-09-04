@@ -5,7 +5,7 @@
 use std::fmt;
 
 use skep_address::Address;
-use skep_retrieval::{Operand, SpecFault};
+use skep_retrieval::{Operand, SpanFault};
 
 use crate::codec::ParseError;
 use crate::op::OpKind;
@@ -97,7 +97,7 @@ pub struct FaultSite {
     /// container.
     pub index: Option<usize>,
     /// The span well-formedness fault.
-    pub fault: Option<SpecFault>,
+    pub fault: Option<SpanFault>,
     /// Offending document of the multi-document `DocNotRegistered(Address)`
     /// variants (RetrieveError/DeletionsError/CompareError/FindError).
     pub addr: Option<Address>,

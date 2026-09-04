@@ -469,7 +469,7 @@ mod tests {
     use super::*;
     use crate::reject::Disposition;
     use skep_address::{validate, Nat, Tumbler};
-    use skep_retrieval::{Operand, SpecFault};
+    use skep_retrieval::{Operand, SpanFault};
 
     /// The standard test document address.
     fn doc() -> skep_address::Address {
@@ -510,11 +510,11 @@ mod tests {
     #[test]
     fn m6_faults_thread_their_site() {
         let (code, site) =
-            RetrieveError::MalformedSpec { index: 3, fault: SpecFault::StartTooShallow }.lower();
+            RetrieveError::MalformedSpec { index: 3, fault: SpanFault::StartTooShallow }.lower();
         assert_eq!(code, RejectCode::MalformedSpan);
         let site = site.expect("localized");
         assert_eq!(site.index, Some(3));
-        assert!(matches!(site.fault, Some(SpecFault::StartTooShallow)));
+        assert!(matches!(site.fault, Some(SpanFault::StartTooShallow)));
         assert!(site.operand.is_none() && site.region.is_none() && site.addr.is_none());
         assert!(site.slot.is_none(), "a slot is an M10 successor coordinate, never an M6 one");
 
@@ -522,7 +522,7 @@ mod tests {
             operand: Operand::Second,
             region: 1,
             index: 2,
-            fault: SpecFault::NotLevelUniform,
+            fault: SpanFault::NotLevelUniform,
         }
         .lower();
         assert_eq!(code, RejectCode::MalformedSpan);
@@ -780,7 +780,7 @@ mod tests {
         // `MalformedSpan` covers RETRIEVEV's differently-named fault (§5).
         deviates(
             "MalformedSpec",
-            RetrieveError::MalformedSpec { index: 0, fault: SpecFault::NotOrdinalLevel },
+            RetrieveError::MalformedSpec { index: 0, fault: SpanFault::NotOrdinalLevel },
             RejectCode::MalformedSpan,
         );
         same_name(ExtentError::DocNotRegistered);
@@ -789,7 +789,7 @@ mod tests {
         same_name(OriginError::EmptySubspace);
         same_name(OriginError::DepthIncompatible);
         same_name(OriginError::RangeNotPresent);
-        same_name(OriginError::MalformedSpan(SpecFault::NotLevelUniform));
+        same_name(OriginError::MalformedSpan(SpanFault::NotLevelUniform));
         same_name(DeletionsError::DocNotRegistered(doc()));
         same_name(CompareError::DocNotRegistered(doc()));
         same_name(CompareError::NotContentSubspace {
@@ -801,13 +801,13 @@ mod tests {
             operand: Operand::First,
             region: 0,
             index: 0,
-            fault: SpecFault::StartNotZeroFree,
+            fault: SpanFault::StartNotZeroFree,
         });
         same_name(FindError::DocNotRegistered(doc()));
         same_name(FindError::MalformedSpan {
             region: 0,
             index: 0,
-            fault: SpecFault::StartTooShallow,
+            fault: SpanFault::StartTooShallow,
         });
 
         // ── M8 (discovery) ──

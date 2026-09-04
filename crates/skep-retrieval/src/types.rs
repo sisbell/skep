@@ -31,22 +31,29 @@ use skep_address::{Address, Nat, Span};
 use skep_arrangement::VPos;
 use skep_content::Val;
 
-/// One document + one ordinal-level depth-2 V-span — RETRIEVEV's ordered,
-/// single-span idiom (ASN-0115: the spec-set is the ORDERED `&[Spec]`;
-/// per-spec order is denotational, R5). The SET-shaped operations (COMPARE,
-/// FINDDOCSCONTAINING) use [`Region`] instead.
+/// One document + one ordinal-level V-span of depth ≥ 2 — RETRIEVEV's
+/// ordered, single-span idiom (ASN-0115: the spec-set is the ORDERED
+/// `&[Spec]`; per-spec order is denotational, R5). Depth-COMPATIBILITY
+/// (`#start == 2`) is consulting-state, not well-formedness, so a deeper
+/// start is an admissible spec that resolves to ⟨⟩. The SET-shaped
+/// operations (COMPARE, FINDDOCSCONTAINING) use [`RegionSpec`] instead.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Spec {
     pub doc: Address,
     pub span: Span,
 }
 
-/// One document + a finite V-region (set of spans) — the shared
-/// "(document, span-set)" idiom for the two SET-shaped operations: COMPARE
-/// (content only; the unordered set ASN-0122's `ρ` is) and FINDDOCSCONTAINING
-/// (FD-CONVEX wants multi-span). Both take `&[Region]`.
+/// One document + a finite set of V-spans — one member of the spec-set the
+/// two SET-shaped operations take: COMPARE (content only; the `(dᵢ, Sᵢ)` of
+/// ASN-0122's `ρ`) and FINDDOCSCONTAINING (FD-CONVEX wants multi-span). Both
+/// take `&[RegionSpec]`.
+///
+/// It SPECIFIES part of a region; it is not one. The region `R_Σ(ρ)` is what
+/// the spec-set denotes once each span is clipped against the document's
+/// current arrangement — the thing COMPARE's report is confined to (X12 R1),
+/// and the thing an empty resolution yields none of.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct Region {
+pub struct RegionSpec {
     pub doc: Address,
     pub spans: Vec<Span>,
 }
@@ -86,10 +93,10 @@ pub struct Delivery(pub Vec<DeliveryItem>);
 /// never copies, T1-orderable (D-ORD).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Deletions {
-    /// Deleted from `d_a` ∧ current in `d_b`.
-    pub a_with_b: Vec<Address>,
-    /// Deleted from `d_b` ∧ current in `d_a`.
-    pub b_with_a: Vec<Address>,
+    /// `DeletedFromAWithB` — `DELETED(a, d_a) ∧ CURRENT(a, d_b)`.
+    pub deleted_from_a_with_b: Vec<Address>,
+    /// `DeletedFromBWithA` — `DELETED(a, d_b) ∧ CURRENT(a, d_a)`.
+    pub deleted_from_b_with_a: Vec<Address>,
 }
 
 /// One COMPARE correspondence (ASN-0122): the two feet resolve to one shared
@@ -105,8 +112,8 @@ pub struct CorrPair {
     pub width: Nat,
 }
 
-/// COMPARE's result: the complete, sound correspondence relation in
-/// deterministic canonical order (ASN-0122 R1–R3; finer-than-maximal — X12 R4
-/// is not required). NOT `Serialize` — see [`CorrPair`].
+/// COMPARE's result: the complete, sound correspondence relation in one
+/// deterministic presentation (ASN-0122 R1–R3; finer-than-maximal — X12 R4's
+/// canonical form is not required). NOT `Serialize` — see [`CorrPair`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompareReport(pub Vec<CorrPair>);

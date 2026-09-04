@@ -63,7 +63,7 @@ use skep_identity::KeySet;
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, Region, Spec, SpecFault};
+use skep_retrieval::{CorrPair, Deletions, DeliveryItem, Operand, RegionSpec, Spec, SpanFault};
 
 /// The most elements one wire array may carry, applied at [`p_list`] — so
 /// every attacker-sized list on the request surface (span regions, spec and
@@ -663,7 +663,7 @@ impl Fields {
         self.field(k, |v| p_list(v, p_spec))
     }
 
-    fn regions(&mut self, k: &'static str) -> PResult<Vec<Region>> {
+    fn regions(&mut self, k: &'static str) -> PResult<Vec<RegionSpec>> {
         self.field(k, |v| p_list(v, p_region))
     }
 
@@ -862,9 +862,9 @@ fn p_spec(v: &Value) -> PResult<Spec> {
     Ok(Spec { doc: field(m, "doc", p_addr)?, span: field(m, "span", p_span)? })
 }
 
-fn p_region(v: &Value) -> PResult<Region> {
+fn p_region(v: &Value) -> PResult<RegionSpec> {
     let m = p_obj(v, &["doc", "spans"])?;
-    Ok(Region { doc: field(m, "doc", p_addr)?, spans: field(m, "spans", |v| p_list(v, p_span))? })
+    Ok(RegionSpec { doc: field(m, "doc", p_addr)?, spans: field(m, "spans", |v| p_list(v, p_span))? })
 }
 
 /// The `values` array of `insert`: each element is one of the four write
@@ -1397,11 +1397,11 @@ fn j_specs(ss: &[Spec]) -> Value {
     Value::Array(ss.iter().map(j_spec).collect())
 }
 
-fn j_region(r: &Region) -> Value {
+fn j_region(r: &RegionSpec) -> Value {
     obj(vec![("doc", j_addr(&r.doc)), ("spans", j_spans(&r.spans))])
 }
 
-fn j_regions(rs: &[Region]) -> Value {
+fn j_regions(rs: &[RegionSpec]) -> Value {
     Value::Array(rs.iter().map(j_region).collect())
 }
 
@@ -1610,9 +1610,14 @@ fn j_endset_pairs(ps: &[(usize, Endset)]) -> Value {
     Value::Array(ps.iter().map(|(slot, e)| j_endset_pair(*slot, e)).collect())
 }
 
-/// SHOWDELETIONS' two directions, each an address list.
+/// SHOWDELETIONS' two directions, each an address list. The wire keys are
+/// `a_with_b`/`b_with_a` (wire.md §showdeletions), the contracted spelling of
+/// M6's `deleted_from_a_with_b`/`deleted_from_b_with_a`.
 fn j_deletions(d: &Deletions) -> Value {
-    obj(vec![("a_with_b", j_addrs(&d.a_with_b)), ("b_with_a", j_addrs(&d.b_with_a))])
+    obj(vec![
+        ("a_with_b", j_addrs(&d.deleted_from_a_with_b)),
+        ("b_with_a", j_addrs(&d.deleted_from_b_with_a)),
+    ])
 }
 
 /// FOLLOWLINK's in-band `Result`: the empty span set is a defined answer,
@@ -1696,12 +1701,12 @@ fn disposition_name(d: Disposition) -> &'static str {
     }
 }
 
-fn fault_name(f: SpecFault) -> &'static str {
+fn fault_name(f: SpanFault) -> &'static str {
     match f {
-        SpecFault::NotOrdinalLevel => "not_ordinal_level",
-        SpecFault::NotLevelUniform => "not_level_uniform",
-        SpecFault::StartNotZeroFree => "start_not_zero_free",
-        SpecFault::StartTooShallow => "start_too_shallow",
+        SpanFault::NotOrdinalLevel => "not_ordinal_level",
+        SpanFault::NotLevelUniform => "not_level_uniform",
+        SpanFault::StartNotZeroFree => "start_not_zero_free",
+        SpanFault::StartTooShallow => "start_too_shallow",
     }
 }
 

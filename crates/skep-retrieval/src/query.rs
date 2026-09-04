@@ -8,15 +8,15 @@ use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
 use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
-use crate::helpers::{debug_assert_dense_occupancy, dedup_addrs, gate_vspec, S_C, S_L};
-use crate::types::{Deletions, Delivery, DeliveryItem, Region, Spec};
+use crate::helpers::{debug_assert_sequential_positions, dedup_addrs, gate_vspan, S_C, S_L};
+use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 use crate::{M6World, Query};
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
-/// (ASN-0113 W2/W4: a count fixes an extent under dense occupancy). The anchor
-/// is written ONCE, here, as the subspace origin `[S, 1]` — never absorbed
-/// into a confluent summary, which is how the negative-origin hazard (0112
-/// OQ5) is designed out.
+/// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
+/// anchor is written ONCE, here, as the subspace origin `[S, 1]` — never
+/// absorbed into a confluent summary, which is how the negative-origin hazard
+/// (0112 OQ5) is designed out.
 ///
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
@@ -33,11 +33,15 @@ fn ext_span(s: Nat, n: &Nat) -> Span {
     .expect("n_S ≥ 1 ⇒ a nonempty extent")
 }
 
-/// CURRENT(·, d) on the content side — every content I-address d's
-/// arrangement currently binds (the math `content_image(d)`; M5's own
-/// `content_image` is private and is NOT called here). May repeat an address
-/// under intra-doc transclusion — callers dedup.
-fn arranged_content(m5: &M5State, d: &Address) -> Vec<Address> {
+/// The enumeration of `CURRENT(·, d)` on the content side (ASN-0075's
+/// predicate; ASN-0124 calls the set `ran_C(d)`) — every content I-address
+/// `d`'s arrangement currently binds, in V order. M5's own `content_image` is
+/// the same set and is private, so it is NOT called here.
+///
+/// `CURRENT` is a set and this is an enumeration WITH MULTIPLICITY: an
+/// address placed at two V-positions of `d` by intra-document transclusion is
+/// yielded twice, so callers dedup.
+fn current_content(m5: &M5State, d: &Address) -> Vec<Address> {
     let runs = m5.content_runs(d);
     runs.iter().flat_map(Run::addrs).collect()
 }
@@ -65,7 +69,7 @@ impl<'s, W: M6World> Query<'s, W> {
             if !m3.is_registered_document(&s.doc) {
                 return Err(RetrieveError::DocNotRegistered(s.doc.clone()));
             }
-            gate_vspec(&s.span).map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
+            gate_vspan(&s.span).map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
         }
         let mut out = Vec::new();
         for s in specs {
@@ -106,14 +110,15 @@ impl<'s, W: M6World> Query<'s, W> {
     }
 
     /// RETRIEVEDOCVSPAN (ASN-0112) — the whole-document bounding span:
-    /// singleton `⟨σ_d⟩`, or `⟨⟩` for an allocated-empty document;
-    /// unallocated ⇒ Err. Across subspaces it is a bounding box bridging the
-    /// inter-subspace void, insensitive to mid-document content edits (V9) —
-    /// by design (route fragmentation-sensitive callers to `doc_vspanset`).
+    /// singleton `⟨σ_d⟩`, or `⟨⟩` for a registered-empty document; a document
+    /// that is not registered ⇒ Err. Across subspaces it is a bounding box
+    /// bridging the inter-subspace void, insensitive to mid-document content
+    /// edits (V9) — by design (route fragmentation-sensitive callers to
+    /// `doc_vspanset`).
     ///
     /// σ_d IS the hull of the per-subspace extents, so it is taken from
     /// [`Query::doc_vspanset`] rather than derived a second time: the registry
-    /// gate, the D-CTG★ trust and the count-read all happen once, in one
+    /// gate, the D-SEQ★ trust and the count-read all happen once, in one
     /// place. Those extents are W13-normalized, so the FIRST member's start is
     /// the anchor `[s, 1]` of the lowest occupied subspace and the LAST
     /// member's reach is one ordinal step past the highest occupied position.
@@ -136,24 +141,24 @@ impl<'s, W: M6World> Query<'s, W> {
     }
 
     /// RETRIEVEDOCVSPANSET (ASN-0113) — per-subspace exact extents: ≤2
-    /// members (content, then link), already W13-normalized; `⟨⟩` for an
-    /// allocated-empty document; unallocated ⇒ Err.
+    /// members (content, then link), already W13-normalized; `⟨⟩` for a
+    /// registered-empty document; a document that is not registered ⇒ Err.
     ///
     /// The count-read core of both extent queries. M5's O(1)
     /// `content_count`/`link_count` ARE the extents, because each subspace's
     /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
-    /// (D-CTG★ — the dense-slice occupancy ASN-0113 W4 proves; M5's write-path
-    /// property, trusted here and tripwired in debug). Built by `union` of
-    /// singletons — concatenation preserves the already-disjoint,
+    /// (D-SEQ★ — the sequential-position occupancy ASN-0113 W4 forces; M5's
+    /// write-path property, trusted here and tripwired in debug). Built by
+    /// `union` of singletons — concatenation preserves the already-disjoint,
     /// content-before-link normal form (asserted in debug); no invented M1
     /// constructor.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         if !m3.is_registered_document(doc) {
-            return Err(ExtentError::DocNotRegistered); // unallocated ⇒ fail
+            return Err(ExtentError::DocNotRegistered); // not registered ⇒ fail
         }
-        debug_assert_dense_occupancy(m5, doc);
+        debug_assert_sequential_positions(m5, doc);
         let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
         let mut result = SpanSet::empty();
         if !nc.is_zero() {
@@ -177,8 +182,8 @@ impl<'s, W: M6World> Query<'s, W> {
     /// (CL-OWN) — handled uniformly, no special case. The I-arity is
     /// de-scoped (see the crate docs); only this V-arity exists.
     ///
-    /// Inadmissible (Err) — reject, never silently clamp (O13): an
-    /// unallocated document (WF_V i), a malformed span (ii/iv), a foreign
+    /// Inadmissible (Err) — reject, never silently clamp (O13): a document
+    /// that is not registered (WF_V i), a malformed span (ii/iv), a foreign
     /// subspace (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`,
     /// iii), a depth-incompatible `#start ≥ 3` span (`DepthIncompatible`,
     /// WF_V v — its own check, kept distinct from the range case so a client
@@ -191,7 +196,7 @@ impl<'s, W: M6World> Query<'s, W> {
         if !m3.is_registered_document(doc) {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
-        gate_vspec(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
+        gate_vspan(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
         // subspace at any depth (gate ⇒ #start ≥ 2)
         let sub = span.start().get(1).expect("the gate ⇒ #start ≥ 2");
         let n_s = if *sub == *S_C {
@@ -226,11 +231,11 @@ impl<'s, W: M6World> Query<'s, W> {
 
     /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
     /// cross-document combine IN M6 from M5's per-document primitives:
-    /// `a_with_b = { a ∈ content_image(d_b) : DELETED(a, d_a) }` and its
-    /// symmetric twin. CURRENT(·, d) is `arranged_content`, which asks each
-    /// content run for its addresses exactly as RETRIEVEV does; DELETED(·, d)
-    /// is tested by membership in M5's per-document deleted cover
-    /// (`deletions(d).denotes(a)`) — exact *unconditionally* by
+    /// `DeletedFromAWithB = { a : CURRENT(a, d_b) ∧ DELETED(a, d_a) }` and its
+    /// symmetric twin. CURRENT(·, d) is enumerated by [`current_content`],
+    /// which asks each content run for its addresses exactly as RETRIEVEV
+    /// does; DELETED(·, d) is tested by membership in M5's per-document
+    /// deleted cover (`deletions(d).denotes(a)`) — exact *unconditionally* by
     /// `difference_sets`' denotational contract
     /// (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
     /// span packing), so there are no false positives. Never opens M4; both
@@ -238,7 +243,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// no torn-read phantom deletion).
     ///
     /// Both documents must be registered (Err otherwise; `d_a` checked
-    /// first); allocated-empty is fine and yields empty halves. Each half is
+    /// first); registered-empty is fine and yields empty halves. Each half is
     /// the deduped, Tumbler-ordered set of the EXISTING I-addresses
     /// (D-IDENT — never copies; D-ORD).
     ///
@@ -264,18 +269,21 @@ impl<'s, W: M6World> Query<'s, W> {
         }
         let del_a = m5.deletions(d_a); // { a : DELETED(a, d_a) } as a per-level-class cover
         let del_b = m5.deletions(d_b); // { a : DELETED(a, d_b) }
-        // a_with_b = current-in-B ∧ deleted-from-A; b_with_a symmetric.
-        let a_with_b = dedup_addrs(
-            arranged_content(m5, d_b)
+        // CURRENT in the one document ∧ DELETED from the other, both ways.
+        let deleted_from_a_with_b = dedup_addrs(
+            current_content(m5, d_b)
                 .into_iter()
                 .filter(|a| del_a.denotes(a.tumbler())),
         );
-        let b_with_a = dedup_addrs(
-            arranged_content(m5, d_a)
+        let deleted_from_b_with_a = dedup_addrs(
+            current_content(m5, d_a)
                 .into_iter()
                 .filter(|a| del_b.denotes(a.tumbler())),
         );
-        Ok(Deletions { a_with_b, b_with_a })
+        Ok(Deletions {
+            deleted_from_a_with_b,
+            deleted_from_b_with_a,
+        })
     }
 
     /// FINDDOCSCONTAINING (ASN-0124 `finddocs`) — resolve, then a
@@ -289,7 +297,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// live answer from M5's `docs_ever_containing` (FD-HIST), the two
     /// differing exactly by FD-GHOST's ghosts. Returns bare deduplicated
     /// identities, tumbler-ordered — no positions, no counts (FD codomain;
-    /// current HOLDERS, distinct from SHOWORIGIN's allocators).
+    /// present-tense CONTAINERS, distinct from SHOWORIGIN's allocators).
     ///
     /// Every named document must be registered and every region span
     /// well-formed (Err otherwise — a malformed span would silently
@@ -297,7 +305,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// does NOT restrict subspace — a link/foreign-subspace span passes and
     /// stays inert downstream (R⁻¹ indexes content provenance only, J-LV),
     /// and a depth-incompatible span resolves to empty coverage
-    /// (consulting-state, like RETRIEVEV's R6). Allocated-empty contributes
+    /// (consulting-state, like RETRIEVEV's R6). Registered-empty contributes
     /// nothing.
     ///
     /// Emptiness is tested with M1's `SpanSet::is_empty` — denotationally
@@ -311,7 +319,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// filter runs one `project` per candidate. M6 owns no admission control
     /// and no refusal for it: capping request size, rate and concurrency for a
     /// route carrying this read is M10's, as the request lifecycle's owner.
-    pub fn find_docs_containing(&self, regions: &[Region]) -> Result<Vec<Address>, FindError> {
+    pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         // The gate first, over the WHOLE request — the first fault wins, and
@@ -321,7 +329,7 @@ impl<'s, W: M6World> Query<'s, W> {
                 return Err(FindError::DocNotRegistered(r.doc.clone()));
             }
             for (si, span) in r.spans.iter().enumerate() {
-                gate_vspec(span).map_err(|f| FindError::MalformedSpan {
+                gate_vspan(span).map_err(|f| FindError::MalformedSpan {
                     region: ri,
                     index: si,
                     fault: f,

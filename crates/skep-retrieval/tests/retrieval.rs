@@ -2,11 +2,11 @@
 //! design/interface actually makes (§-references inline): what each operation
 //! admits and rejects (and WHICH error wins when several conditions fail at
 //! once), the silent-empty degradations RETRIEVEV's R6 mandates, delivery
-//! order/multiplicity (R3/R5/R8), extent synthesis from counts (D-CTG★),
+//! order/multiplicity (R3/R5/R8), extent synthesis from counts (D-SEQ★),
 //! origin projection and its reject-never-clamp admissibility (WF_V/O13), the
 //! cross-document SHOWDELETIONS combine (D-IDENT/D-ORD), COMPARE's
 //! address-equal join (per-block feet, fan-out completeness, deterministic
-//! order, value-blindness), FINDDOCSCONTAINING's present-tense filter
+//! presentation, value-blindness), FINDDOCSCONTAINING's present-tense filter
 //! (FD-SOUND) over the raw mixed-length coverage union, that queries never
 //! mutate, and the derive policy M10 marshals against.
 //!
@@ -26,7 +26,7 @@ use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError, FindError,
-    Operand, OriginError, Query, Region, RetrieveError, Spec, SpecFault,
+    Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -172,8 +172,8 @@ fn spec(doc: Address, span: Span) -> Spec {
     Spec { doc, span }
 }
 
-fn region(doc: Address, spans: Vec<Span>) -> Region {
-    Region { doc, spans }
+fn region_spec(doc: Address, spans: Vec<Span>) -> RegionSpec {
+    RegionSpec { doc, spans }
 }
 
 /// A T12-legal but non-ordinal-level width (action point 1).
@@ -279,10 +279,10 @@ fn as_of_reports_the_pinned_seq_and_queries_never_mutate() {
     let _ = ok_of(q.show_origin_v(&doc1(), &vspan(1, 1, 3)));
     let _ = ok_of(q.show_deletions(&doc1(), &doc2()));
     let _ = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 3)])],
-        &[region(doc2(), vec![vspan(1, 1, 2)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
-    let _ = ok_of(q.find_docs_containing(&[region(doc2(), vec![vspan(1, 1, 2)])]));
+    let _ = ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])]));
     // …and nothing committed.
     assert_eq!(k.current_seq(), before);
 }
@@ -409,13 +409,13 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
         err_of(q.retrieve_v(&[spec(un(), lu_span())])),
         RetrieveError::DocNotRegistered(d) if d == un()
     ));
-    // Each SpecFault, with index attribution (the good spec at 0 does not
+    // Each SpanFault, with index attribution (the good spec at 0 does not
     // save the request — whole-request rejection).
     assert!(matches!(
         err_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 1)), spec(doc1(), lu_span())])),
         RetrieveError::MalformedSpec {
             index: 1,
-            fault: SpecFault::NotOrdinalLevel
+            fault: SpanFault::NotOrdinalLevel
         }
     ));
     let not_uniform = Span::new(t(&[1, 1]), t(&[1])).expect("T12-legal");
@@ -423,7 +423,7 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
         err_of(q.retrieve_v(&[spec(doc1(), not_uniform)])),
         RetrieveError::MalformedSpec {
             index: 0,
-            fault: SpecFault::NotLevelUniform
+            fault: SpanFault::NotLevelUniform
         }
     ));
     let zeroed = Span::new(t(&[1, 0, 1]), t(&[0, 0, 1])).expect("T12-legal");
@@ -431,7 +431,7 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
         err_of(q.retrieve_v(&[spec(doc1(), zeroed)])),
         RetrieveError::MalformedSpec {
             index: 0,
-            fault: SpecFault::StartNotZeroFree
+            fault: SpanFault::StartNotZeroFree
         }
     ));
     let shallow = Span::new(t(&[5]), t(&[1])).expect("T12-legal");
@@ -439,7 +439,7 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
         err_of(q.retrieve_v(&[spec(doc1(), shallow)])),
         RetrieveError::MalformedSpec {
             index: 0,
-            fault: SpecFault::StartTooShallow
+            fault: SpanFault::StartTooShallow
         }
     ));
 }
@@ -449,7 +449,7 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
 #[test]
 fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
     // ASN-0112: σ_d — the whole-document bounding span, a bounding box
-    // bridging the inter-subspace void once links exist (D-CTG★ makes the
+    // bridging the inter-subspace void once links exist (D-SEQ★ makes the
     // counts the extents; the anchor is the subspace origin, never negative).
     let k = mem_kernel();
     insert3(&k);
@@ -498,8 +498,8 @@ fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
 #[test]
 fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
     // ASN-0113 W2/W4/W13: ≤2 members, content before link, exact
-    // ext(d,S) = ([S,1],[0,n_S]), already normal; ⟨⟩ for allocated-empty;
-    // unallocated ⇒ Err (both extent ops).
+    // ext(d,S) = ([S,1],[0,n_S]), already normal; ⟨⟩ for registered-empty;
+    // not registered ⇒ Err (both extent ops).
     let k = mem_kernel();
     insert3(&k);
     seat_link(&k, &doc1(), &la(1)).expect("seat commits");
@@ -518,7 +518,7 @@ fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
     // Registered-empty ⇒ ⟨⟩ for both operations.
     assert_eq!(ok_of(q.doc_vspanset(&doc2())), SpanSet::empty());
     assert_eq!(ok_of(q.doc_vspan(&doc2())), SpanSet::empty());
-    // Unallocated ⇒ fail, for both.
+    // Not registered ⇒ fail, for both.
     assert!(matches!(
         err_of(q.doc_vspan(&un())),
         ExtentError::DocNotRegistered
@@ -589,7 +589,7 @@ fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
     insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    // (i) unallocated — checked first, even with a malformed span.
+    // (i) not registered — checked first, even with a malformed span.
     assert!(matches!(
         err_of(q.show_origin_v(&un(), &vspan(1, 1, 1))),
         OriginError::DocNotRegistered
@@ -602,12 +602,12 @@ fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
     // a foreign subspace is MalformedSpan, not NoSuchSubspace).
     assert!(matches!(
         err_of(q.show_origin_v(&doc1(), &lu_span())),
-        OriginError::MalformedSpan(SpecFault::NotOrdinalLevel)
+        OriginError::MalformedSpan(SpanFault::NotOrdinalLevel)
     ));
     let foreign_malformed = Span::new(t(&[3, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
         err_of(q.show_origin_v(&doc1(), &foreign_malformed)),
-        OriginError::MalformedSpan(SpecFault::NotOrdinalLevel)
+        OriginError::MalformedSpan(SpanFault::NotOrdinalLevel)
     ));
     // Foreign subspace ∉ {s_C, s_L} — distinct from a real-but-empty one,
     // and checked before empty/depth (a deep foreign span is still foreign).
@@ -680,8 +680,8 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
     assert_eq!(
         got,
         Deletions {
-            a_with_b: vec![ca(2)], // deleted from doc1, current in doc2
-            b_with_a: vec![ca(1)], // deleted from doc2, current in doc1
+            deleted_from_a_with_b: vec![ca(2)], // deleted from doc1, current in doc2
+            deleted_from_b_with_a: vec![ca(1)], // deleted from doc2, current in doc1
         }
     );
     // Swapping the arguments swaps the halves.
@@ -689,8 +689,8 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
     assert_eq!(
         got,
         Deletions {
-            a_with_b: vec![ca(1)],
-            b_with_a: vec![ca(2)],
+            deleted_from_a_with_b: vec![ca(1)],
+            deleted_from_b_with_a: vec![ca(2)],
         }
     );
 }
@@ -698,7 +698,7 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
 #[test]
 fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     // ASN-0075: intra-document transclusion multiplicity collapses (sets,
-    // not bags); allocated-empty documents are admissible with empty halves;
+    // not bags); registered-empty documents are admissible with empty halves;
     // an unregistered document is the typed failure (d_a checked first).
     let k = mem_kernel();
     {
@@ -709,8 +709,8 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
         assert_eq!(
             got,
             Deletions {
-                a_with_b: vec![],
-                b_with_a: vec![],
+                deleted_from_a_with_b: vec![],
+                deleted_from_b_with_a: vec![],
             }
         );
         assert!(matches!(
@@ -752,8 +752,8 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     assert_eq!(
         got,
         Deletions {
-            a_with_b: vec![ca(1)],
-            b_with_a: vec![],
+            deleted_from_a_with_b: vec![ca(1)],
+            deleted_from_b_with_a: vec![],
         }
     );
 }
@@ -780,8 +780,8 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
     let s = k.snapshot();
     let q = Query::new(&s);
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 3)])],
-        &[region(doc2(), vec![vspan(1, 1, 1)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
     assert_eq!(rep.0.len(), 1);
     let p = &rep.0[0];
@@ -794,8 +794,8 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
     assert_eq!(p.width, n(1));
     // Swapped operands swap the slots.
     let rep = ok_of(q.compare(
-        &[region(doc2(), vec![vspan(1, 1, 1)])],
-        &[region(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
     ));
     assert_eq!(rep.0.len(), 1);
     let p = &rep.0[0];
@@ -808,7 +808,8 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
 #[test]
 fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
     // ASN-0122 X8: an address in multiple blocks yields the full
-    // cross-product; X12 R3: canonical (d1,u1,d2,u2) order; X1/X2: the join
+    // cross-product; X12 R3: one deterministic (d1,u1,d2,u2) presentation —
+    // NOT R4's canonical maximal report, which is not required; X1/X2: the join
     // is on address equality, never value (equal bytes at distinct addresses
     // do NOT correspond); duplicate windows within one operand are listed,
     // not deduped (denotationally conforming).
@@ -841,31 +842,31 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
     let s = k.snapshot();
     let q = Query::new(&s);
     // Fan-out: one P block, two Q blocks holding the same address ⇒ 2 pairs,
-    // canonically ordered by u2.
+    // presented in ascending u2 order.
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 1)])],
-        &[region(doc2(), vec![vspan(1, 1, 2)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
     assert_eq!(rep.0.len(), 2);
     assert_eq!(rep.0[0].u2.ordinal, n(1));
     assert_eq!(rep.0[1].u2.ordinal, n(2));
     // Value-blind: doc2's own "a" (da1) shares bytes with ca1 but no pair.
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 3)])],
-        &[region(doc2(), vec![vspan(1, 3, 1)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 3, 1)])],
     ));
     assert_eq!(rep.0.len(), 0);
     // A repeated window within ρ₁ double-covers and is listed twice.
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 1), vspan(1, 1, 1)])],
-        &[region(doc2(), vec![vspan(1, 1, 1)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 1), vspan(1, 1, 1)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
     assert_eq!(rep.0.len(), 2);
     // Empty operands and depth-incompatible regions are empty SUCCESSES.
     assert_eq!(ok_of(q.compare(&[], &[])).0.len(), 0);
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![deep_span(1)])],
-        &[region(doc2(), vec![vspan(1, 1, 2)])],
+        &[region_spec(doc1(), vec![deep_span(1)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
     assert_eq!(rep.0.len(), 0);
 }
@@ -881,13 +882,13 @@ fn compare_rejects_with_operand_region_index_attribution() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(matches!(
-        err_of(q.compare(&[region(un(), vec![vspan(1, 1, 1)])], &[])),
+        err_of(q.compare(&[region_spec(un(), vec![vspan(1, 1, 1)])], &[])),
         CompareError::DocNotRegistered(d) if d == un()
     ));
     assert!(matches!(
         err_of(q.compare(
-            &[region(doc1(), vec![vspan(1, 1, 1)])],
-            &[region(doc1(), vec![vspan(2, 1, 1)])],
+            &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+            &[region_spec(doc1(), vec![vspan(2, 1, 1)])],
         )),
         CompareError::NotContentSubspace {
             operand: Operand::Second,
@@ -897,20 +898,20 @@ fn compare_rejects_with_operand_region_index_attribution() {
     ));
     assert!(matches!(
         err_of(q.compare(
-            &[region(doc1(), vec![vspan(1, 1, 1), lu_span()])],
-            &[region(doc1(), vec![vspan(1, 1, 1)])],
+            &[region_spec(doc1(), vec![vspan(1, 1, 1), lu_span()])],
+            &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
         )),
         CompareError::MalformedSpan {
             operand: Operand::First,
             region: 0,
             index: 1,
-            fault: SpecFault::NotOrdinalLevel
+            fault: SpanFault::NotOrdinalLevel
         }
     ));
     // A link-START span that is ALSO malformed: subspace residence wins.
     let link_malformed = Span::new(t(&[2, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        err_of(q.compare(&[region(doc1(), vec![link_malformed])], &[])),
+        err_of(q.compare(&[region_spec(doc1(), vec![link_malformed])], &[])),
         CompareError::NotContentSubspace {
             operand: Operand::First,
             region: 0,
@@ -922,7 +923,7 @@ fn compare_rejects_with_operand_region_index_attribution() {
     // span the gate loop sees, including a one-component start.
     let shallow_foreign = Span::new(t(&[5]), t(&[1])).expect("T12-legal");
     assert!(matches!(
-        err_of(q.compare(&[region(doc1(), vec![shallow_foreign])], &[])),
+        err_of(q.compare(&[region_spec(doc1(), vec![shallow_foreign])], &[])),
         CompareError::NotContentSubspace {
             operand: Operand::First,
             region: 0,
@@ -931,12 +932,12 @@ fn compare_rejects_with_operand_region_index_attribution() {
     ));
     let shallow_content = Span::new(t(&[1]), t(&[1])).expect("T12-legal");
     assert!(matches!(
-        err_of(q.compare(&[region(doc1(), vec![shallow_content])], &[])),
+        err_of(q.compare(&[region_spec(doc1(), vec![shallow_content])], &[])),
         CompareError::MalformedSpan {
             operand: Operand::First,
             region: 0,
             index: 0,
-            fault: SpecFault::StartTooShallow
+            fault: SpanFault::StartTooShallow
         }
     ));
 }
@@ -979,7 +980,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
         // Mixed-length coverage {[ca1,ca2), [vca1,vca2)} passes raw through
         // M6; all three docs currently hold some of it.
         assert_eq!(
-            ok_of(q.find_docs_containing(&[region(doc2(), vec![vspan(1, 1, 2)])])),
+            ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])])),
             vec![doc1(), vdoc(), doc2()]
         );
     }
@@ -989,14 +990,14 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert_eq!(
-        ok_of(q.find_docs_containing(&[region(doc2(), vec![vspan(1, 1, 2)])])),
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])])),
         vec![vdoc(), doc2()]
     );
     // A depth-incompatible span contributes nothing — never a rejection.
     assert_eq!(
         ok_of(q.find_docs_containing(&[
-            region(doc1(), vec![deep_span(1)]),
-            region(doc2(), vec![vspan(1, 1, 2)]),
+            region_spec(doc1(), vec![deep_span(1)]),
+            region_spec(doc2(), vec![vspan(1, 1, 2)]),
         ])),
         vec![vdoc(), doc2()]
     );
@@ -1006,7 +1007,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert_eq!(
-        ok_of(q.find_docs_containing(&[region(doc1(), vec![vspan(2, 1, 1)])])),
+        ok_of(q.find_docs_containing(&[region_spec(doc1(), vec![vspan(2, 1, 1)])])),
         Vec::<Address>::new()
     );
 }
@@ -1021,32 +1022,32 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     let s = k.snapshot();
     let q = Query::new(&s);
     assert!(matches!(
-        err_of(q.find_docs_containing(&[region(un(), vec![vspan(1, 1, 1)])])),
+        err_of(q.find_docs_containing(&[region_spec(un(), vec![vspan(1, 1, 1)])])),
         FindError::DocNotRegistered(d) if d == un()
     ));
     let zeroed = Span::new(t(&[1, 0, 1]), t(&[0, 0, 1])).expect("T12-legal");
     assert!(matches!(
-        err_of(q.find_docs_containing(&[region(doc1(), vec![vspan(1, 1, 1), zeroed])])),
+        err_of(q.find_docs_containing(&[region_spec(doc1(), vec![vspan(1, 1, 1), zeroed])])),
         FindError::MalformedSpan {
             region: 0,
             index: 1,
-            fault: SpecFault::StartNotZeroFree
+            fault: SpanFault::StartNotZeroFree
         }
     ));
     assert!(matches!(
         err_of(q.find_docs_containing(&[
-            region(doc1(), vec![vspan(1, 1, 1)]),
-            region(doc1(), vec![lu_span()]),
+            region_spec(doc1(), vec![vspan(1, 1, 1)]),
+            region_spec(doc1(), vec![lu_span()]),
         ])),
         FindError::MalformedSpan {
             region: 1,
             index: 0,
-            fault: SpecFault::NotOrdinalLevel
+            fault: SpanFault::NotOrdinalLevel
         }
     ));
     // Registered-but-empty doc2: nothing resolves, nothing contains.
     assert_eq!(
-        ok_of(q.find_docs_containing(&[region(doc2(), vec![vspan(1, 1, 1)])])),
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1)])])),
         Vec::<Address>::new()
     );
 }
@@ -1082,8 +1083,8 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&dels).expect("Deletions serializes").is_empty());
     let e = err_of(q.retrieve_v(&[spec(un(), vspan(1, 1, 1))]));
     assert!(!bincode::serialize(&e).expect("RetrieveError serializes").is_empty());
-    assert!(!bincode::serialize(&SpecFault::NotOrdinalLevel)
-        .expect("SpecFault serializes")
+    assert!(!bincode::serialize(&SpanFault::NotOrdinalLevel)
+        .expect("SpanFault serializes")
         .is_empty());
     assert!(!bincode::serialize(&Operand::First)
         .expect("Operand serializes")
@@ -1092,13 +1093,14 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&spec(doc1(), vspan(1, 1, 1)))
         .expect("Spec serializes")
         .is_empty());
-    assert!(!bincode::serialize(&region(doc1(), vec![vspan(1, 1, 1)]))
-        .expect("Region serializes")
+    let rspec = region_spec(doc1(), vec![vspan(1, 1, 1)]);
+    assert!(!bincode::serialize(&rspec)
+        .expect("RegionSpec serializes")
         .is_empty());
     // CorrPair: field-by-field marshaling (no whole-value Serialize).
     let rep = ok_of(q.compare(
-        &[region(doc1(), vec![vspan(1, 1, 3)])],
-        &[region(doc2(), vec![vspan(1, 1, 2)])],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
     assert_eq!(rep.0.len(), 1);
     let p = &rep.0[0];
@@ -1115,8 +1117,8 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert_eq!(
         dels,
         Deletions {
-            a_with_b: vec![],
-            b_with_a: vec![]
+            deleted_from_a_with_b: vec![],
+            deleted_from_b_with_a: vec![]
         }
     );
     assert_eq!(err_of(q.doc_vspan(&un())), ExtentError::DocNotRegistered);

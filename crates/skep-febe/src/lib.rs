@@ -168,7 +168,7 @@ pub use skep_namespace::PrincipalId; // M3
 // newtypes over `Vec<DeliveryItem>` and `Vec<CorrPair>`, so reading either
 // answer means naming what is inside it.
 pub use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, Region, Spec, SpecFault,
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, Spec, SpanFault,
 };
 // M7, whose slot vocabulary the request model uses directly: `SlotArg` is the
 // two-form endset slot (the 2026-08-16 amendment) naming `Op::MakeLink`'s
@@ -321,7 +321,7 @@ mod tests {
             Op::Copy { doc: doc.clone(), at, specs: vec![vspec.clone()] },                      // M5
             Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
             Op::Compare {
-                rho1: vec![Region { doc: doc.clone(), spans: vec![span] }],
+                rho1: vec![RegionSpec { doc: doc.clone(), spans: vec![span] }],
                 rho2: vec![],
             },
             Op::FindLinksFtt { q: q.clone() }, // M8
@@ -379,6 +379,6 @@ mod tests {
         // The two M6 shapes a `FaultSite` carries: M10's own rejection type
         // is unreadable without them.
         let _: Option<Operand> = None;
-        let _: Option<SpecFault> = None;
+        let _: Option<SpanFault> = None;
     }
 }

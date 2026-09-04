@@ -211,7 +211,7 @@ use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
 use skep_febe::{Op, Response, SlotArg};
 use skep_links::{enc, Endset};
-use skep_retrieval::{DeliveryItem, Region, Spec};
+use skep_retrieval::{DeliveryItem, RegionSpec, Spec};
 
 use crate::alpha::Alpha;
 use crate::compare::{
@@ -3965,17 +3965,17 @@ fn bare_find_documents_aim(cx: &mut Cx, op: &Value, out: &mut OpOutcome) -> Opti
 
 fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let xf = expected_failure(op);
-    let mut regions: Vec<Region> = Vec::new();
+    let mut regions: Vec<RegionSpec> = Vec::new();
     let mut ground_failed: Option<String> = None;
     // A search text whose live location is gone: FINDDOCSCONTAINING takes
     // V-regions only, so the I-coverage reach re-locates the doc's DELETED
     // bytes in whichever doc still holds the identity live (the
     // transclusion sharer) — ruling 10's mechanism for this op.
-    let relocate = |cx: &mut Cx, out: &mut OpOutcome, needle: &str| -> Option<Region> {
+    let relocate = |cx: &mut Cx, out: &mut OpOutcome, needle: &str| -> Option<RegionSpec> {
         let l = locate(cx.shadow, None, needle)?;
         out.adaptations.push("i-coverage-search".into());
         let d = cx.alpha.translate(&l.doc)?;
-        Some(Region { doc: d, spans: vspan(1, l.ord, l.width).into_iter().collect() })
+        Some(RegionSpec { doc: d, spans: vspan(1, l.ord, l.width).into_iter().collect() })
     };
     if let Some(v) = field(op, &["specset", "specs", "search", "regions"]) {
         if let Some(arr) = v.as_array() {
@@ -4018,7 +4018,7 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 if clamped {
                     out.adaptations.push("query-clamped-to-extent".into());
                 }
-                regions.push(Region { doc: d, spans });
+                regions.push(RegionSpec { doc: d, spans });
             }
         } else if let Some(s) = v.as_str() {
             if s.contains("NOSPECS") || s == "empty" {
@@ -4031,7 +4031,7 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                         if let (Some(d), Some(span)) =
                             (cx.alpha.translate(&l.doc), vspan(1, l.ord, l.width))
                         {
-                            regions.push(Region { doc: d, spans: vec![span] });
+                            regions.push(RegionSpec { doc: d, spans: vec![span] });
                         }
                     }
                     None => ground_failed = Some(format!("search {s:?} not groundable")),
@@ -4049,7 +4049,7 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                     return;
                 };
                 let spans = vspan(1, l.ord, l.width).into_iter().collect();
-                regions.push(Region { doc: d, spans });
+                regions.push(RegionSpec { doc: d, spans });
             }
             None => {
                 ground_failed = Some(format!(
@@ -4067,7 +4067,7 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         cx.shadow.set_current(&sd);
         let n = cx.shadow.text_len(&sd);
         if let (Some(d), Some(span)) = (cx.alpha.translate(&sd), vspan(1, 1, n)) {
-            regions.push(Region { doc: d, spans: vec![span] });
+            regions.push(RegionSpec { doc: d, spans: vec![span] });
         }
     } else if let Some(doc) = bare_find_documents_aim(cx, op, out) {
         let n = cx.shadow.text_len(&doc);
@@ -4087,11 +4087,11 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
             if !relocated {
                 if let Some(d) = cx.alpha.translate(&doc) {
-                    regions.push(Region { doc: d, spans: Vec::new() });
+                    regions.push(RegionSpec { doc: d, spans: Vec::new() });
                 }
             }
         } else if let Some(d) = cx.alpha.translate(&doc) {
-            regions.push(Region { doc: d, spans: vspan(1, 1, n).into_iter().collect() });
+            regions.push(RegionSpec { doc: d, spans: vspan(1, 1, n).into_iter().collect() });
         }
     }
     if let Some(reason) = ground_failed {
@@ -5205,7 +5205,7 @@ fn run_compare_pair(
     // extension's operand vspec spans) narrows that side's ρ; without one
     // the side is the whole extent.
     let region_of =
-        |cx: &Cx, g: &str, d: &skep_address::Address, win: Option<Vec<(u64, u64)>>| -> Region {
+        |cx: &Cx, g: &str, d: &skep_address::Address, win: Option<Vec<(u64, u64)>>| -> RegionSpec {
             let spans = match win {
                 Some(list) => {
                     list.into_iter().filter_map(|(ord, w)| vspan(1, ord, w)).collect()
@@ -5215,7 +5215,7 @@ fn run_compare_pair(
                     vspan(1, 1, n).into_iter().collect()
                 }
             };
-            Region { doc: d.clone(), spans }
+            RegionSpec { doc: d.clone(), spans }
         };
     let rho1 = vec![region_of(cx, ga, &da, win_a)];
     let rho2 = vec![region_of(cx, gb, &db, win_b)];

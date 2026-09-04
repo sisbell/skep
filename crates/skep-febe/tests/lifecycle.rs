@@ -15,7 +15,7 @@ use skep_febe::{
 };
 use skep_links::{enc, View, MAX_SLOT_SPANS};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
-use skep_retrieval::{Region, Spec};
+use skep_retrieval::{RegionSpec, Spec};
 
 /// A link-subspace element address under `doc` that no MAKELINK ever minted.
 fn ghost_link(doc: &skep_address::Address, ordinal: u32) -> skep_address::Address {
@@ -123,8 +123,8 @@ fn document_lifecycle() {
         &fx.febe,
         fx.user,
         Op::Compare {
-            rho1: vec![Region { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![Region { doc: v.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho2: vec![RegionSpec { doc: v.clone(), spans: vec![vspan(1, 1, 2)] }],
         },
     ));
     assert!(!rep.0.is_empty(), "d and its version share address-equal content");
@@ -134,7 +134,7 @@ fn document_lifecycle() {
         &fx.febe,
         fx.user,
         Op::FindDocsContaining {
-            regions: vec![Region { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
+            regions: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
     ));
     assert!(holders.contains(&d), "the document that allocated the element contains it");
@@ -149,8 +149,8 @@ fn document_lifecycle() {
     // the version — exactly SHOWDELETIONS' a-with-b half.
     ack(ex(&fx.febe, fx.user, Op::Delete { doc: d.clone(), p: vp(1, 3), width: nat(1) }));
     let rep = deletions(ex(&fx.febe, fx.user, Op::ShowDeletions { d_a: d.clone(), d_b: v.clone() }));
-    assert_eq!(rep.a_with_b.len(), 1);
-    assert!(rep.b_with_a.is_empty(), "nothing was deleted from the version");
+    assert_eq!(rep.deleted_from_a_with_b.len(), 1);
+    assert!(rep.deleted_from_b_with_a.is_empty(), "nothing was deleted from the version");
 
     // REARRANGE (pivot, 3 cuts) over the remaining two elements.
     ack(ex(

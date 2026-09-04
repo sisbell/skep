@@ -18,7 +18,7 @@ use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
 use skep_namespace::PrincipalId;
 use skep_retrieval::{
-    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Region, Spec, SpecFault,
+    CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec, SpanFault,
 };
 use skepd::JsonCodec;
 
@@ -201,14 +201,14 @@ fn all_requests() -> Vec<Request> {
         rq(
             None,
             Op::Compare {
-                rho1: vec![Region { doc: d1(), spans: vec![cspan(1, 5)] }],
-                rho2: vec![Region { doc: d2(), spans: vec![cspan(1, 5)] }],
+                rho1: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }],
+                rho2: vec![RegionSpec { doc: d2(), spans: vec![cspan(1, 5)] }],
             },
         ),
         rq(
             None,
             Op::FindDocsContaining {
-                regions: vec![Region { doc: d1(), spans: vec![cspan(1, 5)] }],
+                regions: vec![RegionSpec { doc: d1(), spans: vec![cspan(1, 5)] }],
             },
         ),
         rq(None, Op::Image { d: d1(), region: vec![cspan(1, 5)] }),
@@ -407,7 +407,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
         (
             "deletions",
             Response::Deletions {
-                rep: Deletions { a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], b_with_a: vec![] },
+                rep: Deletions { deleted_from_a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], deleted_from_b_with_a: vec![] },
                 as_of: Seq(9),
             },
         ),
@@ -459,7 +459,7 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                 disposition: Disposition::Permanent,
                 site: Some(FaultSite {
                     index: Some(1),
-                    fault: Some(SpecFault::NotOrdinalLevel),
+                    fault: Some(SpanFault::NotOrdinalLevel),
                     ..FaultSite::default()
                 }),
                 detail: None,
@@ -694,7 +694,7 @@ fn every_disposition_marshals_and_diagnostics_are_omitted_when_absent() {
             region: Some(0),
             slot: Some(skep_febe::FROM),
             index: Some(2),
-            fault: Some(SpecFault::StartTooShallow),
+            fault: Some(SpanFault::StartTooShallow),
             addr: Some(d2()),
         }),
         detail: Some("d2 not registered".into()),

@@ -20,7 +20,7 @@ use skep_febe::{
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
-use skep_retrieval::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, SpecFault};
+use skep_retrieval::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, SpanFault};
 use skepd::JsonCodec;
 
 fn wire_md() -> String {
@@ -229,7 +229,7 @@ fn fixture(name: &str) -> Response {
         },
         "follow_invalid" => Response::Follow { result: Err(Invalid), as_of: Seq(9) },
         "deletions" => Response::Deletions {
-            rep: Deletions { a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], b_with_a: vec![] },
+            rep: Deletions { deleted_from_a_with_b: vec![a(&[1, 0, 1, 0, 1, 0, 1, 1])], deleted_from_b_with_a: vec![] },
             as_of: Seq(9),
         },
         "compare" => Response::Compare {
@@ -269,7 +269,7 @@ fn fixture(name: &str) -> Response {
             disposition: Disposition::Permanent,
             site: Some(FaultSite {
                 index: Some(1),
-                fault: Some(SpecFault::NotOrdinalLevel),
+                fault: Some(SpanFault::NotOrdinalLevel),
                 ..FaultSite::default()
             }),
             detail: None,

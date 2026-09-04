@@ -14,7 +14,7 @@ use skep_febe::{Op, OpKind, Response, SlotArg, SuccessorSpec, FROM};
 use skep_kernel::Seq;
 use skep_links::{enc, View};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Region, Spec};
+use skep_retrieval::{RegionSpec, Spec};
 
 /// The committed coordinate an acknowledgment carries, whichever of the
 /// three acknowledging shapes it is.
@@ -194,11 +194,11 @@ fn every_read_reports_the_log_head_as_its_as_of() {
         Op::ShowOrigin { doc: v.clone(), span: vspan(1, 1, 1) },
         Op::ShowDeletions { d_a: d.clone(), d_b: v.clone() },
         Op::Compare {
-            rho1: vec![Region { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
-            rho2: vec![Region { doc: v, spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho2: vec![RegionSpec { doc: v, spans: vec![vspan(1, 1, 2)] }],
         },
         Op::FindDocsContaining {
-            regions: vec![Region { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
+            regions: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
         Op::Image { d: d.clone(), region: region() },
         Op::FindLinksV { d: d.clone(), region: region() },

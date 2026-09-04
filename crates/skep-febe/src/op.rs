@@ -8,7 +8,7 @@ use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_links::{Endset, SlotArg, View};
 use skep_namespace::PrincipalId;
-use skep_retrieval::{Region, Spec};
+use skep_retrieval::{RegionSpec, Spec};
 
 /// One parsed FEBE request: an optional idempotency key plus the operation.
 /// `id` is used ONLY to key the retry memo (§1(a)/§7); it is never echoed on
@@ -129,9 +129,9 @@ pub enum Op {
     /// SHOWDELETIONS (ASN-0075).
     ShowDeletions { d_a: Address, d_b: Address },
     /// COMPARE / SHOWRELATIONOF2VERSIONS (ASN-0122).
-    Compare { rho1: Vec<Region>, rho2: Vec<Region> },
+    Compare { rho1: Vec<RegionSpec>, rho2: Vec<RegionSpec> },
     /// FINDDOCSCONTAINING (ASN-0124).
-    FindDocsContaining { regions: Vec<Region> },
+    FindDocsContaining { regions: Vec<RegionSpec> },
     // ── link discovery reads (→ M8) ──
     /// V→I image of a region (ASN-0098 companion).
     Image { d: Address, region: Vec<Span> },
@@ -429,7 +429,7 @@ pub(crate) mod tests {
             (Op::ShowOrigin { doc: doc(), span: sp() }, true),
             (Op::ShowDeletions { d_a: doc(), d_b: doc() }, true),
             (Op::Compare { rho1: vec![], rho2: vec![] }, true),
-            (Op::FindDocsContaining { regions: vec![Region { doc: doc(), spans: vec![sp()] }] }, true),
+            (Op::FindDocsContaining { regions: vec![RegionSpec { doc: doc(), spans: vec![sp()] }] }, true),
             (Op::Image { d: doc(), region: vec![sp()] }, true),
             (Op::FindLinksV { d: doc(), region: vec![sp()] }, true),
             (Op::FindLinksFtt { q: q() }, true),

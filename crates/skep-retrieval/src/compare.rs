@@ -1,36 +1,47 @@
 //! §D COMPARE / SHOWRELATIONOF2VERSIONS (ASN-0122) — an interval equi-join on
 //! I-address, complete under fan-out. The contract is a relational join keyed
 //! on **address equality, never value** — so COMPARE never opens M4. Three
-//! phases: resolve regions to blocks, interval-join on the I-axis with
-//! cross-product on overlap (X8 completeness), coalesce-and-canonicalize
-//! (X12 R3 determinism; R4 maximality NOT required — v1 ships the
-//! finer-than-maximal per-overlap report, fully conforming under R1–R3).
+//! phases: resolve each spec-set to the blocks of its region, interval-join on
+//! the I-axis with cross-product on overlap (X8 completeness), sort into one
+//! deterministic presentation (X12 R3; R4's canonical maximal form NOT
+//! required — v1 ships the finer-than-maximal per-overlap report, fully
+//! conforming under R1–R3).
 
 use skep_address::{ordinal, Address, Nat, Tumbler};
 use skep_arrangement::{M5State, Run, VPos};
 
 use crate::error::{CompareError, Operand};
-use crate::helpers::{gate_vspec, S_C};
-use crate::types::{CompareReport, CorrPair, Region};
+use crate::helpers::{gate_vspan, S_C};
+use crate::types::{CompareReport, CorrPair, RegionSpec};
 use crate::{M6World, Query};
 
 impl<'s, W: M6World> Query<'s, W> {
-    /// COMPARE (ASN-0122): two content-subspace spec-sets, each a set of
-    /// `Region`s (the shared (document, span-set) idiom — ASN-0122's `ρ`);
-    /// reports address-equal correspondences (X1/X2 — value-blind, NEVER
-    /// opens M4), complete under fan-out (X8), in deterministic canonical
-    /// order (X12 R3); in each pair, slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
+    /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
+    /// of [`RegionSpec`]s — ASN-0122's `(dᵢ, Sᵢ)`; reports address-equal
+    /// correspondences (X1/X2 — value-blind, NEVER opens M4), complete under
+    /// fan-out (X8), in one deterministic presentation (X12 R3); in each pair,
+    /// slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
+    ///
+    /// A spec-set denotes its region `R_Σ(ρᵢ)` — each span clipped against the
+    /// document's current content arrangement — and that region is what
+    /// [`resolve_blocks`] hands back as the block list `p`/`q`. Every reported
+    /// pair is confined to those two regions (X12 R1), and a span that clips
+    /// to nothing contributes to neither.
     ///
     /// Gate, per operand so a span fault carries an unambiguous
-    /// `(operand, region, span-index)`: each region's doc registered; each
-    /// span starting in the content subspace (`NotContentSubspace` — the
-    /// residence check runs BEFORE the well-formedness gate) and well-formed
+    /// `(operand, region, span-index)`: each spec's doc registered; each span
+    /// starting in the content subspace (`NotContentSubspace` — the residence
+    /// check runs BEFORE the well-formedness gate) and well-formed
     /// (`MalformedSpan`). A well-formed depth-incompatible span passes and
-    /// resolves to an empty region (consulting-state — success, X12);
+    /// contributes nothing to its region (consulting-state — success, X12);
     /// overlapping/repeated windows within one operand are redundant, not
     /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
     /// stable sort keeps the listed order deterministic).
-    pub fn compare(&self, rho1: &[Region], rho2: &[Region]) -> Result<CompareReport, CompareError> {
+    pub fn compare(
+        &self,
+        rho1: &[RegionSpec],
+        rho2: &[RegionSpec],
+    ) -> Result<CompareReport, CompareError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         for (operand, regions) in [(Operand::First, rho1), (Operand::Second, rho2)] {
@@ -50,7 +61,7 @@ impl<'s, W: M6World> Query<'s, W> {
                             index: si,
                         });
                     }
-                    gate_vspec(span).map_err(|f| CompareError::MalformedSpan {
+                    gate_vspan(span).map_err(|f| CompareError::MalformedSpan {
                         operand,
                         region: ri,
                         index: si,
@@ -59,15 +70,16 @@ impl<'s, W: M6World> Query<'s, W> {
                 }
             }
         }
-        let (p, q) = (resolve_blocks(m5, rho1), resolve_blocks(m5, rho2)); // reads ONLY M5
+        // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — reads ONLY M5.
+        let (p, q) = (resolve_blocks(m5, rho1), resolve_blocks(m5, rho2));
         let pairs = interval_join(&p, &q); // cross-product per overlap (X8)
-        Ok(CompareReport(canonicalize(pairs))) // R1–R3 conforming, deterministic (X12)
+        Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
     }
 }
 
 /// Transient per-query working row for COMPARE: built by [`resolve_blocks`],
 /// consumed by [`overlap_pair`]/[`interval_join`]; dropped at return. One
-/// block per resolved I-run of one region span — the run as M5 handed it
+/// block per resolved I-run of one spec's span — the run as M5 handed it
 /// over, plus where the block's first position sits in its document's V-space.
 struct Block {
     doc: Address,
@@ -101,33 +113,35 @@ impl Block {
     }
 }
 
-/// Resolve every region span to its I-run blocks, reconstructing each run's
-/// V-start by accumulation.
+/// The region a spec-set denotes, as blocks: resolve every spec's span to its
+/// I-run blocks, reconstructing each run's V-start by accumulation.
 ///
 /// V-RECONSTRUCTION LEMMA (load-bearing for X12-R1 soundness, correct ONLY
-/// under D-CTG★): content is gap-free, so the FIRST bound V-position of a
-/// content span IS `span.start()`, and `resolve`'s runs tile the bound prefix
-/// CONTIGUOUSLY in V. Hence the V-cursor starts at `span.start()` and
-/// advances by each run's width — there are no V-gaps to skip. The lemma is
-/// asserted on EVERY run — firing per run (not first-run-only) localizes a
-/// future M5 density regression to the EXACT mis-aligning run instead of
-/// letting a mid-document V-gap slip past a first-run check and silently
-/// mis-set a later block's `v_start`.
+/// under D-SEQ★): a content subspace's occupied positions are the dense
+/// prefix `{[s_C, k] : 1 ≤ k ≤ n_C}`, so the FIRST bound V-position of a
+/// content span IS `span.start()` — a start beyond the prefix binds nothing
+/// at all, rather than skipping forward to a later occupied position — and
+/// `resolve`'s runs tile the bound prefix CONTIGUOUSLY in V. Hence the
+/// V-cursor starts at `span.start()` and advances by each run's width: there
+/// are no V-gaps to skip. The lemma is asserted on EVERY run — firing per run
+/// (not first-run-only) localizes a future M5 regression to the EXACT
+/// mis-aligning run instead of letting a mid-document V-gap slip past a
+/// first-run check and silently mis-set a later block's `v_start`.
 ///
-/// REQUIRES GATED REGIONS: every span content-subspace-started and
-/// `gate_vspec`-clean, which [`Query::compare`]'s gate establishes before it
+/// REQUIRES GATED SPECS: every span content-subspace-started and
+/// `gate_vspan`-clean, which [`Query::compare`]'s gate establishes before it
 /// calls. Two things ride on that gate. The lemma above is the CONTENT
-/// subspace's — gap-freedom is a property of content, not of every subspace —
-/// so a link-started span would read a V-cursor the lemma says nothing about.
-/// And `#start ≥ 2` puts both `[subspace, ordinal]` components at every start,
-/// so the let-else is the total form of a fact the caller has already settled,
-/// not a case that arises.
+/// subspace's — D-SEQ★ holds per subspace, and a link-started span would read
+/// a V-cursor against a prefix the lemma says nothing about. And `#start ≥ 2`
+/// puts both `[subspace, ordinal]` components at every start, so the let-else
+/// is the total form of a fact the caller has already settled, not a case
+/// that arises.
 ///
 /// A depth-incompatible (`#start ≥ 3`) span reads its cursor here like any
 /// other and still contributes no blocks — `resolve`'s own shape reader
-/// refuses it and hands back no runs, so the span resolves to ⟨⟩, an empty
+/// refuses it and hands back no runs, so the span contributes nothing to the
 /// region.
-fn resolve_blocks(m5: &M5State, regions: &[Region]) -> Vec<Block> {
+fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Vec<Block> {
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
@@ -141,7 +155,7 @@ fn resolve_blocks(m5: &M5State, regions: &[Region]) -> Vec<Block> {
             for run in m5.resolve(&r.doc, span) {
                 debug_assert!(
                     m5.point(&r.doc, &v).as_ref() == Some(run.i_start()),
-                    "D-CTG★: each content run must begin at the V-cursor (gap-free tiling)"
+                    "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
                 // Accumulate the V offset by run width (no V-gaps in content).
                 let next = &v.ordinal + run.width();
@@ -227,15 +241,16 @@ fn interval_join(p: &[Block], q: &[Block]) -> Vec<CorrPair> {
     out
 }
 
-/// Deterministic presentation (X12 R3) of the complete+sound relation
-/// (R1/R2); NOT claimed maximal (R4 optional). Sort lexicographically by
-/// `(d1, u1, d2, u2)` — `sort_by_cached_key` computes each four-`Tumbler` key
-/// ONCE per element (a bare `sort_by` would rebuild both keys per
-/// *comparison*) and is a STABLE sort, so duplicate overlaps keep a
-/// deterministic listed order (R3). The adjacent-pair fold is the IDENTITY in
-/// v1 (a finer-than-maximal, per-overlap report conforms — see
+/// The one presentation X12 R3 requires the implementation to fix, over the
+/// complete+sound relation (R1/R2). NOT R4's canonical report, which is the
+/// MAXIMAL pairs of X11 and is explicitly not required for conformance. Sort
+/// lexicographically by `(d1, u1, d2, u2)` — `sort_by_cached_key` computes
+/// each four-`Tumbler` key ONCE per element (a bare `sort_by` would rebuild
+/// both keys per *comparison*) and is a STABLE sort, so duplicate overlaps
+/// keep a deterministic listed order (R3). The adjacent-pair fold is the
+/// IDENTITY in v1 (a finer-than-maximal, per-overlap report conforms — see
 /// [`fold_adjacent`]).
-fn canonicalize(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
+fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     pairs.sort_by_cached_key(corr_key);
     fold_adjacent(pairs)
 }
@@ -261,7 +276,9 @@ fn vpos_tumbler(v: &VPos) -> Tumbler {
 /// form merges feet-successor-adjacent pairs here (pair₂'s two feet are the
 /// unit-successors of pair₁'s last positions AND their I-addresses are
 /// consecutive) into one wider pair — a pure presentation post-pass that
-/// never changes ⟦Γ⟧.
+/// never changes ⟦Γ⟧. Implementing that merge is exactly what would make the
+/// output X11's `CANON`, and only then would *canonical* be the right word
+/// for this step.
 fn fold_adjacent(pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     pairs
 }
@@ -344,9 +361,10 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_sorts_by_the_four_tumbler_key_and_folds_identity() {
-        // X12 R3: deterministic lexicographic (d1, u1, d2, u2) order; v1's
-        // fold is the identity (finer-than-maximal conforms, R4 optional).
+    fn the_presentation_sorts_by_the_four_tumbler_key_and_folds_identity() {
+        // X12 R3: one deterministic lexicographic (d1, u1, d2, u2)
+        // presentation; v1's fold is the identity (finer-than-maximal
+        // conforms — R4's canonical form is not required).
         let mk = |u2_ord: u32| CorrPair {
             d1: a(&[1, 0, 1, 0, 1]),
             u1: vp(1, 1),
@@ -354,7 +372,7 @@ mod tests {
             u2: vp(1, u2_ord),
             width: n(1),
         };
-        let got = canonicalize(vec![mk(2), mk(1)]);
+        let got = deterministic_presentation(vec![mk(2), mk(1)]);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].u2.ordinal, n(1));
         assert_eq!(got[1].u2.ordinal, n(2));

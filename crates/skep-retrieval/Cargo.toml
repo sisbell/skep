@@ -25,8 +25,8 @@ skep-address = { path = "../skep-address" }
 # M2 — the pinned Snapshot every query binds, and its Seq. M6 never writes:
 # no transact, no Kernel handle, no LockKey.
 skep-kernel = { path = "../skep-kernel" }
-# M3 — is_registered_document, the universal allocation gate (registered-empty
-# vs unallocated is M6's owned distinction).
+# M3 — is_registered_document, the universal registry gate (registered-empty
+# vs not registered is M6's owned distinction).
 skep-namespace = { path = "../skep-namespace" }
 # M4 — value_at, RETRIEVEV's content delivery ONLY; COMPARE/extents/
 # containment/deletions never open it.

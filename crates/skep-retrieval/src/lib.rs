@@ -20,10 +20,13 @@
 //! M3's `is_registered_document` answers one bool, and M6 reads two answers
 //! out of it: a REGISTERED-but-empty document is an ordinary success that
 //! contributes the operation's empty form (`⟨⟩`, an empty delivery, an empty
-//! half), while an UNALLOCATED one is that operation's typed `*NotRegistered`
-//! failure (W-pre 0112/0113). Which of the two a given document is belongs to
-//! M3; which of the two answers M6 gives back is M6's own, and it is the first
-//! thing each of the seven operations decides.
+//! half), while a NOT-REGISTERED one is that operation's typed
+//! `*NotRegistered` failure (W-pre 0112/0113). Registered is the word
+//! throughout, and it is narrower than M3's `is_allocated`, which is true of
+//! account and element addresses no operation here will accept as a document.
+//! Which of the two a given document is belongs to M3; which of the two
+//! answers M6 gives back is M6's own, and it is the first thing each of the
+//! seven operations decides.
 //!
 //! ## No state, no fold
 //!
@@ -67,9 +70,9 @@ mod types;
 
 pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
-    SpecFault,
+    SpanFault,
 };
-pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Region, Spec};
+pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 
 /// `CorrPair`/`CompareReport` carry M5's `VPos`; re-exported so M10's
 /// marshaler names it through M6, not by reaching into M5's crate.

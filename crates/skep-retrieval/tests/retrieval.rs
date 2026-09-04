@@ -11,12 +11,15 @@
 //! mutate, and the derive policy M10 marshals against.
 //!
 //! This file compiles as a FOREIGN crate, so it also witnesses the derive
-//! policy's consequences: M6's result/error types carry no `Debug`, so the
-//! tests unwrap through `ok_of`/`err_of` (no `expect`) and compare with
-//! `assert!`/`matches!` — exactly the constraints M10 will live under. The
-//! toy `World`/`Rec` pair is the minimal engine assembly the composition
-//! contract prescribes; all state is arranged through M5's real `Vstream`
-//! ops (M5Rec is sealed to foreign crates).
+//! policy's consequences. RETRIEVEV's `Delivery` carries M4's `Val`, which has
+//! no `Debug`, so `Result::expect` does not compile against a delivery: the
+//! tests unwrap through `ok_of`/`err_of` throughout — one idiom, and the only
+//! one available at every operation — and compare a delivery with
+//! `assert!`/`matches!`. Everything else here renders, so the derive-policy
+//! test compares those with `assert_eq!`, which is what M10 gets too. The toy
+//! `World`/`Rec` pair is the minimal engine assembly the composition contract
+//! prescribes; all state is arranged through M5's real `Vstream` ops (M5Rec is
+//! sealed to foreign crates).
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
@@ -186,9 +189,9 @@ fn deep_span(subspace: u32) -> Span {
     Span::new(t(&[subspace, 1, 1]), t(&[0, 0, 1])).expect("T12-legal")
 }
 
-/// Unwrap Ok without `E: Debug` — M6's error enums deliberately carry no
-/// `Debug` (derive policy), so `Result::expect` does not compile against
-/// them; this is the same constraint M10 marshals under.
+/// Unwrap Ok without `E: Debug` — the delivery path has no `Debug` to lend
+/// `Result::expect` (M4's `Val` withholds it), and one unwrap idiom serves
+/// every operation. The same constraint M10 marshals under.
 fn ok_of<T, E>(r: Result<T, E>) -> T {
     match r {
         Ok(v) => v,
@@ -846,8 +849,9 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
 #[test]
 fn compare_rejects_with_operand_region_index_attribution() {
     // ASN-0122 precondition: registered docs, content-subspace starts,
-    // well-formed spans — each fault localized by (operand, region, index);
-    // the subspace residence check runs BEFORE the well-formedness gate.
+    // well-formed spans — each span fault localized by (operand, region,
+    // index); the subspace residence check runs BEFORE the well-formedness
+    // gate.
     let k = mem_kernel();
     insert3(&k);
     let s = k.snapshot();
@@ -887,6 +891,28 @@ fn compare_rejects_with_operand_region_index_attribution() {
             operand: Operand::First,
             region: 0,
             index: 0
+        }
+    ));
+    // Position 1 IS the subspace at any start depth (Tumbler indexing is
+    // 1-based and #start ≥ 1 always), so residence is decidable for every
+    // span the gate loop sees, including a one-component start.
+    let shallow_foreign = Span::new(t(&[5]), t(&[1])).expect("T12-legal");
+    assert!(matches!(
+        err_of(q.compare(&[region(doc1(), vec![shallow_foreign])], &[])),
+        CompareError::NotContentSubspace {
+            operand: Operand::First,
+            region: 0,
+            index: 0
+        }
+    ));
+    let shallow_content = Span::new(t(&[1]), t(&[1])).expect("T12-legal");
+    assert!(matches!(
+        err_of(q.compare(&[region(doc1(), vec![shallow_content])], &[])),
+        CompareError::MalformedSpan {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+            fault: SpecFault::StartTooShallow
         }
     ));
 }
@@ -1007,8 +1033,9 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
 fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     // §Public interface derive policy: results/errors are Serialize (M10
     // marshals them; bincode is M2's actual wire format); CorrPair/
-    // CompareReport carry no derives and marshal FIELD-BY-FIELD — every leaf
-    // still serializes individually, VPos's Nat fields included.
+    // CompareReport are not — they carry M5's VPos — and marshal
+    // FIELD-BY-FIELD, every leaf serializing individually, VPos's Nat fields
+    // included.
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
@@ -1056,4 +1083,22 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     assert!(!bincode::serialize(&p.u1.ordinal).expect("Nat serializes").is_empty());
     assert!(!bincode::serialize(&p.d2).expect("Address serializes").is_empty());
     assert!(!bincode::serialize(&p.width).expect("Nat serializes").is_empty());
+    // Withholding Serialize is not withholding everything else: a consumer
+    // can clone a report, compare two of them, and print one in a failure
+    // message. `assert_eq!` on M6's results and errors compiles from a
+    // foreign crate — the delivery path alone is barred, and by M4's `Val`.
+    assert_eq!(rep.clone(), rep);
+    assert_eq!(
+        dels,
+        Deletions {
+            a_with_b: vec![],
+            b_with_a: vec![]
+        }
+    );
+    assert_eq!(
+        err_of(q.doc_vspan(&un())),
+        ExtentError::DocNotRegistered
+    );
+    assert_eq!(format!("{:?}", Operand::Second), "Second");
+    assert!(!format!("{rep:?}").is_empty());
 }

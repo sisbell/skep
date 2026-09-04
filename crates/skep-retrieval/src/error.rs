@@ -3,20 +3,17 @@
 //! the interface's, which is also each operation's check order (the "which
 //! error wins" contract the conformance tests rely on).
 //!
-//! Derive policy: all six operation enums derive `Clone + PartialEq + Eq +
-//! Serialize`; none derives `Debug` (they carry `Address` — see the policy
-//! note in `types`). The payload-free [`SpecFault`]/[`Operand`] additionally
-//! derive `Copy + Debug`. `DocNotRegistered` carries the offending document
-//! wherever the interface declares a payload (RETRIEVEV/SHOWDELETIONS/
-//! COMPARE/FINDDOCSCONTAINING); the interface declares ExtentError's and
-//! OriginError's as payload-free — the document is recoverable from the
-//! single-document request — and the interface is the verbatim binding.
+//! Derive policy: all six operation enums derive `Clone + Debug + PartialEq +
+//! Eq + Serialize`; the payload-free [`SpecFault`]/[`Operand`] additionally
+//! derive `Copy`. `DocNotRegistered` carries the offending document wherever
+//! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
+//! FINDDOCSCONTAINING); the interface declares ExtentError's and OriginError's
+//! as payload-free — the document is recoverable from the single-document
+//! request — and the interface is the verbatim binding.
 //!
-//! None implements `std::error::Error`: its `Debug` supertrait is exactly
-//! what the derive policy withholds from the `Address`-carrying enums, and
-//! the payload-free fault codes follow suit for one uniform surface. M10
-//! marshals rejections through `Serialize`, never through `dyn Error`;
-//! `Display` alone is provided for human-readable messages.
+//! None implements `std::error::Error`, because nothing consumes one as a
+//! `dyn Error`: M10 marshals every rejection through `Serialize`, and
+//! `Display` carries the human-readable message.
 
 use std::fmt;
 
@@ -49,7 +46,7 @@ pub enum Operand {
 
 /// RETRIEVEV rejection (ASN-0115): a malformed spec rejects the WHOLE request
 /// (well-formedness precondition); `index` names the offending spec.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum RetrieveError {
     DocNotRegistered(Address),
     MalformedSpec { index: usize, fault: SpecFault },
@@ -58,7 +55,7 @@ pub enum RetrieveError {
 /// RETRIEVEDOCVSPAN / RETRIEVEDOCVSPANSET rejection (ASN-0112/0113 W-pre):
 /// unallocated document. Payload-free per the interface (the document is the
 /// request's one argument).
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum ExtentError {
     DocNotRegistered,
 }
@@ -66,7 +63,7 @@ pub enum ExtentError {
 /// SHOWORIGIN_V rejection (ASN-0077 WF_V/O13) — reject, never clamp; each
 /// inadmissibility carries its own variant so M10/clients can localize the
 /// cause ("wrong-depth span" is never conflated with "unbound positions").
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum OriginError {
     /// WF_V(i): the document is unallocated.
     DocNotRegistered,
@@ -86,16 +83,17 @@ pub enum OriginError {
 
 /// SHOWDELETIONS rejection (ASN-0075): both documents must be registered;
 /// carries the offending document (`d_a` is checked first).
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum DeletionsError {
     DocNotRegistered(Address),
 }
 
-/// COMPARE rejection (ASN-0122): every fault carries an unambiguous
+/// COMPARE rejection (ASN-0122): every SPAN fault carries an unambiguous
 /// `(operand, region, span-index)` — FINDDOCSCONTAINING's `(region, index)`
-/// plus the operand tag. Per span, the content-subspace residence check runs
-/// BEFORE the well-formedness gate.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+/// plus the operand tag; the registry fault carries the offending document
+/// instead, which locates it just as unambiguously. Per span, the
+/// content-subspace residence check runs BEFORE the well-formedness gate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum CompareError {
     DocNotRegistered(Address),
     NotContentSubspace {
@@ -115,7 +113,7 @@ pub enum CompareError {
 /// registered and every region span well-formed; a malformed span is a typed
 /// rejection, never a silent under-resolution that drops containers
 /// (FD-COMPLETE).
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {
     DocNotRegistered(Address),
     MalformedSpan {

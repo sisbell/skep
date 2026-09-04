@@ -2,16 +2,22 @@
 //! derive policy (the marshaling seam M10 codes against).
 //!
 //! Every M6-owned request/result type here is a plain all-`pub`-field value
-//! deriving **`Clone + PartialEq + Eq + Serialize`** — and nothing more. No
-//! `Debug` on any type carrying `Address`/`Span`/`Val` (the declared policy;
-//! `Val` carries no `Debug` at all, so `DeliveryItem` could not derive it
-//! anyway). No `Deserialize` anywhere: M10 constructs requests through M1's
-//! validating front doors (`validate`, `Span::new`/`from_endpoints`), never
-//! by deserializing untrusted addresses. The two exceptions are
-//! [`CorrPair`]/[`CompareReport`]: they carry M5's `VPos`, which declares no
-//! serde or equality derives, so M6 declares none on them — they are
-//! move-only, destructure-only values M10 marshals **field-by-field** (every
-//! leaf still serializes individually, `VPos`'s `pub Nat` fields included).
+//! deriving **`Clone + Debug + PartialEq + Eq`**, plus `Serialize` wherever
+//! its leaves carry it. Each withheld derive is withheld for a reason its own
+//! leaf gives:
+//!
+//! * [`Delivery`]/[`DeliveryItem`] have no `Debug`, because M4's `Val` has
+//!   none: content blobs never render into logs, which is M4's decision and
+//!   rides through here.
+//! * [`CorrPair`]/[`CompareReport`] have no `Serialize`, because M5's `VPos`
+//!   has none. They are destructure-and-marshal values M10 writes out
+//!   **field-by-field** — every leaf serializes individually, `VPos`'s
+//!   `pub Nat` fields included.
+//! * NOTHING here derives `Deserialize`, and that one is M6's own decision
+//!   rather than a leaf's: M10 constructs requests through M1's validating
+//!   front doors (`validate`, `Span::new`/`from_endpoints`), so an untrusted
+//!   address reaches M6 only as a value some M1 constructor has already
+//!   admitted.
 
 use serde::Serialize;
 use skep_address::{Address, Nat, Span};
@@ -22,7 +28,7 @@ use skep_content::Val;
 /// single-span idiom (ASN-0115: the spec-set is the ORDERED `&[Spec]`;
 /// per-spec order is denotational, R5). The SET-shaped operations (COMPARE,
 /// FINDDOCSCONTAINING) use [`Region`] instead.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Spec {
     pub doc: Address,
     pub span: Span,
@@ -32,7 +38,7 @@ pub struct Spec {
 /// "(document, span-set)" idiom for the two SET-shaped operations: COMPARE
 /// (content only; the unordered set ASN-0122's `ρ` is) and FINDDOCSCONTAINING
 /// (FD-CONVEX wants multi-span). Both take `&[Region]`.
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Region {
     pub doc: Address,
     pub spans: Vec<Span>,
@@ -58,7 +64,7 @@ pub struct Delivery(pub Vec<DeliveryItem>);
 /// Tumbler-ordered set of I-addresses deleted-from-one document yet
 /// current-in-the-other — the existing I-addresses themselves (D-IDENT),
 /// never copies, T1-orderable (D-ORD).
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Deletions {
     /// Deleted from `d_a` ∧ current in `d_b`.
     pub a_with_b: Vec<Address>,
@@ -68,9 +74,9 @@ pub struct Deletions {
 
 /// One COMPARE correspondence (ASN-0122): the two feet resolve to one shared
 /// I-address run of `width` positions — slot 1 drawn from operand ρ₁, slot 2
-/// from ρ₂ (X12). NO DERIVES (deliberate, derive policy above): carries M5's
-/// `VPos`, whose as-given declaration names no equality/serde derives, so
-/// this is a move-only, destructure-only value M10 marshals field-by-field.
+/// from ρ₂ (X12). NOT `Serialize` (derive policy above): it carries M5's
+/// `VPos`, which is not, so M10 marshals this field-by-field.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CorrPair {
     pub d1: Address,
     pub u1: VPos,
@@ -81,5 +87,6 @@ pub struct CorrPair {
 
 /// COMPARE's result: the complete, sound correspondence relation in
 /// deterministic canonical order (ASN-0122 R1–R3; finer-than-maximal — X12 R4
-/// is not required). NO DERIVES — see [`CorrPair`].
+/// is not required). NOT `Serialize` — see [`CorrPair`].
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompareReport(pub Vec<CorrPair>);

@@ -17,9 +17,10 @@ num-traits.workspace = true
 # per-position loop compares against by reference.
 once_cell.workspace = true
 serde.workspace = true
-# M1 — origin projection (document_of), run-address arithmetic
-# (ElemPos/shift_ordinal/elem_addr/shift), gate primitives (action_point/zeros/
-# is_level_uniform/ordinal), span/span-set synthesis and membership.
+# M1 — origin projection (document_of), the subspace numerals
+# (content_subspace/link_subspace), gate primitives (action_point/zeros/
+# is_level_uniform/ordinal), V-extent arithmetic (shift), span/span-set
+# synthesis and membership.
 skep-address = { path = "../skep-address" }
 # M2 — the pinned Snapshot every query binds, and its Seq. M6 never writes:
 # no transact, no Kernel handle, no LockKey.
@@ -31,7 +32,8 @@ skep-namespace = { path = "../skep-namespace" }
 # containment/deletions never open it.
 skep-content = { path = "../skep-content" }
 # M5 — the workhorse: resolve/point/counts/runs/image/project/
-# docs_ever_containing/deletions, plus VPos (re-exported through M6's surface).
+# docs_ever_containing/deletions; Run, which answers for its own positions; and
+# VPos (re-exported through M6's surface).
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]

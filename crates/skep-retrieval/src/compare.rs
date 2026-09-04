@@ -6,11 +6,11 @@
 //! (X12 R3 determinism; R4 maximality NOT required — v1 ships the
 //! finer-than-maximal per-overlap report, fully conforming under R1–R3).
 
-use skep_address::{ordinal, shift, Address, Nat, Tumbler};
-use skep_arrangement::{M5State, VPos};
+use skep_address::{ordinal, Address, Nat, Tumbler};
+use skep_arrangement::{M5State, Run, VPos};
 
 use crate::error::{CompareError, Operand};
-use crate::helpers::{gate_vspec, require_registered, S_C};
+use crate::helpers::{gate_vspec, is_registered, S_C};
 use crate::types::{CompareReport, CorrPair, Region};
 use crate::{M6World, Query};
 
@@ -21,7 +21,7 @@ impl<'s, W: M6World> Query<'s, W> {
     /// opens M4), complete under fan-out (X8), in deterministic canonical
     /// order (X12 R3); in each pair, slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
     ///
-    /// Gate, per operand so a fault carries an unambiguous
+    /// Gate, per operand so a span fault carries an unambiguous
     /// `(operand, region, span-index)`: each region's doc registered; each
     /// span starting in the content subspace (`NotContentSubspace` — the
     /// residence check runs BEFORE the well-formedness gate) and well-formed
@@ -35,7 +35,7 @@ impl<'s, W: M6World> Query<'s, W> {
         let (m3, m5) = (w.m3(), w.m5());
         for (operand, regions) in [(Operand::First, rho1), (Operand::Second, rho2)] {
             for (ri, r) in regions.iter().enumerate() {
-                if !require_registered(m3, &r.doc) {
+                if !is_registered(m3, &r.doc) {
                     return Err(CompareError::DocNotRegistered(r.doc.clone()));
                 }
                 for (si, span) in r.spans.iter().enumerate() {
@@ -66,13 +66,39 @@ impl<'s, W: M6World> Query<'s, W> {
 }
 
 /// Transient per-query working row for COMPARE: built by [`resolve_blocks`],
-/// consumed by [`overlap_pair`]/[`interval_join`]/[`reach_i`]; dropped at
-/// return. One block per resolved I-run of one region span.
+/// consumed by [`overlap_pair`]/[`interval_join`]; dropped at return. One
+/// block per resolved I-run of one region span — the run as M5 handed it
+/// over, plus where the block's first position sits in its document's V-space.
 struct Block {
     doc: Address,
-    v_start: Tumbler,
-    i_start: Address,
-    width: Nat,
+    v_start: VPos,
+    run: Run,
+}
+
+impl Block {
+    /// One I-step past the block: the run's own exclusive reach, which is all
+    /// the half-open `lo < hi` compare needs. A `Tumbler` endpoint, because no
+    /// `Address` invariant is consumed by a comparison.
+    fn reach_i(&self) -> Tumbler {
+        self.run.tumbler_at(self.run.width())
+    }
+
+    /// The V-position of the I-address `i` WITHIN THIS BLOCK — `v_start`
+    /// advanced by `i`'s offset from the block's own I-start. Each foot of a
+    /// correspondence is computed by the block it comes from, so the
+    /// inter-block I-gap of a cross-document pair can never leak into the
+    /// other operand's V-coordinate (X12 R1 soundness: both feet must resolve
+    /// to the shared address).
+    ///
+    /// REQUIRES `i` inside this block's I-interval — the co-chain
+    /// precondition [`ordinal_gap`] states, discharged by [`overlap_pair`]'s
+    /// overlap guard before it asks.
+    fn vpos_at(&self, i: &Tumbler) -> VPos {
+        VPos {
+            subspace: self.v_start.subspace.clone(),
+            ordinal: &self.v_start.ordinal + &ordinal_gap(i, self.run.i_start().tumbler()),
+        }
+    }
 }
 
 /// Resolve every region span to its I-run blocks, reconstructing each run's
@@ -82,56 +108,55 @@ struct Block {
 /// under D-CTG★): content is gap-free, so the FIRST bound V-position of a
 /// content span IS `span.start()`, and `resolve`'s runs tile the bound prefix
 /// CONTIGUOUSLY in V. Hence the V-cursor starts at `span.start()` and
-/// advances by each run's width — there are no V-gaps to skip. A
-/// depth-incompatible (`#start ≥ 3`) content span resolves to ⟨⟩, so produces
-/// no blocks (empty region). The lemma is asserted on EVERY run — firing
-/// per run (not first-run-only) localizes a future M5 density regression to
-/// the EXACT mis-aligning run instead of letting a mid-document V-gap slip
-/// past a first-run check and silently mis-set a later block's `v_start`.
-/// (`vpos_of(&v)` is depth-2-safe each iteration — a run exists only for a
-/// depth-2 span.)
+/// advances by each run's width — there are no V-gaps to skip. The lemma is
+/// asserted on EVERY run — firing per run (not first-run-only) localizes a
+/// future M5 density regression to the EXACT mis-aligning run instead of
+/// letting a mid-document V-gap slip past a first-run check and silently
+/// mis-set a later block's `v_start`.
+///
+/// A start with no `[subspace, ordinal]` pair to read has no V-cursor and
+/// contributes no blocks — which is also what `resolve` says of it: a
+/// depth-incompatible (`#start ≥ 3`) content span resolves to ⟨⟩, an empty
+/// region.
 fn resolve_blocks(m5: &M5State, regions: &[Region]) -> Vec<Block> {
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
-            let mut v = span.start().clone();
+            let (Some(sub), Some(ord)) = (span.start().get(1), span.start().get(2)) else {
+                continue;
+            };
+            let mut v = VPos {
+                subspace: sub.clone(),
+                ordinal: ord.clone(),
+            };
             for run in m5.resolve(&r.doc, span) {
                 debug_assert!(
-                    m5.point(&r.doc, &vpos_of(&v)).as_ref() == Some(run.i_start()),
+                    m5.point(&r.doc, &v).as_ref() == Some(run.i_start()),
                     "D-CTG★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
+                // Accumulate the V offset by run width (no V-gaps in content).
+                let next = &v.ordinal + run.width();
                 out.push(Block {
                     doc: r.doc.clone(),
                     v_start: v.clone(),
-                    i_start: run.i_start().clone(),
-                    width: run.width().clone(),
+                    run,
                 });
-                v = shift(&v, run.width()); // accumulate V offset by run width (no V-gaps in content)
+                v.ordinal = next;
             }
         }
     }
     out
 }
 
-// ── COMPARE helpers — ALL operate on `Tumbler` (thread `.tumbler()` off any
-// `Address`) ──
+// ── COMPARE helpers ──
 //
-// CO-CHAIN PRECONDITION: `overlap_pair` calls `ordinal_gap` only AFTER the
-// `lo < hi` overlap guard, i.e. only on runs whose I-intervals overlap.
-// Overlapping content runs lie on ONE content chain (shared origin
-// sub-allocator ⇒ equal-length, equal prefix below the action point), so a
-// bare ordinal subtraction is a TOTAL `Nat` op — no borrow, no underflow.
-// Different-chain pairs have disjoint I-intervals and are rejected by the
-// guard before any ordinal arithmetic runs.
-
-/// `i_start ⊕ δ(width, #)`: one I-step past the run. The raw `shift` is SAFE
-/// here (i_start is element-level, so the last component is the ordinal —
-/// M1's TA7a safe window): a bare `Tumbler` endpoint is all the `lo < hi`
-/// compare needs — no `Address` invariant is consumed (cf. `run_addr`'s
-/// `ElemPos` round-trip, whose consumers ARE `Address`-typed).
-fn reach_i(b: &Block) -> Tumbler {
-    shift(b.i_start.tumbler(), &b.width)
-}
+// CO-CHAIN PRECONDITION: `overlap_pair` calls `ordinal_gap` — directly, and
+// through `Block::vpos_at` — only AFTER the `lo < hi` overlap guard, i.e.
+// only on runs whose I-intervals overlap. Overlapping content runs lie on ONE
+// content chain (shared origin sub-allocator ⇒ equal-length, equal prefix
+// below the action point), so a bare ordinal subtraction is a TOTAL `Nat` op
+// — no borrow, no underflow. Different-chain pairs have disjoint I-intervals
+// and are rejected by the guard before any ordinal arithmetic runs.
 
 /// Co-chain ⇒ `ordinal(hi) ≥ ordinal(lo)` — total under the precondition.
 fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
@@ -154,32 +179,12 @@ fn min_tumbler(a: &Tumbler, b: &Tumbler) -> Tumbler {
     }
 }
 
-/// Depth-2 V-position tumbler → `VPos`.
-fn vpos_of(t: &Tumbler) -> VPos {
-    VPos {
-        subspace: t.get(1).expect("gate_vspec ⇒ #t == 2").clone(),
-        ordinal: t.get(2).expect("gate_vspec ⇒ #t == 2").clone(),
-    }
-}
-
-/// Advance a depth-2 V-position's ordinal by `k`.
-fn vpos_shift(v: &Tumbler, k: &Nat) -> VPos {
-    VPos {
-        subspace: v.get(1).expect("gate_vspec ⇒ #v == 2").clone(),
-        ordinal: v.get(2).expect("gate_vspec ⇒ #v == 2").clone() + k,
-    }
-}
-
 /// One correspondence per I-overlap of two blocks, or `None` when the
-/// I-intervals are disjoint. THE SECOND FOOT IS COMPUTED WITHIN ITS OWN
-/// BLOCK: `u2` offsets `qb.v_start` by `lo ⊖ qb.i_start` (lo's position
-/// inside the Q-block), not `lo ⊖ pb.i_start` — in the normal cross-document
-/// case `lo` is one operand's start, so the inter-block gap would otherwise
-/// shift `u2` and make `res_Σ(d2, u2) ≠ a`, violating X12 R1 (soundness).
-/// With the per-block offset, both feet resolve to the shared address `lo`.
+/// I-intervals are disjoint. Each foot is asked of the block it belongs to
+/// ([`Block::vpos_at`]), so both resolve to the shared address `lo`.
 fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
-    let lo = max_tumbler(pb.i_start.tumbler(), qb.i_start.tumbler());
-    let hi = min_tumbler(&reach_i(pb), &reach_i(qb));
+    let lo = max_tumbler(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
+    let hi = min_tumbler(&pb.reach_i(), &qb.reach_i());
     if lo >= hi {
         return None; // disjoint I-intervals ⇒ no correspondence
     }
@@ -187,9 +192,9 @@ fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
     // below is total.
     Some(CorrPair {
         d1: pb.doc.clone(),
-        u1: vpos_shift(&pb.v_start, &ordinal_gap(&lo, pb.i_start.tumbler())), // slot 1 ⇐ operand 1
+        u1: pb.vpos_at(&lo), // slot 1 ⇐ operand 1
         d2: qb.doc.clone(),
-        u2: vpos_shift(&qb.v_start, &ordinal_gap(&lo, qb.i_start.tumbler())), // slot 2 ⇐ operand 2
+        u2: qb.vpos_at(&lo), // slot 2 ⇐ operand 2
         width: ordinal_gap(&hi, &lo),
     })
 }
@@ -274,21 +279,34 @@ mod tests {
         a(&[1, 0, 1, 0, 1, 0, 1, k])
     }
 
+    fn vp(subspace: u32, ordinal: u32) -> VPos {
+        VPos {
+            subspace: n(subspace),
+            ordinal: n(ordinal),
+        }
+    }
+
     fn block(doc: &[u32], v_ord: u32, i_start: Address, width: u32) -> Block {
         Block {
             doc: a(doc),
-            v_start: t(&[1, v_ord]),
-            i_start,
-            width: n(width),
+            v_start: vp(1, v_ord),
+            run: Run::new(i_start, n(width)).expect("test runs are well-formed"),
         }
     }
 
     #[test]
     fn overlap_pair_computes_each_foot_within_its_own_block() {
-        // X12 R1: u2 offsets qb.v_start by lo ⊖ qb.i_start — NOT by lo ⊖
-        // pb.i_start — so both feet resolve to the shared address lo.
+        // X12 R1: a block answers for its own V-coordinates, so each foot is
+        // offset within the block it comes from and both resolve to the
+        // shared address lo.
         let pb = block(&[1, 0, 1, 0, 1], 1, ca(1), 3); // [ca1, ca4) at V 1..
         let qb = block(&[1, 0, 1, 0, 2], 1, ca(2), 1); // [ca2, ca3) at V 1..
+        // The same I-address is a different V-position in each block…
+        assert_eq!(pb.vpos_at(ca(2).tumbler()), vp(1, 2));
+        assert_eq!(qb.vpos_at(ca(2).tumbler()), vp(1, 1));
+        // …and each block's reach is one I-step past its own last position.
+        assert_eq!(pb.reach_i(), *ca(4).tumbler());
+        assert_eq!(qb.reach_i(), *ca(3).tumbler());
         let c = overlap_pair(&pb, &qb).expect("overlapping I-intervals correspond");
         assert_eq!(c.d1, a(&[1, 0, 1, 0, 1]));
         assert_eq!(c.u1.subspace, n(1));
@@ -322,9 +340,9 @@ mod tests {
         // fold is the identity (finer-than-maximal conforms, R4 optional).
         let mk = |u2_ord: u32| CorrPair {
             d1: a(&[1, 0, 1, 0, 1]),
-            u1: vpos_of(&t(&[1, 1])),
+            u1: vp(1, 1),
             d2: a(&[1, 0, 1, 0, 2]),
-            u2: vpos_of(&t(&[1, u2_ord])),
+            u2: vp(1, u2_ord),
             width: n(1),
         };
         let got = canonicalize(vec![mk(2), mk(1)]);

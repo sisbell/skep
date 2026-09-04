@@ -1,37 +1,38 @@
-//! §Internal design — the shared helpers every operation composes: the
-//! registry gate, the VSpec well-formedness gate, run-address enumeration,
-//! Tumbler-keyed dedup-and-sort, and the CURRENT(·, d) content enumeration.
+//! §Internal design — what every operation shares: the request gate (the
+//! registry check, the VSpec well-formedness gate, and the subspace numerals
+//! both read), answer presentation (Tumbler-keyed dedup-and-sort), and the
+//! D-CTG★ occupancy tripwire the extent queries stand on.
 
 use std::collections::HashSet;
 
 use num_traits::{One, Zero};
 use once_cell::sync::Lazy;
 use skep_address::{
-    action_point, document_of, elem_addr, ordinal, shift_ordinal, zeros, Address, ElemPos, Nat,
-    Span, Tumbler,
+    action_point, content_subspace, link_subspace, zeros, Address, Nat, Span, Tumbler,
 };
 use skep_arrangement::{M5State, VPos};
 use skep_namespace::M3State;
 
 use crate::error::SpecFault;
 
-// Content (s_C = 1) / link (s_L = 2) subspace constants (ASN-0047).
-// `Nat = BigUint` cannot be `const`, so each is memoized ONCE via
-// `once_cell::sync::Lazy` instead of re-allocating a fresh `BigUint` on every
-// reference. The hot per-position loop (`retrieve_v`) only COMPARES against
-// them — `*sub == *S_C` is a by-reference compare with no allocation — while
-// the O(1)-per-query construction sites clone via `(*S_C).clone()`.
+// Content (s_C) / link (s_L) subspace numerals. M1 owns T7 and names them
+// ([`content_subspace`]/[`link_subspace`]); M6 memoizes what M1 names, because
+// `Nat = BigUint` cannot be `const` and a bare call would re-allocate a fresh
+// `BigUint` on every reference. The hot per-position loop (`retrieve_v`) only
+// COMPARES against them — `*sub == *S_C` is a by-reference compare with no
+// allocation — while the O(1)-per-query construction sites clone via
+// `(*S_C).clone()`.
 
-/// `s_C` = 1 — the content-subspace numeral (ASN-0047; M1's T7 convention).
-pub(crate) static S_C: Lazy<Nat> = Lazy::new(|| Nat::from(1u8));
+/// `s_C` = M1's content-subspace numeral (ASN-0047; T7 convention).
+pub(crate) static S_C: Lazy<Nat> = Lazy::new(content_subspace);
 
-/// `s_L` = 2 — the link-subspace numeral (ASN-0047; M1's T7 convention).
-pub(crate) static S_L: Lazy<Nat> = Lazy::new(|| Nat::from(2u8));
+/// `s_L` = M1's link-subspace numeral (ASN-0047; T7 convention).
+pub(crate) static S_L: Lazy<Nat> = Lazy::new(link_subspace);
 
 /// The universal allocation gate: M3 supplies the bool; converting
 /// registered-but-empty → the op's empty form and unregistered → the op's
 /// typed failure is M6's owned distinction (decomposition; W-pre 0112/0113).
-pub(crate) fn require_registered(m3: &M3State, d: &Address) -> bool {
+pub(crate) fn is_registered(m3: &M3State, d: &Address) -> bool {
     m3.is_registered_document(d)
 }
 
@@ -56,46 +57,6 @@ pub(crate) fn gate_vspec(span: &Span) -> Result<(), SpecFault> {
         return Err(SpecFault::StartTooShallow); // ASN-0115 WF: #start ≥ 2
     }
     Ok(())
-}
-
-/// k-th address of a run. LOAD-BEARING ASSUMPTION (used directly here by
-/// RETRIEVEV and SHOWDELETIONS, and mirrored by the element-level I-address
-/// arithmetic in SHOWORIGIN_V and COMPARE): every content/link I-address has
-/// a 2-COMPONENT element field `[subspace, ordinal]` (zeros = 3), as M3 mints
-/// them. `ElemPos` models exactly that 2-component field, so reconstructing
-/// i_start as `ElemPos { doc, subspace, ordinal }` and advancing the ordinal
-/// is faithful and dodges the raw-shift subspace-crossing footgun (M1 TA7a)
-/// — but a LONGER element field would be silently truncated here, so a debug
-/// tripwire fails loudly if one ever arrives (M3 makes it unreachable — a
-/// guard, not a path).
-///
-/// WHY THE ElemPos ROUND-TRIP, NOT A RAW `shift`: `run_addr` returns a
-/// validated **`Address`** (not the bare `Tumbler` a raw `shift` would give)
-/// because two of its consumers are `Address`-typed and cannot take a
-/// `Tumbler` — `DeliveryItem::Ref(Address)` (RETRIEVEV link references) and
-/// [`dedup_addrs`] (SHOWDELETIONS); the others (`value_at`/`denotes`) read
-/// `.tumbler()`, but the `Ref`/dedup paths fix the return type. Do NOT
-/// "simplify" this to a raw shift. COMPARE's `reach_i` *does* raw-`shift` an
-/// identical element-level i_start — deliberately — because it needs only a
-/// `Tumbler` endpoint for the half-open I-interval compare, where no
-/// `Address` invariant is consumed. Same i_start shape, two different lifts,
-/// because the consumers differ.
-pub(crate) fn run_addr(i_start: &Address, k: &Nat) -> Address {
-    debug_assert!(
-        i_start.element_field().is_some_and(|e| e.len() == 2),
-        "run_addr: I-address must carry a 2-component element field [subspace, ordinal] \
-         (else silent truncation)"
-    );
-    let p = ElemPos {
-        doc: document_of(i_start).expect("an element-level I-address has a Document prefix"),
-        subspace: i_start
-            .subspace()
-            .expect("an element-level I-address has a subspace component")
-            .clone(),
-        ordinal: ordinal(i_start.tumbler()).clone(),
-    };
-    elem_addr(shift_ordinal(p, k))
-        .expect("ordinal-shifting a valid element position stays T4-valid")
 }
 
 /// Dedup a stream of addresses by their `Tumbler` and return them T1-sorted
@@ -146,24 +107,6 @@ pub(crate) fn debug_assert_dense_occupancy(m5: &M5State, doc: &Address) {
     }
 }
 
-/// CURRENT(·, d) on the content side — every content I-address d's
-/// arrangement currently binds (the math `content_image(d)`, realized in M6
-/// by enumerating M5's V-ordered content runs per-position, exactly as
-/// RETRIEVEV does; M5's own `content_image` is private and is NOT called
-/// here). May repeat an address under intra-doc transclusion — callers dedup.
-pub(crate) fn arranged_content(m5: &M5State, d: &Address) -> Vec<Address> {
-    let mut out = Vec::new();
-    let one = Nat::one();
-    for run in m5.content_runs(d) {
-        let mut k = Nat::zero();
-        while &k < run.width() {
-            out.push(run_addr(run.i_start(), &k));
-            k = &k + &one;
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +122,14 @@ mod tests {
 
     fn span(start: &[u32], width: &[u32]) -> Span {
         Span::new(t(start), t(width)).expect("test spans are T12-valid")
+    }
+
+    #[test]
+    fn the_subspace_numerals_are_m1s() {
+        // M1 owns T7, so the numeral that decides content-from-link is read
+        // from M1 and memoized here, never restated.
+        assert_eq!(*S_C, content_subspace());
+        assert_eq!(*S_L, link_subspace());
     }
 
     #[test]
@@ -215,17 +166,6 @@ mod tests {
             gate_vspec(&span(&[5], &[1])),
             Err(SpecFault::StartTooShallow)
         );
-    }
-
-    #[test]
-    fn run_addr_advances_the_ordinal_only() {
-        // The k-th address of a run keeps doc & subspace, bumps the ordinal —
-        // never the raw-shift subspace-crossing form (M1 TA7a).
-        let ca1 = a(&[1, 0, 1, 0, 1, 0, 1, 1]);
-        assert_eq!(run_addr(&ca1, &Nat::from(0u8)), ca1);
-        assert_eq!(run_addr(&ca1, &Nat::from(2u8)), a(&[1, 0, 1, 0, 1, 0, 1, 3]));
-        let la1 = a(&[1, 0, 1, 0, 1, 0, 2, 1]);
-        assert_eq!(run_addr(&la1, &Nat::from(1u8)), a(&[1, 0, 1, 0, 1, 0, 2, 2]));
     }
 
     #[test]

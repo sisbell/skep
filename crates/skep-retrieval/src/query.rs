@@ -5,11 +5,11 @@
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, shift, union, Address, Nat, Span, SpanSet, Tumbler};
+use skep_arrangement::{M5State, Run};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::helpers::{
-    arranged_content, debug_assert_dense_occupancy, dedup_addrs, gate_vspec, require_registered,
-    run_addr, S_C, S_L,
+    debug_assert_dense_occupancy, dedup_addrs, gate_vspec, is_registered, S_C, S_L,
 };
 use crate::types::{Deletions, Delivery, DeliveryItem, Region, Spec};
 use crate::{M6World, Query};
@@ -27,6 +27,15 @@ fn ext_span(s: Nat, n: &Nat) -> Span {
         Tumbler::new([Nat::zero(), n.clone()]).expect("a two-component sequence is nonempty"),
     )
     .expect("n_S ≥ 1 makes the ordinal-level depth-2 extent T12-valid")
+}
+
+/// CURRENT(·, d) on the content side — every content I-address d's
+/// arrangement currently binds (the math `content_image(d)`; M5's own
+/// `content_image` is private and is NOT called here). May repeat an address
+/// under intra-doc transclusion — callers dedup.
+fn arranged_content(m5: &M5State, d: &Address) -> Vec<Address> {
+    let runs = m5.content_runs(d);
+    runs.iter().flat_map(Run::addrs).collect()
 }
 
 impl<'s, W: M6World> Query<'s, W> {
@@ -49,12 +58,11 @@ impl<'s, W: M6World> Query<'s, W> {
         // in-model failure (ASN-0115). A well-formed but depth-incompatible
         // (#start ≥ 3) spec is NOT rejected here (R6).
         for (i, s) in specs.iter().enumerate() {
-            if !require_registered(m3, &s.doc) {
+            if !is_registered(m3, &s.doc) {
                 return Err(RetrieveError::DocNotRegistered(s.doc.clone()));
             }
             gate_vspec(&s.span).map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
         }
-        let one = Nat::one();
         let mut out = Vec::new();
         for s in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. The gate
@@ -62,10 +70,9 @@ impl<'s, W: M6World> Query<'s, W> {
             // at any depth (1 = content, 2 = link).
             let sub = s.span.start().get(1).expect("the gate ⇒ #start ≥ 2");
             for run in m5.resolve(&s.doc, &s.span) {
-                // Per active position, ascending V (R3) — no dedup (R8).
-                let mut k = Nat::zero();
-                while &k < run.width() {
-                    let a = run_addr(run.i_start(), &k);
+                // Per active position, ascending V (R3) — no dedup (R8); the
+                // run answers for its own positions.
+                for a in run.addrs() {
                     if *sub == *S_C {
                         out.push(DeliveryItem::Content(
                             c.value_at(a.tumbler())
@@ -88,7 +95,6 @@ impl<'s, W: M6World> Query<'s, W> {
                             "active V-position must be content or link subspace (S3★-aux)"
                         );
                     }
-                    k = &k + &one;
                 }
             }
         }
@@ -111,7 +117,7 @@ impl<'s, W: M6World> Query<'s, W> {
     pub fn doc_vspan(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        if !require_registered(m3, doc) {
+        if !is_registered(m3, doc) {
             return Err(ExtentError::DocNotRegistered); // unallocated ⇒ fail
         }
         debug_assert_dense_occupancy(m5, doc);
@@ -156,7 +162,7 @@ impl<'s, W: M6World> Query<'s, W> {
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        if !require_registered(m3, doc) {
+        if !is_registered(m3, doc) {
             return Err(ExtentError::DocNotRegistered);
         }
         debug_assert_dense_occupancy(m5, doc);
@@ -194,7 +200,7 @@ impl<'s, W: M6World> Query<'s, W> {
     pub fn show_origin_v(&self, doc: &Address, span: &Span) -> Result<Vec<Address>, OriginError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        if !require_registered(m3, doc) {
+        if !is_registered(m3, doc) {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspec(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
@@ -233,9 +239,9 @@ impl<'s, W: M6World> Query<'s, W> {
     /// SHOWDELETIONS (ASN-0075) — gate, then membership-test the
     /// cross-document combine IN M6 from M5's per-document primitives:
     /// `a_with_b = { a ∈ content_image(d_b) : DELETED(a, d_a) }` and its
-    /// symmetric twin. CURRENT(·, d) is enumerated exactly as RETRIEVEV
-    /// enumerates content (the `arranged_content` helper); DELETED(·, d) is
-    /// tested by membership in M5's per-document deleted cover
+    /// symmetric twin. CURRENT(·, d) is `arranged_content`, which asks each
+    /// content run for its addresses exactly as RETRIEVEV does; DELETED(·, d)
+    /// is tested by membership in M5's per-document deleted cover
     /// (`deletions(d).denotes(a)`) — exact *unconditionally* by
     /// `difference_sets`' denotational contract
     /// (`⟦deletions(d)⟧ = {x : DELETED(x, d)}` whatever the cover's internal
@@ -255,7 +261,7 @@ impl<'s, W: M6World> Query<'s, W> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         for d in [d_a, d_b] {
-            if !require_registered(m3, d) {
+            if !is_registered(m3, d) {
                 return Err(DeletionsError::DocNotRegistered(d.clone()));
             }
         }
@@ -301,13 +307,20 @@ impl<'s, W: M6World> Query<'s, W> {
     /// exact because no algebra result carries a zero-width member (zero
     /// members ⇔ empty denotation), the predicate the design's M1-seam ask
     /// named (landed in the built M1).
+    ///
+    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT. The candidate scan is
+    /// `|coverage|` — the union of the region images, itself unbounded in the
+    /// spans a caller may name — against the whole of M5's R⁻¹ index, and the
+    /// filter runs one `project` per candidate. M6 owns no admission control
+    /// and no refusal for it: capping request size, rate and concurrency for a
+    /// route carrying this read is M10's, as the request lifecycle's owner.
     pub fn find_docs_containing(&self, regions: &[Region]) -> Result<Vec<Address>, FindError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        // Phase 1: gate and resolve to content I-coverage.
-        let mut coverage = SpanSet::empty();
+        // The gate first, over the WHOLE request — the first fault wins, and
+        // no upstream work is done for a request that will be rejected.
         for (ri, r) in regions.iter().enumerate() {
-            if !require_registered(m3, &r.doc) {
+            if !is_registered(m3, &r.doc) {
                 return Err(FindError::DocNotRegistered(r.doc.clone()));
             }
             for (si, span) in r.spans.iter().enumerate() {
@@ -316,7 +329,13 @@ impl<'s, W: M6World> Query<'s, W> {
                     index: si,
                     fault: f,
                 })?;
-                // Raw mixed-length cover; union is concatenation.
+            }
+        }
+        // Phase 1: resolve to content I-coverage. Raw mixed-length cover;
+        // union is concatenation.
+        let mut coverage = SpanSet::empty();
+        for r in regions {
+            for span in &r.spans {
                 coverage = union(&coverage, &m5.image(&r.doc, span));
             }
         }

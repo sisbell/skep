@@ -625,10 +625,10 @@ mod tests {
         rendered.split(['(', ' ', '{']).next().unwrap_or_default().to_string()
     }
 
-    /// The §5 rule for one flat variant whose name the CALLER spells, because
-    /// M6's enums withhold `Debug` by upstream derive policy (they carry
-    /// `Address`): it lowers to the leaf of that name. Everywhere else
-    /// [`same_name`] reads the name off the variant instead.
+    /// The §5 rule against a name the caller supplies: the variant lowers to
+    /// the leaf of that name. [`same_name`] and [`deviates`] are the two ways
+    /// that name is obtained — off the variant's own `Debug`, or from the
+    /// deviation list.
     fn same_name_spelled<E: Lower>(name: &str, e: E) {
         let (code, _) = e.lower();
         assert_eq!(
@@ -775,41 +775,40 @@ mod tests {
         same_name(EditLinkError::IllFormedSuccessor);
         same_name(EditLinkError::DcViolation);
 
-        // ── M6 (retrieval) — names spelled: these enums withhold `Debug` ──
-        same_name_spelled("DocNotRegistered", RetrieveError::DocNotRegistered(doc()));
+        // ── M6 (retrieval) ──
+        same_name(RetrieveError::DocNotRegistered(doc()));
         // `MalformedSpan` covers RETRIEVEV's differently-named fault (§5).
         deviates(
             "MalformedSpec",
             RetrieveError::MalformedSpec { index: 0, fault: SpecFault::NotOrdinalLevel },
             RejectCode::MalformedSpan,
         );
-        same_name_spelled("DocNotRegistered", ExtentError::DocNotRegistered);
-        same_name_spelled("DocNotRegistered", OriginError::DocNotRegistered);
-        same_name_spelled("NoSuchSubspace", OriginError::NoSuchSubspace);
-        same_name_spelled("EmptySubspace", OriginError::EmptySubspace);
-        same_name_spelled("DepthIncompatible", OriginError::DepthIncompatible);
-        same_name_spelled("RangeNotPresent", OriginError::RangeNotPresent);
-        same_name_spelled("MalformedSpan", OriginError::MalformedSpan(SpecFault::NotLevelUniform));
-        same_name_spelled("DocNotRegistered", DeletionsError::DocNotRegistered(doc()));
-        same_name_spelled("DocNotRegistered", CompareError::DocNotRegistered(doc()));
-        same_name_spelled(
-            "NotContentSubspace",
-            CompareError::NotContentSubspace { operand: Operand::First, region: 0, index: 0 },
-        );
-        same_name_spelled(
-            "MalformedSpan",
-            CompareError::MalformedSpan {
-                operand: Operand::First,
-                region: 0,
-                index: 0,
-                fault: SpecFault::StartNotZeroFree,
-            },
-        );
-        same_name_spelled("DocNotRegistered", FindError::DocNotRegistered(doc()));
-        same_name_spelled(
-            "MalformedSpan",
-            FindError::MalformedSpan { region: 0, index: 0, fault: SpecFault::StartTooShallow },
-        );
+        same_name(ExtentError::DocNotRegistered);
+        same_name(OriginError::DocNotRegistered);
+        same_name(OriginError::NoSuchSubspace);
+        same_name(OriginError::EmptySubspace);
+        same_name(OriginError::DepthIncompatible);
+        same_name(OriginError::RangeNotPresent);
+        same_name(OriginError::MalformedSpan(SpecFault::NotLevelUniform));
+        same_name(DeletionsError::DocNotRegistered(doc()));
+        same_name(CompareError::DocNotRegistered(doc()));
+        same_name(CompareError::NotContentSubspace {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+        });
+        same_name(CompareError::MalformedSpan {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+            fault: SpecFault::StartNotZeroFree,
+        });
+        same_name(FindError::DocNotRegistered(doc()));
+        same_name(FindError::MalformedSpan {
+            region: 0,
+            index: 0,
+            fault: SpecFault::StartTooShallow,
+        });
 
         // ── M8 (discovery) ──
         same_name(QueryError::DocNotRegistered);

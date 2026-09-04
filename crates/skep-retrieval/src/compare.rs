@@ -10,7 +10,7 @@ use skep_address::{ordinal, Address, Nat, Tumbler};
 use skep_arrangement::{M5State, Run, VPos};
 
 use crate::error::{CompareError, Operand};
-use crate::helpers::{gate_vspec, is_registered, S_C};
+use crate::helpers::{gate_vspec, S_C};
 use crate::types::{CompareReport, CorrPair, Region};
 use crate::{M6World, Query};
 
@@ -35,7 +35,7 @@ impl<'s, W: M6World> Query<'s, W> {
         let (m3, m5) = (w.m3(), w.m5());
         for (operand, regions) in [(Operand::First, rho1), (Operand::Second, rho2)] {
             for (ri, r) in regions.iter().enumerate() {
-                if !is_registered(m3, &r.doc) {
+                if !m3.is_registered_document(&r.doc) {
                     return Err(CompareError::DocNotRegistered(r.doc.clone()));
                 }
                 for (si, span) in r.spans.iter().enumerate() {
@@ -114,9 +114,18 @@ impl Block {
 /// letting a mid-document V-gap slip past a first-run check and silently
 /// mis-set a later block's `v_start`.
 ///
-/// A start with no `[subspace, ordinal]` pair to read has no V-cursor and
-/// contributes no blocks — which is also what `resolve` says of it: a
-/// depth-incompatible (`#start ≥ 3`) content span resolves to ⟨⟩, an empty
+/// REQUIRES GATED REGIONS: every span content-subspace-started and
+/// `gate_vspec`-clean, which [`Query::compare`]'s gate establishes before it
+/// calls. Two things ride on that gate. The lemma above is the CONTENT
+/// subspace's — gap-freedom is a property of content, not of every subspace —
+/// so a link-started span would read a V-cursor the lemma says nothing about.
+/// And `#start ≥ 2` puts both `[subspace, ordinal]` components at every start,
+/// so the let-else is the total form of a fact the caller has already settled,
+/// not a case that arises.
+///
+/// A depth-incompatible (`#start ≥ 3`) span reads its cursor here like any
+/// other and still contributes no blocks — `resolve`'s own shape reader
+/// refuses it and hands back no runs, so the span resolves to ⟨⟩, an empty
 /// region.
 fn resolve_blocks(m5: &M5State, regions: &[Region]) -> Vec<Block> {
     let mut out = Vec::new();

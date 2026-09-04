@@ -15,6 +15,16 @@
 //! One thing well: *observe documents over a single pinned snapshot —
 //! resolve, fetch, project, classify, compose — never mutate.*
 //!
+//! ## The distinction every operation opens with
+//!
+//! M3's `is_registered_document` answers one bool, and M6 reads two answers
+//! out of it: a REGISTERED-but-empty document is an ordinary success that
+//! contributes the operation's empty form (`⟨⟩`, an empty delivery, an empty
+//! half), while an UNALLOCATED one is that operation's typed `*NotRegistered`
+//! failure (W-pre 0112/0113). Which of the two a given document is belongs to
+//! M3; which of the two answers M6 gives back is M6's own, and it is the first
+//! thing each of the seven operations decides.
+//!
 //! ## No state, no fold
 //!
 //! M6 owns **no authoritative and no derived-authoritative state**: no

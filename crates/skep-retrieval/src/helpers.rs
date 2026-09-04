@@ -1,7 +1,7 @@
-//! §Internal design — what every operation shares: the request gate (the
-//! registry check, the VSpec well-formedness gate, and the subspace numerals
-//! both read), answer presentation (Tumbler-keyed dedup-and-sort), and the
-//! D-CTG★ occupancy tripwire the extent queries stand on.
+//! §Internal design — what every operation shares: the VSpec well-formedness
+//! gate and the subspace numerals it and the operations both read, answer
+//! presentation (Tumbler-keyed dedup-and-sort), and the D-CTG★ occupancy
+//! tripwire the extent queries stand on.
 
 use std::collections::HashSet;
 
@@ -11,7 +11,6 @@ use skep_address::{
     action_point, content_subspace, link_subspace, zeros, Address, Nat, Span, Tumbler,
 };
 use skep_arrangement::{M5State, VPos};
-use skep_namespace::M3State;
 
 use crate::error::SpecFault;
 
@@ -28,13 +27,6 @@ pub(crate) static S_C: Lazy<Nat> = Lazy::new(content_subspace);
 
 /// `s_L` = M1's link-subspace numeral (ASN-0047; T7 convention).
 pub(crate) static S_L: Lazy<Nat> = Lazy::new(link_subspace);
-
-/// The universal allocation gate: M3 supplies the bool; converting
-/// registered-but-empty → the op's empty form and unregistered → the op's
-/// typed failure is M6's owned distinction (decomposition; W-pre 0112/0113).
-pub(crate) fn is_registered(m3: &M3State, d: &Address) -> bool {
-    m3.is_registered_document(d)
-}
 
 /// VSpec WELL-FORMEDNESS only (ASN-0115): zero-free, ordinal-level,
 /// level-uniform, depth `#start ≥ 2`. It deliberately does NOT gate

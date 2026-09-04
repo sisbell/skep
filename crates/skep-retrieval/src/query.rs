@@ -4,29 +4,33 @@
 //! primitives.
 
 use num_traits::{One, Zero};
-use skep_address::{document_of, ordinal, shift, union, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{M5State, Run};
+use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
+use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
-use crate::helpers::{
-    debug_assert_dense_occupancy, dedup_addrs, gate_vspec, is_registered, S_C, S_L,
-};
+use crate::helpers::{debug_assert_dense_occupancy, dedup_addrs, gate_vspec, S_C, S_L};
 use crate::types::{Deletions, Delivery, DeliveryItem, Region, Spec};
 use crate::{M6World, Query};
 
-/// A depth-2 V-position tumbler `[subspace, ordinal]`.
-fn vpos(s: Nat, n: &Nat) -> Tumbler {
-    Tumbler::new([s, n.clone()]).expect("a two-component sequence is nonempty")
-}
-
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
-/// (ASN-0113 W2/W4: a count fixes an extent under dense occupancy).
+/// (ASN-0113 W2/W4: a count fixes an extent under dense occupancy). The anchor
+/// is written ONCE, here, as the subspace origin `[S, 1]` — never absorbed
+/// into a confluent summary, which is how the negative-origin hazard (0112
+/// OQ5) is designed out.
+///
+/// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
+/// `resolve` READS: the constructor and the recognizer every request span is
+/// folded through are the two halves of one definition and cannot come apart.
+/// `None` iff `n_S == 0`, which both call sites have already excluded.
 fn ext_span(s: Nat, n: &Nat) -> Span {
-    Span::new(
-        Tumbler::new([s, Nat::one()]).expect("a two-component sequence is nonempty"),
-        Tumbler::new([Nat::zero(), n.clone()]).expect("a two-component sequence is nonempty"),
+    ordinal_vspan(
+        &VPos {
+            subspace: s,
+            ordinal: Nat::one(),
+        },
+        n,
     )
-    .expect("n_S ≥ 1 makes the ordinal-level depth-2 extent T12-valid")
+    .expect("n_S ≥ 1 ⇒ a nonempty extent")
 }
 
 /// CURRENT(·, d) on the content side — every content I-address d's
@@ -58,7 +62,7 @@ impl<'s, W: M6World> Query<'s, W> {
         // in-model failure (ASN-0115). A well-formed but depth-incompatible
         // (#start ≥ 3) spec is NOT rejected here (R6).
         for (i, s) in specs.iter().enumerate() {
-            if !is_registered(m3, &s.doc) {
+            if !m3.is_registered_document(&s.doc) {
                 return Err(RetrieveError::DocNotRegistered(s.doc.clone()));
             }
             gate_vspec(&s.span).map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
@@ -107,63 +111,47 @@ impl<'s, W: M6World> Query<'s, W> {
     /// inter-subspace void, insensitive to mid-document content edits (V9) —
     /// by design (route fragmentation-sensitive callers to `doc_vspanset`).
     ///
-    /// Synthesized from M5's O(1) `content_count`/`link_count`: the counts
-    /// ARE the extents because each subspace's occupied V-positions form the
-    /// dense, origin-anchored run `[S, 1..n_S]` (D-CTG★ — the dense-slice
-    /// occupancy ASN-0113 W4 proves; M5's write-path property, trusted here).
-    /// `min` is read as the subspace anchor `[s, 1]`, never absorbed into a
-    /// confluent summary — the negative-origin hazard (0112 OQ5) is designed
-    /// out.
+    /// σ_d IS the hull of the per-subspace extents, so it is taken from
+    /// [`Query::doc_vspanset`] rather than derived a second time: the registry
+    /// gate, the D-CTG★ trust and the count-read all happen once, in one
+    /// place. Those extents are W13-normalized, so the FIRST member's start is
+    /// the anchor `[s, 1]` of the lowest occupied subspace and the LAST
+    /// member's reach is one ordinal step past the highest occupied position.
+    ///
+    /// `from_endpoints` is INFALLIBLE on that pair: both endpoints are depth-2
+    /// (no `LevelMismatch`) and `min.start ≤ max.start < max.reach` (no
+    /// `NotIncreasing`); the stored width `reach ⊖ min` round-trips exactly —
+    /// `divergence(min, reach) ≤ #min` discharges D1, INCLUDING the
+    /// cross-subspace box — so the singleton is faithfully ASN-0112's
+    /// `σ_d = (origin_d, extent_d)`.
     pub fn doc_vspan(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
-        let w = self.0.world();
-        let (m3, m5) = (w.m3(), w.m5());
-        if !is_registered(m3, doc) {
-            return Err(ExtentError::DocNotRegistered); // unallocated ⇒ fail
-        }
-        debug_assert_dense_occupancy(m5, doc);
-        let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
-        if nc.is_zero() && nl.is_zero() {
+        let extents = self.doc_vspanset(doc)?;
+        let (Some(min), Some(max)) = (extents.iter().next(), extents.iter().last()) else {
             return Ok(SpanSet::empty()); // registered-empty ⇒ ⟨⟩
-        }
-        // min O(d): the anchor [s, 1] of the lowest occupied subspace.
-        let min = vpos(
-            if !nc.is_zero() {
-                (*S_C).clone()
-            } else {
-                (*S_L).clone()
-            },
-            &Nat::one(),
-        );
-        let max = vpos(
-            if !nl.is_zero() {
-                (*S_L).clone()
-            } else {
-                (*S_C).clone()
-            },
-            if !nl.is_zero() { &nl } else { &nc },
-        );
-        let reach = shift(&max, &Nat::one()); // one ordinal step past max
-        // from_endpoints is INFALLIBLE here: #min == #reach == 2 (no
-        // LevelMismatch) and min ≤ max < reach (no NotIncreasing); the stored
-        // width reach ⊖ min round-trips exactly — divergence(min, reach) ≤
-        // #min discharges D1, INCLUDING the cross-subspace box — so the
-        // singleton is faithfully ASN-0112's σ_d = (origin_d, extent_d).
+        };
         Ok(SpanSet::singleton(
-            Span::from_endpoints(min, &reach).expect("min < reach at one depth-2 length"),
+            Span::from_endpoints(min.start().clone(), &max.reach())
+                .expect("min.start < max.reach at one depth-2 length"),
         ))
     }
 
     /// RETRIEVEDOCVSPANSET (ASN-0113) — per-subspace exact extents: ≤2
     /// members (content, then link), already W13-normalized; `⟨⟩` for an
-    /// allocated-empty document; unallocated ⇒ Err. Same count-read core as
-    /// `doc_vspan` (D-CTG★), built by `union` of singletons — concatenation
-    /// preserves the already-disjoint, content-before-link normal form
-    /// (asserted in debug); no invented M1 constructor.
+    /// allocated-empty document; unallocated ⇒ Err.
+    ///
+    /// The count-read core of both extent queries. M5's O(1)
+    /// `content_count`/`link_count` ARE the extents, because each subspace's
+    /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
+    /// (D-CTG★ — the dense-slice occupancy ASN-0113 W4 proves; M5's write-path
+    /// property, trusted here and tripwired in debug). Built by `union` of
+    /// singletons — concatenation preserves the already-disjoint,
+    /// content-before-link normal form (asserted in debug); no invented M1
+    /// constructor.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        if !is_registered(m3, doc) {
-            return Err(ExtentError::DocNotRegistered);
+        if !m3.is_registered_document(doc) {
+            return Err(ExtentError::DocNotRegistered); // unallocated ⇒ fail
         }
         debug_assert_dense_occupancy(m5, doc);
         let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
@@ -200,7 +188,7 @@ impl<'s, W: M6World> Query<'s, W> {
     pub fn show_origin_v(&self, doc: &Address, span: &Span) -> Result<Vec<Address>, OriginError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        if !is_registered(m3, doc) {
+        if !m3.is_registered_document(doc) {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspec(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
@@ -253,6 +241,15 @@ impl<'s, W: M6World> Query<'s, W> {
     /// first); allocated-empty is fine and yields empty halves. Each half is
     /// the deduped, Tumbler-ordered set of the EXISTING I-addresses
     /// (D-IDENT — never copies; D-ORD).
+    ///
+    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
+    /// it is not bounded by the answer either. No span narrows the request, so
+    /// both documents are enumerated WHOLE: the work is
+    /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|`, paid in full
+    /// even when the two share nothing and both halves come back empty. M6
+    /// owns no admission control and no refusal for it: capping request rate
+    /// and concurrency for a route carrying this read is M10's, as the request
+    /// lifecycle's owner.
     pub fn show_deletions(
         &self,
         d_a: &Address,
@@ -261,7 +258,7 @@ impl<'s, W: M6World> Query<'s, W> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         for d in [d_a, d_b] {
-            if !is_registered(m3, d) {
+            if !m3.is_registered_document(d) {
                 return Err(DeletionsError::DocNotRegistered(d.clone()));
             }
         }
@@ -320,7 +317,7 @@ impl<'s, W: M6World> Query<'s, W> {
         // The gate first, over the WHOLE request — the first fault wins, and
         // no upstream work is done for a request that will be rejected.
         for (ri, r) in regions.iter().enumerate() {
-            if !is_registered(m3, &r.doc) {
+            if !m3.is_registered_document(&r.doc) {
                 return Err(FindError::DocNotRegistered(r.doc.clone()));
             }
             for (si, span) in r.spans.iter().enumerate() {

@@ -13,7 +13,8 @@
 //!
 //! None implements `std::error::Error`, because nothing consumes one as a
 //! `dyn Error`: M10 marshals every rejection through `Serialize`, and
-//! `Display` carries the human-readable message.
+//! `Display` carries the human-readable message — naming the offending
+//! document, in M1's dotted-decimal form, wherever the variant carries one.
 
 use std::fmt;
 
@@ -147,8 +148,8 @@ impl fmt::Display for Operand {
 impl fmt::Display for RetrieveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RetrieveError::DocNotRegistered(_) => {
-                f.write_str("retrieve_v: a spec's doc is not a registered document")
+            RetrieveError::DocNotRegistered(d) => {
+                write!(f, "retrieve_v: {d} is not a registered document")
             }
             RetrieveError::MalformedSpec { index, fault } => {
                 write!(f, "retrieve_v: spec {index} is malformed: {fault}")
@@ -187,14 +188,18 @@ impl fmt::Display for OriginError {
 }
 impl fmt::Display for DeletionsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("show_deletions: a document is not registered")
+        match self {
+            DeletionsError::DocNotRegistered(d) => {
+                write!(f, "show_deletions: {d} is not a registered document")
+            }
+        }
     }
 }
 impl fmt::Display for CompareError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CompareError::DocNotRegistered(_) => {
-                f.write_str("compare: a region's doc is not a registered document")
+            CompareError::DocNotRegistered(d) => {
+                write!(f, "compare: {d} is not a registered document")
             }
             CompareError::NotContentSubspace {
                 operand,
@@ -219,8 +224,8 @@ impl fmt::Display for CompareError {
 impl fmt::Display for FindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FindError::DocNotRegistered(_) => {
-                f.write_str("find_docs_containing: a region's doc is not a registered document")
+            FindError::DocNotRegistered(d) => {
+                write!(f, "find_docs_containing: {d} is not a registered document")
             }
             FindError::MalformedSpan {
                 region,

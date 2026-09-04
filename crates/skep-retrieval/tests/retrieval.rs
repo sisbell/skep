@@ -11,15 +11,12 @@
 //! mutate, and the derive policy M10 marshals against.
 //!
 //! This file compiles as a FOREIGN crate, so it also witnesses the derive
-//! policy's consequences. RETRIEVEV's `Delivery` carries M4's `Val`, which has
-//! no `Debug`, so `Result::expect` does not compile against a delivery: the
-//! tests unwrap through `ok_of`/`err_of` throughout — one idiom, and the only
-//! one available at every operation — and compare a delivery with
-//! `assert!`/`matches!`. Everything else here renders, so the derive-policy
-//! test compares those with `assert_eq!`, which is what M10 gets too. The toy
-//! `World`/`Rec` pair is the minimal engine assembly the composition contract
-//! prescribes; all state is arranged through M5's real `Vstream` ops (M5Rec is
-//! sealed to foreign crates).
+//! policy's consequences: every result and every error M6 hands back renders,
+//! so `assert_eq!` compiles against any of them here exactly as it does for
+//! M10 — a delivery included, whose content items render by BYTE LENGTH and
+//! never by payload. The toy `World`/`Rec` pair is the minimal engine assembly
+//! the composition contract prescribes; all state is arranged through M5's
+//! real `Vstream` ops (M5Rec is sealed to foreign crates).
 
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
@@ -189,9 +186,9 @@ fn deep_span(subspace: u32) -> Span {
     Span::new(t(&[subspace, 1, 1]), t(&[0, 0, 1])).expect("T12-legal")
 }
 
-/// Unwrap Ok without `E: Debug` — the delivery path has no `Debug` to lend
-/// `Result::expect` (M4's `Val` withholds it), and one unwrap idiom serves
-/// every operation. The same constraint M10 marshals under.
+/// Unwrap Ok — one idiom across all seven operations. `Result::expect` would
+/// serve equally well now that every result and error renders; this keeps the
+/// unwrap and its failure message uniform at every call site.
 fn ok_of<T, E>(r: Result<T, E>) -> T {
     match r {
         Ok(v) => v,
@@ -199,7 +196,7 @@ fn ok_of<T, E>(r: Result<T, E>) -> T {
     }
 }
 
-/// Unwrap Err without `E: Debug`.
+/// Unwrap Err, the mirror of [`ok_of`].
 fn err_of<T, E>(r: Result<T, E>) -> E {
     match r {
         Ok(_) => panic!("expected Err, got Ok"),
@@ -301,8 +298,9 @@ fn retrieve_v_delivers_one_item_per_position_in_v_order_with_verbatim_bytes() {
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))]));
-    assert!(
-        got == Delivery(vec![
+    assert_eq!(
+        got,
+        Delivery(vec![
             DeliveryItem::Content(val(b"a")),
             DeliveryItem::Content(val(b"b")),
             DeliveryItem::Content(val(b"c")),
@@ -323,8 +321,9 @@ fn retrieve_v_concatenates_per_spec_in_submitted_order_without_dedup() {
         spec(doc1(), vspan(1, 1, 1)),
         spec(doc1(), vspan(1, 1, 1)),
     ]));
-    assert!(
-        got == Delivery(vec![
+    assert_eq!(
+        got,
+        Delivery(vec![
             DeliveryItem::Content(val(b"b")),
             DeliveryItem::Content(val(b"c")),
             DeliveryItem::Content(val(b"a")),
@@ -344,8 +343,9 @@ fn retrieve_v_delivers_link_positions_as_address_references() {
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(2, 1, 2)), spec(doc1(), vspan(1, 1, 1))]));
-    assert!(
-        got == Delivery(vec![
+    assert_eq!(
+        got,
+        Delivery(vec![
             DeliveryItem::Ref(la(1)),
             DeliveryItem::Ref(la(2)),
             DeliveryItem::Content(val(b"a")),
@@ -363,11 +363,12 @@ fn retrieve_v_degrades_silently_where_r6_mandates() {
     let s = k.snapshot();
     let q = Query::new(&s);
     // Empty spec-set ⇒ Ok(empty).
-    assert!(ok_of(q.retrieve_v(&[])) == Delivery(vec![]));
+    assert_eq!(ok_of(q.retrieve_v(&[])), Delivery(vec![]));
     // Overrun clips (accept-and-intersect upstream).
     let got = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 2, 10))]));
-    assert!(
-        got == Delivery(vec![
+    assert_eq!(
+        got,
+        Delivery(vec![
             DeliveryItem::Content(val(b"b")),
             DeliveryItem::Content(val(b"c")),
         ])
@@ -375,11 +376,17 @@ fn retrieve_v_degrades_silently_where_r6_mandates() {
     // Depth-incompatible: well-formed, passes the gate, resolves to ⟨⟩ —
     // the good spec's contribution survives beside it.
     let got = ok_of(q.retrieve_v(&[spec(doc1(), deep_span(1)), spec(doc1(), vspan(1, 1, 1))]));
-    assert!(got == Delivery(vec![DeliveryItem::Content(val(b"a"))]));
+    assert_eq!(got, Delivery(vec![DeliveryItem::Content(val(b"a"))]));
     // Foreign subspace: force-emptied upstream, never an error here.
-    assert!(ok_of(q.retrieve_v(&[spec(doc1(), vspan(3, 1, 1))])) == Delivery(vec![]));
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc1(), vspan(3, 1, 1))])),
+        Delivery(vec![])
+    );
     // Registered-empty document contributes nothing.
-    assert!(ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, 1))])) == Delivery(vec![]));
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, 1))])),
+        Delivery(vec![])
+    );
 }
 
 #[test]
@@ -440,10 +447,10 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
 // ---- §B document extents ----
 
 #[test]
-fn doc_vspan_synthesizes_the_bounding_span_from_counts() {
+fn doc_vspan_is_the_bounding_hull_of_the_per_subspace_extents() {
     // ASN-0112: σ_d — the whole-document bounding span, a bounding box
     // bridging the inter-subspace void once links exist (D-CTG★ makes the
-    // counts the extents; min is the subspace anchor, never negative).
+    // counts the extents; the anchor is the subspace origin, never negative).
     let k = mem_kernel();
     insert3(&k);
     {
@@ -465,6 +472,19 @@ fn doc_vspan_synthesizes_the_bounding_span_from_counts() {
     let want =
         SpanSet::singleton(Span::from_endpoints(t(&[1, 1]), &t(&[2, 3])).expect("well-formed"));
     assert_eq!(got, want);
+    // σ_d IS the hull of the per-subspace extents — the same first start and
+    // the same last reach, never a second derivation that could disagree.
+    let extents = ok_of(q.doc_vspanset(&doc1()));
+    let (lo, hi) = (
+        extents.iter().next().expect("occupied ⇒ a first extent"),
+        extents.iter().last().expect("occupied ⇒ a last extent"),
+    );
+    assert_eq!(
+        got,
+        SpanSet::singleton(
+            Span::from_endpoints(lo.start().clone(), &hi.reach()).expect("well-formed")
+        )
+    );
     // Link-only document: the anchor moves to [2,1].
     seat_link(&k, &doc2(), &l2a(1)).expect("seat commits");
     let s = k.snapshot();
@@ -657,16 +677,18 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
-    assert!(
-        got == Deletions {
+    assert_eq!(
+        got,
+        Deletions {
             a_with_b: vec![ca(2)], // deleted from doc1, current in doc2
             b_with_a: vec![ca(1)], // deleted from doc2, current in doc1
         }
     );
     // Swapping the arguments swaps the halves.
     let got = ok_of(q.show_deletions(&doc2(), &doc1()));
-    assert!(
-        got == Deletions {
+    assert_eq!(
+        got,
+        Deletions {
             a_with_b: vec![ca(1)],
             b_with_a: vec![ca(2)],
         }
@@ -684,8 +706,9 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
         let s = k.snapshot();
         let q = Query::new(&s);
         let got = ok_of(q.show_deletions(&doc1(), &doc2()));
-        assert!(
-            got == Deletions {
+        assert_eq!(
+            got,
+            Deletions {
                 a_with_b: vec![],
                 b_with_a: vec![],
             }
@@ -726,8 +749,9 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
     // ca1 appears ONCE despite doc2's double placement (dedup, D-ORD).
-    assert!(
-        got == Deletions {
+    assert_eq!(
+        got,
+        Deletions {
             a_with_b: vec![ca(1)],
             b_with_a: vec![],
         }
@@ -1086,7 +1110,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     // Withholding Serialize is not withholding everything else: a consumer
     // can clone a report, compare two of them, and print one in a failure
     // message. `assert_eq!` on M6's results and errors compiles from a
-    // foreign crate — the delivery path alone is barred, and by M4's `Val`.
+    // foreign crate, the delivery path included.
     assert_eq!(rep.clone(), rep);
     assert_eq!(
         dels,
@@ -1095,10 +1119,27 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
             b_with_a: vec![]
         }
     );
-    assert_eq!(
-        err_of(q.doc_vspan(&un())),
-        ExtentError::DocNotRegistered
-    );
+    assert_eq!(err_of(q.doc_vspan(&un())), ExtentError::DocNotRegistered);
     assert_eq!(format!("{:?}", Operand::Second), "Second");
     assert!(!format!("{rep:?}").is_empty());
+    // A delivery renders its content items by BYTE LENGTH and never by
+    // payload — M4's discipline on `Val`, absorbed here rather than exported
+    // to every caller that would log or diff a delivery.
+    assert_eq!(
+        format!("{delivery:?}"),
+        "Delivery([Content(1 bytes), Content(1 bytes), Content(1 bytes)])"
+    );
+    assert_eq!(
+        format!("{:?}", DeliveryItem::Content(val(b"hello"))),
+        "Content(5 bytes)"
+    );
+    assert_eq!(
+        format!("{:?}", DeliveryItem::Ref(la(1))),
+        format!("Ref({})", la(1))
+    );
+    // A rendered delivery names no byte it carries.
+    assert!(!format!("{:?}", DeliveryItem::Content(val(b"secret"))).contains("secret"));
+    // The registry rejection names the offending document, in M1's dotted
+    // decimal — the payload the variant carries, not discarded by Display.
+    assert!(format!("{e}").contains(&un().to_string()));
 }

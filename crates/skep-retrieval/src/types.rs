@@ -2,22 +2,29 @@
 //! derive policy (the marshaling seam M10 codes against).
 //!
 //! Every M6-owned request/result type here is a plain all-`pub`-field value
-//! deriving **`Clone + Debug + PartialEq + Eq`**, plus `Serialize` wherever
-//! its leaves carry it. Each withheld derive is withheld for a reason its own
-//! leaf gives:
+//! carrying **`Clone + Debug + PartialEq + Eq`**, plus `Serialize` wherever
+//! its leaves carry it. Two departures from the plain derive, each for a
+//! reason its own leaf gives:
 //!
-//! * [`Delivery`]/[`DeliveryItem`] have no `Debug`, because M4's `Val` has
-//!   none: content blobs never render into logs, which is M4's decision and
-//!   rides through here.
+//! * [`DeliveryItem`]'s `Debug` is hand-written, because M4's `Val` has none
+//!   — blobs never render into logs, which is M4's decision. M6 is in the
+//!   same position M4 put its own [`ContentWrite`] in, and keeps the
+//!   discipline the same way: the item renders its payload's byte LENGTH and
+//!   never its bytes, so the difficulty is absorbed here rather than exported
+//!   to every caller that wants to log, `expect` or `assert_eq!` a delivery.
 //! * [`CorrPair`]/[`CompareReport`] have no `Serialize`, because M5's `VPos`
 //!   has none. They are destructure-and-marshal values M10 writes out
 //!   **field-by-field** — every leaf serializes individually, `VPos`'s
 //!   `pub Nat` fields included.
-//! * NOTHING here derives `Deserialize`, and that one is M6's own decision
-//!   rather than a leaf's: M10 constructs requests through M1's validating
-//!   front doors (`validate`, `Span::new`/`from_endpoints`), so an untrusted
-//!   address reaches M6 only as a value some M1 constructor has already
-//!   admitted.
+//!
+//! NOTHING here derives `Deserialize`, and that one is M6's own decision
+//! rather than a leaf's: M10 constructs requests through M1's validating front
+//! doors (`validate`, `Span::new`/`from_endpoints`), so an untrusted address
+//! reaches M6 only as a value some M1 constructor has already admitted.
+//!
+//! [`ContentWrite`]: skep_content::ContentWrite
+
+use std::fmt;
 
 use serde::Serialize;
 use skep_address::{Address, Nat, Span};
@@ -54,10 +61,23 @@ pub enum DeliveryItem {
     Ref(Address),
 }
 
+/// Renders a content item by its payload's BYTE LENGTH and a link item by its
+/// address (M1's dotted decimal) — never a payload byte, which is the whole of
+/// M4's reason for withholding `Debug` from `Val` and is kept here by hand
+/// because a derive could not. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)`.
+impl fmt::Debug for DeliveryItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeliveryItem::Content(v) => write!(f, "Content({} bytes)", v.len()),
+            DeliveryItem::Ref(a) => write!(f, "Ref({a})"),
+        }
+    }
+}
+
 /// RETRIEVEV's result: per-spec concatenation in submitted order,
 /// ascending-V within each spec, no merge, no dedup, no global sort
 /// (ASN-0115 R3/R5/R8).
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Delivery(pub Vec<DeliveryItem>);
 
 /// SHOWDELETIONS' result (ASN-0075): each half is the deduped,

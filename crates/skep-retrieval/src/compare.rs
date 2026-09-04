@@ -79,6 +79,14 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
     /// stable sort keeps the listed order deterministic).
     ///
+    /// WHICH REFUSAL SPEAKS. The gate walks ρ₁'s regions and their spans in
+    /// submitted order, then ρ₂'s, and reports the FIRST fault whatever its
+    /// kind — so `(operand, region, index)` promises that everything listed
+    /// before it is clean. BOTH operands are gated in FULL before either is
+    /// resolved, so a gate fault always outranks a budget refusal: a client
+    /// told `TooManyBlocks { operand: First }` knows ρ₂ was examined too and
+    /// found well-formed.
+    ///
     /// COST, AND THE TWO BUDGETS THAT BOUND IT. The join is `|P|·|Q|`
     /// candidate tests over the two regions' blocks, and BOTH factors are the
     /// request's: a region names a span list and a spec-set names a region
@@ -310,11 +318,12 @@ fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
 /// ORACLE is a per-position hash join on address. One vocabulary — see the
 /// design's Open build decisions (canonical statement).
 ///
-/// `None` when the report reaches [`MAX_COMPARE_PAIRS`] — refused AS THE PAIRS
-/// ARE PRODUCED. That budget is on the REPORT, not on the join's shape: a
-/// sweep changes how many candidate pairs are TESTED and not how many are
-/// EMITTED, so the same cap stands whichever join ships, and it is the only
-/// one that sees a fan-out.
+/// `None` when the report would run to MORE THAN [`MAX_COMPARE_PAIRS`]
+/// correspondences — a report of exactly the budget is answered, and the pair
+/// past it is refused AS THE PAIRS ARE PRODUCED. That budget is on the REPORT,
+/// not on the join's shape: a sweep changes how many candidate pairs are
+/// TESTED and not how many are EMITTED, so the same cap stands whichever join
+/// ships, and it is the only one that sees a fan-out.
 fn interval_join(p: &[Block], q: &[Block]) -> Option<Vec<CorrPair>> {
     let mut out = Vec::new();
     for pb in p {

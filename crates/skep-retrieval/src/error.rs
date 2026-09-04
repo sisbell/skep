@@ -1,7 +1,19 @@
 //! §Errors — the typed rejections of M6's seven operations (all surfaced
-//! verbatim by M10 — never a silent skip). Variant declaration order matches
-//! the interface's, which is also each operation's check order (the "which
-//! error wins" contract the conformance tests rely on).
+//! verbatim by M10 — never a silent skip).
+//!
+//! WHICH REFUSAL SPEAKS, in two clauses a caller may rely on. WITHIN one of
+//! the six OPERATION enums, variant declaration order IS that operation's
+//! check order, so the first variant whose condition holds is the one reported
+//! (`OriginError`'s six read WF_V's conjuncts i, ii/iv, iii, v, vi in that
+//! sequence). ACROSS a request, the first fault in REQUEST order wins whatever
+//! its kind: each gate walks the specs/regions/spans as submitted and stops at
+//! the first, which is what makes `index` / `(region, index)` /
+//! `(operand, region, index)` locate anything — the payload names a position
+//! the caller can trust everything before to be clean of.
+//!
+//! [`SpanFault`] is a fault VOCABULARY rather than an operation's ladder, so
+//! neither clause applies to it: which of its four a malformed span reports is
+//! `gate_vspan`'s to fix, and that order is stated and tested there.
 //!
 //! Derive policy: all six operation enums derive `Clone + Debug + PartialEq +
 //! Eq + Serialize`; the payload-free [`SpanFault`]/[`Operand`] additionally
@@ -78,6 +90,8 @@ pub enum ExtentError {
 pub enum OriginError {
     /// The document is not a registered document (WF_V(i)'s `d ∈ Σ.E_doc`).
     DocNotRegistered,
+    /// WF_V(ii/iv): the span fails span well-formedness.
+    MalformedSpan(SpanFault),
     /// The span's start subspace is ∉ {s_C, s_L} — distinct from a real but
     /// empty subspace.
     NoSuchSubspace,
@@ -88,8 +102,6 @@ pub enum OriginError {
     DepthIncompatible,
     /// WF_V(vi): a depth-2 span naming positions not all currently bound.
     RangeNotPresent,
-    /// WF_V(ii/iv): the span fails span well-formedness.
-    MalformedSpan(SpanFault),
 }
 
 /// SHOWDELETIONS rejection (ASN-0075): both documents must be registered;
@@ -129,8 +141,8 @@ pub enum CompareError {
     ///
     /// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
     TooManyBlocks { operand: Operand },
-    /// The join reached [`MAX_COMPARE_PAIRS`] correspondences. The block
-    /// budget cannot see this one: two small operands naming the same
+    /// The join runs to more than [`MAX_COMPARE_PAIRS`] correspondences. The
+    /// block budget cannot see this one: two small operands naming the same
     /// position fan out to their product.
     ///
     /// [`MAX_COMPARE_PAIRS`]: crate::MAX_COMPARE_PAIRS
@@ -199,6 +211,9 @@ impl fmt::Display for OriginError {
             OriginError::DocNotRegistered => {
                 f.write_str("show_origin_v: doc is not a registered document")
             }
+            OriginError::MalformedSpan(fault) => {
+                write!(f, "show_origin_v: span is malformed: {fault}")
+            }
             OriginError::NoSuchSubspace => f.write_str(
                 "show_origin_v: the span's start subspace is neither content nor link",
             ),
@@ -211,9 +226,6 @@ impl fmt::Display for OriginError {
             OriginError::RangeNotPresent => f.write_str(
                 "show_origin_v: the span names positions not all currently bound (never clamped)",
             ),
-            OriginError::MalformedSpan(fault) => {
-                write!(f, "show_origin_v: span is malformed: {fault}")
-            }
         }
     }
 }

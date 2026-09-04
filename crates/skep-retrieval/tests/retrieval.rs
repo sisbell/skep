@@ -7,14 +7,16 @@
 //! the delivery law they are instances of (the span's intersection with the
 //! bound prefix, over the whole grid of starts and widths); delivery
 //! order/multiplicity across every block a span resolves to (R3/R5/R8);
-//! extent synthesis from counts (D-SEQ★); origin projection and its
-//! reject-never-clamp admissibility, the exact-extent boundary included
-//! (WF_V/O13); the cross-document SHOWDELETIONS combine (D-IDENT/D-ORD);
+//! extent synthesis from counts (D-SEQ★) and what the two extent queries
+//! therefore do and do not answer (V9: the box is fixed under a content edit
+//! the extents follow); origin projection and its reject-never-clamp
+//! admissibility, the exact-extent boundary included (WF_V/O13); the
+//! cross-document SHOWDELETIONS combine (D-IDENT/D-ORD);
 //! COMPARE's address-equal join — per-block feet, overlap widths, fan-out
 //! completeness, region confinement, the four-component presentation, the
 //! whole relation against an independent per-position oracle, and the two
 //! budgets that refuse (never truncate) a request whose `|P|·|Q|` outruns
-//! them;
+//! them, behind a gate that runs over both operands whole;
 //! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
 //! every region span's coverage; that a query answers from the snapshot it
 //! pinned and never mutates; and the derive policy M10 marshals against.
@@ -858,6 +860,47 @@ fn doc_vspanset_reports_per_subspace_exact_extents_prenormalized() {
     ));
 }
 
+#[test]
+fn a_content_edit_under_links_moves_the_extent_and_not_the_bounding_box() {
+    // ASN-0112 V9, which is the whole of the routing `doc_vspan` states: the
+    // cross-subspace box is a function of the two EXTREMES, so a content edit
+    // keeping n_C ≥ 1 leaves it fixed while `doc_vspanset`'s content member
+    // moves with n_C. A caller that must observe a content-count change asks
+    // for the extents; asking for the box would tell it nothing happened.
+    let k = mem_kernel();
+    let vs = insert3(&k); // n_C = 3
+    seat_link(&k, &doc1(), &la(1)).expect("seat commits");
+    seat_link(&k, &doc1(), &la(2)).expect("seat commits"); // n_L = 2
+    let before = k.snapshot();
+    let q_before = Query::new(&before);
+    vs.delete(P1, &doc1(), vp(1, 3), n(1))
+        .expect("delete commits"); // n_C = 2, still ≥ 1
+    let after = k.snapshot();
+    let q_after = Query::new(&after);
+    // The box is [1,1] .. [2, n_L + 1) on both sides of the edit.
+    let box_ = SpanSet::singleton(
+        Span::from_endpoints(t(&[1, 1]), &t(&[2, 3])).expect("well-formed"),
+    );
+    assert_eq!(ok_of(q_before.doc_vspan(&doc1())), box_);
+    assert_eq!(ok_of(q_after.doc_vspan(&doc1())), box_);
+    // The extents are not: the content member follows n_C.
+    let extents = |q: &Query<'_, World>| {
+        ok_of(q.doc_vspanset(&doc1()))
+            .iter()
+            .next()
+            .expect("occupied ⇒ a content extent")
+            .clone()
+    };
+    assert_eq!(
+        extents(&q_before),
+        Span::new(t(&[1, 1]), t(&[0, 3])).expect("T12")
+    );
+    assert_eq!(
+        extents(&q_after),
+        Span::new(t(&[1, 1]), t(&[0, 2])).expect("T12")
+    );
+}
+
 // ---- §C SHOWORIGIN (V-arity) ----
 
 #[test]
@@ -1656,6 +1699,42 @@ fn compare_refuses_a_fanout_past_its_pair_budget() {
     // Under the budget, the same shape reports the FULL cross-product (X8):
     // the cap refuses, and never thins a report it admits.
     assert_eq!(ok_of(q.compare(&side(16), &side(16))).len(), 256);
+}
+
+#[test]
+fn compare_gates_both_operands_whole_before_either_budget_can_refuse() {
+    // §COMPARE, which refusal speaks: both operands are gated in FULL before
+    // either is resolved, so a SHAPE fault always outranks a SIZE refusal. An
+    // over-budget ρ₁ beside a malformed ρ₂ span reports the span — telling a
+    // client that ρ₂ was examined too, which is the promise `TooManyBlocks`
+    // rests on.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let over = vec![region_spec(
+        doc1(),
+        vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS + 1],
+    )];
+    assert_eq!(
+        err_of(q.compare(
+            &over,
+            &[region_spec(doc1(), vec![not_ordinal_level_span()])],
+        )),
+        CompareError::MalformedSpan {
+            operand: Operand::Second,
+            region: 0,
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel,
+        }
+    );
+    // The control: with ρ₂ well-formed, the same ρ₁ is refused for its size.
+    assert_eq!(
+        err_of(q.compare(&over, &[region_spec(doc1(), vec![vspan(1, 1, 1)])])),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
 }
 
 // ---- §E FINDDOCSCONTAINING ----

@@ -113,14 +113,19 @@ impl<W: WorldState + HasM3 + HasContent + HasM5> RetrievalWorld for W {}
 /// Stateless reader over ONE pinned snapshot. Owns nothing; holds a borrow.
 ///
 /// The caller (M10) takes the snapshot (`Kernel::snapshot()`) and constructs
-/// the handle, one per logical query, so every read in that query observes
-/// one consistent `(M, R)` root — the discharge of M2's clause 6 and the
-/// single-Σ requirement of ASN-0075/0122/0124. Reads never commit and have no
+/// the handle over it. The obligation is on the SNAPSHOT, not the handle: take
+/// **one `Kernel::snapshot()` per logical query** and route every read of that
+/// query through handles bound to it, so all of them observe one consistent
+/// `(M, R)` root — the discharge of M2's clause 6 and the single-Σ requirement
+/// of ASN-0075/0122/0124. Reads never commit and have no
 /// commit-before-acknowledge obligation.
 pub struct Query<'s, W: RetrievalWorld>(&'s Snapshot<W>);
 
 impl<'s, W: RetrievalWorld> Query<'s, W> {
-    /// Bind one pinned snapshot. Build **one `Query` per logical query**.
+    /// Bind one pinned snapshot. No precondition: any `&Snapshot<W>` is
+    /// admissible, and the single-Σ obligation is the caller's over the
+    /// snapshot it takes (see the type's card), not over how many handles it
+    /// builds on one.
     pub fn new(snap: &'s Snapshot<W>) -> Self {
         Query(snap)
     }
@@ -145,10 +150,10 @@ impl<W: RetrievalWorld> fmt::Debug for Query<'_, W> {
 }
 
 /// A `Query` IS a borrow, so it copies like one — a copy reads the SAME
-/// pinned `Snapshot`, which is the whole of what "one `Query` per logical
-/// query" protects. The charter above (no slice, no fold, no state) is what
-/// keeps that safe to promise: the day this holds a field of its own, it
-/// stops being a borrow and loses `Copy` with it.
+/// pinned `Snapshot`, which is why the single-Σ obligation is stated over the
+/// snapshot rather than over the handles built on it. The charter above (no
+/// slice, no fold, no state) is what keeps that safe to promise: the day this
+/// holds a field of its own, it stops being a borrow and loses `Copy` with it.
 ///
 /// Hand-written because the derives would put `W: Clone`/`W: Copy` on impls
 /// that never touch `W`, and no `WorldState` is `Copy`.

@@ -82,6 +82,14 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// (R3 exactness, R8 no-dedup), per-spec concatenation in submitted
     /// order (R5), ascending-V within, no merge, no global sort.
     ///
+    /// WHICH REFUSAL SPEAKS. The gate walks the spec-set in SUBMITTED ORDER
+    /// and reports the FIRST faulty spec, whatever the kind of its fault;
+    /// within one spec the registry check precedes the span gate. So
+    /// `MalformedSpec { index: i }` and `DocNotRegistered` both carry a
+    /// promise about the specs before the offending one: a caller may rely on
+    /// specs `0..i` being registered documents with well-formed spans, and
+    /// repair a batch by walking forward rather than re-checking it whole.
+    ///
     /// COST IS THE ANSWER'S SIZE, AND THE ANSWER'S SIZE IS A PRODUCT M6 MAY
     /// NOT NARROW. The delivery is `Σᵢ |σᵢ ∩ [1, n_Sᵢ]|` items, so `k` specs
     /// each naming a whole document deliver `k · n_C` items — one `Arc` clone
@@ -155,9 +163,16 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// RETRIEVEDOCVSPAN (ASN-0112) — the whole-document bounding span:
     /// singleton `⟨σ_d⟩`, or `⟨⟩` for a registered-empty document; a document
     /// that is not registered ⇒ Err. Across subspaces it is a bounding box
-    /// bridging the inter-subspace void, insensitive to mid-document content
-    /// edits (V9) — by design (route fragmentation-sensitive callers to
-    /// `doc_vspanset`).
+    /// bridging the inter-subspace void.
+    ///
+    /// WHAT THE BOX CANNOT SHOW (V9). Being a function of the two EXTREMES
+    /// alone, the cross-subspace box is fixed at `[[s_C, 1], [s_L, n_L + 1])`
+    /// under any content edit that leaves `n_C ≥ 1`, while
+    /// [`Query::doc_vspanset`]'s content member moves with `n_C` — so a caller
+    /// that must observe a CONTENT-COUNT change asks for the extents, not the
+    /// box. Neither reports run structure: under D-SEQ★ both are functions of
+    /// `n_C` and `n_L` alone, and a document's fragmentation is M5's
+    /// `content_runs`, which is not part of M6's surface.
     ///
     /// σ_d IS the hull of the per-subspace extents, so it is taken from
     /// [`Query::doc_vspanset`] rather than derived a second time: the registry
@@ -225,14 +240,23 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// (CL-OWN) — handled uniformly, no special case. The I-arity is
     /// de-scoped (see the crate docs); only this V-arity exists.
     ///
-    /// Inadmissible (Err) — reject, never silently clamp (O13): a document
-    /// that is not registered (WF_V i), a malformed span (ii/iv), a foreign
-    /// subspace (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`,
-    /// iii), a depth-incompatible `#start ≥ 3` span (`DepthIncompatible`,
-    /// WF_V v — its own check, kept distinct from the range case so a client
-    /// can tell "wrong depth" from "unbound positions"), and a depth-2 span
-    /// overrunning the bound prefix (`RangeNotPresent`, WF_V vi — the
-    /// depth-agnostic `resolved_width < ordinal(width)` test).
+    /// A success is never empty: an admissible request has an occupied
+    /// subspace (`n_s ≥ 1`), a depth-2 span, and a fully resolved width, so at
+    /// least one run is projected and `Ok(vec![])` is not an answer this
+    /// operation gives.
+    ///
+    /// Inadmissible (Err) — reject, never silently clamp (O13), and the
+    /// listing below IS the precedence: the checks run in this order and the
+    /// FIRST condition that holds is the one reported. A document that is not
+    /// registered (WF_V i), a malformed span (ii/iv), a foreign subspace
+    /// (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`, iii), a
+    /// depth-incompatible `#start ≥ 3` span (`DepthIncompatible`, WF_V v — its
+    /// own check, kept distinct from the range case so a client can tell
+    /// "wrong depth" from "unbound positions"), and a depth-2 span overrunning
+    /// the bound prefix (`RangeNotPresent`, WF_V vi — the depth-agnostic
+    /// `resolved_width < ordinal(width)` test). So a malformed span in a
+    /// foreign subspace is `MalformedSpan`, and a deep span over an empty
+    /// subspace is `EmptySubspace`.
     pub fn show_origin_v(&self, doc: &Address, span: &Span) -> Result<Vec<Address>, OriginError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -286,6 +310,13 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// first); registered-empty is fine and yields empty halves. Each half is
     /// the deduped, Tumbler-ordered set of the EXISTING I-addresses
     /// (D-IDENT — never copies; D-ORD).
+    ///
+    /// BOTH HALVES ARE CONTENT I-ADDRESSES, and enumerating `CURRENT` on the
+    /// content side alone is EXACT rather than a narrowing: `DELETED(a, d)`
+    /// requires `(a, d) ∈ R`, and R is appended only where content is placed —
+    /// seating a link records nothing in it — so no link position can ever
+    /// satisfy the right conjunct, and a link position enumerated here could
+    /// only be filtered away again.
     ///
     /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
     /// it is not bounded by the answer either. No span narrows the request, so
@@ -348,6 +379,14 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// and a depth-incompatible span resolves to empty coverage
     /// (consulting-state, like RETRIEVEV's R6). Registered-empty contributes
     /// nothing.
+    ///
+    /// WHICH REFUSAL SPEAKS. The gate walks the regions in submitted order and
+    /// each region's spans in submitted order, reporting the FIRST fault
+    /// whatever its kind; within one region the registry check precedes the
+    /// span gate. It also completes over the WHOLE request before any `image`
+    /// is taken, so a rejected request costs `O(spans)` and nothing upstream,
+    /// and `(region, index)` promises that every region and span before the
+    /// named one is clean.
     ///
     /// Emptiness is tested with M1's `SpanSet::is_empty` — denotationally
     /// exact because no algebra result carries a zero-width member (zero

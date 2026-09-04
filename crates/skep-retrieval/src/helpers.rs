@@ -54,6 +54,12 @@ pub(crate) fn subspace_of(s: &Nat) -> Option<Subspace> {
 /// `ρ = (d, σ)`, so the other half — that `d` is a registered document — is
 /// the per-operation registry gate, which raises its own typed rejection.
 ///
+/// A span may fail several of the four at once, so which fault it reports is
+/// fixed HERE and nowhere else — level-uniformity, then ordinal-level, then
+/// zero-freedom, then depth, the first that fails being the one returned. That
+/// is the whole of `SpanFault`'s precedence: its declaration order is a
+/// vocabulary's, not this ladder's.
+///
 /// It deliberately does NOT gate depth-COMPATIBILITY (`#start == 2`):
 /// ASN-0115 is explicit that depth-compatibility is a consulting-state
 /// predicate, NOT a well-formedness condition, so a well-formed `#start ≥ 3`

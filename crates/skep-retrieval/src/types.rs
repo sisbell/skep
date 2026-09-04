@@ -166,6 +166,11 @@ pub struct CorrPair {
     pub u1: VPos,
     pub d2: Address,
     pub u2: VPos,
+    /// How many consecutive positions the two feet share — at least ONE in
+    /// every reported pair, since a correspondence is emitted only for a
+    /// non-empty I-overlap. So expanding a pair into its `width` position
+    /// pairs (X10) is a faithful re-reading of the report: no pair vanishes
+    /// under the expansion.
     pub width: Nat,
 }
 

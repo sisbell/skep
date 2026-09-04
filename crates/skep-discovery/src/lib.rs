@@ -75,13 +75,19 @@
 //! M8 owns no `WorldState` slice, no journal record, no fold, and no
 //! lock-key space tag; it contributes nothing to the assembled `World` and
 //! names neither `World` nor `Record` — a pure consumer of
-//! `HasLinks + HasM5 + HasM3`, generic over `W` (Engine Composition
-//! Contract). Consumed only by M10, which reaches every read through the pure
-//! `*_on` twins: M10 pins ONE snapshot per request and reports its position
-//! as `as_of`, which the self-snapshotting [`LinkQuery`] handle cannot serve
-//! — its snapshot is taken and dropped inside the call, so the answer could
-//! not be labelled with the state it came from. The handle serves callers
-//! reading current state without naming it.
+//! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
+//! Consumed only by M10, which reaches every read through the pure `*_on`
+//! twins: M10 pins ONE snapshot per request and reports its position as
+//! `as_of`, which the self-snapshotting [`LinkQuery`] handle cannot serve —
+//! its snapshot is taken and dropped inside the call, so the answer could not
+//! be labelled with the state it came from. The handle serves callers reading
+//! current state without naming it.
+//!
+//! The twins are free functions over a borrowed `&Snapshot<W>` — the dialect
+//! M1, M4 and M5 use for pure reads over borrowed state, and the one that
+//! keeps the snapshot the caller's to name. Nothing is bound to a snapshot
+//! here, so nothing has a coordinate of its own to disagree with M10's
+//! `as_of`.
 
 #![forbid(unsafe_code)]
 
@@ -108,3 +114,46 @@ pub use types::{
 // The 1-based standard slot numerals every query here indexes by, re-exported
 // from the store that owns them so M8 and M7 index one set of values.
 pub use skep_links::{FROM, TO, TYPE};
+
+use skep_arrangement::HasM5;
+use skep_kernel::WorldState;
+use skep_links::HasLinks;
+use skep_namespace::HasM3;
+
+/// The world bound M8 reads under: three upstream slices, none of its own
+/// (Engine Composition Contract — M8 contributes no slice, no record variant,
+/// no accessor trait, no fold). Named for the reason M6 names
+/// `RetrievalWorld` and M7 `LinkWorld`: one word for the seam, so a consumer
+/// generic over the same world writes one bound rather than four.
+/// Blanket-implemented, so an engine that implements the accessors gets it
+/// for free.
+///
+/// Every read here carries the whole bound, the descriptor and lineage
+/// families included, though those reach only the link store: M8 declares ONE
+/// dependency surface, so widening a read later is an edit inside this crate
+/// rather than a break for a caller who wrote the narrower form.
+pub trait DiscoveryWorld: WorldState + HasLinks + HasM5 + HasM3 {}
+impl<W: WorldState + HasLinks + HasM5 + HasM3> DiscoveryWorld for W {}
+
+/// The auto traits M8 promises without saying. Every answer type here crosses
+/// into M10's `Response` and from there onto a worker thread, and no signature
+/// in this crate states it — [`FourSet`]/[`SlotSpec`] keep the promise through
+/// M7's `im`-backed `Endset`, and this crate's manifest names `im` too, so a
+/// swap to the `Rc`-backed `im-rc` would revoke it with nothing here failing
+/// to build. This is where that fails to compile instead.
+///
+/// [`Cursor`] is an alias for `Option<Address>` — M1's promise, not M8's — and
+/// [`LinkQuery`] is generic over `W` and borrows the kernel, so it is neither
+/// `'static` nor a concrete witness to assert.
+const _: fn() = || {
+    fn owed<T: Send + Sync + 'static>() {}
+    owed::<FourSet>();
+    owed::<SlotSpec>();
+    owed::<Window>();
+    owed::<SupClaim>();
+    owed::<OrphanReport>();
+    // Both rejections too: a caller that boxes one meets
+    // `Box<dyn Error + Send + Sync>`, which is the crossing form.
+    owed::<QueryError>();
+    owed::<OrphanError>();
+};

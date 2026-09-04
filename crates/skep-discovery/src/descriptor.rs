@@ -7,13 +7,12 @@
 
 use im::OrdSet;
 use skep_address::Address;
-use skep_arrangement::HasM5;
-use skep_kernel::{Snapshot, WorldState};
-use skep_links::{HasLinks, View};
-use skep_namespace::HasM3;
+use skep_kernel::Snapshot;
+use skep_links::{LinkState, View};
 
 use crate::helpers::window_over;
 use crate::types::{Cursor, FourSet, Window};
+use crate::DiscoveryWorld;
 
 /// ASN-0121's CANDIDATE set: the descriptor's constrained LINK slots handed
 /// to M7's AND-of-ORs over the ACTIVE view, and no constraints at all
@@ -26,10 +25,10 @@ use crate::types::{Cursor, FourSet, Window};
 /// the same way if it could be asked — `stab(slot, ⟨⟩, ·) = ∅` empties the
 /// AND — but an `Empty` slot carries no endset to ask WITH, so this is where
 /// FL-EMP is answered for the link slots, not merely where it is anticipated.
-pub(crate) fn candidates<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
+pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
     match q.link_constraints() {
         None => OrdSet::new(), // FL-EMP: some slot is the zero
-        Some(cons) => w.links().match_links(&cons, View::Active),
+        Some(cons) => l.match_links(&cons, View::Active),
     }
 }
 
@@ -42,8 +41,8 @@ pub(crate) fn candidates<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
 /// [`FourSet::at_home`] — the home-bound placement M8 chose, since M8 owns no
 /// index dimension keyed on `home(a)` (Conflicts #7: a home-only query
 /// degrades to a full active scan, accepted).
-pub(crate) fn satisfying<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
-    candidates(w, q)
+pub(crate) fn satisfying(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
+    candidates(l, q)
         .into_iter()
         .filter(|a| q.at_home(a))
         .collect()
@@ -54,11 +53,8 @@ pub(crate) fn satisfying<W: HasLinks>(w: &W, q: &FourSet) -> OrdSet<Address> {
 /// `(∗,∗,∗,∗)` = the whole addressable slice (FL-WILD); any constrained-empty
 /// slot ⇒ `[]` (FL-EMP). Monotone absent retraction (FL-MON): a found link
 /// stays found unless nullified.
-pub fn findlinks_ftt_on<W>(s: &Snapshot<W>, q: &FourSet) -> Vec<Address>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
-    satisfying(s.world(), q).into_iter().collect()
+pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<Address> {
+    satisfying(s.world().links(), q).into_iter().collect()
 }
 
 /// The count operation over the descriptor family (ASN-0132 CN-*): the
@@ -72,11 +68,8 @@ where
 /// that gave up. The third zero, the degenerate request that names nothing,
 /// is answerable off the descriptor alone through
 /// [`FourSet::is_unsatisfiable`]: same number, different assertion.
-pub fn count_ftt_on<W>(s: &Snapshot<W>, q: &FourSet) -> usize
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
-    satisfying(s.world(), q).len()
+pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
+    satisfying(s.world().links(), q).len()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -89,10 +82,12 @@ where
 /// LAZILY during the range walk — so a home-narrow query never materializes
 /// the filtered set. The links this pages over are exactly the ones
 /// [`findlinks_ftt_on`] returns.
-pub fn window_ftt_on<W>(s: &Snapshot<W>, q: &FourSet, cur: Cursor, n: usize) -> Window
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
-    let cand = candidates(s.world(), q);
+pub fn window_ftt_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    q: &FourSet,
+    cur: Cursor,
+    n: usize,
+) -> Window {
+    let cand = candidates(s.world().links(), q);
     window_over(&cand, cur, n, |a| q.at_home(a))
 }

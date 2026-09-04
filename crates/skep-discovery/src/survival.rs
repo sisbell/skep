@@ -7,14 +7,13 @@
 
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::{HasM5, VPos};
-use skep_kernel::{Snapshot, WorldState};
-use skep_links::HasLinks;
-use skep_namespace::HasM3;
+use skep_arrangement::VPos;
+use skep_kernel::Snapshot;
 
 use crate::helpers::stab_runs;
 use crate::region::content_vspan;
 use crate::types::{OrphanError, OrphanReport};
+use crate::DiscoveryWorld;
 
 /// [`content_vspan`] at a bare content `ordinal`: `count` positions from it,
 /// built through the query surface's own V-span constructor — so the spans
@@ -56,15 +55,12 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// links. The global-ghost determination (LP17 — discoverable from NO
 /// document) reaches provenance R and is M6 territory; M8 stops at the
 /// per-document set.
-pub fn delete_orphans_on<W>(
+pub fn delete_orphans_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     p: &VPos,
     width: &Nat,
-) -> Result<OrphanReport, OrphanError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<OrphanReport, OrphanError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
         return Err(OrphanError::DocNotRegistered);
@@ -97,8 +93,8 @@ where
     for sp in [pre, suf].into_iter().flatten() {
         retained.extend(w.m5().resolve(d, &sp));
     }
-    let cand = stab_runs(w, &a_del);
-    let surv = stab_runs(w, &retained);
+    let cand = stab_runs(w.links(), &a_del);
+    let surv = stab_runs(w.links(), &retained);
     Ok(OrphanReport {
         orphaned: cand.relative_complement(surv).into_iter().collect(),
     })

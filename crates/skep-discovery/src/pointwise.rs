@@ -11,13 +11,12 @@
 //! cross-length spans, categorically distinct from the level-gated set
 //! algebra M8 avoids.
 
-use skep_address::{classify_spans, Address, SpanRel, SpanSet};
-use skep_arrangement::{HasM5, Run};
-use skep_kernel::{Snapshot, WorldState};
-use skep_links::{Endset, HasLinks};
-use skep_namespace::HasM3;
+use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
+use skep_kernel::Snapshot;
+use skep_links::Endset;
 
 use crate::types::QueryError;
+use crate::DiscoveryWorld;
 
 /// I→V projection of link `a`'s `slot` into `d`'s CONTENT subspace (ASN-0098
 /// `project`).
@@ -51,15 +50,12 @@ use crate::types::QueryError;
 /// M5's `point`) and `SpanSet::is_empty`, which is total where the
 /// level-gated set comparisons can fault. M8 itself never tests the
 /// projection for emptiness.
-pub fn project_on<W>(
+pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
     slot: usize,
     d: &Address,
-) -> Result<SpanSet, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<SpanSet, QueryError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
@@ -71,17 +67,21 @@ where
     Ok(w.m5().project(d, &cov)) // I→V, content subspace, level-class-safe inside M5
 }
 
-/// `coverage(e) ∩ ⋃ runs ≠ ∅` — pointwise, mirroring M7's stab overlap
+/// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, mirroring M7's stab overlap
 /// relations (ProperOverlap | Containment | Equal, never Adjacent).
 /// `classify_spans` is a pure, level-gate-free order relation, total on
 /// cross-length spans (a link-address span against a content run classifies
 /// by plain tumbler order — no fault), so the cross-subspace cases just work.
-/// Vacuously false over an empty run list.
-fn touches(e: &Endset, runs: &[Run]) -> bool {
+/// Vacuously false over an empty extent list.
+///
+/// `extents` are the I-extents of the document's runs, lifted by the caller:
+/// this is asked once per slot of a link, and a run's extent depends on the
+/// run alone, so the lift belongs where the runs are read.
+fn touches(e: &Endset, extents: &[Span]) -> bool {
     e.spans().any(|s| {
-        runs.iter().any(|r| {
+        extents.iter().any(|x| {
             matches!(
-                classify_spans(s, &r.iextent()),
+                classify_spans(s, x),
                 SpanRel::ProperOverlap | SpanRel::Containment | SpanRel::Equal
             )
         })
@@ -108,16 +108,13 @@ fn touches(e: &Endset, runs: &[Run]) -> bool {
 /// gate and returns `Ok(false)` through the `is_active` conjunct —
 /// distinguishing "not a link" from "a retracted link". A registered-but-
 /// empty `d` short-circuits to `Ok(false)` (nothing is reachable; `touches`
-/// over an empty run list is vacuously false, so the early-out is cheap, not
-/// a correctness guard).
-pub fn addressably_discoverable_from_on<W>(
+/// over an empty extent list is vacuously false, so the early-out is cheap,
+/// not a correctness guard).
+pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
     d: &Address,
-) -> Result<bool, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<bool, QueryError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
@@ -126,15 +123,15 @@ where
     if !w.links().is_active(a) {
         return Ok(false); // the ADDRESSABLE half (Conflicts #8)
     }
-    let full: Vec<Run> = w
+    let extents: Vec<Span> = w
         .m5()
         .content_runs(d)
         .into_iter()
         .chain(w.m5().link_runs(d))
-        .collect(); // ran(M(d)), BOTH subspaces (LP12)
-    if full.is_empty() {
+        .map(|r| r.iextent())
+        .collect(); // ran(M(d)) as I-extents, BOTH subspaces (LP12)
+    if extents.is_empty() {
         return Ok(false); // registered-empty d ⇒ nothing reachable
     }
-    Ok((1..=link.arity())
-        .any(|i| touches(link.slot(i).expect("i ≤ arity"), &full)))
+    Ok((1..=link.arity()).any(|i| touches(link.slot(i).expect("i ≤ arity"), &extents)))
 }

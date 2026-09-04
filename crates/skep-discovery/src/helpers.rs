@@ -8,7 +8,7 @@ use std::ops::Bound::{Excluded, Unbounded};
 use im::OrdSet;
 use skep_address::{document_of, Address};
 use skep_arrangement::Run;
-use skep_links::{Endset, HasLinks, View};
+use skep_links::{Endset, LinkState, View};
 
 use crate::types::{Cursor, Window};
 use crate::{FROM, TO, TYPE};
@@ -35,15 +35,12 @@ pub(crate) const V1_SLOTS: [usize; 3] = [FROM, TO, TYPE];
 /// names. Empty `runs` skip the store: M7 answers `stab(slot, ⟨⟩, ·) = ∅`
 /// for the endset they lift to, so the short-circuit saves a scan rather than
 /// changing an answer.
-pub(crate) fn stab_runs_by_slot<W: HasLinks>(
-    w: &W,
-    runs: &[Run],
-) -> [(usize, OrdSet<Address>); 3] {
+pub(crate) fn stab_runs_by_slot(l: &LinkState, runs: &[Run]) -> [(usize, OrdSet<Address>); 3] {
     if runs.is_empty() {
         return V1_SLOTS.map(|i| (i, OrdSet::new()));
     }
     let q = Endset::from_spans(runs.iter().map(Run::iextent)); // coverage(q) = the runs
-    V1_SLOTS.map(|i| (i, w.links().stab(i, &q, View::Active)))
+    V1_SLOTS.map(|i| (i, l.stab(i, &q, View::Active)))
 }
 
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots
@@ -58,8 +55,8 @@ pub(crate) fn union_slots(slots: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Addre
 /// `findlinks(coverage of runs)` ∩ the active view, as M7's native
 /// `OrdSet<Address>` (address order — ASN-0108's permanent enumeration key):
 /// the selection index every run-anchored family reads.
-pub(crate) fn stab_runs<W: HasLinks>(w: &W, runs: &[Run]) -> OrdSet<Address> {
-    union_slots(&stab_runs_by_slot(w, runs))
+pub(crate) fn stab_runs(l: &LinkState, runs: &[Run]) -> OrdSet<Address> {
+    union_slots(&stab_runs_by_slot(l, runs))
 }
 
 /// `home(a)`: the origin Document of a link address — M1's `document_of`

@@ -13,13 +13,13 @@ use std::collections::HashSet;
 
 use im::OrdSet;
 use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, HasM5, Run, VPos};
-use skep_kernel::{Snapshot, WorldState};
-use skep_links::{Endset, HasLinks};
-use skep_namespace::HasM3;
+use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, Run, VPos};
+use skep_kernel::Snapshot;
+use skep_links::Endset;
 
 use crate::helpers::{stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
+use crate::DiscoveryWorld;
 
 /// The V-span shape every region-family request must have: `count` positions
 /// from `at`, in the CONTENT subspace. `None` iff `count = 0` (M1 has no
@@ -76,10 +76,11 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// region spans may still yield partially-overlapping runs (not an
 /// address-disjoint partition — don't sum widths for |image|; coalescing
 /// would need the run-level span algebra M8 deliberately avoids).
-pub fn image_on<W>(s: &Snapshot<W>, d: &Address, region: &[Span]) -> Result<Vec<Run>, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+pub fn image_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+) -> Result<Vec<Run>, QueryError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
@@ -100,32 +101,28 @@ where
 /// ASN-0127 `findlinks(image(W,d))` ∩ the active view (View::Active internally
 /// == addressable == `dom(L)` ∖ nullified), as M7's native `OrdSet<Address>`
 /// (address order — ASN-0108's permanent enumeration key).
-pub(crate) fn findlinks_v_set_on<W>(
+pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-) -> Result<OrdSet<Address>, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<OrdSet<Address>, QueryError> {
     let img = image_on(s, d, region)?; // gate + region-check + resolve, on THIS snap
-    Ok(stab_runs(s.world(), &img))
+    Ok(stab_runs(s.world().links(), &img))
 }
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive
-/// across slots `{FROM, TO, TYPE}` — exact by the v1 arity-3 invariant).
+/// across slots `{FROM, TO, TYPE}` — exact by the v1 arity-3 invariant), in
+/// ASCENDING ADDRESS ORDER: ASN-0108's permanent enumeration key, so this
+/// enumerates in the order [`window_v_on`] pages by.
 /// result = `findlinks_V ∩ addressable` (`View::Active`) — nullified links
 /// never surface; diverges from ASN-0127's UNFILTERED `findlinks_V`
 /// (Conflicts #8).
-pub fn findlinks_v_on<W>(
+pub fn findlinks_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-) -> Result<Vec<Address>, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
-    Ok(findlinks_v_set_on(s, d, region)?.iter().cloned().collect())
+) -> Result<Vec<Address>, QueryError> {
+    Ok(findlinks_v_set_on(s, d, region)?.into_iter().collect())
 }
 
 /// Present-tense census of region-reaching links; the cardinality of
@@ -133,10 +130,11 @@ where
 /// asserts present unreachability over the active view, not history (D-ZERO)
 /// — the region family's zero, distinct from [`crate::count_ftt_on`]'s
 /// store-wide CN-ZERO.
-pub fn count_v_on<W>(s: &Snapshot<W>, d: &Address, region: &[Span]) -> Result<usize, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+pub fn count_v_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+) -> Result<usize, QueryError> {
     Ok(findlinks_v_set_on(s, d, region)?.len())
 }
 
@@ -144,16 +142,13 @@ where
 /// `Match = findlinks_V` reading); result = `findlinks_V ∩ addressable` —
 /// nullified links never surface. `n = 0` is clamped to 1 (the API is total,
 /// W9).
-pub fn window_v_on<W>(
+pub fn window_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
     cur: Cursor,
     n: usize,
-) -> Result<Window, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<Window, QueryError> {
     let m = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
     Ok(window_over(&m, cur, n, |_| true))
 }
@@ -170,17 +165,14 @@ where
 /// order is pinned (slot, then lexicographic span-sequence): deterministic at
 /// a snapshot, no hash-iteration leak; the internal dedup is a throwaway
 /// `std::collections::HashSet`, so no `im` container crosses this seam.
-pub fn retrieve_endsets_on<W>(
+pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
     region: &[Span],
-) -> Result<Vec<(usize, Endset)>, QueryError>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+) -> Result<Vec<(usize, Endset)>, QueryError> {
     let w = s.world();
     let img = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
-    let slots = stab_runs_by_slot(w, &img); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
+    let slots = stab_runs_by_slot(w.links(), &img); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
     let cand = union_slots(&slots);
     let mut out: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
     for c in cand.iter() {

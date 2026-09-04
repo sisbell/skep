@@ -6,16 +6,23 @@
 //! the FTT unit/zero/conjunction algebra and the home address-projection
 //! filter, projection and addressable discoverability, the delete-orphan
 //! preview's M5-mirroring preconditions and last-witness report, the flipped
-//! lineage probes with the residence gate, and the snapshot twins.
+//! lineage probes with the residence gate, the snapshot twins, and — because
+//! this file is a crate of its own — the promises M8 makes to a consumer
+//! rather than to itself: one named world bound, the standard traits its
+//! values carry, and rejection enums that stay exhaustively matchable.
 
 mod common;
 
+use std::collections::HashSet;
+
 use common::*;
+use skep_address::{Address, Span};
 use skep_arrangement::HasM5;
 use skep_discovery::{
-    content_vspan, count_v_on, window_v_on, FourSet, LinkQuery, OrphanError, QueryError, SlotSpec,
-    SupClaim, FROM, TO, TYPE,
+    content_vspan, count_ftt_on, count_v_on, window_v_on, DiscoveryWorld, FourSet, LinkQuery,
+    OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM, TO, TYPE,
 };
+use skep_kernel::Snapshot;
 use skep_links::{enc, Endset, LinkWriter, SlotArg, View};
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
@@ -717,6 +724,49 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
     assert!(!audit[0].active);
 }
 
+/// §7 — the lineage read-out is in ascending CLAIM-address order, the same
+/// permanent key every enumeration here reads out by: two claims naming one
+/// `old` come back ordered, not in whatever order the index handed them over.
+#[test]
+fn lineage_reads_out_in_claim_address_order() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let mut made = Vec::new();
+    for to in [ca(101), ca(102), ca(103)] {
+        let (e, _) = store
+            .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
+            .expect("emit succeeds");
+        made.push(e);
+    }
+    // Two successors of one superseded link: two claims, both probed by in().
+    let (c1, _) = store
+        .assert_sup(SYS, &doc1(), &made[0], &made[1])
+        .expect("assert_sup succeeds");
+    let (c2, _) = store
+        .assert_sup(SYS, &doc1(), &made[0], &made[2])
+        .expect("assert_sup succeeds");
+    assert!(c1 < c2, "later claims mint later addresses");
+
+    let claims: Vec<Address> = lq
+        .in_claims(&made[0], View::Active)
+        .into_iter()
+        .map(|c| c.claim)
+        .collect();
+    assert_eq!(claims, vec![c1.clone(), c2.clone()]);
+    // out() reads the same order off the TO probe — one claim each here, so
+    // the pair is read back through the union of the two probes.
+    assert_eq!(
+        lq.out_claims(&made[1], View::Active)[0].claim,
+        c1
+    );
+    assert_eq!(
+        lq.out_claims(&made[2], View::Active)[0].claim,
+        c2
+    );
+}
+
 // ───────────────────────── snapshot twins ─────────────────────────
 
 #[test]
@@ -742,4 +792,176 @@ fn snapshot_twins_read_one_pinned_state() {
     let w = window_v_on(&snap, &doc1(), &region, None, 10).expect("window");
     assert_eq!(w.batch, vec![la(1)]);
     assert_eq!(lq.count_v(&doc1(), &region), Ok(2));
+}
+
+// ─────────────────────── the promises to a consumer ───────────────────────
+
+/// The shape a caller composing two M8 reads has to write: ONE bound naming
+/// the world, not the four slices behind it. Blanket-implemented, so the
+/// assembled test world satisfies it by satisfying the accessors — which is
+/// what the call below proves.
+fn region_and_home_census<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+) -> Result<(usize, usize), QueryError> {
+    let reaching = count_v_on(s, d, region)?;
+    let resident = count_ftt_on(
+        s,
+        &FourSet {
+            home: SlotSpec::Spans(enc([d])),
+            ..Default::default()
+        },
+    );
+    Ok((reaching, resident))
+}
+
+/// One bound names the world M8 reads under, and `Default` is the wildcard
+/// base a narrowed descriptor is built from — so a consumer writes the query
+/// it means and leaves no slot at something other than the unit by accident.
+#[test]
+fn one_named_bound_and_the_unit_descriptor_serve_a_composing_caller() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // Both reads off ONE pinned snapshot, through one bound. The two censuses
+    // answer different questions about doc1: BOTH links reach its position 1
+    // (each from-slot covers ca(1)), and only one is homed there.
+    let snap = k.snapshot();
+    assert_eq!(
+        region_and_home_census(&snap, &doc1(), &[vspan(1, 1, 1)]),
+        Ok((2, 1))
+    );
+    // And about doc2, which arranges nothing yet homes a link — the region
+    // zero and the descriptor count, side by side.
+    assert_eq!(
+        region_and_home_census(&snap, &doc2(), &[vspan(1, 1, 1)]),
+        Ok((0, 1))
+    );
+
+    // Default IS the unit, at both levels: an unstated slot constrains
+    // nothing, and a descriptor built from neither constrains anything.
+    assert_eq!(SlotSpec::default(), SlotSpec::Any);
+    assert_eq!(FourSet::default(), FourSet::any());
+}
+
+/// The values M8 hands back are hashable, so a caller can key on a request
+/// and dedup an answer — every field they hold already hashes, and the
+/// orphan rule puts the impl out of a consumer's reach.
+///
+/// Keying is REPRESENTATIONAL: the two spellings of the zero are one query
+/// and two keys. A missed hit, never a wrong answer, and the semantic test is
+/// `is_unsatisfiable`.
+#[test]
+fn the_value_surface_is_hashable_and_keys_by_representation() {
+    let q_any = FourSet::any();
+    let q_from = FourSet {
+        from: SlotSpec::Spans(enc(&[ca(1)])),
+        ..FourSet::any()
+    };
+    let mut memo: HashSet<FourSet> = HashSet::new();
+    assert!(memo.insert(q_any.clone()));
+    assert!(memo.insert(q_from.clone()));
+    assert!(!memo.insert(q_any.clone())); // an equal descriptor hits
+    assert!(memo.contains(&q_from));
+
+    let explicit = FourSet {
+        to: SlotSpec::Empty,
+        ..FourSet::any()
+    };
+    let spelled = FourSet {
+        to: SlotSpec::Spans(Endset::empty()),
+        ..FourSet::any()
+    };
+    assert!(explicit.is_unsatisfiable() && spelled.is_unsatisfiable()); // one query
+    assert!(memo.insert(explicit) && memo.insert(spelled)); // two keys
+
+    // The answer types too: a lineage graph dedups its claims, a window and a
+    // report ride in whatever container a caller reaches for.
+    let claim = SupClaim {
+        claim: la(3),
+        old: la(1),
+        new: la(2),
+        home: doc1(),
+        active: true,
+    };
+    let mut claims: HashSet<SupClaim> = HashSet::new();
+    assert!(claims.insert(claim.clone()));
+    assert!(!claims.insert(claim));
+    let mut windows: HashSet<Window> = HashSet::new();
+    assert!(windows.insert(Window {
+        batch: vec![la(1)],
+        next: Some(la(1)),
+        exhausted: true,
+    }));
+    let mut reports: HashSet<OrphanReport> = HashSet::new();
+    assert!(reports.insert(OrphanReport {
+        orphaned: vec![la(1)]
+    }));
+}
+
+/// The handle is a kernel borrow and behaves as one: it prints without asking
+/// `W: Debug`, and it copies — a copy binds the same kernel and snapshots
+/// afresh, so it answers what the original answers. A consumer holding one in
+/// a struct of its own derives over it, which is the wall a missing impl
+/// would be.
+#[test]
+fn the_handle_debugs_and_copies_like_the_borrow_it_is() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let lq = LinkQuery::new(&k);
+    assert_eq!(format!("{lq:?}"), "LinkQuery { .. }");
+
+    #[derive(Debug, Clone, Copy)]
+    struct Reader<'k> {
+        links: LinkQuery<'k, World>,
+    }
+    let reader = Reader { links: lq }; // lq is Copy — not moved
+    assert!(format!("{reader:?}").starts_with("Reader { links: LinkQuery { .. }"));
+    assert_eq!(reader.links.count_ftt(&FourSet::any()), 1);
+    assert_eq!(lq.count_ftt(&FourSet::any()), 1);
+}
+
+/// Both rejection enums are exhaustively matchable from OUTSIDE the crate —
+/// this file is a crate of its own, so these matches are the check that they
+/// stay so. A consumer's `match` without a catch-all is a completeness proof
+/// (M10 must give every refusal a wire code); sealing either enum, or adding
+/// a variant, has to fail a build rather than fall into a default arm.
+#[test]
+fn every_refusal_is_matchable_without_a_catch_all() {
+    fn query_word(e: QueryError) -> &'static str {
+        match e {
+            QueryError::DocNotRegistered => "doc",
+            QueryError::NotALink => "link",
+            QueryError::BadRegion => "region",
+        }
+    }
+    fn orphan_word(e: OrphanError) -> &'static str {
+        match e {
+            OrphanError::DocNotRegistered => "doc",
+            OrphanError::NotContentSubspace => "subspace",
+            OrphanError::EmptyWidth => "width",
+            OrphanError::OutOfBounds => "bounds",
+        }
+    }
+    assert_eq!(query_word(QueryError::BadRegion), "region");
+    assert_eq!(orphan_word(OrphanError::EmptyWidth), "width");
+
+    // `Display` names the surface that refused, so a relayed refusal says
+    // which of the two vocabularies it came from.
+    assert!(QueryError::NotALink.to_string().starts_with("query: "));
+    assert!(OrphanError::DocNotRegistered
+        .to_string()
+        .starts_with("delete-orphans: "));
 }

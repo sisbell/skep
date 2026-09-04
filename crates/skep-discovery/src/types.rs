@@ -16,9 +16,11 @@ use crate::{FROM, TO, TYPE};
 
 /// Per-slot request component for the four-set descriptor query — the
 /// three-way distinction the conjunction needs (ASN-0121).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SlotSpec {
-    /// ∗ / NOSPECS — the unit: drops out of the conjunction (FL-WILD).
+    /// ∗ / NOSPECS — the unit: drops out of the conjunction (FL-WILD), and so
+    /// the default: an unstated slot constrains nothing.
+    #[default]
     Any,
     /// ∅ constrained-empty — the zero: annihilates the whole result (FL-EMP).
     Empty,
@@ -33,7 +35,14 @@ pub enum SlotSpec {
 /// against `home(a)` — an M1 `document_of` address projection — NOT a slot
 /// and NOT an arrangement-presence test (ASN-0132 CN-STAB: a reverse-orphaned
 /// link still satisfies a home-bounded query).
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Eq`/`Hash` are REPRESENTATIONAL, not semantic: [`SlotSpec::Empty`] and a
+/// `Spans` naming nothing are one query — [`FourSet::is_unsatisfiable`]
+/// answers for both — and two distinct values, so a map keyed on a descriptor
+/// holds two entries for that one query. A missed hit, never a wrong answer;
+/// the semantic test is `is_unsatisfiable`, which reads the slots rather than
+/// their spelling.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FourSet {
     pub home: SlotSpec,
     pub from: SlotSpec,
@@ -119,6 +128,15 @@ impl FourSet {
     }
 }
 
+/// `FourSet::default()` IS [`FourSet::any()`] — the unit descriptor, so
+/// `FourSet { from: …, ..Default::default() }` reads as the wildcard base it
+/// is. The domain name carries the doc; this is the std spelling of it.
+impl Default for FourSet {
+    fn default() -> FourSet {
+        FourSet::any()
+    }
+}
+
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
 /// strictly past `a`. The cursor is a permanent link ADDRESS — the whole
 /// continuation is this value, held by the client; there is no server
@@ -128,7 +146,7 @@ pub type Cursor = Option<Address>;
 /// One window of an enumeration (ASN-0108): `batch` in ascending address
 /// order; `next` resumes (the ≺-max of the batch, else the cursor unchanged);
 /// `exhausted` — a batch shorter than `n` — is the terminal signal (W9).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Window {
     pub batch: Vec<Address>,
     pub next: Cursor,
@@ -144,7 +162,7 @@ pub struct Window {
 /// disclosed from the Audit view yet itself nullified. `old` and `new` carry
 /// no such flag: they are the addresses the claim names, read out as
 /// recorded, and either may itself be a nullified link.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SupClaim {
     pub claim: Address,
     pub old: Address,
@@ -157,7 +175,10 @@ pub struct SupClaim {
 /// would drop from `d` — the PER-DOCUMENT orphan set over the ACTIVE view (a
 /// nullified link that lost its last witness in `d` is NOT reported). The
 /// global-ghost / LP17 escalation is M6 territory, not computed here.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `orphaned` is in ascending address order — the same permanent key every
+/// enumeration here reads out by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OrphanReport {
     pub orphaned: Vec<Address>,
 }
@@ -166,6 +187,13 @@ pub struct OrphanReport {
 /// families. Exactly these three can arise there, so a caller matching them
 /// exhaustively writes no unreachable arm; the delete-orphan preview refuses
 /// on its own preconditions and carries its own [`OrphanError`].
+///
+/// **The exhaustiveness is promised, not merely current.** A downstream match
+/// over these variants is a COMPLETENESS check — M10 must give every refusal
+/// a wire code, and a variant added here has to fail that build rather than
+/// fall into a catch-all arm that ships some default. That is what a caller
+/// buys by matching without `_`, and it is why this enum is not sealed; the
+/// suite matches it from outside the crate so the promise is checked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryError {
     /// `d` is not a registered document (M3) — distinct from a
@@ -198,6 +226,9 @@ impl Error for QueryError {}
 /// `DeleteError` granularity so the refusal is actionable: the preview
 /// declines exactly the requests DELETE would decline, and names the same
 /// fault (§6 states where the two vocabularies label one refusal differently).
+///
+/// Exhaustively matchable from outside the crate, and promised so, for the
+/// reason [`QueryError`] states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrphanError {
     /// `d` is not a registered document (M3) — distinct from a

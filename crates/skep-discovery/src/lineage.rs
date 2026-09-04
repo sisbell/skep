@@ -5,14 +5,12 @@
 //! M7's. Contextual discovery (EL11a) is out of scope and composed above M8.
 
 use skep_address::{validate, Address};
-use skep_arrangement::HasM5;
-use skep_kernel::{Snapshot, WorldState};
-use skep_links::{enc, Endset, HasLinks, LinkState, ShippedType, View};
-use skep_namespace::HasM3;
+use skep_kernel::Snapshot;
+use skep_links::{enc, Endset, LinkState, ShippedType, View};
 
 use crate::helpers::home_of;
 use crate::types::SupClaim;
-use crate::{FROM, TO};
+use crate::{DiscoveryWorld, FROM, TO};
 
 /// What one resident claim says: its two endpoints under the flipped
 /// convention, its home attribution (EL8b), and its own activity.
@@ -66,10 +64,12 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 /// These reads return `Vec`, not `Result`, so the gate short-circuits to `[]`
 /// when `readlink(key)` is `None` — the correct empty lineage, a defensive
 /// backstop, not a license to pass arbitrary tumblers.
-fn claims_on<W>(s: &Snapshot<W>, slot: usize, key: &Address, v: View) -> Vec<SupClaim>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+fn claims_on<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    slot: usize,
+    key: &Address,
+    v: View,
+) -> Vec<SupClaim> {
     let l = s.world().links();
     if l.readlink(key).is_none() {
         return Vec::new(); // residence gate (EL4 + R0a)
@@ -83,28 +83,24 @@ where
 }
 
 /// The claims with `old = y` (ASN-0125 EL11b `in(y)`): probes FROM under the
-/// flipped convention. `y` is intended as a resident link address (`dom(L)`);
-/// a non-link key is gated internally and returns `[]`. `v = Active` yields
-/// the operative graph (`succ_o`), `Audit` the full history (`succ_h`);
-/// `Default` behaves as `Active` (M7's §G primitives coerce it).
+/// flipped convention, in ASCENDING CLAIM-ADDRESS order — the same permanent
+/// key the enumeration families page by, read off M7's own index. `y` is
+/// intended as a resident link address (`dom(L)`); a non-link key is gated
+/// internally and returns `[]`. `v = Active` yields the operative graph
+/// (`succ_o`), `Audit` the full history (`succ_h`); `Default` behaves as
+/// `Active` (M7's §G primitives coerce it).
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as
 /// recorded, so under any view a live claim can name a nullified link. A
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
-pub fn in_claims_on<W>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+pub fn in_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim> {
     claims_on(s, FROM, y, v)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
-/// flipped convention. Same key, view and endpoint-disclosure contract as
-/// [`in_claims_on`].
-pub fn out_claims_on<W>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+/// flipped convention. Same key, view, order and endpoint-disclosure contract
+/// as [`in_claims_on`].
+pub fn out_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim> {
     claims_on(s, TO, x, v)
 }

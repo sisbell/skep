@@ -4,17 +4,18 @@
 //! coherence ASN-0127 forces; M2 clause 6). Which of the two routes a caller
 //! wants is answered on [`LinkQuery`] itself.
 
+use std::fmt;
+
 use skep_address::{Address, Nat, Span, SpanSet};
-use skep_arrangement::{HasM5, Run, VPos};
+use skep_arrangement::{Run, VPos};
 use skep_kernel::{Kernel, WorldState};
-use skep_links::{Endset, HasLinks, View};
-use skep_namespace::HasM3;
+use skep_links::{Endset, View};
 
 use crate::types::{Cursor, FourSet, OrphanError, OrphanReport, QueryError, SupClaim, Window};
 use crate::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
     findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
-    retrieve_endsets_on, window_ftt_on, window_v_on,
+    retrieve_endsets_on, window_ftt_on, window_v_on, DiscoveryWorld,
 };
 
 /// The read-only query/presentation handle over the link subsystem (M8). Owns
@@ -31,10 +32,34 @@ pub struct LinkQuery<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }
 
-impl<'k, W> LinkQuery<'k, W>
-where
-    W: WorldState + HasLinks + HasM5 + HasM3,
-{
+/// The handle prints as itself: `Kernel` is deliberately opaque, and the
+/// answer comes from a snapshot taken and dropped inside the call, so there is
+/// no pinned coordinate to render. Written out rather than derived: a derive
+/// would bound the impl on `W: Debug`, which a world composed of persistent
+/// store slices need not be — and asking for it would make this type the
+/// reason a consumer's own derive fails.
+impl<W: WorldState> fmt::Debug for LinkQuery<'_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LinkQuery").finish_non_exhaustive()
+    }
+}
+
+/// A `LinkQuery` IS a borrow of the kernel, so it copies like one; a copy
+/// binds the same kernel and, like the original, snapshots afresh per call.
+/// The charter above — no slice, no index, no state — is what keeps this safe
+/// to promise: the day this holds a field of its own it stops being a borrow
+/// and loses `Copy` with it.
+///
+/// Hand-written because the derives would put `W: Clone`/`W: Copy` on impls
+/// that never touch `W`, and no `WorldState` is `Copy`.
+impl<W: WorldState> Clone for LinkQuery<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: WorldState> Copy for LinkQuery<'_, W> {}
+
+impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
     /// Bind the kernel. Each method then takes ONE fresh snapshot and
     /// delegates to its `*_on` twin.
     pub fn new(kernel: &'k Kernel<W>) -> Self {

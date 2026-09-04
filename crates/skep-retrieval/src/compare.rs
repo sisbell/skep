@@ -7,11 +7,14 @@
 //! required — v1 ships the finer-than-maximal per-overlap report, fully
 //! conforming under R1–R3).
 
+use std::cmp;
+
+use num_traits::CheckedSub;
 use skep_address::{ordinal, Address, Nat, Tumbler};
 use skep_arrangement::{M5State, Run, VPos};
 
 use crate::error::{CompareError, Operand};
-use crate::helpers::{gate_vspan, S_C};
+use crate::helpers::{gate_vspan, subspace_of, Subspace};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
 use crate::{M6World, Query};
 
@@ -50,7 +53,7 @@ impl<'s, W: M6World> Query<'s, W> {
                     return Err(CompareError::DocNotRegistered(r.doc.clone()));
                 }
                 for (si, span) in r.spans.iter().enumerate() {
-                    if span.start().get(1) != Some(&S_C) {
+                    if span.start().get(1).and_then(subspace_of) != Some(Subspace::Content) {
                         // Start must lie in the content subspace (Open build
                         // decision: reject loudly, the recommended default —
                         // spans that merely DENOTE link positions from a
@@ -81,6 +84,7 @@ impl<'s, W: M6World> Query<'s, W> {
 /// consumed by [`overlap_pair`]/[`interval_join`]; dropped at return. One
 /// block per resolved I-run of one spec's span — the run as M5 handed it
 /// over, plus where the block's first position sits in its document's V-space.
+#[derive(Debug)]
 struct Block {
     doc: Address,
     v_start: VPos,
@@ -177,37 +181,31 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Vec<Block> {
 // through `Block::vpos_at` — only AFTER the `lo < hi` overlap guard, i.e.
 // only on runs whose I-intervals overlap. Overlapping content runs lie on ONE
 // content chain (shared origin sub-allocator ⇒ equal-length, equal prefix
-// below the action point), so a bare ordinal subtraction is a TOTAL `Nat` op
-// — no borrow, no underflow. Different-chain pairs have disjoint I-intervals
+// below the action point), so the ordinal subtraction is a TOTAL `Nat` op —
+// no borrow, no underflow. Different-chain pairs have disjoint I-intervals
 // and are rejected by the guard before any ordinal arithmetic runs.
 
-/// Co-chain ⇒ `ordinal(hi) ≥ ordinal(lo)` — total under the precondition.
+/// Co-chain ⇒ `ordinal(hi) ≥ ordinal(lo)`, so the subtraction is total under
+/// the precondition — and the `expect` names the lemma a violation would have
+/// falsified, rather than surfacing as a bignum borrow panic from inside
+/// `num-bigint` that says nothing about the argument.
 fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
-    ordinal(hi) - ordinal(lo)
-}
-
-fn max_tumbler(a: &Tumbler, b: &Tumbler) -> Tumbler {
-    if a >= b {
-        a.clone()
-    } else {
-        b.clone()
-    }
-}
-
-fn min_tumbler(a: &Tumbler, b: &Tumbler) -> Tumbler {
-    if a <= b {
-        a.clone()
-    } else {
-        b.clone()
-    }
+    ordinal(hi)
+        .checked_sub(ordinal(lo))
+        .expect("co-chain overlap ⇒ ordinal(hi) ≥ ordinal(lo)")
 }
 
 /// One correspondence per I-overlap of two blocks, or `None` when the
 /// I-intervals are disjoint. Each foot is asked of the block it belongs to
 /// ([`Block::vpos_at`]), so both resolve to the shared address `lo`.
+///
+/// The endpoints stay BORROWED across the guard: the exhaustive join asks
+/// this of every candidate pair, and most are disjoint, so a rejected pair
+/// must not pay to clone two `Vec<BigUint>`s for a comparison.
 fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
-    let lo = max_tumbler(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
-    let hi = min_tumbler(&pb.reach_i(), &qb.reach_i());
+    let (p_reach, q_reach) = (pb.reach_i(), qb.reach_i());
+    let lo = cmp::max(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
+    let hi = cmp::min(&p_reach, &q_reach);
     if lo >= hi {
         return None; // disjoint I-intervals ⇒ no correspondence
     }
@@ -215,10 +213,10 @@ fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
     // below is total.
     Some(CorrPair {
         d1: pb.doc.clone(),
-        u1: pb.vpos_at(&lo), // slot 1 ⇐ operand 1
+        u1: pb.vpos_at(lo), // slot 1 ⇐ operand 1
         d2: qb.doc.clone(),
-        u2: qb.vpos_at(&lo), // slot 2 ⇐ operand 2
-        width: ordinal_gap(&hi, &lo),
+        u2: qb.vpos_at(lo), // slot 2 ⇐ operand 2
+        width: ordinal_gap(hi, lo),
     })
 }
 
@@ -245,7 +243,7 @@ fn interval_join(p: &[Block], q: &[Block]) -> Vec<CorrPair> {
 /// complete+sound relation (R1/R2). NOT R4's canonical report, which is the
 /// MAXIMAL pairs of X11 and is explicitly not required for conformance. Sort
 /// lexicographically by `(d1, u1, d2, u2)` — `sort_by_cached_key` computes
-/// each four-`Tumbler` key ONCE per element (a bare `sort_by` would rebuild
+/// each four-component key ONCE per element (a bare `sort_by` would rebuild
 /// both keys per *comparison*) and is a STABLE sort, so duplicate overlaps
 /// keep a deterministic listed order (R3). The adjacent-pair fold is the
 /// IDENTITY in v1 (a finer-than-maximal, per-overlap report conforms — see
@@ -255,11 +253,13 @@ fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     fold_adjacent(pairs)
 }
 
-fn corr_key(c: &CorrPair) -> (Tumbler, Tumbler, Tumbler, Tumbler) {
+/// The documents order by their own `Ord`, which IS the T1 tumbler order; the
+/// feet are lifted to `Tumbler`, because a `VPos` carries no order of its own.
+fn corr_key(c: &CorrPair) -> (Address, Tumbler, Address, Tumbler) {
     (
-        c.d1.tumbler().clone(),
+        c.d1.clone(),
         vpos_tumbler(&c.u1),
-        c.d2.tumbler().clone(),
+        c.d2.clone(),
         vpos_tumbler(&c.u2),
     )
 }

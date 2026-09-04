@@ -11,11 +11,21 @@
 //! as payload-free — the document is recoverable from the single-document
 //! request — and the interface is the verbatim binding.
 //!
-//! None implements `std::error::Error`, because nothing consumes one as a
-//! `dyn Error`: M10 marshals every rejection through `Serialize`, and
-//! `Display` carries the human-readable message — naming the offending
-//! document, in M1's dotted-decimal form, wherever the variant carries one.
+//! All six carry the workspace's shape for a typed rejection —
+//! `Debug + Display + std::error::Error`, each a LEAF with no `source()`,
+//! because no M6 variant wraps another error — so a caller boxes one, `?`s it
+//! into a `Box<dyn Error>` or an `anyhow` chain, and reads its message like
+//! any other error in the system. That is independent of `Serialize`, which
+//! is how M10 marshals them; `Display` carries the human-readable message,
+//! naming the offending document in M1's dotted-decimal form wherever the
+//! variant carries one.
+//!
+//! [`SpanFault`] and [`Operand`] deliberately stop at `Debug + Display`: they
+//! are payload INSIDE those six and are never the `E` of a public `Result`,
+//! so an `Error` impl there would only invite a `source()` that double-prints
+//! the message its carrier already interpolates.
 
+use std::error::Error;
 use std::fmt;
 
 use serde::Serialize;
@@ -157,11 +167,15 @@ impl fmt::Display for RetrieveError {
         }
     }
 }
+impl Error for RetrieveError {}
+
 impl fmt::Display for ExtentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("doc_vspan/doc_vspanset: doc is not a registered document")
     }
 }
+impl Error for ExtentError {}
+
 impl fmt::Display for OriginError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -186,6 +200,8 @@ impl fmt::Display for OriginError {
         }
     }
 }
+impl Error for OriginError {}
+
 impl fmt::Display for DeletionsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -195,6 +211,8 @@ impl fmt::Display for DeletionsError {
         }
     }
 }
+impl Error for DeletionsError {}
+
 impl fmt::Display for CompareError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -221,6 +239,8 @@ impl fmt::Display for CompareError {
         }
     }
 }
+impl Error for CompareError {}
+
 impl fmt::Display for FindError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -238,3 +258,4 @@ impl fmt::Display for FindError {
         }
     }
 }
+impl Error for FindError {}

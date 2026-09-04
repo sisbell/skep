@@ -22,6 +22,14 @@
 //! doors (`validate`, `Span::new`/`from_endpoints`), so an untrusted address
 //! reaches M6 only as a value some M1 constructor has already admitted.
 //!
+//! [`Delivery`] and [`CompareReport`] are COLLECTIONS, and behave like std's:
+//! `len`/`is_empty`/`iter`/`as_slice`, `IntoIterator` owned and borrowed,
+//! `FromIterator`, and `Default` for the empty answer each genuinely returns.
+//! A reader walks an answer without naming its representation, which the
+//! orphan rule would otherwise forbid a consumer from arranging for itself.
+//! Not `Extend`: these are answers produced whole, never grown in place, and
+//! the narrower promise is the honest one.
+//!
 //! [`ContentWrite`]: skep_content::ContentWrite
 
 use std::fmt;
@@ -83,15 +91,64 @@ impl fmt::Debug for DeliveryItem {
 
 /// RETRIEVEV's result: per-spec concatenation in submitted order,
 /// ascending-V within each spec, no merge, no dedup, no global sort
-/// (ASN-0115 R3/R5/R8).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// (ASN-0115 R3/R5/R8). `Default` is the empty delivery, which is the exact
+/// answer to an empty spec-set.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Delivery(pub Vec<DeliveryItem>);
+
+impl Delivery {
+    /// The delivered items, in delivery order.
+    pub fn as_slice(&self) -> &[DeliveryItem] {
+        &self.0
+    }
+
+    /// How many items were delivered — one per active V-position (R3).
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether nothing was delivered: an empty spec-set, or one whose spans
+    /// all resolved empty (R6).
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Borrowed items in delivery order — the iterator `&Delivery` walks.
+    pub fn iter(&self) -> std::slice::Iter<'_, DeliveryItem> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for Delivery {
+    type Item = DeliveryItem;
+    type IntoIter = std::vec::IntoIter<DeliveryItem>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Delivery {
+    type Item = &'a DeliveryItem;
+    type IntoIter = std::slice::Iter<'a, DeliveryItem>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// Collect AS GIVEN: the order a delivery is collected in IS its delivery
+/// order (R5/R8 — no merge, no dedup, no sort).
+impl FromIterator<DeliveryItem> for Delivery {
+    fn from_iter<I: IntoIterator<Item = DeliveryItem>>(it: I) -> Delivery {
+        Delivery(it.into_iter().collect())
+    }
+}
 
 /// SHOWDELETIONS' result (ASN-0075): each half is the deduped,
 /// Tumbler-ordered set of I-addresses deleted-from-one document yet
 /// current-in-the-other — the existing I-addresses themselves (D-IDENT),
-/// never copies, T1-orderable (D-ORD).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// never copies, T1-orderable (D-ORD). `Default` is the two-empty-halves
+/// answer two registered-empty documents genuinely yield.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Deletions {
     /// `DeletedFromAWithB` — `DELETED(a, d_a) ∧ CURRENT(a, d_b)`.
     pub deleted_from_a_with_b: Vec<Address>,
@@ -115,5 +172,55 @@ pub struct CorrPair {
 /// COMPARE's result: the complete, sound correspondence relation in one
 /// deterministic presentation (ASN-0122 R1–R3; finer-than-maximal — X12 R4's
 /// canonical form is not required). NOT `Serialize` — see [`CorrPair`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Default` is the empty report two regions that share no address yield.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompareReport(pub Vec<CorrPair>);
+
+impl CompareReport {
+    /// The reported correspondences, in presentation order.
+    pub fn as_slice(&self) -> &[CorrPair] {
+        &self.0
+    }
+
+    /// How many correspondences were reported.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the two regions share no address at all.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Borrowed correspondences in presentation order — the iterator
+    /// `&CompareReport` walks.
+    pub fn iter(&self) -> std::slice::Iter<'_, CorrPair> {
+        self.0.iter()
+    }
+}
+
+impl IntoIterator for CompareReport {
+    type Item = CorrPair;
+    type IntoIter = std::vec::IntoIter<CorrPair>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a CompareReport {
+    type Item = &'a CorrPair;
+    type IntoIter = std::slice::Iter<'a, CorrPair>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+/// Collect AS GIVEN — the presentation order is [`Query::compare`]'s to fix
+/// (X12 R3), not this constructor's to impose.
+///
+/// [`Query::compare`]: crate::Query::compare
+impl FromIterator<CorrPair> for CompareReport {
+    fn from_iter<I: IntoIterator<Item = CorrPair>>(it: I) -> CompareReport {
+        CompareReport(it.into_iter().collect())
+    }
+}

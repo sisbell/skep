@@ -62,6 +62,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::fmt;
+
 mod compare;
 mod error;
 mod helpers;
@@ -109,3 +111,31 @@ impl<'s, W: M6World> Query<'s, W> {
         self.0.seq()
     }
 }
+
+/// Renders the pinned coordinate, which is the whole of a `Query`'s
+/// observable identity: the snapshot behind it has no `Debug` of its own, and
+/// the world it holds is not a thing to print into a log. Hand-written
+/// because a derive would demand `W: Debug` on an impl that never touches
+/// `W`.
+impl<W: M6World> fmt::Debug for Query<'_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Query")
+            .field("as_of", &self.as_of())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `Query` IS a borrow, so it copies like one — a copy reads the SAME
+/// pinned `Snapshot`, which is the whole of what "one `Query` per logical
+/// query" protects. The charter above (no slice, no fold, no state) is what
+/// keeps that safe to promise: the day this holds a field of its own, it
+/// stops being a borrow and loses `Copy` with it.
+///
+/// Hand-written because the derives would put `W: Clone`/`W: Copy` on impls
+/// that never touch `W`, and no `WorldState` is `Copy`.
+impl<W: M6World> Clone for Query<'_, W> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<W: M6World> Copy for Query<'_, W> {}

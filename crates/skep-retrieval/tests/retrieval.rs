@@ -22,11 +22,11 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
-    CompareError, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError, FindError,
-    Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
+    CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
+    FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -285,6 +285,27 @@ fn as_of_reports_the_pinned_seq_and_queries_never_mutate() {
     let _ = ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])]));
     // …and nothing committed.
     assert_eq!(k.current_seq(), before);
+}
+
+#[test]
+fn the_query_handle_is_a_borrow_and_copies_like_one() {
+    // §Public interface: a Query owns nothing and holds one borrow, so it
+    // copies rather than moves, and every copy reads the SAME pinned
+    // snapshot — which is the whole of what "one Query per logical query"
+    // protects. It renders as the coordinate it is pinned to, since the
+    // snapshot behind it has no Debug of its own.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    fn consume(q: Query<'_, World>) -> Seq {
+        q.as_of()
+    }
+    assert_eq!(consume(q), s.seq()); // by value…
+    assert_eq!(q.as_of(), s.seq()); // …and q is still usable: Copy, not moved.
+    let copy = q;
+    assert_eq!(copy.as_of(), q.as_of());
+    assert_eq!(format!("{q:?}"), format!("Query {{ as_of: {:?}, .. }}", s.seq()));
 }
 
 // ---- §A RETRIEVEV ----
@@ -1144,4 +1165,113 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
     // The registry rejection names the offending document, in M1's dotted
     // decimal — the payload the variant carries, not discarded by Display.
     assert!(format!("{e}").contains(&un().to_string()));
+}
+
+#[test]
+fn every_rejection_is_a_std_error() {
+    // §Errors: a foreign caller boxes an M6 rejection like any other error in
+    // the workspace — the shape `?` into a `Box<dyn Error>` and anyhow need,
+    // and one the orphan rule would forbid the caller from supplying. Each is
+    // a LEAF: no variant wraps another error, so none has a source.
+    fn boxed(
+        e: impl std::error::Error + Send + Sync + 'static,
+    ) -> Box<dyn std::error::Error + Send + Sync> {
+        assert!(e.source().is_none(), "M6 rejections are leaves");
+        Box::new(e)
+    }
+    assert!(!boxed(ExtentError::DocNotRegistered).to_string().is_empty());
+    assert!(!boxed(RetrieveError::MalformedSpec {
+        index: 0,
+        fault: SpanFault::StartTooShallow,
+    })
+    .to_string()
+    .is_empty());
+    assert!(
+        !boxed(OriginError::MalformedSpan(SpanFault::NotLevelUniform))
+            .to_string()
+            .is_empty()
+    );
+    // A boxed rejection still renders the document its variant carries.
+    assert!(boxed(DeletionsError::DocNotRegistered(un()))
+        .to_string()
+        .contains(&un().to_string()));
+    assert!(!boxed(CompareError::NotContentSubspace {
+        operand: Operand::First,
+        region: 0,
+        index: 0,
+    })
+    .to_string()
+    .is_empty());
+    assert!(!boxed(FindError::MalformedSpan {
+        region: 0,
+        index: 0,
+        fault: SpanFault::NotOrdinalLevel,
+    })
+    .to_string()
+    .is_empty());
+}
+
+#[test]
+fn the_answer_collections_behave_like_std_collections() {
+    // §Public interface: Delivery and CompareReport are collections, so a
+    // consumer walks, measures and collects one without naming the Vec
+    // inside it — impls the orphan rule would forbid a consumer from adding.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }],
+    )
+    .expect("copy commits");
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let delivery = ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))]));
+    assert_eq!(delivery.len(), 3);
+    assert!(!delivery.is_empty());
+    assert_eq!(delivery.iter().count(), 3);
+    assert_eq!(delivery.as_slice()[0], DeliveryItem::Content(val(b"a")));
+    // Borrowed walk, then an owned one that collects straight back.
+    let borrowed: Vec<&DeliveryItem> = (&delivery).into_iter().collect();
+    assert_eq!(borrowed.len(), 3);
+    let round: Delivery = delivery.clone().into_iter().collect();
+    assert_eq!(round, delivery);
+    // The empty answers are the defaults, and an empty spec-set yields one.
+    assert_eq!(ok_of(q.retrieve_v(&[])), Delivery::default());
+    assert!(Delivery::default().is_empty());
+    assert_eq!(Deletions::default(), ok_of(q.show_deletions(&doc1(), &doc2())));
+    let rep = ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+    ));
+    assert_eq!(rep.len(), 1);
+    assert!(!rep.is_empty());
+    assert_eq!(rep.iter().count(), 1);
+    assert_eq!(rep.as_slice()[0].d1, doc1());
+    let round: CompareReport = rep.clone().into_iter().collect();
+    assert_eq!(round, rep);
+    assert!(CompareReport::default().is_empty());
+    // A report of two documents that share no address IS the default.
+    let none = ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+        &[region_spec(doc1(), vec![])],
+    ));
+    assert_eq!(none, CompareReport::default());
+}
+
+#[test]
+fn the_query_handle_and_its_answers_cross_threads() {
+    // Auto traits are promises made by what a type CONTAINS, and a threaded
+    // front door depends on them; a private field could revoke one with no
+    // signature changing, so the promise is pinned here.
+    fn is_send_sync<T: Send + Sync>() {}
+    is_send_sync::<Query<'static, World>>();
+    is_send_sync::<Delivery>();
+    is_send_sync::<CompareReport>();
+    is_send_sync::<Deletions>();
+    is_send_sync::<RetrieveError>();
 }

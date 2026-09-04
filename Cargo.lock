@@ -880,7 +880,6 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "num-traits",
- "once_cell",
  "serde",
  "skep-address",
  "skep-arrangement",

@@ -165,8 +165,8 @@ pub use skep_discovery::{Cursor, FourSet, OrphanReport, SlotSpec, SupClaim, Wind
 pub use skep_kernel::Seq; // M2
 pub use skep_namespace::PrincipalId; // M3
 // M6, the two enclosed shapes included: `Delivery` and `CompareReport` are
-// newtypes over `Vec<DeliveryItem>` and `Vec<CorrPair>`, so reading either
-// answer means naming what is inside it.
+// collections of `DeliveryItem` and `CorrPair`, and marshaling either answer
+// means naming the element it yields.
 pub use skep_retrieval::{
     CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Operand, RegionSpec, Spec, SpanFault,
 };

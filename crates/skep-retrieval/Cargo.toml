@@ -9,18 +9,14 @@ description = "M6 — Content Retrieval & Query: the read-only observer surface 
 readme = "README.md"
 
 [dependencies]
-# Nat::zero()/one()/is_zero() are trait fns the per-position ordinal math keeps
-# in scope.
+# Nat::zero()/one()/is_zero()/checked_sub() are trait fns the ordinal math
+# keeps in scope.
 num-traits.workspace = true
-# The design-mandated memoization of the two subspace numerals (§Internal
-# design): Nat = BigUint cannot be `const`, so s_C/s_L are Lazy statics the hot
-# per-position loop compares against by reference.
-once_cell.workspace = true
 serde.workspace = true
 # M1 — origin projection (document_of), the subspace numerals
 # (content_subspace/link_subspace), gate primitives (action_point/zeros/
-# is_level_uniform/ordinal), V-extent arithmetic (shift), span/span-set
-# synthesis and membership.
+# is_level_uniform/ordinal), span/span-set synthesis and membership, and the
+# Address/Tumbler orders the answer presentation sorts by.
 skep-address = { path = "../skep-address" }
 # M2 — the pinned Snapshot every query binds, and its Seq. M6 never writes:
 # no transact, no Kernel handle, no LockKey.

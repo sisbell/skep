@@ -8,7 +8,9 @@ use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
 use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
-use crate::helpers::{debug_assert_sequential_positions, dedup_addrs, gate_vspan, S_C, S_L};
+use crate::helpers::{
+    debug_assert_sequential_positions, dedup_addrs, gate_vspan, subspace_of, Subspace, S_C, S_L,
+};
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 use crate::{M6World, Query};
 
@@ -21,11 +23,11 @@ use crate::{M6World, Query};
 /// Built with M5's `ordinal_vspan`, so the extent M6 REPORTS is the shape M5's
 /// `resolve` READS: the constructor and the recognizer every request span is
 /// folded through are the two halves of one definition and cannot come apart.
-/// `None` iff `n_S == 0`, which both call sites have already excluded.
-fn ext_span(s: Nat, n: &Nat) -> Span {
+/// `None` iff `n_S == 0`, which its one call site has already excluded.
+fn ext_span(s: &Nat, n: &Nat) -> Span {
     ordinal_vspan(
         &VPos {
-            subspace: s,
+            subspace: s.clone(),
             ordinal: Nat::one(),
         },
         n,
@@ -74,23 +76,22 @@ impl<'s, W: M6World> Query<'s, W> {
         let mut out = Vec::new();
         for s in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. The gate
-            // guarantees #start ≥ 2 and zero-free, so get(1) is the subspace
-            // at any depth (1 = content, 2 = link).
-            let sub = s.span.start().get(1).expect("the gate ⇒ #start ≥ 2");
+            // guarantees #start ≥ 2 and zero-free, so position 1 is the
+            // subspace at any depth; classify ONCE per spec, because the
+            // answer is constant over the spec's positions.
+            let sub = subspace_of(s.span.start().get(1).expect("the gate ⇒ #start ≥ 2"));
             for run in m5.resolve(&s.doc, &s.span) {
                 // Per active position, ascending V (R3) — no dedup (R8); the
                 // run answers for its own positions.
                 for a in run.addrs() {
-                    if *sub == *S_C {
-                        out.push(DeliveryItem::Content(
+                    match sub {
+                        Some(Subspace::Content) => out.push(DeliveryItem::Content(
                             c.value_at(a.tumbler())
                                 .expect("S3★: an arranged content position has a stored value")
                                 .clone(),
-                        ));
-                    } else if *sub == *S_L {
+                        )),
                         // The link reference IS the address — never reads M4.
-                        out.push(DeliveryItem::Ref(a));
-                    } else {
+                        Some(Subspace::Link) => out.push(DeliveryItem::Ref(a)),
                         // UNREACHABLE for an ACTIVE position: S3★-aux
                         // confines every bound V-position to subspace ∈
                         // {s_C, s_L}, and `resolve` yields NO runs for any
@@ -99,9 +100,9 @@ impl<'s, W: M6World> Query<'s, W> {
                         // read-path policy with the S3★ `expect` above:
                         // silently dropping an active position would violate
                         // exactness (R3).
-                        unreachable!(
+                        None => unreachable!(
                             "active V-position must be content or link subspace (S3★-aux)"
-                        );
+                        ),
                     }
                 }
             }
@@ -148,10 +149,12 @@ impl<'s, W: M6World> Query<'s, W> {
     /// `content_count`/`link_count` ARE the extents, because each subspace's
     /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
     /// (D-SEQ★ — the sequential-position occupancy ASN-0113 W4 forces; M5's
-    /// write-path property, trusted here and tripwired in debug). Built by
-    /// `union` of singletons — concatenation preserves the already-disjoint,
-    /// content-before-link normal form (asserted in debug); no invented M1
-    /// constructor.
+    /// write-path property, trusted here and tripwired in debug). Each
+    /// numeral travels with its OWN count in one pair, so the two can never be
+    /// crossed, and the occupied ones are `collect`ed through M1's
+    /// `FromIterator<Span>` — which collects AS GIVEN, preserving the
+    /// already-disjoint, content-before-link normal form (asserted in debug);
+    /// no invented M1 constructor.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -160,13 +163,11 @@ impl<'s, W: M6World> Query<'s, W> {
         }
         debug_assert_sequential_positions(m5, doc);
         let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
-        let mut result = SpanSet::empty();
-        if !nc.is_zero() {
-            result = union(&result, &SpanSet::singleton(ext_span((*S_C).clone(), &nc)));
-        }
-        if !nl.is_zero() {
-            result = union(&result, &SpanSet::singleton(ext_span((*S_L).clone(), &nl)));
-        }
+        let result: SpanSet = [(&*S_C, &nc), (&*S_L, &nl)]
+            .into_iter()
+            .filter(|(_, n)| !n.is_zero())
+            .map(|(s, n)| ext_span(s, n))
+            .collect();
         debug_assert!(
             result.is_normalized(),
             "W13: content-before-link, subspace-separated ⇒ already normal"
@@ -198,15 +199,12 @@ impl<'s, W: M6World> Query<'s, W> {
         }
         gate_vspan(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
         // subspace at any depth (gate ⇒ #start ≥ 2)
-        let sub = span.start().get(1).expect("the gate ⇒ #start ≥ 2");
-        let n_s = if *sub == *S_C {
-            m5.content_count(doc)
-        } else if *sub == *S_L {
-            m5.link_count(doc)
-        } else {
+        let n_s = match subspace_of(span.start().get(1).expect("the gate ⇒ #start ≥ 2")) {
+            Some(Subspace::Content) => m5.content_count(doc),
+            Some(Subspace::Link) => m5.link_count(doc),
             // Foreign subspace ∉ {s_C, s_L}: distinct from a real-but-empty
             // subspace.
-            return Err(OriginError::NoSuchSubspace);
+            None => return Err(OriginError::NoSuchSubspace),
         };
         if n_s.is_zero() {
             return Err(OriginError::EmptySubspace); // (iii)

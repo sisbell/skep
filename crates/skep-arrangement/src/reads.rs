@@ -22,41 +22,40 @@ use skep_address::{content_subspace, difference_sets, union, Address, Nat, Span,
 
 use crate::run::Run;
 use crate::state::M5State;
-use crate::vspace::{is_ordinal_vspan, ordinal_vspan, VPos};
+use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
 impl M5State {
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
     /// I-runs covering an ORDINAL-LEVEL depth-2 V-span (width `[0, n]`,
-    /// action point 2), V-ordered, clipped to the active range. Subspace from
-    /// `span.start().get(1)`, count from `span.width().get(2)`.
+    /// action point 2), V-ordered, clipped to the active range. The span's
+    /// subspace, ordinal and count come from the one reader that establishes
+    /// it has them.
     ///
     /// DEFENSIVE (returns ⟨⟩, cannot fault — no `Result`) unless the span is
-    /// usable: a span failing [`is_ordinal_vspan`] — the shared, complete
-    /// shape predicate, which COPY's `BadSpan` rejects on — yields ⟨⟩, and so
-    /// does a shape-valid span whose subspace `start().get(1)` ∉ {s_C, s_L},
-    /// a `DocArrangement` having exactly the content and link run-lists.
-    /// Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate registered-empty vs unallocated
-    /// via M3). A caller that must tell "bad request" from "genuinely empty"
-    /// calls the predicate itself before asking; M6's own request gate is
-    /// deliberately WEAKER (ASN-0115 well-formedness, `#start ≥ 2`), leaving
-    /// depth compatibility to this defensive fold.
+    /// usable: a span the shared shape reader refuses — the same shape COPY's
+    /// `BadSpan` rejects on — yields ⟨⟩, and so does a shape-valid span whose
+    /// subspace ∉ {s_C, s_L}, a `DocArrangement` having exactly the content
+    /// and link run-lists. Absent doc ⇒ ⟨⟩ (M6/M8 disambiguate
+    /// registered-empty vs unallocated via M3). A caller that must tell "bad
+    /// request" from "genuinely empty" calls
+    /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) itself before asking;
+    /// M6's own request gate is deliberately WEAKER (ASN-0115
+    /// well-formedness, `#start ≥ 2`), leaving depth compatibility to this
+    /// defensive fold.
     ///
     /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs' extents:
     /// see [`Run::iextent`].
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
-        if !is_ordinal_vspan(span) {
+        let Some(v) = as_ordinal_vspan(span) else {
             return Vec::new();
-        }
+        };
         let Some(arr) = self.arrangements.get(doc.tumbler()) else {
             return Vec::new();
         };
-        let Some(list) = arr.list(span.start().get(1).expect("#start == 2")) else {
+        let Some(list) = arr.list(v.subspace) else {
             return Vec::new();
         };
-        list.resolve_range(
-            span.start().get(2).expect("#start == 2"),
-            span.width().get(2).expect("#width == 2"),
-        )
+        list.resolve_range(v.ordinal, v.count)
     }
 
     /// `M(d)(v)` (§2): the I-address at V-position `v`, or `None` when
@@ -181,8 +180,12 @@ impl M5State {
                 let Some((k_lo, k_hi)) = run.offsets_covered_by(cspan) else {
                     continue;
                 };
+                let at = VPos {
+                    subspace: content_subspace(),
+                    ordinal: &v_start + &k_lo,
+                };
                 vspans.push(
-                    ordinal_vspan(&content_subspace(), &(&v_start + &k_lo), &(&k_hi - &k_lo))
+                    ordinal_vspan(&at, &(&k_hi - &k_lo))
                         .expect("a covered offset range is nonempty (k_lo < k_hi)"),
                 );
             }
@@ -280,7 +283,7 @@ mod tests {
         // §2: every malformed request folds to ⟨⟩ — never a fault.
         let s = arranged();
         // The usable form resolves.
-        assert!(s.resolve(&doc1(), &vspan(1, 1, 3)) == vec![run(&ca(1), 3)]);
+        assert_eq!(s.resolve(&doc1(), &vspan(1, 1, 3)), vec![run(&ca(1), 3)]);
         // #start ≠ 2 (both < 2 and > 2).
         let short = Span::new(t(&[5]), t(&[1])).expect("T12");
         assert!(s.resolve(&doc1(), &short).is_empty());
@@ -302,7 +305,7 @@ mod tests {
         // transclusion seam.
         let s = arranged();
         let got = s.resolve(&doc1(), &vspan(1, 2, 10));
-        assert!(got == vec![run(&ca(2), 2), run(&vca(1), 2)]);
+        assert_eq!(got, vec![run(&ca(2), 2), run(&vca(1), 2)]);
     }
 
     #[test]

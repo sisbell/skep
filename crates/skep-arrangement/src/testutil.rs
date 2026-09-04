@@ -63,7 +63,7 @@ pub(crate) fn run(start: &Address, width: u32) -> Run {
 
 /// An ordinal-level depth-2 V-span `[subspace, ordinal]` × `[0, count]`.
 pub(crate) fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
-    ordinal_vspan(&n(subspace), &n(ordinal), &n(count)).expect("test spans name ≥ 1 position")
+    ordinal_vspan(&vp(subspace, ordinal), &n(count)).expect("test spans name ≥ 1 position")
 }
 
 /// A depth-2 V-position.

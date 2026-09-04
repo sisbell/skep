@@ -140,7 +140,7 @@ fn vp(subspace: u32, ordinal: u32) -> VPos {
 }
 
 fn vspan(subspace: u32, ordinal: u32, count: u32) -> Span {
-    ordinal_vspan(&n(subspace), &n(ordinal), &n(count)).expect("test spans name ≥ 1 position")
+    ordinal_vspan(&vp(subspace, ordinal), &n(count)).expect("test spans name ≥ 1 position")
 }
 
 fn val(b: &[u8]) -> Val {
@@ -350,7 +350,7 @@ fn copy_transcludes_by_reference_and_records_provenance() {
             P1,
             &doc2(),
             vp(1, 1),
-            vec![VSpec {
+            &[VSpec {
                 source: doc1(),
                 span: vspan(1, 1, 2),
             }],
@@ -381,7 +381,7 @@ fn self_copy_resolves_against_the_pre_edit_arrangement_preserving_multiplicity()
         P1,
         &doc1(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
@@ -402,37 +402,37 @@ fn copy_rejects_each_documented_guard() {
     let un = a(&[1, 0, 1, 0, 9]);
     // Destination checks first (as INSERT, minus EmptyContent).
     assert!(matches!(
-        rejected(vs.copy(P1, &un, vp(1, 1), vec![])),
+        rejected(vs.copy(P1, &un, vp(1, 1), &[])),
         CopyError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(2, 1), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[])),
         CopyError::NotContentSubspace
     ));
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 2), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 2), &[])),
         CopyError::OutOfBounds
     ));
     let spec = |source: Address, span: Span| VSpec { source, span };
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(un.clone(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
     ));
     // BadSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
     let lu = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), lu)])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), lu)])),
         CopyError::BadSpan
     ));
     // Content-residence guard (§5).
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), vspan(2, 1, 1))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(2, 1, 1))])),
         CopyError::SourceNotContentSubspace
     ));
     // Registered-but-content-empty source is a typed verdict, not a skip.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), vec![spec(doc2(), vspan(1, 1, 1))])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), vspan(1, 1, 1))])),
         CopyError::EmptySource
     ));
     // Which of the per-spec verdicts wins: doc2 is BOTH content-empty and
@@ -440,18 +440,18 @@ fn copy_rejects_each_documented_guard() {
     // shape check first.
     let lu2 = Span::new(t(&[1, 1]), t(&[1, 0])).expect("T12-legal");
     assert!(matches!(
-        rejected(vs.copy(P1, &doc1(), vp(1, 1), vec![spec(doc2(), lu2)])),
+        rejected(vs.copy(P1, &doc1(), vp(1, 1), &[spec(doc2(), lu2)])),
         CopyError::BadSpan
     ));
     // Span-level out-of-range stays accept-and-intersect: clipping to
     // nothing is EmptyResult…
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![spec(doc1(), vspan(1, 5, 2))])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(doc1(), vspan(1, 5, 2))])),
         CopyError::EmptyResult
     ));
     // …as is an empty spec list.
     assert!(matches!(
-        rejected(vs.copy(P1, &doc2(), vp(1, 1), vec![])),
+        rejected(vs.copy(P1, &doc2(), vp(1, 1), &[])),
         CopyError::EmptyResult
     ));
 }
@@ -536,7 +536,7 @@ fn rearrange_pivot_exchanges_the_two_adjacent_regions() {
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
     )
     .expect("insert commits");
-    vs.rearrange(P1, &doc1(), vec![vp(1, 2), vp(1, 4), vp(1, 6)])
+    vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 4), vp(1, 6)])
         .expect("pivot commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -558,7 +558,7 @@ fn rearrange_swap_exchanges_the_outer_regions_around_the_middle() {
         vec![val(b"a"), val(b"b"), val(b"c"), val(b"d"), val(b"e")],
     )
     .expect("insert commits");
-    vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
+    vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3), vp(1, 4)])
         .expect("swap commits");
     let s = k.snapshot();
     let got: Vec<Vec<u8>> = (1..=5).map(|i| read_v(&s, &doc1(), i)).collect();
@@ -571,24 +571,24 @@ fn rearrange_rejects_in_documented_order() {
     let vs = insert3(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.rearrange(P1, &un, vec![vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &un, &[vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::DocNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2)])),
         RearrangeError::BadCutCount
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 2), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(1, 2), vp(1, 3)])),
         RearrangeError::NotAscending
     ));
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), vec![vp(2, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::NotContentSubspace
     ));
     // n_C = 3 ⇒ upper bound is 4.
     assert!(matches!(
-        rejected(vs.rearrange(P1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 5)])),
+        rejected(vs.rearrange(P1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 5)])),
         RearrangeError::OutOfBounds
     ));
 }
@@ -609,7 +609,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     {
         let s = k.snapshot();
         let m5 = s.world().m5();
-        assert!(m5.content_runs(&fork) == m5.content_runs(&doc1()));
+        assert_eq!(m5.content_runs(&fork), m5.content_runs(&doc1()));
         let cov = SpanSet::singleton(m5.content_runs(&doc1())[0].iextent());
         assert_eq!(m5.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
     }
@@ -638,7 +638,7 @@ fn cross_owner_version_mints_under_the_forkers_account() {
     assert_eq!(fork, a(&[1, 0, 2, 0, 1]));
     let s = k.snapshot();
     let m5 = s.world().m5();
-    assert!(m5.content_runs(&fork) == m5.content_runs(&doc1()));
+    assert_eq!(m5.content_runs(&fork), m5.content_runs(&doc1()));
 }
 
 #[test]
@@ -699,7 +699,7 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
         DeleteError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
-        rejected(vs.rearrange(p2, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3)])),
+        rejected(vs.rearrange(p2, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
         RearrangeError::NotOwner(d) if d == doc1()
     ));
     assert!(matches!(
@@ -707,7 +707,7 @@ fn edit_ops_reject_a_sibling_principal_and_commit_nothing() {
             p2,
             &doc1(),
             vp(1, 4),
-            vec![VSpec {
+            &[VSpec {
                 source: doc1(),
                 span: vspan(1, 1, 1),
             }]
@@ -759,7 +759,7 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
         p2,
         &fork,
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
@@ -820,7 +820,7 @@ fn finddocscontaining_composes_candidates_with_the_project_filter() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 3),
         }],
@@ -861,7 +861,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![
+        &[
             VSpec {
                 source: doc1(),
                 span: vspan(1, 1, 2),

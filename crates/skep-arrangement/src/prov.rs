@@ -19,7 +19,7 @@ use skep_address::{classify_spans, validate, Address, Span, SpanRel, SpanSet, Tu
 /// A single-field newtype over the mandated slice shape, so the checkpoint
 /// encoding is the map's own (bincode writes a newtype struct as its inner
 /// value).
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Provenance(im::OrdMap<Tumbler, im::Vector<Span>>);
 
 impl Provenance {
@@ -34,9 +34,7 @@ impl Provenance {
     ) -> Provenance {
         let k = doc.tumbler();
         let mut col = self.0.get(k).cloned().unwrap_or_default();
-        for s in spans {
-            col.push_back(s);
-        }
+        col.extend(spans);
         Provenance(self.0.update(k.clone(), col))
     }
 

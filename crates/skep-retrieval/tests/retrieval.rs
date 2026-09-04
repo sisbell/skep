@@ -261,7 +261,7 @@ fn as_of_reports_the_pinned_seq_and_queries_never_mutate() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
@@ -521,7 +521,7 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
         P1,
         &doc2(),
         vp(1, 2),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
@@ -531,7 +531,7 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
         P1,
         &doc2(),
         vp(1, 4),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
@@ -643,7 +643,7 @@ fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],
@@ -702,7 +702,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
@@ -712,7 +712,7 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
         P1,
         &doc2(),
         vp(1, 2),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
@@ -744,7 +744,7 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 2, 1),
         }],
@@ -793,7 +793,7 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
@@ -803,7 +803,7 @@ fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
         P1,
         &doc2(),
         vp(1, 2),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 1),
         }],
@@ -911,7 +911,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![
+        &[
             VSpec {
                 source: doc1(),
                 span: vspan(1, 1, 1),
@@ -1015,7 +1015,7 @@ fn results_and_errors_marshal_through_serialize_per_the_derive_policy() {
         P1,
         &doc2(),
         vp(1, 1),
-        vec![VSpec {
+        &[VSpec {
             source: doc1(),
             span: vspan(1, 1, 2),
         }],

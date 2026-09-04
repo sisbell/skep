@@ -1,7 +1,7 @@
 //! §A — the `Run` value: one contiguous I-extent placed in an arrangement,
-//! the run's own position arithmetic ([`Run::tumbler_at`]/[`Run::addr_at`],
-//! [`Run::offsets_covered_by`]), and the ONE admissible Run→Span lift
-//! ([`Run::iextent`]).
+//! the run's own position arithmetic ([`Run::tumbler_at`]/[`Run::addr_at`]/
+//! [`Run::addrs`], [`Run::offsets_covered_by`]), and the ONE admissible
+//! Run→Span lift ([`Run::iextent`]).
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,7 @@ use skep_address::{intersect, shift, validate, Address, Level, Nat, Span, Tumble
 /// system. On that basis the invariants hold for every
 /// minted-or-validly-recovered Run — which is exactly what justifies the
 /// `.expect`s in the run's own position arithmetic below.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub(crate) i_start: Address,
     pub(crate) width: Nat,
@@ -81,6 +81,28 @@ impl Run {
     pub fn addr_at(&self, k: &Nat) -> Address {
         validate(self.tumbler_at(k))
             .expect("ordinal shift of a valid element I-start is T4-valid by construction")
+    }
+
+    /// The run's addresses — offsets `[0, width)`, in I-order, which is also
+    /// V-order (a run occupies consecutive V-ordinals). The sequence a run
+    /// denotes, asked of the run, so a consumer that needs the positions
+    /// rather than the extent does not count them itself.
+    ///
+    /// Yields OWNED addresses because a run stores none: it stores a start and
+    /// a width, and each position is [`addr_at`](Run::addr_at) of an offset.
+    /// That is why this is an inherent method and not `IntoIterator for &Run`,
+    /// where a caller would rightly expect borrowed items. It is likewise not
+    /// an `ExactSizeIterator`: `width` is a `Nat`, so a `len() -> usize` would
+    /// be a lie at the top of its range.
+    pub fn addrs(&self) -> impl Iterator<Item = Address> + '_ {
+        let mut k = Nat::zero();
+        std::iter::from_fn(move || {
+            (k < self.width).then(|| {
+                let a = self.addr_at(&k);
+                k = &k + &Nat::one();
+                a
+            })
+        })
     }
 
     /// The ONE admissible Run→Span lift: the level-uniform, element-level
@@ -205,6 +227,21 @@ mod tests {
     }
 
     #[test]
+    fn addrs_enumerates_the_half_open_offset_range() {
+        // §A: the run's own sequence — offsets [0, width), never the reach.
+        let r = Run::new(ca(2), n(3)).expect("valid run");
+        assert_eq!(r.addrs().collect::<Vec<_>>(), vec![ca(2), ca(3), ca(4)]);
+        // A width-1 run yields exactly its start.
+        let one = Run::new(ca(7), n(1)).expect("valid run");
+        assert_eq!(one.addrs().collect::<Vec<_>>(), vec![ca(7)]);
+        // Every yielded address is the run's own addr_at of that offset.
+        assert!(r
+            .addrs()
+            .enumerate()
+            .all(|(k, a)| a == r.addr_at(&n(k as u32))));
+    }
+
+    #[test]
     fn offsets_covered_by_answers_in_both_branches() {
         // §2: a same-length level-uniform cover goes through M1's intersect;
         // any other cover takes the total boundary search. Both name the
@@ -230,7 +267,7 @@ mod tests {
         let r = Run::new(ca(7), n(4)).expect("valid run");
         let bytes = bincode::serialize(&r).expect("run serializes");
         let back: Run = bincode::deserialize(&bytes).expect("run deserializes");
-        assert!(back == r);
+        assert_eq!(back, r);
         assert_eq!(back.i_start(), &ca(7));
         assert_eq!(back.width(), &n(4));
     }

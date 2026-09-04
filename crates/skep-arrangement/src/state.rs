@@ -13,7 +13,7 @@ use crate::runlist::RunList;
 /// Exactly these two subspaces exist, which is a fact about the arrangement
 /// and so is answered by [`list`](DocArrangement::list) rather than restated
 /// by each read that routes on a subspace numeral.
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DocArrangement {
     pub(crate) content: RunList,
     pub(crate) link: RunList,
@@ -49,7 +49,7 @@ impl DocArrangement {
 /// Serialization needs the `im` crate's `serde` feature and
 /// `Tumbler: Serialize/DeserializeOwned` (M1's `num-bigint` serde feature) —
 /// both carried by this crate's dependencies (Build precondition).
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct M5State {
     pub(crate) arrangements: im::OrdMap<Tumbler, DocArrangement>,
     pub(crate) prov: Provenance,
@@ -57,13 +57,20 @@ pub struct M5State {
 
 /// M5's sole journal delta — effect-level (carries concrete
 /// addresses/ordinals so the fold needs no upstream access and never
-/// re-mints; Conflicts #4). Each variant is `#[non_exhaustive]`, so NO
-/// foreign crate can build an `M5Rec` by struct literal — `stage_seat_link`
-/// and the op bodies (all in M5's crate) are the only constructors, and the
-/// M/R-coupling cannot be bypassed. The engine only `From`-lifts and folds an
-/// already-built value; [`M5State::apply_m5`] matches in M5's own crate, so
-/// it destructures freely — the engine never does.
-#[derive(Clone, Serialize, Deserialize)]
+/// re-mints; Conflicts #4).
+///
+/// TWO SEALS, governing two different things. Each VARIANT is
+/// `#[non_exhaustive]`, so no foreign crate can build an `M5Rec` by struct
+/// literal — `stage_seat_link` and the op bodies (all in M5's crate) are the
+/// only constructors, and the M/R-coupling cannot be bypassed. The TYPE is
+/// `#[non_exhaustive]` too, because the variant set may grow (the
+/// explicit-runs form of `VersionSnapshot`, Open decision #4, is one such
+/// record): a foreign `match` must carry a `_` arm, and gains one variant
+/// rather than a broken build when the set does grow. Neither seal touches
+/// M5's own crate — [`M5State::apply_m5`] matches and destructures freely —
+/// and the engine needs neither, `From`-lifting and folding the record whole.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum M5Rec {
     /// INSERT/COPY: splice `runs` at content ordinal `at` + R-append each
     /// placed run's iextent (J1★).
@@ -253,7 +260,7 @@ mod tests {
         let s0 = M5State::genesis();
         let s1 = place(&s0, &doc1(), 1, vec![run(&ca(1), 3)]);
         assert_eq!(s1.content_count(&doc1()), n(3));
-        assert!(s1.content_runs(&doc1()) == vec![run(&ca(1), 3)]);
+        assert_eq!(s1.content_runs(&doc1()), vec![run(&ca(1), 3)]);
         // ever_contained ∖ image is empty right after a place…
         assert!(s1.deletions(&doc1()).is_empty());
         // …and the R side is visible through docs_ever_containing.
@@ -274,7 +281,7 @@ mod tests {
             width: n(2),
         });
         assert_eq!(s.content_count(&doc1()), n(3));
-        assert!(s.content_runs(&doc1()) == vec![run(&ca(1), 1), run(&ca(4), 2)]);
+        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(1), 1), run(&ca(4), 2)]);
         // The deleted iextent [ca(2), ca(4)) is ever-contained minus image.
         let d = s.deletions(&doc1());
         let spans: Vec<_> = d.iter().cloned().collect();
@@ -295,7 +302,7 @@ mod tests {
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
         let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(2) });
         assert_eq!(s.link_count(&doc1()), n(2));
-        assert!(s.link_runs(&doc1()) == vec![run(&la(1), 2)]);
+        assert_eq!(s.link_runs(&doc1()), vec![run(&la(1), 2)]);
         assert_eq!(s.content_count(&doc1()), n(0));
         // J-LV: no provenance from link seating.
         let cov = skep_address::SpanSet::singleton(run(&la(1), 2).iextent());
@@ -314,12 +321,12 @@ mod tests {
             new: vdoc(),
         });
         assert_eq!(s.content_count(&vdoc()), n(4));
-        assert!(s.content_runs(&vdoc()) == s.content_runs(&doc1()));
+        assert_eq!(s.content_runs(&vdoc()), s.content_runs(&doc1()));
         // Fork provenance recorded (a candidate for the shared region).
         let cov = skep_address::SpanSet::singleton(run(&ca(1), 2).iextent());
         assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
         // Source untouched (V3).
-        assert!(s.content_runs(&doc1()) == vec![run(&ca(1), 2), run(&ca(1), 2)]);
+        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(1), 2), run(&ca(1), 2)]);
     }
 
     #[test]
@@ -352,9 +359,10 @@ mod tests {
         };
         let a = build();
         let b = build();
+        assert_eq!(a, b); // the same records fold to the same state…
         let ab = bincode::serialize(&a).expect("state serializes");
         let bb = bincode::serialize(&b).expect("state serializes");
-        assert_eq!(ab, bb);
+        assert_eq!(ab, bb); // …and that state encodes to the same bytes
         let back: M5State = bincode::deserialize(&ab).expect("state deserializes");
         assert_eq!(bincode::serialize(&back).expect("reserializes"), ab);
         assert_eq!(back.content_count(&doc1()), n(2));
@@ -373,6 +381,7 @@ mod tests {
         };
         let bytes = bincode::serialize(&rec).expect("record serializes");
         let back: M5Rec = bincode::deserialize(&bytes).expect("record deserializes");
+        assert_eq!(back, rec); // the same record, not merely one folding alike
         let s1 = M5State::genesis().apply_m5(&rec);
         let s2 = M5State::genesis().apply_m5(&back);
         assert_eq!(

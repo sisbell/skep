@@ -141,8 +141,11 @@ impl fmt::Display for InsertError {
                 f.write_str("insert: at.ordinal is outside the valid insertion range [1, n_C + 1]")
             }
             InsertError::EmptyContent => f.write_str("insert: values is empty"),
-            InsertError::Mint(e) => write!(f, "insert: content mint failed: {e}"),
-            InsertError::Content(e) => write!(f, "insert: content write rejected: {e}"),
+            // The wrapping variants describe THIS layer only; the inner
+            // message is reachable through `source`, and a reporter that
+            // walks the chain would otherwise print it twice.
+            InsertError::Mint(_) => f.write_str("insert: content mint failed"),
+            InsertError::Content(_) => f.write_str("insert: content write rejected"),
         }
     }
 }
@@ -231,7 +234,8 @@ impl fmt::Display for VersionError {
             VersionError::NodeTierCrossOwner => f.write_str(
                 "version: a cross-owner fork requires an account-tier forker (P-tier, ASN-0123)",
             ),
-            VersionError::Mint(e) => write!(f, "version: identity mint failed: {e}"),
+            // This layer only — the mint's own message is the `source`.
+            VersionError::Mint(_) => f.write_str("version: identity mint failed"),
         }
     }
 }

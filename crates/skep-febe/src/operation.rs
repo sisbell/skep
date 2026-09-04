@@ -330,7 +330,7 @@ where
                 let committed_at = self
                     .stores
                     .vstream()
-                    .copy(wc.caller(), &doc, at, specs)
+                    .copy(wc.caller(), &doc, at, &specs)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at: committed_at })
             }
@@ -338,7 +338,7 @@ where
                 let at = self
                     .stores
                     .vstream()
-                    .rearrange(wc.caller(), &doc, cuts)
+                    .rearrange(wc.caller(), &doc, &cuts)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }

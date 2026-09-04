@@ -145,7 +145,7 @@ fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Ru
 /// The per-subspace run-list (§Core data model). All mutators are persistent
 /// (`&self → RunList`); the `im::Vector` backing keeps clones O(1) (VERSION's
 /// structural fork share) while the v1 surgery below is Vec-based O(#runs).
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RunList(im::Vector<Run>);
 
 impl RunList {
@@ -301,9 +301,9 @@ mod tests {
         // appends merge (M12), non-adjacent stay separate.
         let l = list(vec![run(&ca(1), 3)]);
         let merged = l.splice_in(&n(4), &[run(&ca(4), 2)]); // shift(ca(1),3) = ca(4): adjacent
-        assert!(merged.runs_vec() == vec![run(&ca(1), 5)]);
+        assert_eq!(merged.runs_vec(), vec![run(&ca(1), 5)]);
         let apart = l.splice_in(&n(4), &[run(&ca(9), 1)]); // not adjacent
-        assert!(apart.runs_vec() == vec![run(&ca(1), 3), run(&ca(9), 1)]);
+        assert_eq!(apart.runs_vec(), vec![run(&ca(1), 3), run(&ca(9), 1)]);
         assert_eq!(apart.total_width(), n(4));
     }
 
@@ -313,7 +313,10 @@ mod tests {
         // +Σ width for free.
         let l = list(vec![run(&ca(1), 4)]);
         let spliced = l.splice_in(&n(3), &[run(&ca(9), 1)]);
-        assert!(spliced.runs_vec() == vec![run(&ca(1), 2), run(&ca(9), 1), run(&ca(3), 2)]);
+        assert_eq!(
+            spliced.runs_vec(),
+            vec![run(&ca(1), 2), run(&ca(9), 1), run(&ca(3), 2)]
+        );
         // point: implicit positions after the shift.
         assert_eq!(spliced.point(&n(2)), Some(ca(2)));
         assert_eq!(spliced.point(&n(3)), Some(ca(9)));
@@ -328,11 +331,11 @@ mod tests {
         // here removing an interleaved foreign run rejoins ca(1..2) & ca(3..4).
         let l = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(3), 2)]);
         let out = l.remove_range(&n(3), &n(1));
-        assert!(out.runs_vec() == vec![run(&ca(1), 4)]);
+        assert_eq!(out.runs_vec(), vec![run(&ca(1), 4)]);
         // And an interior removal within one run splits then re-shifts.
         let l2 = list(vec![run(&ca(1), 5)]);
         let out2 = l2.remove_range(&n(2), &n(2));
-        assert!(out2.runs_vec() == vec![run(&ca(1), 1), run(&ca(4), 2)]);
+        assert_eq!(out2.runs_vec(), vec![run(&ca(1), 1), run(&ca(4), 2)]);
         assert_eq!(out2.total_width(), n(3));
     }
 
@@ -364,8 +367,8 @@ mod tests {
     fn resolve_range_clips_accept_and_intersect() {
         // ASN-0118: out-of-range silently dropped; V-ordered result.
         let l = list(vec![run(&ca(1), 3)]);
-        assert!(l.resolve_range(&n(2), &n(10)) == vec![run(&ca(2), 2)]);
-        assert!(l.resolve_range(&n(0), &n(2)) == vec![run(&ca(1), 1)]); // lo clamps to 1
+        assert_eq!(l.resolve_range(&n(2), &n(10)), vec![run(&ca(2), 2)]);
+        assert_eq!(l.resolve_range(&n(0), &n(2)), vec![run(&ca(1), 1)]); // lo clamps to 1
         assert!(l.resolve_range(&n(4), &n(2)).is_empty());
     }
 }

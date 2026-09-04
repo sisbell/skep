@@ -18,6 +18,8 @@
 //! read and the records they stage, so a minimal test world can drive
 //! `delete`/`rearrange` with `HasM5 + HasM3` and `From<M5Rec>` alone.
 
+use std::fmt;
+
 use num_traits::Zero;
 use skep_address::{content_subspace, zeros, Address, Nat};
 use skep_content::{stage_write, ContentWrite, HasContent, Val};
@@ -29,7 +31,7 @@ use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionE
 use crate::run::Run;
 use crate::runlist::{extend_or_push_run, extend_run};
 use crate::state::M5Rec;
-use crate::vspace::{is_ordinal_vspan, VPos, VSpec};
+use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -45,6 +47,17 @@ impl<'k, W: WorldState> Vstream<'k, W> {
     /// a Vstream over the engine's kernel this way.
     pub fn new(k: &'k Kernel<W>) -> Vstream<'k, W> {
         Vstream { kernel: k }
+    }
+}
+
+/// The handle's name and nothing else — it holds one kernel borrow, and a
+/// world is not a thing to print into a diagnostic. Written out rather than
+/// derived: a derive would bound the impl on `W: Debug`, and a world composed
+/// of persistent store slices need not be, so the derived impl would apply to
+/// no `W` that exists.
+impl<W: WorldState> fmt::Debug for Vstream<'_, W> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Vstream")
     }
 }
 
@@ -131,16 +144,20 @@ where
     /// resolved addresses stay valid forever by content immutability (S0),
     /// so no source lock is needed.
     ///
+    /// `specs` is borrowed: COPY reads each spec's source and span and keeps
+    /// neither, so a caller that holds its spec list behind a reference is not
+    /// made to clone it.
+    ///
     /// Check order (which error wins). Destination first, as INSERT:
     /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
     /// source spans stay unrestricted, transclusion of anyone's content being
     /// the point of the medium) → `NotContentSubspace` → `OutOfBounds`. Then,
     /// per spec: `SourceNotRegistered`
-    /// → `BadSpan` (fails [`is_ordinal_vspan`] — the one shape predicate,
-    /// which `resolve` folds on, so a span COPY rejects is exactly a span
+    /// → `BadSpan` (the span is not an ordinal-level depth-2 V-range — the one
+    /// shape `resolve` folds on, so a span COPY rejects is exactly a span
     /// `resolve` would refuse to serve, Conflicts #7)
-    /// → `SourceNotContentSubspace`
-    /// (`span.start().get(1) ≠ s_C`) → `EmptySource` (ASN-0118
+    /// → `SourceNotContentSubspace` (that span's subspace ≠ s_C)
+    /// → `EmptySource` (ASN-0118
     /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
     /// start — S3★, Open decision #5 default); finally `EmptyResult` when
     /// nothing survives clipping. Cross-origin runs never coalesce
@@ -151,7 +168,7 @@ where
         caller: Caller,
         doc: &Address,
         at: VPos,
-        specs: Vec<VSpec>,
+        specs: &[VSpec],
     ) -> Result<Seq, TxnError<CopyError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
@@ -171,15 +188,15 @@ where
                     return Err(CopyError::OutOfBounds);
                 }
                 let mut runs: Vec<Run> = Vec::new();
-                for spec in &specs {
+                for spec in specs {
                     if !w.m3().is_registered_document(&spec.source) {
                         return Err(CopyError::SourceNotRegistered);
                     }
                     let span = &spec.span;
-                    if !is_ordinal_vspan(span) {
+                    let Some(v) = as_ordinal_vspan(span) else {
                         return Err(CopyError::BadSpan);
-                    }
-                    if span.start().get(1) != Some(&content_subspace()) {
+                    };
+                    if *v.subspace != content_subspace() {
                         return Err(CopyError::SourceNotContentSubspace);
                     }
                     if w.m5().content_count(&spec.source).is_zero() {
@@ -275,6 +292,12 @@ where
     /// permutation — content, links, R untouched (a duplicate-I interval
     /// correctly yields π ≠ id with M' = M).
     ///
+    /// `cuts` is borrowed, as COPY's specs are, so the caller keeps the cut
+    /// sequence it asked with — to report it beside a rejection, say. The
+    /// record then clones the three or four ordinals out; against a
+    /// transaction that will fsync, four small clones buy the caller its own
+    /// value back.
+    ///
     /// Check order (which error wins, per R-PRE): `DocNotRegistered` →
     /// `NotOwner` (the ω gate) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
@@ -287,7 +310,7 @@ where
         &self,
         caller: Caller,
         doc: &Address,
-        cuts: Vec<VPos>,
+        cuts: &[VPos],
     ) -> Result<Seq, TxnError<RearrangeError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel
@@ -320,7 +343,7 @@ where
                 if m5.content_count(doc).is_zero() {
                     return Err(RearrangeError::EmptyContentSubspace);
                 }
-                let cut_ordinals: Vec<Nat> = cuts.into_iter().map(|c| c.ordinal).collect();
+                let cut_ordinals: Vec<Nat> = cuts.iter().map(|c| c.ordinal.clone()).collect();
                 stg.push(
                     M5Rec::ContentReorder {
                         doc: doc.clone(),
@@ -453,6 +476,14 @@ mod tests {
     }
 
     #[test]
+    fn the_handle_prints_without_its_world_being_printable() {
+        // `MiniWorld` is not `Debug`, and the handle is — which is the whole
+        // reason the impl is written out rather than derived.
+        let k = mini_kernel();
+        assert_eq!(format!("{:?}", Vstream::new(&k)), "Vstream");
+    }
+
+    #[test]
     fn delete_and_rearrange_drive_a_minimal_world() {
         let k = mini_kernel();
         let vs = Vstream::new(&k);
@@ -460,7 +491,7 @@ mod tests {
         let p1 = Caller::Principal(PrincipalId(1));
         vs.delete(p1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         let seq = vs
-            .rearrange(p1, &doc1(), vec![vp(1, 1), vp(1, 2), vp(1, 3)])
+            .rearrange(p1, &doc1(), &[vp(1, 1), vp(1, 2), vp(1, 3)])
             .expect("rearrange commits");
         let s = k.snapshot();
         assert_eq!(s.seq(), seq);

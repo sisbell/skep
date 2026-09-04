@@ -323,7 +323,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
 pub fn copy_prefix(k: &Kernel<World>, src: &Address, width: u32, dst: &Address, times: u32) {
     for _ in 0..times {
         skep_arrangement::Vstream::new(k)
-            .copy(Caller::System, dst, vp(1, 1), vec![spec(src, 1, 1, width)])
+            .copy(Caller::System, dst, vp(1, 1), &[spec(src, 1, 1, width)])
             .expect("test content COPY succeeds");
     }
 }

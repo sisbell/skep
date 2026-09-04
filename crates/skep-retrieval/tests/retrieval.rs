@@ -1,14 +1,21 @@
 //! Integration tests for M6's public surface. Each test states a claim the
-//! design/interface actually makes (§-references inline): what each operation
-//! admits and rejects (and WHICH error wins when several conditions fail at
-//! once), the silent-empty degradations RETRIEVEV's R6 mandates, delivery
-//! order/multiplicity (R3/R5/R8), extent synthesis from counts (D-SEQ★),
-//! origin projection and its reject-never-clamp admissibility (WF_V/O13), the
-//! cross-document SHOWDELETIONS combine (D-IDENT/D-ORD), COMPARE's
-//! address-equal join (per-block feet, fan-out completeness, deterministic
-//! presentation, value-blindness), FINDDOCSCONTAINING's present-tense filter
-//! (FD-SOUND) over the raw mixed-length coverage union, that queries never
-//! mutate, and the derive policy M10 marshals against.
+//! design/interface actually makes (§-references inline): the registry gate
+//! every operation opens with, in the form M6 owns it — `is_registered_document`
+//! and never M3's wider `is_allocated`; which error wins when several
+//! conditions fail at once, and that the FIRST fault in request order is the
+//! one reported; the silent-empty degradations RETRIEVEV's R6 mandates and
+//! the delivery law they are instances of (the span's intersection with the
+//! bound prefix, over the whole grid of starts and widths); delivery
+//! order/multiplicity across every block a span resolves to (R3/R5/R8);
+//! extent synthesis from counts (D-SEQ★); origin projection and its
+//! reject-never-clamp admissibility, the exact-extent boundary included
+//! (WF_V/O13); the cross-document SHOWDELETIONS combine (D-IDENT/D-ORD);
+//! COMPARE's address-equal join — per-block feet, overlap widths, fan-out
+//! completeness, region confinement, the four-component presentation, and the
+//! whole relation against an independent per-position oracle;
+//! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
+//! every region span's coverage; that a query answers from the snapshot it
+//! pinned and never mutates; and the derive policy M10 marshals against.
 //!
 //! This file compiles as a FOREIGN crate, so it also witnesses the derive
 //! policy's consequences: every result and every error M6 hands back renders,
@@ -124,9 +131,21 @@ fn un() -> Address {
     a(&[1, 0, 1, 0, 9])
 }
 
+/// A second never-registered document, so a two-document rejection can say
+/// WHICH one it named.
+fn un2() -> Address {
+    a(&[1, 0, 1, 0, 8])
+}
+
 /// doc1 content element k (length 8), M3's minted shape.
 fn ca(k: u32) -> Address {
     a(&[1, 0, 1, 0, 1, 0, 1, k])
+}
+
+/// doc2 content element k — doc2's OWN minted content, on a different
+/// I-chain from doc1's [`ca`].
+fn c2a(k: u32) -> Address {
+    a(&[1, 0, 1, 0, 2, 0, 1, k])
 }
 
 /// doc1 link element k.
@@ -248,6 +267,67 @@ fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     vs
 }
 
+/// doc1 = `[a, b, c]`; doc2 = `[x][ca1, ca2][ca1]` — its own content, then
+/// two transclusions of doc1. doc2's content resolves to THREE runs and one
+/// address (ca1) sits at two V-positions: the multi-block document every
+/// per-run claim in this module is about.
+fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = insert3(k);
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")])
+        .expect("insert commits");
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 2),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }],
+    )
+    .expect("copy commits");
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 4),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 1),
+        }],
+    )
+    .expect("copy commits");
+    vs
+}
+
+/// doc1 = `[a, b, c]`; doc2 = `[ca1][ca1][own "a"]` — ca1 placed twice, then
+/// doc2's own content whose BYTES equal doc1's ca1 at a different address.
+/// The fan-out and value-blindness fixture.
+fn fanout_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = insert3(k);
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 1),
+        }],
+    )
+    .expect("copy commits");
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 2),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 1),
+        }],
+    )
+    .expect("copy commits");
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")])
+        .expect("insert commits");
+    vs
+}
+
 // ---- Query basics ----
 
 #[test]
@@ -306,6 +386,87 @@ fn the_query_handle_is_a_borrow_and_copies_like_one() {
     let copy = q;
     assert_eq!(copy.as_of(), q.as_of());
     assert_eq!(format!("{q:?}"), format!("Query {{ as_of: {:?}, .. }}", s.seq()));
+}
+
+#[test]
+fn a_query_answers_from_its_pinned_snapshot_after_later_commits() {
+    // §Public interface: every operation is a pure function of ONE consistent
+    // M2 snapshot — the discharge of M2's clause 6 and the single-Σ
+    // requirement of ASN-0075/0122/0124. A handle taken before a commit
+    // answers from the state it pinned, never from the state that followed.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
+        .expect("insert commits");
+    assert_ne!(
+        k.current_seq(),
+        q.as_of(),
+        "the fixture committed after the pin"
+    );
+    // Three positions, not four: the fourth is not in this query's world.
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"a")),
+            DeliveryItem::Content(val(b"b")),
+            DeliveryItem::Content(val(b"c")),
+        ])
+    );
+    // The extent is the pinned count, not the live one.
+    assert_eq!(
+        ok_of(q.doc_vspanset(&doc1())),
+        SpanSet::singleton(Span::new(t(&[1, 1]), t(&[0, 3])).expect("T12"))
+    );
+    // The control: a handle taken now sees all four.
+    let s2 = k.snapshot();
+    let q2 = Query::new(&s2);
+    assert_eq!(
+        ok_of(q2.retrieve_v(&[spec(doc1(), vspan(1, 1, 4))])).len(),
+        4
+    );
+}
+
+#[test]
+fn every_operation_refuses_an_allocated_address_that_is_not_a_document() {
+    // §The distinction every operation opens with: M6 gates on M3's
+    // `is_registered_document`, which is NARROWER than `is_allocated` — an
+    // account address and a content element are both allocated and neither is
+    // a document. Reading the wider oracle turns each of these rejections
+    // into a spurious empty success.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    for d in [a(&[1, 0, 1]), ca(1)] {
+        // an ACCOUNT (genesis), an ELEMENT (insert3)
+        let m3 = s.world().m3();
+        assert!(m3.is_allocated(&d), "the premise: {d} IS allocated");
+        assert!(!m3.is_registered_document(&d), "…and is not a document");
+        assert_eq!(
+            err_of(q.retrieve_v(&[spec(d.clone(), vspan(1, 1, 1))])),
+            RetrieveError::DocNotRegistered(d.clone())
+        );
+        assert_eq!(err_of(q.doc_vspan(&d)), ExtentError::DocNotRegistered);
+        assert_eq!(err_of(q.doc_vspanset(&d)), ExtentError::DocNotRegistered);
+        assert_eq!(
+            err_of(q.show_origin_v(&d, &vspan(1, 1, 1))),
+            OriginError::DocNotRegistered
+        );
+        assert_eq!(
+            err_of(q.show_deletions(&d, &doc1())),
+            DeletionsError::DocNotRegistered(d.clone())
+        );
+        assert_eq!(
+            err_of(q.compare(&[region_spec(d.clone(), vec![vspan(1, 1, 1)])], &[])),
+            CompareError::DocNotRegistered(d.clone())
+        );
+        assert_eq!(
+            err_of(q.find_docs_containing(&[region_spec(d.clone(), vec![vspan(1, 1, 1)])])),
+            FindError::DocNotRegistered(d.clone())
+        );
+    }
 }
 
 // ---- §A RETRIEVEV ----
@@ -411,6 +572,82 @@ fn retrieve_v_degrades_silently_where_r6_mandates() {
 }
 
 #[test]
+fn retrieve_v_delivers_every_run_of_a_multi_block_document_in_v_order() {
+    // ASN-0115 R3/R8: exactness is per ACTIVE V-POSITION, over every block
+    // the span resolves to — a transcluding document resolves to several
+    // runs, and an address at two V-positions is delivered twice.
+    let k = mem_kernel();
+    three_runs(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 1, 4))])),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"x")), // doc2's own block
+            DeliveryItem::Content(val(b"a")), // transcluded [ca1, ca2]
+            DeliveryItem::Content(val(b"b")),
+            DeliveryItem::Content(val(b"a")), // ca1 a second time — R8, no dedup
+        ])
+    );
+}
+
+#[test]
+fn retrieve_v_delivers_content_a_source_document_has_deleted() {
+    // §Invariants: delivered content is permanent and faithful — M4 has no
+    // delete, so a position a source document dropped still delivers its
+    // bytes wherever it remains arranged. A document emptied by deletion is
+    // registered-empty, which is a success, not a rejection.
+    let k = mem_kernel();
+    let vs = three_runs(&k);
+    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+        .expect("delete commits"); // doc1 drops all three
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, 1, 3))])),
+        Delivery::default()
+    );
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 2, 2))])),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"a")),
+            DeliveryItem::Content(val(b"b")),
+        ])
+    );
+}
+
+#[test]
+fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
+    // ASN-0115 R3 + R6 as the LAW they are: for every well-formed
+    // ordinal-level span, the delivery is the document's V-sequence clipped
+    // to [start, start + width) ∩ [1, n_C] — never an error, never a clamp to
+    // anything else. Enumerated over the whole grid, so the boundaries no
+    // hand-picked example visits (a start past the last position, a width
+    // landing exactly on the end) are visited too.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
+        .expect("insert commits");
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let text: [&[u8]; 4] = [b"a", b"b", b"c", b"d"];
+    for start in 1..=6u32 {
+        // Width 0 is not constructible: T12 forbids a zero width.
+        for width in 1..=6u32 {
+            let want: Vec<DeliveryItem> = (start..start + width)
+                .filter(|p| (1..=4).contains(p))
+                .map(|p| DeliveryItem::Content(val(text[p as usize - 1])))
+                .collect();
+            assert_eq!(
+                ok_of(q.retrieve_v(&[spec(doc1(), vspan(1, start, width))])),
+                Delivery(want),
+                "span [1,{start}] x [0,{width}] over a four-position document"
+            );
+        }
+    }
+}
+
+#[test]
 fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
     // ASN-0115 well-formedness precondition: one bad spec rejects the WHOLE
     // request; the fault names the spec index; DocNotRegistered is checked
@@ -462,6 +699,65 @@ fn retrieve_v_rejects_the_whole_request_on_any_malformed_spec() {
             index: 0,
             fault: SpanFault::StartTooShallow
         }
+    ));
+}
+
+// ---- the request gate, across the operations that take a whole request ----
+
+#[test]
+fn the_request_gate_reports_the_first_fault_in_request_order() {
+    // The gate walks the request IN ORDER and the FIRST fault wins, whatever
+    // its kind — which is what makes `index` / `(region, index)` /
+    // `(operand, region, index)` localization mean anything. Within ONE spec
+    // the registry check precedes the span gate; ACROSS specs, position
+    // decides. Each request below carries two faults of DIFFERENT kinds, so
+    // only the ordering can explain which is reported.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert!(matches!(
+        err_of(q.retrieve_v(&[spec(doc1(), lu_span()), spec(un(), vspan(1, 1, 1))])),
+        RetrieveError::MalformedSpec {
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    ));
+    assert!(matches!(
+        err_of(q.retrieve_v(&[spec(un(), vspan(1, 1, 1)), spec(doc1(), lu_span())])),
+        RetrieveError::DocNotRegistered(d) if d == un()
+    ));
+    assert!(matches!(
+        err_of(q.find_docs_containing(&[
+            region_spec(doc1(), vec![lu_span()]),
+            region_spec(un(), vec![vspan(1, 1, 1)]),
+        ])),
+        FindError::MalformedSpan {
+            region: 0,
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    ));
+    assert!(matches!(
+        err_of(q.compare(
+            &[region_spec(doc1(), vec![lu_span()])],
+            &[region_spec(un(), vec![vspan(1, 1, 1)])],
+        )),
+        CompareError::MalformedSpan {
+            operand: Operand::First,
+            region: 0,
+            index: 0,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    ));
+    // ρ₂'s documents are gated too, after ρ₁'s — the operand-2 registry
+    // check no single-operand request can reach.
+    assert!(matches!(
+        err_of(q.compare(
+            &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+            &[region_spec(un(), vec![])],
+        )),
+        CompareError::DocNotRegistered(d) if d == un()
     ));
 }
 
@@ -557,30 +853,7 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
     // ASN-0077 O2/O5: one origin per run (block uniformity), deduplicated,
     // tumbler-ordered; the link arity reports the home document (CL-OWN).
     let k = mem_kernel();
-    let vs = insert3(&k);
-    // doc2 = [da1][ca1, ca2][ca1]: own content + two transclusions of doc1.
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")])
-        .expect("insert commits");
-    vs.copy(
-        P1,
-        &doc2(),
-        vp(1, 2),
-        &[VSpec {
-            source: doc1(),
-            span: vspan(1, 1, 2),
-        }],
-    )
-    .expect("copy commits");
-    vs.copy(
-        P1,
-        &doc2(),
-        vp(1, 4),
-        &[VSpec {
-            source: doc1(),
-            span: vspan(1, 1, 1),
-        }],
-    )
-    .expect("copy commits");
+    three_runs(&k); // doc2 = [c2a1][ca1, ca2][ca1]
     seat_link(&k, &doc2(), &l2a(1)).expect("seat commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -599,6 +872,34 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
         ok_of(q.show_origin_v(&doc2(), &vspan(2, 1, 1))),
         vec![doc2()]
     );
+}
+
+#[test]
+fn show_origin_v_admits_the_exact_extent_and_rejects_one_position_past_it() {
+    // ASN-0077 WF_V(vi): the test is `resolved < ordinal(width)`, so a span
+    // covering the bound prefix EXACTLY is admissible and one position more
+    // is rejected — never clamped to the surviving sub-span (O13). The equal
+    // case and the overrun-by-one are the two sides of that inequality.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        ok_of(q.show_origin_v(&doc1(), &vspan(1, 1, 3))),
+        vec![doc1()]
+    );
+    assert_eq!(
+        ok_of(q.show_origin_v(&doc1(), &vspan(1, 3, 1))),
+        vec![doc1()]
+    );
+    assert!(matches!(
+        err_of(q.show_origin_v(&doc1(), &vspan(1, 1, 4))),
+        OriginError::RangeNotPresent
+    ));
+    assert!(matches!(
+        err_of(q.show_origin_v(&doc1(), &vspan(1, 3, 2))),
+        OriginError::RangeNotPresent
+    ));
 }
 
 #[test]
@@ -779,6 +1080,60 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     );
 }
 
+#[test]
+fn show_deletions_orders_a_multi_address_half_by_tumbler_not_by_arrangement() {
+    // ASN-0075 D-ORD: a half is the whole set, Tumbler-ordered — not the
+    // order the containing document happens to arrange it in. doc2 holds
+    // ca2 BEFORE ca1 after the rearrange, so arrangement order and T1 order
+    // disagree and only one of them is the documented answer.
+    let k = mem_kernel();
+    let vs = insert3(&k); // doc1 = [ca1, ca2, ca3]
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }],
+    )
+    .expect("copy commits"); // doc2 = [ca1, ca2]
+    vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)])
+        .expect("rearrange commits"); // doc2 = [ca2, ca1]
+    vs.delete(P1, &doc1(), vp(1, 1), n(3))
+        .expect("delete commits"); // doc1 drops all three
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        ok_of(q.show_deletions(&doc1(), &doc2())),
+        Deletions {
+            // Enumerated from doc2 as [ca2, ca1] and returned SORTED; ca3 is
+            // deleted from doc1 but not current in doc2, so it is no member.
+            deleted_from_a_with_b: vec![ca(1), ca(2)],
+            deleted_from_b_with_a: vec![],
+        }
+    );
+}
+
+#[test]
+fn show_deletions_names_the_first_unregistered_document() {
+    // §Errors: both documents must be registered and `d_a` is checked FIRST,
+    // so the rejection names the argument POSITION, not whichever address
+    // happens to be looked at first.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        err_of(q.show_deletions(&un(), &un2())),
+        DeletionsError::DocNotRegistered(un())
+    );
+    assert_eq!(
+        err_of(q.show_deletions(&un2(), &un())),
+        DeletionsError::DocNotRegistered(un2())
+    );
+}
+
 // ---- §D COMPARE ----
 
 #[test]
@@ -827,69 +1182,321 @@ fn compare_reports_address_equal_correspondences_with_per_block_feet() {
 }
 
 #[test]
-fn compare_is_complete_under_fanout_deterministic_and_value_blind() {
-    // ASN-0122 X8: an address in multiple blocks yields the full
-    // cross-product; X12 R3: one deterministic (d1,u1,d2,u2) presentation —
-    // NOT R4's canonical maximal report, which is not required; X1/X2: the join
-    // is on address equality, never value (equal bytes at distinct addresses
-    // do NOT correspond); duplicate windows within one operand are listed,
-    // not deduped (denotationally conforming).
+fn compare_reports_the_full_width_of_each_overlap() {
+    // ASN-0122 X10: a correspondence carries the WIDTH of the shared run, and
+    // the width is the NARROWER operand's — the half-open clamp
+    // `hi = min(p_reach, q_reach)`, exercised from each side in turn.
     let k = mem_kernel();
     let vs = insert3(&k);
-    // doc2 = [ca1][ca1][da1]: ca1 placed twice, then doc2's OWN "a" (same
-    // bytes as doc1's ca1, different address).
     vs.copy(
         P1,
         &doc2(),
         vp(1, 1),
         &[VSpec {
             source: doc1(),
-            span: vspan(1, 1, 1),
+            span: vspan(1, 1, 3),
         }],
     )
-    .expect("copy commits");
+    .expect("copy commits"); // doc2 = [ca1, ca2, ca3], one run
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    for (w1, w2, want) in [(3u32, 3u32, 3u32), (3, 2, 2), (2, 3, 2)] {
+        let rep = ok_of(q.compare(
+            &[region_spec(doc1(), vec![vspan(1, 1, w1)])],
+            &[region_spec(doc2(), vec![vspan(1, 1, w2)])],
+        ));
+        assert_eq!(rep.len(), 1, "one overlap for widths ({w1}, {w2})");
+        let p = &rep.as_slice()[0];
+        assert_eq!(p.width, n(want), "width of the ({w1}, {w2}) overlap");
+        assert_eq!(p.u1.ordinal, n(1));
+        assert_eq!(p.u2.ordinal, n(1));
+    }
+}
+
+#[test]
+fn compare_takes_each_blocks_v_start_from_the_span_that_named_it() {
+    // ASN-0122 X12 R1 soundness rests on the V-RECONSTRUCTION LEMMA: a
+    // content span's FIRST bound V-position is `span.start()`, so a block's
+    // V-cursor begins there and not at the subspace origin. A window opened
+    // MID-document is the only input that can tell the two apart.
+    let k = mem_kernel();
+    let vs = insert3(&k);
     vs.copy(
         P1,
         &doc2(),
-        vp(1, 2),
+        vp(1, 1),
         &[VSpec {
             source: doc1(),
-            span: vspan(1, 1, 1),
+            span: vspan(1, 3, 1),
         }],
     )
-    .expect("copy commits");
-    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")])
-        .expect("insert commits");
+    .expect("copy commits"); // doc2 = [ca3]
     let s = k.snapshot();
     let q = Query::new(&s);
-    // Fan-out: one P block, two Q blocks holding the same address ⇒ 2 pairs,
+    let rep = ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 2, 2)])], // doc1 positions 2..3
+        &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
+    ));
+    assert_eq!(rep.len(), 1);
+    let p = &rep.as_slice()[0];
+    assert_eq!(p.u1.ordinal, n(3)); // ca3 IS doc1's THIRD position, not its first
+    assert_eq!(p.u2.ordinal, n(1));
+    assert_eq!(p.width, n(1));
+}
+
+#[test]
+fn compare_presents_pairs_in_lexicographic_d1_u1_d2_u2_order() {
+    // ASN-0122 X12 R3: the presentation is the FOUR-component lexicographic
+    // key. The operand below is listed in exactly the reverse of the
+    // presentation, and the pairs differ in `d1` and in `u1` as well as in
+    // the tail, so no proper prefix of the key reproduces the answer.
+    let k = mem_kernel();
+    three_runs(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let rep = ok_of(q.compare(
+        &[
+            region_spec(doc2(), vec![vspan(1, 4, 1), vspan(1, 2, 1)]), // emitted 1st, 2nd
+            region_spec(doc1(), vec![vspan(1, 2, 1)]),                 // emitted 3rd
+        ],
+        &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
+    ));
+    // Emission order is (doc2,4), (doc2,2), (doc1,2); the presentation is not.
+    let got: Vec<(Address, Nat)> = rep
+        .iter()
+        .map(|c| (c.d1.clone(), c.u1.ordinal.clone()))
+        .collect();
+    assert_eq!(got, vec![(doc1(), n(2)), (doc2(), n(2)), (doc2(), n(4))]);
+}
+
+#[test]
+fn compare_confines_every_pair_to_the_two_named_regions() {
+    // ASN-0122 X12 R1: pairs are confined to R_Σ(ρ₁) × R_Σ(ρ₂) — the WINDOW
+    // is the operand, not the document. An address the two documents share is
+    // reported only when BOTH windows name it.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 2),
+        }],
+    )
+    .expect("copy commits"); // doc2 = [ca1, ca2]
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // ρ₁ names ca3, which doc2 does not hold at all.
+    assert!(ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 3, 1)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+    ))
+    .is_empty());
+    // Both documents hold ca1 and ca2, but the two windows name different ones.
+    assert!(ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+        &[region_spec(doc2(), vec![vspan(1, 2, 1)])],
+    ))
+    .is_empty());
+    // The control: widen ρ₂ to cover ca1 and the pair appears.
+    assert_eq!(
+        ok_of(q.compare(
+            &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+            &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
+        ))
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn compare_is_complete_under_fanout() {
+    // ASN-0122 X8: an address held in several blocks yields the FULL
+    // cross-product — never a lockstep merge.
+    let k = mem_kernel();
+    fanout_doc2(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // One P block, two Q blocks holding the same address ⇒ 2 pairs,
     // presented in ascending u2 order.
     let rep = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
     ));
-    assert_eq!(rep.0.len(), 2);
-    assert_eq!(rep.0[0].u2.ordinal, n(1));
-    assert_eq!(rep.0[1].u2.ordinal, n(2));
-    // Value-blind: doc2's own "a" (da1) shares bytes with ca1 but no pair.
+    assert_eq!(rep.len(), 2);
+    assert_eq!(rep.as_slice()[0].u2.ordinal, n(1));
+    assert_eq!(rep.as_slice()[1].u2.ordinal, n(2));
+}
+
+#[test]
+fn compare_joins_on_address_equality_never_on_value() {
+    // ASN-0122 X1/X2: the join is a relational equi-join on I-ADDRESS, so
+    // equal bytes at distinct addresses do NOT correspond — and COMPARE never
+    // opens M4 to find out.
+    let k = mem_kernel();
+    fanout_doc2(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // The fixture's premise, which is what makes the claim below say
+    // anything: doc2's third position is its OWN address, and the bytes there
+    // are byte-for-byte doc1's ca1.
+    assert_eq!(s.world().m5().point(&doc2(), &vp(1, 3)), Some(c2a(1)));
+    assert_ne!(c2a(1), ca(1));
+    assert_eq!(
+        ok_of(q.retrieve_v(&[spec(doc2(), vspan(1, 3, 1)), spec(doc1(), vspan(1, 1, 1))])),
+        Delivery(vec![
+            DeliveryItem::Content(val(b"a")),
+            DeliveryItem::Content(val(b"a")),
+        ])
+    );
+    // Equal bytes, distinct addresses — and no pair follows.
     let rep = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 3)])],
         &[region_spec(doc2(), vec![vspan(1, 3, 1)])],
     ));
-    assert_eq!(rep.0.len(), 0);
-    // A repeated window within ρ₁ double-covers and is listed twice.
+    assert!(rep.is_empty());
+}
+
+#[test]
+fn compare_lists_a_repeated_window_of_one_operand_twice() {
+    // ASN-0122: ⟦Γ⟧ is a set-union, so a repeated window within one operand
+    // is redundant rather than wrong — it double-covers, and the report lists
+    // both overlaps (denotationally conforming, deterministically ordered).
+    let k = mem_kernel();
+    fanout_doc2(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
     let rep = ok_of(q.compare(
         &[region_spec(doc1(), vec![vspan(1, 1, 1), vspan(1, 1, 1)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
-    assert_eq!(rep.0.len(), 2);
-    // Empty operands and depth-incompatible regions are empty SUCCESSES.
-    assert_eq!(ok_of(q.compare(&[], &[])).0.len(), 0);
-    let rep = ok_of(q.compare(
+    assert_eq!(rep.len(), 2);
+}
+
+#[test]
+fn compare_succeeds_emptily_on_empty_operands_and_depth_incompatible_regions() {
+    // ASN-0122 X12: consulting-state degradations are SUCCESSES with nothing
+    // to report — an empty spec-set, and a well-formed depth-incompatible
+    // span that clips to nothing.
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert!(ok_of(q.compare(&[], &[])).is_empty());
+    assert!(ok_of(q.compare(
         &[region_spec(doc1(), vec![deep_span(1)])],
         &[region_spec(doc2(), vec![vspan(1, 1, 2)])],
-    ));
-    assert_eq!(rep.0.len(), 0);
+    ))
+    .is_empty());
+}
+
+/// The per-position `(doc, subspace, ordinal, I-address)` triples a spec-set
+/// resolves to, read straight off M5 — the independent oracle COMPARE's join
+/// is checked against, computed without consulting anything M6 does.
+///
+/// REQUIRES depth-2 ordinal-level spans, which is what the one test that
+/// calls it hands over: `get(2)` is the ordinal only at that depth.
+fn positions(w: &World, regions: &[RegionSpec]) -> Vec<(Address, Nat, Nat, Address)> {
+    let mut out = Vec::new();
+    for r in regions {
+        for span in &r.spans {
+            let sub = span.start().get(1).expect("depth 2").clone();
+            let from = span.start().get(2).expect("depth 2").clone();
+            let end = &from + span.width().get(2).expect("ordinal-level");
+            let mut k = from;
+            while k < end {
+                let p = VPos {
+                    subspace: sub.clone(),
+                    ordinal: k.clone(),
+                };
+                if let Some(addr) = w.m5().point(&r.doc, &p) {
+                    out.push((r.doc.clone(), sub.clone(), k.clone(), addr));
+                }
+                k += n(1);
+            }
+        }
+    }
+    out
+}
+
+/// A report expanded to the position pairs it denotes: a pair of width `w` is
+/// `w` consecutive position pairs on both feet (ASN-0122 X10). Sorted, so two
+/// expansions compare as MULTISETS and fan-out multiplicity is checked too.
+fn expand(rep: &CompareReport) -> Vec<(Address, Nat, Nat, Address, Nat, Nat)> {
+    let mut out = Vec::new();
+    for c in rep.iter() {
+        let mut k = n(0);
+        while k < c.width {
+            out.push((
+                c.d1.clone(),
+                c.u1.subspace.clone(),
+                &c.u1.ordinal + &k,
+                c.d2.clone(),
+                c.u2.subspace.clone(),
+                &c.u2.ordinal + &k,
+            ));
+            k += n(1);
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn compare_reports_exactly_the_address_equal_position_pairs() {
+    // ASN-0122 X8 (completeness) and X12 R1 (soundness) together say the
+    // report IS the set of address-equal position pairs of the two regions —
+    // a law over the whole space, not four hand-picked counts. The oracle is
+    // a per-position hash join computed from M5 alone, so it shares no
+    // reasoning with the block join it checks.
+    let k = mem_kernel();
+    three_runs(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let oracle = |rho1: &[RegionSpec], rho2: &[RegionSpec]| {
+        let (p, q) = (positions(s.world(), rho1), positions(s.world(), rho2));
+        let mut out = Vec::new();
+        for (d1, s1, o1, a1) in &p {
+            for (d2, s2, o2, a2) in &q {
+                if a1 == a2 {
+                    out.push((
+                        d1.clone(),
+                        s1.clone(),
+                        o1.clone(),
+                        d2.clone(),
+                        s2.clone(),
+                        o2.clone(),
+                    ));
+                }
+            }
+        }
+        out.sort();
+        out
+    };
+    for (rho1, rho2, want_pairs) in [
+        // Whole against whole: three position pairs, from a report of two
+        // pairs — one candidate block being doc2's own content, on a chain
+        // doc1 never touches.
+        (
+            vec![region_spec(doc2(), vec![vspan(1, 1, 4)])],
+            vec![region_spec(doc1(), vec![vspan(1, 1, 3)])],
+            3usize,
+        ),
+        // Windowed: one position pair, from a report whose second candidate
+        // block is disjoint.
+        (
+            vec![region_spec(doc2(), vec![vspan(1, 2, 3)])],
+            vec![region_spec(doc1(), vec![vspan(1, 2, 2)])],
+            1,
+        ),
+    ] {
+        let rep = ok_of(q.compare(&rho1, &rho2));
+        let want = oracle(&rho1, &rho2);
+        assert_eq!(want.len(), want_pairs, "the oracle's own size");
+        assert_eq!(expand(&rep), want, "report over {rho1:?} × {rho2:?}");
+    }
 }
 
 #[test]
@@ -1031,6 +1638,32 @@ fn find_docs_containing_filters_to_present_tense_containers() {
         ok_of(q.find_docs_containing(&[region_spec(doc1(), vec![vspan(2, 1, 1)])])),
         Vec::<Address>::new()
     );
+}
+
+#[test]
+fn find_docs_containing_unions_every_span_of_a_region() {
+    // ASN-0124 FD-CONVEX/FD-COMPLETE: a region carries a SET of spans and
+    // phase 1 unions every one of their images. Answering from the first span
+    // alone would silently under-resolve and drop containers, which is the
+    // hazard the operation names.
+    let k = mem_kernel();
+    three_runs(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // Span 0 covers doc2's OWN content (doc2 alone holds it); span 1 covers
+    // ca1, which doc1 holds too. Only the union names both containers.
+    assert_eq!(
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1), vspan(1, 2, 1)])])),
+        vec![doc1(), doc2()]
+    );
+    // The control that makes the line above mean something: the first span's
+    // coverage alone names doc2 and nobody else.
+    assert_eq!(
+        ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1)])])),
+        vec![doc2()]
+    );
+    // An empty request names no coverage and finds nothing.
+    assert_eq!(ok_of(q.find_docs_containing(&[])), Vec::<Address>::new());
 }
 
 #[test]

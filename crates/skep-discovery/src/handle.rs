@@ -1,9 +1,8 @@
 //! §Public interface — the [`LinkQuery`] handle: every method takes ONE fresh
 //! M2 snapshot and delegates to its pure `*_on` twin, threading that one
 //! snapshot through all internal composition (the one-`(L, M, registry)`
-//! coherence ASN-0127 forces; M2 clause 6). For a consistent multi-call
-//! verdict — a count and its window — a caller uses the `*_on` twins over one
-//! shared `&Snapshot<W>` instead.
+//! coherence ASN-0127 forces; M2 clause 6). Which of the two routes a caller
+//! wants is answered on [`LinkQuery`] itself.
 
 use skep_address::{Address, Nat, Span, SpanSet};
 use skep_arrangement::{HasM5, Run, VPos};
@@ -21,6 +20,13 @@ use crate::{
 /// The read-only query/presentation handle over the link subsystem (M8). Owns
 /// no authoritative state and no index; recomputes every answer from upstream
 /// (M7/M5/M3) over one snapshot per call.
+///
+/// The convenience is that a caller needs no snapshot of its own to read
+/// current state; the cost is that the snapshot is taken and dropped INSIDE
+/// each call, so the answer comes back with no way to learn which state
+/// produced it, and two answers come from two states. A caller that must name
+/// the state it read (reporting it as an `as_of`, say) or read two answers off
+/// one state uses the pure `*_on` twins over its own `&Snapshot<W>` instead.
 pub struct LinkQuery<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
 }

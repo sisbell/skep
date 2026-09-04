@@ -7,24 +7,26 @@
 
 use num_traits::{One, Zero};
 use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::{ordinal_vspan, HasM5, VPos};
+use skep_arrangement::{HasM5, VPos};
 use skep_kernel::{Snapshot, WorldState};
 use skep_links::HasLinks;
 use skep_namespace::HasM3;
 
 use crate::helpers::stab_runs;
+use crate::region::content_vspan;
 use crate::types::{OrphanError, OrphanReport};
 
-/// `count` content positions from `ordinal`, as M5's own V-span constructor
-/// builds them — so the spans this hands `resolve` are the shape `resolve`
-/// reads. Unwrap-safe under the callers' width ≥ 1 guard, `count = 0` being
-/// the only thing M5 declines to build.
+/// `count` content positions from `ordinal`, built through the query
+/// surface's own V-span constructor — so the spans this hands `resolve` are
+/// the shape `resolve` reads and the shape the region gate accepts.
+/// Unwrap-safe: the subspace is `s_C` here by construction, and the callers'
+/// width ≥ 1 guard excludes `count = 0`, the only other thing declined.
 fn content_span(ordinal: &Nat, count: &Nat) -> Span {
     let at = VPos {
         subspace: content_subspace(),
         ordinal: ordinal.clone(),
     };
-    ordinal_vspan(&at, count).expect("width ≥ 1 ⇒ count ≥ 1")
+    content_vspan(&at, count).expect("s_C ∧ width ≥ 1 ⇒ count ≥ 1")
 }
 
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`

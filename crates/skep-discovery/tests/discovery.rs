@@ -13,19 +13,10 @@ mod common;
 use common::*;
 use skep_arrangement::HasM5;
 use skep_discovery::{
-    count_v_on, window_v_on, FourSet, LinkQuery, OrphanError, QueryError, SlotSpec, SupClaim, FROM,
-    TO, TYPE,
+    content_vspan, count_v_on, window_v_on, FourSet, LinkQuery, OrphanError, QueryError, SlotSpec,
+    SupClaim, FROM, TO, TYPE,
 };
 use skep_links::{enc, Endset, LinkWriter, SlotArg, View};
-
-fn all_any() -> FourSet {
-    FourSet {
-        home: SlotSpec::Any,
-        from: SlotSpec::Any,
-        to: SlotSpec::Any,
-        ty: SlotSpec::Any,
-    }
-}
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
 
@@ -69,6 +60,15 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
         lq.findlinks_v(&doc1(), &[vspan(1, 1, 1), vspan(2, 1, 1)]),
         Err(QueryError::BadRegion)
     );
+
+    // The published constructor and the gate are two halves of ONE shape:
+    // what content_vspan builds the gate accepts, and it declines exactly the
+    // two requests that would have been BadRegion — a non-s_C subspace and a
+    // zero count.
+    let built = content_vspan(&vp(1, 1), &n(1)).expect("s_C, count ≥ 1");
+    assert!(lq.count_v(&doc1(), &[built]).is_ok());
+    assert_eq!(content_vspan(&vp(2, 1), &n(1)), None);
+    assert_eq!(content_vspan(&vp(1, 1), &n(0)), None);
 
     // Registered-but-empty d → a DEFINED empty result, distinct from
     // DocNotRegistered.
@@ -271,34 +271,34 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
         .expect("emit succeeds");
 
     // (∗,∗,∗,∗) — the whole addressable slice (FL-WILD), address order.
-    assert_eq!(lq.findlinks_ftt(&all_any()), vec![la(1), la(2), la2(1)]);
-    assert_eq!(lq.count_ftt(&all_any()), 3);
+    assert_eq!(lq.findlinks_ftt(&FourSet::any()), vec![la(1), la(2), la2(1)]);
+    assert_eq!(lq.count_ftt(&FourSet::any()), 3);
 
     // Any constrained-empty slot annihilates (FL-EMP) — both the explicit
     // zero and an empty Spans endset, which never reaches M7.
     let q = FourSet {
         to: SlotSpec::Empty,
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q), vec![]);
     assert_eq!(lq.count_ftt(&q), 0);
     let q = FourSet {
         from: SlotSpec::Spans(Endset::empty()),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q), vec![]);
 
     // One constrained slot.
     let q_from = FourSet {
         from: SlotSpec::Spans(enc(&[ca(1)])),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q_from), vec![la(1), la2(1)]);
     // Conjunction across slots (AND-of-ORs, M7's combiner).
     let q_both = FourSet {
         from: SlotSpec::Spans(enc(&[ca(1)])),
         to: SlotSpec::Spans(enc(&[ca(102)])),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q_both), vec![la2(1)]);
     assert_eq!(lq.count_ftt(&q_both), 1);
@@ -315,24 +315,24 @@ fn ftt_wildcard_unit_empty_zero_and_conjunction() {
 /// though it were the unit.
 #[test]
 fn the_descriptor_states_its_own_zero() {
-    assert!(!all_any().is_unsatisfiable());
+    assert!(!FourSet::any().is_unsatisfiable());
     for zero in [SlotSpec::Empty, SlotSpec::Spans(Endset::empty())] {
         for q in [
             FourSet {
                 home: zero.clone(),
-                ..all_any()
+                ..FourSet::any()
             },
             FourSet {
                 from: zero.clone(),
-                ..all_any()
+                ..FourSet::any()
             },
             FourSet {
                 to: zero.clone(),
-                ..all_any()
+                ..FourSet::any()
             },
             FourSet {
                 ty: zero.clone(),
-                ..all_any()
+                ..FourSet::any()
             },
         ] {
             assert!(q.is_unsatisfiable(), "{q:?} carries the zero");
@@ -360,13 +360,13 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     // not a slot and not an arrangement test.
     let q_home1 = FourSet {
         home: SlotSpec::Spans(enc(&[doc1()])),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q_home1), vec![la(1), la(2)]);
     assert_eq!(lq.count_ftt(&q_home1), 2);
     let q_home2 = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q_home2), vec![la2(1)]);
 
@@ -374,7 +374,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let q_h2_from = FourSet {
         home: SlotSpec::Spans(enc(&[doc2()])),
         from: SlotSpec::Spans(enc(&[ca(1)])),
-        ..all_any()
+        ..FourSet::any()
     };
     assert_eq!(lq.findlinks_ftt(&q_h2_from), vec![la2(1)]);
 
@@ -383,7 +383,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     for zero in [SlotSpec::Empty, SlotSpec::Spans(Endset::empty())] {
         let q = FourSet {
             home: zero,
-            ..all_any()
+            ..FourSet::any()
         };
         assert_eq!(lq.findlinks_ftt(&q), vec![]);
         assert_eq!(lq.count_ftt(&q), 0);

@@ -24,12 +24,21 @@
 //! filter the same way, the latter diverging from ASN-0117/0098 by conjoining
 //! `is_active` onto reachability.
 //!
-//! The ONE exception is [`project_on`], and a caller building a live-links
-//! view needs to know it: coverage reaches it through M7's `followlink`,
-//! which takes no `View` and reports what is recorded, so a retracted link
-//! still projects the V-positions it covers. That is ASN-0098's `project`
-//! unchanged; the filtered question it looks like it answers is
-//! [`discoverable_from_on`]'s.
+//! Two reads depart from that, and a caller building a live-links view needs
+//! both:
+//!
+//! * [`project_on`] is UNFILTERED — coverage reaches it through M7's
+//!   `followlink`, which takes no `View` and reports what is recorded, so a
+//!   retracted link still projects the V-positions it covers. That is
+//!   ASN-0098's `project` unchanged; the filtered question it looks like it
+//!   answers is [`discoverable_from_on`]'s.
+//! * the lineage family ([`in_claims_on`]/[`out_claims_on`]) takes a `View`,
+//!   so the caller chooses: `Active` yields the operative graph, `Audit` the
+//!   full history including nullified claims, each disclosing its own
+//!   activity in [`SupClaim::active`]. Under EVERY view a claim's `old`/`new`
+//!   are the addresses it NAMES, read out as recorded — the view filters
+//!   claims, never their endpoints, so a live claim can name a nullified
+//!   link.
 //!
 //! Windowing (ASN-0108) is a stateless key-cut over M7's native
 //! `OrdSet<Address>` — address order IS the permanent enumeration key
@@ -65,9 +74,12 @@
 //! lock-key space tag; it contributes nothing to the assembled `World` and
 //! names neither `World` nor `Record` — a pure consumer of
 //! `HasLinks + HasM5 + HasM3`, generic over `W` (Engine Composition
-//! Contract). Consumed only by M10, which uses the [`LinkQuery`] handle for
-//! single reads and the pure `*_on` twins over one shared `Snapshot` for any
-//! multi-call verdict (the ASN-0132 snapshot-token need; M2 clause 6).
+//! Contract). Consumed only by M10, which reaches every read through the pure
+//! `*_on` twins: M10 pins ONE snapshot per request and reports its position
+//! as `as_of`, which the self-snapshotting [`LinkQuery`] handle cannot serve
+//! — its snapshot is taken and dropped inside the call, so the answer could
+//! not be labelled with the state it came from. The handle serves callers
+//! reading current state without naming it.
 
 #![forbid(unsafe_code)]
 
@@ -84,7 +96,9 @@ pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
 pub use handle::LinkQuery;
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{discoverable_from_on, project_on};
-pub use region::{count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on};
+pub use region::{
+    content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
+};
 pub use survival::delete_orphans_on;
 pub use types::{
     Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,

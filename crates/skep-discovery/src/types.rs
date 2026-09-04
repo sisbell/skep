@@ -42,6 +42,21 @@ pub struct FourSet {
 }
 
 impl FourSet {
+    /// `(∗,∗,∗,∗)` — the UNIT descriptor (FL-WILD): every slot wildcard, so
+    /// it matches the whole addressable slice. The counterpart to the zero
+    /// [`FourSet::is_unsatisfiable`] answers for, and the base a narrowed
+    /// query is built from: `FourSet { from: …, ..FourSet::any() }` names
+    /// only the slots it constrains, so no slot is left at something other
+    /// than the wildcard by accident.
+    pub fn any() -> FourSet {
+        FourSet {
+            home: SlotSpec::Any,
+            from: SlotSpec::Any,
+            to: SlotSpec::Any,
+            ty: SlotSpec::Any,
+        }
+    }
+
     /// FL-EMP: does some slot carry the zero — an explicit
     /// [`SlotSpec::Empty`], or a `Spans` that names nothing? Such a descriptor
     /// matches no link whatever the other slots say.
@@ -115,8 +130,12 @@ pub struct Window {
 /// One supersession claim from the archival lineage (ASN-0125 EL11b), read
 /// off M7's FLIPPED storage convention: `old` = the FROM slot (superseded),
 /// `new` = the TO slot (superseding). `home` is the pure M1 `document_of`
-/// attribution (EL8b); `active` is M7's `is_active(claim)` — a claim may be
-/// disclosed from the Audit view yet itself nullified.
+/// attribution (EL8b).
+///
+/// `active` is the CLAIM's own — M7's `is_active(claim)`, so a claim may be
+/// disclosed from the Audit view yet itself nullified. `old` and `new` carry
+/// no such flag: they are the addresses the claim names, read out as
+/// recorded, and either may itself be a nullified link.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SupClaim {
     pub claim: Address,
@@ -147,9 +166,10 @@ pub enum QueryError {
     /// `a ∉ dom(L)` — or, on `project` only, an out-of-range slot (M7's
     /// `followlink` conflates the two; the `BadSlot` split is deferred).
     NotALink,
-    /// The region is not content-subspace, ordinal-level, depth-2 V-spans
-    /// (`start[1] = s_C = 1`, `width[1] = 0`) — rejected up front so M5's
-    /// silent clipping never turns the request into a different query.
+    /// Some span of the region is not the shape [`crate::content_vspan`]
+    /// builds — rejected up front so M5's silent clipping never turns the
+    /// request into a different query. A caller that builds its region
+    /// through that constructor cannot provoke this.
     BadRegion,
 }
 
@@ -187,7 +207,7 @@ pub enum OrphanError {
 impl fmt::Display for OrphanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            OrphanError::DocNotRegistered => "query: d is not a registered document",
+            OrphanError::DocNotRegistered => "delete-orphans: d is not a registered document",
             OrphanError::NotContentSubspace => {
                 "delete-orphans: p.subspace is not the content subspace s_C"
             }

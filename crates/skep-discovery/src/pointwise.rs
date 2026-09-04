@@ -38,12 +38,16 @@ use crate::types::QueryError;
 ///
 /// `NotALink` subsumes BOTH `a ∉ dom(L)` AND an out-of-range `slot` (M7's
 /// `followlink` conflates them; a `BadSlot` split is deferred — it would cost
-/// an extra `readlink` to read arity). The returned `SpanSet` is handed back
-/// verbatim — M8 never tests the projection for emptiness; a caller probes it
-/// with `SpanSet` membership (`denotes(&[s_C, k])` over
-/// `k ∈ 1..=content_count(d)`, cross-checkable via M5's `point`) or
-/// `SpanSet::is_empty`, which is total where the level-gated set comparisons
-/// can fault.
+/// an extra `readlink` to read arity).
+///
+/// The result is a NORMALIZED set of depth-2 content V-spans
+/// (`[s_C, ordinal] × [0, count]`) in `d`'s own V-coordinates, M5's `project`
+/// guarantee handed back verbatim — so a caller reads the covered positions
+/// straight off the spans. The two probe routes are `SpanSet` membership
+/// (`denotes(&[s_C, k])` over `k ∈ 1..=content_count(d)`, cross-checkable via
+/// M5's `point`) and `SpanSet::is_empty`, which is total where the
+/// level-gated set comparisons can fault. M8 itself never tests the
+/// projection for emptiness.
 pub fn project_on<W>(
     s: &Snapshot<W>,
     a: &Address,

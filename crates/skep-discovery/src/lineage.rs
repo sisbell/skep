@@ -87,6 +87,11 @@ where
 /// a non-link key is gated internally and returns `[]`. `v = Active` yields
 /// the operative graph (`succ_o`), `Audit` the full history (`succ_h`);
 /// `Default` behaves as `Active` (M7's §G primitives coerce it).
+///
+/// The view selects which CLAIMS are disclosed, never which endpoints: each
+/// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as
+/// recorded, so under any view a live claim can name a nullified link. A
+/// caller that needs the endpoints' activity asks M7's `is_active` for them.
 pub fn in_claims_on<W>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,
@@ -95,7 +100,8 @@ where
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
-/// flipped convention. Same key/view contract as [`in_claims_on`].
+/// flipped convention. Same key, view and endpoint-disclosure contract as
+/// [`in_claims_on`].
 pub fn out_claims_on<W>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim>
 where
     W: WorldState + HasLinks + HasM5 + HasM3,

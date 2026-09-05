@@ -1,8 +1,13 @@
 //! §A — the `Run` value: one contiguous I-extent placed in an arrangement,
-//! the run's own position arithmetic ([`Run::addr_at`]/[`Run::addrs`]/
-//! [`Run::into_addrs`]/[`Run::reach`], and [`Run::offsets_covered_by`] with
-//! the [`OffsetRange`] it answers in), and the ONE admissible Run→Span lift
+//! the run's own position arithmetic, and the ONE admissible Run→Span lift
 //! ([`Run::iextent`]).
+//!
+//! The arithmetic divides by whether a caller can get the question wrong.
+//! [`Run::addrs`], [`Run::into_addrs`] and [`Run::reach`] take no offset, so
+//! they are total and published; [`Run::tumbler_at`], [`Run::addr_at`] and
+//! [`Run::offsets_covered_by`] (with the [`OffsetRange`] it answers in) are
+//! crate-private, the first two carrying a `k ≤ width` precondition nothing
+//! can report and the third an operand the level-class discipline governs.
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
@@ -20,7 +25,7 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// alone does not supply it: T4b admits element fields of any length ≥ 1, so
 /// a subspace BASE `doc·0·subspace` is element-level too, and advancing its
 /// last component walks the subspace id rather than an ordinal (M1's TA7a
-/// hazard, stated on `shift`). [`Run::admits_start`] is the predicate; both
+/// hazard, stated on `shift`). `Run::admits_start` is the predicate; both
 /// invariants hold for every `Run` in the process, not merely for every one
 /// this crate minted.
 ///
@@ -126,16 +131,16 @@ impl Run {
     }
 
     /// Checked constructor — the ONE door: `None` iff `width == 0` OR
-    /// `i_start` fails [`admits_start`](Run::admits_start). Every Run that is
-    /// not built by M5's own emission sites walks through here, an external
-    /// producer and a decoded journal or checkpoint alike — the serde
-    /// `try_from` shadow routes deserialization into this function.
+    /// `i_start` is not a full element position `doc·0·subspace·ordinal`.
+    /// Every Run that is not built by M5's own emission sites walks through
+    /// here, an external producer and a decoded journal or checkpoint alike —
+    /// the serde `try_from` shadow routes deserialization into this function.
     ///
     /// M5's own sites divide in two. The propagating ones — run-list
     /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the placing
     /// folds — build Runs by the in-crate struct literal from a start that is
     /// already one: a start reaching them is a minted element address or an
-    /// [`addr_at`](Run::addr_at) of one, and an ordinal shift preserves the
+    /// in-crate ordinal shift of one, and such a shift preserves the
     /// element field's length. The two ORIGINATING sites establish it
     /// instead: `insert` places what `M3State::mint_content` returns, which is
     /// `doc·0·s_C·ordinal` by construction, and the `LinkSeat` fold seats the
@@ -183,12 +188,13 @@ impl Run {
     /// [`iextent`](Run::iextent), the run-list's I-adjacency test — is asked
     /// of the run through one of those, so the argument is discharged once.
     ///
-    /// CRATE-PRIVATE for the sake of that same precondition: an offset is a
-    /// thing a caller can get wrong, and outside this crate there is no
-    /// question about a run's positions that needs one. A consumer wanting a
-    /// position asks [`addr_at`](Run::addr_at) or [`addrs`](Run::addrs); one
-    /// wanting the exclusive end asks [`reach`](Run::reach), which takes no
-    /// offset at all.
+    /// CRATE-PRIVATE for the sake of that same precondition, as
+    /// [`addr_at`](Run::addr_at) beside it is: an offset is a thing a caller
+    /// can get wrong, and outside this crate there is no question about a
+    /// run's positions that needs one. A consumer wanting the positions asks
+    /// [`addrs`](Run::addrs) or [`into_addrs`](Run::into_addrs); one wanting
+    /// the exclusive end asks [`reach`](Run::reach), which takes no offset at
+    /// all. Every published question about a run is therefore total.
     pub(crate) fn tumbler_at(&self, k: &Nat) -> Tumbler {
         debug_assert!(
             *k <= self.width,
@@ -201,7 +207,12 @@ impl Run {
     /// and re-validated, REQUIRING `k ≤ width` as the shift does.
     /// Ordinal-shifting a valid element I-start preserves T4-validity, so the
     /// `.expect` flags an internal-invariant violation, never a domain case.
-    pub fn addr_at(&self, k: &Nat) -> Address {
+    ///
+    /// CRATE-PRIVATE for the precondition it inherits, and for the reason
+    /// [`tumbler_at`](Run::tumbler_at) states: past the reach this answers
+    /// with a T4-valid element address OUTSIDE the run, which no caller could
+    /// tell from one the run holds and no release build stops on.
+    pub(crate) fn addr_at(&self, k: &Nat) -> Address {
         validate(self.tumbler_at(k))
             .expect("ordinal shift of a valid element I-start is T4-valid by construction")
     }
@@ -228,7 +239,7 @@ impl Run {
     /// holding the run BY VALUE, [`into_addrs`](Run::into_addrs).
     ///
     /// Yields OWNED addresses because a run stores none: it stores a start and
-    /// a width, and each position is [`addr_at`](Run::addr_at) of an offset.
+    /// a width, and each position is the start advanced by an offset.
     /// That is why this is an inherent method and not `IntoIterator for &Run`,
     /// where a caller would rightly expect borrowed items. It is likewise not
     /// an `ExactSizeIterator`: `width` is a `Nat`, so a `len() -> usize` would

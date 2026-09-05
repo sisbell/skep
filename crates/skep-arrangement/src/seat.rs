@@ -19,8 +19,8 @@ use crate::HasM5;
 /// checks, in order:
 ///
 /// * `NotLinkAddress` — `link` is a FULL ELEMENT POSITION
-///   `doc·0·s_L·ordinal`: [`Run::admits_start`] for the shape the placed run
-///   requires, and the link subspace for where it belongs. Element level
+///   `doc·0·s_L·ordinal`: the element-field shape the placed run requires,
+///   and the link subspace for where it belongs. Element level
 ///   alone would not do — a subspace BASE `doc·0·s_L` is element-level, and
 ///   its `subspace()` answers `s_L`, so it would pass a bare subspace test
 ///   and then be placed as a "width-1" run whose I-extent covers every link

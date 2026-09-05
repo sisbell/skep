@@ -2,8 +2,8 @@
 //! verdict and says what it means; that is the whole job of this file.
 //!
 //! WHICH ERROR WINS when several conditions fail at once is a property of the
-//! operation, not of the enum: it is stated on each op in
-//! [`ops`](crate::Vstream), which is where a caller reads it and where the
+//! operation, not of the enum: it is stated on each op of
+//! [`Vstream`](crate::Vstream), which is where a caller reads it and where the
 //! integration suite pins it. Declaration order here carries no contract.
 
 use std::error::Error;

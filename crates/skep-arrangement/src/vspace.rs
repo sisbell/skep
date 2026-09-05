@@ -20,7 +20,7 @@ impl VPos {
     /// Does this position name the CONTENT subspace s_C? The numeral is M1's
     /// (T7), and naming the classification here is what keeps the four edit
     /// ops that gate on it from each restating the comparison — the same
-    /// service [`DocArrangement::list`](crate::M5State) performs on the
+    /// service the arrangement's own subspace selector performs on the
     /// run-list side, where "exactly these two subspaces exist" is answered by
     /// the arrangement rather than by every read that routes on a numeral.
     ///
@@ -48,6 +48,11 @@ pub struct VSpec {
 ///
 /// Named fields, not a tuple: all three are `&Nat`, so a positional
 /// destructuring would put them back within swapping distance of each other.
+///
+/// `Copy` because three shared references are, and `Debug`/`Eq` because a
+/// value a test asserts about should print what it read rather than a
+/// boolean — the same baseline the run's `OffsetRange` carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OrdinalVSpan<'a> {
     /// The subspace numeral, `start.get(1)`.
     pub(crate) subspace: &'a Nat,
@@ -147,8 +152,17 @@ mod tests {
             assert!(is_ordinal_vspan(&s));
             assert_eq!(s.start(), &t(&[sub, ord]));
             assert_eq!(s.width(), &t(&[0, count]));
-            let v = as_ordinal_vspan(&s).expect("what the constructor builds, the reader reads");
-            assert_eq!((v.subspace, v.ordinal, v.count), (&n(sub), &n(ord), &n(count)));
+            // Compared as the value the reader hands back, not as a tuple
+            // rebuilt from its fields: a failure then prints the span that
+            // was read, which is the whole of what a diagnostic is for.
+            assert_eq!(
+                as_ordinal_vspan(&s).expect("what the constructor builds, the reader reads"),
+                OrdinalVSpan {
+                    subspace: &n(sub),
+                    ordinal: &n(ord),
+                    count: &n(count),
+                }
+            );
         }
         // Zero positions is not a span: ⟨⟩ designates nothing, T12 has no
         // zero-width value to hand back.

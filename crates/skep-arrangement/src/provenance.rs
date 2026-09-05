@@ -45,6 +45,7 @@ impl Provenance {
     /// Takes the runs rather than their spans: the lift is the one this type
     /// admits, so performing it here makes the span-shape invariant above
     /// true at the mutator instead of owed by each caller.
+    #[must_use = "append returns the extended record; R is persistent and the receiver is untouched"]
     pub(crate) fn append<'r>(
         &self,
         doc: &Address,

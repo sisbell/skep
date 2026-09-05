@@ -184,6 +184,7 @@ impl RunList {
     /// Splice `new_runs` in at `ord` (§1): split, insert, concat, coalesce.
     /// The suffix's implicit positions are now `+Σ width(new_runs)` — the
     /// uniform forward shift, for free.
+    #[must_use = "splice_in returns the new run-list; it does not modify the receiver"]
     pub(crate) fn splice_in(&self, ord: &Nat, new_runs: &[Run]) -> RunList {
         let (mut acc, right) = self.split_at(ord);
         acc.extend(new_runs.iter().cloned());
@@ -197,6 +198,7 @@ impl RunList {
     /// `n_L(d) + 1`). Where the end IS is this list's knowledge, so a caller
     /// meaning "after everything" says that rather than computing it.
     /// Coalesces with the last run when I-adjacent, as any splice does.
+    #[must_use = "append returns the new run-list; it does not modify the receiver"]
     pub(crate) fn append(&self, run: Run) -> RunList {
         self.splice_in(&(self.total_width() + Nat::one()), &[run])
     }
@@ -205,6 +207,7 @@ impl RunList {
     /// `from` and `from + width`, drop the middle, concat prefix + suffix.
     /// Suffix positions shift left for free; the gap closes by construction
     /// (ASN-0117 P2).
+    #[must_use = "remove_range returns the new run-list; it does not modify the receiver"]
     pub(crate) fn remove_range(&self, from: &Nat, width: &Nat) -> RunList {
         let (mut left, rest) = self.split_at(from);
         // The removed range is rest-relative ordinals [1, width].
@@ -229,6 +232,7 @@ impl RunList {
     /// fold's input class (§10) and 3|4 is debug-asserted; the tiling is
     /// nonetheless total for any vector — with fewer than three ordinals there
     /// is no interior region to move, so the list comes back unchanged.
+    #[must_use = "reorder returns the new run-list; it does not modify the receiver"]
     pub(crate) fn reorder(&self, cut_ordinals: &[Nat]) -> RunList {
         debug_assert!(
             matches!(cut_ordinals.len(), 3 | 4),

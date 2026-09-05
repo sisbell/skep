@@ -205,9 +205,9 @@ impl M5State {
     /// spans.
     ///
     /// Per content run × coverage span: the run reports which of its offsets
-    /// the span covers ([`Run::offsets_covered_by`], which owns both the
-    /// same-level-class intersection and the cross-class boundary search),
-    /// and this method turns that `OffsetRange` into a V-range by adding the
+    /// the span covers (the run owns both the same-level-class intersection
+    /// and the cross-class boundary search that decide it),
+    /// and this method turns that offset range into a V-range by adding the
     /// run's implicit V-start to where the range opens — the
     /// range answering for how many positions it covers, so no reader
     /// subtracts its bounds. Scan of the forward content map (Open decision

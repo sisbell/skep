@@ -34,9 +34,9 @@ impl DocArrangement {
     }
 }
 
-/// Authoritative folded state: the per-document POOM, and [`Provenance`]
-/// co-located beside it (ASN-0075). The arrangement is authoritative MUTABLE
-/// state recovered by replay — NOT a recomputable hint (ASN-0047 P3);
+/// Authoritative folded state: the per-document POOM, and the `Provenance`
+/// record co-located beside it (ASN-0075). The arrangement is authoritative
+/// MUTABLE state recovered by replay — NOT a recomputable hint (ASN-0047 P3);
 /// provenance is the append-only history housed next to it, and it is a type
 /// of its own whose surface offers no removal, so the permanence R promises
 /// holds by construction. `arrangements` is sparse: an absent doc ⇒ empty
@@ -46,10 +46,9 @@ impl DocArrangement {
 /// CLASS INVARIANTS, relating the two fields. The reads state what they
 /// answer; these are what makes those answers mean it.
 ///
-/// * **R is append-only.** Structural: [`Provenance`] offers
-///   [`append`](Provenance::append) and reads, and no removal, so no fold arm
-///   can shorten a document's record however the variant set grows (ASN-0047
-///   P2).
+/// * **R is append-only.** Structural: `Provenance` offers `append` and
+///   reads, and no removal, so no fold arm can shorten a document's record
+///   however the variant set grows (ASN-0047 P2).
 /// * **P4★ — present containment is recorded.** For every `doc`, the current
 ///   content image `⋃ r.iextent()` over `content_runs(doc)` is contained in
 ///   `provenance.ever_contained(doc)`. Established by the two arms that
@@ -65,7 +64,7 @@ impl DocArrangement {
 /// * **D-SEQ★ — each subspace's arranged positions are the dense prefix.**
 ///   For every `doc` and each subspace `s`, the positions the arrangement
 ///   binds are exactly `{[s, k] : 1 ≤ k ≤ n_s}` — anchored at ordinal 1, no
-///   holes. Structural rather than maintained: a [`RunList`] stores no
+///   holes. Structural rather than maintained: a run-list stores no
 ///   V-positions, so a run's V-start is a prefix sum (§1; ASN-0047 D-SEQ★, via
 ///   contiguity D-CTG★ and minimum-position D-MIN★), and no fold arm can open
 ///   a gap because there is nothing in which to open one.
@@ -168,6 +167,7 @@ impl M5State {
     /// the lazy convention. Stating the read-modify-write once leaves each
     /// editing fold arm showing only what distinguishes it: which run-list
     /// operation it performs, and what it does to R.
+    #[must_use = "returns the updated arrangements map; it does not modify the receiver"]
     fn arrangements_with_content(
         &self,
         doc: &Address,
@@ -180,6 +180,7 @@ impl M5State {
 
     /// The link-subspace twin of
     /// [`arrangements_with_content`](M5State::arrangements_with_content).
+    #[must_use = "returns the updated arrangements map; it does not modify the receiver"]
     fn arrangements_with_link(
         &self,
         doc: &Address,
@@ -205,6 +206,7 @@ impl M5State {
     /// Determinism for `VersionSnapshot` holds because records replay in
     /// journal order, so `source`'s arrangement is reconstructed to its
     /// fork-point value before the snapshot reads it.
+    #[must_use = "apply_m5 returns the folded state; it does not modify the receiver"]
     pub fn apply_m5(&self, r: &M5Rec) -> M5State {
         match r {
             // §3/§5 fold: splice + eager coalesce, and append each placed
@@ -281,6 +283,7 @@ impl M5State {
     /// the inverse-arrangement or reverse-provenance hint (Open decisions
     /// #2/#3) obliges an override that reseeds exactly the fold-equivalent
     /// state.
+    #[must_use = "rebuild_derived consumes the state and returns the seeded one"]
     pub fn rebuild_derived(self) -> M5State {
         self
     }

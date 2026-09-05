@@ -81,7 +81,7 @@ impl<W: WorldState> fmt::Debug for Vstream<'_, W> {
     }
 }
 
-impl<'k, W> Vstream<'k, W>
+impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration, mints) + M4 (write) + M5
     W::Record: From<M5Rec> + From<M3Rec> + From<ContentWrite>, // stages M3Rec + ContentWrite + M5Rec
@@ -114,7 +114,7 @@ where
     /// J0/J1★ by construction: mint + write + place + provenance ride one
     /// transaction; successive `mint_content` calls read `stg.working()`, so
     /// under the held lock they advance the same frontier → contiguous
-    /// I-adjacent addresses → [`extend_or_push_run`] coalesces them into
+    /// I-adjacent addresses → the placement accumulator coalesces them into
     /// exactly ONE placed run, whose start is the first address minted.
     /// The accumulator is asked rather than assumed: were the frontier ever
     /// to hand back a non-adjacent address, the placement would be a correct
@@ -180,7 +180,7 @@ where
     }
 }
 
-impl<'k, W> Vstream<'k, W>
+impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3 + HasContent, // reads M3 (registration) + M4 (`contains` gate) + M5
     W::Record: From<M5Rec>,                     // stages only M5Rec (no mint, no byte write)
@@ -213,7 +213,7 @@ where
     /// PRODUCED so an over-budget copy stops accumulating rather than being
     /// built and then measured); finally `EmptyResult` when nothing survives
     /// clipping. Cross-origin runs never coalesce
-    /// ([`extend_or_push_run`]'s I-adjacency guard), preserving the origin
+    /// (the placement accumulator's I-adjacency guard), preserving the origin
     /// multiset (CP11).
     ///
     /// WHICH SPEC SPEAKS, when more than one is defective: the specs are
@@ -315,7 +315,7 @@ where
     }
 }
 
-impl<'k, W> Vstream<'k, W>
+impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3, // reads M3 registration + M5 only
     W::Record: From<M5Rec>,        // stages only M5Rec
@@ -454,7 +454,7 @@ where
     }
 }
 
-impl<'k, W> Vstream<'k, W>
+impl<W> Vstream<'_, W>
 where
     W: WorldState + HasM5 + HasM3, // reads M3 (ω pre-read, registration, mints) + M5
     W::Record: From<M5Rec> + From<M3Rec>, // stages M3Rec + M5Rec

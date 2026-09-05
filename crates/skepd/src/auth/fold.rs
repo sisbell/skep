@@ -33,9 +33,10 @@ use crate::World;
 /// The fold's four facts, answered off one `World` snapshot (AUTH-2.31):
 /// `value_at` from M4's permascroll (I-bytes are immutable, so a head read
 /// equals the deposit-commit read for every honored deposit), ω and
-/// account-hood from M3, and v1's constant-true publication (AUTH-2.117 —
-/// no draft substrate exists in this workspace; the precheck's
-/// guest-publication read degenerates to this constant, see the report).
+/// account-hood from M3, and publication from the engine's exception set —
+/// `World::published`, the daemon's ONE publication definition (owner ruling
+/// D1, 2026-09-05; PUB-7.5), which is M3's per-document bit indexed for a
+/// membership miss.
 pub(crate) struct WorldCtx<'a>(pub &'a World);
 
 impl Values for WorldCtx<'_> {
@@ -60,15 +61,29 @@ impl FoldCtx for WorldCtx<'_> {
         self.0.m3().is_registered_account(a)
     }
 
-    /// The daemon's OTHER publication read is
-    /// [`super::policy::is_published_v1`], which computes v1's real answer
-    /// (a document is published iff it IS its account's doc 1) for the
-    /// RES-26 publish gate. The two are one design decision under two
-    /// rules, and they agree on every credential home — which the home pin
-    /// confines to doc 1, the argument written there. A draft substrate
-    /// moves both.
-    fn is_published(&self, _doc: &Address) -> bool {
-        true
+    /// AUTH-2.34, answered as owner ruling D1 states it: `doc ∉
+    /// exception_set` and nothing else — `World::published`, the engine's
+    /// derived membership index over M3's publication bit (PUB-7.5). The
+    /// RES-26 publish gate reads the same function (`super::policy`), so the
+    /// daemon has ONE publication definition; on a reconstruction the same
+    /// call answers off the reconstructed world's own set (PUB-7.12), which
+    /// `Engine::world_at` seeds before it replays.
+    ///
+    /// The document's BIRTH state, constant over every record's life: no
+    /// publish op exists and a link deposit moves no document's bit (PUB-1.9),
+    /// so the pre-commit gate and the post-commit fold read one answer. The
+    /// cell this moved (D1, `conformance/adjudication/decisions.md`): a
+    /// credential deposited in a DRAFT-homed document now answers
+    /// `unpublished` — AUTH-2.66 item 3 — where the constant-true v1 wiring
+    /// let it fall through to the home pin's `not_doc_one`.
+    ///
+    /// The fold hands this the home `document_of` derived — a document
+    /// address, a version member's own where the home is a version — and
+    /// asks nothing of registration: an unregistered home has no ω and so
+    /// answers `MalformedShape` at item 2, ahead of this read (PUB-6.37's
+    /// registration-first discipline, in the fold's own order).
+    fn is_published(&self, doc: &Address) -> bool {
+        self.0.published(doc)
     }
 }
 
@@ -205,7 +220,8 @@ impl IdentityFold {
     /// one the gate read only by this write's own records, and classify
     /// reads none of them: the record bytes at `from` are a prior write's
     /// atom, `owner_of`/`is_account` of the home are M3 state a link
-    /// deposit does not move, and publication is a constant. So a firing
+    /// deposit does not move, and publication is the home's birth state,
+    /// which a link deposit does not move either (PUB-1.9). So a firing
     /// assert names a broken E4 and not a classification that shifted
     /// underneath it.
     ///

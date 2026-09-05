@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, genesis from the one type configuration, the pinned recovery order, and the world dump surface"
+description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, the constant genesis, the pinned recovery order, the exception set over M3's publication bit, and the world dump surface"
 readme = "README.md"
 
 [features]
@@ -18,6 +18,11 @@ dump = []
 [dependencies]
 # The World/Record serde derives satisfying M2's WorldState bounds.
 serde.workspace = true
+# The exception set (PUB-7.5) — a persistent hash map draft → owner account,
+# so the World's per-transact clone stays a root clone. The serde feature is
+# the workspace's; the set itself is `#[serde(skip)]` (derived, never
+# checkpointed).
+im.workspace = true
 # M1 — Tumbler/Address construction for the standard reserved type addresses
 # and the world dump's address rendering.
 skep-address = { path = "../skep-address" }
@@ -44,6 +49,11 @@ skep-febe = { path = "../skep-febe" }
 skep-retrieval = { path = "../skep-retrieval" }
 skep-discovery = { path = "../skep-discovery" }
 # Fsync journals for the lifecycle/recovery tests; bincode is M2's actual
-# wire format — the genesis-determinism test compares two Σ₀ through it.
+# wire format — the genesis-determinism test compares two Σ₀ through it, and
+# the load-check tests hand-build the pre-publication checkpoint shapes.
 tempfile.workspace = true
 bincode.workspace = true
+# The load-check test rewrites a checkpoint's body under a VALID header, so
+# the decode — not the checksum — is what refuses it: M2's header checksum
+# is CRC32C (the same crate and version skep-kernel pins).
+crc32c = "0.6"

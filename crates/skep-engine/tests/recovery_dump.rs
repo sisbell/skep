@@ -377,7 +377,7 @@ fn the_dump_names_each_section_for_its_store() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
     let text = engine.world_dump().into_string();
 
-    assert!(text.starts_with("skep-world-dump v3\n"), "unexpected banner: {text:.32}");
+    assert!(text.starts_with("skep-world-dump v4\n"), "unexpected banner: {text:.32}");
     for section in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
         assert!(
             text.contains(section),

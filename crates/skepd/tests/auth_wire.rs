@@ -804,59 +804,149 @@ fn a_valid_hex_non_point_key_is_refused_at_enrollment() {
     sd.shutdown();
 }
 
-/// The home pin (RES-17, wire.md §The claim ceremony): a credential link
-/// homed in any document of its account other than doc 1 refuses
-/// `not_doc_one` — which is what confines an account's credential state to
-/// one address, and what two of `policy.rs`'s arguments (`is_published_v1`'s
-/// agreement with the fold's constant, and `key_set`'s one home) rest on.
+/// The fold's publication read is the engine's ONE definition (owner ruling
+/// D1, 2026-09-05; `conformance/adjudication/decisions.md`): a credential
+/// deposited in a DRAFT-homed document answers `unpublished` — AUTH-2.66
+/// item 3, ahead of the per-kind arm — where the constant-true v1 wiring let
+/// it fall through to the home pin's `not_doc_one`. THE CELL THAT FLIPS; no
+/// golden moves. Item 3 precedes the payload parse too, so an unparseable
+/// record in a draft answers `unpublished` and never `malformed_payload`.
 ///
-/// The second cell is the precedence AUTH-2.127 pins and the only place it
-/// is observable: the payload is parsed BEFORE the pin, so a wrong-home
-/// deposit whose record is unparseable answers `malformed_payload`, never
-/// `not_doc_one`.
+/// The home pin (RES-17) and AUTH-2.127's parse-before-pin precedence
+/// therefore need a PUBLISHED home that is not doc 1 to stay observable, and
+/// this build has one: doc 1's own version, born published by inheritance
+/// (PUB-8.17). A well-formed record there answers `not_doc_one`; an
+/// unparseable one answers the PAYLOAD fault, the parse preceding the pin.
 #[test]
-fn a_credential_homed_outside_doc_1_refuses_not_doc_one() {
+fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_published_home() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    // A DRAFT of the claimant's — a document of its account that is not
-    // doc 1. Home anchoring puts the record atom in the same document.
+
+    // An enroll deposit homed in `home`, its record atom landed first at the
+    // V-position `ordinal`. The atom's I-address is the insert's own ack —
+    // a version's content chain is its own, so the I-ordinal is not the
+    // V-ordinal there — and home anchoring puts the record in `home`.
+    let enroll_in = |home: &str, ordinal: u64, atom: &str| -> Value {
+        let v = op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+            ),
+        );
+        let atom_addr = acked_addr(&v);
+        op(
+            port,
+            Some(&signed),
+            &format!(
+                r#"{{"op":"make_link","home":"{home}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+            ),
+        )
+    };
+
+    // A DRAFT of the claimant's — a second mint into its account, born
+    // private (PUB-1.1).
     let v = op(
         port,
         Some(&signed),
         &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
     );
     let draft = acked_addr(&v);
-    let enroll_in_draft = |ordinal: u64, atom: &str| -> Value {
-        let v = op(
-            port,
-            Some(&signed),
-            &format!(
-                r#"{{"op":"insert","doc":"{draft}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
-            ),
-        );
-        expect_resp(&v, "ack_addr");
-        op(
-            port,
-            Some(&signed),
-            &format!(
-                r#"{{"op":"make_link","home":"{draft}","from":{{"addrs":["{draft}.0.1.{ordinal}"]}},"to":{{"addrs":["{CLAIMANT_ACCOUNT}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
-            ),
-        )
-    };
+    assert_eq!(
+        rejected_detail(&enroll_in(&draft, 1, &enroll_atom(&[&distinct_key(7)]))),
+        "credential_refused:unpublished",
+        "D1's flipped cell: item 3 answers ahead of the home pin"
+    );
+    assert_eq!(
+        rejected_detail(&enroll_in(&draft, 2, &json_atom("nonsense"))),
+        "credential_refused:unpublished",
+        "publication precedes the payload parse"
+    );
 
-    // A WELL-FORMED record in the wrong home: the pin answers.
+    // A PUBLISHED home that is not doc 1: doc 1's own version. The version
+    // snapshots doc 1's one content position (the ceremony's atom), so its
+    // first free insert slot is 2.
+    let v = op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
+    let version = acked_addr(&v);
+    assert_eq!(version, format!("{CLAIMANT_DOC1}.1"), "the version chain opens at the member 1");
     assert_eq!(
-        rejected_detail(&enroll_in_draft(1, &enroll_atom(&[&distinct_key(7)]))),
-        "credential_refused:not_doc_one"
+        rejected_detail(&enroll_in(&version, 2, &enroll_atom(&[&distinct_key(7)]))),
+        "credential_refused:not_doc_one",
+        "a published non-doc-1 home reaches the home pin"
     );
-    // The same wrong home with an unparseable record answers the PAYLOAD
-    // fault instead — the parse precedes the pin.
     assert_eq!(
-        rejected_detail(&enroll_in_draft(2, &json_atom("nonsense"))),
-        "credential_refused:malformed_payload:bad_header"
+        rejected_detail(&enroll_in(&version, 3, &json_atom("nonsense"))),
+        "credential_refused:malformed_payload:bad_header",
+        "the parse precedes the pin (AUTH-2.127)"
     );
+
+    sd.shutdown();
+}
+
+/// PUB-2.15 — the publish gate projects a VERSION member to its DOCUMENT
+/// before the read: a bare write homed in doc 1's version, and a bare version
+/// of that member, both refuse `signed_session_required`. The drift sweep's
+/// claim-2 defect: the retired equality compare read doc 1's versions as
+/// unpublished and ADMITTED both. The signed session performs both.
+#[test]
+fn the_publish_gate_projects_a_version_member_to_its_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
+    let version = acked_addr(&v);
+    assert_eq!(version, format!("{CLAIMANT_DOC1}.1"));
+
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    // A bare write homed in the member: refused — the member projects to the
+    // published doc 1.
+    let insert = format!(
+        r#"{{"op":"insert","doc":"{version}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"]}}"#
+    );
+    assert_eq!(rejected_detail(&op(port, Some(&bare), &insert)), "credential_refused:signed_session_required");
+    // A bare version OF the member: refused the same way.
+    let version_of_version = format!(r#"{{"op":"version","d_src":"{version}"}}"#);
+    assert_eq!(
+        rejected_detail(&op(port, Some(&bare), &version_of_version)),
+        "credential_refused:signed_session_required"
+    );
+    // The signed session lands both.
+    expect_resp(&op(port, Some(&signed), &insert), "ack_addr");
+    let v = op(port, Some(&signed), &version_of_version);
+    assert_eq!(acked_addr(&v), format!("{CLAIMANT_DOC1}.1.1"));
+
+    sd.shutdown();
+}
+
+/// PUB-6.37 — `published()` is evaluated only on REGISTERED addresses: a
+/// membership miss is the published fast path, so an unregistered argument
+/// would otherwise read PUBLISHED and meet the gate as
+/// `signed_session_required`, a code named for nothing the op could have
+/// done. Registration stands ahead: a bare write to a never-minted slot of
+/// the claimant's own account answers the registration refusal, and so does
+/// a bare version of one.
+#[test]
+fn the_publish_gate_reads_publication_only_on_registered_addresses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    // A document slot of the claimant's own chain that no mint has reached.
+    let never = format!("{CLAIMANT_ACCOUNT}.0.99");
+
+    let v = op(
+        port,
+        Some(&bare),
+        &format!(
+            r#"{{"op":"insert","doc":"{never}","at":{{"subspace":"1","ordinal":"1"}},"values":["x"]}}"#
+        ),
+    );
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("doc_not_registered"), "{v}");
+    let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{never}"}}"#));
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("source_not_registered"), "{v}");
 
     sd.shutdown();
 }

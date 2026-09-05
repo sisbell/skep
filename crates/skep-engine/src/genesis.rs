@@ -13,7 +13,8 @@ use skep_content::ContentStore;
 use skep_links::LinkState;
 use skep_namespace::M3State;
 
-use crate::world::World;
+use crate::publication::Drafts;
+use crate::world::{FormatStamp, World};
 
 impl World {
     /// Σ₀ — the full genesis, one store at a time per its own design:
@@ -26,8 +27,9 @@ impl World {
     /// creates exactly two things: the namespace roots and the empty
     /// docuverse. A CONSTANT — deterministic with no inputs to hold
     /// constant — which is what discharges M2's byte-identical-genesis
-    /// caller contract by construction; the journal's format stamp, not a
-    /// sealed configuration, names the format that wrote it.
+    /// caller contract by construction; the World's own leading format stamp
+    /// and the journal's format stamp, not a sealed configuration, name the
+    /// format that wrote a base.
     ///
     /// The five reserved type addresses the M7 slice dispatches on are
     /// in-docuverse GHOST TUMBLERS (owner ruling, 2026-08-26): content
@@ -52,15 +54,21 @@ impl World {
     /// historical reads, the whole in-memory suite) reads through whatever
     /// hints it arrives with. That is why each slice above comes from its own
     /// genesis constructor rather than from a placeholder: `LinkState::genesis`
-    /// builds a real registry over an empty links map, and M5's rebuild is the
-    /// identity. `Engine::check_hints` is the standing check that what is
-    /// seeded here equals a from-authoritative rebuild.
+    /// builds a real registry over an empty links map, M5's rebuild is the
+    /// identity, and the exception set is EMPTY because no document exists
+    /// at Σ₀ to be a draft — the one world where an empty set and
+    /// everything-published are the same true statement (PUB-7.5's fail-open
+    /// sign has nothing to fail open over). `Engine::check_hints` is the
+    /// standing check that what is seeded here equals a from-authoritative
+    /// rebuild.
     pub fn genesis() -> World {
         World {
+            format: FormatStamp,
             namespace: M3State::genesis(),
             content: ContentStore::default(),
             arrangement: M5State::genesis(),
             links: LinkState::genesis(),
+            drafts: Drafts::new(),
         }
     }
 }

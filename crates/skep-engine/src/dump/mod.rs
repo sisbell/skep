@@ -30,7 +30,10 @@
 //!   slices, the nullified members of the audit slice, the five shipped
 //!   classes' type slices, the supersession forward edges (the BH2 walk),
 //!   and M9's definition registry projected as `pdef`/`pd_stable`
-//!   membership. M3/M4 hold no hints; M5's rebuild is the identity in v1.
+//!   membership — and the engine's OWN derived index, the exception set
+//!   (`publication.drafts`: draft document → owner account, PUB-7.5),
+//!   address-ordered at render. M3/M4 hold no hints of their own; M5's
+//!   rebuild is the identity in v1.
 //!
 //!   THREE of M7's hint families sit outside that reach, so the section — and
 //!   the faithfulness check built on it — is an oracle over what it renders
@@ -50,16 +53,14 @@
 //!   link, so a root that is not itself a link would sit in the hint and
 //!   outside this rendering.
 
-mod canon;
-
 use std::fmt;
 
 use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 
+use crate::canon::{render, to_tree, SerdeTree};
 use crate::world::World;
-use canon::{render, to_tree, SerdeTree};
 
 /// A deterministic rendering of one world. Byte-equality is the comparison
 /// the harnesses use: two dumps of equal worlds are byte-equal, and a
@@ -112,7 +113,9 @@ fn dump(world: &World) -> WorldDump {
         (key("authoritative"), authoritative_tree(world)),
         (key("hints"), hints_tree(world)),
     ]);
-    let mut s = String::from("skep-world-dump v3\n");
+    // v4 (2026-09-05): the hints section gained `publication.drafts`, the
+    // exception set. The banner's version moves with the section keys.
+    let mut s = String::from("skep-world-dump v4\n");
     render(&root, &mut s);
     s.push('\n');
     WorldDump(s)
@@ -286,7 +289,25 @@ fn hints_tree(world: &World) -> SerdeTree {
         addr_seq(&links.members(pred_stable, View::Active)),
     ));
 
+    // The engine's own derived index: the exception set (PUB-7.5), a map
+    // draft → owner account. Collected in the set's hash order; `render`
+    // sorts map entries, so the text is a function of the contents alone.
+    entries.push((key("publication.drafts"), drafts_tree(world)));
+
     SerdeTree::Map(entries)
+}
+
+/// The exception set as a map of dotted addresses, draft → owner account.
+/// The one hint that is the assembler's rather than a store's; its seed and
+/// its fold are `crate::publication`'s, and this rendering is what
+/// [`hints_faithful`] compares them through.
+fn drafts_tree(world: &World) -> SerdeTree {
+    SerdeTree::Map(
+        world
+            .drafts()
+            .map(|(doc, owner)| (SerdeTree::Str(doc.to_string()), SerdeTree::Str(owner.to_string())))
+            .collect(),
+    )
 }
 
 impl crate::Engine {
@@ -341,8 +362,11 @@ impl crate::Engine {
     ///
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
     /// slices, the nullified members of the audit slice, the shipped classes'
-    /// typed slices, the supersession forward edges and the predicate
-    /// projections each agree with a rebuild from authoritative state. It
+    /// typed slices, the supersession forward edges, the predicate
+    /// projections and the exception set each agree with a rebuild from
+    /// authoritative state — for the set, that the fold over every
+    /// document-minting record and the seed over M3's publication map name
+    /// the same drafts with the same owners (PUB-7.7's two halves). It
     /// certifies nothing of the three families the dump does not reach, and
     /// each of those drives something a caller can observe — `dedup` drives
     /// `emit`'s incumbent lookup and with it idempotence; `home_frontier`
@@ -479,7 +503,10 @@ mod tests {
     /// every checkpoint on disk while a rename is byte-neutral. Serde emits
     /// fields in declaration order to any serializer, so the transcode's
     /// COLLECTION order (before `render` sorts) is that order. The names are
-    /// here to identify the fields; the ORDER is the claim.
+    /// here to identify the fields; the ORDER is the claim — the format stamp
+    /// FIRST (it is what refuses a foreign layout before any slice is read),
+    /// and the skip-serialized exception set absent, since it occupies no
+    /// bytes.
     #[test]
     fn the_world_serializes_its_slices_in_declaration_order() {
         let world = World::genesis();
@@ -493,7 +520,7 @@ mod tests {
                 other => panic!("struct field keys are strings, got {other:?}"),
             })
             .collect();
-        assert_eq!(names, ["namespace", "content", "arrangement", "links"]);
+        assert_eq!(names, ["format", "namespace", "content", "arrangement", "links"]);
     }
 
     /// The term that dominates a dump's cost, pinned where the cost is

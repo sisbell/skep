@@ -189,3 +189,27 @@ identical rows, no off-diagonal entries); green-nplaces-version-depth
 concurrency recordings PASS outright (interleaved inserts, committed
 visibility mechanics); the rest diverge only at the bert adaptation
 boundary. Skep bugs found: still ZERO.**
+
+## 2026-09-05 — PUB round 1, delta 2: one publication definition
+
+19. **D1 — one publication definition; the draft-homed credential cell reads
+    AUTH-2.66's own order; no golden moves.** (Owner ruling D1, 2026-09-05;
+    kickoff lane 2.2.) The daemon's two publication reads — the AUTH fold's
+    `FoldCtx::is_published` (skepd's `WorldCtx`, until now the constant
+    `true` of AUTH-2.117) and the RES-26 publish gate's read (until now
+    `is_published_v1`, the doc-1 equality compare) — both answer
+    `D ∉ exception_set` and nothing else: the engine's derived membership
+    index over M3's per-document publication bit (PUB-7.5, PUB-7.7), seeded
+    at load and folded on every document-minting record, with the gate
+    projecting a version member to its document ahead of the read
+    (PUB-2.15). THE CELL THAT FLIPS: a credential record deposited in a
+    DRAFT-homed document answers `unpublished` (AUTH-2.66 item 3, ahead of
+    the per-kind arm) where it answered `not_doc_one`; the unparseable-record
+    variant in a draft home answers `unpublished` too (item 3 precedes the
+    payload parse). The home pin's own cells — `not_doc_one`, and
+    `malformed_payload` ahead of it (AUTH-2.127) — stand on a published
+    non-doc-1 home, doc 1's version. The drift sweep's claim-2 patch (doc
+    1's versions read unpublished under the equality compare, so bare
+    sessions wrote into them) is discharged by the projection; no interim
+    `prefix_contains` patch ships. Conformance goldens: none moves — no
+    recorded scenario exercises a credential deposit or the publish gate.

@@ -95,7 +95,13 @@ impl Engine {
     /// run. A journal names the format that wrote it through the journal's
     /// own format stamp; one written under the retired `GenesisConfig`
     /// regime (the 9-space reserved addresses, the config-carrying M7
-    /// checkpoint shape) does not reopen under this format.
+    /// checkpoint shape) does not reopen under this format. A CHECKPOINT
+    /// names the World layout that wrote it through the World's own leading
+    /// format stamp (`world.rs`), so a base from a build before M3's
+    /// publication bit fails to DECODE (PUB-7.8) and M2's fallback chain
+    /// takes over: the next-older retained base, genesis while the journal
+    /// still reaches it, else `OpenError::BadCheckpoint` (PUB-7.9) — never a
+    /// decoded world with an empty exception set.
     ///
     /// The registry the engine keeps is M7's own: `skep_links::registry` is
     /// that module's compiled format constant, built once per process, so the
@@ -212,9 +218,11 @@ impl EngineStores {
     /// the passed world unrebuilt, so a `World` that arrived any other way
     /// (deserialized straight from bytes, say — `World: Deserialize` is
     /// forced on it by `WorldState`) is served here with M7's skip-serialized
-    /// HINTS still empty. Reads then answer with nullification invisible,
-    /// `Active` equal to `Audit`, every typed slice empty and no supersession
-    /// edge at all — and nothing about the answers looks wrong. (The type
+    /// HINTS still empty and the exception set EMPTY. Reads then answer with
+    /// nullification invisible, `Active` equal to `Audit`, every typed slice
+    /// empty and no supersession edge at all, and EVERY document published —
+    /// the fail-open sign PUB-7.5 names — and nothing about the answers looks
+    /// wrong. (The type
     /// registry is not in that hazard: it is M7's module constant, so it
     /// answers the same on any world however the world arrived.)
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {

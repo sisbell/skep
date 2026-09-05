@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{parent, validate, Address, Nat, Span, Tumbler};
 use skep_febe::Op;
 use skep_identity::{
     CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
@@ -349,20 +349,44 @@ pub(crate) fn mint_home_refusal(
 
 // ── board_state_refusal — the two mode-complementary gates (AUTH-3.78) ───
 
-/// v1's publication read for the PUBLISH gate (RES-26): the one
-/// born-published class this build can compute is the mechanical home mint
-/// — an account's doc 1 (publication.md rule 1's home-mint law). Flagless
-/// mints resolve DRAFT (AUTH-3.67's scoping), and no wire flag exists yet,
-/// so a document is published here iff it IS its account's doc 1. The
-/// fold's own `is_published` stays wired constant `true` (AUTH-2.117) and
-/// agrees on every credential home, all of which the home pin confines to
-/// doc 1.
-fn is_published_v1(world: &World, doc: &Address) -> bool {
-    world
-        .m3()
-        .effective_owner_prefix(doc)
-        .and_then(first_document_address)
-        .is_some_and(|first| first == *doc)
+/// PUB-2.15 — the DOCUMENT a version member projects to: the version
+/// components stripped off the document field, one M1 `parent` peel at a
+/// time, so `A·0·d·v·w` answers `A·0·d` and a document answers itself. Pure
+/// address arithmetic, no read; total on every address (a field of one
+/// component peels nothing), and terminating because each peel shortens the
+/// field by one.
+///
+/// The publish gate reads `published()` on THIS, never on the member: the
+/// engine's `World::published` and `owner_account` take the document, and a
+/// member's own bit is what its own mint journaled (PUB-8.17's inheritance
+/// makes the two agree today; the projection is what keeps the gate exact of
+/// the DOCUMENT's state, which is the state the gate is about). The drift
+/// sweep's claim-2 defect — doc 1's versions read unpublished under the
+/// retired equality compare, so a bare session wrote into them — is closed
+/// here, and no interim `prefix_contains` patch ships.
+fn trunk_of(a: &Address) -> Address {
+    let mut trunk = a.clone();
+    while trunk.document_field().is_some_and(|field| field.len() > 1) {
+        trunk = parent(&trunk)
+            .expect("a document field of two or more components peels to one shorter");
+    }
+    trunk
+}
+
+/// The publish gate's publication read — the engine's ONE definition (owner
+/// ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership miss on
+/// the exception set (PUB-7.5), after the projection above. The retired
+/// `is_published_v1` (a document is published iff it IS its account's doc 1)
+/// answered off address arithmetic what the set now answers off M3's bit,
+/// and the AUTH fold's `is_published` reads the same set, so the two reads
+/// can no longer disagree.
+///
+/// CONTRACT — `doc` is a REGISTERED document (PUB-6.37): a membership miss
+/// is also what an unregistered address answers, so every caller below tests
+/// registration first and an unregistered argument takes the registration
+/// refusal, never `signed_session_required`.
+fn published(world: &World, doc: &Address) -> bool {
+    world.published(&trunk_of(doc))
 }
 
 /// The plain path's one producer for the two board-state gates, dispatched
@@ -391,10 +415,12 @@ pub(crate) fn board_state_refusal(
 /// RES-26 (AUTH-3.79–3.81): on a claimed board, an op whose write lands in
 /// the published world is accepted only from a signed session. Domain per
 /// input form: a flagless `version` reads `published(d_src)`; a homed
-/// write reads `published(home)`. Flagless `create`/`fork` resolve draft
-/// (outside), `delegate`/`register_node`/`nullify` present no input form,
-/// and the mechanical home mint is exempt by AUTH-3.80. Registration and ω
-/// stand AHEAD: the gate evaluates only registered addresses the caller
+/// write reads `published(home)` — both through [`published`], the engine's
+/// exception set with the version-member projection (PUB-2.15, PUB-6.43's
+/// input table). Flagless `create`/`fork` resolve draft (outside),
+/// `delegate`/`register_node`/`nullify` present no input form, and the
+/// mechanical home mint is exempt by AUTH-3.80. Registration and ω stand
+/// AHEAD (PUB-6.37): the gate evaluates only registered addresses the caller
 /// owns, so an unregistered or foreign home answers `execute`'s own code.
 fn publish_gate(
     world: &World,
@@ -408,7 +434,7 @@ fn publish_gate(
     let homed = |home: &Address| -> Option<CredentialRefusal> {
         let m3 = world.m3();
         if m3.is_registered_document(home)
-            && is_published_v1(world, home)
+            && published(world, home)
             && m3.is_effective_owner(principal, home)
         {
             Some(CredentialRefusal::SignedSessionRequired)
@@ -418,7 +444,7 @@ fn publish_gate(
     };
     match op {
         Op::Version { d_src } => {
-            if world.m3().is_registered_document(d_src) && is_published_v1(world, d_src) {
+            if world.m3().is_registered_document(d_src) && published(world, d_src) {
                 Some(CredentialRefusal::SignedSessionRequired)
             } else {
                 None
@@ -682,6 +708,23 @@ mod tests {
         // is NOT a credential type.
         let retired = subtree_of(addr_of(&[1, 1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
         assert_eq!(types.kind_of(&[retired]), None);
+    }
+
+    /// PUB-2.15's projection is address arithmetic and total: a version
+    /// member answers its document, a document answers itself, a member of
+    /// a member peels to the same document — and off the document tier the
+    /// arithmetic changes nothing (an account has no document field; an
+    /// element's field is its document's own).
+    #[test]
+    fn a_version_member_projects_to_its_document() {
+        let doc = addr_of(&[1, 0, 1, 0, 1]);
+        assert_eq!(trunk_of(&doc), doc, "a document is its own trunk");
+        assert_eq!(trunk_of(&addr_of(&[1, 0, 1, 0, 1, 1])), doc, "a version");
+        assert_eq!(trunk_of(&addr_of(&[1, 0, 1, 0, 1, 1, 2])), doc, "a version of a version");
+        let acct = addr_of(&[1, 0, 1]);
+        assert_eq!(trunk_of(&acct), acct);
+        let element = addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]);
+        assert_eq!(trunk_of(&element), element);
     }
 
     /// AUTH-3.70's conformance expression in miniature: a content-I-span

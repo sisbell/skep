@@ -11,7 +11,8 @@
 //! therefore do and do not answer (V9: the box is fixed under a content edit
 //! the extents follow); origin projection and its reject-never-clamp
 //! admissibility, the exact-extent boundary included (WF_V/O13); the
-//! cross-document SHOWDELETIONS combine (D-IDENT/D-ORD);
+//! cross-document SHOWDELETIONS combine (D-IDENT, and M6's T1 presentation
+//! of each set);
 //! COMPARE's address-equal join — per-block feet, overlap widths, fan-out
 //! completeness, region confinement, the four-component presentation, the
 //! whole relation against an independent per-position oracle, and the two
@@ -1034,9 +1035,10 @@ fn show_origin_v_rejects_each_inadmissible_case_distinctly() {
 
 #[test]
 fn show_deletions_reports_the_existing_addresses_deleted_from_one_current_in_the_other() {
-    // ASN-0075 D-IDENT/D-ORD: each half is the deduped, Tumbler-ordered set
-    // of the EXISTING I-addresses deleted-from-one ∧ current-in-the-other;
-    // slot semantics follow the argument order.
+    // ASN-0075 D-IDENT: each half is a set of the EXISTING I-addresses
+    // deleted-from-one ∧ current-in-the-other, listed deduplicated and
+    // T1-ascending (M6's presentation); slot semantics follow the argument
+    // order.
     let k = mem_kernel();
     let vs = insert3(&k);
     vs.copy(
@@ -1125,7 +1127,8 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
     let s = k.snapshot();
     let q = Query::new(&s);
     let got = ok_of(q.show_deletions(&doc1(), &doc2()));
-    // ca1 appears ONCE despite doc2's double placement (dedup, D-ORD).
+    // ca1 appears ONCE despite doc2's double placement (dedup — the halves
+    // are set comprehensions).
     assert_eq!(
         got,
         Deletions {
@@ -1137,10 +1140,12 @@ fn show_deletions_dedups_multiplicity_and_admits_empty_documents() {
 
 #[test]
 fn show_deletions_orders_a_multi_address_half_by_tumbler_not_by_arrangement() {
-    // ASN-0075 D-ORD: a half is the whole set, Tumbler-ordered — not the
-    // order the containing document happens to arrange it in. doc2 holds
-    // ca2 BEFORE ca1 after the rearrange, so arrangement order and T1 order
-    // disagree and only one of them is the documented answer.
+    // A half is the whole set, listed T1-ascending — never the order the
+    // containing document happens to arrange it in, which is D-ORD's own
+    // clause that the operation takes no input ordering to preserve; the
+    // T1 listing itself is M6's presentation. doc2 holds ca2 BEFORE ca1
+    // after the rearrange, so arrangement order and T1 order disagree and
+    // only one of them is the documented answer.
     let k = mem_kernel();
     let vs = insert3(&k); // doc1 = [ca1, ca2, ca3]
     vs.copy(
@@ -1368,8 +1373,9 @@ fn compare_confines_every_pair_to_the_two_named_regions() {
 
 #[test]
 fn compare_is_complete_under_fanout() {
-    // ASN-0122 X8: an address held in several blocks yields the FULL
-    // cross-product — never a lockstep merge.
+    // ASN-0122 X12 R2, over `corr`'s `P × Q` comprehension: an address held
+    // in several blocks yields the FULL cross-product — never a lockstep
+    // merge.
     let k = mem_kernel();
     fanout_doc2(&k);
     let s = k.snapshot();
@@ -1502,11 +1508,11 @@ fn position_pairs(rep: &CompareReport) -> Vec<(Address, Nat, Nat, Address, Nat, 
 
 #[test]
 fn compare_reports_exactly_the_address_equal_position_pairs() {
-    // ASN-0122 X8 (completeness) and X12 R1 (soundness) together say the
-    // report IS the set of address-equal position pairs of the two regions —
-    // a law over the whole space, not four hand-picked counts. The oracle is
-    // a per-position hash join computed from M5 alone, so it shares no
-    // reasoning with the block join it checks.
+    // ASN-0122 X12 R2 (completeness) and R1 (soundness) — which R2 states
+    // jointly give `⟦Γ⟧ = corr` — say the report IS the set of address-equal
+    // position pairs of the two regions: a law over the whole space, not four
+    // hand-picked counts. The oracle is a per-position hash join computed
+    // from M5 alone, so it shares no reasoning with the block join it checks.
     let k = mem_kernel();
     three_runs(&k);
     let s = k.snapshot();
@@ -1664,7 +1670,7 @@ fn compare_refuses_an_operand_past_its_block_budget() {
     // The cap refuses only what is PAST it, and refuses the request WHOLE:
     // at the budget the same shape still answers, and answers completely
     // (one pair per block — a truncating cap would answer with fewer and
-    // break X8).
+    // break X12 R2).
     let at = vec![region_spec(
         doc1(),
         vec![vspan(1, 1, 1); MAX_COMPARE_OPERAND_BLOCKS],
@@ -1696,8 +1702,8 @@ fn compare_refuses_a_fanout_past_its_pair_budget() {
         err_of(q.compare(&side(257), &side(257))),
         CompareError::TooManyPairs
     );
-    // Under the budget, the same shape reports the FULL cross-product (X8):
-    // the cap refuses, and never thins a report it admits.
+    // Under the budget, the same shape reports the FULL cross-product
+    // (X12 R2): the cap refuses, and never thins a report it admits.
     assert_eq!(ok_of(q.compare(&side(16), &side(16))).len(), 256);
 }
 

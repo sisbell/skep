@@ -2,7 +2,8 @@
 //! I-address, complete under fan-out. The contract is a relational join keyed
 //! on **address equality, never value** — so COMPARE never opens M4. Three
 //! phases: resolve each spec-set to the blocks of its region, interval-join on
-//! the I-axis with cross-product on overlap (X8 completeness), sort into one
+//! the I-axis with cross-product on overlap (X12 R2 completeness; the
+//! cross-product is `corr`'s own comprehension over `P × Q`), sort into one
 //! deterministic presentation (X12 R3; R4's canonical maximal form NOT
 //! required — v1 ships the finer-than-maximal per-overlap report, fully
 //! conforming under R1–R3).
@@ -65,8 +66,8 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
     /// of [`RegionSpec`]s — ASN-0122's `(dᵢ, Sᵢ)`; reports address-equal
     /// correspondences (X1/X2 — value-blind, NEVER opens M4), complete under
-    /// fan-out (X8), in one deterministic presentation (X12 R3); in each pair,
-    /// slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
+    /// fan-out (X12 R2), in one deterministic presentation (X12 R3); in each
+    /// pair, slot 1 ⇐ ρ₁ and slot 2 ⇐ ρ₂.
     ///
     /// A spec-set denotes its region `R_Σ(ρᵢ)` — each span clipped against the
     /// document's current content arrangement — and that region is what
@@ -103,9 +104,9 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// accumulating rather than being built and then measured).
     ///
     /// Both are REFUSALS, never truncations: a request past either gets a
-    /// typed rejection and no report, so X8 completeness and X12 R1 hold
-    /// verbatim for every request COMPARE answers. A caller wanting more
-    /// splits the request, exactly as an over-budget transaction is split.
+    /// typed rejection and no report, so X12 R1–R2 hold verbatim for every
+    /// request COMPARE answers. A caller wanting more splits the request,
+    /// exactly as an over-budget transaction is split.
     pub fn compare(
         &self,
         rho1: &[RegionSpec],
@@ -124,7 +125,8 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         let q = resolve_blocks(m5, rho2).ok_or(CompareError::TooManyBlocks {
             operand: Operand::Second,
         })?;
-        // Cross-product per overlap (X8), within the report budget.
+        // Cross-product per overlap (`corr` is a comprehension over `P × Q`),
+        // within the report budget.
         let pairs = interval_join(&p, &q).ok_or(CompareError::TooManyPairs)?;
         Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
     }
@@ -217,21 +219,26 @@ impl Block {
         self.run.i_start().tumbler()
     }
 
-    /// The V-position of the I-address `i` WITHIN THIS BLOCK — `v_start`
-    /// advanced by `i`'s offset from the block's own I-start. Each foot of a
-    /// correspondence is computed by the block it comes from, so the
-    /// inter-block I-gap of a cross-document pair can never leak into the
-    /// other operand's V-coordinate (X12 R1 soundness: both feet must resolve
-    /// to the shared address).
+    /// The FOOT this block contributes at the I-address `i` — X11's word for
+    /// one side of a correspondence, `(document, position)`: the block's own
+    /// document, and its `v_start` advanced by `i`'s offset from its own
+    /// I-start. A foot comes WHOLE from the block it belongs to, so its
+    /// document and its position can never be drawn from different blocks, and
+    /// the inter-block I-gap of a cross-document pair can never leak into the
+    /// other block's V-coordinate (X12 R1 soundness: both feet must resolve to
+    /// the shared address).
     ///
     /// REQUIRES `i` inside this block's I-interval — the co-chain
     /// precondition [`ordinal_gap`] states, discharged by [`overlap_pair`]'s
     /// overlap guard before it asks.
-    fn vpos_at(&self, i: &Tumbler) -> VPos {
-        VPos {
-            subspace: self.v_start.subspace.clone(),
-            ordinal: &self.v_start.ordinal + &ordinal_gap(i, self.i_start()),
-        }
+    fn foot_at(&self, i: &Tumbler) -> (Address, VPos) {
+        (
+            self.doc.clone(),
+            VPos {
+                subspace: self.v_start.subspace.clone(),
+                ordinal: &self.v_start.ordinal + &ordinal_gap(i, self.i_start()),
+            },
+        )
     }
 }
 
@@ -308,7 +315,7 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
 // ── COMPARE helpers ──
 //
 // CO-CHAIN PRECONDITION: `overlap_pair` calls `ordinal_gap` — directly, and
-// through `Block::vpos_at` — only AFTER the `start < reach` overlap guard,
+// through `Block::foot_at` — only AFTER the `start < reach` overlap guard,
 // i.e. only on runs whose I-intervals overlap. Overlapping content runs lie on
 // ONE content chain (shared origin sub-allocator ⇒ equal-length, equal prefix
 // below the action point), so the ordinal subtraction is a TOTAL `Nat` op —
@@ -327,9 +334,9 @@ fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
 
 /// One correspondence per I-overlap of two blocks, or `None` when the
 /// I-intervals are disjoint. The overlap is itself an I-interval, named the
-/// way M1 names one: inclusive `start`, exclusive `reach`. Each foot is asked
-/// of the block it belongs to ([`Block::vpos_at`]), so both resolve to the
-/// shared address `start`.
+/// way M1 names one: inclusive `start`, exclusive `reach`. Each FOOT is asked
+/// whole of the block it belongs to ([`Block::foot_at`]), so both resolve to
+/// the shared address `start` and slot `i` draws from operand `i` (X3).
 ///
 /// Each endpoint is asked of the block that owns it — [`Block::i_start`] and
 /// the reach it stores — and both stay BORROWED across the guard: the
@@ -343,17 +350,20 @@ fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
     }
     // start < reach now discharges the co-chain precondition: every
     // ordinal_gap below is total.
+    let (d1, u1) = pb.foot_at(start); // slot 1 ⇐ operand 1 (X3)
+    let (d2, u2) = qb.foot_at(start); // slot 2 ⇐ operand 2
     Some(CorrPair {
-        d1: pb.doc.clone(),
-        u1: pb.vpos_at(start), // slot 1 ⇐ operand 1
-        d2: qb.doc.clone(),
-        u2: qb.vpos_at(start), // slot 2 ⇐ operand 2
+        d1,
+        u1,
+        d2,
+        u2,
         width: ordinal_gap(reach, start),
     })
 }
 
 /// v1 REFERENCE IMPLEMENTATION: exhaustive O(|P|·|Q|) double-loop block join —
-/// emit EVERY I-overlap (X8 fan-out completeness: an address in multiple
+/// emit EVERY I-overlap (X12 R2 completeness: `corr_Σ(P, Q)` is the
+/// comprehension over the whole rectangle `P × Q`, so an address in multiple
 /// P-blocks and/or Q-blocks yields the full cross-product, never a lockstep
 /// merge). Sort-by-i_start + sweep (or an interval tree) is a drop-in
 /// optimization of this SAME join (same pair multiset); the independent TEST
@@ -390,6 +400,13 @@ fn interval_join(p: &[Block], q: &[Block]) -> Option<Vec<CorrPair>> {
 /// keep a deterministic listed order (R3). The adjacent-pair fold is the
 /// IDENTITY in v1 (a finer-than-maximal, per-overlap report conforms — see
 /// [`fold_adjacent`]).
+///
+/// THE SECOND FOOT IS IN THE KEY BECAUSE OF FAN-OUT, which is X11's own
+/// strictness clause: two pairs sharing both starts would share their first
+/// element and coincide, and sharing ONLY the first start "happens exactly
+/// under fan-out" — where several chains land on one first foot — so the
+/// second key is what separates them. A presentation keyed on the first foot
+/// alone would leave a fanned-out report's order undetermined.
 fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     pairs.sort_by_cached_key(corr_key);
     fold_adjacent(pairs)
@@ -425,6 +442,11 @@ fn vpos_tumbler(v: &VPos) -> Tumbler {
 /// never changes ⟦Γ⟧. Implementing that merge is exactly what would make the
 /// output X11's `CANON`, and only then would *canonical* be the right word
 /// for this step.
+///
+/// Landing that merge would leave every report EQUIVALENT to today's and
+/// UNEQUAL to it — which is exactly what R4 licenses, conformance being
+/// denotational. So a consumer that must survive a presentation change
+/// compares denotations, not [`CompareReport`] values; `==` is the listing's.
 fn fold_adjacent(pairs: Vec<CorrPair>) -> Vec<CorrPair> {
     pairs
 }
@@ -468,14 +490,20 @@ mod tests {
 
     #[test]
     fn overlap_pair_computes_each_foot_within_its_own_block() {
-        // X12 R1: a block answers for its own V-coordinates, so each foot is
-        // offset within the block it comes from and both resolve to the
-        // overlap's shared start address.
+        // X12 R1: a block answers for its own foot WHOLE — document and
+        // position together — so each foot is offset within the block it
+        // comes from and both resolve to the overlap's shared start address.
         let pb = block(&[1, 0, 1, 0, 1], 1, ca(1), 3); // [ca1, ca4) at V 1..
         let qb = block(&[1, 0, 1, 0, 2], 1, ca(2), 1); // [ca2, ca3) at V 1..
-        // The same I-address is a different V-position in each block…
-        assert_eq!(pb.vpos_at(ca(2).tumbler()), vp(1, 2));
-        assert_eq!(qb.vpos_at(ca(2).tumbler()), vp(1, 1));
+        // The same I-address is a different foot in each block…
+        assert_eq!(
+            pb.foot_at(ca(2).tumbler()),
+            (a(&[1, 0, 1, 0, 1]), vp(1, 2))
+        );
+        assert_eq!(
+            qb.foot_at(ca(2).tumbler()),
+            (a(&[1, 0, 1, 0, 2]), vp(1, 1))
+        );
         // …and each block's reach is one I-step past its own last position.
         assert_eq!(pb.reach, *ca(4).tumbler());
         assert_eq!(qb.reach, *ca(3).tumbler());

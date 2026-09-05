@@ -34,10 +34,15 @@ fn ext_span(s: &Nat, n: &Nat) -> Span {
     .expect("n_S ≥ 1 ⇒ a nonempty extent")
 }
 
-/// The enumeration of `CURRENT(·, d)` on the content side (ASN-0075's
-/// predicate; ASN-0124 calls the set `ran_C(d)`) — every content I-address
-/// `d`'s arrangement currently binds, in V order. M5's own `content_image` is
-/// the same set and is private, so it is NOT called here.
+/// The enumeration of `CURRENT(·, d)` (ASN-0075's predicate; ASN-0124 calls
+/// the set `ran_C(d)`) — every content I-address `d`'s arrangement currently
+/// binds, in V order. M5's own `content_image` is the same set and is private,
+/// so it is NOT called here.
+///
+/// Walking the CONTENT runs is not a narrowing of `CURRENT` but its whole
+/// extent: ASN-0075 defines the predicate over `a ∈ dom(C)`, so
+/// `{a : CURRENT(a, d)} = ran(M(d)) ∩ dom(C) = ran_C(d)` and no link run is
+/// skipped — there is none to skip (D-SUBSP).
 ///
 /// `CURRENT` is a set and this is an enumeration WITH MULTIPLICITY: an
 /// address placed at two V-positions of `d` by intra-document transclusion is
@@ -59,10 +64,20 @@ fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
 }
 
 /// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
-/// halves are published guarantees, not conveniences: [`Query::show_origin_v`]
-/// answers "deduplicated origin documents in tumbler order" and
-/// [`Query::show_deletions`]' halves are each "the deduped, Tumbler-ordered
-/// set" (D-ORD), and this is the one place either is established.
+/// the dedup and the sort are published guarantees, not conveniences:
+/// [`Query::show_origin_v`] answers "deduplicated origin documents in tumbler
+/// order" and each half of [`Query::show_deletions`]' answer is a
+/// deduplicated, T1-ascending listing, and this is the one place either is
+/// established.
+///
+/// THE TWO GUARANTEES STAND ON DIFFERENT AUTHORITIES, and only one of them is
+/// the corpus's. The DEDUP is the comprehension's: ASN-0075's
+/// `DeletedFromAWithB` is `{a ∈ dom(C) : …}`, a set, and SHOWORIGIN_V's answer
+/// is a set of origin documents. The ORDERING is M6's own presentation of that
+/// set — D-ORD licenses it (each output half is a finite subset of
+/// `dom(C) ⊆ T`, so T1-orderability is a property of the output addresses) and
+/// does not require it (the operation "carries no ordering of its own"), which
+/// is why fixing one is M6's to do and to state.
 ///
 /// Identity and order are both `Address`'s own — its `Eq` is tumbler equality
 /// (the level is a function of the tumbler) and its `Ord` IS the T1 tumbler
@@ -378,15 +393,25 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     ///
     /// Both documents must be registered (Err otherwise; `d_a` checked
     /// first); registered-empty is fine and yields empty halves. Each half is
-    /// the deduped, Tumbler-ordered set of the EXISTING I-addresses
-    /// (D-IDENT — never copies; D-ORD).
+    /// a set of the EXISTING I-addresses (D-IDENT — never copies), returned
+    /// deduplicated and T1-ascending: the dedup is the comprehension's, the
+    /// ordering M6's own presentation, which D-ORD licenses (T1-orderability
+    /// is a property of the addresses) and does not require (the operation
+    /// transports no ordering of its own).
     ///
-    /// BOTH HALVES ARE CONTENT I-ADDRESSES, and enumerating `CURRENT` on the
-    /// content side alone is EXACT rather than a narrowing: `DELETED(a, d)`
+    /// BOTH HALVES ARE CONTENT I-ADDRESSES BY DEFINITION (D-SUBSP): ASN-0075
+    /// classifies `(a, d)` with `a ∈ dom(C)`, so `CURRENT` and `DELETED` are
+    /// defined only there and both output sets are `{a ∈ dom(C) : …}` — every
+    /// such `a` has `subspace_I(a) = s_C`, and `dom(C) ∩ dom(L) = ∅` (L14), so
+    /// no link address can appear in either half whatever the enumeration does.
+    /// The operation's domain is what confines it, not this implementation's
+    /// choice of walk.
+    ///
+    /// What the implementation gets from that: enumerating the content runs
+    /// alone loses nothing AND needs no filter behind it. `DELETED(a, d)`
     /// requires `(a, d) ∈ R`, and R is appended only where content is placed —
-    /// seating a link records nothing in it — so no link position can ever
-    /// satisfy the right conjunct, and a link position enumerated here could
-    /// only be filtered away again.
+    /// seating a link records nothing in it — so a link position enumerated
+    /// here could only be filtered away again.
     ///
     /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
     /// it is not bounded by the answer either. No span narrows the request, so
@@ -443,14 +468,17 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// level-class discipline anywhere); phase 2 narrows the tumbler-ordered
     /// candidate superset with `project(d, coverage)` non-emptiness — the
     /// present-tense soundness filter (FD-SOUND), which is what separates this
-    /// live answer from M5's `docs_ever_containing`. That superset is coarser
-    /// than FD-HIST's `finddocs_R` in two ways this filter removes together:
-    /// it keeps FD-GHOST's ghosts, which held the queried material at some
-    /// past boundary, and it keeps the merely ADJACENT candidates M5's
-    /// order-overlap test admits, whose recorded spans touch the coverage
-    /// without sharing a position. Returns bare deduplicated
-    /// identities, tumbler-ordered — no positions, no counts (FD codomain;
-    /// present-tense CONTAINERS, distinct from SHOWORIGIN's allocators).
+    /// live answer from M5's `docs_ever_containing`. TWO narrowings separate
+    /// that superset from the live answer, and this filter discharges both at
+    /// once — from order-overlap to genuine ever-containment, M5's test
+    /// admitting the merely ADJACENT candidates whose recorded spans touch the
+    /// coverage without sharing a position, so the superset is coarser even
+    /// than FD-HIST's `finddocs_R`; and from ever to now, dropping FD-GHOST's
+    /// `ghosts` (`finddocs_R ∖ finddocs`), the documents that held the queried
+    /// material at some past boundary and hold none of it now. Returns bare
+    /// deduplicated identities, tumbler-ordered — no positions, no counts
+    /// (FD codomain; present-tense CONTAINERS, distinct from SHOWORIGIN's
+    /// allocators).
     ///
     /// Every named document must be registered and every region span
     /// well-formed (Err otherwise — a malformed span would silently

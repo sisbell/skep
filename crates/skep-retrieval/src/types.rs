@@ -53,8 +53,10 @@ pub struct Spec {
 
 /// One document + a finite set of V-spans — one member of the spec-set the
 /// two SET-shaped operations take: COMPARE (content only; the `(dᵢ, Sᵢ)` of
-/// ASN-0122's `ρ`) and FINDDOCSCONTAINING (FD-CONVEX wants multi-span). Both
-/// take `&[RegionSpec]`.
+/// ASN-0122's spec-set `ρ`) and FINDDOCSCONTAINING (the `(d_j, W_j)` of
+/// ASN-0124's **vspec-set** `Q`, whose `W_j` is a **V-region** — FD-CONVEX is
+/// why it is multi-span: a single span's convex denotation cannot name
+/// scattered fragments exactly). Both take `&[RegionSpec]`.
 ///
 /// It SPECIFIES part of a region; it is not one. The region `R_Σ(ρ)` is what
 /// the spec-set denotes once each span is clipped against the document's
@@ -146,8 +148,10 @@ impl FromIterator<DeliveryItem> for Delivery {
 /// SHOWDELETIONS' result (ASN-0075): each half is the deduped,
 /// Tumbler-ordered set of I-addresses deleted-from-one document yet
 /// current-in-the-other — the existing I-addresses themselves (D-IDENT),
-/// never copies, T1-orderable (D-ORD). `Default` is the two-empty-halves
-/// answer two registered-empty documents genuinely yield.
+/// never copies, T1-orderable (D-ORD). Both halves are CONTENT I-addresses:
+/// the two predicates are defined over `dom(C)` alone, so no link address can
+/// appear in either (D-SUBSP). `Default` is the two-empty-halves answer two
+/// registered-empty documents genuinely yield.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Deletions {
     /// `DeletedFromAWithB` — `DELETED(a, d_a) ∧ CURRENT(a, d_b)`.
@@ -174,10 +178,20 @@ pub struct CorrPair {
     pub width: Nat,
 }
 
-/// COMPARE's result: the complete, sound correspondence relation in one
-/// deterministic presentation (ASN-0122 R1–R3; finer-than-maximal — X12 R4's
-/// canonical form is not required). NOT `Serialize` — see [`CorrPair`].
+/// COMPARE's result: ASN-0122's report `Γ` — a LIST of correspondence pairs
+/// whose denotation `⟦Γ⟧` is the correspondence relation, complete and sound
+/// (X12 R1–R2) in one deterministic presentation (R3; finer-than-maximal —
+/// R4's canonical form is not required). NOT `Serialize` — see [`CorrPair`].
 /// `Default` is the empty report two regions that share no address yield.
+///
+/// `PartialEq` IS EQUALITY OF THE LISTING, which is strictly finer than X12's
+/// report *equivalence* (`⟦Γ₁⟧ = ⟦Γ₂⟧`). Conformance is denotational and
+/// "representation granularity is free", so two conforming reports of one
+/// comparison may compare unequal — splitting a pair into two abutting pairs
+/// changes the listing and nothing reported. A consumer comparing reports
+/// ACROSS implementations, or across a licensed presentation change (R4),
+/// compares denotations rather than listings; `==` answers the narrower
+/// question of whether two reports are the same list.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompareReport(pub Vec<CorrPair>);
 

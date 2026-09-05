@@ -47,12 +47,12 @@ impl M5State {
     }
 
     /// `doc`'s content run-list — empty for an absent document.
-    fn content_of(&self, doc: &Address) -> &RunList {
+    fn content_list(&self, doc: &Address) -> &RunList {
         &self.arrangement_of(doc).content
     }
 
     /// `doc`'s link run-list — empty for an absent document.
-    fn link_of(&self, doc: &Address) -> &RunList {
+    fn link_list(&self, doc: &Address) -> &RunList {
         &self.arrangement_of(doc).link
     }
 
@@ -148,14 +148,14 @@ impl M5State {
     /// on [`M5State`]), so the first begins at V-ordinal 1 and each next where
     /// the previous ends.
     pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
-        self.content_of(doc).runs()
+        self.content_list(doc).runs()
     }
 
     /// The canonical, V-ordered link run decomposition. Absent doc ⇒ `[]`; it
     /// tiles `[1, n_L]` as [`content_runs`](M5State::content_runs) tiles the
     /// content prefix, D-SEQ★ holding per subspace.
     pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
-        self.link_of(doc).runs()
+        self.link_list(doc).runs()
     }
 
     /// `n_C(d)` — the arranged content width. Absent doc ⇒ 0. Under D-SEQ★
@@ -164,14 +164,14 @@ impl M5State {
     /// positions are `[1, n_C]` with no holes, so a count fixes the extent
     /// (ASN-0113 W2/W4) rather than over-reporting one.
     pub fn content_count(&self, doc: &Address) -> Nat {
-        self.content_of(doc).total_width()
+        self.content_list(doc).total_width()
     }
 
     /// `n_L(d)` — the arranged link width. Absent doc ⇒ 0; the D-SEQ★ reading
     /// of [`content_count`](M5State::content_count) holds per subspace, so
     /// this is likewise the largest arranged link ordinal.
     pub fn link_count(&self, doc: &Address) -> Nat {
-        self.link_of(doc).total_width()
+        self.link_list(doc).total_width()
     }
 
     /// Does the content subspace admit `ord` as a PLACEMENT boundary —
@@ -190,7 +190,7 @@ impl M5State {
     /// [`admits_content_boundary`](M5State::admits_content_boundary), which
     /// admits the append boundary as well.
     pub(crate) fn arranges_content_position(&self, doc: &Address, ord: &Nat) -> bool {
-        self.content_of(doc).locate(ord).is_some()
+        self.content_list(doc).locate(ord).is_some()
     }
 
     /// Does `doc`'s arranged content CONTAIN the whole range `[from, from +
@@ -207,7 +207,7 @@ impl M5State {
     /// link run-list's own membership answer, so a link INTERIOR to a
     /// coalesced link run counts as seated. Absent doc ⇒ not seated.
     pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
-        self.link_of(doc).holds(link)
+        self.link_list(doc).holds(link)
     }
 
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by
@@ -241,9 +241,9 @@ impl M5State {
         let mut vspans: Vec<Span> = Vec::new();
         // An absent document is a CASE and not a path: its content run-list is
         // the empty one, which iterates no runs and answers ⟨⟩.
-        for (v_start, run) in self.content_of(doc).iter_runs() {
-            for cspan in coverage.iter() {
-                let Some(covered) = run.offsets_covered_by(cspan) else {
+        for (v_start, run) in self.content_list(doc).iter_runs() {
+            for cover in coverage.iter() {
+                let Some(covered) = run.offsets_covered_by(cover) else {
                     continue;
                 };
                 let at = VPos {
@@ -269,7 +269,7 @@ impl M5State {
     /// content runs. Union (concatenation) only; possibly mixed-length across
     /// transcluded origins — never blindly normalized, never a seam.
     fn content_image(&self, doc: &Address) -> SpanSet {
-        self.content_of(doc).image()
+        self.content_list(doc).image()
     }
 
     /// SHOWDELETIONS primitive (§9; ASN-0047 P2; ASN-0075's
@@ -429,9 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_clips_accept_and_intersect_and_orders_by_v() {
-        // ASN-0118: over-reach silently clipped; V-order preserved across the
-        // transclusion seam.
+    fn resolve_clips_the_over_reach_and_preserves_v_order() {
+        // ASN-0118 accept-and-intersect: over-reach silently clipped; V-order
+        // preserved across the transclusion seam.
         let s = arranged();
         let got = s.resolve(&doc1(), &vspan(1, 2, 10));
         assert_eq!(got, vec![run(&ca(2), 2), run(&vca(1), 2)]);

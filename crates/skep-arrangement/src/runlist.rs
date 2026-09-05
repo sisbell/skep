@@ -84,8 +84,8 @@ fn coalesced(runs: Vec<Run>) -> im::Vector<Run> {
 /// `n_L(d) + 1` — returns (all, empty), so a splice concatenates at the tail
 /// (§1). `ord ≤ 1` returns (empty, all) — the defensive clamp under which a
 /// split at 0 and at 1 coincide (ASN-0119 tile-by-placement note). An
-/// interior `ord` splits the boundary run `Run(a, w) → Run(a, c),
-/// Run(a ⊕ c, w − c)` via [`Run::addr_at`](crate::Run::addr_at).
+/// interior `ord` splits the boundary run `Run(a, w) → Run(a, kept),
+/// Run(a ⊕ kept, w − kept)` via [`Run::addr_at`](crate::Run::addr_at).
 ///
 /// Over an ITERATOR, not a `RunList`: the ops that split twice (contract,
 /// clip, transpose) split a `Vec<Run>` the first split produced, and a
@@ -107,16 +107,16 @@ fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Ru
         }
         let end = &before + &run.width; // this run's last ordinal
         if *ord <= end {
-            // Interior: keep c = ord − start elements on the left
-            // (1 ≤ c ≤ width − 1 here).
-            let c = ord - &start;
+            // Interior: keep `ord − start` elements on the left
+            // (1 ≤ kept ≤ width − 1 here).
+            let kept = ord - &start;
             let right_first = Run {
-                i_start: run.addr_at(&c),
-                width: &run.width - &c,
+                i_start: run.addr_at(&kept),
+                width: &run.width - &kept,
             };
             left.push(Run {
                 i_start: run.i_start.clone(),
-                width: c,
+                width: kept,
             });
             let mut right: Vec<Run> = vec![right_first];
             right.extend(runs.cloned());
@@ -326,10 +326,10 @@ impl RunList {
     /// prefix sum + 1 (§1 iter_runs).
     pub(crate) fn iter_runs(&self) -> impl Iterator<Item = (Nat, &Run)> + '_ {
         let mut v_start = Nat::one();
-        self.0.iter().map(move |r| {
-            let s = v_start.clone();
-            v_start = &v_start + &r.width;
-            (s, r)
+        self.0.iter().map(move |run| {
+            let start = v_start.clone();
+            v_start = &v_start + &run.width;
+            (start, run)
         })
     }
 
@@ -533,8 +533,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_range_clips_accept_and_intersect() {
-        // ASN-0118: out-of-range silently dropped; V-ordered result.
+    fn iter_resolve_range_clips_to_the_arranged_range() {
+        // ASN-0118 accept-and-intersect: out-of-range silently dropped;
+        // V-ordered result.
         let l = list(vec![run(&ca(1), 3)]);
         assert_eq!(resolved(&l, 2, 10), vec![run(&ca(2), 2)]);
         assert_eq!(resolved(&l, 0, 2), vec![run(&ca(1), 1)]); // lo clamps to 1

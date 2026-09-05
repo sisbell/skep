@@ -91,9 +91,9 @@ impl Provenance {
         doc: &Address,
         runs: impl IntoIterator<Item = &'r Run>,
     ) -> Provenance {
-        let mut col = self.0.get(doc).cloned().unwrap_or_default();
-        col.extend(runs.into_iter().map(Run::iextent));
-        Provenance(self.0.update(doc.clone(), col))
+        let mut spans = self.0.get(doc).cloned().unwrap_or_default();
+        spans.extend(runs.into_iter().map(Run::iextent));
+        Provenance(self.0.update(doc.clone(), spans))
     }
 
     /// R↾doc: the iextent cover of content spans `doc` has ever contained —
@@ -133,9 +133,11 @@ impl Provenance {
     pub(crate) fn docs_ever_containing(&self, coverage: &SpanSet) -> Vec<Address> {
         let mut out = Vec::new();
         for (doc, spans) in self.0.iter() {
-            let hit = spans
-                .iter()
-                .any(|p| coverage.iter().any(|c| classify_spans(p, c) != SpanRel::Separated));
+            let hit = spans.iter().any(|placed| {
+                coverage
+                    .iter()
+                    .any(|cover| classify_spans(placed, cover) != SpanRel::Separated)
+            });
             if hit {
                 out.push(doc.clone());
             }

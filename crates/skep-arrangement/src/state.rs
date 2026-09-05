@@ -760,17 +760,18 @@ mod tests {
             });
             s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) })
         };
-        let a = build();
-        let b = build();
-        assert_eq!(a, b); // the same records fold to the same state…
-        let ab = bincode::serialize(&a).expect("state serializes");
-        let bb = bincode::serialize(&b).expect("state serializes");
-        assert_eq!(ab, bb); // …and that state encodes to the same bytes
-        let back: M5State = bincode::deserialize(&ab).expect("state deserializes");
-        assert_eq!(bincode::serialize(&back).expect("reserializes"), ab);
+        let first = build();
+        let second = build();
+        assert_eq!(first, second); // the same records fold to the same state…
+        let first_bytes = bincode::serialize(&first).expect("state serializes");
+        let second_bytes = bincode::serialize(&second).expect("state serializes");
+        assert_eq!(first_bytes, second_bytes); // …and that state encodes alike
+        let back: M5State = bincode::deserialize(&first_bytes).expect("state deserializes");
+        assert_eq!(bincode::serialize(&back).expect("reserializes"), first_bytes);
         assert_eq!(back.content_count(&doc1()), n(2));
-        let rb = bincode::serialize(&back.clone().rebuild_derived()).expect("serializes");
-        assert_eq!(rb, ab);
+        let rebuilt_bytes =
+            bincode::serialize(&back.clone().rebuild_derived()).expect("serializes");
+        assert_eq!(rebuilt_bytes, first_bytes);
     }
 
     #[test]

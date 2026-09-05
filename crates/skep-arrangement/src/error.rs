@@ -286,30 +286,39 @@ mod tests {
         // because the cause is reachable through `source`, so a reporter
         // walking the chain prints it exactly once. That chain is the whole
         // justification, and it is what this pins.
-        let m = MintError::HomeNotRegistered;
-        let e = InsertError::Mint(m);
-        assert_eq!(e.to_string(), "insert: content mint failed");
+        let cause = MintError::HomeNotRegistered;
+        let insert_mint = InsertError::Mint(cause);
+        assert_eq!(insert_mint.to_string(), "insert: content mint failed");
         // Compared against the inner error's OWN message, never against M3's
         // literal text: M3 may reword freely, and the claim here is that the
         // cause arrives, not what it says.
         assert_eq!(
-            e.source().expect("the mint failure is the cause").to_string(),
-            m.to_string()
+            insert_mint
+                .source()
+                .expect("the mint failure is the cause")
+                .to_string(),
+            cause.to_string()
         );
 
-        let v = VersionError::Mint(m);
-        assert_eq!(v.to_string(), "version: identity mint failed");
+        let version_mint = VersionError::Mint(cause);
+        assert_eq!(version_mint.to_string(), "version: identity mint failed");
         assert_eq!(
-            v.source().expect("the mint failure is the cause").to_string(),
-            m.to_string()
+            version_mint
+                .source()
+                .expect("the mint failure is the cause")
+                .to_string(),
+            cause.to_string()
         );
 
-        let c = ContentError::AlreadyPresent(t(&[1, 0, 1, 0, 1, 0, 1, 1]));
-        let w = InsertError::Content(c.clone());
-        assert_eq!(w.to_string(), "insert: content write rejected");
+        let refusal = ContentError::AlreadyPresent(t(&[1, 0, 1, 0, 1, 0, 1, 1]));
+        let insert_write = InsertError::Content(refusal.clone());
+        assert_eq!(insert_write.to_string(), "insert: content write rejected");
         assert_eq!(
-            w.source().expect("the write refusal is the cause").to_string(),
-            c.to_string()
+            insert_write
+                .source()
+                .expect("the write refusal is the cause")
+                .to_string(),
+            refusal.to_string()
         );
 
         // The unwrapped verdicts are the end of the chain: they describe

@@ -295,11 +295,11 @@ where
                     // this closure hold live is the accumulator (capped
                     // below) and not the source's whole run-list, whose size
                     // the request does not choose.
-                    for r in world.m5().iter_resolve(&spec.source, span) {
-                        if !world.content().contains(r.i_start().tumbler()) {
+                    for run in world.m5().iter_resolve(&spec.source, span) {
+                        if !world.content().contains(run.i_start().tumbler()) {
                             return Err(CopyError::DanglingSource);
                         }
-                        extend_or_push_run(&mut runs, r);
+                        extend_or_push_run(&mut runs, run);
                         // Measured where the run is produced, not after the
                         // whole spec list has been folded: the accumulator is
                         // what a request's spec count multiplies, and a
@@ -696,12 +696,12 @@ mod tests {
     /// bytes of exactly `present`. The two halves of S3★ are set apart from
     /// each other, which is what lets one test say which of them COPY reads.
     fn gate_kernel(present: &[u32]) -> Kernel<GateWorld> {
-        fragmented_gate_kernel(vec![run(&ca(1), 3)], present)
+        gate_kernel_arranging(vec![run(&ca(1), 3)], present)
     }
 
-    /// The same world with doc1's arrangement chosen — for the tests whose
-    /// subject is the source's RUN COUNT rather than its bytes.
-    fn fragmented_gate_kernel(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
+    /// The same world arranging the runs a caller chooses — for the tests
+    /// whose subject is the source's RUN COUNT rather than its bytes.
+    fn gate_kernel_arranging(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
         let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
             doc: doc1(),
             at: n(1),
@@ -783,11 +783,11 @@ mod tests {
             source: doc1(),
             span: vspan(1, 1, 1),
         };
-        let over: Vec<VSpec> = std::iter::repeat_with(|| one.clone())
+        let over_budget_specs: Vec<VSpec> = std::iter::repeat_with(|| one.clone())
             .take(MAX_PLACED_RUNS + 1)
             .collect();
         assert!(matches!(
-            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &over)),
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &over_budget_specs)),
             CopyError::TooManyRuns
         ));
         // Nothing was placed: the refusal happens inside the closure, before
@@ -796,7 +796,7 @@ mod tests {
         // And the cap refuses only what is past it — an ordinary copy still
         // commits, so the assertion above is not earned by refusing COPY.
         Vstream::new(&k)
-            .copy(p1, &doc2(), vp(1, 1), &over[..3])
+            .copy(p1, &doc2(), vp(1, 1), &over_budget_specs[..3])
             .expect("a placement inside the budget commits");
         assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(3));
     }
@@ -812,19 +812,19 @@ mod tests {
         let p1 = Caller::Principal(PrincipalId(1));
         // Non-adjacent starts (`shift(ca(2k), 1) = ca(2k + 1) ≠ ca(2k + 2)`),
         // so nothing coalesces and the source really holds this many runs.
-        let over = MAX_PLACED_RUNS + 1;
-        let present: Vec<u32> = (1..=over as u32).map(|k| 2 * k).collect();
+        let over_budget_runs = MAX_PLACED_RUNS + 1;
+        let present: Vec<u32> = (1..=over_budget_runs as u32).map(|k| 2 * k).collect();
         let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
-        let k = fragmented_gate_kernel(runs, &present);
+        let k = gate_kernel_arranging(runs, &present);
         assert_eq!(
             k.snapshot().world().m5().content_runs(&doc1()).len(),
-            over,
+            over_budget_runs,
             "the source arranges one run per placed address"
         );
         // ONE spec, whose span covers the whole source.
         let whole = [VSpec {
             source: doc1(),
-            span: vspan(1, 1, over as u32),
+            span: vspan(1, 1, over_budget_runs as u32),
         }];
         assert!(matches!(
             rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole)),

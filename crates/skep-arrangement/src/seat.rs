@@ -36,15 +36,30 @@ use crate::HasM5;
 ///
 /// The shape check refuses nothing M3's `mint_link` produces.
 ///
-/// REQUIRES, and nothing here can check it: `m5` must be the WORKING state of
-/// the transaction that stages the returned record — `stg.working().m5()` —
-/// and that transaction must hold `M3State::link_lock_key(doc)`. `CL-UNIQ` is
-/// decided against the state this reads, so a caller that decides it against
-/// some other state has not decided it: read off a snapshot and stage
-/// afterwards, and a link already seated between the two is seated a second
-/// time at `n_L(d) + 1`, which no read reports and no operation undoes.
-/// [`seat_link`] below discharges both, and M7's MAKELINK holds the same key
-/// for its own K.λ mint.
+/// REQUIRES, three clauses, none of which this step can check.
+///
+/// * `m5` must be the WORKING state of the transaction that stages the
+///   returned record — `stg.working().m5()` — and
+/// * that transaction must hold `M3State::link_lock_key(doc)`. `CL-UNIQ` is
+///   decided against the state this reads, so a caller that decides it
+///   against some other state has not decided it: read off a snapshot and
+///   stage afterwards, and a link already seated between the two is seated a
+///   second time at `n_L(d) + 1`, which no read reports and no operation
+///   undoes.
+/// * THE CALLER OWES THE OWNERSHIP GATE. This step applies none: it does not
+///   ask whether `doc` is a registered document, nor whether the writing
+///   caller is its effective owner, and a record it returns writes a link
+///   V-position into `doc` regardless. Before composing it, establish both —
+///   the registration-then-ω gate the edit ops open with (`auth::gate_write`,
+///   and [`Caller::is_owner`](crate::Caller::is_owner) for the ω half). CL-OWN
+///   narrows what a defective caller can reach, `doc` having to be
+///   `origin(link)`, but a link address in any document's link subspace is a
+///   tumbler anyone can spell.
+///
+/// [`seat_link`] below discharges the first two and NOT the third. M7's
+/// MAKELINK discharges all three: it runs its own registration-and-ω gate on
+/// `home` before composing this step, in the same transaction and under the
+/// same key it holds for its K.λ mint.
 ///
 /// Returns the delta; M7 lifts via `.into()` and stages it inside MAKELINK's
 /// K.λ + K.μ⁺_L transaction. The fold appends at `n_L(d) + 1` and records NO
@@ -70,12 +85,16 @@ pub fn stage_seat_link(m5: &M5State, doc: &Address, link: &Address) -> Result<M5
 /// any primitive that appears as a step in another store's composite, and
 /// `stage_seat_link` is exactly that step for M7's MAKELINK).
 ///
-/// ISOLATION/TEST USE ONLY: production seats a home link through MAKELINK,
-/// which composes `stage_seat_link` into its transaction under M3's
-/// `link_lock_key(doc)` — the same key held here; committing a seat *alone*
-/// is not a production path (it would record a link V-position with no link
-/// allocation in the same composite). Mirrors M4's `#[doc(hidden)] write`.
-/// Returns the seated link address and the commit `Seq`.
+/// ISOLATION/TEST USE ONLY, for two reasons. It applies NO OWNERSHIP GATE —
+/// it takes no [`Caller`](crate::Caller), asks nothing of `doc`'s
+/// registration, and so commits a link V-position into whatever document the
+/// link's origin names; and committing a seat *alone* records that position
+/// with no link allocation in the same composite. Production seats a home
+/// link through MAKELINK, which gates the write on `doc`'s registration and
+/// effective owner and then composes `stage_seat_link` into its transaction
+/// under M3's `link_lock_key(doc)` — the same key held here. Mirrors M4's
+/// `#[doc(hidden)] write`. Returns the seated link address and the commit
+/// `Seq`.
 #[doc(hidden)]
 pub fn seat_link<W>(
     kernel: &Kernel<W>,

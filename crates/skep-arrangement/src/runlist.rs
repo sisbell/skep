@@ -131,8 +131,44 @@ fn split_runs<'a>(mut runs: impl Iterator<Item = &'a Run>, ord: &Nat) -> (Vec<Ru
 /// The per-subspace run-list (§Core data model). All mutators are persistent
 /// (`&self → RunList`); the `im::Vector` backing keeps clones O(1) (VERSION's
 /// structural fork share) while the v1 surgery below is Vec-based O(#runs).
+///
+/// MAXIMAL MERGE IS THE INVARIANT: the resident form is the unique
+/// maximally-merged decomposition (ASN-0058 M12), so
+/// [`content_runs`](crate::M5State::content_runs) and
+/// [`link_runs`](crate::M5State::link_runs) publish canonical run structure
+/// and `resolve` serves it. TWO DOORS keep it. Every mutator here rebuilds
+/// through [`coalesced`], and the serde shadow below establishes it on the
+/// DECODE path — a checkpoint carries these lists whole, so without that door
+/// a recovered list could hold two I-adjacent runs and every read publishing
+/// canonicality would answer off it, silently and across restarts.
+///
+/// The decode door REPAIRS rather than refuses, which is what distinguishes
+/// it from [`Run`]'s and `Provenance`'s: a non-merged list denotes exactly the
+/// right V→I map, and `coalesced` is total, idempotent and
+/// denotation-preserving, so establishing the invariant is what a constructor
+/// is for. Refusing would turn a fully recoverable store into a dead one for
+/// no gain. The reads therefore rest on the type, not on M2's checksum.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RunListShadow")]
 pub(crate) struct RunList(im::Vector<Run>);
+
+/// The deserialization mint path (the serde shadow, as [`Run`] and
+/// `Provenance` each carry one, with `from` rather than `try_from` because
+/// the conversion is total): the decoded runs re-enter [`coalesced`], so the
+/// maximal-merge invariant holds for every `RunList` in the process rather
+/// than for every one the folds built.
+///
+/// It reads exactly what a `RunList` writes — the same newtype over the same
+/// vector, which bincode encodes as its inner value — and `Serialize` is
+/// derived on `RunList` itself, so the shadow costs the encoding nothing.
+#[derive(Deserialize)]
+struct RunListShadow(im::Vector<Run>);
+
+impl From<RunListShadow> for RunList {
+    fn from(s: RunListShadow) -> RunList {
+        RunList(coalesced(s.0.into_iter().collect()))
+    }
+}
 
 impl RunList {
     /// `n(d)` for this subspace — the total arranged width.
@@ -228,16 +264,18 @@ impl RunList {
     /// first and then descending through the remaining ordinals peels the
     /// interior regions off right-to-left — β, then μ where there is one, then
     /// α — so emitting them in the order they were peeled IS the exchange,
-    /// whatever the region count. A cut sequence outside R-PRE is outside the
-    /// fold's input class (§10) and 3|4 is debug-asserted; the tiling is
-    /// nonetheless total for any vector — with fewer than three ordinals there
-    /// is no interior region to move, so the list comes back unchanged.
+    /// whatever the region count.
+    ///
+    /// THE 3|4 CLAUSE IS THE OP'S OBLIGATION, discharged at staging by
+    /// [`Vstream::rearrange`](crate::Vstream::rearrange)'s `BadCutCount`, and
+    /// it is not re-asked here. The tiling is total for any vector instead:
+    /// with fewer than three ordinals there is no interior region to move and
+    /// the list comes back unchanged, and with more the peel runs to the end.
+    /// That totality is what [`apply_m5`](crate::M5State::apply_m5)'s
+    /// panic-free promise requires of this method, a corrupt cut vector being
+    /// something the replay path must tile rather than stop on.
     #[must_use = "reorder returns the new run-list; it does not modify the receiver"]
     pub(crate) fn reorder(&self, cut_ordinals: &[Nat]) -> RunList {
-        debug_assert!(
-            matches!(cut_ordinals.len(), 3 | 4),
-            "R-PRE: 3 or 4 cut ordinals (validated at staging)"
-        );
         let Some((last, interior)) = cut_ordinals.split_last() else {
             return self.clone();
         };
@@ -401,6 +439,54 @@ mod tests {
         assert!(!empty.holds(&ca(1)));
         // A different origin length is held by nobody here.
         assert!(!apart.holds(&vca(1)));
+    }
+
+    #[test]
+    fn decoding_a_list_re_establishes_the_maximal_merge_the_reads_publish() {
+        // §1/M12: `content_runs` and `link_runs` publish the unique
+        // maximally-merged decomposition, and a checkpoint carries these
+        // lists whole — so the decode path establishes the invariant as the
+        // mutators do. Without that door a recovered list could hold two
+        // I-adjacent runs, and every read publishing canonicality would
+        // answer off it: M6's COMPARE would see a different block structure
+        // for the same document after a restart, and M7's slot endsets would
+        // count more spans against `MAX_SLOT_SPANS`. Nothing faults, because
+        // the denotation is intact — which is why the door repairs rather
+        // than refuses, and why only a comparison of run STRUCTURE sees it.
+        //
+        // The bytes are made by encoding the shadow's own shape, which is the
+        // exact form a checkpoint would present.
+        #[derive(Serialize)]
+        struct Wire(im::Vector<Run>);
+        let wire = |runs: Vec<Run>| {
+            bincode::serialize(&Wire(runs.into_iter().collect::<im::Vector<Run>>()))
+                .expect("the shadow encodes")
+        };
+        // Two I-adjacent runs — `shift(ca(1), 2) = ca(3)` — which no fold
+        // could have written apart, since every mutator here coalesces.
+        let split = wire(vec![run(&ca(1), 2), run(&ca(3), 1)]);
+        let decoded: RunList = bincode::deserialize(&split).expect("a run sequence decodes");
+        assert_eq!(
+            decoded.runs(),
+            vec![run(&ca(1), 3)],
+            "a decoded list is the maximally-merged decomposition"
+        );
+        // The denotation was never in doubt: repairing preserved it exactly,
+        // which is what makes coalescing the right response to this input and
+        // refusing the wrong one.
+        assert_eq!(decoded.total_width(), n(3));
+        for k in 1..=3u32 {
+            assert_eq!(decoded.point(&n(k)), Some(ca(k)));
+        }
+        // The door costs the encoding nothing: a canonical list's bytes are
+        // exactly what the shadow's shape writes, and it decodes to itself.
+        let canonical = list(vec![run(&ca(1), 3), run(&ca(9), 1)]);
+        let bytes = bincode::serialize(&canonical).expect("the list encodes");
+        assert_eq!(bytes, wire(vec![run(&ca(1), 3), run(&ca(9), 1)]));
+        assert_eq!(
+            bincode::deserialize::<RunList>(&bytes).expect("a canonical list decodes"),
+            canonical
+        );
     }
 
     #[test]

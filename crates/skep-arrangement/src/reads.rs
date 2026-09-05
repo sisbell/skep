@@ -199,6 +199,16 @@ impl M5State {
     /// PRESENT containment, as the corpus uses the word; the historical
     /// question belongs to
     /// [`docs_ever_containing`](M5State::docs_ever_containing).
+    ///
+    /// REQUIRES `from ≥ 1`, and this is the UPPER BOUND ALONE. Arranged
+    /// content is `[1, n_C]`, so containment of `[from, from + width)` is
+    /// `from ≥ 1 ∧ from + width ≤ n_C + 1`; given the first conjunct the test
+    /// below IS containment, and without it the answer says nothing about
+    /// where the range opens — `from = 0` passes for every document,
+    /// including an empty one, though ordinal 0 is arranged nowhere. Every
+    /// caller establishes the conjunct by asking
+    /// [`arranges_content_position`](M5State::arranges_content_position)
+    /// first, which is why this predicate does not re-ask it.
     pub(crate) fn contains_content_range(&self, doc: &Address, from: &Nat, width: &Nat) -> bool {
         from + width <= &self.content_count(doc) + &Nat::one()
     }

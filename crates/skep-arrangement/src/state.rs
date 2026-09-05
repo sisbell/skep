@@ -708,9 +708,10 @@ mod tests {
                 from: n(999),
                 width: n(1),
             },
-            // Cut vectors violating R-PRE. The COUNT clause is
-            // debug-asserted, so these keep 3 ordinals and break ascent and
-            // the bounds instead.
+            // Cut vectors violating R-PRE, the COUNT clause included: the
+            // 3|4 rule is the OP's, discharged at staging by `BadCutCount`,
+            // so a corrupt record can carry any vector and the tiling has to
+            // answer for all of them.
             M5Rec::ContentReorder {
                 doc: doc1(),
                 cut_ordinals: vec![n(3), n(2), n(1)],
@@ -722,6 +723,14 @@ mod tests {
             M5Rec::ContentReorder {
                 doc: doc1(),
                 cut_ordinals: vec![n(1), n(2), n(999)],
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(1), n(2)],
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(1), n(2), n(3), n(4), n(5)],
             },
             // And against a document the arrangement has never touched.
             M5Rec::ContentRemove {

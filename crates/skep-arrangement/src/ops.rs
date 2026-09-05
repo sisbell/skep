@@ -1,9 +1,15 @@
 //! §B / §3–§7 — the editing & versioning surface: `Vstream`, one M2
 //! `transact` per operation, every mutation under an M3 lock key for the
-//! touched document's allocation domain (§Serialization key). Rejections are
-//! validated before any record is staged, so a rejection leaves no state
-//! change; M10 surfaces `TxnError::Rejected(E)` as typed rejections and
-//! acknowledges only after commit.
+//! touched document's allocation domain (§Serialization key).
+//!
+//! A REJECTION LEAVES NO STATE CHANGE, and that is M2's guarantee rather than
+//! an ordering these ops keep: `transact` returns `TxnError::Rejected(E)`
+//! straight out of the closure phase, discarding the staging, drawing no
+//! `Seq` and appending nothing. Four of the five ops do reject before staging
+//! anything; INSERT cannot, since its per-value mint and content write are
+//! staged as they are made and either may reject on a later value.
+//! M10 surfaces the rejection as a typed one and acknowledges only after
+//! commit.
 //!
 //! Ownership: the four edit ops take a [`Caller`] and open with
 //! [`gate_write`] — the in-txn ω gate — on the document whose arrangement
@@ -107,7 +113,16 @@ where
     /// in-txn ω gate) → `EmptyContent` → `NotContentSubspace`
     /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
     /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
-    /// so ordinal = 1 when n_C = 0).
+    /// so ordinal = 1 when n_C = 0). Then, PER VALUE in the order given,
+    /// `Mint` (the content mint) → `Content` (the byte write), with the FIRST
+    /// value to fail deciding.
+    ///
+    /// Only one of those last two is a verdict an honest request can earn.
+    /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier;
+    /// `Mint(MintError::HomeNotRegistered)` cannot arrive past the gate above
+    /// and is M3's own boundary discharge; and `Content(AlreadyPresent)`
+    /// cannot occur in production at all — M3 mints fresh and M5 writes once,
+    /// which is the argument `stage_write` itself makes for keeping the guard.
     ///
     /// COST, AND WHO OWNS IT. This op admits any `values` length: there is no
     /// analogue of COPY's [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) here,
@@ -347,6 +362,13 @@ where
     /// gate) → `NotContentSubspace` → `NotArranged` (`p.ordinal ∉ [1, n_C]`)
     /// → `OutOfBounds` (`ordinal + width − 1 > n_C`) → `EmptyWidth`
     /// (`width = 0`).
+    ///
+    /// THE FIRST TWO OF THOSE MAY NOT BE TRANSPOSED, and the reason is not
+    /// only which verdict a caller reads: `NotArranged` also DISCHARGES the
+    /// next check's precondition. `contains_content_range` tests the upper
+    /// bound alone and means containment only for `p.ordinal ≥ 1`, which the
+    /// arranged-position check has just established. Asked the other way
+    /// round, a range opening at ordinal 0 would be admitted as contained.
     pub fn delete(
         &self,
         caller: Caller,
@@ -491,6 +513,20 @@ where
     /// mint rather than obliquely as `Mint(NotAnAccount)` — and mints
     /// `mint_document(prefix)` under `document_lock_key(prefix)`. Source
     /// untouched (V3); the fork diverges copy-on-write (V11).
+    ///
+    /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
+    /// applier lock and so possibly stale by the time the transaction runs,
+    /// and each is sound for its own reason. `ω(source)` is stable for an
+    /// existing document (per M3), which is what makes the branch and the
+    /// lock key safe to choose before the transaction opens. The two
+    /// REGISTRATION reads — `is_registered_document(source)` and
+    /// `is_registered_account(prefix)` — are sound because M3's registrations
+    /// are MONOTONE: its record set allocates and registers and never
+    /// withdraws, so a `true` here cannot go stale, and a `false` can only be
+    /// a rejection a retry need not repeat. Any future M2 realization that
+    /// widens what may land between a snapshot and its transaction must
+    /// re-examine this, along with [`M5Rec::VersionSnapshot`]'s
+    /// linearization-at-fold, which the same change already obliges.
     ///
     /// UNGATED, deliberately: this op takes no [`Caller`] and applies no ω
     /// check, because forking a document one may not write IS the remedy the

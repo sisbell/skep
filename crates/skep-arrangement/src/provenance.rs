@@ -18,22 +18,62 @@ use crate::run::Run;
 /// standing, so SHOWDELETIONS has something to subtract from. Recovered by
 /// replay like the arrangement itself, never rebuilt.
 ///
-/// SPAN SHAPE, and it is the door that keeps it: every recorded span is a
-/// [`Run::iextent`] — level-uniform and element-level. [`append`](Provenance::append)
-/// takes RUNS and lifts them itself, so no caller can record a span of
-/// another shape, and the reads may rest on it: it is what makes
+/// SPAN SHAPE, and there are TWO doors that keep it: every recorded span is a
+/// [`Run::iextent`] — level-uniform and element-level.
+/// [`append`](Provenance::append) takes RUNS and lifts them itself, so no
+/// caller can record a span of another shape, and the serde shadow below
+/// re-enters the level-uniformity clause on the decode path, so no checkpoint
+/// can present one either. The reads rest on that: it is what makes
 /// [`M5State::deletions`](crate::M5State::deletions)' per-class
 /// `difference_sets` infallible, M1's set ops gating on level-uniformity as
-/// well as on length. The decode path re-establishes T12 per span but not
-/// this shape, which stays M2's checkpoint integrity — the same posture
-/// [`apply_m5`](crate::M5State::apply_m5) takes for records.
+/// well as on length — and a `.expect` on a public read is not a thing to
+/// leave standing on checkpoint integrity when the type can hold it instead.
 ///
 /// A single-field newtype over the mandated slice shape, so the checkpoint
 /// encoding is the map's own (bincode writes a newtype struct as its inner
 /// value), keyed by the placing document's `Address` — which orders and
 /// serializes as its bare tumbler, and re-validates on the way back in.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ProvenanceShadow")]
 pub(crate) struct Provenance(im::OrdMap<Address, im::Vector<Span>>);
+
+/// The deserialization mint path (the serde `try_from` shadow, as [`Run`] and
+/// M1's `Address`/`Span`/`Tumbler` each carry one): the map is decoded — each
+/// key re-entering `validate` and each span re-entering T12 through their own
+/// shadows — and then the SPAN SHAPE clause the reads depend on is
+/// re-established here, so a checkpoint whose R holds a span no
+/// [`Run::iextent`] could have produced is a decode failure M2 reports as
+/// corruption rather than a value that panics
+/// [`M5State::deletions`](crate::M5State::deletions) on the next
+/// SHOWDELETIONS, on a worker thread, per request.
+///
+/// LEVEL-UNIFORMITY IS THE CLAUSE, and it is the minimal one: it is what M1's
+/// `level_class` gates on, hence exactly what the per-class `difference_sets`
+/// needs. Element-level-ness is not re-checked — no read faults on its
+/// absence, and asking it here would be a second definition of a run start
+/// rather than the one [`Run::admits_start`] owns. One length comparison per
+/// recorded span, once, at checkpoint load.
+///
+/// It reads exactly what a `Provenance` writes — the same newtype over the
+/// same map — and `Serialize` is derived on `Provenance` itself, so the
+/// shadow costs the encoding nothing.
+#[derive(Deserialize)]
+struct ProvenanceShadow(im::OrdMap<Address, im::Vector<Span>>);
+
+impl TryFrom<ProvenanceShadow> for Provenance {
+    type Error = &'static str;
+    fn try_from(s: ProvenanceShadow) -> Result<Provenance, &'static str> {
+        if s.0
+            .iter()
+            .flat_map(|(_, spans)| spans.iter())
+            .all(Span::is_level_uniform)
+        {
+            Ok(Provenance(s.0))
+        } else {
+            Err("provenance: every recorded span is a run I-extent (level-uniform)")
+        }
+    }
+}
 
 impl Provenance {
     /// Append the I-extents of `runs` to `doc`'s record (persistent — the
@@ -107,7 +147,7 @@ impl Provenance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{ca, doc1, doc2, run, vdoc};
+    use crate::testutil::{ca, doc1, doc2, run, t, vdoc};
 
     #[test]
     fn appending_accumulates_and_never_shortens() {
@@ -133,5 +173,46 @@ mod tests {
         // A document that has placed nothing is absent, and reads empty.
         assert!(!p.is_recorded(&vdoc()));
         assert!(p.ever_contained(&vdoc()).is_empty());
+    }
+
+    #[test]
+    fn decoding_a_record_re_establishes_the_span_shape_the_reads_rest_on() {
+        // §9: the SPAN SHAPE clause is what makes `M5State::deletions`'
+        // per-class `difference_sets` infallible — M1's set ops gate on
+        // level-uniformity as well as on length — so the decode path holds it
+        // as the mutator does. A span no `Run::iextent` could have produced is
+        // a decode failure M2 reports as corruption, not a value that panics a
+        // public read on the next SHOWDELETIONS.
+        //
+        // The bytes are made by encoding the shadow's own shape, which is the
+        // exact form a corrupt checkpoint would present.
+        #[derive(Serialize)]
+        struct Wire(im::OrdMap<Address, im::Vector<Span>>);
+        let wire = |spans: Vec<Span>| {
+            bincode::serialize(&Wire(im::OrdMap::unit(
+                doc1(),
+                spans.into_iter().collect::<im::Vector<Span>>(),
+            )))
+            .expect("the shadow encodes")
+        };
+        // T12-valid (action point 1 ≤ #start 8) and NOT level-uniform — the
+        // shape `iextent` cannot make and `difference_sets` faults on.
+        let skew = Span::new(ca(1).tumbler().clone(), t(&[1])).expect("T12");
+        assert!(!skew.is_level_uniform());
+        assert!(
+            bincode::deserialize::<Provenance>(&wire(vec![skew])).is_err(),
+            "a span no run extent could produce is not a provenance record"
+        );
+        // A well-formed record decodes to itself, and its bytes are exactly
+        // what the shadow's shape writes — the door is a check on the decode
+        // path and not a second encoding.
+        let placed = run(&ca(1), 2);
+        let good = Provenance::default().append(&doc1(), [&placed]);
+        let bytes = bincode::serialize(&good).expect("the record encodes");
+        assert_eq!(bytes, wire(vec![placed.iextent()]));
+        assert_eq!(
+            bincode::deserialize::<Provenance>(&bytes).expect("a run extent decodes"),
+            good
+        );
     }
 }

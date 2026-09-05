@@ -37,7 +37,10 @@ use skep_address::{intersect, shift, validate, Address, Nat, Span, Tumbler};
 /// constructor, and it is also the DESERIALIZATION path: a decoded Run
 /// re-enters it through the serde shadow below, so a journalled
 /// [`ContentPlace`](crate::M5Rec::ContentPlace) cannot carry a Run the
-/// constructor would refuse. That is what justifies the `.expect`s in the
+/// constructor would refuse, and a journalled
+/// [`LinkSeat`](crate::M5Rec::LinkSeat) — which carries a bare `Address` and
+/// so re-enters T4 alone — is minted through it by the fold. That is what
+/// justifies the `.expect`s in the
 /// run's own position arithmetic — they rest on the type, not on M2's
 /// checkpoint integrity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,16 +139,19 @@ impl Run {
     /// here, an external producer and a decoded journal or checkpoint alike —
     /// the serde `try_from` shadow routes deserialization into this function.
     ///
-    /// M5's own sites divide in two. The propagating ones — run-list
-    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the placing
-    /// folds — build Runs by the in-crate struct literal from a start that is
-    /// already one: a start reaching them is a minted element address or an
-    /// in-crate ordinal shift of one, and such a shift preserves the
-    /// element field's length. The two ORIGINATING sites establish it
-    /// instead: `insert` places what `M3State::mint_content` returns, which is
-    /// `doc·0·s_C·ordinal` by construction, and the `LinkSeat` fold seats the
-    /// address `stage_seat_link` admitted, which is where the link path's
-    /// check is made.
+    /// M5's own sites divide in two. The PROPAGATING ones — run-list
+    /// split/coalesce, `resolve`, `content_runs`/`link_runs`, the content
+    /// placing fold — build Runs by the in-crate struct literal from a start
+    /// that is already one: a start reaching them is a minted element address
+    /// or an in-crate ordinal shift of one, and such a shift preserves the
+    /// element field's length. The two ORIGINATING ones establish it instead,
+    /// and each does so at its own door: `insert` places what
+    /// `M3State::mint_content` returns, which is `doc·0·s_C·ordinal` by
+    /// construction, and the `LinkSeat` fold seats an address that arrives in
+    /// a record, so it calls THIS function — `stage_seat_link` checks the
+    /// shape on the live path, but a replayed record's `Address` re-enters
+    /// only M1's `validate`, and T4-validity does not imply a full element
+    /// position.
     ///
     /// Field privacy then closes the mutate-after-obtain path: a foreign
     /// holder cannot later set `width = 0` or swap `i_start` on any Run it

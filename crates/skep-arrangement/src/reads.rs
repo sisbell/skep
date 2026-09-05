@@ -88,13 +88,31 @@ impl M5State {
     /// MIXED-LENGTH HAZARD for whoever aggregates the returned runs' extents:
     /// see [`Run::iextent`].
     pub fn resolve(&self, doc: &Address, span: &Span) -> Vec<Run> {
-        let Some(vspan) = as_ordinal_vspan(span) else {
-            return Vec::new();
-        };
-        let Some(list) = self.arrangement_of(doc).list(vspan.subspace) else {
-            return Vec::new();
-        };
-        list.resolve_range(vspan.ordinal, vspan.count)
+        self.iter_resolve(doc, span).collect()
+    }
+
+    /// [`resolve`](M5State::resolve)'s LAZY twin — the same runs, in the same
+    /// order, under the same defensive folds, clipped as they are pulled.
+    ///
+    /// CRATE-PRIVATE, and the reason is what the two forms cost: a
+    /// resolution's size is the SOURCE document's fragmentation, which the
+    /// asking request does not choose, so a consumer that carries a budget of
+    /// its own holds that budget instead of the whole resolution. COPY is that
+    /// consumer — its accumulator is capped at
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), so pulling lazily means an
+    /// over-budget spec stops the walk at the cap rather than materializing
+    /// the source's every run first and refusing afterwards. Outside this
+    /// crate the vector is the right shape: M6, M7 and M8 each hand the runs
+    /// onward, and admission control on those routes is theirs.
+    pub(crate) fn iter_resolve(&self, doc: &Address, span: &Span) -> impl Iterator<Item = Run> + '_ {
+        as_ordinal_vspan(span)
+            .and_then(|vspan| {
+                self.arrangement_of(doc)
+                    .list(vspan.subspace)
+                    .map(|list| (list, vspan.ordinal.clone(), vspan.count.clone()))
+            })
+            .into_iter()
+            .flat_map(|(list, ordinal, count)| list.iter_resolve_range(&ordinal, &count))
     }
 
     /// `M(d)(p)` (§2): the I-address at V-position `p`, or `None` when
@@ -266,13 +284,33 @@ impl M5State {
     /// ascend by endpoint length, the partition being ordered. M6 reads
     /// SHOWDELETIONS straight off this — neither operand crosses the
     /// boundary. Fault-free.
+    ///
+    /// COST, AND WHO OWNS IT — the historical operand is what dominates, and
+    /// the answer's size bounds none of it. Per call both operands are rebuilt
+    /// and partitioned, and each per-class `difference_sets` normalizes and
+    /// SORTS its two operands, so the work is
+    /// `Θ(|R↾doc| log |R↾doc|) + Θ(#runs(doc))` and the transient heap is
+    /// several full copies of `R↾doc`. `|R↾doc|` is not bounded here and is
+    /// monotone (P2, R losing no member): it is every span `doc` has ever
+    /// placed, grown by COPY up to
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per request and by VERSION
+    /// without a ceiling ([`Vstream::version`](crate::Vstream::version)), so a
+    /// document that has deleted much more than it holds costs far more here
+    /// than its current arrangement suggests. There is no index over R in v1
+    /// (Open decision #3) and no admission gate: this read refuses nothing and
+    /// bounds nothing, so admission control and concurrency for the query that
+    /// composes on it are the CALLER's, as they are for
+    /// [`docs_ever_containing`](M5State::docs_ever_containing) — and a request
+    /// naming two documents is not a small request whatever its size.
     pub fn deletions(&self, doc: &Address) -> SpanSet {
         let image = self.content_image(doc).by_level_class();
         let mut out = SpanSet::empty();
         for (len, ever) in self.provenance.ever_contained(doc).by_level_class() {
             let here = image.get(&len).cloned().unwrap_or_else(SpanSet::empty);
-            let deleted = difference_sets(&ever, &here)
-                .expect("per-class operands share one length class — the gate passes");
+            let deleted = difference_sets(&ever, &here).expect(
+                "per-class operands share one length class, and every span of \
+                 either is a run extent hence level-uniform — the gate passes",
+            );
             out = union(&out, &deleted);
         }
         out

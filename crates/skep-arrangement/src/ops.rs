@@ -47,11 +47,22 @@ use crate::HasM5;
 /// arithmetic is checked against the real encoding rather than restated here
 /// (`the_placement_budget_stays_inside_the_transaction_budget`).
 ///
-/// It binds what one COPY PLACES. Resolving a single spec still materializes
-/// that spec's own runs, which the source document's fragmentation bounds;
-/// what the cap removes is the multiplication of that fragmentation by a
-/// request's spec count. A copy needing more runs than this is split by the
-/// caller, exactly as an over-budget transaction already is.
+/// IT BINDS WHAT ONE COPY PLACES AND HOLDS LIVE, and that is the whole of
+/// what it binds. A copy needing more runs than this is split by the caller,
+/// exactly as an over-budget transaction already is. Because the accumulator
+/// is filled from a LAZY resolution, the cap also stops the walk: an
+/// over-budget spec is refused at the cap rather than resolved in full and
+/// measured afterwards.
+///
+/// WHAT IT DOES NOT BIND is the WORK of resolving, which is a separate
+/// quantity with a separate owner. Each spec costs a prefix-sum walk of its
+/// source's run-list to reach the span — `Θ(#runs(source))` for a span near
+/// the end, however narrow the answer — and a request multiplies that by its
+/// spec count. Neither factor has a ceiling here: `#runs(source)` has none in
+/// v1 (Open decision #1) and grows with editing, and a spec count is bounded
+/// only by M10's wire list cap. So admission control and concurrency for a
+/// route carrying COPY are the CALLER's, as they are for the reads that state
+/// their own cost, and a route that carries this op owes that number.
 pub const MAX_PLACED_RUNS: usize = 1 << 16;
 
 /// M5's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -209,9 +220,10 @@ where
     /// → `EmptySource` (ASN-0118
     /// enabled(COPY)) → per-run `DanglingSource` (`M4::contains` on the run
     /// start — S3★, Open decision #5 default) → `TooManyRuns`
-    /// ([`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), refused AS THE RUNS ARE
-    /// PRODUCED so an over-budget copy stops accumulating rather than being
-    /// built and then measured); finally `EmptyResult` when nothing survives
+    /// ([`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), measured after each run
+    /// is accumulated; the resolution is pulled LAZILY, so an over-budget spec
+    /// stops the source walk at the cap rather than being resolved in full and
+    /// measured afterwards); finally `EmptyResult` when nothing survives
     /// clipping. Cross-origin runs never coalesce
     /// (the placement accumulator's I-adjacency guard), preserving the origin
     /// multiset (CP11).
@@ -279,17 +291,22 @@ where
                         return Err(CopyError::EmptySource);
                     }
                     // Resolved BEFORE staging ⇒ a self-copy sees the pre-edit
-                    // arrangement.
-                    for r in world.m5().resolve(&spec.source, span) {
+                    // arrangement. Resolved LAZILY, so what one spec makes
+                    // this closure hold live is the accumulator (capped
+                    // below) and not the source's whole run-list, whose size
+                    // the request does not choose.
+                    for r in world.m5().iter_resolve(&spec.source, span) {
                         if !world.content().contains(r.i_start().tumbler()) {
                             return Err(CopyError::DanglingSource);
                         }
                         extend_or_push_run(&mut runs, r);
                         // Measured where the run is produced, not after the
-                        // whole spec list has been folded: the accumulator
-                        // is what a request's spec count multiplies, and a
+                        // whole spec list has been folded: the accumulator is
+                        // what a request's spec count multiplies, and a
                         // refusal that arrives at the end has already been
-                        // paid for.
+                        // paid for. With the resolution pulled lazily, this
+                        // return also ends the source walk, so an over-budget
+                        // spec is not resolved past the cap.
                         if runs.len() > MAX_PLACED_RUNS {
                             return Err(CopyError::TooManyRuns);
                         }
@@ -493,6 +510,29 @@ where
     /// absent-⇒-empty convention, with no redundant entry and no provenance
     /// (ASN-0123 V1). Every read answers for it as it does for any document
     /// M5 has not yet touched.
+    ///
+    /// COST, AND WHO OWNS IT. One request names one address, and the record
+    /// it stages names two; what the fold then does is share the source's
+    /// run-list (O(1), structural) and append `#runs(source)` freshly-built
+    /// spans to R, permanently, R losing no member ever (P2). So the work and
+    /// the state a request commands are set by the SOURCE's fragmentation and
+    /// not by the request, and `#runs(source)` is itself grown by editing —
+    /// a self-COPY doubles it, within `MAX_PLACED_RUNS` per request.
+    ///
+    /// M5 CAPS NONE OF IT, and no cap upstream reaches it: M2's
+    /// `MAX_TXN_BYTES` prices the staged record, which is two addresses;
+    /// M10's `MAX_INSERT_VALUES` prices values and `MAX_WIRE_LIST` prices
+    /// lists, and this request carries neither. The asymmetry against COPY is
+    /// deliberate to state and not to defend: COPY's R-append is bounded at
+    /// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS) per request and this one is
+    /// unbounded, though the two append by the same mechanism and with the
+    /// same permanence — a fork cannot be split by its caller the way an
+    /// over-budget copy can, so a ceiling here would refuse
+    /// `enabled(VERSION)` rather than shape a request. Replay re-does the
+    /// expansion from the same two addresses ([`M5Rec::VersionSnapshot`]), so
+    /// the bill is charged again at every `Kernel::open`. Admission control
+    /// for a route carrying this op is therefore the CALLER's, and a route
+    /// that carries it owes the number.
     pub fn version(
         &self,
         principal: PrincipalId,
@@ -656,10 +696,16 @@ mod tests {
     /// bytes of exactly `present`. The two halves of S3★ are set apart from
     /// each other, which is what lets one test say which of them COPY reads.
     fn gate_kernel(present: &[u32]) -> Kernel<GateWorld> {
+        fragmented_gate_kernel(vec![run(&ca(1), 3)], present)
+    }
+
+    /// The same world with doc1's arrangement chosen — for the tests whose
+    /// subject is the source's RUN COUNT rather than its bytes.
+    fn fragmented_gate_kernel(runs: Vec<Run>, present: &[u32]) -> Kernel<GateWorld> {
         let m5 = M5State::genesis().apply_m5(&M5Rec::ContentPlace {
             doc: doc1(),
             at: n(1),
-            runs: vec![run(&ca(1), 3)],
+            runs,
         });
         let mut content = ContentStore::default();
         for &k in present {
@@ -753,6 +799,52 @@ mod tests {
             .copy(p1, &doc2(), vp(1, 1), &over[..3])
             .expect("a placement inside the budget commits");
         assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(3));
+    }
+
+    #[test]
+    fn one_spec_over_a_fragmented_source_is_refused_at_the_cap_not_after_it() {
+        // §5: a spec list is one multiplier of the source's fragmentation and
+        // the SPAN is the other — a single spec over a heavily fragmented
+        // source names as many runs as the source holds in range. The cap
+        // therefore has to bind one spec, and because the resolution is pulled
+        // lazily the refusal arrives AT the cap: the accumulator never holds
+        // more than the budget, whatever the source's run count.
+        let p1 = Caller::Principal(PrincipalId(1));
+        // Non-adjacent starts (`shift(ca(2k), 1) = ca(2k + 1) ≠ ca(2k + 2)`),
+        // so nothing coalesces and the source really holds this many runs.
+        let over = MAX_PLACED_RUNS + 1;
+        let present: Vec<u32> = (1..=over as u32).map(|k| 2 * k).collect();
+        let runs: Vec<Run> = present.iter().map(|&k| run(&ca(k), 1)).collect();
+        let k = fragmented_gate_kernel(runs, &present);
+        assert_eq!(
+            k.snapshot().world().m5().content_runs(&doc1()).len(),
+            over,
+            "the source arranges one run per placed address"
+        );
+        // ONE spec, whose span covers the whole source.
+        let whole = [VSpec {
+            source: doc1(),
+            span: vspan(1, 1, over as u32),
+        }];
+        assert!(matches!(
+            rejected(Vstream::new(&k).copy(p1, &doc2(), vp(1, 1), &whole)),
+            CopyError::TooManyRuns
+        ));
+        assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(0));
+        // A span inside the budget over the same source still commits, so the
+        // refusal above is about the count and not about the source.
+        Vstream::new(&k)
+            .copy(
+                p1,
+                &doc2(),
+                vp(1, 1),
+                &[VSpec {
+                    source: doc1(),
+                    span: vspan(1, 1, 4),
+                }],
+            )
+            .expect("a span inside the budget commits");
+        assert_eq!(k.snapshot().world().m5().content_count(&doc2()), n(4));
     }
 
     #[test]

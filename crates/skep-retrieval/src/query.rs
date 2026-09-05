@@ -312,12 +312,19 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// TIME IS UNBOUNDED AND M6 DOES NOT BOUND IT — and unlike RETRIEVEV's,
     /// it is not bounded by the answer either. No span narrows the request, so
     /// both documents are enumerated WHOLE: the work is
-    /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|`, paid in full
-    /// even when the two share nothing and both halves come back empty. M6
-    /// owns no admission control and no refusal for it: capping request rate
-    /// and concurrency for a route carrying this read is M10's, as the request
-    /// lifecycle's owner — and a request-size cap is no help here, this
-    /// request being two addresses whatever the documents behind them hold.
+    /// `|R↾d_a| log |R↾d_a| + |R↾d_b| log |R↾d_b|`, the two `M5State::deletions`
+    /// calls that build the halves (each rebuilds and SORTS the document's
+    /// whole provenance record — M5 states this cost where it is paid), plus
+    /// `n_C(d_a)·|deletions(d_b)| + n_C(d_b)·|deletions(d_a)|` for the
+    /// membership pass, all paid in full even when the two share nothing and
+    /// both halves come back empty. THE FIRST TERM USUALLY DOMINATES, and it
+    /// is the one a document's current size does not reveal: R never loses a
+    /// member, so a document that has deleted far more than it holds carries a
+    /// record far larger than its arrangement. M6 owns no admission control
+    /// and no refusal for any of it: capping request rate and concurrency for
+    /// a route carrying this read is M10's, as the request lifecycle's owner —
+    /// and a request-size cap is no help here, this request being two
+    /// addresses whatever the documents behind them hold.
     ///
     /// MEMORY IS THE ANSWER'S. [`current_content`] streams, so what is held
     /// live is the deduped halves and one address at a time, not a

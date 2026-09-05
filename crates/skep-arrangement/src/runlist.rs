@@ -257,14 +257,19 @@ impl RunList {
         RunList(coalesced(out))
     }
 
-    /// The runs covering ordinals `[lo, hi_excl)`, the boundary runs clipped
-    /// — MATERIALIZING ONLY THE ANSWER. One prefix-sum walk that skips the
-    /// runs left of `lo`, stops at the first run at or past `hi_excl`, and
-    /// clones nothing outside the range: the cost of a read is the size of
-    /// what it returns, not the size of the list it reads from. That matters
-    /// because a resolution's caller is a per-spec loop — COPY's, M7's slot
-    /// endsets, M6's RETRIEVEV — so any per-call term proportional to the
-    /// SOURCE's fragmentation is multiplied by the request's spec count.
+    /// The runs covering ordinals `[lo, hi_excl)`, the boundary runs clipped,
+    /// yielded LAZILY — nothing outside the range is cloned, and a consumer
+    /// that stops early stops the walk with it (`take_while` short-circuits).
+    ///
+    /// WHAT THIS COSTS, since a resolution's caller is a per-spec loop —
+    /// COPY's, M7's slot endsets, M6's RETRIEVEV — and a request's spec count
+    /// multiplies whatever one call costs. Pulling the whole range is
+    /// `Θ(#runs left of lo) + Θ(#runs in the range)`: the prefix-sum walk has
+    /// to reach `lo`, one `Nat` addition and one comparison per run it passes
+    /// over, so resolving the LAST position of an n-run list costs n steps
+    /// however narrow the answer. That term is the `im::Vector<Run>` backing's
+    /// (Open decision #1); what laziness removes is the other term, the
+    /// materialization of runs a bounded consumer will never look at.
     ///
     /// Called with `lo < hi_excl`. Every emitted run then has `width ≥ 1` and
     /// an element-level start: a run reaching the push has `v_start < hi_excl`
@@ -274,41 +279,47 @@ impl RunList {
     /// [`Run::addr_at`](crate::Run::addr_at) of an offset inside the run. Both
     /// `Nat` subtractions are therefore over ordered operands and cannot
     /// underflow.
-    fn slice_runs(&self, lo: &Nat, hi_excl: &Nat) -> Vec<Run> {
-        let mut out: Vec<Run> = Vec::new();
-        for (v_start, run) in self.iter_runs() {
-            if v_start >= *hi_excl {
-                break;
-            }
-            let v_end = &v_start + &run.width; // the first ordinal past this run
-            if v_end <= *lo {
-                continue;
-            }
-            let first = std::cmp::max(&v_start, lo); // this run's first kept ordinal
-            let past = std::cmp::min(&v_end, hi_excl); // one past its last
-            out.push(Run {
-                i_start: run.addr_at(&(first - &v_start)),
-                width: past - first,
-            });
-        }
-        out
+    fn slice_runs(&self, lo: Nat, hi_excl: Nat) -> impl Iterator<Item = Run> + '_ {
+        let stop = hi_excl.clone();
+        self.iter_runs()
+            .take_while(move |(v_start, _)| *v_start < stop)
+            .filter_map(move |(v_start, run)| {
+                let v_end = &v_start + &run.width; // the first ordinal past this run
+                if v_end <= lo {
+                    return None;
+                }
+                let first = std::cmp::max(&v_start, &lo); // this run's first kept ordinal
+                let past = std::cmp::min(&v_end, &hi_excl); // one past its last
+                Some(Run {
+                    i_start: run.addr_at(&(first - &v_start)),
+                    width: past - first,
+                })
+            })
     }
 
     /// I-runs covering ordinals `[ord, ord + count)`, clipped to the arranged
     /// range — accept-and-intersect: out-of-range is silently dropped
-    /// (ASN-0118). V-ordered by construction.
+    /// (ASN-0118). V-ordered by construction, and LAZY: the clipping happens
+    /// as runs are pulled, so a consumer with a budget of its own holds that
+    /// budget rather than the whole resolution, whose size is the source
+    /// document's fragmentation and not the asking request's choice.
+    /// [`M5State::resolve`](crate::M5State::resolve) is where the collecting
+    /// form lives, at the level that has consumers wanting a vector.
     ///
     /// The upper clip needs no `total_width`: no run reaches past `total + 1`,
     /// so clipping each run at `hi_excl` already drops everything beyond the
     /// arrangement, and asking for the total would be a second walk of the
     /// whole list to learn a bound the walk enforces anyway.
-    pub(crate) fn resolve_range(&self, ord: &Nat, count: &Nat) -> Vec<Run> {
+    pub(crate) fn iter_resolve_range(&self, ord: &Nat, count: &Nat) -> impl Iterator<Item = Run> + '_ {
         let lo = std::cmp::max(ord.clone(), Nat::one());
         let hi_excl = ord + count;
-        if lo >= hi_excl {
-            return Vec::new();
-        }
-        self.slice_runs(&lo, &hi_excl)
+        // An empty range names no position, and it is excluded HERE rather
+        // than clipped to nothing below: a run straddling `hi_excl ≤ lo` would
+        // otherwise clip to `past − first = hi_excl − lo`, which underflows.
+        (lo < hi_excl)
+            .then_some((lo, hi_excl))
+            .into_iter()
+            .flat_map(move |(lo, hi_excl)| self.slice_runs(lo, hi_excl))
     }
 
     /// Iterate `(v_start, run)` pairs — the implicit V-start is the running
@@ -344,6 +355,13 @@ mod tests {
 
     fn list(runs: Vec<Run>) -> RunList {
         RunList(runs.into_iter().collect())
+    }
+
+    /// The whole of a resolution, for the assertions whose subject is WHICH
+    /// runs come back rather than when. The laziness itself is the subject of
+    /// `the_lazy_resolution_yields_a_prefix_when_a_consumer_stops`.
+    fn resolved(l: &RunList, ord: u32, count: u32) -> Vec<Run> {
+        l.iter_resolve_range(&n(ord), &n(count)).collect()
     }
 
     #[test]
@@ -518,9 +536,9 @@ mod tests {
     fn resolve_range_clips_accept_and_intersect() {
         // ASN-0118: out-of-range silently dropped; V-ordered result.
         let l = list(vec![run(&ca(1), 3)]);
-        assert_eq!(l.resolve_range(&n(2), &n(10)), vec![run(&ca(2), 2)]);
-        assert_eq!(l.resolve_range(&n(0), &n(2)), vec![run(&ca(1), 1)]); // lo clamps to 1
-        assert!(l.resolve_range(&n(4), &n(2)).is_empty());
+        assert_eq!(resolved(&l, 2, 10), vec![run(&ca(2), 2)]);
+        assert_eq!(resolved(&l, 0, 2), vec![run(&ca(1), 1)]); // lo clamps to 1
+        assert!(resolved(&l, 4, 2).is_empty());
         // A narrow resolution over a FRAGMENTED list answers with the one run
         // it names and nothing else, and it names the right one from each
         // position in the list — first, middle, last. The interesting half is
@@ -529,18 +547,50 @@ mod tests {
         // transcluded source does not multiply that source's fragmentation
         // by its spec count.
         let frag = list(vec![run(&ca(1), 1), run(&vca(1), 1), run(&ca(5), 1)]);
-        assert_eq!(frag.resolve_range(&n(1), &n(1)), vec![run(&ca(1), 1)]);
-        assert_eq!(frag.resolve_range(&n(2), &n(1)), vec![run(&vca(1), 1)]);
-        assert_eq!(frag.resolve_range(&n(3), &n(1)), vec![run(&ca(5), 1)]);
+        assert_eq!(resolved(&frag, 1, 1), vec![run(&ca(1), 1)]);
+        assert_eq!(resolved(&frag, 2, 1), vec![run(&vca(1), 1)]);
+        assert_eq!(resolved(&frag, 3, 1), vec![run(&ca(5), 1)]);
         // …and a range spanning the seams clips both boundary runs.
         let wide = list(vec![run(&ca(1), 3), run(&vca(1), 3), run(&ca(9), 3)]);
         assert_eq!(
-            wide.resolve_range(&n(3), &n(5)),
+            resolved(&wide, 3, 5),
             vec![run(&ca(3), 1), run(&vca(1), 3), run(&ca(9), 1)]
         );
         // Over-reach past the last arranged ordinal is still dropped without
         // the total ever being computed.
-        assert_eq!(wide.resolve_range(&n(8), &n(99)), vec![run(&ca(10), 2)]);
-        assert!(wide.resolve_range(&n(10), &n(99)).is_empty());
+        assert_eq!(resolved(&wide, 8, 99), vec![run(&ca(10), 2)]);
+        assert!(resolved(&wide, 10, 99).is_empty());
+    }
+
+    #[test]
+    fn the_lazy_resolution_yields_a_prefix_when_a_consumer_stops() {
+        // §1: a consumer with a budget of its own — COPY's placement cap —
+        // takes what it can hold and stops there, which is the whole reason
+        // the resolution is pulled rather than collected. What must be true
+        // for that to be safe is that stopping yields exactly the prefix of
+        // the full answer and never a different run: a truncated walk must
+        // not silently clip a run differently for having been asked for less.
+        let frag = list(vec![
+            run(&ca(1), 2),
+            run(&vca(1), 1),
+            run(&ca(5), 2),
+            run(&vca(5), 1),
+        ]);
+        for (ord, count) in [(1u32, 99u32), (2, 4), (3, 1), (0, 3), (7, 99)] {
+            let whole = resolved(&frag, ord, count);
+            for take in 0..=whole.len() {
+                assert_eq!(
+                    frag.iter_resolve_range(&n(ord), &n(count))
+                        .take(take)
+                        .collect::<Vec<_>>(),
+                    whole[..take],
+                    "({ord}, {count}) stopped after {take}"
+                );
+            }
+        }
+        // The empty range is excluded before any clipping — a straddling run
+        // would otherwise clip to a width the subtraction underflows on.
+        assert!(frag.iter_resolve_range(&n(3), &n(0)).next().is_none());
+        assert!(frag.iter_resolve_range(&n(0), &n(0)).next().is_none());
     }
 }

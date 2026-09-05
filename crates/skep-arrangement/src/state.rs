@@ -235,13 +235,22 @@ impl M5State {
             // positions, coalescing with the prior link run if I-adjacent
             // (sequential A_L(d) allocations are — the maximally-merged link
             // list is a valid S8★ witness). NO R append (J-LV).
+            //
+            // The seated address becomes a Run START, so it walks `Run`'s own
+            // door rather than a struct literal: `stage_seat_link` establishes
+            // the shape on the live path, but a record's `Address` re-enters
+            // only M1's `validate` on the REPLAY path, and T4-validity does
+            // not imply a full element position. An address the door refuses
+            // is a NO-OP here. The fold is infallible and runs inside
+            // `Kernel::open`, so panicking is not the alternative; and placing
+            // it is worse than dropping it, a link run whose extent covered a
+            // whole document or a whole subspace refusing every later link of
+            // that document for good, CL-UNIQ being I-extent membership.
             M5Rec::LinkSeat { doc, link } => M5State {
-                arrangements: self.arrangements_with_link(doc, |l| {
-                    l.append(Run {
-                        i_start: link.clone(),
-                        width: Nat::from(1u32),
-                    })
-                }),
+                arrangements: match Run::new(link.clone(), Nat::from(1u32)) {
+                    Some(seated) => self.arrangements_with_link(doc, |l| l.append(seated)),
+                    None => self.arrangements.clone(),
+                },
                 provenance: self.provenance.clone(),
             },
             // §7 fold: share `source`'s then-current content run-list into
@@ -254,6 +263,24 @@ impl M5State {
             // leaving `new` ABSENT under the lazy convention (≡ empty) —
             // V1's zero-content footprint with no redundant entry. Source is
             // untouched (V3); the fork diverges copy-on-write (V11).
+            //
+            // THE TWO HALVES COST DIFFERENTLY, and only one of them is
+            // priced by the record. The arrangement share is O(1). The
+            // R-append is Θ(#runs(source)) freshly-built spans — one per
+            // run, each a pair of tumblers — and permanent (P2). This
+            // record carries two addresses whatever the source holds, so
+            // M2's `MAX_TXN_BYTES` weighs those two addresses and bounds
+            // the expansion not at all; `ContentPlace`, which appends to R
+            // by this same mechanism, carries its runs and is bounded twice
+            // over (by that ceiling and by `MAX_PLACED_RUNS`). REPLAY
+            // RE-PAYS IT: the journal record stays two addresses, so `k`
+            // fork records cost `Σ #runs(sourceᵢ)` spans at every
+            // `Kernel::open`, and a checkpoint carries the result. What
+            // would put this append under the transaction budget where
+            // `ContentPlace`'s already sits is the explicit-runs form of
+            // this record (Open decision #4) — a second reason for that
+            // migration beside the M2-concurrency one stated on the variant.
+            // `Vstream::version` states who owns the bound meanwhile.
             M5Rec::VersionSnapshot { source, new } => {
                 let content = self
                     .arrangements
@@ -292,7 +319,7 @@ impl M5State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::{ca, doc1, doc2, la, n, run, vca, vdoc};
+    use crate::testutil::{a, ca, doc1, doc2, la, n, run, vca, vdoc};
     use crate::vspace::VPos;
 
     fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
@@ -360,6 +387,47 @@ mod tests {
     }
 
     #[test]
+    fn the_link_seat_fold_mints_through_the_run_door_and_drops_what_it_refuses() {
+        // §8/§10: the seated address becomes a Run START, and on the REPLAY
+        // path a record's `Address` has re-entered only M1's `validate` —
+        // T4-validity does not imply a full element position, which is the
+        // clause the run's ordinal arithmetic stands on. So the fold mints
+        // through `Run::new`, and an address the door refuses is dropped.
+        //
+        // Dropping rather than placing is the point: a document address and a
+        // subspace base are both T4-valid, and seating either would give a
+        // width-1 run whose I-extent covers a whole document or a whole link
+        // subspace — after which CL-UNIQ, which IS I-extent membership,
+        // reports every later link of that document as already seated, with no
+        // unseat anywhere in the module. Panicking is not the alternative:
+        // this fold runs inside `Kernel::open`.
+        let s = M5State::genesis();
+        for link in [doc1(), a(&[1, 0, 1, 0, 1, 0, 2])] {
+            let out = s.apply_m5(&M5Rec::LinkSeat {
+                doc: doc1(),
+                link: link.clone(),
+            });
+            assert_eq!(out.link_count(&doc1()), n(0), "{link:?} is no run start");
+            assert!(out.link_runs(&doc1()).is_empty(), "{link:?}");
+            // And the subspace is still seatable afterwards, which is what
+            // dropping buys and placing would have cost permanently.
+            let after = out.apply_m5(&M5Rec::LinkSeat {
+                doc: doc1(),
+                link: la(1),
+            });
+            assert_eq!(after.link_runs(&doc1()), vec![run(&la(1), 1)], "{link:?}");
+            assert!(after.seats_link(&doc1(), &la(1)), "{link:?}");
+        }
+        // A well-formed seat still lands, so the assertions above are not
+        // earned by a fold that has stopped seating anything.
+        let ok = s.apply_m5(&M5Rec::LinkSeat {
+            doc: doc1(),
+            link: la(1),
+        });
+        assert_eq!(ok.link_runs(&doc1()), vec![run(&la(1), 1)]);
+    }
+
+    #[test]
     fn version_snapshot_shares_the_map_preserving_multiplicity() {
         // ASN-0123 V2: the V→I map is copied, not the I-range — a
         // within-document transclusion duplicate survives into the fork.
@@ -377,6 +445,59 @@ mod tests {
         assert_eq!(s.docs_ever_containing(&cov), vec![doc1(), vdoc()]);
         // Source untouched (V3).
         assert_eq!(s.content_runs(&doc1()), vec![run(&ca(1), 2), run(&ca(1), 2)]);
+    }
+
+    #[test]
+    fn a_fork_appends_one_r_span_per_source_run_from_a_two_address_record() {
+        // §7: the amplification `Vstream::version`'s cost note names. The
+        // arrangement half is O(1) (structural im share); the R half is one
+        // freshly-built span per source run, permanent (P2). The record that
+        // commands it is two addresses WHATEVER the source holds, so M2's
+        // MAX_TXN_BYTES weighs those two addresses and bounds the expansion
+        // not at all — and replay re-reads the same two addresses to re-do it.
+        // `ContentPlace` appends to R by the same mechanism and carries its
+        // runs, so it is priced for them; that contrast is the finding, and it
+        // is measured here rather than remembered. Corpus seed for the
+        // fuzzing tier.
+        //
+        // Non-adjacent starts, so nothing coalesces and the source really
+        // holds one run per placed address.
+        let runs = |count: u32| -> Vec<Run> { (1..=count).map(|k| run(&ca(2 * k), 1)).collect() };
+        let fork = |count: u32| {
+            let s = place(&M5State::genesis(), &doc1(), 1, runs(count));
+            let rec = M5Rec::VersionSnapshot {
+                source: doc1(),
+                new: vdoc(),
+            };
+            let record_bytes = bincode::serialize(&rec).expect("the record encodes").len();
+            let forked = s.apply_m5(&rec);
+            assert_eq!(forked.content_runs(&vdoc()), s.content_runs(&doc1()));
+            (
+                s.content_runs(&doc1()).len(),
+                record_bytes,
+                forked.provenance.ever_contained(&vdoc()).len(),
+            )
+        };
+        // One R span per source run, at both sizes…
+        assert_eq!(fork(2), (2, fork(2).1, 2));
+        let (source_runs, record_bytes, r_spans) = fork(64);
+        assert_eq!((source_runs, r_spans), (64, 64));
+        // …from a record whose size did not move between them.
+        assert_eq!(record_bytes, fork(2).1);
+        // And the record that PAYS for what it commands, for contrast: the
+        // same spans into R, carried.
+        let placing = bincode::serialize(&M5Rec::ContentPlace {
+            doc: doc1(),
+            at: n(1),
+            runs: runs(64),
+        })
+        .expect("the record encodes")
+        .len();
+        assert!(
+            record_bytes * 10 < placing,
+            "a fork commands {r_spans} permanent R spans in {record_bytes} bytes; \
+             placing the same spans costs {placing}"
+        );
     }
 
     #[test]

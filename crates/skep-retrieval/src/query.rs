@@ -357,8 +357,12 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// level-class discipline anywhere); phase 2 narrows the tumbler-ordered
     /// candidate superset with `project(d, coverage)` non-emptiness — the
     /// present-tense soundness filter (FD-SOUND), which is what separates this
-    /// live answer from M5's `docs_ever_containing` (FD-HIST), the two
-    /// differing exactly by FD-GHOST's ghosts. Returns bare deduplicated
+    /// live answer from M5's `docs_ever_containing`. That superset is coarser
+    /// than FD-HIST's `finddocs_R` in two ways this filter removes together:
+    /// it keeps FD-GHOST's ghosts, which held the queried material at some
+    /// past boundary, and it keeps the merely ADJACENT candidates M5's
+    /// order-overlap test admits, whose recorded spans touch the coverage
+    /// without sharing a position. Returns bare deduplicated
     /// identities, tumbler-ordered — no positions, no counts (FD codomain;
     /// present-tense CONTAINERS, distinct from SHOWORIGIN's allocators).
     ///

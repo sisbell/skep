@@ -1,7 +1,8 @@
 //! §A — the `Run` value: one contiguous I-extent placed in an arrangement,
 //! the run's own position arithmetic ([`Run::addr_at`]/[`Run::addrs`]/
-//! [`Run::into_addrs`]/[`Run::reach`], [`Run::offsets_covered_by`]), and the
-//! ONE admissible Run→Span lift ([`Run::iextent`]).
+//! [`Run::into_addrs`]/[`Run::reach`], and [`Run::offsets_covered_by`] with
+//! the [`OffsetRange`] it answers in), and the ONE admissible Run→Span lift
+//! ([`Run::iextent`]).
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,48 @@ impl TryFrom<RunShadow> for Run {
     fn try_from(s: RunShadow) -> Result<Run, &'static str> {
         Run::new(s.i_start, s.width)
             .ok_or("run: width ≥ 1 and a full element-position i_start (doc·0·subspace·ordinal)")
+    }
+}
+
+/// A NONEMPTY half-open range `[lo, hi)` of one run's own offsets — the
+/// positions of that run which some span covers, within `[0, width]`. The
+/// answer [`Run::offsets_covered_by`] gives, given a name because it is one
+/// thing: the two bounds never travel apart, and the quantity the I→V read
+/// actually wants from them is [`width`](OffsetRange::width), which the range
+/// derives rather than its reader.
+///
+/// NONEMPTY IS THE INVARIANT, and it is why `width` is total: `lo < hi`
+/// always, "covers none" being `None` rather than an empty range. The fields
+/// are private to this module and [`Run::offsets_covered_by`] is the only
+/// producer, so no reader can forge a range the subtraction would underflow
+/// on — both of that method's branches establish the strict inequality, the
+/// intersect branch from `start < reach` on the intersection it found and the
+/// boundary-search branch from its explicit `k_lo < k_hi` test.
+///
+/// Named fields, not a tuple: both bounds are `Nat`, so a positional
+/// destructuring would put them back within swapping distance of each other —
+/// the reason [`VPos`](crate::VPos) and the span reader's `OrdinalVSpan`
+/// carry theirs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OffsetRange {
+    /// The first covered offset.
+    lo: Nat,
+    /// One past the last covered offset.
+    hi: Nat,
+}
+
+impl OffsetRange {
+    /// Where the covered range OPENS — the run offset whose V-position is the
+    /// first the covering span reaches.
+    pub(crate) fn lo(&self) -> &Nat {
+        &self.lo
+    }
+
+    /// HOW MANY of the run's positions the range covers, `hi − lo`. The count
+    /// a V-range is built from, derived here rather than at the read that
+    /// needs it, and ≥ 1 by the standing nonemptiness invariant.
+    pub(crate) fn width(&self) -> Nat {
+        &self.hi - &self.lo
     }
 }
 
@@ -250,9 +293,9 @@ impl Run {
             .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
     }
 
-    /// The half-open offset range `[k_lo, k_hi)` of this run's positions that
-    /// `span` covers, or `None` when it covers none — the I→V question asked
-    /// of the run that owns the arithmetic (§2 project).
+    /// The [`OffsetRange`] of this run's positions that `span` covers, or
+    /// `None` when it covers none — the I→V question asked of the run that
+    /// owns the arithmetic (§2 project).
     ///
     /// Two branches, one answer. A span that is level-uniform at the run's own
     /// endpoint length is intersected with M1 (`intersect`, both operands
@@ -263,7 +306,12 @@ impl Run {
     /// — takes the total membership boundary search: the run's addresses are
     /// contiguous and a span is order-convex, so the covered subset is one
     /// contiguous offset range. TOTAL either way.
-    pub(crate) fn offsets_covered_by(&self, span: &Span) -> Option<(Nat, Nat)> {
+    ///
+    /// THE SOLE PRODUCER of an `OffsetRange`, which is what makes that type's
+    /// nonemptiness structural: an intersection satisfies `start < reach`
+    /// (TS4), and the search branch tests `k_lo < k_hi` before answering at
+    /// all.
+    pub(crate) fn offsets_covered_by(&self, span: &Span) -> Option<OffsetRange> {
         let addr_len = self.i_start.tumbler().len();
         if span.is_level_uniform() && span.start().len() == addr_len {
             let sub = intersect(&self.iextent(), span)
@@ -275,11 +323,14 @@ impl Run {
             };
             let base = ordinal_of(self.i_start.tumbler());
             let reach = sub.reach();
-            Some((ordinal_of(sub.start()) - &base, ordinal_of(&reach) - &base))
+            Some(OffsetRange {
+                lo: ordinal_of(sub.start()) - &base,
+                hi: ordinal_of(&reach) - &base,
+            })
         } else {
             let k_lo = self.lower_bound(span.start());
             let k_hi = self.lower_bound(&span.reach());
-            (k_lo < k_hi).then_some((k_lo, k_hi))
+            (k_lo < k_hi).then_some(OffsetRange { lo: k_lo, hi: k_hi })
         }
     }
 
@@ -420,13 +471,25 @@ mod tests {
         // run's own half-open offset range.
         let r = Run::new(ca(2), n(3)).expect("valid run"); // ca(2), ca(3), ca(4)
         let inner = Run::new(ca(3), n(1)).expect("valid run").iextent();
-        assert_eq!(r.offsets_covered_by(&inner), Some((n(1), n(2))));
+        assert_eq!(
+            r.offsets_covered_by(&inner),
+            Some(OffsetRange { lo: n(1), hi: n(2) })
+        );
+        // The two quantities the I→V read takes off a range: where it opens,
+        // and how many of the run's positions it names — the second derived by
+        // the range, so `project` does not subtract the bounds itself.
+        let one = r.offsets_covered_by(&inner).expect("the cover is nonempty");
+        assert_eq!(one.lo(), &n(1));
+        assert_eq!(one.width(), n(1));
         let apart = Run::new(ca(9), n(1)).expect("valid run").iextent();
         assert_eq!(r.offsets_covered_by(&apart), None);
         // Cross-length fallback: doc1's content-base subtree covers every
         // length-8 ca(·)…
         let base = subtree_of(&t(&[1, 0, 1, 0, 1, 0, 1]));
-        assert_eq!(r.offsets_covered_by(&base), Some((n(0), n(3))));
+        assert_eq!(
+            r.offsets_covered_by(&base),
+            Some(OffsetRange { lo: n(0), hi: n(3) })
+        );
         // …and none of the fork's length-9 elements.
         let forked = Run::new(vca(1), n(2)).expect("valid run");
         assert_eq!(forked.offsets_covered_by(&base), None);
@@ -439,7 +502,10 @@ mod tests {
         let partial = Span::new(ca(3).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
         assert_eq!(partial.start().len(), r.i_start.tumbler().len());
         assert!(!partial.is_level_uniform());
-        assert_eq!(r.offsets_covered_by(&partial), Some((n(1), n(3))));
+        assert_eq!(
+            r.offsets_covered_by(&partial),
+            Some(OffsetRange { lo: n(1), hi: n(3) })
+        );
     }
 
     #[test]

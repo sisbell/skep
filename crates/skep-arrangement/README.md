@@ -1,6 +1,6 @@
 # skep-arrangement
 
-Arrangements and editing: the versioned V→I mapping that makes
+Arrangements and editing: the mutable V→I arrangement that makes
 skep documents editable over immutable content.
 
 Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substrate in the Project Xanadu lineage.
@@ -22,8 +22,9 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   recorded, not recomputable: an arrangement that no longer holds an
   address cannot tell you it once did, which is what makes deletions
   and "who has ever contained this" answerable at all.
-- **`resolve` / `project`** — V→I image and I→V occurrences, the
-  reads every query layer builds on.
+- **`resolve` / `project`** — the I-runs a V-region maps onto, and the
+  V-footprint an I-address cover leaves in a document; the reads every
+  query layer builds on.
 
 Rides the kernel for atomicity and recovery; consumes
 [skep-address](../skep-address) span algebra throughout.

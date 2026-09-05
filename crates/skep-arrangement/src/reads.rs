@@ -58,7 +58,7 @@ impl M5State {
 
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
     /// I-runs covering an ORDINAL-LEVEL depth-2 V-span (width `[0, n]`,
-    /// action point 2), V-ordered, clipped to the active range. The span's
+    /// action point 2), V-ordered, clipped to the arranged range. The span's
     /// subspace, ordinal and count come from the one reader that establishes
     /// it has them.
     ///
@@ -207,8 +207,10 @@ impl M5State {
     /// Per content run × coverage span: the run reports which of its offsets
     /// the span covers ([`Run::offsets_covered_by`], which owns both the
     /// same-level-class intersection and the cross-class boundary search),
-    /// and this method turns that offset range into a V-range by adding the
-    /// run's implicit V-start. Scan of the forward content map (Open decision
+    /// and this method turns that `OffsetRange` into a V-range by adding the
+    /// run's implicit V-start to where the range opens — the
+    /// range answering for how many positions it covers, so no reader
+    /// subtracts its bounds. Scan of the forward content map (Open decision
     /// #2 v1 default), so the cost is `#runs(doc) × |coverage|` — the
     /// product of two quantities this method does not bound. `#runs(doc)`
     /// grows with `doc`'s own edit and transclusion history; `|coverage|` is
@@ -223,16 +225,16 @@ impl M5State {
         // the empty one, which iterates no runs and answers ⟨⟩.
         for (v_start, run) in self.content_of(doc).iter_runs() {
             for cspan in coverage.iter() {
-                let Some((k_lo, k_hi)) = run.offsets_covered_by(cspan) else {
+                let Some(covered) = run.offsets_covered_by(cspan) else {
                     continue;
                 };
                 let at = VPos {
                     subspace: content_subspace(),
-                    ordinal: &v_start + &k_lo,
+                    ordinal: &v_start + covered.lo(),
                 };
                 vspans.push(
-                    ordinal_vspan(&at, &(&k_hi - &k_lo))
-                        .expect("a covered offset range is nonempty (k_lo < k_hi)"),
+                    ordinal_vspan(&at, &covered.width())
+                        .expect("an OffsetRange is nonempty, so its width is ≥ 1"),
                 );
             }
         }
@@ -276,19 +278,33 @@ impl M5State {
         out
     }
 
-    /// R⁻¹ candidate documents (§9; ASN-0124 FD-HIST, the ProvenanceQuery
-    /// `finddocs_R`; Conflicts #6) — the documents that have EVER contained an
-    /// address of `coverage`, which is what the provenance record can answer
-    /// and all it can answer. Distinct, in deterministic Tumbler order.
+    /// R⁻¹ candidate documents (§9; Conflicts #6) — every document with a
+    /// recorded span NOT `Separated` from a span of `coverage`, distinct and
+    /// in deterministic Tumbler order. A CANDIDATE SUPERSET of ASN-0124's
+    /// FD-HIST `finddocs_R` (the documents that have ever contained an address
+    /// of `coverage`), and not that set itself: `SpanRel::Adjacent` is
+    /// touching with the spans half-open, so an adjacent recorded span shares
+    /// no position with the coverage and its document need never have
+    /// contained an address of `coverage` at all.
     ///
-    /// HISTORY, NOT CONTAINMENT, and the two are different questions the
-    /// corpus keeps apart: present containment is `finddocs` (FD-FIND), whose
-    /// members each carry a live witness (FD-SOUND), and it is a SUBSET of
-    /// this answer (FD-SUPER). The difference is FD-GHOST's `ghosts` —
-    /// documents that held queried material at some past boundary and hold
-    /// none of it now — which is why a caller wanting present containment must
-    /// narrow, with `project(d, coverage) ≠ ⟨⟩` off the same snapshot
-    /// (M6's FINDDOCSCONTAINING).
+    /// WHY THE COARSE TEST. Membership is decided by M1's `classify_spans`,
+    /// which is total and length-gate-free, so a MIXED-LENGTH coverage — which
+    /// is what transclusion across heterogeneous-depth origins produces — is
+    /// answered without the level-class discipline. Exact ever-containment
+    /// would cost a per-class intersection of the whole relation against the
+    /// coverage, which this read declines; the narrowing below removes the
+    /// difference anyway.
+    ///
+    /// HISTORY, NOT CONTAINMENT, and the corpus keeps the two apart: present
+    /// containment is `finddocs` (FD-FIND), whose members each carry a live
+    /// witness (FD-SOUND), and it is a SUBSET of this answer (FD-SUPER). TWO
+    /// narrowings separate them — from order-overlap to genuine
+    /// ever-containment, and from ever to now, the second being FD-GHOST's
+    /// `ghosts`, documents that held queried material at some past boundary
+    /// and hold none of it now. A caller wanting present containment
+    /// discharges BOTH at once with `project(d, coverage) ≠ ⟨⟩` off the same
+    /// snapshot, which answers from the live arrangement and so admits neither
+    /// a ghost nor a merely adjacent candidate (M6's FINDDOCSCONTAINING).
     ///
     /// A SUPERSET with no false negatives: a document genuinely holding an
     /// address of `coverage` placed a span that overlaps it in the tumbler

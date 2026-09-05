@@ -542,7 +542,7 @@ fn documented_reject_codes() -> Vec<String> {
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 66] = [
+    let table: [(RejectCode, &str); 67] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -607,6 +607,7 @@ fn reject_code_names_are_pinned() {
         (RejectCode::MalformedSpan, "malformed_span"),
         (RejectCode::TooManyBlocks, "too_many_blocks"),
         (RejectCode::TooManyPairs, "too_many_pairs"),
+        (RejectCode::TooMuchCoverage, "too_much_coverage"),
         (RejectCode::NotALink, "not_a_link"),
         (RejectCode::BadRegion, "bad_region"),
     ];
@@ -644,9 +645,10 @@ fn reject_code_names_are_pinned() {
     const NOT_TABLE_ROWS: [&str; 3] = ["credential_refused", "detail", "permanent"];
     // Every other code the document lists must be pinned here. The reverse
     // is deliberately NOT asserted: `slot_too_large`, `too_many_runs` and
-    // COMPARE's two budget refusals (`too_many_blocks`, `too_many_pairs`)
-    // are names `code_name` can emit that wire.md v6.1 assigns no code to —
-    // a guarantee question, not a table error (see the boundary note).
+    // M6's three budget refusals (`too_many_blocks`, `too_many_pairs`,
+    // `too_much_coverage`) are names `code_name` can emit that wire.md v6.1
+    // assigns no code to — a guarantee question, not a table error (see the
+    // boundary note).
     let documented = documented_reject_codes();
     let pinned: std::collections::HashSet<&str> = table.iter().map(|&(_, n)| n).collect();
     for name in &documented {

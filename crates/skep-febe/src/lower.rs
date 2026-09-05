@@ -450,6 +450,10 @@ impl Lower for FindError {
                     ..FaultSite::default()
                 }),
             ),
+            // The coverage budget names the request's whole shape and no
+            // position in it, so it carries no site — `TooManyPairs`'s
+            // position exactly.
+            FindError::TooMuchCoverage => (RejectCode::TooMuchCoverage, None),
         }
     }
 }
@@ -830,6 +834,7 @@ mod tests {
             index: 0,
             fault: SpanFault::StartTooShallow,
         });
+        same_name(FindError::TooMuchCoverage);
 
         // ── M8 (discovery) ──
         same_name(QueryError::DocNotRegistered);

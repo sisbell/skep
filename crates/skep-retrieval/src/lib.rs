@@ -41,21 +41,29 @@
 //!
 //! ## What M6 refuses for size, and what it does not
 //!
-//! Six of the seven operations cost what their answer costs, or what the
+//! Five of the seven operations cost what their answer costs, or what the
 //! documents they name cost, and M6 bounds neither: capping request size,
 //! rate and concurrency for a route carrying a read is M10's, as the request
 //! lifecycle's owner, and each operation whose cost outruns its answer says so
-//! on its own card ([`Query::show_deletions`], [`Query::find_docs_containing`],
-//! [`Query::retrieve_v`]).
+//! on its own card ([`Query::show_deletions`], [`Query::retrieve_v`]).
 //!
-//! COMPARE is the exception, because its cost is SUPERLINEAR in its request:
-//! the join is `|P|·|Q|` over two block lists the caller sizes independently,
-//! so a byte cap on the request buys the square of what it bounds and no
-//! upstream gate can price it. It therefore carries its own two budgets —
+//! Two carry budgets of their own, each for a factor no upstream gate can
+//! price. COMPARE's cost is SUPERLINEAR in its request — the join is `|P|·|Q|`
+//! over two block lists the caller sizes independently, so a byte cap on the
+//! request buys the square of what it bounds — and it carries
 //! [`MAX_COMPARE_OPERAND_BLOCKS`] per operand and [`MAX_COMPARE_PAIRS`] per
-//! report, both published so a caller sizes a request against the number
-//! rather than transcribing it, and both refusals rather than truncations, so
-//! every request COMPARE answers is answered completely.
+//! report. FINDDOCSCONTAINING's request is the multiplier on two world-sized
+//! scans, and the request-to-coverage step EXPANDS: a region set nests two
+//! wire caps whose product only a body cap bounds, and one span over a
+//! fragmented document resolves to many coverage spans from a single wire
+//! element — so it carries [`MAX_FIND_COVERAGE_SPANS`].
+//!
+//! All three are published, so a caller sizes a request against the number
+//! rather than transcribing it, and all three are refusals rather than
+//! truncations, so every request either operation answers is answered
+//! completely. What no number here bounds is the WORLD's own size — `|R|`, a
+//! candidate's fragmentation, the provenance record behind a two-address
+//! SHOWDELETIONS — which stays with rate and concurrency, M10's.
 //!
 //! ## SHOWORIGIN's I-arity — de-scoped (ruling)
 //!
@@ -94,6 +102,7 @@ pub use error::{
     CompareError, DeletionsError, ExtentError, FindError, Operand, OriginError, RetrieveError,
     SpanFault,
 };
+pub use query::MAX_FIND_COVERAGE_SPANS;
 pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 
 /// `CorrPair`/`CompareReport` carry M5's `VPos`; re-exported so M10's

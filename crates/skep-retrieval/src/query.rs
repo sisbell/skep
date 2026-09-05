@@ -4,7 +4,7 @@
 //! primitives.
 
 use num_traits::{One, Zero};
-use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
+use skep_address::{document_of, ordinal, Address, Nat, Span, SpanSet};
 use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, M5State, Run, VPos};
 use skep_content::HasContent;
 
@@ -12,6 +12,33 @@ use crate::error::{DeletionsError, ExtentError, FindError, OriginError, Retrieve
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
 use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld};
+
+/// The most I-coverage spans one FINDDOCSCONTAINING request may resolve to,
+/// and so the ceiling on the multiplier the REQUEST applies to the two
+/// world-sized scans behind it.
+///
+/// The budget: `docs_ever_containing` joins this coverage against the whole of
+/// R, and `project` runs it against each candidate's runs, so the coverage is
+/// one side of a join exactly as a COMPARE operand is — and `2^12` is this
+/// module's existing answer for how large one side of a join may be. It is
+/// also M10's per-array wire cap, so a FLAT region set of 4096 single-run
+/// spans — the largest flat span list the transport admits for one region — is
+/// admitted unchanged.
+///
+/// What it refuses is the two shapes no wire cap prices, the same two
+/// [`MAX_COMPARE_OPERAND_BLOCKS`] names: the NESTED region×span product, whose
+/// cost model M10's codec leaves to M6, and the multi-run expansion, where one
+/// span over a fragmented document resolves to many coverage spans from a
+/// single wire element.
+///
+/// WHAT IT DOES NOT BOUND, and neither could any number here: `|R|` and
+/// `#runs(d)` are the WORLD's, not the request's, so they stay with rate and
+/// concurrency — M10's, exactly as [`Query::show_deletions`]' `|R↾d|` term
+/// already is. This bounds the coverage the request materializes, and the
+/// factor the request multiplies those scans by; it does not bound the scans.
+///
+/// [`MAX_COMPARE_OPERAND_BLOCKS`]: crate::MAX_COMPARE_OPERAND_BLOCKS
+pub const MAX_FIND_COVERAGE_SPANS: usize = 1 << 12;
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
 /// (ASN-0113 W2/W4: a count fixes an extent under sequential positions). The
@@ -506,28 +533,47 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// whatever its kind; within one region the registry check precedes the
     /// span gate. It also completes over the WHOLE request before any `image`
     /// is taken, so a rejected request costs `O(spans)` and nothing upstream,
-    /// and `(region, index)` promises that every region and span before the
-    /// named one is clean.
+    /// `(region, index)` promises that every region and span before the named
+    /// one is clean, and a SHAPE fault always outranks the size refusal below.
     ///
     /// Emptiness is tested with M1's `SpanSet::is_empty` — denotationally
     /// exact because no algebra result carries a zero-width member (zero
     /// members ⇔ empty denotation), the predicate the design's M1-seam ask
     /// named (landed in the built M1).
     ///
-    /// COST IS UNBOUNDED AND M6 DOES NOT BOUND IT, in three factors and not
-    /// one. `|coverage|` is the union of the region images, itself unbounded
-    /// in the spans a caller may name; the candidate scan is that coverage
-    /// against the whole of M5's R⁻¹ index; and the filter is one `project`
-    /// per candidate, each itself `#runs(d) · |coverage|` in the CANDIDATE's
-    /// own fragmentation — a factor the request never names and M6 never sees.
-    /// So the work is `|candidates| · #runs(d) · |coverage|`.
+    /// COST, IN THREE FACTORS OF WHICH ONE IS THE REQUEST'S. The work is
+    /// `|candidates| · #runs(d) · |coverage|`: the coverage is the union of
+    /// the region images; the candidate scan runs that coverage against the
+    /// whole of M5's R⁻¹ index; and the filter is one `project` per candidate,
+    /// each itself `#runs(d) · |coverage|` in the CANDIDATE's own
+    /// fragmentation — a factor the request never names and M6 never sees.
+    /// Each `project` is a cost in HEAP as well as in steps: it materializes
+    /// and sorts one span per overlapping (run, cover) pair before M6 reads
+    /// one bit off it, so the peak transient of the filter is that product in
+    /// live heap and the operation asks for a whole footprint where it needs
+    /// only its non-emptiness.
     ///
-    /// It is LINEAR in the request, unlike COMPARE's join, which is why a
-    /// request-size cap would bound it proportionally and no budget is taken
-    /// here. That cap is unassigned rather than delegated: M6 hands request
-    /// size, rate and concurrency to M10 as the request lifecycle's owner, and
-    /// M10's codec records that the cost model of a REGION SET is M6's rather
-    /// than its own. One of the two must take the number.
+    /// Only `|coverage|` is the request's, and it is capped at
+    /// [`MAX_FIND_COVERAGE_SPANS`] (`TooMuchCoverage`, refused AS THE COVERAGE
+    /// IS PRODUCED, so an over-budget request stops resolving rather than
+    /// resolving whole and then being measured). That is a REFUSAL, never a
+    /// truncation: a request past the budget gets a typed rejection and no
+    /// answer, so FD-COMPLETE holds verbatim for every request this operation
+    /// answers — a truncated coverage would silently drop containers, which is
+    /// the hazard the operation names. A caller wanting more splits the
+    /// request.
+    ///
+    /// THE BUDGET'S GRANULARITY IS A SPAN, as COMPARE's operand budget's is:
+    /// the walk stops at the first span whose image carries the accumulator
+    /// past the budget, so what the budget bounds is the coverage the request
+    /// materializes and the factor it multiplies the two scans by. Within one
+    /// span it bounds nothing — `image` resolves that span whole, at a size
+    /// that is the DOCUMENT's fragmentation rather than the request's shape,
+    /// and M5 keeps the lazy form crate-private.
+    ///
+    /// `|R|` and `#runs(d)` are the WORLD's and no number here reaches them:
+    /// they stay with request rate and concurrency, which are M10's as the
+    /// request lifecycle's owner.
     pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -545,14 +591,27 @@ impl<W: RetrievalWorld> Query<'_, W> {
                 })?;
             }
         }
-        // Phase 1: resolve to content I-coverage. Raw mixed-length cover;
-        // union is concatenation.
-        let mut coverage = SpanSet::empty();
+        // Phase 1: resolve to content I-coverage. Raw mixed-length cover, and
+        // the union of the region images IS their concatenation, so the
+        // images are gathered in submitted order and the cover is built from
+        // them once. Gathering rather than re-unioning is what keeps the walk
+        // LINEAR in the coverage: `union` answers with a fresh set, so an
+        // accumulator threaded through it copies the cover built so far at
+        // every span, and the budget below would then bound a quantity that
+        // costs its own square to produce.
+        let mut spans: Vec<Span> = Vec::new();
         for r in regions {
             for span in &r.spans {
-                coverage = union(&coverage, &m5.image(&r.doc, span));
+                spans.extend(m5.image(&r.doc, span));
+                // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
+                // `>` and not `==`, because one span's image adds many spans
+                // at once.
+                if spans.len() > MAX_FIND_COVERAGE_SPANS {
+                    return Err(FindError::TooMuchCoverage);
+                }
             }
         }
+        let coverage: SpanSet = spans.into_iter().collect(); // collect AS GIVEN
         // Phase 2: the historical superset (tumbler-ordered, level-classes
         // handled inside M5), narrowed by the present-tense filter — one
         // `project` per candidate.

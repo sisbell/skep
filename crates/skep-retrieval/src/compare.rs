@@ -307,7 +307,7 @@ fn resolve_blocks<'a>(m5: &M5State, regions: &'a [RegionSpec]) -> Option<Vec<Blo
                 continue;
             };
             for run in m5.resolve(&r.doc, span) {
-                if out.len() == MAX_COMPARE_OPERAND_BLOCKS {
+                if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
                     return None; // the operand's budget, refused as produced
                 }
                 debug_assert!(
@@ -387,13 +387,17 @@ fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
 /// past it is refused AS THE PAIRS ARE PRODUCED. That budget is on the REPORT,
 /// not on the join's shape: a sweep changes how many candidate pairs are
 /// TESTED and not how many are EMITTED, so the same cap stands whichever join
-/// ships, and it is the only one that sees a fan-out.
+/// ships, and it is the only one that sees a fan-out. The guard is written
+/// `>=` for that reason and not as an equality on the accumulator: a sweep or
+/// an interval tree emits one event point's pairs TOGETHER, so a cap that can
+/// only see the counter land exactly on the budget is a cap the successor join
+/// steps over.
 fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Option<Vec<CorrPair>> {
     let mut out = Vec::new();
     for pb in p {
         for qb in q {
             if let Some(c) = overlap_pair(pb, qb) {
-                if out.len() == MAX_COMPARE_PAIRS {
+                if out.len() >= MAX_COMPARE_PAIRS {
                     return None; // the report's budget, refused as produced
                 }
                 out.push(c);

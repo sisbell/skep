@@ -166,6 +166,10 @@ pub enum CompareError {
 /// registered and every region span well-formed; a malformed span is a typed
 /// rejection, never a silent under-resolution that drops containers
 /// (FD-COMPLETE).
+///
+/// The last is the budget refusal, and the only rejection here that names no
+/// defect in the request's SHAPE — only its size. It names the budget it
+/// passed, so a client learns what to narrow.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum FindError {
     DocNotRegistered(Address),
@@ -174,6 +178,14 @@ pub enum FindError {
         index: usize,
         fault: SpanFault,
     },
+    /// The request resolves to more than [`MAX_FIND_COVERAGE_SPANS`] coverage
+    /// spans — the one factor of this operation's cost that the request owns,
+    /// and the multiplier it applies to two world-sized scans. Refused BEFORE
+    /// the candidate scan runs; a refusal, never a truncation, so FD-COMPLETE
+    /// holds verbatim for every request answered.
+    ///
+    /// [`MAX_FIND_COVERAGE_SPANS`]: crate::MAX_FIND_COVERAGE_SPANS
+    TooMuchCoverage,
 }
 
 impl fmt::Display for SpanFault {
@@ -308,6 +320,12 @@ impl fmt::Display for FindError {
             } => write!(
                 f,
                 "find_docs_containing: region {region} span {index} is malformed: {fault}"
+            ),
+            FindError::TooMuchCoverage => write!(
+                f,
+                "find_docs_containing: the request resolves past the {}-span coverage budget \
+                 (MAX_FIND_COVERAGE_SPANS); narrow its spans or split the request",
+                crate::MAX_FIND_COVERAGE_SPANS
             ),
         }
     }

@@ -176,9 +176,10 @@ pub enum RejectCode {
     IllFormedSuccessor,
     DcViolation,
     // ── M6 content/provenance read (MalformedSpan also covers
-    //    RetrieveError::MalformedSpec; the last two are COMPARE's own budget
-    //    refusals, its join being the one read whose cost squares in the
-    //    request) ──
+    //    RetrieveError::MalformedSpec; the last three are M6's own budget
+    //    refusals — two for COMPARE, whose join squares in the request, and
+    //    one for FINDDOCSCONTAINING, whose coverage is the multiplier it
+    //    applies to two world-sized scans) ──
     NoSuchSubspace,
     EmptySubspace,
     DepthIncompatible,
@@ -186,6 +187,7 @@ pub enum RejectCode {
     MalformedSpan,
     TooManyBlocks,
     TooManyPairs,
+    TooMuchCoverage,
     // ── M8 link discovery read ──
     NotALink,
     BadRegion,
@@ -560,6 +562,7 @@ mod tests {
             | RejectCode::MalformedSpan
             | RejectCode::TooManyBlocks
             | RejectCode::TooManyPairs
+            | RejectCode::TooMuchCoverage
             | RejectCode::NotALink
             | RejectCode::BadRegion => Disposition::Permanent,
         }
@@ -568,7 +571,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 66] = [
+    const ALL_CODES: [RejectCode; 67] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -633,6 +636,7 @@ mod tests {
         RejectCode::MalformedSpan,
         RejectCode::TooManyBlocks,
         RejectCode::TooManyPairs,
+        RejectCode::TooMuchCoverage,
         RejectCode::NotALink,
         RejectCode::BadRegion,
     ];

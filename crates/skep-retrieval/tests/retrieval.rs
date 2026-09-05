@@ -49,7 +49,7 @@ use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
     CompareError, CompareReport, CorrPair, Deletions, DeletionsError, Delivery, DeliveryItem,
     ExtentError, FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault,
-    Spec, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS,
+    Spec, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS, MAX_FIND_COVERAGE_SPANS,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -2092,6 +2092,58 @@ fn find_docs_containing_rejects_unregistered_and_malformed_regions() {
     assert_eq!(
         ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 1)])])),
         Vec::<Address>::new()
+    );
+}
+
+#[test]
+fn find_docs_containing_refuses_a_request_past_its_coverage_budget() {
+    // The coverage is one side of a join against the WHOLE of R, and it is the
+    // request's only factor in it — capped by nothing upstream, since a region
+    // set nests two wire caps whose product only a body cap bounds. The
+    // refusal is WHOLE: a truncated coverage would drop containers, which is
+    // exactly FD-COMPLETE's hazard.
+    let k = mem_kernel();
+    insert3(&k); // doc1 is ONE run, so one span ⇒ one coverage span
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let spans = |count: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); count])];
+    // At the budget the same shape still answers, and answers completely.
+    assert_eq!(
+        ok_of(q.find_docs_containing(&spans(MAX_FIND_COVERAGE_SPANS))),
+        vec![doc1()]
+    );
+    // One span past it is refused, and the refusal names its own budget, as
+    // COMPARE's two do, so a client narrows against the number rather than
+    // guessing it.
+    let e = err_of(q.find_docs_containing(&spans(MAX_FIND_COVERAGE_SPANS + 1)));
+    assert_eq!(e, FindError::TooMuchCoverage);
+    assert!(e.to_string().contains(&MAX_FIND_COVERAGE_SPANS.to_string()));
+}
+
+#[test]
+fn find_docs_containing_counts_coverage_spans_and_not_request_spans() {
+    // The budget's own card: beyond M10's per-array wire cap it refuses "the
+    // multi-run expansion, where one span over a fragmented document resolves
+    // to many coverage spans from a single wire element". doc2 resolves to
+    // THREE runs, so the two requests below are `MAX/3` and `MAX/3 + 1` SPANS
+    // — both far under any wire cap — and `MAX - (MAX mod 3)` and three more
+    // COVERAGE spans, which is the only unit that explains one being answered
+    // and the other refused.
+    let k = mem_kernel();
+    three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1] — three runs
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let spans = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
+    let under = MAX_FIND_COVERAGE_SPANS / 3;
+    // The admitted request answers completely — both containers, not merely
+    // "not refused".
+    assert_eq!(
+        ok_of(q.find_docs_containing(&spans(under))),
+        vec![doc1(), doc2()]
+    );
+    assert_eq!(
+        err_of(q.find_docs_containing(&spans(under + 1))),
+        FindError::TooMuchCoverage
     );
 }
 

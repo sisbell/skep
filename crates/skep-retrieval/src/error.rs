@@ -98,7 +98,8 @@ pub enum OriginError {
     /// WF_V(iii): a real subspace (s_C or s_L) with no occupied positions.
     EmptySubspace,
     /// WF_V(v): span depth ≠ the subspace common depth `m_S ≡ 2`
-    /// (`#start ≥ 3`).
+    /// (`#start ≥ 3`) — decided by M5's `is_ordinal_vspan`, the shape its
+    /// `resolve` serves.
     DepthIncompatible,
     /// WF_V(vi): a depth-2 span naming positions not all currently bound.
     RangeNotPresent,

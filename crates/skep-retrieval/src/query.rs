@@ -5,7 +5,7 @@
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
-use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
+use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, M5State, Run, VPos};
 use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
@@ -309,9 +309,12 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// FIRST condition that holds is the one reported. A document that is not
     /// registered (WF_V i), a malformed span (ii/iv), a foreign subspace
     /// (`NoSuchSubspace`) or empty real subspace (`EmptySubspace`, iii), a
-    /// depth-incompatible `#start ≥ 3` span (`DepthIncompatible`, WF_V v — its
-    /// own check, kept distinct from the range case so a client can tell
-    /// "wrong depth" from "unbound positions"), and a depth-2 span overrunning
+    /// depth-incompatible `#start ≥ 3` span (`DepthIncompatible`, WF_V v —
+    /// decided by M5's `is_ordinal_vspan`, the recognizer its `resolve` folds
+    /// every span through, so the span this refuses and the span `resolve`
+    /// would silently empty are one span; kept distinct from the range case so
+    /// a client can tell "wrong depth" from "unbound positions"), and a
+    /// depth-2 span overrunning
     /// the bound prefix (`RangeNotPresent`, WF_V vi — the depth-agnostic
     /// `resolved_width < ordinal(width)` test). So a malformed span in a
     /// foreign subspace is `MalformedSpan`, and a deep span over an empty
@@ -334,8 +337,16 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         if n_s.is_zero() {
             return Err(OriginError::EmptySubspace); // (iii)
         }
-        if span.start().len() != 2 {
-            return Err(OriginError::DepthIncompatible); // (v): depth must equal m_S ≡ 2
+        if !is_ordinal_vspan(span) {
+            // (v): depth must equal the subspace common depth m_S ≡ 2, asked
+            // as "the shape `resolve` serves" — so this refusal and
+            // `resolve`'s silent ⟨⟩ can never name different spans. After
+            // `gate_vspan` the only clause of M5's shape still open IS the
+            // depth one: level-uniformity ties `#width` to `#start`, and
+            // ordinal-level puts the width's only nonzero component last, so
+            // `#start == 2` gives `width = [0, n≥1]` and every other gated
+            // span fails on depth alone.
+            return Err(OriginError::DepthIncompatible);
         }
         // Span now depth-2 (≥ 3 rejected above); resolve may still be partial
         // if the span overruns the bound prefix.

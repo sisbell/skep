@@ -19,9 +19,11 @@ use num_traits::CheckedSub;
 use skep_address::{ordinal, Address, Nat, Tumbler};
 use skep_arrangement::{M5State, Run, VPos};
 
+use skep_namespace::M3State;
+
 use crate::error::{CompareError, Operand};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
-use crate::vspan::{gate_vspan, span_subspace, Subspace};
+use crate::vspan::{gate_vspan, span_subspace, span_vpos, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and so the ceiling on
@@ -40,16 +42,19 @@ use crate::{Query, RetrievalWorld};
 /// resolves to many blocks from a single wire element.
 pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 
-/// The most correspondences one COMPARE may report, and so the ceiling on
-/// what one query makes M6 hold live.
+/// The most correspondences one COMPARE may report, and so the ceiling on what
+/// the REPORT makes M6 hold live.
 ///
 /// The budget: a [`CorrPair`] is two `Address`es, two `VPos`es and a `Nat` —
 /// order a kilobyte of live heap once the `BigUint` digit vectors are counted
 /// — and the presentation holds a four-component sort key beside each, so peak
-/// is order two kilobytes per reported pair. `2^16` is therefore
-/// order 128 MiB of transient heap, the ceiling one query may command; it is
-/// also M5's `MAX_PLACED_RUNS`, the substrate's existing answer to how many
-/// runs one operation may materialize.
+/// is order two kilobytes per reported pair. `2^16` is therefore order 128 MiB
+/// of report; it is also M5's `MAX_PLACED_RUNS`, the substrate's existing
+/// answer to how many runs one operation may materialize.
+///
+/// It is not a ceiling on the whole query's heap, and neither budget is: one
+/// span over a fragmented document materializes that document's entire
+/// resolution before a block is counted (see [`resolve_blocks`]).
 ///
 /// [`MAX_COMPARE_OPERAND_BLOCKS`] cannot stand in for it: two operands at that
 /// budget whose spans all name ONE shared position report the SQUARE of it in
@@ -69,11 +74,11 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// pair is confined to those two regions (X12 R1), and a span that clips
     /// to nothing contributes to neither.
     ///
-    /// Gate, per operand so a span fault carries an unambiguous
-    /// `(operand, region, span-index)`: each spec's doc registered; each span
-    /// starting in the content subspace (`NotContentSubspace` — the residence
-    /// check runs BEFORE the well-formedness gate) and well-formed
-    /// (`MalformedSpan`). A well-formed depth-incompatible span passes and
+    /// Gate, per operand ([`gate_spec_set`]): each spec's doc registered, each
+    /// span content-subspace-started (`NotContentSubspace`) and well-formed
+    /// (`MalformedSpan`), every span fault located by an unambiguous
+    /// `(operand, region, span-index)`. A well-formed depth-incompatible span
+    /// passes and
     /// contributes nothing to its region (consulting-state — success, X12);
     /// overlapping/repeated windows within one operand are redundant, not
     /// wrong (⟦Γ⟧ is a set-union; duplicates collapse denotationally and the
@@ -108,32 +113,9 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     ) -> Result<CompareReport, CompareError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
-        for (operand, regions) in [(Operand::First, rho1), (Operand::Second, rho2)] {
-            for (ri, r) in regions.iter().enumerate() {
-                if !m3.is_registered_document(&r.doc) {
-                    return Err(CompareError::DocNotRegistered(r.doc.clone()));
-                }
-                for (si, span) in r.spans.iter().enumerate() {
-                    if span_subspace(span) != Some(Subspace::Content) {
-                        // Start must lie in the content subspace (Open build
-                        // decision: reject loudly, the recommended default —
-                        // spans that merely DENOTE link positions from a
-                        // content start are always legal; resolve clips them).
-                        return Err(CompareError::NotContentSubspace {
-                            operand,
-                            region: ri,
-                            index: si,
-                        });
-                    }
-                    gate_vspan(span).map_err(|f| CompareError::MalformedSpan {
-                        operand,
-                        region: ri,
-                        index: si,
-                        fault: f,
-                    })?;
-                }
-            }
-        }
+        // BOTH operands whole, before either resolves.
+        gate_spec_set(m3, Operand::First, rho1)?;
+        gate_spec_set(m3, Operand::Second, rho2)?;
         // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — reads ONLY M5, each operand
         // within its own block budget.
         let p = resolve_blocks(m5, rho1).ok_or(CompareError::TooManyBlocks {
@@ -146,6 +128,49 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         let pairs = interval_join(&p, &q).ok_or(CompareError::TooManyPairs)?;
         Ok(CompareReport(deterministic_presentation(pairs))) // R1–R3 (X12)
     }
+}
+
+/// One operand's admissibility: every region's doc registered, every span
+/// content-subspace-started and well-formed, faults located by
+/// `(operand, region, span-index)`.
+///
+/// Walks the regions and their spans in SUBMITTED ORDER and returns at the
+/// first fault whatever its kind, which is what makes the triple locate
+/// anything: it names a position everything before which is clean. Per span
+/// the residence check runs BEFORE [`gate_vspan`] — a link-started span that
+/// is also malformed reports `NotContentSubspace` — because a request naming
+/// the wrong subspace is a different request, not a misshapen one.
+///
+/// Content residence is COMPARE's own clause (ASN-0122 spec-sets are
+/// content-subspace), rejected loudly rather than resolved to nothing: a span
+/// that merely DENOTES link positions from a content start is always legal,
+/// and `resolve` clips it.
+fn gate_spec_set(
+    m3: &M3State,
+    operand: Operand,
+    regions: &[RegionSpec],
+) -> Result<(), CompareError> {
+    for (region, r) in regions.iter().enumerate() {
+        if !m3.is_registered_document(&r.doc) {
+            return Err(CompareError::DocNotRegistered(r.doc.clone()));
+        }
+        for (index, span) in r.spans.iter().enumerate() {
+            if span_subspace(span) != Some(Subspace::Content) {
+                return Err(CompareError::NotContentSubspace {
+                    operand,
+                    region,
+                    index,
+                });
+            }
+            gate_vspan(span).map_err(|fault| CompareError::MalformedSpan {
+                operand,
+                region,
+                index,
+                fault,
+            })?;
+        }
+    }
+    Ok(())
 }
 
 /// Transient per-query working row for COMPARE: built by [`resolve_blocks`],
@@ -216,26 +241,40 @@ impl Block {
 /// BLOCKS ARE PRODUCED, so an over-budget operand stops resolving rather than
 /// resolving whole and then being measured.
 ///
-/// V-RECONSTRUCTION LEMMA (load-bearing for X12-R1 soundness, correct ONLY
-/// under D-SEQ★): a content subspace's occupied positions are the dense
-/// prefix `{[s_C, k] : 1 ≤ k ≤ n_C}`, so the FIRST bound V-position of a
-/// content span IS `span.start()` — a start beyond the prefix binds nothing
-/// at all, rather than skipping forward to a later occupied position — and
-/// `resolve`'s runs tile the bound prefix CONTIGUOUSLY in V. Hence the
-/// V-cursor starts at `span.start()` and advances by each run's width: there
-/// are no V-gaps to skip. The lemma is asserted on EVERY run — firing per run
-/// (not first-run-only) localizes a future M5 regression to the EXACT
-/// mis-aligning run instead of letting a mid-document V-gap slip past a
-/// first-run check and silently mis-set a later block's `v_start`.
+/// THE BUDGET'S GRANULARITY IS A SPAN. The walk stops at the first span whose
+/// runs carry the accumulator past the budget, so what the budget bounds is
+/// the block LIST — the join's factor, which is what it is priced on. Within
+/// one span it bounds nothing: `resolve` hands back the whole of that span's
+/// resolution, whose size is the DOCUMENT's fragmentation rather than the
+/// request's shape, and M5 keeps the lazy form crate-private. So one span over
+/// a heavily fragmented document builds every run of its resolution before the
+/// count is consulted, and that transient is sized by neither budget here.
+///
+/// V-RECONSTRUCTION (load-bearing for X12-R1 soundness): `resolve` PROMISES
+/// that its runs tile V contiguously from the first run's `max(ordinal, 1)`,
+/// each next run beginning where the previous one ends — which is precisely
+/// what lets a caller recover every run's V-start by accumulating widths from
+/// the span's own ordinal, with no V-gaps to skip and no second question
+/// asked. That promise rests on D-SEQ★ (ASN-0047), a subspace's arranged
+/// positions being its dense prefix, and D-SEQ★ is what the per-run assertion
+/// tripwires. Asserting on EVERY run (not first-run-only) localizes a future
+/// M5 regression to the EXACT mis-aligning run instead of letting a
+/// mid-document V-gap slip past a first-run check and silently mis-set a later
+/// block's `v_start`.
 ///
 /// REQUIRES GATED SPECS: every span content-subspace-started and
 /// `gate_vspan`-clean, which [`Query::compare`]'s gate establishes before it
-/// calls. Two things ride on that gate. The lemma above is the CONTENT
-/// subspace's — D-SEQ★ holds per subspace, and a link-started span would read
-/// a V-cursor against a prefix the lemma says nothing about. And `#start ≥ 2`
-/// puts both `[subspace, ordinal]` components at every start, so the let-else
-/// is the total form of a fact the caller has already settled, not a case
-/// that arises.
+/// calls. Three clauses of that gate ride here. The ZERO-FREE start puts
+/// `ordinal ≥ 1` at every span, so the cursor M6 opens at `span.start()`'s
+/// ordinal IS `resolve`'s `max(ordinal, 1)` and M6 carries no clamp of its own
+/// — relax zero-freedom and every foot of every correspondence from an
+/// ordinal-0 span is off by one, with the assertion below the only thing that
+/// would say so, and only in debug. `#start ≥ 2` puts both components at every
+/// start, which is the condition [`span_vpos`] hands back `None` on and
+/// therefore the one the let-else stands in for. And the CONTENT-subspace
+/// start is ASN-0122's own restriction on
+/// what a spec-set may name — the regions this builds are content regions
+/// because the gate admits nothing else.
 ///
 /// A depth-incompatible (`#start ≥ 3`) span reads its cursor here like any
 /// other and still contributes no blocks — `resolve`'s own shape reader
@@ -245,12 +284,8 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
-            let (Some(sub), Some(ord)) = (span.start().get(1), span.start().get(2)) else {
+            let Some(mut v) = span_vpos(span) else {
                 continue;
-            };
-            let mut v = VPos {
-                subspace: sub.clone(),
-                ordinal: ord.clone(),
             };
             for run in m5.resolve(&r.doc, span) {
                 if out.len() == MAX_COMPARE_OPERAND_BLOCKS {
@@ -371,6 +406,10 @@ fn corr_key(c: &CorrPair) -> (Address, Tumbler, Address, Tumbler) {
     )
 }
 
+/// A foot as the `[subspace, ordinal]` tumbler its layout denotes — the
+/// writing direction of the layout [`span_vpos`] reads, kept beside the
+/// presentation because giving the sort an `Ord` carrier is the whole of what
+/// it is for.
 fn vpos_tumbler(v: &VPos) -> Tumbler {
     Tumbler::new([v.subspace.clone(), v.ordinal.clone()])
         .expect("a two-component sequence is nonempty")

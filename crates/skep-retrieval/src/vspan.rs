@@ -4,6 +4,7 @@
 use std::sync::LazyLock;
 
 use skep_address::{action_point, content_subspace, link_subspace, zeros, Nat, Span};
+use skep_arrangement::VPos;
 
 use crate::error::SpanFault;
 
@@ -62,6 +63,23 @@ pub(crate) fn span_subspace(span: &Span) -> Option<Subspace> {
     )
 }
 
+/// The V-position a span's start names — its first two components read as the
+/// `[subspace, ordinal]` layout of a depth-2 V-position (ASN-0036 S8-depth),
+/// which is where M6 states that layout and [`Subspace`] states half of it.
+///
+/// `None` iff the start carries fewer than two components, which
+/// [`gate_vspan`]'s `#start ≥ 2` has already excluded for every gated span —
+/// so a caller downstream of the gate is reading the total form of a settled
+/// fact, not handling a case that arises. A deeper start reads its first two
+/// components like any other: whether the position it names is one the
+/// arrangement binds is M5's question, asked by `resolve`.
+pub(crate) fn span_vpos(span: &Span) -> Option<VPos> {
+    Some(VPos {
+        subspace: span.start().get(1)?.clone(),
+        ordinal: span.start().get(2)?.clone(),
+    })
+}
+
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,
 /// ordinal-level, level-uniform, depth `#start ≥ 2`. A V-spec is the pair
 /// `ρ = (d, σ)`, so the other half — that `d` is a registered document — is
@@ -99,6 +117,7 @@ mod tests {
     use super::*;
     use num_traits::Zero;
     use skep_address::Tumbler;
+    use skep_arrangement::is_ordinal_vspan;
 
     fn t(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
@@ -160,6 +179,62 @@ mod tests {
             gate_vspan(&span(&[5], &[1])),
             Err(SpanFault::StartTooShallow)
         );
+    }
+
+    #[test]
+    fn a_gated_span_has_m5s_shape_exactly_when_its_start_is_depth_2() {
+        // What lets SHOWORIGIN_V put WF_V(v) to M5's `is_ordinal_vspan`
+        // instead of measuring the start itself: after this gate, DEPTH is the
+        // only clause of M5's shape still open. Level-uniformity ties #width
+        // to #start and ordinal-level puts the width's one nonzero component
+        // last, so a gated depth-2 span IS `[s, o] × [0, n≥1]`, and every
+        // deeper gated span fails M5's shape on depth alone.
+        for (start, width) in [
+            (&[1u32, 1][..], &[0u32, 3][..]),
+            (&[2, 4], &[0, 1]),
+            (&[3, 1], &[0, 1]), // a foreign subspace is still this SHAPE
+        ] {
+            let s = span(start, width);
+            assert!(gate_vspan(&s).is_ok());
+            assert!(is_ordinal_vspan(&s), "gated depth-2 ⇒ M5 serves it");
+        }
+        for (start, width) in [
+            (&[1u32, 1, 1][..], &[0u32, 0, 1][..]),
+            (&[1, 1, 1, 1], &[0, 0, 0, 2]),
+        ] {
+            let s = span(start, width);
+            assert!(gate_vspan(&s).is_ok(), "deeper spans are WELL-FORMED");
+            assert!(!is_ordinal_vspan(&s), "…and M5 declines them, on depth");
+        }
+    }
+
+    #[test]
+    fn span_vpos_reads_the_two_components_a_gated_start_carries() {
+        // The depth-2 layout is read HERE and written back by COMPARE's sort
+        // key, so the two directions name each other rather than each
+        // extracting components on their own.
+        assert_eq!(
+            span_vpos(&span(&[1, 7], &[0, 3])),
+            Some(VPos {
+                subspace: Nat::from(1u32),
+                ordinal: Nat::from(7u32),
+            })
+        );
+        // A deeper start reads its FIRST TWO components like any other — what
+        // the position it names resolves to is M5's question.
+        assert_eq!(
+            span_vpos(&span(&[2, 4, 9], &[0, 0, 1])),
+            Some(VPos {
+                subspace: Nat::from(2u32),
+                ordinal: Nat::from(4u32),
+            })
+        );
+        // The one `None`, and the gate has already refused it
+        // (`StartTooShallow`), which is why its callers may treat the read as
+        // total.
+        let shallow = span(&[5], &[1]);
+        assert_eq!(span_vpos(&shallow), None);
+        assert_eq!(gate_vspan(&shallow), Err(SpanFault::StartTooShallow));
     }
 
     #[test]

@@ -30,7 +30,10 @@ skep-namespace = { path = "../skep-namespace" }
 skep-content = { path = "../skep-content" }
 # M5 — the workhorse: resolve/point/counts/runs/image/project/
 # docs_ever_containing/deletions; Run, which answers for its own positions; and
-# VPos (re-exported through M6's surface).
+# VPos (re-exported through M6's surface). Both halves of the ordinal-vspan
+# shape come from here too — ordinal_vspan builds the extents M6 reports and
+# is_ordinal_vspan judges the spans M6 is asked about — so the extent and the
+# refusal are two readings of one definition.
 skep-arrangement = { path = "../skep-arrangement" }
 
 [dev-dependencies]

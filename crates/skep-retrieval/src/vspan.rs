@@ -13,13 +13,17 @@ use crate::error::SpanFault;
 // `Nat = BigUint` cannot be `const` and a bare call would re-allocate a fresh
 // `BigUint` on every reference. [`subspace_of`] only COMPARES against them —
 // by reference, with no allocation — while the O(1)-per-query construction
-// sites clone.
+// sites clone through [`Subspace::numeral`].
+//
+// Private, which is the point of [`Subspace`] carrying both directions: no
+// file but this one names a raw subspace numeral, so a numeral cannot be
+// handed to a function expecting a count.
 
 /// `s_C` = M1's content-subspace numeral (ASN-0047; T7 convention).
-pub(crate) static S_C: LazyLock<Nat> = LazyLock::new(content_subspace);
+static S_C: LazyLock<Nat> = LazyLock::new(content_subspace);
 
 /// `s_L` = M1's link-subspace numeral (ASN-0047; T7 convention).
-pub(crate) static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
+static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 
 /// Which of a document's two subspaces (T7; ASN-0047) a numeral names, or
 /// `None` for a foreign one. `Nat` cannot appear in a pattern, so this is the
@@ -33,6 +37,23 @@ pub(crate) static S_L: LazyLock<Nat> = LazyLock::new(link_subspace);
 pub(crate) enum Subspace {
     Content,
     Link,
+}
+
+impl Subspace {
+    /// The numeral M1 names this subspace by (T7) — the writing direction of
+    /// [`subspace_of`], which reads one. The two sit together for the reason
+    /// M5 keeps `ordinal_vspan` beside `is_ordinal_vspan`: a classification
+    /// and the value it stands for are one definition read two ways, and they
+    /// cannot come apart if neither is spelled anywhere else.
+    ///
+    /// Borrowed from the memoized static, so a caller that must own one
+    /// clones at the O(1)-per-query site rather than on every comparison.
+    pub(crate) fn numeral(self) -> &'static Nat {
+        match self {
+            Subspace::Content => &S_C,
+            Subspace::Link => &S_L,
+        }
+    }
 }
 
 /// Classify a start subspace numeral (see [`Subspace`]).
@@ -128,11 +149,17 @@ mod tests {
     }
 
     #[test]
-    fn the_subspace_numerals_are_m1s() {
+    fn the_subspace_numerals_are_m1s_and_the_two_directions_round_trip() {
         // M1 owns T7, so the numeral that decides content-from-link is read
         // from M1 and memoized here, never restated.
-        assert_eq!(*S_C, content_subspace());
-        assert_eq!(*S_L, link_subspace());
+        assert_eq!(*Subspace::Content.numeral(), content_subspace());
+        assert_eq!(*Subspace::Link.numeral(), link_subspace());
+        // Writing a subspace and reading it back is the identity, which is
+        // what makes `numeral` and `subspace_of` one definition rather than
+        // two that happen to agree.
+        for s in [Subspace::Content, Subspace::Link] {
+            assert_eq!(subspace_of(s.numeral()), Some(s));
+        }
     }
 
     #[test]

@@ -15,9 +15,21 @@
 //! neither clause applies to it: which of its four a malformed span reports is
 //! `gate_vspan`'s to fix, and that order is stated and tested there.
 //!
-//! Derive policy: all six operation enums derive `Clone + Debug + PartialEq +
-//! Eq + Serialize`; the payload-free [`SpanFault`]/[`Operand`] additionally
-//! derive `Copy`. `DocNotRegistered` carries the offending document wherever
+//! Derive policy, in two classes that take different derives for a reason.
+//! The six OPERATION enums are the `E` of a public `Result`, and derive
+//! `Clone + Debug + PartialEq + Eq + Serialize`. [`SpanFault`] and [`Operand`]
+//! are classification VOCABULARIES that travel as payload inside those six,
+//! so they take the derives M1 gives its own — `Level`, `Class`, `SpanRel` —
+//! adding `Copy` and `Hash`: a consumer that keys by one cannot supply the
+//! impl (both the trait and the type are foreign to it), and M10's `FaultSite`
+//! embeds both, so withholding `Hash` here is what would decide whether that
+//! type can have it. Not `Ord`, and the asymmetry is deliberate:
+//! [`SpanFault`]'s declaration order carries no meaning (`gate_vspan` fixes
+//! the decision order), and a derived `Ord` would give reordering the variants
+//! an observable effect. Not `Hash` on the six either — no consumer keys by a
+//! rejection, and M10 converts each to its own `Rejection` at the seam.
+//!
+//! `DocNotRegistered` carries the offending document wherever
 //! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
 //! FINDDOCSCONTAINING); the interface declares ExtentError's and OriginError's
 //! as payload-free — the document is recoverable from the single-document
@@ -47,7 +59,7 @@ use skep_address::Address;
 /// the span half of the V-spec gate. `StartTooShallow` is `#start < 2`; a
 /// well-formed `#start ≥ 3` span is NOT a fault here — depth-compatibility is
 /// consulting-state, not well-formedness (§Conflicts resolved 8).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub enum SpanFault {
     /// Width does not act at its deepest component (not ordinal-level).
     NotOrdinalLevel,
@@ -61,7 +73,7 @@ pub enum SpanFault {
 
 /// Which COMPARE spec-set (ρ₁/ρ₂) a fault came from — `Copy`, captured into
 /// the gate loop.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub enum Operand {
     First,
     Second,

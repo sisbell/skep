@@ -10,7 +10,7 @@ use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
-use crate::vspan::{gate_vspan, span_subspace, Subspace, S_C, S_L};
+use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
@@ -23,10 +23,16 @@ use crate::{Query, RetrievalWorld};
 /// `resolve` READS: the constructor and the recognizer every request span is
 /// folded through are the two halves of one definition and cannot come apart.
 /// `None` iff `n_S == 0`, which its one call site has already excluded.
-fn ext_span(s: &Nat, n: &Nat) -> Span {
+///
+/// The subspace arrives CLASSIFIED rather than as a numeral, so the two
+/// arguments have different types and `ext_span(count, subspace)` fails to
+/// compile — the hazard M5 designs out of `ordinal_vspan` by taking a `VPos`,
+/// since a swap here builds a well-formed span naming a subspace that selects
+/// nothing and reports as emptiness far downstream.
+fn ext_span(s: Subspace, n: &Nat) -> Span {
     ordinal_vspan(
         &VPos {
-            subspace: s.clone(),
+            subspace: s.numeral().clone(),
             ordinal: Nat::one(),
         },
         n,
@@ -112,8 +118,12 @@ fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
 fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
     if cfg!(debug_assertions) {
         for (sub, count, runs) in [
-            (&*S_C, m5.content_count(doc), m5.content_runs(doc)),
-            (&*S_L, m5.link_count(doc), m5.link_runs(doc)),
+            (
+                Subspace::Content,
+                m5.content_count(doc),
+                m5.content_runs(doc),
+            ),
+            (Subspace::Link, m5.link_count(doc), m5.link_runs(doc)),
         ] {
             let width_sum = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
             debug_assert!(
@@ -126,7 +136,7 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
                         .point(
                             doc,
                             &VPos {
-                                subspace: sub.clone(),
+                                subspace: sub.numeral().clone(),
                                 ordinal: Nat::one(),
                             },
                         )
@@ -141,7 +151,7 @@ fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
 /// this impl block's bound and nowhere else's, which is what makes the other
 /// six operations' value-blindness structural rather than a rule their cards
 /// ask a maintainer to keep.
-impl<'s, W: RetrievalWorld + HasContent> Query<'s, W> {
+impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// RETRIEVEV (ASN-0115) — resolve, then dereference, in order (the
     /// load-bearing two-phase factoring): resolve V-spans to I-addresses
     /// (M5), then fetch values (M4, content) or pass the address through
@@ -193,8 +203,9 @@ impl<'s, W: RetrievalWorld + HasContent> Query<'s, W> {
             let sub = span_subspace(&spec.span);
             for run in m5.resolve(&spec.doc, &spec.span) {
                 // Per active position, ascending V (R3) — no dedup (R8); the
-                // run answers for its own positions.
-                for a in run.addrs() {
+                // run answers for its own positions, in the owned form, since
+                // `resolve` hands the run over and it outlives only this walk.
+                for a in run.into_addrs() {
                     match sub {
                         // S3★ — an arranged content position has an M4 value
                         // — is kept on M5's WRITE path, and this read is
@@ -233,7 +244,7 @@ impl<'s, W: RetrievalWorld + HasContent> Query<'s, W> {
     }
 }
 
-impl<'s, W: RetrievalWorld> Query<'s, W> {
+impl<W: RetrievalWorld> Query<'_, W> {
     /// RETRIEVEDOCVSPAN (ASN-0112) — the whole-document bounding span:
     /// singleton `⟨σ_d⟩`, or `⟨⟩` for a registered-empty document; a document
     /// that is not registered ⇒ Err. Across subspaces it is a bounding box
@@ -281,11 +292,12 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// occupied V-positions form the dense, origin-anchored run `[S, 1..n_S]`
     /// (D-SEQ★ — the sequential-position occupancy ASN-0113 W4 forces; M5's
     /// write-path property, trusted here and tripwired in debug). Each
-    /// numeral travels with its OWN count in one pair, so the two can never be
-    /// crossed, and the occupied ones are `collect`ed through M1's
-    /// `FromIterator<Span>` — which collects AS GIVEN, preserving the
-    /// already-disjoint, content-before-link normal form (asserted in debug);
-    /// no invented M1 constructor.
+    /// subspace travels with its OWN count in one pair, and reaches
+    /// [`ext_span`] classified rather than as a numeral, so the two can be
+    /// crossed neither by the pairing nor by the call; the occupied ones are
+    /// `collect`ed through M1's `FromIterator<Span>` — which collects AS
+    /// GIVEN, preserving the already-disjoint, content-before-link normal form
+    /// (asserted in debug); no invented M1 constructor.
     pub fn doc_vspanset(&self, doc: &Address) -> Result<SpanSet, ExtentError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
@@ -294,7 +306,7 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         }
         debug_assert_sequential_positions(m5, doc);
         let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
-        let extents: SpanSet = [(&*S_C, &nc), (&*S_L, &nl)]
+        let extents: SpanSet = [(Subspace::Content, &nc), (Subspace::Link, &nl)]
             .into_iter()
             .filter(|(_, n)| !n.is_zero())
             .map(|(s, n)| ext_span(s, n))

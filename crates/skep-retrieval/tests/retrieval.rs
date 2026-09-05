@@ -30,6 +30,8 @@
 //! the composition contract prescribes; all state is arranged through M5's
 //! real `Vstream` ops (M5Rec is sealed to foreign crates).
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{seat_link, Caller, HasM5, M5State, VPos, VSpec, Vstream};
@@ -211,22 +213,19 @@ fn deep_span(subspace: u32) -> Span {
     Span::new(t(&[subspace, 1, 1]), t(&[0, 0, 1])).expect("T12-legal")
 }
 
-/// Unwrap Ok — one idiom across all seven operations. `Result::expect` would
-/// serve equally well now that every result and error renders; this keeps the
-/// unwrap and its failure message uniform at every call site.
-fn ok_of<T, E>(r: Result<T, E>) -> T {
-    match r {
-        Ok(v) => v,
-        Err(_) => panic!("expected Ok, got Err"),
-    }
+/// Unwrap Ok — `Result::expect` under one name, so the unwrap and its failure
+/// message are uniform across all seven operations. The `Debug` bound is what
+/// makes a failure name WHICH rejection fired rather than only that one did:
+/// every M6 error renders, and a suite this size cannot afford a panic that
+/// says nothing about the answer it got.
+fn ok_of<T, E: fmt::Debug>(r: Result<T, E>) -> T {
+    r.expect("expected Ok, got Err")
 }
 
-/// Unwrap Err, the mirror of [`ok_of`].
-fn err_of<T, E>(r: Result<T, E>) -> E {
-    match r {
-        Ok(_) => panic!("expected Err, got Ok"),
-        Err(e) => e,
-    }
+/// Unwrap Err, the mirror of [`ok_of`] — printing the answer that arrived
+/// where a rejection was claimed.
+fn err_of<T: fmt::Debug, E>(r: Result<T, E>) -> E {
+    r.expect_err("expected Err, got Ok")
 }
 
 /// Genesis with M3 pre-seeded by folding exactly the records its own

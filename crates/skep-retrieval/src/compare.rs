@@ -48,10 +48,10 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 ///
 /// The budget: a [`CorrPair`] is two `Address`es, two `VPos`es and a `Nat` —
 /// order a kilobyte of live heap once the `BigUint` digit vectors are counted
-/// — and the presentation holds a four-component sort key beside each, so peak
-/// is order two kilobytes per reported pair. `2^16` is therefore order 128 MiB
-/// of report; it is also M5's `MAX_PLACED_RUNS`, the substrate's existing
-/// answer to how many runs one operation may materialize.
+/// — and the report is what the query holds, the presentation sorting it in
+/// place over borrowed keys and holding nothing beside it. `2^16` is therefore
+/// order 64 MiB of report; it is also M5's `MAX_PLACED_RUNS`, the substrate's
+/// existing answer to how many runs one operation may materialize.
 ///
 /// It is not a ceiling on the whole query's heap, and neither budget is: one
 /// span over a fragmented document materializes that document's entire
@@ -62,7 +62,7 @@ pub const MAX_COMPARE_OPERAND_BLOCKS: usize = 1 << 12;
 /// pairs, so fan-out is bounded only by counting the pairs themselves.
 pub const MAX_COMPARE_PAIRS: usize = 1 << 16;
 
-impl<'s, W: RetrievalWorld> Query<'s, W> {
+impl<W: RetrievalWorld> Query<'_, W> {
     /// COMPARE (ASN-0122): two content-subspace spec-sets `ρ₁, ρ₂`, each a set
     /// of [`RegionSpec`]s — ASN-0122's `(dᵢ, Sᵢ)`; reports address-equal
     /// correspondences (X1/X2 — value-blind, NEVER opens M4), complete under
@@ -180,9 +180,16 @@ fn gate_spec_set(
 /// block per resolved I-run of one spec's span — the run as M5 handed it
 /// over, plus where the block's first position sits in its document's V-space
 /// and one I-step past its last position.
+///
+/// A block REFERS TO the document of the region that named it, which outlives
+/// every block built from it, so the row borrows what it only reads and owns
+/// only what it computed. The join builds one block per resolved run BEFORE it
+/// emits anything, so an owned document here would be one `Address` clone per
+/// block — paid in full by a query whose two regions share nothing and report
+/// no pairs at all.
 #[derive(Debug)]
-struct Block {
-    doc: Address,
+struct Block<'a> {
+    doc: &'a Address,
     v_start: VPos,
     run: Run,
     /// One I-step past the block: the run's own exclusive reach, which is all
@@ -198,10 +205,10 @@ struct Block {
     reach: Tumbler,
 }
 
-impl Block {
+impl<'a> Block<'a> {
     /// One block over one resolved run, with its reach taken once —
     /// [`Run::reach`], the run's own exclusive I-end.
-    fn new(doc: Address, v_start: VPos, run: Run) -> Block {
+    fn new(doc: &'a Address, v_start: VPos, run: Run) -> Block<'a> {
         let reach = run.reach();
         Block {
             doc,
@@ -287,7 +294,12 @@ impl Block {
 /// other and still contributes no blocks — `resolve`'s own shape reader
 /// refuses it and hands back no runs, so the span contributes nothing to the
 /// region.
-fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
+///
+/// The blocks borrow the REGIONS, not `m5`: each carries a reference to the
+/// document of the spec that named it, so the lifetime is written out rather
+/// than elided — two input lifetimes and no `&self` leave nothing for elision
+/// to pick.
+fn resolve_blocks<'a>(m5: &M5State, regions: &'a [RegionSpec]) -> Option<Vec<Block<'a>>> {
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
@@ -304,7 +316,7 @@ fn resolve_blocks(m5: &M5State, regions: &[RegionSpec]) -> Option<Vec<Block>> {
                 );
                 // Accumulate the V offset by run width (no V-gaps in content).
                 let next = &v.ordinal + run.width();
-                out.push(Block::new(r.doc.clone(), v.clone(), run));
+                out.push(Block::new(&r.doc, v.clone(), run));
                 v.ordinal = next;
             }
         }
@@ -342,7 +354,7 @@ fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
 /// the reach it stores — and both stay BORROWED across the guard: the
 /// exhaustive join asks this of every candidate pair, and most are disjoint,
 /// so a rejected pair must build nothing and clone nothing to be compared.
-fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
+fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
     let start = cmp::max(pb.i_start(), qb.i_start());
     let reach = cmp::min(&pb.reach, &qb.reach);
     if start >= reach {
@@ -376,7 +388,7 @@ fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
 /// not on the join's shape: a sweep changes how many candidate pairs are
 /// TESTED and not how many are EMITTED, so the same cap stands whichever join
 /// ships, and it is the only one that sees a fan-out.
-fn interval_join(p: &[Block], q: &[Block]) -> Option<Vec<CorrPair>> {
+fn interval_join(p: &[Block<'_>], q: &[Block<'_>]) -> Option<Vec<CorrPair>> {
     let mut out = Vec::new();
     for pb in p {
         for qb in q {
@@ -394,9 +406,11 @@ fn interval_join(p: &[Block], q: &[Block]) -> Option<Vec<CorrPair>> {
 /// The one presentation X12 R3 requires the implementation to fix, over the
 /// complete+sound relation (R1/R2). NOT R4's canonical report, which is the
 /// MAXIMAL pairs of X11 and is explicitly not required for conformance. Sort
-/// lexicographically by `(d1, u1, d2, u2)` — `sort_by_cached_key` computes
-/// each four-component key ONCE per element (a bare `sort_by` would rebuild
-/// both keys per *comparison*) and is a STABLE sort, so duplicate overlaps
+/// lexicographically by `(d1, u1, d2, u2)` over a BORROWED key: the pair's own
+/// components already carry the order the comparison wants, so the sort builds
+/// nothing and clones nothing. `sort_by` rather than `sort_by_cached_key` for
+/// that reason — caching amortizes an EXPENSIVE key computation, and taking
+/// four references is not one — and STABLE either way, so duplicate overlaps
 /// keep a deterministic listed order (R3). The adjacent-pair fold is the
 /// IDENTITY in v1 (a finer-than-maximal, per-overlap report conforms — see
 /// [`fold_adjacent`]).
@@ -408,28 +422,28 @@ fn interval_join(p: &[Block], q: &[Block]) -> Option<Vec<CorrPair>> {
 /// second key is what separates them. A presentation keyed on the first foot
 /// alone would leave a fanned-out report's order undetermined.
 fn deterministic_presentation(mut pairs: Vec<CorrPair>) -> Vec<CorrPair> {
-    pairs.sort_by_cached_key(corr_key);
+    pairs.sort_by(|a, b| corr_key(a).cmp(&corr_key(b)));
     fold_adjacent(pairs)
 }
 
-/// The documents order by their own `Ord`, which IS the T1 tumbler order; the
-/// feet are lifted to `Tumbler`, because a `VPos` carries no order of its own.
-fn corr_key(c: &CorrPair) -> (Address, Tumbler, Address, Tumbler) {
-    (
-        c.d1.clone(),
-        vpos_tumbler(&c.u1),
-        c.d2.clone(),
-        vpos_tumbler(&c.u2),
-    )
+/// The four components X12 R3's presentation is keyed on, borrowed. The
+/// documents order by their own `Ord`, which IS the T1 tumbler order; each
+/// foot orders as the pair its layout denotes ([`foot_key`]). Nesting rather
+/// than flattening to six, so the key has the four components the card
+/// describes.
+fn corr_key(c: &CorrPair) -> (&Address, (&Nat, &Nat), &Address, (&Nat, &Nat)) {
+    (&c.d1, foot_key(&c.u1), &c.d2, foot_key(&c.u2))
 }
 
-/// A foot as the `[subspace, ordinal]` tumbler its layout denotes — the
-/// writing direction of the layout [`span_vpos`] reads, kept beside the
-/// presentation because giving the sort an `Ord` carrier is the whole of what
-/// it is for.
-fn vpos_tumbler(v: &VPos) -> Tumbler {
-    Tumbler::new([v.subspace.clone(), v.ordinal.clone()])
-        .expect("a two-component sequence is nonempty")
+/// A foot's position as the `[subspace, ordinal]` pair its layout denotes —
+/// the writing direction of the layout [`span_vpos`] reads, in the order a
+/// comparison consumes. `VPos` carries no order of its own, so the ordering is
+/// stated here; it is `Tumbler`'s own slice-lexicographic order on the two
+/// components, which is what that layout means.
+///
+/// [`span_vpos`]: crate::vspan::span_vpos
+fn foot_key(v: &VPos) -> (&Nat, &Nat) {
+    (&v.subspace, &v.ordinal)
 }
 
 /// Adjacent-pair folding is OPTIONAL — X12 R4 (maximal pairs) is NOT
@@ -480,9 +494,12 @@ mod tests {
         }
     }
 
-    fn block(doc: &[u32], v_ord: u32, i_start: Address, width: u32) -> Block {
+    /// A block over `doc`, which the block borrows and the caller therefore
+    /// binds first — the same shape `resolve_blocks` has, where the document
+    /// belongs to the region that named the span.
+    fn block(doc: &Address, v_ord: u32, i_start: Address, width: u32) -> Block<'_> {
         Block::new(
-            a(doc),
+            doc,
             vp(1, v_ord),
             Run::new(i_start, n(width)).expect("test runs are well-formed"),
         )
@@ -493,25 +510,20 @@ mod tests {
         // X12 R1: a block answers for its own foot WHOLE — document and
         // position together — so each foot is offset within the block it
         // comes from and both resolve to the overlap's shared start address.
-        let pb = block(&[1, 0, 1, 0, 1], 1, ca(1), 3); // [ca1, ca4) at V 1..
-        let qb = block(&[1, 0, 1, 0, 2], 1, ca(2), 1); // [ca2, ca3) at V 1..
+        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
+        let pb = block(&d1, 1, ca(1), 3); // [ca1, ca4) at V 1..
+        let qb = block(&d2, 1, ca(2), 1); // [ca2, ca3) at V 1..
         // The same I-address is a different foot in each block…
-        assert_eq!(
-            pb.foot_at(ca(2).tumbler()),
-            (a(&[1, 0, 1, 0, 1]), vp(1, 2))
-        );
-        assert_eq!(
-            qb.foot_at(ca(2).tumbler()),
-            (a(&[1, 0, 1, 0, 2]), vp(1, 1))
-        );
+        assert_eq!(pb.foot_at(ca(2).tumbler()), (d1.clone(), vp(1, 2)));
+        assert_eq!(qb.foot_at(ca(2).tumbler()), (d2.clone(), vp(1, 1)));
         // …and each block's reach is one I-step past its own last position.
         assert_eq!(pb.reach, *ca(4).tumbler());
         assert_eq!(qb.reach, *ca(3).tumbler());
         let c = overlap_pair(&pb, &qb).expect("overlapping I-intervals correspond");
-        assert_eq!(c.d1, a(&[1, 0, 1, 0, 1]));
+        assert_eq!(c.d1, d1);
         assert_eq!(c.u1.subspace, n(1));
         assert_eq!(c.u1.ordinal, n(2)); // start = ca2 is offset 1 within P
-        assert_eq!(c.d2, a(&[1, 0, 1, 0, 2]));
+        assert_eq!(c.d2, d2);
         assert_eq!(c.u2.subspace, n(1));
         assert_eq!(c.u2.ordinal, n(1)); // start = ca2 is offset 0 within Q
         assert_eq!(c.width, n(1));
@@ -519,23 +531,24 @@ mod tests {
 
     #[test]
     fn overlap_pair_rejects_disjoint_and_cross_chain_intervals() {
+        let (d1, d2) = (a(&[1, 0, 1, 0, 1]), a(&[1, 0, 1, 0, 2]));
         // Same chain, disjoint: [ca1, ca4) vs [ca5, ca6).
-        let pb = block(&[1, 0, 1, 0, 1], 1, ca(1), 3);
-        let qb = block(&[1, 0, 1, 0, 2], 1, ca(5), 1);
+        let pb = block(&d1, 1, ca(1), 3);
+        let qb = block(&d2, 1, ca(5), 1);
         assert!(overlap_pair(&pb, &qb).is_none());
         // Adjacent (half-open, touching): [ca1, ca4) vs [ca4, ca5) share
         // nothing.
-        let qb = block(&[1, 0, 1, 0, 2], 1, ca(4), 1);
+        let qb = block(&d2, 1, ca(4), 1);
         assert!(overlap_pair(&pb, &qb).is_none());
         // Different chains have disjoint I-intervals — the guard rejects
         // BEFORE any ordinal arithmetic runs (co-chain precondition).
         let da1 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
-        let qb = block(&[1, 0, 1, 0, 2], 1, da1, 2);
+        let qb = block(&d2, 1, da1, 2);
         assert!(overlap_pair(&pb, &qb).is_none());
     }
 
     #[test]
-    fn the_presentation_sorts_by_the_four_tumbler_key_and_folds_identity() {
+    fn the_presentation_sorts_by_the_four_component_key_and_folds_identity() {
         // X12 R3: one deterministic lexicographic (d1, u1, d2, u2)
         // presentation; v1's fold is the identity (finer-than-maximal
         // conforms — R4's canonical form is not required).

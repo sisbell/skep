@@ -505,14 +505,26 @@ where
     ///
     /// `ω(source)` is pre-read off a snapshot (stable for an existing
     /// document, per M3) to choose branch + lock key: an owned fork mints
-    /// `mint_version(source)` under `version_lock_key(source)` (serializing
-    /// forks of that source); a cross-owner fork requires the forker's prefix
-    /// to be a registered ACCOUNT — M3's `is_registered_account`, which is the
-    /// predicate `mint_document` itself gates on, so the P-tier rule has one
-    /// spelling and asking it here surfaces `NodeTierCrossOwner` BEFORE any
-    /// mint rather than obliquely as `Mint(NotAnAccount)` — and mints
-    /// `mint_document(prefix)` under `document_lock_key(prefix)`. Source
-    /// untouched (V3); the fork diverges copy-on-write (V11).
+    /// `mint_version(source, bit)` under `version_lock_key(source)`
+    /// (serializing forks of that source); a cross-owner fork requires the
+    /// forker's prefix to be a registered ACCOUNT — M3's
+    /// `is_registered_account`, which is the predicate `mint_document` itself
+    /// gates on, so the P-tier rule has one spelling and asking it here
+    /// surfaces `NodeTierCrossOwner` BEFORE any mint rather than obliquely as
+    /// `Mint(NotAnAccount)` — and mints `mint_document(prefix, bit)` under
+    /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
+    /// copy-on-write (V11).
+    ///
+    /// THE PUBLICATION BIT (PUB round 1, delta 1): `bit` is the new
+    /// document's RESOLVED publication state, which THIS composite resolves
+    /// off its own working state and passes down (PUB-8.17) — the mints
+    /// apply no default of their own (PUB-8.18). This op carries no flag yet,
+    /// so the resolution is the flag's ABSENT arm alone: INHERIT
+    /// `published(source)`, on both branches — a cross-owner fork into an
+    /// EMPTY account inherits too, never the create path's born-published
+    /// rule. The three-valued wire flag's `Some(..)` arm is lane 2.3's, and
+    /// the write-path refusals that bound the resolved bit (PUB-2.7,
+    /// PUB-2.9) are the daemon's routed item (PUB-8.2).
     ///
     /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
@@ -598,9 +610,16 @@ where
             }
         };
         self.kernel.transact(&[key], |stg| {
+            let m3 = stg.working().m3();
+            // PUB-8.17: ABSENT ⇒ INHERIT `published(d_src)`, resolved here off
+            // this composite's own working state and passed down as the
+            // RESOLVED bit the record journals (PUB-7.10, PUB-8.18). `source`
+            // is a registered document (the monotone pre-read above), so the
+            // read is inside `published`'s contract.
+            let published = m3.published(source);
             let (v, m3rec) = match &branch {
-                Branch::Owned => stg.working().m3().mint_version(source),
-                Branch::Cross(prefix) => stg.working().m3().mint_document(prefix),
+                Branch::Owned => m3.mint_version(source, published),
+                Branch::Cross(prefix) => m3.mint_document(prefix, published),
             }?;
             stg.push(m3rec.into());
             stg.push(

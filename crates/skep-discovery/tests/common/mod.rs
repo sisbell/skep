@@ -208,19 +208,26 @@ pub fn rel_ty() -> Endset {
 
 /// An M3 slice with a principal-owned account and two registered documents,
 /// built by folding exactly the records M3's own `delegate`/
-/// `create_new_document` would stage.
+/// `create_new_document` would stage — the publication bits being the
+/// flagless create path's (PUB-8.21): the first document born published, the
+/// second private; an account's `Allocate` carries no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
+            published: false,
         })
 }
 

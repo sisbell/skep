@@ -422,7 +422,7 @@ mod tests {
             .expect("delegation of the peeked prefix succeeds");
         let (doc, _) = engine
             .namespace()
-            .create_new_document(USER, &acct)
+            .create_new_document(USER, &acct, None)
             .expect("the delegated owner may create a document");
         engine
             .vstream()

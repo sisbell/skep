@@ -276,11 +276,15 @@ where
         let kind = op.kind();
         match op {
             // ── namespace writes (→ M3) ──
+            // The publication flag is passed ABSENT until the `Op` carries
+            // it (lane 2.3): M3 resolves the create-path default — the
+            // account's first document born published, every later flagless
+            // one private (PUB-8.21).
             Op::CreateNewDocument { account } => {
                 let (addr, at) = self
                     .stores
                     .namespace()
-                    .create_new_document(wc.principal, &account)
+                    .create_new_document(wc.principal, &account, None)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }

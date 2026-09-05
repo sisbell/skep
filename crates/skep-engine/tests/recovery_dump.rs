@@ -209,7 +209,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
         for byte in [b'r', b's', b't'] {
             let (d, _) = engine
                 .namespace()
-                .create_new_document(USER, &acct)
+                .create_new_document(USER, &acct, None)
                 .expect("the delegated owner may create a document");
             engine
                 .vstream()

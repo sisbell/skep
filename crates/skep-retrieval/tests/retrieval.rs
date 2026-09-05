@@ -238,24 +238,34 @@ fn err_of<T: fmt::Debug, E>(r: Result<T, E>) -> E {
 
 /// Genesis with M3 pre-seeded by folding exactly the records its own
 /// delegate/create_new_document ops would stage: account [1,0,1] → principal
-/// 1 (owns doc1, doc2), account [1,0,2] → principal 2.
+/// 1 (owns doc1, doc2), account [1,0,2] → principal 2. The publication bits
+/// are the flagless create path's (PUB-8.21): doc1 born published, doc2
+/// private; an account's `Allocate` carries no publication state.
 fn genesis() -> World {
     let m3 = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 2]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
+            published: false,
         });
     World {
         m3,

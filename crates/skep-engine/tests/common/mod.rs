@@ -90,7 +90,7 @@ pub fn setup_doc(engine: &Engine) -> (Address, Address) {
         .expect("delegation of the peeked next-form prefix succeeds");
     let (doc, _) = engine
         .namespace()
-        .create_new_document(USER, &acct)
+        .create_new_document(USER, &acct, None)
         .expect("the delegated owner may create a document");
     (acct, doc)
 }

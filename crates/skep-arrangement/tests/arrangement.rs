@@ -156,21 +156,31 @@ const P1: Caller = Caller::Principal(PrincipalId(1));
 /// 1 (owns doc1, doc2), sibling account [1,0,2] → principal 2, sub-account
 /// [1,0,1,1] (delegated under [1,0,1]) → principal 3 with its own document
 /// [1,0,1,1,0,1] — the ownership-exactness fixtures. Deterministic, per
-/// M2's byte-identical-genesis contract.
+/// M2's byte-identical-genesis contract. The publication bits are the
+/// flagless create path's (PUB-8.21): each account's first document born
+/// published, doc2 private; an account's `Allocate` carries no publication
+/// state.
 fn genesis() -> World {
     let m3 = M3State::genesis()
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 2]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 1]),
+            published: false,
         })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1, 1]),
@@ -178,12 +188,15 @@ fn genesis() -> World {
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
+            published: false,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 1, 0, 1]),
+            published: true,
         });
     World {
         m3,

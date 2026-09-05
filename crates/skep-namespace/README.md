@@ -25,6 +25,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Allocation and entity reads** — is-this-allocated over every
   chain, and node/account/document classification over the entity
   registry: the universal gates other stores consult.
+- **The publication bit** — one bit per document, resolved by the
+  minting op and journaled on the document's own allocation record
+  at mint; immutable thereafter, there being no publish op.
+  `published(doc)` is the engine's one definition of a document's
+  publication state; a checkpoint or journal written before the bit
+  existed fails to decode rather than defaulting.
 - **Lock-key constructors** — the workspace's one source of
   namespace-keyed critical-section bytes, plus the two registry-wide
   keys.

@@ -29,7 +29,9 @@
 //!   M5/M7 composites, each returning the minted address plus the one
 //!   [`M3Rec`] the caller stages, with the matching `*_lock_key`
 //!   constructor for M2 `transact`'s `keys` \[ASN-0040 B1/B2/B6–B10,
-//!   ASN-0123 VD\]. The remaining chain — the account chain, `A_account(N)`
+//!   ASN-0123 VD\]. The two document-minting mints take the RESOLVED
+//!   publication bit the caller resolved and stamp it on the record
+//!   \[PUB-8.18\]. The remaining chain — the account chain, `A_account(N)`
 //!   under a node and the sub-account `(A, 1)` under an account — is minted
 //!   internally by [`Namespace::delegate`], the only op that allocates one,
 //!   and its next value is published as the peek
@@ -47,8 +49,11 @@
 //!   predicate [`M3State::is_effective_owner`] beside the two projections of
 //!   the owner it names ([`M3State::effective_owner`] for the id,
 //!   [`M3State::effective_owner_prefix`] for the address it is seated at)
-//!   \[ASN-0042 O1–O9\], id→prefix resolution, and the next-form peek
-//!   [`M3State::next_account_prefix`] — plus two registry-free address
+//!   \[ASN-0042 O1–O9\], id→prefix resolution, the next-form peek
+//!   [`M3State::next_account_prefix`], and the publication read
+//!   [`M3State::published`] — the engine's ONE definition of a document's
+//!   publication state, the bit its own allocation record journaled
+//!   \[PUB-7.8, PUB-7.10; owner ruling D1\] — plus two registry-free address
 //!   answers: [`prefix_contains`], which answers where an address SITS and
 //!   never who may write it, and [`first_document_address`], the slot an
 //!   account's document chain opens at.
@@ -88,7 +93,13 @@
 //!   are permanent (B0/O12), and a frontier gap is unrepresentable (B1). The
 //!   one carve-out is the ghost region above, which is compiled format
 //!   rather than state: the skipped ordinals are never issued and never
-//!   members, on every board.
+//!   members, on every board;
+//! * a publish op — none exists, in either direction: a document's
+//!   publication state is fixed at its mint and journaled on its own
+//!   allocation record, and no M3 function changes it (PUB-1.9, PUB-1.68).
+//!   The three-valued wire flag, the first-mint refusal at the daemon's door
+//!   (PUB-8.20) and the exception set derived over the bit are the daemon's
+//!   and the later PUB lanes' (owner rulings D1/D2).
 //!
 //! ## Composition
 //!

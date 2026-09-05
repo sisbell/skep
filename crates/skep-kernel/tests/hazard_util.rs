@@ -286,7 +286,7 @@ impl Fixture {
 
         // 2: create the document.
         let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct).expect("create document");
+            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
         capture(&engine, &mut boundaries);
 
         // 3–4: content (multi-value insert = a multi-record composite).

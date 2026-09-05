@@ -77,23 +77,34 @@ pub(crate) fn vp(subspace: u32, ordinal: u32) -> VPos {
 /// An M3 slice with two principal-owned accounts and two registered
 /// documents, built by folding exactly the records M3's own `delegate` /
 /// `create_new_document` would stage: account `[1,0,1]` → principal 1 (owns
-/// doc1, doc2), account `[1,0,2]` → principal 2.
+/// doc1, doc2), account `[1,0,2]` → principal 2. The publication bits are
+/// the flagless create path's (PUB-8.21): doc1, the account's first
+/// document, born published; doc2 private. An account's `Allocate` carries
+/// no publication state.
 pub(crate) fn seeded_m3() -> M3State {
     M3State::genesis()
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 1]),
             id: PrincipalId(1),
         })
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 2]) })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 2]),
+            published: false,
+        })
         .apply_m3(&M3Rec::RegisterPrincipal {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
+            published: false,
         })
 }

@@ -167,7 +167,7 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
     assert_eq!(operator, addr(&[1, 1, 0, 1]));
     let (doc1, _) = engine
         .namespace()
-        .create_new_document(USER, &operator)
+        .create_new_document(USER, &operator, None)
         .expect("the ceremony's doc-1");
     assert_eq!(doc1, ghost_home_doc(), "doc-1 IS the ghost home document");
 

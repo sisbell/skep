@@ -161,23 +161,25 @@ impl TryFrom<u8> for Generator {
 
 /// M3's journal deltas — lifted to `W::Record` via the engine's `From<M3Rec>`
 /// impl (the write-side mirror of [`crate::HasM3`]) and folded by
-/// [`M3State::apply_m3`]. Every payload is an [`Address`], so T4-validity is
-/// carried by the value: checked once where the record is built, and re-checked
-/// on the way back off the journal by M1's validating `Deserialize`. A record
-/// still journals as a bare, flat tumbler, exactly as the data model
-/// prescribes. One `Allocate` variant suffices for every minted address
-/// (entity, content, link) because the frontier map is uniform; the level
-/// distinction is recovered at *query* time from the address's own level.
+/// [`M3State::apply_m3`]. Every address payload is an [`Address`], so
+/// T4-validity is carried by the value: checked once where the record is
+/// built, and re-checked on the way back off the journal by M1's validating
+/// `Deserialize`. A record still journals as a bare, flat tumbler, exactly as
+/// the data model prescribes. One `Allocate` variant suffices for every minted
+/// address (entity, content, link) because the frontier map is uniform; the
+/// level distinction is recovered at *query* time from the address's own
+/// level.
 ///
 /// Off the journal a record arrives through [`M3RecShadow`], which re-checks
 /// the two standing facts T4-validity does not carry: an `Allocate` address
-/// extends a parent, and a `RegisterPrincipal` prefix is account-tier.
+/// extends a parent, and a `RegisterPrincipal` prefix is account-tier — and
+/// which carries the publication bit as a REQUIRED field (PUB-7.8).
 ///
-/// A variant added HERE must be added to [`M3RecShadow`] too: `Serialize` is
-/// derived from this enum and `Deserialize` runs through the shadow, so a
-/// shadow missing the variant yields records that journal and then never
-/// decode — a recovery failure that survives restart, from an edit that looked
-/// local.
+/// A variant or field added HERE must be added to [`M3RecShadow`] too:
+/// `Serialize` is derived from this enum and `Deserialize` runs through the
+/// shadow, so a shadow missing the variant yields records that journal and
+/// then never decode — a recovery failure that survives restart, from an edit
+/// that looked local.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "M3RecShadow")]
 pub enum M3Rec {
@@ -185,7 +187,22 @@ pub enum M3Rec {
     /// this record is the only thing that moves a frontier. The `(parent, g)`
     /// of an `Allocate` is exactly the `NsKey` of the `LockKey` the minting op
     /// held — frontier key and lock key are the same key.
-    Allocate { addr: Address },
+    ///
+    /// `published` is the RESOLVED publication state of a minted DOCUMENT
+    /// (PUB-7.8, PUB-7.10, PUB-8.18): every document-minting record journals
+    /// the bit its caller resolved — never the caller's three-valued flag, so
+    /// replay reconstructs the world that committed and not a re-derivation
+    /// from the op's arguments — and [`M3State::apply_m3`] folds it into the
+    /// publication map for a Document-tier `addr` (a version is a document
+    /// too). IMMUTABLE after mint: no record and no op changes it, and there
+    /// is no publish op in either direction (PUB-1.9, PUB-1.68). Outside the
+    /// document tier — an account, a content or link element — publication is
+    /// not a property of the address at all (PUB-1.68: one bit per DOCUMENT);
+    /// those mints stamp `NO_PUBLICATION_STATE` (`false`) and the fold does
+    /// not read it. NON-OPTIONAL by design: a record written without the
+    /// field fails to decode at [`M3RecShadow`] rather than defaulting
+    /// (PUB-7.8).
+    Allocate { addr: Address, published: bool },
     /// External node admission (ASN-0047 NodeBaptism; §7).
     RegisterNode { addr: Address },
     /// Delegation's principal half (§6).
@@ -231,9 +248,18 @@ pub enum M3Rec {
 /// about to enter, which no decoder holding a single frame can settle. That
 /// invariant has one owner, `delegate`'s `DuplicateId` gate, and this door
 /// does not share it.
+///
+/// The publication bit is a REQUIRED field here, exactly as on [`M3Rec`] —
+/// no `Option`, no `#[serde(default)]` (PUB-7.8): a journal frame or a
+/// checkpoint written before the bit existed ends where the bit should
+/// begin, and the decoder's end-of-input there is the refusal. M2 treats a
+/// decode failure as "replay from an older start point, else refuse to
+/// serve" (PUB-7.9); what this door owes is that the failure HAPPENS, and
+/// that no pre-publication record is ever read as private or as published
+/// by a default it never carried (PUB-1.2: no grandfather clause).
 #[derive(Deserialize)]
 enum M3RecShadow {
-    Allocate { addr: Address },
+    Allocate { addr: Address, published: bool },
     RegisterNode { addr: Address },
     RegisterPrincipal { prefix: Address, id: PrincipalId },
 }
@@ -242,10 +268,10 @@ impl TryFrom<M3RecShadow> for M3Rec {
     type Error = &'static str;
     fn try_from(shadow: M3RecShadow) -> Result<M3Rec, &'static str> {
         match shadow {
-            M3RecShadow::Allocate { addr } if addr.tumbler().len() < 2 => {
+            M3RecShadow::Allocate { addr, .. } if addr.tumbler().len() < 2 => {
                 Err("an Allocate address extends a parent (≥ 2 components)")
             }
-            M3RecShadow::Allocate { addr } => Ok(M3Rec::Allocate { addr }),
+            M3RecShadow::Allocate { addr, published } => Ok(M3Rec::Allocate { addr, published }),
             M3RecShadow::RegisterNode { addr } => Ok(M3Rec::RegisterNode { addr }),
             M3RecShadow::RegisterPrincipal { prefix, .. } if prefix.level() != Level::Account => {
                 Err("a RegisterPrincipal prefix is account-tier (delegate's O15(iii) gate)")
@@ -261,19 +287,22 @@ impl TryFrom<M3RecShadow> for M3Rec {
 /// All persistent (`im`), so each commit yields a cheap structurally-shared
 /// version — free MVCC snapshots for readers and free historical ω_Σ.
 ///
-/// **The journal is the sole authority** (M2); these three structures are the
+/// **The journal is the sole authority** (M2); these four structures are the
 /// *recovered working representation*, folded by [`M3State::apply_m3`]. All
-/// three are ordinary `Serialize`/`Deserialize` fields — **none** is
+/// four are ordinary `Serialize`/`Deserialize` fields — **none** is
 /// `#[serde(skip)]` — so they are restored verbatim from the loaded checkpoint
 /// and then advanced by replaying the post-checkpoint `M3Rec`s. They are
 /// authoritative working state, not derived hints, so M3 takes M2's **default
 /// `rebuild_derived`** (identity): nothing to re-seed before replay.
 ///
-/// Authoritative vs hint: `frontiers`/`nodes`/`principals` are authoritative
-/// (the compressed allocation journal). The delegation forest, any
-/// `address → owner` ω-cache, and any `id → prefix` reverse index are *hints*
-/// — recomputable from `principals` alone — and are deliberately NOT stored
-/// (Open build decisions: defaults taken).
+/// Authoritative vs hint: `frontiers`/`nodes`/`principals`/`publication` are
+/// authoritative (the compressed allocation journal, and the per-document
+/// publication record beside it). The delegation forest, any
+/// `address → owner` ω-cache, any `id → prefix` reverse index, and the
+/// exception set over `publication` are *hints* — recomputable from the
+/// authoritative fields alone — and are deliberately NOT stored here (Open
+/// build decisions: defaults taken; the exception set is lane 2.2's derived
+/// membership index).
 ///
 /// The `Serialize` impl targets bincode-class formats, M2's checkpoint
 /// encoding: `frontiers` is keyed by a struct, which formats requiring string
@@ -281,10 +310,13 @@ impl TryFrom<M3RecShadow> for M3Rec {
 /// `im::HashMap` iterates in an order the process's hash seed picks — so a
 /// caller wanting a byte-comparable rendering canonicalizes it (the engine's
 /// observation surface transcodes for exactly this reason) rather than
-/// hashing the encoding.
+/// hashing the encoding. Field ORDER is the compatibility surface (bincode
+/// carries no names): a field is APPENDED, never inserted, so an older
+/// checkpoint decodes its prefix and fails at the field it lacks rather than
+/// mis-reading one field as another.
 ///
 /// Equality is structural, and it is the meaning of the type: two slices are
-/// equal iff their three registries hold the same entries, whatever order a
+/// equal iff their four registries hold the same entries, whatever order a
 /// process's hash seed iterates them in. So a slice recovered from a
 /// checkpoint is comparable to the one it was taken from — the whole claim
 /// recovery makes — without going through a rendering. There is no
@@ -362,7 +394,48 @@ pub struct M3State {
     /// (the id, the seat, and the authorization predicate stated in terms of
     /// the id).
     principals: im::OrdMap<Address, PrincipalId>,
+
+    /// The publication state of every registered DOCUMENT — the engine's ONE
+    /// definition of `published(doc)` (owner ruling D1, 2026-09-05; PUB-1.68:
+    /// the substrate knows one bit per document, and PUB-1.70: never a
+    /// second). Keyed by document address, versions included (a version is a
+    /// registered Document); the value is the RESOLVED bit its minting
+    /// `Allocate` journaled (PUB-7.10), folded by [`M3State::apply_m3`] and
+    /// written by nothing else: there is no publish op and no transition
+    /// (PUB-1.9, PUB-1.11), so an entry is written once, at mint, and stands
+    /// forever. AUTHORITATIVE working state like its three siblings — an
+    /// ordinary serde field, restored from the checkpoint and advanced by
+    /// replay, never `#[serde(skip)]` — and the exception set (lane 2.2) is a
+    /// derived membership index OVER it (PUB-7.5, PUB-7.7), answerable off
+    /// this record at the one-lookup cost [`M3State::published`] pays.
+    ///
+    /// Declared LAST, and that is load-bearing: bincode encodes a struct as
+    /// its fields in declaration order with no names, so a pre-publication
+    /// checkpoint decodes its three older fields and then meets end-of-input
+    /// where this one should begin — the decode FAILURE PUB-7.8 demands,
+    /// never a default and never everything-published. Inserted anywhere
+    /// earlier, the same checkpoint would read a sibling's bytes as this map.
+    ///
+    /// OPEN DECISION (collection shape — the delta names none): an `OrdMap`
+    /// rather than the frontier map's `HashMap`. The read is a point lookup
+    /// either way — O(log |documents|) tumbler compares here — and what the
+    /// ordered map buys is a checkpoint encoding and an iteration order that
+    /// are functions of the contents: two boards with one history checkpoint
+    /// this field to one byte string, and the seed lane 2.2 folds over it
+    /// walks documents in address order. `nodes` and `principals` already pay
+    /// that price for the same reason.
+    publication: im::OrdMap<Address, bool>,
 }
+
+/// The `published` an `Allocate` carries OUTSIDE the document tier — an
+/// account, a content or link element — where publication is not a property
+/// of the address at all (PUB-1.68: one bit per DOCUMENT, and nothing else
+/// carries one). [`M3State::apply_m3`] reads the bit only for a Document-tier
+/// address, so this value is never consulted; it is named so the three
+/// non-document mints say what they stamp and why, and so a reader of a
+/// journal frame knows the `false` on an account or element `Allocate` is an
+/// absence and not a verdict.
+const NO_PUBLICATION_STATE: bool = false;
 
 // ---------------------------------------------------------------------------
 // Pure structural helpers (the house style for pure helpers: free functions).
@@ -761,6 +834,9 @@ impl M3State {
             frontiers: im::HashMap::new(),
             nodes: im::OrdSet::unit(root.clone()),
             principals: im::OrdMap::unit(root.clone(), BOOTSTRAP_PRINCIPAL),
+            // No document exists at Σ₀, so no document has a publication
+            // state: the empty docuverse is empty on this axis too.
+            publication: im::OrdMap::new(),
         }
     }
 
@@ -786,6 +862,14 @@ impl M3State {
     /// on the contiguity `debug_assert`, which is corruption rather than a
     /// live error path. What the fold trusts for both is an IN-PROCESS
     /// producer, which builds the variant directly.
+    ///
+    /// `Allocate`'s publication bit is folded for a DOCUMENT-tier address and
+    /// read for no other (PUB-7.7's fold half, at M3's own record: the map
+    /// and the registration reach a reader in the ONE commit that carries
+    /// the record, never a later step). Within the totality domain the write
+    /// is never an overwrite — an address is allocated once, and a re-staged
+    /// `Allocate` trips the contiguity check first — so the bit a document
+    /// was minted with is the bit that stands (PUB-1.9).
     ///
     /// `RegisterNode`'s admission conditions — node level, the
     /// [`MAX_NODE_COMPONENTS`] cap, and bootstrap lineage — belong to
@@ -820,7 +904,7 @@ impl M3State {
         let mut s = self.clone();
         // Adding a variant? `M3RecShadow` needs it as well — see `M3Rec`.
         match r {
-            M3Rec::Allocate { addr } => {
+            M3Rec::Allocate { addr, published } => {
                 let key = namespace_of(addr)
                     .expect("≥ 2 components — every mint extends a registered parent");
                 let n = ordinal(addr.tumbler()).clone();
@@ -837,6 +921,14 @@ impl M3State {
                     "Allocate ordinal must equal its namespace's effective frontier + 1"
                 );
                 s.frontiers.insert(key, n);
+                // The publication bit rides only a DOCUMENT's Allocate — a
+                // version is a document — and lands in the same fold step as
+                // the registration, so no reader's snapshot holds the one
+                // without the other (PUB-7.7). On any other tier the field is
+                // `NO_PUBLICATION_STATE`, an absence, and is not read.
+                if addr.level() == Level::Document {
+                    s.publication.insert(addr.clone(), *published);
+                }
             }
             M3Rec::RegisterNode { addr } => {
                 s.nodes.insert(addr.clone());
@@ -948,9 +1040,9 @@ impl M3State {
 
     /// Version-chain `LockKey`: `(source, 1)` — SEPARATE from the document
     /// chain below (ASN-0123 VD). Pairs with
-    /// [`M3State::mint_version`]`(source)` — take it BEFORE the closure; the
-    /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
-    /// ADVANCES it.
+    /// [`M3State::mint_version`]`(source, published)` — take it BEFORE the
+    /// closure; the mint inside READS this key's frontier, and the [`M3Rec`]
+    /// you stage ADVANCES it.
     ///
     /// Total on every [`Address`], and the anchor is the argument itself, so
     /// the key is T4-valid whatever tier arrives. What a wrong tier costs is
@@ -964,9 +1056,9 @@ impl M3State {
     }
 
     /// Document-chain `LockKey`: `(account, 2)`. Pairs with
-    /// [`M3State::mint_document`]`(account)` — take it BEFORE the closure; the
-    /// mint inside READS this key's frontier, and the [`M3Rec`] you stage
-    /// ADVANCES it.
+    /// [`M3State::mint_document`]`(account, published)` — take it BEFORE the
+    /// closure; the mint inside READS this key's frontier, and the [`M3Rec`]
+    /// you stage ADVANCES it.
     ///
     /// Same shape as [`M3State::version_lock_key`]: total on every
     /// [`Address`], T4-valid whatever tier arrives because the anchor is the
@@ -1053,7 +1145,13 @@ impl M3State {
             return Err(MintError::HomeNotRegistered); // P6/C2
         }
         let a = self.next_in(&content_ns(home)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a }))
+        Ok((
+            a.clone(),
+            M3Rec::Allocate {
+                addr: a,
+                published: NO_PUBLICATION_STATE,
+            },
+        ))
     }
 
     /// Next link address under `home`: namespace `(b_L(home), 1)`, element
@@ -1064,7 +1162,13 @@ impl M3State {
             return Err(MintError::HomeNotRegistered); // L1a
         }
         let a = self.next_in(&link_ns(home)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a }))
+        Ok((
+            a.clone(),
+            M3Rec::Allocate {
+                addr: a,
+                published: NO_PUBLICATION_STATE,
+            },
+        ))
     }
 
     /// Next version identity: namespace `(source, 1)` — the version chain,
@@ -1072,20 +1176,49 @@ impl M3State {
     /// CREATENEWVERSION] The caller holds
     /// [`M3State::version_lock_key`]`(source)` and stages the returned
     /// [`M3Rec`].
-    pub fn mint_version(&self, source: &Address) -> Result<(Address, M3Rec), MintError> {
+    ///
+    /// `published` is the RESOLVED bit the version is born with, stamped on
+    /// the `Allocate` exactly as passed (PUB-8.18): the three-valued flag and
+    /// its ABSENT ⇒ INHERIT `published(source)` rule are the CALLING
+    /// composite's to resolve off its own working state (PUB-8.17), and this
+    /// mint applies no default of its own — a version of a private source
+    /// passed `true` is born published and passed `false` private, the
+    /// composite's choice both times. The write-path refusals that bound
+    /// that choice (PUB-2.7, PUB-2.9) are the daemon's routed item
+    /// (PUB-8.2), not this mint's.
+    pub fn mint_version(
+        &self,
+        source: &Address,
+        published: bool,
+    ) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_document(source) {
             // V-WF: registered Document (covers unregistered AND non-document).
             return Err(MintError::SourceNotRegistered);
         }
         let a = self.next_in(&version_ns(source)).map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a, published }))
     }
 
     /// Next document identity under an account: namespace `(account, 2)`.
     /// [CREATENEWDOCUMENT; cross-owner VERSION; fork] The caller holds
     /// [`M3State::document_lock_key`]`(account)` and stages the returned
     /// [`M3Rec`].
-    pub fn mint_document(&self, account: &Address) -> Result<(Address, M3Rec), MintError> {
+    ///
+    /// `published` is the RESOLVED bit the document is born with, stamped on
+    /// the `Allocate` exactly as passed (PUB-8.18) — never the caller's
+    /// three-valued flag, and NEVER a default of this mint's own. In
+    /// particular the empty-account rule (PUB-8.21: a flagless FIRST mint is
+    /// born published) belongs to the CREATE path and lives in
+    /// [`crate::Namespace::create_new_document`], which resolves it before
+    /// calling here; a cross-owner `version` into an empty account passes the
+    /// bit its composite inherited from the SOURCE (PUB-8.17), and a `false`
+    /// there mints private. Whether that first mint is REFUSED (PUB-8.20) is
+    /// the daemon's door, not M3's (owner ruling D2c).
+    pub fn mint_document(
+        &self,
+        account: &Address,
+        published: bool,
+    ) -> Result<(Address, M3Rec), MintError> {
         if !self.is_registered_account(account) {
             // P8/CND.pre (covers unregistered AND non-account).
             return Err(MintError::NotAnAccount);
@@ -1093,7 +1226,7 @@ impl M3State {
         let a = self
             .next_in(&document_ns(account))
             .map_err(MintError::Gate)?;
-        Ok((a.clone(), M3Rec::Allocate { addr: a }))
+        Ok((a.clone(), M3Rec::Allocate { addr: a, published }))
     }
 
     /// Next account identity under `parent`: namespace `(parent, 2)` under a
@@ -1115,7 +1248,13 @@ impl M3State {
         let a = self
             .next_in(&account_ns(parent))
             .expect("a registered node/account anchor with g ≤ 2 passes TA5a");
-        Some((a.clone(), M3Rec::Allocate { addr: a }))
+        Some((
+            a.clone(),
+            M3Rec::Allocate {
+                addr: a,
+                published: NO_PUBLICATION_STATE,
+            },
+        ))
     }
 }
 
@@ -1198,6 +1337,32 @@ impl M3State {
     /// `register_node`'s freshness gate wants) and this.
     pub fn is_registered_account(&self, a: &Address) -> bool {
         self.entity_level(a) == Some(Level::Account)
+    }
+
+    /// `published(doc)` — THE engine's one definition of a document's
+    /// publication state (owner ruling D1; PUB-1.68, PUB-7.8): the bit its
+    /// minting `Allocate` journaled, read off the publication map at one
+    /// point lookup — the record-lookup cost the PUB pack names for a build
+    /// answering off M3's document records (§5.5), and the record the derived
+    /// exception set (lane 2.2) is a membership index over. A version
+    /// address answers its OWN member's bit; projecting a member to its
+    /// document ahead of a gate (PUB-2.15) is the caller's address
+    /// arithmetic, not this read's.
+    ///
+    /// CONTRACT — `doc` is a REGISTERED document: callers gate on
+    /// [`M3State::is_registered_document`] first (PUB-6.37: registration
+    /// precedes publication, and an unregistered address is answered by the
+    /// registration check and by nothing here). Every registered document has
+    /// an entry, because the record that registers it carries the bit and the
+    /// fold writes both in one step; an unregistered address has no record,
+    /// so what this function returns for one is no answer at all — it is
+    /// `false`, the fail-private direction (PUB-1.1), and a caller that reads
+    /// it has skipped the gate.
+    ///
+    /// IMMUTABLE: no M3 function changes a document's bit after its mint —
+    /// there is no publish op, in either direction (PUB-1.9, PUB-1.68).
+    pub fn published(&self, doc: &Address) -> bool {
+        self.publication.get(doc).copied().unwrap_or(false)
     }
 
     /// ω's resolution step: the Π entry whose prefix is the LONGEST covering

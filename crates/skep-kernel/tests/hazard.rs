@@ -310,7 +310,7 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegate");
         let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct).expect("create document");
+            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
         // One fat Val is ONE position (a composite atom), so appends land at
         // ordinal i+1; each still journals ~300 KiB, forcing rotation.
         for i in 0..8u32 {
@@ -437,7 +437,7 @@ fn d_trial(trial: u64) -> (usize, u64) {
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegate");
         let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct).expect("create document");
+            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
         tum_str(doc.tumbler())
     };
 

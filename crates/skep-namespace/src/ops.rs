@@ -13,8 +13,8 @@ use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use crate::error::{CreateDocumentError, DelegateError, NodeError};
 use crate::state::bootstrap_root;
 use crate::{
-    prefix_contains, HasM3, M3Rec, M3State, PrincipalId, MAX_NODE_COMPONENTS,
-    MAX_PRINCIPAL_COMPONENTS,
+    first_document_address, prefix_contains, HasM3, M3Rec, M3State, PrincipalId,
+    MAX_NODE_COMPONENTS, MAX_PRINCIPAL_COMPONENTS,
 };
 
 /// M3's transact-driving op handle over M2 (§B): a thin borrow of the
@@ -54,10 +54,34 @@ where
     /// harmless orphan empty document — exactly-once is M10's). Returns the
     /// address and its commit `Seq` only after commit
     /// (commit-before-acknowledge).
+    ///
+    /// `published` is the CREATE path's three-valued flag (PUB-8.16:
+    /// `absent | true | false`, `None` being absent), and THIS op resolves it
+    /// to the bit the mint journals (PUB-7.10, PUB-8.18) — the mint applies
+    /// no default of its own. The rule is PUB-8.21's empty-account rule,
+    /// read off the same WORKING state the mint reads, under the held
+    /// document-chain key, so exactly one mint is ever the account's first:
+    ///
+    /// | the account has documents | flag          | the bit journaled |
+    /// |---------------------------|---------------|-------------------|
+    /// | no                        | absent        | `true` — the home is born published (PUB-1.17) |
+    /// | no                        | `Some(true)`  | `true` |
+    /// | no                        | `Some(false)` | `false` — minted PRIVATE, not refused here |
+    /// | yes                       | any           | `flag.unwrap_or(false)` — private by default (PUB-1.1) |
+    ///
+    /// The explicit-`false` FIRST mint is refused at the DAEMON's door
+    /// (PUB-8.20; owner ruling D2c), not in this transaction — here it mints
+    /// private, and no `MintError`/`CreateDocumentError` variant names it
+    /// (the one departure from PUB-8.19's letter, recorded in the round's
+    /// report). "Has documents" is the published pairing —
+    /// [`first_document_address`] holds a registered document — exact because
+    /// the chain is contiguous from 1 (B1). The engine's only caller passes
+    /// `None` until the wire carries the flag (lane 2.3).
     pub fn create_new_document(
         &self,
         caller: PrincipalId,
         account: &Address,
+        published: Option<bool>,
     ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
         let keys = [
             M3State::document_lock_key(account),
@@ -67,7 +91,14 @@ where
             if !stg.base().m3().is_effective_owner(caller, account) {
                 return Err(CreateDocumentError::NotOwner);
             }
-            let (addr, rec) = stg.working().m3().mint_document(account)?;
+            let m3 = stg.working().m3();
+            // PUB-8.21, off WORKING state under the held chain key: the
+            // flagless FIRST mint is born published; every other flagless
+            // mint is private (PUB-1.1); an explicit flag is honored as sent.
+            let has_documents = first_document_address(account)
+                .is_some_and(|first| m3.is_registered_document(&first));
+            let published = published.unwrap_or(!has_documents);
+            let (addr, rec) = m3.mint_document(account, published)?;
             stg.push(rec.into());
             Ok(addr)
         })
@@ -302,6 +333,14 @@ where
     /// `CreateDocumentError::Mint(MintError::NotAnAccount)` — the node-tier
     /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6). M5
     /// wires the shared content separately (mechanism/policy split).
+    ///
+    /// The publication flag is passed ABSENT — the reduction is literal, so
+    /// the fork's bit is [`Namespace::create_new_document`]'s create-path
+    /// resolution (PUB-8.21): private in a non-empty account, and the home's
+    /// `true` in an empty one, which the daemon's mint-first door refuses
+    /// before this op is reached (PUB-1.18, PUB-8.22). `fork`'s own
+    /// three-valued flag on the wire (PUB-8.16) is lane 2.3's, with the `Op`
+    /// field that carries it.
     pub fn fork(
         &self,
         caller: PrincipalId,
@@ -310,6 +349,6 @@ where
         let Some(pfx) = snap.world().m3().principal_prefix(caller) else {
             return Err(TxnError::Rejected(CreateDocumentError::NotOwner));
         };
-        self.create_new_document(caller, pfx)
+        self.create_new_document(caller, pfx, None)
     }
 }

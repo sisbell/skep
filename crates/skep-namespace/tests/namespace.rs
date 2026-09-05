@@ -63,8 +63,15 @@ fn a(comps: &[u32]) -> Address {
     validate(t(comps)).expect("test addresses are T4-valid")
 }
 
+/// An `Allocate` off the publication axis — an account, an element, or a
+/// document whose bit the test at hand never reads — stamped `false`, the
+/// value the non-document mints stamp themselves. A test ABOUT the bit builds
+/// its record explicitly.
 fn alloc(comps: &[u32]) -> M3Rec {
-    M3Rec::Allocate { addr: a(comps) }
+    M3Rec::Allocate {
+        addr: a(comps),
+        published: false,
+    }
 }
 
 fn genesis_world() -> World {
@@ -124,10 +131,11 @@ const ID2: PrincipalId = PrincipalId(2);
 /// refuse, and the ω no address resolves to.
 const UNKNOWN_ID: PrincipalId = PrincipalId(99);
 
-/// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then
-/// `create_new_document` under it (⇒ doc `[1,0,1,0,1]`). The handle borrows
-/// the kernel, so it stays inside; a test that needs one builds it off the
-/// returned kernel.
+/// The standard fixture: genesis, then `delegate [1,0,1] → ID1`, then a
+/// flagless `create_new_document` under it (⇒ doc `[1,0,1,0,1]`, the
+/// account's home, born PUBLISHED by the create-path default). The handle
+/// borrows the kernel, so it stays inside; a test that needs one builds it
+/// off the returned kernel.
 fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
     let k = mem_kernel(genesis_world());
     let ns = Namespace::new(&k);
@@ -135,7 +143,7 @@ fn kernel_with_account_and_doc() -> (Kernel<World>, Address, Address) {
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
         .expect("bootstrap delegates the first account");
     let (doc, _) = ns
-        .create_new_document(ID1, &acct)
+        .create_new_document(ID1, &acct, None)
         .expect("the delegate creates a document");
     (k, acct, doc)
 }
@@ -161,15 +169,15 @@ fn genesis_seeds_bootstrap_node_and_principal() {
 }
 
 #[test]
-fn the_slice_prints_its_three_registries_and_their_contents() {
+fn the_slice_prints_its_four_registries_and_their_contents() {
     // The slice a world embeds is reportable, so a test failure or a `dbg!` in
     // any engine can print it — the impl has to live here, since no downstream
-    // crate may add it. Rendered from a POPULATED slice, so all three
+    // crate may add it. Rendered from a POPULATED slice, so all four
     // registries have contents to print and not just names.
     let (k, _acct, _doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
     let dump = format!("{:?}", snap.world().m3());
-    for field in ["frontiers", "nodes", "principals"] {
+    for field in ["frontiers", "nodes", "principals", "publication"] {
         assert!(dump.contains(field), "the dump omits {field}: {dump}");
     }
     // The contents ride along: the bootstrap principal and the delegate.
@@ -195,8 +203,15 @@ fn pure_mints_answer_the_next_address_on_each_documented_chain() {
     assert_eq!(c1, a(&[1, 0, 1, 0, 1, 0, 1, 1]));
     assert_eq!(c1.subspace(), Some(&content_subspace()));
     // The mint hands back exactly the Allocate for the minted address —
-    // whole value, variant and payload alike.
-    assert_eq!(rec, M3Rec::Allocate { addr: c1.clone() });
+    // whole value, variant and payload alike; an element carries no
+    // publication state, so the bit is the non-document mints' `false`.
+    assert_eq!(
+        rec,
+        M3Rec::Allocate {
+            addr: c1.clone(),
+            published: false,
+        }
+    );
     // Determinism (B2): a pure function of the frontier — same state, same
     // answer.
     assert_eq!(m3.mint_content(&doc).expect("repeat").0, c1);
@@ -209,13 +224,13 @@ fn pure_mints_answer_the_next_address_on_each_documented_chain() {
 
     // mint_version: namespace (d, 1) — the version chain, SEPARATE from the
     // document chain (ASN-0123 VD).
-    let (v1, _) = m3.mint_version(&doc).expect("version mint");
+    let (v1, _) = m3.mint_version(&doc, false).expect("version mint");
     assert_eq!(v1, a(&[1, 0, 1, 0, 1, 1]));
     assert_eq!(v1.level(), Level::Document);
 
     // mint_document: namespace (account, 2) — advances independently of the
     // version chain; no collision (the ASN-0103 fix).
-    let (d2, _) = m3.mint_document(&acct).expect("document mint");
+    let (d2, _) = m3.mint_document(&acct, false).expect("document mint");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
     assert_ne!(d2, v1);
 }
@@ -255,7 +270,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
 
     // Version chain (d, 1) — ASN-0123's separate chain.
     let v1 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
-        m3.mint_version(&doc)
+        m3.mint_version(&doc, false)
     });
     assert_eq!(v1, a(&[1, 0, 1, 0, 1, 1]));
     let m3 = k.snapshot().world().m3().clone();
@@ -265,7 +280,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     assert_eq!(m3.entity_level(&v1), Some(Level::Document));
     // The frontier advanced, so the chain does not re-mint v1.
     let v2 = commit_mint(&k, M3State::version_lock_key(&doc), |m3| {
-        m3.mint_version(&doc)
+        m3.mint_version(&doc, false)
     });
     assert_eq!(v2, a(&[1, 0, 1, 0, 1, 2]));
     assert!(k.snapshot().world().m3().is_allocated(&v2));
@@ -286,7 +301,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     });
     assert_eq!(c, a(&[1, 0, 1, 0, 1, 1, 0, 1, 1]));
     let vv = commit_mint(&k, M3State::version_lock_key(&v1), |m3| {
-        m3.mint_version(&v1)
+        m3.mint_version(&v1, false)
     });
     assert_eq!(vv, a(&[1, 0, 1, 0, 1, 1, 1]));
     let m3 = k.snapshot().world().m3().clone();
@@ -295,7 +310,7 @@ fn every_chain_survives_the_round_trip_from_mint_to_allocated() {
     // Through all of it the document chain (A, 2) stood still — the ASN-0123
     // separation, now checked across real folds rather than one snapshot.
     assert_eq!(
-        m3.mint_document(&acct).expect("document mint").0,
+        m3.mint_document(&acct, false).expect("document mint").0,
         a(&[1, 0, 1, 0, 2])
     );
 }
@@ -351,9 +366,9 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
                     stg.push(rc.into());
                     let (l, rl) = stg.working().m3().mint_link(&doc)?;
                     stg.push(rl.into());
-                    let (v, rv) = stg.working().m3().mint_version(&doc)?;
+                    let (v, rv) = stg.working().m3().mint_version(&doc, false)?;
                     stg.push(rv.into());
-                    let (d, rd) = stg.working().m3().mint_document(&acct)?;
+                    let (d, rd) = stg.working().m3().mint_document(&acct, false)?;
                     stg.push(rd.into());
                     Ok(vec![c, l, v, d])
                 })
@@ -387,8 +402,8 @@ fn the_allocator_never_repeats_an_address_across_an_interleaved_schedule() {
     for (chain, next) in [
         ("content", m3.mint_content(&doc).expect("peek").0),
         ("link", m3.mint_link(&doc).expect("peek").0),
-        ("version", m3.mint_version(&doc).expect("peek").0),
-        ("document", m3.mint_document(&acct).expect("peek").0),
+        ("version", m3.mint_version(&doc, false).expect("peek").0),
+        ("document", m3.mint_document(&acct, false).expect("peek").0),
     ] {
         assert!(
             !minted.contains(&next),
@@ -434,22 +449,22 @@ fn mint_preconditions_reject_structurally() {
     // V-WF: version source must be a registered Document — covers an
     // unregistered address AND a registered non-document alike.
     assert_eq!(
-        m3.mint_version(&unregistered_doc).unwrap_err(),
+        m3.mint_version(&unregistered_doc, false).unwrap_err(),
         MintError::SourceNotRegistered
     );
     assert_eq!(
-        m3.mint_version(&acct).unwrap_err(),
+        m3.mint_version(&acct, false).unwrap_err(),
         MintError::SourceNotRegistered
     );
     // P8/CND.pre: document target must be a registered Account — covers
     // unregistered AND non-account (document, node) alike.
     assert_eq!(
-        m3.mint_document(&unregistered_acct).unwrap_err(),
+        m3.mint_document(&unregistered_acct, false).unwrap_err(),
         MintError::NotAnAccount
     );
-    assert_eq!(m3.mint_document(&doc).unwrap_err(), MintError::NotAnAccount);
+    assert_eq!(m3.mint_document(&doc, false).unwrap_err(), MintError::NotAnAccount);
     assert_eq!(
-        m3.mint_document(&node).unwrap_err(),
+        m3.mint_document(&node, false).unwrap_err(),
         MintError::NotAnAccount
     );
 
@@ -473,7 +488,7 @@ fn mint_preconditions_reject_structurally() {
     // `is_allocated` answers from the node registry — so an ungated version
     // mint would return an address that reads unallocated.
     assert_eq!(
-        m3.mint_version(&node).unwrap_err(),
+        m3.mint_version(&node, false).unwrap_err(),
         MintError::SourceNotRegistered
     );
     // An ELEMENT home: b_C(e) = e ++ [0, s_C] carries four separators and is
@@ -488,7 +503,7 @@ fn mint_preconditions_reject_structurally() {
         MintError::HomeNotRegistered
     );
     assert_eq!(
-        m3.mint_version(&element).unwrap_err(),
+        m3.mint_version(&element, false).unwrap_err(),
         MintError::SourceNotRegistered
     );
     // An ELEMENT target is the ONE live input that could reach M1's TA5a gate
@@ -496,7 +511,7 @@ fn mint_preconditions_reject_structurally() {
     // refuses — so this gate is what keeps `MintError::Gate` the dead,
     // defensive arm its own doc claims it is.
     assert_eq!(
-        m3.mint_document(&element).unwrap_err(),
+        m3.mint_document(&element, false).unwrap_err(),
         MintError::NotAnAccount
     );
     // The fifth mint's gate through its published face (the document and
@@ -511,7 +526,7 @@ fn a_mint_refusal_lifts_into_the_document_rejection() {
     // composes with `?` inside an op that creates a document — the same lift
     // M5 and M7 provide into their own op errors.
     fn create(m3: &M3State, account: &Address) -> Result<Address, CreateDocumentError> {
-        Ok(m3.mint_document(account)?.0)
+        Ok(m3.mint_document(account, false)?.0)
     }
     let (k, acct, doc) = kernel_with_account_and_doc();
     let snap = k.snapshot();
@@ -1025,7 +1040,7 @@ fn omega_refuses_a_principal_seated_below_the_account_tier() {
     // outcome for the wrong reason, and the wrong one for M5, which asks ω
     // about elements.
     assert_eq!(
-        rejected(Namespace::new(&k).create_new_document(ID2, &doc)),
+        rejected(Namespace::new(&k).create_new_document(ID2, &doc, None)),
         CreateDocumentError::NotOwner
     );
 }
@@ -1125,7 +1140,7 @@ fn delegate_mints_the_account_and_registers_its_principal_atomically() {
     // next_account_prefix: None unless the parent is a REGISTERED node or
     // account.
     assert!(m3.next_account_prefix(&a(&[1, 0, 9])).is_none());
-    let (doc, _) = ns.create_new_document(ID1, &acct).expect("create");
+    let (doc, _) = ns.create_new_document(ID1, &acct, None).expect("create");
     assert!(k
         .snapshot()
         .world()
@@ -1375,8 +1390,8 @@ fn create_new_document_authorizes_by_omega() {
         .expect("delegate");
 
     // Ordinary: the effective owner baptizes documents in chain order.
-    let (d1, s1) = ns.create_new_document(ID1, &acct).expect("create 1");
-    let (d2, s2) = ns.create_new_document(ID1, &acct).expect("create 2");
+    let (d1, s1) = ns.create_new_document(ID1, &acct, None).expect("create 1");
+    let (d2, s2) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
     assert!(s2 > s1);
@@ -1387,12 +1402,12 @@ fn create_new_document_authorizes_by_omega() {
     let before = k.current_seq();
     assert!(prefix_contains(&a(&[1]), &acct));
     assert_eq!(
-        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct)),
+        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &acct, None)),
         CreateDocumentError::NotOwner
     );
     // An unknown caller is the effective owner of nothing.
     assert_eq!(
-        rejected(ns.create_new_document(UNKNOWN_ID, &acct)),
+        rejected(ns.create_new_document(UNKNOWN_ID, &acct, None)),
         CreateDocumentError::NotOwner
     );
     // ω-auth is evaluated FIRST (§7): a non-owner of an unregistered
@@ -1400,22 +1415,22 @@ fn create_new_document_authorizes_by_omega() {
     // prefixes under [1]) reaches the structural mint gate — NotAnAccount
     // covers unregistered and node-tier targets alike.
     assert_eq!(
-        rejected(ns.create_new_document(ID1, &a(&[1, 0, 2]))),
+        rejected(ns.create_new_document(ID1, &a(&[1, 0, 2]), None)),
         CreateDocumentError::NotOwner
     );
     assert_eq!(
-        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1, 0, 2]))),
+        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1, 0, 2]), None)),
         CreateDocumentError::Mint(MintError::NotAnAccount)
     );
     assert_eq!(
-        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1]))),
+        rejected(ns.create_new_document(BOOTSTRAP_PRINCIPAL, &a(&[1]), None)),
         CreateDocumentError::Mint(MintError::NotAnAccount)
     );
     // A refused creation baptizes nothing: no commit, and the account's
     // document chain still stands where d1 and d2 left it — the next
     // creation takes ordinal 3, so no refusal spent a slot.
     assert_eq!(k.current_seq(), before);
-    let (d3, _) = ns.create_new_document(ID1, &acct).expect("create 3");
+    let (d3, _) = ns.create_new_document(ID1, &acct, None).expect("create 3");
     assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
 }
 
@@ -1432,13 +1447,13 @@ fn the_first_document_address_is_the_slot_the_document_chain_opens_at() {
     let slot = first_document_address(&acct).expect("an account anchors a document chain");
     assert_eq!(slot, a(&[1, 0, 1, 0, 1]));
     assert!(!k.snapshot().world().m3().is_allocated(&slot)); // the slot, not a claim
-    let (d1, _) = ns.create_new_document(ID1, &acct).expect("create 1");
+    let (d1, _) = ns.create_new_document(ID1, &acct, None).expect("create 1");
     assert_eq!(d1, slot);
     // …and the prescribed pairing answers "has this account any documents?"
     // in both directions: the slot was unallocated above, and is a registered
     // document now.
     assert!(k.snapshot().world().m3().is_registered_document(&slot));
-    let (d2, _) = ns.create_new_document(ID1, &acct).expect("create 2");
+    let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create 2");
     assert_ne!(d2, slot);
     // The ghost home document is that rule applied to the registry node's
     // operator account — so the compiled literal and the chain rule agree.
@@ -1471,7 +1486,7 @@ fn fork_mints_in_the_callers_own_account() {
     assert!(snap.world().m3().is_registered_document(&d1));
     assert!(snap.world().m3().is_effective_owner(ID1, &d1));
     // Shares the (account, 2) chain with create_new_document.
-    let (d2, _) = ns.create_new_document(ID1, &acct).expect("create");
+    let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
@@ -1686,6 +1701,13 @@ fn journaled_types_survive_serde_round_trips() {
     let recs = [
         M3Rec::Allocate {
             addr: a(&[1, 0, 1]),
+            published: false,
+        },
+        // A document's Allocate carries its resolved bit, and the bit rides
+        // the round trip with it (PUB-7.8/7.10).
+        M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
         },
         M3Rec::RegisterNode { addr: a(&[1, 7]) },
         M3Rec::RegisterPrincipal {
@@ -1704,13 +1726,18 @@ fn journaled_types_survive_serde_round_trips() {
     // byte-identically, variant for variant.
     #[derive(Serialize)]
     enum RawM3Rec {
-        Allocate { addr: Tumbler },
+        Allocate { addr: Tumbler, published: bool },
         RegisterNode { addr: Tumbler },
         RegisterPrincipal { prefix: Tumbler, id: PrincipalId },
     }
     let raw_recs = [
         RawM3Rec::Allocate {
             addr: t(&[1, 0, 1]),
+            published: false,
+        },
+        RawM3Rec::Allocate {
+            addr: t(&[1, 0, 1, 0, 1]),
+            published: true,
         },
         RawM3Rec::RegisterNode { addr: t(&[1, 7]) },
         RawM3Rec::RegisterPrincipal {
@@ -1738,8 +1765,11 @@ fn journaled_types_survive_serde_round_trips() {
     // at every replay from then on. M3's own door is what refuses it, before
     // the record is ever a value.
     for parentless in [t(&[7]), t(&[1])] {
-        let frame = bincode::serialize(&RawM3Rec::Allocate { addr: parentless })
-            .expect("serialize the raw shape");
+        let frame = bincode::serialize(&RawM3Rec::Allocate {
+            addr: parentless,
+            published: false,
+        })
+        .expect("serialize the raw shape");
         assert!(
             bincode::deserialize::<M3Rec>(&frame).is_err(),
             "a parentless Allocate decoded into a record"
@@ -1747,11 +1777,17 @@ fn journaled_types_survive_serde_round_trips() {
     }
     // The refusal is exactly the parentless case, not a length rule: the
     // shortest address that DOES extend a parent still decodes.
-    let shortest = bincode::serialize(&RawM3Rec::Allocate { addr: t(&[1, 1]) })
-        .expect("serialize the raw shape");
+    let shortest = bincode::serialize(&RawM3Rec::Allocate {
+        addr: t(&[1, 1]),
+        published: false,
+    })
+    .expect("serialize the raw shape");
     assert_eq!(
         bincode::deserialize::<M3Rec>(&shortest).expect("a two-component Allocate decodes"),
-        M3Rec::Allocate { addr: a(&[1, 1]) }
+        M3Rec::Allocate {
+            addr: a(&[1, 1]),
+            published: false,
+        }
     );
     // …and RegisterNode is untouched by it: a one-component node is exactly
     // what that variant carries.
@@ -1816,11 +1852,14 @@ fn journaled_types_survive_serde_round_trips() {
     let bytes = bincode::serialize(&state).expect("serialize M3State");
     let back: M3State = bincode::deserialize(&bytes).expect("deserialize M3State");
     // Whole-value: the decoded slice IS the encoded one, entry for entry
-    // across all three registries — which the per-question probes below then
+    // across all four registries — which the per-question probes below then
     // name, so a failure says which claim broke.
     assert_eq!(back, state);
     assert!(back.is_allocated(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
     assert!(back.is_registered_document(&doc));
+    // The publication record rides inside the slice too: the fixture's doc is
+    // the account's home, born published by the flagless create.
+    assert!(back.published(&doc));
     assert_eq!(back.entity_level(&acct), Some(Level::Account));
     assert_eq!(back.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
     // The whole principal registry rides inside the slice — both its
@@ -1832,10 +1871,12 @@ fn journaled_types_survive_serde_round_trips() {
 }
 
 #[test]
-fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
+fn durable_kernel_recovers_all_four_registries_by_checkpoint_and_replay() {
     // M3 rides M2 (§8): its slice is restored verbatim from the loaded
     // checkpoint, then advanced by replaying post-checkpoint M3Recs (default
-    // rebuild_derived — nothing to re-seed).
+    // rebuild_derived — nothing to re-seed). The publication map's own
+    // recovery, bit by bit, is pinned in
+    // `the_bit_is_immutable_and_recovers_by_checkpoint_and_replay`.
     let dir = tempdir().expect("tempdir");
     let acct;
     let doc;
@@ -1850,7 +1891,7 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
         // Checkpoint here: the delegation is restored FROM the checkpoint;
         // everything after rides post-checkpoint replay.
         k.checkpoint().expect("checkpoint");
-        let (d, _) = ns.create_new_document(ID1, &acct).expect("create");
+        let (d, _) = ns.create_new_document(ID1, &acct, None).expect("create");
         doc = d;
         ns.register_node(t(&[1, 7])).expect("register node");
         before = k.snapshot().world().m3().clone();
@@ -1869,8 +1910,393 @@ fn durable_kernel_recovers_all_three_registries_by_checkpoint_and_replay() {
     assert_eq!(m3.effective_owner(&doc), Some(ID1));
     // The frontiers recovered too: the chains continue where they left off.
     assert_eq!(m3.next_account_prefix(&a(&[1])), Some(a(&[1, 0, 2])));
-    let (d2, _) = m3.mint_document(&acct).expect("mint after recovery");
+    let (d2, _) = m3.mint_document(&acct, false).expect("mint after recovery");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+}
+
+// ---- the publication bit (PUB round 1, delta 1 — owner rulings D1/D2,
+//      2026-09-05; PUB-7.8, PUB-7.10, PUB-8.18, PUB-8.21) ----
+
+/// Create a document through the op and read its bit back off the committed
+/// slice — the observable of the CREATE path's resolution, since the bit the
+/// op resolved is the bit the record journals and the fold writes, and
+/// nothing else ever writes one.
+fn create_and_read(
+    ns: &Namespace<'_, World>,
+    k: &Kernel<World>,
+    caller: PrincipalId,
+    acct: &Address,
+    flag: Option<bool>,
+) -> (Address, bool) {
+    let (d, _) = ns
+        .create_new_document(caller, acct, flag)
+        .expect("the owner creates a document");
+    let published = k.snapshot().world().m3().published(&d);
+    (d, published)
+}
+
+/// PUB-8.21, the create-path default, resolved by `create_new_document` and
+/// never by the mint: a FLAGLESS first mint into an empty account is honored
+/// born PUBLISHED (PUB-1.17: the home) — the Allocate the mint stamps carries
+/// `true`, the fold's map holds `true`, and `published` answers `true`.
+#[test]
+fn a_flagless_first_create_is_born_published() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    // The account is empty: the slot its chain opens at holds nothing.
+    let slot = first_document_address(&acct).expect("an account anchors a document chain");
+    let empty = k.snapshot().world().m3().clone();
+    assert!(!empty.is_registered_document(&slot));
+
+    let (home, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(home, slot);
+    assert!(published, "the flagless first mint is the home, born published");
+
+    // The record half, pure, on the empty slice: the op resolved `true` and
+    // the mint stamps exactly what it is handed, so the Allocate that
+    // registered the home carries `true` — whole value…
+    let (addr, rec) = empty.mint_document(&acct, true).expect("the empty account mints");
+    assert_eq!(addr, slot);
+    assert_eq!(
+        rec,
+        M3Rec::Allocate {
+            addr: slot.clone(),
+            published: true,
+        }
+    );
+    // …and folding that one record is the whole of what the op committed:
+    // the map is written by the fold, in the same step as the registration.
+    assert_eq!(empty.apply_m3(&rec), *k.snapshot().world().m3());
+    assert!(empty.apply_m3(&rec).published(&slot));
+}
+
+/// PUB-8.21's other arm at the engine: an EXPLICIT `false` first mint is NOT
+/// refused here — it mints PRIVATE, honored as sent. The refusal (PUB-8.20)
+/// is the daemon's door (owner ruling D2c), and no `MintError` names it.
+/// An explicit `true` on an empty account is `true`.
+#[test]
+fn an_explicit_first_create_flag_is_honored_as_sent_and_never_refused_here() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct1, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate ID1");
+    let (acct2, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 2]), ID2)
+        .expect("delegate ID2");
+
+    let (home1, published) = create_and_read(&ns, &k, ID1, &acct1, Some(false));
+    assert_eq!(home1, first_document_address(&acct1).expect("slot"));
+    assert!(!published, "an explicit false mints private — no refusal, no override");
+    assert!(k.snapshot().world().m3().is_registered_document(&home1));
+
+    let (home2, published) = create_and_read(&ns, &k, ID2, &acct2, Some(true));
+    assert_eq!(home2, first_document_address(&acct2).expect("slot"));
+    assert!(published);
+}
+
+/// PUB-1.1 at the engine: once the account has a document, a flagless mint is
+/// PRIVATE, and an explicit flag is honored as sent — `Some(true)` publishes,
+/// `Some(false)` does not. The home's own bit stands through all of it.
+#[test]
+fn a_create_into_a_non_empty_account_is_private_unless_flagged() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    let (home, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert!(published);
+
+    let (d2, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    assert!(!published, "flagless into a non-empty account is private");
+    let (d3, published) = create_and_read(&ns, &k, ID1, &acct, Some(true));
+    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+    assert!(published);
+    let (d4, published) = create_and_read(&ns, &k, ID1, &acct, Some(false));
+    assert_eq!(d4, a(&[1, 0, 1, 0, 4]));
+    assert!(!published);
+
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.published(&home), "the home's bit is untouched by later mints");
+    assert!(!m3.published(&d2) && m3.published(&d3) && !m3.published(&d4));
+}
+
+/// PUB-8.18: `mint_version` stamps exactly the bit passed — the composite's
+/// resolution, never the mint's. A version of a PRIVATE source passed
+/// `false` reads `false`; the same source passed `true` reads `true`; the
+/// source's own bit is untouched either way (a version is its own member —
+/// projecting it to its document ahead of a gate, PUB-2.15, is the caller's).
+#[test]
+fn mint_version_stamps_exactly_the_bit_passed() {
+    let (k, acct, _home) = kernel_with_account_and_doc();
+    let ns = Namespace::new(&k);
+    // A PRIVATE source: the account's second document, flagless.
+    let (src, published) = create_and_read(&ns, &k, ID1, &acct, None);
+    assert!(!published);
+
+    let v1 = commit_mint(&k, M3State::version_lock_key(&src), |m3| {
+        m3.mint_version(&src, false)
+    });
+    let v2 = commit_mint(&k, M3State::version_lock_key(&src), |m3| {
+        m3.mint_version(&src, true)
+    });
+    assert_eq!(v1, a(&[1, 0, 1, 0, 2, 1]));
+    assert_eq!(v2, a(&[1, 0, 1, 0, 2, 2]));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&v1) && m3.is_registered_document(&v2));
+    assert!(!m3.published(&v1), "passed false, reads false");
+    assert!(m3.published(&v2), "passed true, reads true — the composite's choice");
+    assert!(!m3.published(&src), "the source's own bit is not the version's");
+
+    // The record carries the bit verbatim, whole value, in both directions.
+    for bit in [false, true] {
+        let (next, rec) = m3.mint_version(&src, bit).expect("peek");
+        assert_eq!(
+            rec,
+            M3Rec::Allocate {
+                addr: next,
+                published: bit,
+            }
+        );
+    }
+}
+
+/// The RIDER on PUB-8.21: the empty-account default is the CREATE path's
+/// alone. `mint_document` into an EMPTY account — the cross-owner `version`
+/// path, which passes the bit its composite inherited from the source
+/// (PUB-8.17) — stamps what it is handed: `false` mints the account's first
+/// document PRIVATE, the born-published default NOT applied.
+#[test]
+fn mint_document_applies_no_default_into_an_empty_account() {
+    let k = mem_kernel(genesis_world());
+    let ns = Namespace::new(&k);
+    let (acct, _) = ns
+        .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+        .expect("delegate");
+    let slot = first_document_address(&acct).expect("slot");
+    assert!(!k.snapshot().world().m3().is_registered_document(&slot));
+
+    let first = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+        m3.mint_document(&acct, false)
+    });
+    assert_eq!(first, slot, "the account's FIRST document");
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&first));
+    assert!(
+        !m3.published(&first),
+        "the create-path default must not be applied by the mint"
+    );
+    // …and the mint stamps `true` the same way, into a now non-empty
+    // account: it stamps, it never resolves.
+    let second = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+        m3.mint_document(&acct, true)
+    });
+    assert_eq!(second, a(&[1, 0, 1, 0, 2]));
+    assert!(k.snapshot().world().m3().published(&second));
+}
+
+/// The bit is folded for a DOCUMENT-tier Allocate and read for no other: an
+/// account's or an element's record carries the non-document `false` as an
+/// absence, and the map gains no entry for it.
+#[test]
+fn only_a_document_allocate_writes_the_publication_map() {
+    let s = M3State::genesis()
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1]),
+            published: true, // an account: outside the axis, not read
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 1]),
+            published: true,
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 1, 0, 1, 1]),
+            published: true, // an element: outside the axis, not read
+        });
+    assert!(s.published(&a(&[1, 0, 1, 0, 1])));
+    assert!(!s.published(&a(&[1, 0, 1])));
+    assert!(!s.published(&a(&[1, 0, 1, 0, 1, 0, 1, 1])));
+    // A version is a document, and its Allocate is folded like any other's.
+    let s = s.apply_m3(&M3Rec::Allocate {
+        addr: a(&[1, 0, 1, 0, 1, 1]),
+        published: false,
+    });
+    assert!(s.is_registered_document(&a(&[1, 0, 1, 0, 1, 1])));
+    assert!(!s.published(&a(&[1, 0, 1, 0, 1, 1])));
+}
+
+/// PUB-1.9/PUB-1.68, and PUB-7.7's fold half: no public function changes a
+/// document's bit after its mint — every op the crate has runs after the
+/// mints and none moves one — and the map is ordinary recoverable state:
+/// restored from the checkpoint and advanced by replaying the
+/// post-checkpoint Allocates, it reproduces the live map exactly.
+#[test]
+fn the_bit_is_immutable_and_recovers_by_checkpoint_and_replay() {
+    let dir = tempdir().expect("tempdir");
+    let (expected, live) = {
+        let k = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("open");
+        let ns = Namespace::new(&k);
+        let (acct, _) = ns
+            .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 0, 1]), ID1)
+            .expect("delegate");
+        let (home, _) = ns.create_new_document(ID1, &acct, None).expect("home");
+        let (draft, _) = ns.create_new_document(ID1, &acct, None).expect("draft");
+        let (edition, _) = ns
+            .create_new_document(ID1, &acct, Some(true))
+            .expect("published");
+        // Checkpoint here: those three are restored FROM the checkpoint; the
+        // rest ride post-checkpoint replay.
+        k.checkpoint().expect("checkpoint");
+        let v_private = commit_mint(&k, M3State::version_lock_key(&edition), |m3| {
+            m3.mint_version(&edition, false)
+        });
+        let v_published = commit_mint(&k, M3State::version_lock_key(&draft), |m3| {
+            m3.mint_version(&draft, true)
+        });
+        let (forked, _) = ns.fork(ID1).expect("fork"); // flagless, non-empty: private
+        let expected = vec![
+            (home, true),
+            (draft, false),
+            (edition, true),
+            (v_private, false),
+            (v_published, true),
+            (forked, false),
+        ];
+        let bits = |m3: &M3State| -> Vec<bool> { expected.iter().map(|(d, _)| m3.published(d)).collect() };
+        let after_mints = bits(k.snapshot().world().m3());
+        assert_eq!(
+            after_mints,
+            expected.iter().map(|(_, b)| *b).collect::<Vec<_>>()
+        );
+
+        // Every op the crate has, after the mints: none moves a bit.
+        ns.register_node(t(&[1, 7])).expect("register node");
+        ns.delegate(ID1, t(&[1, 0, 1, 1]), ID2).expect("sub-delegate");
+        let home = &expected[0].0;
+        commit_mint(&k, M3State::content_lock_key(home), |m3| {
+            m3.mint_content(home)
+        });
+        commit_mint(&k, M3State::link_lock_key(home), |m3| m3.mint_link(home));
+        ns.create_new_document(ID1, &acct, Some(true))
+            .expect("another document");
+        ns.fork(ID1).expect("another fork");
+        assert_eq!(bits(k.snapshot().world().m3()), after_mints);
+        let live = k.snapshot().world().m3().clone();
+        (expected, live)
+    };
+
+    let k2 = Kernel::open(fsync_config(dir.path()), genesis_world()).expect("reopen");
+    let recovered = k2.snapshot().world().m3().clone();
+    assert_eq!(recovered, live);
+    for (doc, bit) in &expected {
+        assert!(recovered.is_registered_document(doc));
+        assert_eq!(
+            recovered.published(doc),
+            *bit,
+            "{doc:?} recovered with the wrong bit"
+        );
+    }
+}
+
+/// PUB-7.8: the bit is NON-OPTIONAL at rest. A journal record and a
+/// checkpoint written in the pre-publication shape — the old bytes, built by
+/// hand — FAIL TO DECODE; neither resolves to `false`, and a checkpoint never
+/// resolves to everything-published (PUB-1.2: no grandfather clause). The
+/// premise is pinned first: the current shape IS the old bytes followed by
+/// the bit — the field is appended — so the hand-built shapes are the old
+/// ones and not a strawman.
+#[test]
+fn a_record_or_checkpoint_without_the_bit_fails_to_decode() {
+    // The journal record, pre-publication shape: an Allocate is its address.
+    #[derive(Serialize)]
+    enum OldM3Rec {
+        Allocate { addr: Tumbler },
+    }
+    let doc = a(&[1, 0, 1, 0, 1]);
+    let old = bincode::serialize(&OldM3Rec::Allocate {
+        addr: t(&[1, 0, 1, 0, 1]),
+    })
+    .expect("serialize the old shape");
+    for bit in [false, true] {
+        let new = bincode::serialize(&M3Rec::Allocate {
+            addr: doc.clone(),
+            published: bit,
+        })
+        .expect("serialize the current shape");
+        assert_eq!(
+            new,
+            [old.as_slice(), &[u8::from(bit)][..]].concat(),
+            "the current record shape is the old bytes plus the bit"
+        );
+    }
+    assert!(
+        bincode::deserialize::<M3Rec>(&old).is_err(),
+        "a pre-publication Allocate decoded — it must fail, never default"
+    );
+
+    // The checkpointed slice, pre-publication shape: three fields — the
+    // frontier map, the node set, the principal map — at genesis, where the
+    // first is empty and a `Vec` of pairs encodes exactly as the maps do.
+    #[derive(Serialize)]
+    struct OldM3State {
+        frontiers: Vec<(u8, u8)>, // empty: an empty map's bytes name no entry type
+        nodes: Vec<Tumbler>,
+        principals: Vec<(Tumbler, PrincipalId)>,
+    }
+    let old = bincode::serialize(&OldM3State {
+        frontiers: vec![],
+        nodes: vec![t(&[1])],
+        principals: vec![(t(&[1]), BOOTSTRAP_PRINCIPAL)],
+    })
+    .expect("serialize the old shape");
+    let new = bincode::serialize(&M3State::genesis()).expect("serialize genesis");
+    assert_eq!(
+        new,
+        [old.as_slice(), &0u64.to_le_bytes()[..]].concat(),
+        "the current checkpoint shape is the old bytes plus the (empty) publication map"
+    );
+    assert!(
+        bincode::deserialize::<M3State>(&old).is_err(),
+        "a pre-publication checkpoint decoded — it must fail, never read as everything-published"
+    );
+}
+
+/// PUB-6.37: registration precedes publication. `published` is defined for a
+/// REGISTERED document and callers gate on `is_registered_document` first;
+/// an address that was never minted — the chain's next slot, a deeper
+/// never-minted document — is answered by the registration check, which is
+/// false there, and `published` on it is outside the contract. A document
+/// becomes registered and gains its bit in the ONE step that mints it.
+#[test]
+fn registration_precedes_publication() {
+    let (k, acct, home) = kernel_with_account_and_doc();
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&home) && m3.published(&home));
+    for never_minted in [
+        a(&[1, 0, 1, 0, 2]),    // the chain's next slot
+        a(&[1, 0, 1, 0, 9]),    // deeper on the chain
+        a(&[1, 0, 1, 0, 1, 1]), // the home's version chain, never opened
+        a(&[1, 0, 2, 0, 1]),    // under an account that does not exist
+    ] {
+        assert!(
+            !m3.is_registered_document(&never_minted),
+            "{never_minted:?} reads as registered"
+        );
+    }
+    // The next slot is registered — and carries its bit — after the one
+    // record that mints it, and not before.
+    let d2 = commit_mint(&k, M3State::document_lock_key(&acct), |m3| {
+        m3.mint_document(&acct, true)
+    });
+    assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(m3.is_registered_document(&d2));
+    assert!(m3.published(&d2));
 }
 
 // ---- the ghost region (owner ruling, 2026-08-26) ----
@@ -1926,7 +2352,7 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
         .expect("the operator lands at account 1");
     let (doc1, _) = ns
-        .create_new_document(ID1, &operator)
+        .create_new_document(ID1, &operator, None)
         .expect("the ceremony's doc-1");
     assert_eq!(
         doc1,
@@ -1968,14 +2394,14 @@ fn the_content_chain_of_the_ghost_home_doc_never_issues_a_ghost_tumbler() {
     let link = commit_mint(&k, M3State::link_lock_key(&doc1), |m3| m3.mint_link(&doc1));
     assert_eq!(link, a(&[1, 1, 0, 1, 0, 1, 0, 2, 1]));
     let version = commit_mint(&k, M3State::version_lock_key(&doc1), |m3| {
-        m3.mint_version(&doc1)
+        m3.mint_version(&doc1, false)
     });
     assert_eq!(version, a(&[1, 1, 0, 1, 0, 1, 1]));
 
     // A SECOND document under the operator carries no floor: its content
     // chain starts at 1 like any other — the region is five positions of one
     // document, not a rule about the prefix.
-    let (doc2, _) = ns.create_new_document(ID1, &operator).expect("doc-2");
+    let (doc2, _) = ns.create_new_document(ID1, &operator, None).expect("doc-2");
     assert_eq!(doc2, a(&[1, 1, 0, 1, 0, 2]));
     let first = commit_mint(&k, M3State::content_lock_key(&doc2), |m3| {
         m3.mint_content(&doc2)
@@ -1996,7 +2422,7 @@ fn a_floored_frontier_survives_the_checkpoint_round_trip() {
     let (operator, _) = ns
         .delegate(BOOTSTRAP_PRINCIPAL, t(&[1, 1, 0, 1]), ID1)
         .expect("delegate the operator");
-    let (doc1, _) = ns.create_new_document(ID1, &operator).expect("doc-1");
+    let (doc1, _) = ns.create_new_document(ID1, &operator, None).expect("doc-1");
     commit_mint(&k, M3State::content_lock_key(&doc1), |m3| {
         m3.mint_content(&doc1)
     });

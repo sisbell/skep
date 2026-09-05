@@ -12,7 +12,7 @@ use skep_address::{
 
 use crate::endset::{coverage_class, CoverageClass, Endset, Link};
 use crate::error::{Invalid, NotBh4};
-use crate::registry::{Behavior, ShippedType};
+use crate::registry::{registry, Behavior, ShippedType};
 use crate::state::{lift, LinkState};
 
 /// Read view (ASN-0128). `Default` (active ∖ filtered) is meaningful only on
@@ -408,11 +408,12 @@ impl LinkState {
 
     /// BH3 join (§7): `target_of` across EVERY BH3-registered Binary type,
     /// keyed by the public [`coverage_class`] (M9 indexes with
-    /// `coverage_class(ty)`; the registry is private to `LinkState`, which is
-    /// why M7 composes the join).
+    /// `coverage_class(ty)`). M7 composes the join because the enumeration it
+    /// walks is crate-internal — which classes declare BH3 is the registry's
+    /// own knowledge, and the registry publishes a lookup, not a scan.
     pub fn targets_keyed(&self, source: &Address) -> im::HashMap<CoverageClass, Address> {
         let mut out = im::HashMap::new();
-        for class in self.registry.reverse_lookup_classes() {
+        for class in registry().reverse_lookup_classes() {
             if let Some(t) = self.target_of_class(class, source) {
                 out.insert(class.clone(), t);
             }
@@ -480,10 +481,7 @@ impl LinkState {
     /// typed refusal.
     pub fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
-        let registered_bh4 = self
-            .registration(&class)
-            .is_some_and(|r| r.behaviors.contains(&Behavior::Age));
-        if !registered_bh4 {
+        if !self.declares(&class, Behavior::Age) {
             return Err(NotBh4);
         }
         Ok(self
@@ -543,14 +541,14 @@ impl LinkState {
             .collect()
     }
 
-    /// The genesis-fixed endset of a shipped class, read off a snapshot — for
-    /// a caller holding the SLICE: M8's lineage reads name `Supersedes` this
-    /// way, and the engine's observe dump and its genesis-drift check name all
-    /// five. A caller holding the registry itself asks
+    /// The genesis-fixed endset of a shipped class — for a caller holding the
+    /// SLICE: M8's lineage reads name `Supersedes` this way, and the engine's
+    /// observe dump names all five. A caller holding the registry itself asks
     /// [`TypeRegistry::reserved_type`](crate::TypeRegistry::reserved_type),
-    /// which is public and is where this delegates.
-    pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
-        self.registry.reserved_type(ty)
+    /// which is public and is where this delegates; the answer is the same
+    /// value either way, the registry being the module's format constant.
+    pub fn reserved_type(&self, ty: ShippedType) -> &'static Endset {
+        registry().reserved_type(ty)
     }
 
     // ─────────────── §G — discovery primitives for M8 ────────────────

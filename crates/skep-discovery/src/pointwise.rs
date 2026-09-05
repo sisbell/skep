@@ -183,5 +183,5 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     if extents.is_empty() {
         return Ok(false); // registered-empty d ⇒ nothing reachable
     }
-    Ok((1..=link.arity()).any(|i| touches(link.slot(i).expect("i ≤ arity"), &extents)))
+    Ok(link.slots().any(|slot| touches(slot, &extents)))
 }

@@ -1559,9 +1559,7 @@ fn j_items(items: &[DeliveryItem]) -> Value {
 /// Positional slots, 1-based on the wire as in M7 (slot 1 = FROM, 2 = TO,
 /// 3 = TYPE).
 fn j_link(l: &Link) -> Value {
-    let slots: Vec<Value> = (1..=l.arity())
-        .map(|i| j_endset(l.slot(i).expect("1..=arity is in range by Link::slot's contract")))
-        .collect();
+    let slots: Vec<Value> = l.slots().map(j_endset).collect();
     obj(vec![("slots", Value::Array(slots))])
 }
 

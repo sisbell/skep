@@ -46,7 +46,10 @@
 //! [`LinkState::apply_link`]; [`LinkState::rebuild_derived`] runs once at
 //! load, before replay. M7's dedup `LockKey` draws the `Space::CoverageClass`
 //! tag from M2's central enum; namespace alloc keys come from M3's
-//! `link_lock_key`.
+//! `link_lock_key`. The type registry every gate and fold reads is the
+//! module's own compiled constant, [`registry`], so an assembler that needs it
+//! (M9's catalog, the world dump) shares that one value rather than building a
+//! second from the same constants.
 
 #![forbid(unsafe_code)]
 
@@ -71,7 +74,9 @@ pub use error::{
     RetractStaleError,
 };
 pub use reads::{CurrentMember, Pattern, Tip, Tuple, View};
-pub use registry::{Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry};
+pub use registry::{
+    registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
+};
 pub use state::{LinkRec, LinkState};
 pub use writes::{LinkWriter, SlotArg, MAX_SLOT_SPANS};
 

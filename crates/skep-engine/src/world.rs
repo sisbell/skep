@@ -26,21 +26,22 @@ use skep_namespace::{HasM3, M3Rec, M3State};
 /// recovery and a reordering is not.
 ///
 /// INVARIANT — a world's derived state agrees with its authoritative state:
-/// concretely, M7's skip-serialized registry and hints. TWO construction
-/// paths establish it, and the third does not. [`World::genesis`] establishes
-/// it, each slice arriving from its own genesis constructor; and
+/// concretely, M7's skip-serialized hints. TWO construction paths establish
+/// it, and the third does not. [`World::genesis`] establishes it, each slice
+/// arriving from its own genesis constructor; and
 /// [`WorldState::rebuild_derived`] re-establishes it, which M2 runs over
 /// every base it loads, before replay. The `Deserialize` derived below
-/// establishes nothing — it leaves M7's registry at serde's seed, which
-/// "registers nothing, reports every shipped endset as `⟨⟩` and holds none of
-/// `TypeRegistry`'s invariant", in `LinkState::registry`'s own words. So a
-/// world decoded from bytes is not one until the rebuild has run over it.
-/// That gate cannot be closed here: `WorldState: DeserializeOwned` forces the
-/// impl to exist, and this type is public, so the only defence is the
+/// establishes nothing — it leaves M7's hints empty, so every typed slice
+/// reads as absent, nullification is invisible and `Active` equals `Audit`.
+/// So a world decoded from bytes is not one until the rebuild has run over
+/// it. That gate cannot be closed here: `WorldState: DeserializeOwned` forces
+/// the impl to exist, and this type is public, so the only defence is the
 /// discipline of the one mode that skips the rebuild —
 /// `Durability::InMemory` installs the passed world as the root exactly as
 /// given, and [`crate::EngineStores::new`] states the precondition for the
-/// kernels built that way and what reads answer when it is violated.
+/// kernels built that way and what reads answer when it is violated. M7's
+/// type registry is outside the hazard: it is that module's compiled format
+/// constant, not carried state, so nothing about it can arrive unrebuilt.
 ///
 /// THREE OBLIGATIONS `WorldState` places on this type that M2 cannot check,
 /// each discharged by a fact about the slices rather than about this file.
@@ -119,17 +120,16 @@ impl WorldState for World {
     /// consult is already restored. As built, no rebuild reads a foreign
     /// slice at all — M3 and M4 are fully serialized (M2's default identity;
     /// their docs say so), M5's `rebuild_derived` is the identity (no
-    /// skip-serialized hints in v1), and M7's reconstructs its registry from
-    /// the compiled format constants and its hints from its OWN links map —
-    /// so the order is future-proofing, pinned here and held to by the
-    /// recovery-equivalence test.
+    /// skip-serialized hints in v1), and M7's recomputes its hints from its
+    /// OWN links map, under a registry that is a compiled constant rather
+    /// than state — so the order is future-proofing, pinned here and held to
+    /// by the recovery-equivalence test.
     ///
     /// Infallible by M2's trait, and fail-stop in fact: the rebuilds composed
     /// here run over state that was just DESERIALIZED, and M7's asserts what
-    /// it needs of it (that every stored link key is T4-valid and
-    /// element-level; its registry is the compiled format constants and
-    /// cannot fail to build). With no error channel to refuse through, a
-    /// base that violates any of those panics rather than returning — inside
+    /// it needs of it — that every stored link key is T4-valid and
+    /// element-level. With no error channel to refuse through, a base that
+    /// violates any of those panics rather than returning — inside
     /// `Kernel::open`, after that checkpoint loaded, so M2's next-older-base
     /// fallback does not get its turn.
     fn rebuild_derived(self) -> Self {

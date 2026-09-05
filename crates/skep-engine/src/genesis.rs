@@ -10,23 +10,10 @@
 
 use skep_arrangement::M5State;
 use skep_content::ContentStore;
-use skep_links::{LinkState, ShippedType};
+use skep_links::LinkState;
 use skep_namespace::M3State;
 
 use crate::world::World;
-
-/// The five shipped classes, in `ShippedType` declaration order — the ONE
-/// list, held beside the genesis that seeds them. Every walk over the
-/// shipped set reads it here: the world dump's per-class hint enumeration
-/// today, and whatever enumerates next. A second copy is how a walk silently
-/// comes to cover four classes out of five.
-pub(crate) const SHIPPED: [ShippedType; 5] = [
-    ShippedType::Retired,
-    ShippedType::Supersedes,
-    ShippedType::Retraction,
-    ShippedType::PredDef,
-    ShippedType::PredStable,
-];
 
 impl World {
     /// Σ₀ — the full genesis, one store at a time per its own design:

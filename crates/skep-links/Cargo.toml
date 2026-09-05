@@ -14,10 +14,11 @@ readme = "README.md"
 # feature because the authoritative slice (the links map) rides M2
 # checkpoints.
 im.workspace = true
-# serde's `rc` feature: retained for the Arc-wrapped skip-serialized
-# registry field's derive plumbing (the sealed genesis config it once
-# checkpointed is retired — the type set is compiled format).
-serde = { workspace = true, features = ["rc"] }
+# Plain serde: the slice's serialized reach is `links` and the carrier types
+# under it, none of which is reference-counted — M7's one `Arc` wraps the
+# format registry, which is a compiled constant and rides no checkpoint, so
+# the `rc` feature has nothing here to derive for.
+serde.workspace = true
 # M1 — tumbler/address/span algebra; M7 holds no address algebra of its own.
 skep-address = { path = "../skep-address" }
 # M2 — every write rides transact, every read rides a snapshot; the dedup

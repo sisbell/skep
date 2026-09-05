@@ -8,7 +8,7 @@
 //! compiled substrate classes.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, Address, Level};
@@ -105,9 +105,8 @@ pub enum Behavior {
 /// One type's registration: shape, idempotence flag, behavior set. A `std`
 /// `BTreeSet` over a four-variant `Copy` enum; every registration is seeded
 /// at [`TypeRegistry::build`] from the note-pinned shipped table and is
-/// immutable thereafter — there are no persistent updates to share. The
-/// per-fold sharing the design asks for is one level up, on
-/// [`crate::LinkState`]'s `Arc<TypeRegistry>`.
+/// immutable thereafter — there are no persistent updates to share, and the
+/// registry holding it is built once per process, so no fold copies it.
 ///
 /// `idem` is the MANAGED SURFACE'S DEDUP DISCIPLINE, not a uniqueness
 /// invariant on the class: MAKELINK deposits into a registered idem⊤ class
@@ -183,68 +182,88 @@ pub enum ShippedType {
     PredStable,
 }
 
-/// The immutable lookup registry: coverage class → registration, plus the
-/// five genesis-fixed shipped types held BOTH ways — as the endset a caller
-/// names them by and as the [`CoverageClass`] every guard, fold and read
-/// recognizes them by. Both are fixed at [`TypeRegistry::build`], so the
-/// class each shipped type belongs to is a fact this registry knows rather
-/// than one its callers re-derive. RECOMPUTABLE from nothing but the compiled
-/// format constants — keyed by the non-`Serialize` [`CoverageClass`], so it
-/// never rides a checkpoint, and carrying no sealed configuration, because
-/// none exists: `LinkState::rebuild_derived` reconstructs this by calling
-/// `build()` again before replay.
+impl ShippedType {
+    /// The shipped set, ONCE — the one enumeration of the five, in declaration
+    /// order. Every walk over them reads it here: M7's own suite, the engine's
+    /// world dump, and whatever enumerates next. A second copy is how a walk
+    /// silently comes to cover four classes out of five. (The one place that
+    /// names the five WITHOUT walking this is [`TypeRegistry::build`], which
+    /// binds each to its own reserved address; a variant added here without a
+    /// binding there is a missing field, not a silent gap.)
+    pub const ALL: [ShippedType; 5] = [
+        ShippedType::Retired,
+        ShippedType::Supersedes,
+        ShippedType::Retraction,
+        ShippedType::PredDef,
+        ShippedType::PredStable,
+    ];
+}
+
+/// One shipped type's two genesis-fixed facts, PAIRED: the endset a caller
+/// names the type by, and the [`CoverageClass`] every guard, fold and read
+/// recognizes it by. One constructor, so "the class is that type's own endset
+/// classified" holds by construction rather than by two five-arm matches a
+/// reader has to cross-check against each other.
+#[derive(Debug, Clone)]
+struct Shipped {
+    endset: Endset,
+    class: CoverageClass,
+}
+
+impl Shipped {
+    /// The per-address half of [`TypeRegistry::build`]'s startup assertion,
+    /// carried by the constructor rather than by a second loop over the same
+    /// five: a ghost tumbler is an element-level CONTENT position — the
+    /// in-docuverse form the 2026-08-26 ruling pins, and the shape M3's
+    /// ghost-region floor protects. (The superseded reserved-isolation clause
+    /// demanded the opposite subspace; its collision-freedom job now belongs
+    /// to the allocator's non-reissue guarantee — see
+    /// [`ReservedAddrs::format`].) Can only fail if the format constants
+    /// themselves are edited inconsistently.
+    fn of(addr: &Address) -> Shipped {
+        assert_eq!(
+            addr.level(),
+            Level::Element,
+            "a reserved type address is element-level"
+        );
+        assert_eq!(
+            addr.subspace(),
+            Some(&content_subspace()),
+            "a ghost tumbler is a content position (owner ruling, 2026-08-26)"
+        );
+        let endset = enc([addr]);
+        Shipped {
+            class: coverage_class(&endset),
+            endset,
+        }
+    }
+}
+
+/// The immutable lookup registry: coverage class → registration, plus the five
+/// genesis-fixed shipped types held BOTH ways — as the endset a caller names
+/// them by and as the class every guard recognizes them by, the two paired in
+/// one value per type so they cannot fall out of step. Both are fixed at
+/// [`TypeRegistry::build`], so the class a shipped type belongs to is a fact
+/// this registry knows rather than one its callers re-derive. RECOMPUTABLE
+/// from nothing but the compiled format constants — keyed by the
+/// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint, and
+/// carrying no sealed configuration, because none exists.
 ///
 /// INVARIANT, established by [`TypeRegistry::build`], its sole constructor:
 /// the five shipped classes are pairwise distinct, each is registered, and
 /// `shipped_class(t)` is the class of `reserved_type(t)`. Every guard that
 /// recognizes a deposit by its class, and every read that compares one
-/// against a shipped class, leans on all three.
-///
-/// ONE value holds none of it, and it is crate-private and unreachable live:
-/// `placeholder_registry` is the serde seed for
-/// [`crate::LinkState`]'s skipped field, which
-/// [`LinkState::rebuild_derived`](crate::LinkState::rebuild_derived) replaces
-/// with a fresh `build()` BEFORE replay. So every registry a caller can reach
-/// through the published surface is one `build` established.
+/// against a shipped class, leans on all three. `build` is the one way to
+/// make one, so holding a `TypeRegistry` is a FACT the startup assertion
+/// established rather than a value a caller can state.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     registrations: im::HashMap<CoverageClass, Registration>,
-    retired: Endset,
-    supersedes: Endset,
-    retraction: Endset,
-    pred_def: Endset,
-    pred_stable: Endset,
-    retired_class: CoverageClass,
-    supersedes_class: CoverageClass,
-    retraction_class: CoverageClass,
-    pred_def_class: CoverageClass,
-    pred_stable_class: CoverageClass,
-}
-
-/// The empty registry, which holds NONE of [`TypeRegistry`]'s invariant: it
-/// registers nothing, every shipped endset is `⟨⟩`, and all five shipped
-/// classes are one value. It exists solely so serde can seed `LinkState`'s
-/// `#[serde(skip)] registry` field on deserialize, which is why it is named
-/// here and has no other caller: `rebuild_derived` replaces it with a fresh
-/// [`TypeRegistry::build`] BEFORE replay, so it is never consulted live. Not
-/// a `Default` impl — the type publishes one constructor, and a second one
-/// that establishes nothing would be a legal way to state a fact no endset
-/// has.
-pub(crate) fn placeholder_registry() -> Arc<TypeRegistry> {
-    let empty_class = coverage_class(&Endset::empty());
-    Arc::new(TypeRegistry {
-        registrations: im::HashMap::new(),
-        retired: Endset::empty(),
-        supersedes: Endset::empty(),
-        retraction: Endset::empty(),
-        pred_def: Endset::empty(),
-        pred_stable: Endset::empty(),
-        retired_class: empty_class.clone(),
-        supersedes_class: empty_class.clone(),
-        retraction_class: empty_class.clone(),
-        pred_def_class: empty_class.clone(),
-        pred_stable_class: empty_class,
-    })
+    retired: Shipped,
+    supersedes: Shipped,
+    retraction: Shipped,
+    pred_def: Shipped,
+    pred_stable: Shipped,
 }
 
 impl TypeRegistry {
@@ -265,59 +284,26 @@ impl TypeRegistry {
     /// chooses the input.
     pub fn build() -> TypeRegistry {
         let reserved = ReservedAddrs::format();
-        // Startup assertion over the constants: each ghost tumbler is an
-        // element-level CONTENT position — the in-docuverse form the 2026-08-26
-        // ruling pins, and the shape M3's ghost-region floor protects. (The
-        // superseded reserved-isolation clause demanded the opposite subspace;
-        // its collision-freedom job now belongs to the allocator's
-        // non-reissue guarantee — see `ReservedAddrs::format`.)
-        for addr in [
-            &reserved.pred_def,
-            &reserved.pred_stable,
-            &reserved.retired,
-            &reserved.supersedes,
-            &reserved.retraction,
-        ] {
-            assert_eq!(
-                addr.level(),
-                Level::Element,
-                "a reserved type address is element-level"
-            );
-            assert_eq!(
-                addr.subspace(),
-                Some(&content_subspace()),
-                "a ghost tumbler is a content position (owner ruling, 2026-08-26)"
-            );
-        }
-
-        let key_of = |a: &Address| enc([a]);
-        let retired = key_of(&reserved.retired);
-        let supersedes = key_of(&reserved.supersedes);
-        let retraction = key_of(&reserved.retraction);
-        let pred_def = key_of(&reserved.pred_def);
-        let pred_stable = key_of(&reserved.pred_stable);
-
-        // Each shipped class is bound to its name where it is computed, so
-        // the class this registry hands out for a `ShippedType` is that
-        // type's own endset classified — never a positional coincidence.
-        let retired_class = coverage_class(&retired);
-        let supersedes_class = coverage_class(&supersedes);
-        let retraction_class = coverage_class(&retraction);
-        let pred_def_class = coverage_class(&pred_def);
-        let pred_stable_class = coverage_class(&pred_stable);
+        // Each shipped type's endset and its class are built together, so the
+        // class this registry hands out for a `ShippedType` is that type's own
+        // endset classified — never a positional coincidence. `Shipped::of`
+        // carries the per-address half of the startup assertion, so the five
+        // are named here ONCE rather than walked again for it.
+        let retired = Shipped::of(&reserved.retired);
+        let supersedes = Shipped::of(&reserved.supersedes);
+        let retraction = Shipped::of(&reserved.retraction);
+        let pred_def = Shipped::of(&reserved.pred_def);
+        let pred_stable = Shipped::of(&reserved.pred_stable);
 
         let unary_top = |behaviors: BTreeSet<Behavior>| Registration {
             shape: Shape::Unary,
             idem: true,
             behaviors,
         };
-        let shipped: [(&CoverageClass, Registration); 5] = [
+        let shipped: [(&Shipped, Registration); 5] = [
+            (&retired, unary_top(BTreeSet::from([Behavior::ReadFilter]))),
             (
-                &retired_class,
-                unary_top(BTreeSet::from([Behavior::ReadFilter])),
-            ),
-            (
-                &supersedes_class,
+                &supersedes,
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
@@ -325,7 +311,7 @@ impl TypeRegistry {
                 },
             ),
             (
-                &retraction_class,
+                &retraction,
                 Registration {
                     shape: Shape::Binary,
                     idem: true,
@@ -333,19 +319,19 @@ impl TypeRegistry {
                 },
             ),
             // The PredLayer registration agreement (M7↔M9 constant, §B).
-            (&pred_def_class, unary_top(BTreeSet::new())),
-            (&pred_stable_class, unary_top(BTreeSet::new())),
+            (&pred_def, unary_top(BTreeSet::new())),
+            (&pred_stable, unary_top(BTreeSet::new())),
         ];
 
         let mut registrations: im::HashMap<CoverageClass, Registration> = im::HashMap::new();
-        for (class, reg) in shipped {
+        for (ty, reg) in shipped {
             // The C0 key-uniqueness half of the startup assertion: five
             // distinct constants classify to five distinct classes.
             assert!(
-                !registrations.contains_key(class),
+                !registrations.contains_key(&ty.class),
                 "the five reserved format constants must be pairwise class-distinct (C0)"
             );
-            registrations.insert(class.clone(), reg);
+            registrations.insert(ty.class.clone(), reg);
         }
 
         TypeRegistry {
@@ -355,11 +341,6 @@ impl TypeRegistry {
             retraction,
             pred_def,
             pred_stable,
-            retired_class,
-            supersedes_class,
-            retraction_class,
-            pred_def_class,
-            pred_stable_class,
         }
     }
 
@@ -371,6 +352,18 @@ impl TypeRegistry {
     /// this way; M7's own gates and reads go through the same lookup).
     pub fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
         self.registrations.get(class)
+    }
+
+    /// Whether a registered class DECLARES a behavior — the "served only where
+    /// declared" test, decided here where the shipped table above is in view,
+    /// as [`TypeRegistry::reverse_lookup_classes`] is. An unregistered class
+    /// declares nothing. Which registrations answer to a behavior is this
+    /// registry's own knowledge, so the one gate that reads a declaration back
+    /// (`stale`'s BH4 fence) asks rather than destructuring a `Registration`
+    /// at the read surface.
+    pub(crate) fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
+        self.registration(class)
+            .is_some_and(|reg| reg.behaviors.contains(&behavior))
     }
 
     /// The classes the BH3 join covers: registered `Binary` classes declaring
@@ -395,6 +388,20 @@ impl TypeRegistry {
     /// [`crate::LinkState::reserved_type`] is the snapshot-bound delegate, for
     /// a caller holding the slice instead.
     pub fn reserved_type(&self, ty: ShippedType) -> &Endset {
+        &self.shipped(ty).endset
+    }
+
+    /// The coverage class of a shipped type — the recognition key the write
+    /// gates, the hint fold and the read surface all compare against, fixed
+    /// at build alongside the endset it classifies.
+    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
+        &self.shipped(ty).class
+    }
+
+    /// The one dispatch over the five, so the endset a shipped type reports
+    /// and the class it reports come out of one [`Shipped`] rather than out of
+    /// two matches that could fall out of step.
+    fn shipped(&self, ty: ShippedType) -> &Shipped {
         match ty {
             ShippedType::Retired => &self.retired,
             ShippedType::Supersedes => &self.supersedes,
@@ -403,19 +410,26 @@ impl TypeRegistry {
             ShippedType::PredStable => &self.pred_stable,
         }
     }
+}
 
-    /// The coverage class of a shipped type — the recognition key the write
-    /// gates, the hint fold and the read surface all compare against, fixed
-    /// at build alongside the endset it classifies.
-    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
-        match ty {
-            ShippedType::Retired => &self.retired_class,
-            ShippedType::Supersedes => &self.supersedes_class,
-            ShippedType::Retraction => &self.retraction_class,
-            ShippedType::PredDef => &self.pred_def_class,
-            ShippedType::PredStable => &self.pred_stable_class,
-        }
-    }
+/// THE registry — the compiled format constant, built once per process.
+/// [`TypeRegistry::build`] is a pure function of [`ReservedAddrs::format`], so
+/// there is nothing per-instance to hold: every slice, every writer and every
+/// assembler reads this one value, and "the assembler shares the instance the
+/// fold runs against" is true by construction rather than by an accessor and
+/// an agreement check.
+///
+/// The `Arc` is the M9 seam's, not a preference: `Coordinator::new` takes an
+/// `Arc<TypeRegistry>`, so this hands out one to clone.
+static REGISTRY: LazyLock<Arc<TypeRegistry>> = LazyLock::new(|| Arc::new(TypeRegistry::build()));
+
+/// The module's format registry — the ONE instance, and the one M7's own fold,
+/// gates and reads run against. An assembler that needs the registry (M9's
+/// catalog projection, the engine's world dump) reads it here rather than
+/// building a second copy from the same constants, which is what makes
+/// agreement structural.
+pub fn registry() -> &'static Arc<TypeRegistry> {
+    &REGISTRY
 }
 
 #[cfg(test)]
@@ -436,13 +450,7 @@ mod tests {
     #[test]
     fn the_class_a_shipped_type_reports_is_the_class_of_the_endset_it_reports() {
         let registry = TypeRegistry::build();
-        for ty in [
-            ShippedType::Retired,
-            ShippedType::Supersedes,
-            ShippedType::Retraction,
-            ShippedType::PredDef,
-            ShippedType::PredStable,
-        ] {
+        for ty in ShippedType::ALL {
             assert_eq!(
                 *registry.shipped_class(ty),
                 coverage_class(registry.reserved_type(ty))
@@ -450,6 +458,48 @@ mod tests {
             // ...and each is registered under exactly that class.
             assert!(registry.registration(registry.shipped_class(ty)).is_some());
         }
+    }
+
+    /// The module's registry is ONE value: every reader shares the instance
+    /// M7's own fold and gates run against, so agreement between an assembler
+    /// and the store is a construction and not a comparison.
+    #[test]
+    fn the_module_registry_is_one_shared_instance() {
+        assert!(
+            Arc::ptr_eq(registry(), registry()),
+            "the format registry is built once per process"
+        );
+        // ...and it is a built one, not a placeholder: every shipped class
+        // answers with its own endset and is registered under its own class.
+        for ty in ShippedType::ALL {
+            let endset = registry().reserved_type(ty);
+            assert!(!endset.is_empty(), "{ty:?} names a real endset");
+            assert!(registry().registration(registry().shipped_class(ty)).is_some());
+        }
+    }
+
+    /// `declares` is the "served only where declared" test: it answers for the
+    /// note-pinned shipped declarations, refuses the behaviors no shipped
+    /// class carries, and treats an unregistered class as declaring nothing.
+    #[test]
+    fn declares_reads_the_shipped_declarations_and_nothing_else() {
+        let registry = TypeRegistry::build();
+        let retired = registry.shipped_class(ShippedType::Retired);
+        let supersedes = registry.shipped_class(ShippedType::Supersedes);
+        assert!(registry.declares(retired, Behavior::ReadFilter));
+        assert!(registry.declares(supersedes, Behavior::Walk));
+        assert!(!registry.declares(retired, Behavior::Walk));
+        // No shipped class declares BH3 or BH4 in this format, which is why
+        // `targets_keyed`'s join covers nothing and `stale` refuses every ty.
+        for ty in ShippedType::ALL {
+            let class = registry.shipped_class(ty);
+            assert!(!registry.declares(class, Behavior::Age), "{ty:?} is idem⊤");
+            assert!(!registry.declares(class, Behavior::ReverseLookup), "{ty:?}");
+        }
+        // An unregistered class declares nothing rather than faulting.
+        let unregistered = coverage_class(&enc([&ra(9)]));
+        assert!(registry.registration(&unregistered).is_none());
+        assert!(!registry.declares(&unregistered, Behavior::ReadFilter));
     }
 
     /// The five format constants are the ghost tumblers the ruling pins, in

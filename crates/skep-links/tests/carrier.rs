@@ -1,17 +1,18 @@
 //! Carrier-type and registry contracts, stated by the documents: the Link
-//! arity floor and the 1-based slot range, Endset readback (verbatim
-//! decomposition, `enc(X).addrs() = X` over every subset of a family, ⟨⟩
-//! distinctness), coverage-class identity (exact denoted antichain;
-//! conservative extent partition, keyed per `#start` so a mixed-length
-//! endset classifies rather than aborts; invariance under span permutation;
-//! structural derives ≠ coverage identity; the pinned off-contract panic and
-//! the address-denoting projection a caller discharges it with), the five
-//! shipped registrations §B pins over the compiled ghost-tumbler constants
-//! (owner ruling, 2026-08-26 — the decl rejection matrix went with the
-//! retired `GenesisConfig` seam), and the serde/journal round trips. (The
-//! fold's freshness gate is watched from inside the crate: the one store
-//! invariant that would otherwise fail silently is witnessed by a deposit no
-//! foreign crate can construct.)
+//! arity floor, the 1-based slot range and the whole-value slot walk, Endset
+//! readback (verbatim decomposition, `enc(X).addrs() = X` over every subset
+//! of a family, ⟨⟩ distinctness), coverage-class identity (exact denoted
+//! antichain; conservative extent partition, keyed per `#start` so a
+//! mixed-length endset classifies rather than aborts; invariance under span
+//! permutation; structural derives ≠ coverage identity; the pinned
+//! off-contract panic and the address-denoting projection a caller discharges
+//! it with), the five shipped registrations §B pins over the compiled
+//! ghost-tumbler constants (owner ruling, 2026-08-26 — the decl rejection
+//! matrix went with the retired `GenesisConfig` seam), the module registry
+//! every assembler shares, and the serde/journal round trips. (The fold's
+//! freshness gate is watched from inside the crate: the one store invariant
+//! that would otherwise fail silently is witnessed by a deposit no foreign
+//! crate can construct.)
 
 mod common;
 
@@ -188,30 +189,30 @@ fn genesis_seeds_the_five_shipped_classes_at_the_format_constants() {
 }
 
 #[test]
-fn the_published_registry_is_the_one_rebuilt_from_the_format_constants() {
-    // The registry an assembler SHARES instead of building a second one. It
-    // must answer as the format lookup after a checkpoint round trip — where
-    // the skipped field deserializes as a seed that registers nothing and
-    // reports every shipped endset as ⟨⟩ — because that is the state a
-    // recovering assembler reads it out of.
+fn the_published_registry_answers_before_any_rebuild() {
+    // The registry an assembler SHARES instead of building a second one. It is
+    // the module's compiled format constant, so it answers as the format
+    // lookup on a RAW-deserialized slice — no rebuild first — which is the
+    // state a recovering assembler reads it out of.
     let state = LinkState::genesis();
     let bytes = bincode::serialize(&state).expect("the slice serializes");
-    let recovered: LinkState = bincode::deserialize(&bytes).expect("the slice deserializes");
-    let recovered = recovered.rebuild_derived();
-    for ty in [
-        ShippedType::PredDef,
-        ShippedType::PredStable,
-        ShippedType::Retired,
-        ShippedType::Supersedes,
-        ShippedType::Retraction,
-    ] {
-        let endset = recovered.registry().reserved_type(ty);
-        assert_eq!(endset, state.registry().reserved_type(ty), "{ty:?}");
+    let raw: LinkState = bincode::deserialize(&bytes).expect("the slice deserializes");
+    for ty in ShippedType::ALL {
+        let endset = skep_links::registry().reserved_type(ty);
+        // Non-vacuous: each shipped type names a real endset, not ⟨⟩.
+        assert!(!endset.is_empty(), "{ty:?} names a real endset");
+        // A raw slice and a genesis one read the same shipped endsets,
+        // because neither carries a registry to differ about.
+        assert_eq!(raw.reserved_type(ty), endset, "{ty:?}");
+        assert_eq!(state.reserved_type(ty), endset, "{ty:?}");
         assert!(
-            recovered.registry().registration(&coverage_class(endset)).is_some(),
+            skep_links::registry().registration(&coverage_class(endset)).is_some(),
             "{ty:?} is registered in the published registry"
         );
     }
+    // One instance, so an assembler that clones it and the store's own fold
+    // cannot come apart: agreement is a construction, not a comparison.
+    assert!(std::sync::Arc::ptr_eq(skep_links::registry(), skep_links::registry()));
 }
 
 #[test]
@@ -397,6 +398,26 @@ fn slot_is_none_outside_the_one_based_arity_range() {
                 "arity {arity}, slot {i}"
             );
         }
+    }
+}
+
+#[test]
+fn slots_walks_the_whole_value_in_positional_order() {
+    // The whole-value projection, for the reads that are about the value
+    // rather than about a position in it. Its two obligations: it yields
+    // EVERY slot, and it yields them in the order the positional accessors
+    // name — so a caller walking it and a caller indexing `1..=arity` cannot
+    // disagree. Stated at the store's own shape and at a wider L3 capacity.
+    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2), ca(3)]), enc(&[ra(10)])]).expect("arity 3");
+    let walked: Vec<&Endset> = l.slots().collect();
+    assert_eq!(walked, vec![l.from_slot(), l.to_slot(), l.type_slot()]);
+    for arity in [3usize, 4] {
+        let wide = Link::new((1..=arity as u32).map(|k| enc(&[ca(k)])).collect::<Vec<_>>())
+            .expect("capacity admits arity ≥ 3");
+        let indexed: Vec<&Endset> =
+            (1..=arity).map(|i| wide.slot(i).expect("1..=arity is in range")).collect();
+        assert_eq!(wide.slots().collect::<Vec<_>>(), indexed, "arity {arity}");
+        assert_eq!(wide.slots().count(), arity, "every slot, arity {arity}");
     }
 }
 

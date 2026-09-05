@@ -214,12 +214,11 @@ impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent> FebeWorld for W {}
 /// follow from the kernel — `Namespace::new` and `Vstream::new` are bound by
 /// `W: WorldState` alone, exactly this trait's bound, and each handle holds
 /// nothing but the borrow — so they are given here rather than transcribed
-/// into every impl. [`Stores::linkstore`] is the one that must be written:
-/// `LinkWriter::new` requires `W: HasLinks`, which this trait does not, and it
-/// does more than hold a borrow — it takes a snapshot and clones the
-/// genesis-sealed `Arc<TypeRegistry>` off it (the as-built constructor takes
-/// no registry argument, a benign simplification of the amendment's stated
-/// shape).
+/// into every impl. [`Stores::linkstore`] is asked of the implementer
+/// instead: M7's handle has the same shape as its two siblings (the borrow
+/// and nothing else, bound by `W: WorldState`), so what the implementer
+/// writes is one line, and where the trait's own default would sit is the
+/// engine's decision rather than M10's.
 ///
 /// PRECONDITION on the implementer: **every accessor names ONE kernel.**
 /// [`Stores::kernel`] answers with the same `Kernel<W>` on every call, and
@@ -253,7 +252,7 @@ pub trait Stores<W: WorldState>: Send + Sync {
     fn vstream(&self) -> Vstream<'_, W> {
         Vstream::new(self.kernel())
     }
-    /// M7 driver — borrows the kernel; holds the genesis-immutable registry.
+    /// M7 driver — borrows the held kernel for the call.
     fn linkstore(&self) -> LinkWriter<'_, W>;
 }
 

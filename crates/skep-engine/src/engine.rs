@@ -1,6 +1,6 @@
 //! The assembled engine handle: `Kernel::open` over the genesis [`World`],
-//! the one `Arc<TypeRegistry>` (M7's own, shared out of the recovered slice),
-//! the store-driver constructors, the M9 `Coordinator` assembly, and the
+//! the one `Arc<TypeRegistry>` (M7's own module constant, shared), the
+//! store-driver constructors, the M9 `Coordinator` assembly, and the
 //! `Stores<World>` factory M10's transport injects. All dispatch and
 //! construction — no semantics.
 
@@ -11,7 +11,7 @@ use skep_arrangement::Vstream;
 use skep_coordination::Coordinator;
 use skep_febe::Stores;
 use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
-use skep_links::{HasLinks, LinkWriter, TypeRegistry};
+use skep_links::{LinkWriter, TypeRegistry};
 use skep_namespace::Namespace;
 
 use crate::world::World;
@@ -55,9 +55,9 @@ impl std::error::Error for EngineError {
 }
 
 /// The assembled engine: the recovered kernel over the one concrete
-/// [`World`], and the registry M7's slice built from the compiled format
-/// constants — held so every later consumer (M9's catalog, the world dump)
-/// reads the SAME instance, never a copy that could drift.
+/// [`World`], and M7's own registry over the compiled format constants — held
+/// so every later consumer (M9's catalog, the world dump) reads the SAME
+/// instance, never a copy that could drift.
 ///
 /// The kernel is held as the [`EngineStores`] factory rather than bare: the
 /// engine's own driver accessors read through it, so which driver constructor
@@ -97,17 +97,15 @@ impl Engine {
     /// regime (the 9-space reserved addresses, the config-carrying M7
     /// checkpoint shape) does not reopen under this format.
     ///
-    /// The registry the engine keeps is M7's own: the slice reconstructs it
-    /// from the format constants at genesis or in `rebuild_derived` before
-    /// replay, so the instance every later consumer reads (M9's catalog, the
-    /// world dump) is the one the store's fold and write gates actually run
-    /// against, not a second build that would then owe an agreement check.
+    /// The registry the engine keeps is M7's own: `skep_links::registry` is
+    /// that module's compiled format constant, built once per process, so the
+    /// instance every later consumer reads (M9's catalog, the world dump) IS
+    /// the one the store's fold and write gates run against — not a second
+    /// build that would then owe an agreement check, and not a copy read out
+    /// of whichever slice happened to be at hand.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
         let kernel = Arc::new(Kernel::open(cfg, World::genesis()).map_err(EngineError::Open)?);
-        let registry = {
-            let snap = kernel.snapshot();
-            Arc::clone(snap.world().links().registry())
-        };
+        let registry = Arc::clone(skep_links::registry());
         Ok(Engine { stores: EngineStores::new(kernel), registry })
     }
 
@@ -124,9 +122,8 @@ impl Engine {
         &self.stores.kernel
     }
 
-    /// The ONE registry — M7's own instance behind the compiled format
-    /// constants, shared rather than rebuilt, and the one M9 projects (M9
-    /// builds no second `TypeRegistry`).
+    /// The ONE registry — M7's own module constant, shared rather than
+    /// rebuilt, and the one M9 projects (M9 builds no second `TypeRegistry`).
     pub fn registry(&self) -> &Arc<TypeRegistry> {
         &self.registry
     }
@@ -141,8 +138,7 @@ impl Engine {
         self.stores.vstream()
     }
 
-    /// M7's driver (borrows the kernel; clones the slice's rebuilt registry
-    /// `Arc` internally, per M7's as-built constructor).
+    /// M7's driver (borrows the kernel, and holds nothing else).
     pub fn linkstore(&self) -> LinkWriter<'_, World> {
         self.stores.linkstore()
     }
@@ -216,12 +212,11 @@ impl EngineStores {
     /// the passed world unrebuilt, so a `World` that arrived any other way
     /// (deserialized straight from bytes, say — `World: Deserialize` is
     /// forced on it by `WorldState`) is served here with M7's skip-serialized
-    /// registry still at serde's seed: it "registers nothing, reports every
-    /// shipped endset as `⟨⟩`, and holds none of `TypeRegistry`'s invariant",
-    /// in `LinkState::registry`'s own words. Reads then answer with
-    /// nullification invisible, `Active` equal to `Audit`, and no
-    /// supersession or retraction recognized at all — and nothing about the
-    /// answers looks wrong.
+    /// HINTS still empty. Reads then answer with nullification invisible,
+    /// `Active` equal to `Audit`, every typed slice empty and no supersession
+    /// edge at all — and nothing about the answers looks wrong. (The type
+    /// registry is not in that hazard: it is M7's module constant, so it
+    /// answers the same on any world however the world arrived.)
     pub fn new(kernel: Arc<Kernel<World>>) -> EngineStores {
         EngineStores { kernel }
     }

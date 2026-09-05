@@ -58,7 +58,6 @@ use skep_address::{Address, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
 
-use crate::genesis::SHIPPED;
 use crate::world::World;
 use canon::{render, to_tree, SerdeTree};
 
@@ -253,9 +252,9 @@ fn hints_tree(world: &World) -> SerdeTree {
         (key("links.nullified"), addr_seq(audit.iter().filter(|a| links.is_nullified(a)))),
     ];
 
-    // Per-class typed slices: the shipped classes off the one genesis list.
+    // Per-class typed slices: the shipped classes off M7's own one list.
     let mut classes: Vec<(SerdeTree, SerdeTree)> = Vec::new();
-    for ty in SHIPPED {
+    for ty in ShippedType::ALL {
         classes.push((key(shipped_label(ty)), class_tree(links, links.reserved_type(ty))));
     }
     entries.push((key("types"), SerdeTree::Map(classes)));

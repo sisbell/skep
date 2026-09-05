@@ -214,6 +214,17 @@ impl Link {
         self.slots.len()
     }
 
+    /// The slot sequence, in order — a representation view, not a positional
+    /// contract: [`Link::slot`] stays the 1-based primitive (L6), and this is
+    /// for the reads that are about the WHOLE value rather than about a
+    /// position in it. [`Endset::spans`] is its counterpart one level down.
+    /// A caller that walks every slot asks here instead of indexing over
+    /// `1..=arity()` and then discharging an `Option` the bound has already
+    /// made `Some`.
+    pub fn slots(&self) -> impl Iterator<Item = &Endset> {
+        self.slots.iter()
+    }
+
     /// 1-based slot lookup; `None` iff `slot < 1 ∨ slot > arity`
     /// (FOLLOWLINK's post-lookup arity bound).
     pub fn slot(&self, slot: usize) -> Option<&Endset> {

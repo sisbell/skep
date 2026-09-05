@@ -1,10 +1,11 @@
 //! §C/§D — the transact-driving write surface: [`LinkWriter`] (the kernel
-//! handle + construction-time registry cache), the shared single choke point
-//! [`emit_core`] with its two-disciplines gate (§2), the M2 keyed dedup
-//! sections (§3), and the six public ops (five deposits plus the BH4 batch).
+//! handle), the shared single choke point [`emit_core`] with its
+//! two-disciplines gate (§2), the M2 keyed dedup sections (§3), and the six
+//! public ops (five deposits plus the BH4 batch).
 //!
-//! Concurrency belongs to the kernel: nothing here locks, threads, or caches
-//! beyond the genesis-immutable registry `Arc` the design mandates.
+//! Concurrency belongs to the kernel: nothing here locks, threads, or caches.
+//! The type registry every gate reads is the module's compiled format
+//! constant, so no handle carries one.
 //!
 //! Ownership (as amended 2026-08-16): every op that deposits into a home
 //! document's link subspace takes a [`Caller`] and requires
@@ -14,7 +15,6 @@
 //! only in v1).
 
 use std::fmt;
-use std::sync::Arc;
 
 use skep_address::{content_subspace, Address, Span};
 use skep_arrangement::{stage_seat_link, Caller, HasM5, M5Rec, M5State, SeatError, VSpec};
@@ -27,30 +27,28 @@ use crate::error::{
     AssertSupError, EditLinkError, EmitError, MakeLinkError, NotBh4, NullifyError,
     RetractStaleError,
 };
-use crate::registry::{sh_conf, ShippedType, TypeRegistry};
+use crate::registry::{registry, sh_conf, ShippedType};
 use crate::state::LinkRec;
-use crate::{HasLinks, LinkWorld};
+use crate::LinkWorld;
 
-/// M7's single writer of link values — the transact-driving handle: `&'k
-/// Kernel<W>` plus a construction-time `Arc<TypeRegistry>` cache of the
-/// genesis-immutable registry (§C), which the registration/reserved-class
-/// reads of §3's pre-transact steps consult. Sound because the registry is
-/// sealed at genesis and never drifts (P1/P2, R1/R2): the cache can never go
-/// stale, and it agrees with what `emit_core` consults inside the txn.
+/// M7's single writer of link values — the transact-driving handle, and
+/// nothing but `&'k Kernel<W>`. The registration and reserved-class reads of
+/// §3's pre-transact steps go to the module's format registry
+/// ([`registry`]), a compiled constant: there is no per-handle copy to keep,
+/// so the question of whether a cache agrees with what `emit_core` consults
+/// inside the txn does not arise.
 ///
-/// The handle holds no links. `Σ.L` — the append-only store itself — is
+/// The handle holds no links either. `Σ.L` — the append-only store itself — is
 /// [`crate::LinkState`]'s map, reached through [`crate::HasLinks`] and read
 /// by `readlink`; this type is the write half, the counterpart to M8's
 /// `LinkQuery`.
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
-    registry: Arc<TypeRegistry>,
 }
 
-/// The handle prints as itself: `Kernel` is deliberately opaque and the
-/// registry is genesis config, so neither is worth rendering — and asking for
-/// no `W: Debug` keeps this type from being the reason a consumer's own
-/// derive fails.
+/// The handle prints as itself: `Kernel` is deliberately opaque, so it is not
+/// worth rendering — and asking for no `W: Debug` keeps this type from being
+/// the reason a consumer's own derive fails.
 impl<W: WorldState> fmt::Debug for LinkWriter<'_, W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkWriter").finish_non_exhaustive()
@@ -89,15 +87,13 @@ impl SlotArg {
 
 impl<'k, W> LinkWriter<'k, W>
 where
-    W: WorldState + HasLinks,
+    W: WorldState,
 {
-    /// Construct the writer handle: takes ONE `kernel.snapshot()` and clones
-    /// the `Arc<TypeRegistry>` off `snapshot.world().links()` — a refcount
-    /// bump of the slice's rebuilt registry (§C).
+    /// Construct the writer handle: it holds the borrow and nothing else —
+    /// no snapshot, no state, exactly as `Namespace::new` and `Vstream::new`
+    /// do (§C).
     pub fn new(kernel: &'k Kernel<W>) -> LinkWriter<'k, W> {
-        let snap = kernel.snapshot();
-        let registry = Arc::clone(snap.world().links().registry());
-        LinkWriter { kernel, registry }
+        LinkWriter { kernel }
     }
 
     /// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
@@ -119,7 +115,7 @@ where
     fn deposit_lock_set(&self, value: &Link, home: &Address) -> Vec<LockKey> {
         let mut keys: Vec<LockKey> = Vec::with_capacity(2);
         let class = coverage_class(value.type_slot());
-        if self.registry.registration(&class).is_some_and(|r| r.idem) {
+        if registry().registration(&class).is_some_and(|r| r.idem) {
             keys.push(DedupKey::of(value).lock_key());
         }
         keys.push(M3State::link_lock_key(home));
@@ -622,8 +618,8 @@ where
         to: SlotArg,
         ty: SlotArg,
     ) -> Result<(Address, Seq), TxnError<MakeLinkError>> {
-        let r_class = self.registry.shipped_class(ShippedType::Retraction);
-        let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
+        let r_class = registry().shipped_class(ShippedType::Retraction);
+        let sup_class = registry().shipped_class(ShippedType::Supersedes);
         // No dedup section: the open surface takes no dedup CHECK either
         // (ML0 — distinct links always), so `deposit_lock_set`'s question does
         // not arise and the home's alloc key is the whole set.
@@ -704,8 +700,8 @@ where
     /// and which no `ty` can reach: the shape gate never reads e₃'s count.
     /// The lock set is `[dedup_key, link_lock_key(home)]` for a
     /// registered idem⊤ `ty`, else `[link_lock_key(home)]` — the
-    /// registration read comes from the construction-time cache, race-free
-    /// because the registry is genesis-immutable (§3 step 1).
+    /// registration read goes to the module's format registry, race-free
+    /// because that registry is a compiled constant (§3 step 1).
     ///
     /// RETURNS `(tuple, seq)`: the address of the deposited tuple, or — on a
     /// dedup hit — the incumbent's, with the base `Seq`.
@@ -721,7 +717,7 @@ where
             return Err(TxnError::Rejected(EmitError::NonAddressDenotingType));
         }
         let class = coverage_class(ty);
-        if class == *self.registry.shipped_class(ShippedType::Supersedes) {
+        if class == *registry().shipped_class(ShippedType::Supersedes) {
             return Err(TxnError::Rejected(EmitError::SupersessionClass));
         }
         // The two managed slots a caller sizes: `enc({from})` is one span,
@@ -792,7 +788,7 @@ where
         home: &Address,
         target: &Address,
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
-        let retraction = self.registry.reserved_type(ShippedType::Retraction).clone();
+        let retraction = registry().reserved_type(ShippedType::Retraction).clone();
         let value = Link::triple(enc([home]), enc([target]), retraction);
         let keys = self.deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
@@ -838,7 +834,7 @@ where
         old: &Address,
         new: &Address,
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
-        let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
+        let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
         let keys = self.deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
@@ -919,9 +915,9 @@ where
         let mut keys = vec![M3State::link_lock_key(d_s), M3State::link_lock_key(d_a)];
         keys.sort();
         keys.dedup();
-        let sup = self.registry.reserved_type(ShippedType::Supersedes).clone();
-        let sup_class = self.registry.shipped_class(ShippedType::Supersedes);
-        let r_class = self.registry.shipped_class(ShippedType::Retraction);
+        let sup = registry().reserved_type(ShippedType::Supersedes).clone();
+        let sup_class = registry().shipped_class(ShippedType::Supersedes);
+        let r_class = registry().shipped_class(ShippedType::Retraction);
         let ((succ, claim), seq) = self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -941,9 +937,7 @@ where
                 // the count is the SOURCE document's fragmentation rather
                 // than the request's size, which is the same expansion
                 // MAKELINK's `Resolve` slots are bounded against.
-                if (1..=successor.arity())
-                    .any(|i| successor.slot(i).is_some_and(|e| e.len() > MAX_SLOT_SPANS))
-                {
+                if successor.slots().any(|e| e.len() > MAX_SLOT_SPANS) {
                     return Err(EditLinkError::SlotTooLarge);
                 }
                 // Level-uniformity is required of EVERY slot, not just the
@@ -958,9 +952,8 @@ where
                 // check, and `⟨⟩` classifies as the empty denoted antichain —
                 // neither shipped class — so it passes the DC guard untouched
                 // and comes back from the gate as `IllFormedSuccessor`.
-                let well_formed = successor.arity() == 3
-                    && (1..=successor.arity())
-                        .all(|i| successor.slot(i).is_some_and(Endset::is_level_uniform));
+                let well_formed =
+                    successor.arity() == 3 && successor.slots().all(Endset::is_level_uniform);
                 if !well_formed {
                     return Err(EditLinkError::IllFormedSuccessor);
                 }
@@ -994,9 +987,12 @@ where
     /// lifts into `TxnError::Rejected(RetractStaleError::NotBh4)` —
     /// PRE-TRANSACT, no transaction opened, the same channel as `emit`'s
     /// pre-transact rejections — so the batch nullifier can never be aimed
-    /// at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims); v1
-    /// ships no BH4 type, so every call rejects until an app registers one.
-    /// NOT atomic — a sequence of
+    /// at an idem⊤ class (e.g. mass-nullifying old `[K_sup]` claims). In THIS
+    /// format that fence covers every input: the registry's population is the
+    /// shipped five, all of them idem⊤ and none declaring BH4, so no `ty` a
+    /// caller can name is served and this op cannot succeed. Kept as the one
+    /// statement of the rule rather than specialized to the population, as
+    /// `reverse_lookup_classes` is. NOT atomic — a sequence of
     /// `nullify` transacts, each failure lifted through
     /// `RetractStaleError::Nullify`; on the first `TxnError` it returns
     /// `Err`, leaving earlier nullifies committed and durable (append-only,

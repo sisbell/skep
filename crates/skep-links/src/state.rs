@@ -5,7 +5,6 @@
 //! [`LinkState::rebuild_derived`].
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use im::{HashMap, OrdMap, OrdSet};
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,7 @@ use skep_address::{
 
 use crate::dedup::DedupKey;
 use crate::endset::{coverage_class, CoverageClass, Link};
-use crate::registry::{Registration, ShippedType, TypeRegistry};
+use crate::registry::{registry, Behavior, Registration, ShippedType};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction tuple, supersession claim, editlink successor, pdef/pd_stable
@@ -117,47 +116,42 @@ pub(crate) struct Hints {
 /// fail-stops on a non-T4 key at the rebuild fold, and takes the other two on
 /// checkpoint integrity.
 ///
-/// `registry` and `hints` are `#[serde(skip)]` RECOMPUTABLE state: on
-/// deserialize serde seeds them with their `Default`s, placeholders
-/// [`LinkState::rebuild_derived`] replaces BEFORE replay — the registry from
-/// the compiled format constants, the hints from the deserialized `links`
-/// map — load-bearing because M2 recovers from the deserialized checkpoint
-/// whenever one exists, and replay's `apply_link` folds need both.
+/// `hints` is `#[serde(skip)]` RECOMPUTABLE state — a pure function of
+/// `links`, which is the whole of the Lampson spine's claim: on deserialize
+/// serde seeds it empty and [`LinkState::rebuild_derived`] recomputes it from
+/// the decoded map BEFORE replay. Load-bearing, because M2 recovers from the
+/// deserialized checkpoint whenever one exists and replay's `apply_link` folds
+/// read the hints they maintain. The type registry the fold reads alongside
+/// them is not carried here at all: it is the module's compiled format
+/// constant, [`crate::registry()`], so there is nothing per-slice to seed, to
+/// checkpoint, or to re-validate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkState {
     /// ── AUTHORITATIVE ── append-only, immutable values.
     pub(crate) links: OrdMap<Tumbler, Link>,
-    /// ── RECOMPUTABLE ── lookup map; rebuilt from the compiled format
-    /// constants (`TypeRegistry::build`). The seed is named:
-    /// [`crate::registry::placeholder_registry`] is the one value that
-    /// stands in until `rebuild_derived` runs, and the registry publishes no
-    /// `Default` for a bare `skip` to reach.
-    #[serde(skip, default = "crate::registry::placeholder_registry")]
-    pub(crate) registry: Arc<TypeRegistry>,
-    /// ── RECOMPUTABLE ── rebuilt from `links`+`registry`.
+    /// ── RECOMPUTABLE ── rebuilt from `links` under the format registry.
     #[serde(skip)]
     pub(crate) hints: Hints,
 }
 
 impl LinkState {
-    /// The genesis slice: `links = ∅` under the format registry
-    /// (`TypeRegistry::build` — a pure function of the compiled constants).
+    /// The genesis slice: `links = ∅`, read under the format registry.
     /// Infallible: the retired `GenesisConfig` seam's validate-once-or-fail
     /// had a caller who chose the input; nothing chooses this one (owner
     /// ruling, 2026-08-26, second clause).
     pub fn genesis() -> LinkState {
         LinkState {
             links: OrdMap::new(),
-            registry: Arc::new(TypeRegistry::build()),
             hints: Hints::default(),
         }
     }
 
     /// The pure/total/deterministic M2 fold (§1): insert `addr ↦ value` into
-    /// `links` and fold EVERY hint incrementally, carrying the `registry`
-    /// forward unchanged (an Arc refcount bump). Reads only `LinkState` + M1
-    /// arithmetic + the registry. Applied exactly once per committed record
-    /// (M2 guarantees this — deliberately NOT coded idempotent).
+    /// `links` and fold EVERY hint incrementally. Reads only `LinkState` + M1
+    /// arithmetic + the module's format registry — which is a compiled
+    /// constant, identical on every board, so reading it costs the fold's
+    /// purity nothing. Applied exactly once per committed record (M2
+    /// guarantees this — deliberately NOT coded idempotent).
     ///
     /// Totality domain over `addr`, all three clauses owed by M3's `mint_link`
     /// and held by every record M7's own paths stage: `addr` is T4-valid, is
@@ -195,47 +189,26 @@ impl LinkState {
                     "apply_link: a Deposit must land at a fresh address (M3's mint never \
                      re-issues); replacing an immutable value voids Permanence (L12/R2)"
                 );
-                next.hints = fold_hints(&self.hints, &self.registry, addr, value);
+                next.hints = fold_hints(&self.hints, addr, value);
                 next
             }
         }
     }
 
-    /// Runs once at load, BEFORE replay (M2's `rebuild_derived` slot): first
-    /// reconstructs the registry from the compiled format constants
-    /// (`TypeRegistry::build` — infallible, and identical on every board
-    /// because the constants ARE the format), THEN recomputes every hint from
-    /// `links` + the rebuilt registry in one pass. Required because both
-    /// fields are `#[serde(skip)]` — M2's default identity would leave them
-    /// empty, and replay's `apply_link` folds need the registry to recognize
-    /// the `[R]`/`[K_sup]` classes.
+    /// Runs once at load, BEFORE replay (M2's `rebuild_derived` slot):
+    /// recomputes every hint from the deserialized `links` map in one pass,
+    /// under the module's format registry. Required because `hints` is
+    /// `#[serde(skip)]` — M2's default identity would leave it empty, and
+    /// replay's `apply_link` folds maintain exactly these hints.
     pub fn rebuild_derived(self) -> LinkState {
-        let registry = Arc::new(TypeRegistry::build());
         let mut hints = Hints::default();
         for (addr, value) in self.links.iter() {
-            hints = fold_hints(&hints, &registry, addr, value);
+            hints = fold_hints(&hints, addr, value);
         }
         LinkState {
             links: self.links,
-            registry,
             hints,
         }
-    }
-
-    /// The format registry — the instance [`LinkState::rebuild_derived`]
-    /// installed BEFORE replay (or genesis built), so this is the registry
-    /// the hint fold and every write gate actually run against. Published so
-    /// an assembler SHARES this instance rather than building a second one
-    /// and then owing an agreement check between the two.
-    ///
-    /// PRECONDITION: `self` has passed [`LinkState::rebuild_derived`], which
-    /// M2 runs at load ahead of replay. On a RAW-deserialized state the field
-    /// is still serde's seed, which registers nothing, reports every shipped
-    /// endset as `⟨⟩` and holds none of [`TypeRegistry`]'s invariant — so a
-    /// caller reading a registry out of a checkpoint reads it after the
-    /// rebuild, never before.
-    pub fn registry(&self) -> &Arc<TypeRegistry> {
-        &self.registry
     }
 
     /// Residence: `t ∈ dom(links)` (crate-internal; the public forms are
@@ -282,11 +255,18 @@ impl LinkState {
     }
 
     /// The registration of a coverage class, `None` for an unregistered one —
-    /// the slice's delegate to its own registry, beside `shipped_class`, so a
-    /// gate or a read asks the state it already holds rather than reaching
-    /// through it for the lookup.
-    pub(crate) fn registration(&self, class: &CoverageClass) -> Option<&Registration> {
-        self.registry.registration(class)
+    /// the slice's delegate to the module's format registry, beside
+    /// `shipped_class` and `declares`, so a gate or a read asks one question
+    /// of one place rather than reaching for the registry itself.
+    pub(crate) fn registration(&self, class: &CoverageClass) -> Option<&'static Registration> {
+        registry().registration(class)
+    }
+
+    /// Whether a registered class declares a behavior — the delegate beside
+    /// `registration`, so the one gate that reads a declaration back asks the
+    /// registry that knows the shipped table (§B).
+    pub(crate) fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
+        registry().declares(class, behavior)
     }
 
     /// The link an INDEX KEY names. Every key in `type_slices`/`dedup`/
@@ -331,8 +311,8 @@ impl LinkState {
     }
 
     /// The coverage class of a shipped reserved type (guard/recognition key).
-    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &CoverageClass {
-        self.registry.shipped_class(ty)
+    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &'static CoverageClass {
+        registry().shipped_class(ty)
     }
 }
 
@@ -359,13 +339,12 @@ pub(crate) fn lift(t: &Tumbler) -> Address {
 /// Class recognition and every write-path guard evaluate the SAME pure
 /// [`coverage_class`] — the shipped classes this fold recognizes are that
 /// function's own verdicts, fixed once at [`TypeRegistry::build`]. No second
-/// classifier exists anywhere in M7 (class coherence, §Core data model).
-pub(crate) fn fold_hints(
-    hints: &Hints,
-    registry: &TypeRegistry,
-    addr: &Tumbler,
-    value: &Link,
-) -> Hints {
+/// classifier exists anywhere in M7 (class coherence, §Core data model). The
+/// registry it recognizes them through is the module's compiled constant, so
+/// this stays a pure function of `(hints, addr, value)`: the same three
+/// arguments give the same hints on every board.
+pub(crate) fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
+    let registry = registry();
     let mut out = hints.clone();
     let class = coverage_class(value.type_slot());
 

@@ -18,13 +18,9 @@ use skep_engine::{ReservedAddrs, World};
 use skep_links::{coverage_class, HasLinks, ShippedType, View};
 use skep_namespace::{ghost_home_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
 
-const SHIPPED: [ShippedType; 5] = [
-    ShippedType::Retired,
-    ShippedType::Supersedes,
-    ShippedType::Retraction,
-    ShippedType::PredDef,
-    ShippedType::PredStable,
-];
+/// M7's own list of the five — read rather than restated, so a walk here
+/// cannot come to cover four classes out of five.
+const SHIPPED: [ShippedType; 5] = ShippedType::ALL;
 
 /// Genesis seeds M3's baptismal roots and leaves M4/M5/M7's stores empty —
 /// exactly two things exist: the namespace roots and the empty docuverse.
@@ -58,22 +54,24 @@ fn two_geneses_are_byte_identical() {
     assert_eq!(a, b, "genesis must be one value, byte for byte");
 }
 
-/// The genesis seam: the registry the engine publishes IS the one M7's slice
-/// built from the format constants — one instance, so the two consumers
-/// cannot disagree by construction rather than by comparison — and every
-/// shipped class is registered in it.
+/// The genesis seam: the registry the engine publishes IS M7's own module
+/// constant — one instance, so the engine and the store cannot disagree by
+/// construction rather than by comparison — and every shipped class is
+/// registered in it.
 #[test]
-fn the_engine_publishes_the_slice_s_own_registry() {
+fn the_engine_publishes_m7_s_own_registry() {
     let engine = mem_engine();
     let snap = engine.kernel().snapshot();
     let links = snap.world().links();
 
     assert!(
-        Arc::ptr_eq(engine.registry(), links.registry()),
+        Arc::ptr_eq(engine.registry(), skep_links::registry()),
         "the engine must share M7's registry, not rebuild a second one"
     );
     for ty in SHIPPED {
         let ours = engine.registry().reserved_type(ty);
+        // ...and the slice reads the same shipped endsets the engine does,
+        // because there is one registry rather than two that agree.
         assert_eq!(ours, links.reserved_type(ty), "shipped class {ty:?}");
         assert!(
             engine.registry().registration(&coverage_class(ours)).is_some(),

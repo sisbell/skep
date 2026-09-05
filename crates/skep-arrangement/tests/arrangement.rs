@@ -415,10 +415,23 @@ fn copy_rejects_each_documented_guard() {
         rejected(vs.copy(P1, &doc2(), vp(1, 2), &[])),
         CopyError::OutOfBounds
     ));
+    // Subspace before bounds: the destination position is BOTH in the link
+    // subspace and past doc2's only admissible boundary (n_C + 1 = 1).
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(2, 99), &[])),
+        CopyError::NotContentSubspace
+    ));
     let spec = |source: Address, span: Span| VSpec { source, span };
     assert!(matches!(
         rejected(vs.copy(P1, &doc2(), vp(1, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
         CopyError::SourceNotRegistered
+    ));
+    // Destination before spec: a link-subspace destination beside a spec
+    // whose source is unregistered. "Destination first, then per spec" is
+    // the documented order; the other reading gives SourceNotRegistered.
+    assert!(matches!(
+        rejected(vs.copy(P1, &doc2(), vp(2, 1), &[spec(un.clone(), vspan(1, 1, 1))])),
+        CopyError::NotContentSubspace
     ));
     // NotOrdinalVSpan: a T12-legal but level-uniform [m, n] width is action-point-1 —
     // not an ordinal-level depth-2 V-span (Conflicts #7's precise verdict).
@@ -573,6 +586,12 @@ fn delete_rejects_in_documented_order() {
         rejected(vs.delete(P1, &doc1(), vp(1, 9), n(0))),
         DeleteError::NotArranged
     ));
+    // Subspace before position: the link subspace AND an ordinal no content
+    // position holds — the subspace check runs first.
+    assert!(matches!(
+        rejected(vs.delete(P1, &doc1(), vp(2, 9), n(1))),
+        DeleteError::NotContentSubspace
+    ));
 }
 
 // ---- §B REARRANGE ----
@@ -656,6 +675,22 @@ fn rearrange_rejects_in_documented_order() {
     assert!(matches!(
         rejected(vs.rearrange(P1, &doc1(), &[vp(1, 2), vp(2, 1), vp(1, 3)])),
         RearrangeError::NotAscending
+    ));
+    // Subspace before bounds: ascending cuts, the first in the link
+    // subspace, the last past doc1's upper bound of n_C + 1 = 4.
+    assert!(matches!(
+        rejected(vs.rearrange(P1, &doc1(), &[vp(2, 1), vp(1, 2), vp(1, 9)])),
+        RearrangeError::NotContentSubspace
+    ));
+    // Bounds before emptiness, which is what makes `EmptyContentSubspace`
+    // the defensive-completeness verdict its own doc says it is: doc2 is
+    // registered and content-empty, so n_C + 1 = 1 admits only ordinal 1 and
+    // the third cut trips OutOfBounds first. Transposing the two checks
+    // would make an unreachable verdict reachable, and M10 would then have
+    // to handle it.
+    assert!(matches!(
+        rejected(vs.rearrange(P1, &doc2(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+        RearrangeError::OutOfBounds
     ));
 }
 
@@ -1060,6 +1095,13 @@ fn reads_fold_an_absent_document_to_empty_results() {
     // §D/§E: absent doc ⇒ ⟨⟩/None/0 — M5 does not distinguish
     // registered-empty from unallocated (that is M6's, via M3).
     let k = mem_kernel();
+    // doc1 is populated in BOTH subspaces and has a deletion on record, so
+    // every answer below is about doc2's ABSENCE rather than about an empty
+    // store: against a genesis world these reads would pass even if they
+    // ignored the document they are asked about.
+    let vs = insert_abc(&k);
+    seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
+    vs.delete(P1, &doc1(), vp(1, 1), n(1)).expect("delete commits");
     let s = k.snapshot();
     let m5 = s.world().m5();
     assert!(m5.resolve(&doc2(), &vspan(1, 1, 1)).is_empty());
@@ -1073,6 +1115,17 @@ fn reads_fold_an_absent_document_to_empty_results() {
         .project(&doc2(), &SpanSet::singleton(subtree_of(doc2().tumbler())))
         .is_empty());
     assert!(m5.docs_ever_containing(&SpanSet::empty()).is_empty());
+    // The positive control: R is not empty, and the reads that answer ⟨⟩ for
+    // doc2 answer for doc1 — so the sweep above is about the document asked
+    // for, not about a store with nothing in it.
+    let placed = SpanSet::singleton(
+        Span::from_endpoints(ca(1).tumbler().clone(), ca(4).tumbler())
+            .expect("well-formed I-extent"),
+    );
+    assert_eq!(m5.docs_ever_containing(&placed), vec![doc1()]);
+    assert!(!m5.deletions(&doc1()).is_empty());
+    assert_eq!(m5.content_count(&doc1()), n(2));
+    assert_eq!(m5.link_count(&doc1()), n(1));
 }
 
 // ---- M2-driven recovery: checkpoint load + tail replay ----
@@ -1081,8 +1134,9 @@ fn reads_fold_an_absent_document_to_empty_results() {
 fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // §10: M5 owns no recovery machinery — M2 loads the checkpoint
     // (deserializing the slice) and replays the tail through apply → apply_m5.
-    // The insert rides the checkpoint path, the delete and the seat ride the
-    // replay path; the recovered slice is byte-identical.
+    // The insert rides the checkpoint path; the delete, the seat, the fork
+    // and the post-fork source edit ride the replay path; the recovered
+    // slice is byte-identical.
     let dir = tempdir().expect("tempdir");
     let link1 = a(&[1, 0, 1, 0, 1, 0, 2, 1]);
     let bytes_before;
@@ -1094,6 +1148,13 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         k.checkpoint().expect("checkpoint");
         vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         seat_link(&k, &doc1(), &link1).expect("seat commits");
+        let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+        assert_eq!(fork, vdoc());
+        // A source edit AFTER the fork: on replay the VersionSnapshot must
+        // fold at its own journal slot and read doc1 as it was there, not as
+        // the source ends up.
+        vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"d")])
+            .expect("post-fork source edit commits");
         let s = k.snapshot();
         bytes_before = bincode::serialize(s.world().m5()).expect("slice serializes");
     }
@@ -1104,15 +1165,22 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         bincode::serialize(m5).expect("slice serializes"),
         bytes_before
     );
-    assert_eq!(m5.content_count(&doc1()), n(2));
+    assert_eq!(m5.content_count(&doc1()), n(3));
     assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(3)));
     assert_eq!(m5.link_count(&doc1()), n(1));
     let d = m5.deletions(&doc1());
     let spans: Vec<Span> = d.iter().cloned().collect();
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].start(), ca(2).tumbler());
+    // The fork replayed at ITS slot: it holds what doc1 held at the fork
+    // point, not what doc1 holds now. Byte-identity above would fail either
+    // way; these say which value is the right one.
+    assert_eq!(m5.content_count(&vdoc()), n(2));
+    assert_eq!(m5.point(&vdoc(), &vp(1, 1)), Some(ca(1)));
+    assert_eq!(m5.point(&vdoc(), &vp(1, 2)), Some(ca(3)));
+    assert_eq!(m5.point(&vdoc(), &vp(1, 3)), None);
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
-    vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"d")])
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"e")])
         .expect("post-recovery insert commits");
 }

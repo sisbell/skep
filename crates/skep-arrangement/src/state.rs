@@ -293,6 +293,7 @@ impl M5State {
 mod tests {
     use super::*;
     use crate::testutil::{ca, doc1, doc2, la, n, run, vca, vdoc};
+    use crate::vspace::VPos;
 
     fn place(s: &M5State, doc: &Address, at: u32, runs: Vec<Run>) -> M5State {
         s.apply_m5(&M5Rec::ContentPlace {
@@ -404,6 +405,81 @@ mod tests {
     }
 
     #[test]
+    fn a_fork_keeps_the_arrangement_its_source_had_at_the_fork_point() {
+        // ASN-0123 V11, the half V3 does not cover: the source is untouched
+        // by the fork, AND the fork is untouched by later edits to the
+        // source. That is what makes the divergence copy-on-write, and it is
+        // the property a lazy or by-reference share — the explicit-runs
+        // migration this record's own doc anticipates — would quietly lose.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+        let s = s.apply_m5(&M5Rec::VersionSnapshot {
+            source: doc1(),
+            new: vdoc(),
+        });
+        // The source grows…
+        let s = place(&s, &doc1(), 3, vec![run(&ca(5), 1)]);
+        // …and shrinks, after the fork was taken.
+        let s = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(1),
+            width: n(1),
+        });
+        assert_eq!(s.content_count(&doc1()), n(2));
+        assert_eq!(s.content_runs(&doc1()), vec![run(&ca(2), 1), run(&ca(5), 1)]);
+        // The fork still reads as doc1 did at the fork point.
+        assert_eq!(s.content_count(&vdoc()), n(2));
+        assert_eq!(s.content_runs(&vdoc()), vec![run(&ca(1), 2)]);
+        // And the fork's R records the fork-point placement and nothing the
+        // source placed afterwards.
+        let later = skep_address::SpanSet::singleton(run(&ca(5), 1).iextent());
+        assert_eq!(s.docs_ever_containing(&later), vec![doc1()]);
+    }
+
+    #[test]
+    fn every_address_a_document_arranged_is_recorded_in_r() {
+        // P4★ (the class invariant on M5State), at ADDRESS granularity. The
+        // per-class assertions elsewhere catch dropping a whole origin
+        // length; a truncated append records spans of the right classes and
+        // passes them. Here the subject is the addresses: remove a
+        // document's whole content, and every address it ever arranged must
+        // surface in `deletions` — which is `ever_contained ∖ image` with the
+        // image empty, hence exactly what R holds.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 2)]);
+        // ONE record placing TWO runs — the shape COPY stages, and the only
+        // shape in which a truncated ContentPlace append is observable.
+        let s = place(&s, &doc1(), 3, vec![run(&vca(1), 1), run(&ca(5), 2)]);
+        let s = s.apply_m5(&M5Rec::VersionSnapshot {
+            source: doc1(),
+            new: vdoc(),
+        });
+        for doc in [doc1(), vdoc()] {
+            let arranged: Vec<Address> = s
+                .content_runs(&doc)
+                .into_iter()
+                .flat_map(Run::into_addrs)
+                .collect();
+            assert_eq!(
+                arranged.len(),
+                5,
+                "the fixture arranges five positions in {doc:?}"
+            );
+            let gone = s.apply_m5(&M5Rec::ContentRemove {
+                doc: doc.clone(),
+                from: n(1),
+                width: n(5),
+            });
+            assert_eq!(gone.content_count(&doc), n(0));
+            let deleted = gone.deletions(&doc);
+            for a in arranged {
+                assert!(
+                    deleted.denotes(a.tumbler()),
+                    "{a:?} was arranged in {doc:?}; P4★ says R recorded it"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn only_placement_and_version_append_to_r() {
         // §4/§6/§8: DELETE, REARRANGE and link seating leave R alone — P2 is
         // about never LOSING a pair, and J-LV uncouples link placement from R
@@ -462,6 +538,91 @@ mod tests {
         assert!(s1.arrangements.get(&vdoc()).is_none());
         assert!(!s1.provenance.is_recorded(&vdoc()));
         assert_eq!(s1.content_count(&vdoc()), n(0));
+    }
+
+    #[test]
+    fn the_fold_answers_records_outside_its_input_class_without_panicking() {
+        // §10 TOTALITY DOMAIN: an out-of-contract record can arise only from
+        // corruption and is deliberately NOT re-validated here — what the
+        // fold promises instead is that the run-list clamps keep it
+        // panic-free. `Nat` is a BigUint, so a lost clamp is an UNDERFLOW
+        // PANIC, and this fold runs on the replay path: the failure would be
+        // an abort inside `Kernel::open` rather than a rejected request.
+        let s = place(&M5State::genesis(), &doc1(), 1, vec![run(&ca(1), 5)]);
+        let at = |k: &Nat| VPos {
+            subspace: content_subspace(),
+            ordinal: k.clone(),
+        };
+        for r in [
+            // `at` below the first boundary, past the append boundary, and a
+            // placement carrying no runs at all.
+            M5Rec::ContentPlace {
+                doc: doc1(),
+                at: n(0),
+                runs: vec![run(&ca(9), 1)],
+            },
+            M5Rec::ContentPlace {
+                doc: doc1(),
+                at: n(99),
+                runs: vec![run(&ca(9), 1)],
+            },
+            M5Rec::ContentPlace {
+                doc: doc1(),
+                at: n(1),
+                runs: vec![],
+            },
+            // Removals that overrun, open below 1, or open past the end.
+            M5Rec::ContentRemove {
+                doc: doc1(),
+                from: n(3),
+                width: n(999),
+            },
+            M5Rec::ContentRemove {
+                doc: doc1(),
+                from: n(0),
+                width: n(0),
+            },
+            M5Rec::ContentRemove {
+                doc: doc1(),
+                from: n(999),
+                width: n(1),
+            },
+            // Cut vectors violating R-PRE. The COUNT clause is
+            // debug-asserted, so these keep 3 ordinals and break ascent and
+            // the bounds instead.
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(3), n(2), n(1)],
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(0), n(0), n(0)],
+            },
+            M5Rec::ContentReorder {
+                doc: doc1(),
+                cut_ordinals: vec![n(1), n(2), n(999)],
+            },
+            // And against a document the arrangement has never touched.
+            M5Rec::ContentRemove {
+                doc: doc2(),
+                from: n(1),
+                width: n(1),
+            },
+            M5Rec::ContentReorder {
+                doc: doc2(),
+                cut_ordinals: vec![n(1), n(2), n(3)],
+            },
+        ] {
+            let out = s.apply_m5(&r);
+            // It answered — and what it answered is still an arrangement:
+            // D-SEQ★ holds, the count being the largest arranged ordinal.
+            let n_c = out.content_count(&doc1());
+            assert_eq!(out.point(&doc1(), &at(&n(0))), None, "{r:?}");
+            assert_eq!(out.point(&doc1(), &at(&(&n_c + &n(1)))), None, "{r:?}");
+            if !n_c.is_zero() {
+                assert!(out.point(&doc1(), &at(&n_c)).is_some(), "{r:?}");
+            }
+        }
     }
 
     #[test]

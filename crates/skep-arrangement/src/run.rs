@@ -520,6 +520,73 @@ mod tests {
     }
 
     #[test]
+    fn offsets_covered_by_names_exactly_the_positions_the_span_contains() {
+        // §2: the answer is a LAW over covering spans, and the oracle is the
+        // span's own membership — for every span, the range must be exactly
+        // the offsets whose address it contains. The same-length
+        // level-uniform family is small enough to exhaust, and it is the
+        // branch the worked example above visits only strictly INSIDE the
+        // run: the equal case, a span opening before the run and one
+        // reaching past it are all cases M1's `intersect` CLIPS, and the
+        // clipping is what those offsets are derived from. The second family
+        // is non-uniform at the run's own length, which takes the boundary
+        // search, and it walks that search's every boundary.
+        let r = Run::new(ca(4), n(3)).expect("valid run"); // ca4, ca5, ca6
+        let check = |span: &Span, label: String| {
+            let covered: Vec<Nat> = (0..3u32)
+                .map(n)
+                .filter(|k| span.contains(r.addr_at(k).tumbler()))
+                .collect();
+            match r.offsets_covered_by(span) {
+                None => assert!(
+                    covered.is_empty(),
+                    "{label}: covers offsets {covered:?}, answered None"
+                ),
+                Some(range) => {
+                    assert!(
+                        !covered.is_empty(),
+                        "{label}: covers no offset, answered {range:?}"
+                    );
+                    assert_eq!(
+                        range.lo(),
+                        &covered[0],
+                        "{label}: opens at the first covered offset"
+                    );
+                    assert_eq!(
+                        range.width(),
+                        n(covered.len() as u32),
+                        "{label}: names as many positions as the span contains"
+                    );
+                    // Contiguity, the other half of the claim: the covered
+                    // subset of a run is one unbroken offset range.
+                    let last = covered.last().expect("nonempty");
+                    assert_eq!(
+                        &covered[0] + &range.width(),
+                        last + &n(1),
+                        "{label}: the covered offsets are contiguous"
+                    );
+                }
+            }
+        };
+        // Level-uniform at the run's own length ⇒ the intersect branch. 45
+        // spans: before, abutting, overlapping either end, equal, containing.
+        for lo in 1..=9u32 {
+            for hi in lo + 1..=10u32 {
+                let span = Span::from_endpoints(ca(lo).tumbler().clone(), ca(hi).tumbler())
+                    .expect("lo < hi at one length ⇒ well-formed");
+                check(&span, format!("[ca{lo}, ca{hi})"));
+            }
+        }
+        // Same length, NOT level-uniform ⇒ the boundary-search branch, whose
+        // reach is [2] — every length-8 address at or after ca(k) is covered.
+        for k in 1..=9u32 {
+            let span = Span::new(ca(k).tumbler().clone(), t(&[1])).expect("T12: action point 1 ≤ 8");
+            assert!(!span.is_level_uniform());
+            check(&span, format!("[ca{k}, [2])"));
+        }
+    }
+
+    #[test]
     fn run_survives_a_bincode_round_trip() {
         // §A: Run is a journaled type (inside ContentPlace); bincode is M2's
         // actual wire format.

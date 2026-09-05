@@ -442,6 +442,30 @@ mod tests {
     }
 
     #[test]
+    fn reorder_recoalesces_the_neighbours_the_transposition_rejoins() {
+        // ASN-0058 M12: the resident form is the unique MAXIMALLY MERGED
+        // decomposition, and reorder must re-establish it — an exchange can
+        // put two runs of one origin side by side that a foreign run had
+        // separated. Over a single contiguous run no admissible cut vector
+        // can produce a merge (strict ascent forbids adjacency at all three
+        // new seams), which is why the exhaustive tiling test below cannot
+        // see this and why the fixture here is fragmented across two origin
+        // lengths.
+        let l = list(vec![run(&ca(1), 1), run(&vca(1), 1), run(&ca(2), 1)]);
+        let out = l.reorder(&[n(1), n(2), n(3)]); // pivot: α = {1}, β = {2}
+        // V-order becomes vca1, ca1, ca2 — and ca1 REACHES ca2, so the tail
+        // merges. Without the coalesce the list holds three runs denoting
+        // the same addresses, which no `point` or `total_width` assertion
+        // can see.
+        assert_eq!(out.runs(), vec![run(&vca(1), 1), run(&ca(1), 2)]);
+        assert_eq!(out.total_width(), n(3));
+        // The permutation itself is what it was; the merge is about
+        // structure, not about which address sits where.
+        let got: Vec<Address> = (1..=3).map(|i| out.point(&n(i)).expect("arranged")).collect();
+        assert_eq!(got, vec![vca(1), ca(1), ca(2)]);
+    }
+
+    #[test]
     fn reorder_tiles_by_placement_for_every_admissible_cut_vector() {
         // ASN-0119/ASN-0084 Q14: the tiling is a law over the whole
         // R-PRE-admissible input class, and at n_C = 5 that class is small

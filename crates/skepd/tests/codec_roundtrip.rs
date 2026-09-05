@@ -542,7 +542,7 @@ fn documented_reject_codes() -> Vec<String> {
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 67] = [
+    let table: [(RejectCode, &str); 69] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -610,6 +610,8 @@ fn reject_code_names_are_pinned() {
         (RejectCode::TooMuchCoverage, "too_much_coverage"),
         (RejectCode::NotALink, "not_a_link"),
         (RejectCode::BadRegion, "bad_region"),
+        (RejectCode::ImageTooLarge, "image_too_large"),
+        (RejectCode::EndsetsTooLarge, "endsets_too_large"),
     ];
     let codec = JsonCodec;
     for (code, name) in table {

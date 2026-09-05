@@ -11,11 +11,13 @@
 //! narrowing, and addressable discoverability; the delete-orphan preview
 //! measured against the DELETE it previews, over that operation's whole
 //! accepted domain and against M5's own admission; the flipped lineage probes
-//! with the residence gate, the claim's own home attribution and the
-//! endpoints it reads out as recorded; the snapshot twins; and — because this
-//! file is a crate of its own — the promises M8 makes to a consumer rather
-//! than to itself: one named world bound, the standard traits its values
-//! carry, and rejection enums that stay exhaustively matchable.
+//! with the residence gate, the claim's own home attribution, the endpoints it
+//! reads out as recorded and the write-surface fences that read-out rests on;
+//! the two budgets, each refused at its boundary and on every entry point that
+//! inherits it; the snapshot twins; and — because this file is a crate of its
+//! own — the promises M8 makes to a consumer rather than to itself: one named
+//! world bound, the standard traits its values carry, and rejection enums that
+//! stay exhaustively matchable.
 
 mod common;
 
@@ -26,11 +28,14 @@ use skep_address::{Address, Span};
 use skep_arrangement::{HasM5, Vstream};
 use skep_discovery::{
     content_vspan, count_ftt_on, count_v_on, delete_orphans_on, window_v_on, DiscoveryWorld,
-    FourSet, LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window, FROM,
-    TO, TYPE,
+    FourSet, LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
+    FROM, MAX_ENDSET_SPANS, MAX_IMAGE_RUNS, TO, TYPE,
 };
-use skep_kernel::{Kernel, Snapshot};
-use skep_links::{enc, Endset, HasLinks, LinkWriter, SlotArg, View};
+use skep_kernel::{Kernel, Snapshot, TxnError};
+use skep_links::{
+    enc, EditLinkError, Endset, HasLinks, Link, LinkWriter, MakeLinkError, ShippedType, SlotArg,
+    View, MAX_SLOT_SPANS,
+};
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
 
@@ -194,6 +199,129 @@ fn image_returns_runs_in_region_span_order_then_v_order() {
         lq.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 4, 1)]),
         Ok(vec![run(&ca(4), 1), run(&ca(1), 1)])
     );
+}
+
+/// §1 — the dedup keys on `(i_start, width)`, which is exactly `Run`'s
+/// equality and not one component of it. Two runs sharing a start and
+/// differing in width are two runs, and a key that dropped the width would
+/// collapse them — the one mistake the spelled-out key can make, since `Run`
+/// itself carries no `Hash`. `resolve` clips to the span asked for, so two
+/// nested region spans over one arranged run produce exactly that pair.
+#[test]
+fn image_dedups_on_a_runs_whole_identity_not_its_start() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3); // V 1..3 → one run at ca(1)
+    let lq = LinkQuery::new(&k);
+
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 1), vspan(1, 1, 2)]),
+        Ok(vec![run(&ca(1), 1), run(&ca(1), 2)])
+    );
+    // The collapse the same key MUST still make: an exact repeat is one run.
+    assert_eq!(
+        lq.image(&doc1(), &[vspan(1, 1, 2), vspan(1, 1, 2)]),
+        Ok(vec![run(&ca(1), 2)])
+    );
+}
+
+/// §1 — the run budget, at its boundary and on every entry point that
+/// inherits `image_on`. The shape it prices is the region×image PRODUCT, not
+/// the region: each span here is well-formed, in-budget for the transport,
+/// and resolves to the document's whole arrangement, so a request the wire
+/// admits whole can still name work no wire cap bounds. Counted over runs
+/// RESOLVED, so four runs under 1024 spans is the budget exactly and one more
+/// span is past it.
+#[test]
+fn the_region_family_refuses_an_image_past_the_run_budget() {
+    let k = kernel();
+    for _ in 0..4 {
+        seed_content(&k, &doc1(), 1); // four separate INSERTs ⇒ four runs
+    }
+    let lq = LinkQuery::new(&k);
+    // Every span the same: the whole document, resolving to all four runs.
+    let past: Vec<Span> = vec![vspan(1, 1, 4); MAX_IMAGE_RUNS / 4 + 1];
+    let at_budget = &past[..MAX_IMAGE_RUNS / 4];
+    assert_eq!(lq.image(&doc1(), &past[..1]).map(|r| r.len()), Ok(4));
+    // At the budget the answer is still those four distinct runs — the dedup
+    // is not what the budget counts.
+    assert_eq!(lq.image(&doc1(), at_budget).map(|r| r.len()), Ok(4));
+
+    let entries: Vec<(&str, RegionRefusal<'_>)> = vec![
+        ("image", Box::new(|d, r| lq.image(d, r).err())),
+        ("findlinks_v", Box::new(|d, r| lq.findlinks_v(d, r).err())),
+        ("count_v", Box::new(|d, r| lq.count_v(d, r).err())),
+        ("window_v", Box::new(|d, r| lq.window_v(d, r, None, 3).err())),
+        (
+            "retrieve_endsets",
+            Box::new(|d, r| lq.retrieve_endsets(d, r).err()),
+        ),
+    ];
+    for (name, refusal) in &entries {
+        assert_eq!(
+            refusal(&doc1(), at_budget),
+            None,
+            "{name}: the budget itself is admitted"
+        );
+        assert_eq!(
+            refusal(&doc1(), &past),
+            Some(QueryError::ImageTooLarge),
+            "{name}: one span past the budget is refused, not truncated"
+        );
+    }
+}
+
+/// §5 — the same run budget over `ran(M(d))`, which is what makes the three
+/// reads of a document's runs refuse the same documents: a `d` the region
+/// family declines is not one the pointwise family answers about. Both
+/// pointwise reads are checked, since each reaches the runs by its own route
+/// — `project` through M5's join, `addressably_discoverable_from` through the
+/// extents it lifts itself.
+#[test]
+fn the_pointwise_family_holds_the_same_run_budget_over_the_documents_runs() {
+    let k = kernel();
+    let store = LinkWriter::new(&k);
+    seed_content(&k, &doc1(), 1);
+    let (e1, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let lq = LinkQuery::new(&k);
+
+    // Well under the budget, both answer.
+    assert!(lq.project(&e1, FROM, &doc1()).is_ok());
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc1()), Ok(true));
+
+    // Fragment doc2 to exactly the budget: one COPY placing the SAME source
+    // position many times — each placement is a width-1 run that abuts
+    // nothing, so the arrangement holds one run per spec rather than
+    // coalescing them. This is the world quantity the budget prices, and a
+    // caller can build it far faster than a reader can pay for it.
+    let vs = Vstream::new(&k);
+    let many = vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS];
+    vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert!(lq.project(&e1, FROM, &doc2()).is_ok());
+    assert!(lq.addressably_discoverable_from(&e1, &doc2()).is_ok());
+
+    // One run past it, and both routes to `d`'s runs refuse — the region
+    // family's image, checked above, refuses the same document.
+    vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
+        .expect("copy succeeds");
+    assert_eq!(
+        lq.project(&e1, FROM, &doc2()),
+        Err(QueryError::ImageTooLarge)
+    );
+    assert_eq!(
+        lq.addressably_discoverable_from(&e1, &doc2()),
+        Err(QueryError::ImageTooLarge)
+    );
+    // The gates above the budget still answer first: an unregistered `d` and
+    // a non-link `a` are not swallowed by it.
+    assert_eq!(
+        lq.project(&e1, FROM, &d7()),
+        Err(QueryError::DocNotRegistered)
+    );
+    assert_eq!(lq.project(&ca(1), FROM, &doc2()), Err(QueryError::NotALink));
 }
 
 #[test]
@@ -429,6 +557,62 @@ fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     );
 }
 
+/// §4 — the answer's span budget, at its boundary. The amplification it
+/// prices is the one no request-shaped cap reaches: a two-hundred-byte query
+/// naming ONE position, answered with every whole endset touching it, each of
+/// which M7 admits at `MAX_SLOT_SPANS` on deposit. Sixty-four such endsets is
+/// the budget exactly, and the sixty-fifth is refused rather than dropped —
+/// RE-UNIT licenses withholding a link's IDENTITY, never its endset.
+#[test]
+fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
+    /// Endsets are collapsed by VALUE, so each link needs its own filler set
+    /// or the sixty-four would ship as one pair. `ca(1)` is the span that
+    /// touches the region; the rest name unarranged positions of doc1.
+    fn wide_from(link: u32, spans: u32) -> Vec<Address> {
+        let mut addrs = vec![ca(1)];
+        addrs.extend((1..spans).map(|j| ca(1000 + link * spans + j)));
+        addrs
+    }
+    const SPANS: u32 = 1024;
+    let at_budget = MAX_ENDSET_SPANS / SPANS as usize; // 64 whole endsets
+
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    let region = [vspan(1, 1, 1)];
+    let deposit = |i: u32| {
+        store
+            .makelink(
+                SYS,
+                &doc1(),
+                SlotArg::Addrs(wide_from(i, SPANS)),
+                SlotArg::Addrs(vec![ca(101)]),
+                SlotArg::Addrs(vec![ra(10)]),
+            )
+            .expect("a slot at MAX_SLOT_SPANS is admitted");
+    };
+    assert!(SPANS as usize <= MAX_SLOT_SPANS, "each slot is in M7's budget");
+    for i in 0..at_budget as u32 {
+        deposit(i);
+    }
+
+    // At the budget: one pair per link, each endset WHOLE, none clipped.
+    let pairs = lq.retrieve_endsets(&doc1(), &region).expect("at budget");
+    assert_eq!(pairs.len(), at_budget);
+    assert!(pairs.iter().all(|(i, e)| *i == FROM && e.len() == SPANS as usize));
+
+    // One link more, and the answer is refused rather than shortened.
+    deposit(at_budget as u32);
+    assert_eq!(
+        lq.retrieve_endsets(&doc1(), &region),
+        Err(QueryError::EndsetsTooLarge)
+    );
+    // The region family's other read-outs carry no such budget: they enumerate
+    // ADDRESSES, whose size is the link count and not the endsets'.
+    assert_eq!(lq.count_v(&doc1(), &region), Ok(at_budget + 1));
+}
+
 // ─────────────────── §3 — four-set descriptor query ───────────────────
 
 #[test]
@@ -515,6 +699,51 @@ fn the_descriptor_states_its_own_zero() {
             assert!(q.is_unsatisfiable(), "{q:?} carries the zero");
         }
     }
+}
+
+/// §3 — the conjunction is handed to M7 smallest constraint first, because
+/// M7 drives ONE whole-store scan with the first and narrows the survivors
+/// with the rest. That reordering must move work and not the answer, and the
+/// way it could move the answer is by decoupling an endset from its slot: a
+/// descriptor whose big constraint is FROM and small is TO answers the same
+/// links as it did unsorted, and its MIRROR — the same two endsets in the
+/// other slots — answers different links, not the same ones. A sort that lost
+/// the pairing would make the two agree.
+#[test]
+fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 2);
+    let store = LinkWriter::new(&k);
+    let lq = LinkQuery::new(&k);
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds"); // la(1): from ca(1), to ca(2)
+    store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds"); // la(2): the mirror
+
+    // A many-span constraint and a one-span one, so the sort actually
+    // reorders rather than leaving the list as written.
+    let wide = enc(&[ca(1), ca(101), ca(102), ca(103), ca(104)]);
+    let narrow = enc(&[ca(2)]);
+    assert!(wide.len() > narrow.len(), "the sort has something to do");
+
+    let wide_from = FourSet {
+        from: SlotSpec::Spans(wide.clone()),
+        to: SlotSpec::Spans(narrow.clone()),
+        ..FourSet::any()
+    };
+    let wide_to = FourSet {
+        from: SlotSpec::Spans(narrow),
+        to: SlotSpec::Spans(wide),
+        ..FourSet::any()
+    };
+    // Each descriptor names exactly one of the two links, and they are
+    // different links: the endsets stayed with the slots they were written in
+    // however the list was ordered on the way to M7.
+    assert_eq!(lq.findlinks_ftt(&wide_from), vec![la(1)]);
+    assert_eq!(lq.findlinks_ftt(&wide_to), vec![la(2)]);
+    assert_eq!(lq.count_ftt(&wide_from), 1);
 }
 
 #[test]
@@ -1304,6 +1533,95 @@ fn lineage_reads_out_in_claim_address_order() {
     );
 }
 
+/// §7 — the lineage read-out reports a claim's endpoints with NO per-claim
+/// conformance filter, and cannot fault because every stored `[K_sup]` tuple
+/// carries unit-depth single-address F and G. That is a fence on the WRITE
+/// surface, held at sites M8 cannot see and cannot ask about, so what M8 can
+/// do is pin its own reliance: the two routes by which a caller-shaped tuple
+/// could reach the `[K_sup]` class are closed, in the build where a change to
+/// either would surface as this test rather than as a panic in `claim_at`.
+///
+/// The open route is `editlink`, whose successor is the caller's: its DC
+/// guard is the very predicate the read-out applies, so a successor with a
+/// two-address F is refused rather than deposited. `makelink` refuses the
+/// class outright.
+#[test]
+fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k);
+    let (e1, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let (e2, _) = store
+        .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(102)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+
+    // The reserved Supersedes type, read off the store rather than spelled:
+    // the ghost tumbler is the compiled format constant, and the two are
+    // asserted equal so the fixture below names the class M7 recognizes.
+    let sup = k
+        .snapshot()
+        .world()
+        .links()
+        .reserved_type(ShippedType::Supersedes)
+        .clone();
+    assert_eq!(sup, enc(&[ra(4)]), "Supersedes is ghost position 4");
+
+    // The open surface refuses the class outright, so no MAKELINK can deposit
+    // a [K_sup] tuple of any shape.
+    assert!(matches!(
+        store.makelink(
+            SYS,
+            &doc1(),
+            SlotArg::Addrs(vec![e1.clone()]),
+            SlotArg::Addrs(vec![e2.clone()]),
+            SlotArg::Addrs(vec![ra(4)]),
+        ),
+        Err(TxnError::Rejected(MakeLinkError::SupersessionClass))
+    ));
+
+    // The caller-supplied route is gated by the schema the read-out reads
+    // back: a [K_sup]-typed successor whose F denotes TWO addresses — the
+    // shape `single_denoted` answers `None` for — is refused.
+    let two = enc(&[e1.clone(), e2.clone()]);
+    assert!(two.single_denoted().is_none(), "F denotes two addresses");
+    assert!(matches!(
+        store.editlink(
+            SYS,
+            &e1,
+            Link::triple(two, enc(&[e2]), sup),
+            &doc1(),
+            &doc1(),
+        ),
+        Err(TxnError::Rejected(EditLinkError::DcViolation))
+    ));
+
+    // And the schema-conforming edit IS admitted, so the fence above is a
+    // fence and not a closed door: the claim it deposits reads back through
+    // the lineage surface with both endpoints named.
+    let (succ, claim, _) = store
+        .editlink(
+            SYS,
+            &e1,
+            Link::triple(enc(&[ca(1)]), enc(&[ca(103)]), rel_ty()),
+            &doc1(),
+            &doc1(),
+        )
+        .expect("a schema-conforming successor is admitted");
+    let lq = LinkQuery::new(&k);
+    assert_eq!(
+        lq.in_claims(&e1, View::Active),
+        vec![SupClaim {
+            claim,
+            old: e1,
+            new: succ,
+            home: doc1(),
+            active: true,
+        }]
+    );
+}
+
 // ───────────────────────── snapshot twins ─────────────────────────
 
 #[test]
@@ -1482,6 +1800,8 @@ fn every_refusal_is_matchable_without_a_catch_all() {
             QueryError::DocNotRegistered => "doc",
             QueryError::NotALink => "link",
             QueryError::BadRegion => "region",
+            QueryError::ImageTooLarge => "runs",
+            QueryError::EndsetsTooLarge => "spans",
         }
     }
     fn orphan_word(e: OrphanError) -> &'static str {

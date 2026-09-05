@@ -7,7 +7,10 @@
 //!
 //! The shape a request must have lives here too, as the constructor/gate pair
 //! [`content_vspan`]/`check_region` — the family that judges a region is the
-//! family that publishes how to build one.
+//! family that publishes how to build one — and so do the family's two
+//! budgets, [`MAX_IMAGE_RUNS`] and [`MAX_ENDSET_SPANS`], each a refusal rather
+//! than a truncation: a truncated answer would silently drop links, which is
+//! the one thing every read here exists to not do.
 
 use std::collections::HashSet;
 
@@ -20,6 +23,67 @@ use skep_links::Endset;
 use crate::helpers::{stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
+
+/// The most arrangement I-runs one request may make M8 materialize or join
+/// against, and so the ceiling on the multiplier the REQUEST applies to the
+/// world-sized scan behind it.
+///
+/// ONE quantity read three ways, and held at all three, so no read of a
+/// document's runs refuses what another answers: a region's image
+/// ([`image_on`]), and `ran(M(d))` — the image of `d`'s whole V-extent — on
+/// both pointwise reads ([`crate::project_on`],
+/// [`crate::addressably_discoverable_from_on`]).
+///
+/// The budget: the runs become one side of a join in every case — lifted into
+/// a query `Endset` for M7's `stab`, which walks the whole store testing
+/// every query span against every slot span of every link; lifted into an
+/// I-extent apiece for the pointwise touch test; handed to M5's `project`,
+/// which states the cost as `#runs(d) × |coverage|` and leaves admission
+/// control to its caller. `2^12` is this workspace's existing answer for how
+/// large one side of a join may be (M6's COMPARE operand and its coverage
+/// budget both). It is also M7's `MAX_SLOT_SPANS`, the ceiling a STORED slot
+/// is held to — a query endset costs more than a stored one, never less — and
+/// M10's per-array wire cap, so a FLAT region of 4096 spans each resolving to
+/// one run, the largest region the transport admits, is admitted unchanged.
+///
+/// What it refuses is the shape no wire cap prices: the region×image product,
+/// where each admitted span resolves to the whole of a fragmented document.
+///
+/// THE GRANULARITY IS A REGION SPAN, as M6's coverage budget's is: the walk
+/// stops at the first span whose image carries the accumulator past the
+/// budget, so an over-budget request stops resolving rather than resolving
+/// whole and then being measured. Within one span it bounds nothing — M5's
+/// `resolve` answers that span whole, at a size that is the DOCUMENT's
+/// fragmentation rather than the request's shape.
+///
+/// `#runs(d)` and `|links|` are the WORLD's, and no number here reaches them:
+/// they stay with request rate and concurrency, which are M10's as the
+/// request lifecycle's owner.
+pub const MAX_IMAGE_RUNS: usize = 1 << 12;
+
+/// The most spans one RETRIEVEENDSETS answer may carry, and so the ceiling on
+/// what the pair set makes M8 hold live and what the presentation sorts.
+///
+/// The budget: a pair's cost is its spans, and the answer's is their sum —
+/// the sort is `O(B log B)` span comparisons over `B` accumulated spans (a
+/// comparison walks two span sequences to their first difference, so a long
+/// endset pays its length once rather than once per comparison), each span
+/// two `Tumbler`s. `2^16` is M5's `MAX_PLACED_RUNS` and M6's
+/// `MAX_COMPARE_PAIRS` — the substrate's existing answer to how large one
+/// REPORT may be.
+///
+/// Not `MAX_IMAGE_RUNS`: that budget bounds one side of a join a caller
+/// supplies, and this bounds an answer the STORE supplies. One deposit may
+/// legitimately carry `MAX_SLOT_SPANS` = `2^12` spans in a single slot, so a
+/// `2^12` answer budget would refuse a region touched by two such links —
+/// while `2^16` admits some twenty thousand ordinary small-endset links
+/// through one region.
+///
+/// WHAT IT DOES NOT BOUND: `|links|` and any one link's endset size are the
+/// WORLD's, so the candidate walk this budget rides on is world-sized whatever
+/// the number — the same division M6 draws — and the answer's marshalled form
+/// is M10's, which owns no ceiling of its own beyond the one this bounds.
+pub const MAX_ENDSET_SPANS: usize = 1 << 16;
 
 /// The V-span shape every region-family request must have: `count` positions
 /// from `at`, in the CONTENT subspace. `None` iff `count = 0` (M1 has no
@@ -68,14 +132,23 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// `Ok(vec![])`.
 ///
 /// The result is the I-runs of the image, in region-span order and V-order
-/// within each span, deduped by `Run: Eq`. The dedup compares each run
-/// against those already kept, so it costs quadratically in the image size —
-/// which the caller's region chooses.
+/// within each span, deduped on `(i_start, width)` — the pair a `Run`
+/// publishes, and exactly its equality. The key is spelled out because `Run`
+/// is neither `Hash` nor `Ord` (M5's); keying rather than scanning is what
+/// keeps the dedup one probe per resolved run, so the cost is linear in an
+/// image size the caller's region chooses rather than square in it.
 ///
 /// Exact-`Run` equality is the extent of the set claim: overlapping INPUT
 /// region spans may still yield partially-overlapping runs (not an
 /// address-disjoint partition — don't sum widths for |image|; coalescing
 /// would need the run-level span algebra M8 deliberately avoids).
+///
+/// Refuses past [`MAX_IMAGE_RUNS`] with `ImageTooLarge`, counted over the
+/// runs RESOLVED rather than the distinct ones kept, because that is the
+/// quantity every later step is linear in — and counted AS THE IMAGE IS
+/// PRODUCED, so an over-budget request stops resolving instead of resolving
+/// whole and then being measured. A refusal, never a truncation: a truncated
+/// image drops links from every read-out composed on it, silently.
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -87,9 +160,17 @@ pub fn image_on<W: DiscoveryWorld>(
     }
     check_region(region)?;
     let mut runs: Vec<Run> = Vec::new();
+    let mut seen: HashSet<(Address, Nat)> = HashSet::new(); // internal throwaway
+    let mut resolved: usize = 0;
     for span in region {
-        for r in w.m5().resolve(d, span) {
-            if !runs.contains(&r) {
+        let image = w.m5().resolve(d, span);
+        // `>` and not `==`: one span's image adds many runs at once.
+        resolved += image.len();
+        if resolved > MAX_IMAGE_RUNS {
+            return Err(QueryError::ImageTooLarge);
+        }
+        for r in image {
+            if seen.insert((r.i_start().clone(), r.width().clone())) {
                 runs.push(r);
             }
         }
@@ -165,6 +246,14 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// order is pinned (slot, then lexicographic span-sequence): deterministic at
 /// a snapshot, no hash-iteration leak; the internal dedup is a throwaway
 /// `std::collections::HashSet`, so no `im` container crosses this seam.
+///
+/// Refuses past [`MAX_ENDSET_SPANS`] with `EndsetsTooLarge`, accumulated over
+/// the spans of the pairs actually KEPT — what the answer carries is what the
+/// budget prices, so the identity-withholding collapse counts once, as it
+/// ships once — and checked AS THE ANSWER IS PRODUCED, so an over-budget
+/// request stops accumulating and never reaches the sort. A refusal, never a
+/// truncation: a short answer would silently withhold endsets that touch the
+/// region, which is the one thing RE-UNIT does not license.
 pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -175,6 +264,7 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let slots = stab_runs_by_slot(w.links(), &img); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
     let cand = union_slots(&slots);
     let mut out: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
+    let mut spans: usize = 0;
     for c in cand.iter() {
         let link = w.links().readlink(c).expect("stab keys are resident links");
         for (i, set) in &slots {
@@ -182,7 +272,13 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
                 let e = link
                     .slot(*i)
                     .expect("a link in slot i's stab set has slot i: M7's per-slot overlap is false for an absent slot");
-                out.insert((*i, e.clone())); // WHOLE endset, no clip
+                if out.insert((*i, e.clone())) {
+                    // WHOLE endset, no clip
+                    spans += e.len();
+                    if spans > MAX_ENDSET_SPANS {
+                        return Err(QueryError::EndsetsTooLarge);
+                    }
+                }
             }
         }
     }

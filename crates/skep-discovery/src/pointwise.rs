@@ -15,6 +15,7 @@ use skep_address::{classify_spans, Address, Span, SpanRel, SpanSet};
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
+use crate::region::MAX_IMAGE_RUNS;
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
 
@@ -50,6 +51,18 @@ use crate::DiscoveryWorld;
 /// M5's `point`) and `SpanSet::is_empty`, which is total where the
 /// level-gated set comparisons can fault. M8 itself never tests the
 /// projection for emptiness.
+///
+/// COST, IN TWO FACTORS: M5 states the work as `#runs(d) × |coverage|` and
+/// leaves admission control to its caller, which is this function. `|coverage|`
+/// is already held — M7 caps a stored slot at `MAX_SLOT_SPANS` on every
+/// deposit path, so the coverage a link can hand over is bounded before it is
+/// read. `#runs(d)` is not held anywhere upstream, so it is held here, at
+/// [`crate::MAX_IMAGE_RUNS`] (`ImageTooLarge`) — the same budget
+/// [`addressably_discoverable_from_on`] and the region family's image hold,
+/// so those three reads of `d`'s runs refuse the same documents rather than
+/// one refusing what another answers. The count walks the run set M5
+/// publishes, which is `#runs(d)` itself: bounded by the quantity it prices,
+/// and one small allocation where the budget is nowhere near.
 pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -64,6 +77,11 @@ pub fn project_on<W: DiscoveryWorld>(
         .links()
         .followlink(a, slot)
         .map_err(|_| QueryError::NotALink)?; // Err(Invalid) ⇒ NotALink (a ∉ dom(L) OR slot OOB)
+    // CONTENT runs, because M5's `project` joins the coverage against those
+    // alone — the factor priced is the factor multiplied.
+    if w.m5().content_runs(d).len() > MAX_IMAGE_RUNS {
+        return Err(QueryError::ImageTooLarge);
+    }
     Ok(w.m5().project(d, &cov)) // I→V, content subspace, level-class-safe inside M5
 }
 
@@ -110,6 +128,14 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// empty `d` short-circuits to `Ok(false)` (nothing is reachable; `touches`
 /// over an empty extent list is vacuously false, so the early-out is cheap,
 /// not a correctness guard).
+///
+/// `Err(ImageTooLarge)` when `ran(M(d))` is past [`crate::MAX_IMAGE_RUNS`]:
+/// the runs are lifted into an I-extent apiece and every one of them is
+/// tested against every span of every slot, so this is where a document's
+/// fragmentation becomes the multiplier M8 itself applies. Refused BEFORE the
+/// lift, so an over-budget `d` costs the count and not the span set. The same
+/// budget the region family's image and [`project_on`] hold, over the same
+/// quantity, so all three refuse the same documents.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -123,11 +149,13 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     if !w.links().is_active(a) {
         return Ok(false); // the ADDRESSABLE half (Conflicts #8)
     }
-    let extents: Vec<Span> = w
-        .m5()
-        .content_runs(d)
+    let (content, links) = (w.m5().content_runs(d), w.m5().link_runs(d));
+    if content.len() + links.len() > MAX_IMAGE_RUNS {
+        return Err(QueryError::ImageTooLarge);
+    }
+    let extents: Vec<Span> = content
         .into_iter()
-        .chain(w.m5().link_runs(d))
+        .chain(links)
         .map(|r| r.iextent())
         .collect(); // ran(M(d)) as I-extents, BOTH subspaces (LP12)
     if extents.is_empty() {

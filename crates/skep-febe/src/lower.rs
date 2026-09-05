@@ -468,6 +468,11 @@ impl Lower for QueryError {
             QueryError::DocNotRegistered => RejectCode::DocNotRegistered,
             QueryError::NotALink => RejectCode::NotALink,
             QueryError::BadRegion => RejectCode::BadRegion,
+            // M8's two budget refusals name the request's whole shape and no
+            // position in it, so they carry no site — M6's `TooManyPairs`
+            // and `TooMuchCoverage` exactly.
+            QueryError::ImageTooLarge => RejectCode::ImageTooLarge,
+            QueryError::EndsetsTooLarge => RejectCode::EndsetsTooLarge,
         };
         (code, None)
     }
@@ -840,6 +845,8 @@ mod tests {
         same_name(QueryError::DocNotRegistered);
         same_name(QueryError::NotALink);
         same_name(QueryError::BadRegion);
+        same_name(QueryError::ImageTooLarge);
+        same_name(QueryError::EndsetsTooLarge);
         same_name(OrphanError::DocNotRegistered);
         same_name(OrphanError::NotContentSubspace);
         same_name(OrphanError::EmptyWidth);

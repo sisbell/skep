@@ -1787,6 +1787,8 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::TooMuchCoverage => "too_much_coverage",
         RejectCode::NotALink => "not_a_link",
         RejectCode::BadRegion => "bad_region",
+        RejectCode::ImageTooLarge => "image_too_large",
+        RejectCode::EndsetsTooLarge => "endsets_too_large",
     }
 }
 

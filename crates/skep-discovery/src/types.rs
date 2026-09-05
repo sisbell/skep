@@ -96,6 +96,15 @@ impl FourSet {
     /// [`FourSet::is_unsatisfiable`] would drop that slot exactly as it drops
     /// `Any` and silently widen the query. Every endset in a `Some` list is
     /// non-empty.
+    ///
+    /// ORDERED SMALLEST FIRST, which is a cost decision and not a semantic
+    /// one: M7 drives one whole-store scan with the FIRST constraint and
+    /// narrows the survivors with the rest, at `|query spans| × |slot spans|`
+    /// per link tested, so the conjunct that pays the store-sized factor
+    /// should be the cheapest one to test. An AND is order-free, so this
+    /// moves work and never the answer — and the sort is stable, so equal
+    /// spellings keep FROM/TO/TYPE order and one descriptor still names one
+    /// constraint list.
     pub(crate) fn link_constraints(&self) -> Option<Vec<(usize, &Endset)>> {
         if self.is_unsatisfiable() {
             return None;
@@ -106,6 +115,7 @@ impl FourSet {
                 cons.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
             }
         }
+        cons.sort_by_key(|(_, e)| e.len());
         Some(cons)
     }
 
@@ -184,9 +194,14 @@ pub struct OrphanReport {
 }
 
 /// The typed rejection of the QUERY surface — the region and pointwise
-/// families. Exactly these three can arise there, so a caller matching them
+/// families. Exactly these five can arise there, so a caller matching them
 /// exhaustively writes no unreachable arm; the delete-orphan preview refuses
 /// on its own preconditions and carries its own [`OrphanError`].
+///
+/// The last two are M8's own BUDGET refusals, and they are refusals rather
+/// than truncations for the reason every read here exists: a short answer
+/// silently drops links, and a caller cannot tell a short answer from a true
+/// one. A caller past a budget splits the request.
 ///
 /// **The exhaustiveness is promised, not merely current.** A downstream match
 /// over these variants is a COMPLETENESS check — M10 must give every refusal
@@ -207,6 +222,16 @@ pub enum QueryError {
     /// request into a different query. A caller that builds its region
     /// through that constructor cannot provoke this.
     BadRegion,
+    /// The request names more arrangement I-runs than
+    /// [`crate::MAX_IMAGE_RUNS`]: a region whose image is past the budget, or
+    /// — on the two pointwise reads, where the runs are `ran(M(d))` — a `d`
+    /// whose whole arrangement is. The runs are the side of a join the
+    /// request supplies; what they are joined against is the world's.
+    ImageTooLarge,
+    /// The RETRIEVEENDSETS answer would carry more spans than
+    /// [`crate::MAX_ENDSET_SPANS`]. The one budget here priced on what the
+    /// store hands back rather than on what the request names.
+    EndsetsTooLarge,
 }
 
 impl fmt::Display for QueryError {
@@ -216,6 +241,12 @@ impl fmt::Display for QueryError {
             QueryError::NotALink => "query: the address is not a resident link (or the slot is out of range)",
             QueryError::BadRegion => {
                 "query: the region is not content-subspace ordinal-level depth-2 V-spans"
+            }
+            QueryError::ImageTooLarge => {
+                "query: the arrangement runs the request would materialize are past the run budget"
+            }
+            QueryError::EndsetsTooLarge => {
+                "query: the endsets touching the region are past the answer's span budget"
             }
         })
     }

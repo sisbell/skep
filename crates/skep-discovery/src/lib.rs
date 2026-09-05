@@ -53,6 +53,30 @@
 //! comparison is `addressably_discoverable_from`'s level-gate-free
 //! `classify_spans` touch test (§5).
 //!
+//! ## Budgets
+//!
+//! Two, both in the region file that owns the shape they price, and both
+//! REFUSALS rather than truncations — a short answer silently drops links,
+//! and no caller can tell one from a true answer.
+//! [`MAX_IMAGE_RUNS`] bounds the arrangement runs one request makes M8
+//! materialize or join against, and is held at all three sites that read a
+//! document's runs ([`image_on`], [`project_on`],
+//! [`addressably_discoverable_from_on`]), so they refuse the same documents.
+//! [`MAX_ENDSET_SPANS`] bounds what a RETRIEVEENDSETS answer carries, the one
+//! quantity here the store supplies rather than the request.
+//!
+//! [`delete_orphans_on`] reads the same runs as those three — a whole
+//! document's, resolved and stabbed — and holds NEITHER budget, so a `d` the
+//! reads above refuse is one the preview still answers about. That is a gap
+//! and not a decision: closing it wants a budget refusal in
+//! [`OrphanError`], which mirrors M5's `DeleteError` variant for variant and
+//! so cannot take one without a word for it there.
+//!
+//! What no number here reaches: `|links|`, `#runs(d)` and any one link's
+//! endset size are the WORLD's, so they stay with request rate and
+//! concurrency — M10's, as the request lifecycle's owner. These bound what a
+//! request multiplies those quantities by, never the quantities.
+//!
 //! ## Boundary — deliberately NOT owned here
 //!
 //! * the spanfilade / coverage index, the per-slot matcher, and the
@@ -106,6 +130,7 @@ pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
     content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
+    MAX_ENDSET_SPANS, MAX_IMAGE_RUNS,
 };
 pub use survival::delete_orphans_on;
 pub use types::{

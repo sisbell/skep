@@ -188,9 +188,13 @@ pub enum RejectCode {
     TooManyBlocks,
     TooManyPairs,
     TooMuchCoverage,
-    // ── M8 link discovery read ──
+    // ── M8 link discovery read (the last two are M8's own budget refusals —
+    //    one for the arrangement runs a request materializes or joins
+    //    against, one for the spans a RETRIEVEENDSETS answer carries) ──
     NotALink,
     BadRegion,
+    ImageTooLarge,
+    EndsetsTooLarge,
 }
 
 /// The fixed operator-condition detail a `Gate` rejection carries (§5): M3
@@ -564,14 +568,16 @@ mod tests {
             | RejectCode::TooManyPairs
             | RejectCode::TooMuchCoverage
             | RejectCode::NotALink
-            | RejectCode::BadRegion => Disposition::Permanent,
+            | RejectCode::BadRegion
+            | RejectCode::ImageTooLarge
+            | RejectCode::EndsetsTooLarge => Disposition::Permanent,
         }
     }
 
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 67] = [
+    const ALL_CODES: [RejectCode; 69] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -639,6 +645,8 @@ mod tests {
         RejectCode::TooMuchCoverage,
         RejectCode::NotALink,
         RejectCode::BadRegion,
+        RejectCode::ImageTooLarge,
+        RejectCode::EndsetsTooLarge,
     ];
 
     /// §5: the policy is a TOTAL function off the flat code, and the advice

@@ -78,7 +78,7 @@ pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use writes::{LinkWriter, SlotArg, MAX_SLOT_SPANS};
+pub use writes::{Edit, LinkWriter, SlotArg, MAX_SLOT_SPANS};
 
 /// The auto traits M7's slice promises without saying. `WorldState` is
 /// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes
@@ -98,6 +98,7 @@ const _: fn() = || {
     owed::<CoverageClass>();
     owed::<Tuple>();
     owed::<CurrentMember>();
+    owed::<Edit>();
     // Every rejection too: a caller that boxes one meets
     // `Box<dyn Error + Send + Sync>`, which is the crossing form.
     owed::<MakeLinkError>();

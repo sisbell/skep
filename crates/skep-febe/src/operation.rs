@@ -397,12 +397,12 @@ where
             Op::EditLink { original, successor, d_s, d_a } => {
                 let snap = self.stores.kernel().snapshot();
                 let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
-                let (succ, claim, at) = self
+                let (edit, at) = self
                     .stores
                     .linkstore()
                     .editlink(wc.caller(), &original, link, &d_s, &d_a)
                     .map_err(|e| self.map_txn(kind, e))?;
-                Ok(Response::AckEdit { successor: succ, claim, at })
+                Ok(Response::AckEdit { successor: edit.successor, claim: edit.claim, at })
             }
             // Complementary half — unreachable under the is_write partition
             // that selected this function; written as an explicit |-list (no

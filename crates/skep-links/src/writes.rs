@@ -184,6 +184,22 @@ impl Deposited {
     }
 }
 
+/// What an edit deposited (ASN-0125 EDITop): the fresh successor, and the
+/// `[K_sup]` claim asserting it supersedes the original. Two same-typed
+/// addresses, NAMED — the pair is permanently distinguishable only by which
+/// home's link chain each landed on, the successor in `d_s` and the claim in
+/// `d_a`, so a positional pair would carry that distinction in a convention
+/// rather than in the value. M10 puts the two on the wire under these same
+/// names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Edit {
+    /// The fresh successor, deposited in `d_s`.
+    pub successor: Address,
+    /// The `[K_sup]` claim that `original` is superseded by `successor`,
+    /// deposited in `d_a`.
+    pub claim: Address,
+}
+
 /// `emit_core`'s internal error; each public op maps it through the `From`
 /// impls below (§2 error mapping). `HomeNotRegistered` originates at the
 /// hoisted home check alone — the hoist makes `home` known-registered before
@@ -256,7 +272,7 @@ impl From<EmitCoreError> for EmitError {
 
 impl From<EmitCoreError> for NullifyError {
     // Retraction: the shared discipline's verdicts are all dead here — the
-    // `[R]` class is genesis-registered (never NotRegistered) and Binary
+    // `[R]` class is shipped-registered (never NotRegistered) and Binary
     // against a tuple nullify builds at |F| = |G| = 1 (never ShapeViolation),
     // and K ≁ R refuses `[R]` under Managed alone. P-tgt is nullify's own.
     fn from(e: EmitCoreError) -> Self {
@@ -268,7 +284,7 @@ impl From<EmitCoreError> for NullifyError {
             | EmitCoreError::ShapeViolation
             | EmitCoreError::RetractionClass
             | EmitCoreError::EmptyType => {
-                unreachable!("[R] is genesis-registered Binary and admitted under Retraction")
+                unreachable!("[R] is shipped-registered Binary and admitted under Retraction")
             }
         }
     }
@@ -456,13 +472,13 @@ where
         // ONE discipline, derived from the value's own class: registered,
         // shape-conformant per the REGISTERED shape, idem⊤ ⇒ active-view
         // dedup. `[R]` reaches it as an ordinary registered class — the
-        // genesis registration supplies Binary and idem⊤, so nullify's
+        // shipped registration supplies Binary and idem⊤, so nullify's
         // discipline is read from the registry rather than restated here,
         // and the two can never disagree.
         Gate::Managed | Gate::Retraction => {
             // Total: the type slot is level-uniform by upstream validation
             // (emit's ty is address-denoting; the claim's and the retraction
-            // tuple's types are the genesis-fixed reserved endsets).
+            // tuple's types are the format-fixed reserved endsets).
             let class = coverage_class(value.type_slot());
             let Some(reg) = registry().registration(&class) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
@@ -875,10 +891,9 @@ where
     /// Successor born UNSEATED; both writes commit atomically (EL7);
     /// `original` untouched (L12).
     ///
-    /// RETURNS `(successor, claim, seq)`: the SUCCESSOR's address first,
-    /// deposited in `d_s`; the CLAIM's second, deposited in `d_a`. The two
-    /// are same-typed and permanently distinguishable only by which home's
-    /// link chain they landed on, so the positions are part of the contract.
+    /// RETURNS `(edit, seq)`, where [`Edit`] carries the successor's address
+    /// and the claim's each under its own name — the successor deposited in
+    /// `d_s`, the claim in `d_a` — so the two cannot trade places at a call.
     ///
     /// OWNERSHIP is required on `d_s` and `d_a` and on NOTHING ELSE: the
     /// caller need not own `original`, so an edit may claim to supersede a
@@ -908,7 +923,7 @@ where
         successor: Link,
         d_s: &Address,
         d_a: &Address,
-    ) -> Result<(Address, Address, Seq), TxnError<EditLinkError>> {
+    ) -> Result<(Edit, Seq), TxnError<EditLinkError>> {
         // The one op that hands M2 two keys of ONE space, so the one whose
         // relative order would otherwise be the caller's: two concurrent
         // edits over the same pair of homes, named in opposite orders, would
@@ -927,7 +942,7 @@ where
         let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let sup_class = registry().shipped_class(ShippedType::Supersedes);
         let r_class = registry().shipped_class(ShippedType::Retraction);
-        let ((succ, claim), seq) = self.kernel.transact(&keys, |stg| {
+        self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
                 // P0 on both homes, then ω on both: the successor deposits
@@ -979,14 +994,13 @@ where
                 }
             }
             // Both `minted`: this op reports each address as one it deposited,
-            // and the claim's own I0 carries `succ`, minted a line above in
-            // this same transaction, so no incumbent of that class exists.
-            let succ = emit_core(stg, caller, d_s, successor, Gate::Open)?.minted();
-            let claim_value = Link::triple(enc([original]), enc([&succ]), sup);
+            // and the claim's own I0 carries `successor`, minted a line above
+            // in this same transaction, so no incumbent of that class exists.
+            let successor = emit_core(stg, caller, d_s, successor, Gate::Open)?.minted();
+            let claim_value = Link::triple(enc([original]), enc([&successor]), sup);
             let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?.minted();
-            Ok((succ, claim))
-        })?;
-        Ok((succ, claim, seq))
+            Ok(Edit { successor, claim })
+        })
     }
 
     /// BH4 batch tooling (§7): nullify every stale tuple of `ty` (age >

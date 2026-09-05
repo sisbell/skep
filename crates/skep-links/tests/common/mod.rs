@@ -162,9 +162,13 @@ pub fn la2(ordinal: u32) -> Address {
 }
 
 /// Reserved type address `k` — ghost tumbler `[1,1,0,1,0,1,0,1,k]`, content
-/// position `k` of the ghost doc (the compiled format constants for
-/// k = 1..=5; `ReservedAddrs::format` assignment order: pred_def,
-/// pred_stable, retired, supersedes, retraction).
+/// position `k` of the ghost doc. DOMAIN `k = 1..=5`: those are the compiled
+/// format constants, in `ReservedAddrs::format`'s assignment order (pred_def,
+/// pred_stable, retired, supersedes, retraction), and the ghost region has
+/// exactly those five names (M3's `GHOST_POSITIONS`). A position past it is
+/// ordinary mintable content of the operator's own document — reserved by
+/// nothing and ghost in no sense — so a test wanting an arbitrary type NAME
+/// asks [`unregistered_ta`] instead.
 pub fn ra(k: u32) -> Address {
     a(&[1, 1, 0, 1, 0, 1, 0, 1, k])
 }

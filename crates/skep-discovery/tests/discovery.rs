@@ -1696,7 +1696,7 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     // And the schema-conforming edit IS admitted, so the fence above is a
     // fence and not a closed door: the claim it deposits reads back through
     // the lineage surface with both endpoints named.
-    let (succ, claim, _) = store
+    let (edit, _) = store
         .editlink(
             SYS,
             &e1,
@@ -1709,9 +1709,9 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     assert_eq!(
         lq.in_claims(&e1, View::Active),
         vec![SupClaim {
-            claim,
+            claim: edit.claim,
             old: e1,
-            new: succ,
+            new: edit.successor,
             home: doc1(),
             active: true,
         }]

@@ -1,6 +1,6 @@
 //! §B — the immutable, construction-time type registry: shape/idempotence/
 //! behavior registration per coverage class, built from compiled format
-//! constants at genesis ([`TypeRegistry::build`]) and never mutated (P1/P2 of
+//! constants ([`TypeRegistry::build`]) and never mutated (P1/P2 of
 //! ASN-0126, R1/R2 of ASN-0128 — no mutator exists). The registry's
 //! population is the five shipped classes and nothing else: the app-declared
 //! types seam was deleted by the owner ruling of 2026-08-26 (second clause) —
@@ -172,7 +172,7 @@ impl ReservedAddrs {
     }
 }
 
-/// The genesis-fixed shipped classes.
+/// The format-fixed shipped classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ShippedType {
     Retired,
@@ -199,7 +199,7 @@ impl ShippedType {
     ];
 }
 
-/// One shipped type's two genesis-fixed facts, PAIRED: the endset a caller
+/// One shipped type's two format-fixed facts, PAIRED: the endset a caller
 /// names the type by, and the [`CoverageClass`] every guard, fold and read
 /// recognizes it by. One constructor, so "the class is that type's own endset
 /// classified" holds by construction rather than by two five-arm matches a
@@ -240,8 +240,8 @@ impl Shipped {
 }
 
 /// The immutable lookup registry: coverage class → registration, plus the five
-/// genesis-fixed shipped types held BOTH ways — as the endset a caller names
-/// them by and as the class every guard recognizes them by, the two paired in
+/// shipped types held BOTH ways — as the endset a caller names them by and as
+/// the class every guard recognizes them by, the two paired in
 /// one value per type so they cannot fall out of step. Both are fixed at
 /// [`TypeRegistry::build`], so the class a shipped type belongs to is a fact
 /// this registry knows rather than one its callers re-derive. RECOMPUTABLE
@@ -381,7 +381,7 @@ impl TypeRegistry {
             .map(|(class, _)| class)
     }
 
-    /// The genesis-fixed type endset for a shipped class — for a caller
+    /// The format-fixed type endset for a shipped class — for a caller
     /// holding the registry: M9's catalog projection reads each shipped
     /// class from this at assembly, and M7's own write ops read the
     /// `Retraction` and `Supersedes` endsets here to build their tuples.

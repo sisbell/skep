@@ -542,7 +542,7 @@ impl LinkState {
             .collect()
     }
 
-    /// The genesis-fixed endset of a shipped class — for a caller holding the
+    /// The format-fixed endset of a shipped class — for a caller holding the
     /// SLICE: M8's lineage reads name `Supersedes` this way, and the engine's
     /// observe dump names all five. A caller holding the registry itself asks
     /// [`TypeRegistry::reserved_type`](crate::TypeRegistry::reserved_type),

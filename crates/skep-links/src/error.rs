@@ -108,12 +108,14 @@ pub enum EmitError {
     /// so `from` needs no clause.) Pre-transact, and so ahead of
     /// `ShapeViolation`.
     ///
-    /// The two causes differ in reach. An over-budget `to` also violates the
-    /// shape under Unary and Binary, so that cause is reachable only where an
-    /// app registers a `Multi` type — the five shipped classes are Unary or
-    /// Binary, and the shape gate holds `|G| ≤ 1` for them without this. An
-    /// over-budget `ty` is reachable under EVERY shape, no gate anywhere
-    /// reading e₃'s span count.
+    /// The two causes differ in what they PREVENT, not in whether they fire:
+    /// both are pre-transact, so either speaks ahead of `ShapeViolation`, and
+    /// an over-budget `to` is refused under every registered class. What the
+    /// shape gate would otherwise catch is the DEPOSIT — no class in this
+    /// format admits `|G| > 1`, all five shipped classes being Unary or
+    /// Binary, so an over-budget `to` could never have been stored. An
+    /// over-budget `ty` has no such backstop under any shape: no gate anywhere
+    /// reads e₃'s span count.
     SlotTooLarge,
     /// M3's mint failed structurally.
     Mint(MintError),

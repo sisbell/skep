@@ -35,7 +35,7 @@ fn link_enforces_only_the_arity_floor_with_one_based_slots() {
     // Link::new: None ⇔ arity < 3 (the type floor; e₃ ≠ ∅ is a write-boundary
     // check, not the type's).
     assert!(Link::new([Endset::empty(), Endset::empty()]).is_none());
-    let l = Link::new([enc(&[ca(1)]), Endset::empty(), enc(&[ra(10)])])
+    let l = Link::new([enc(&[ca(1)]), Endset::empty(), enc(&[unregistered_ta(10)])])
         .expect("arity 3 is admitted, empty slots included");
     assert_eq!(l.arity(), 3);
     // slot(i) is 1-based, and the published numerals name exactly the three
@@ -54,13 +54,13 @@ fn link_enforces_only_the_arity_floor_with_one_based_slots() {
 fn triple_is_the_creation_shape_and_needs_no_arity_discharge() {
     // The store's one creation shape, infallible: same value the general
     // constructor yields, with no Option for a caller to discharge.
-    let (f, g, ty) = (enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)]));
+    let (f, g, ty) = (enc(&[ca(1)]), enc(&[ca(2)]), enc(&[unregistered_ta(10)]));
     let triple = Link::triple(f.clone(), g.clone(), ty.clone());
     assert_eq!(triple.arity(), 3);
     assert_eq!(Link::new([f, g, ty]), Some(triple.clone()));
     assert_eq!(triple.from_slot(), &enc(&[ca(1)]));
     assert_eq!(triple.to_slot(), &enc(&[ca(2)]));
-    assert_eq!(triple.type_slot(), &enc(&[ra(10)]));
+    assert_eq!(triple.type_slot(), &enc(&[unregistered_ta(10)]));
     // Empty slots are the type's business only at the arity floor: triple
     // admits ⟨⟩ anywhere, and e₃ ≠ ∅ stays a write-boundary check.
     assert!(Link::triple(Endset::empty(), Endset::empty(), Endset::empty())
@@ -173,7 +173,7 @@ fn coverage_class_panics_on_an_off_contract_span() {
 }
 
 #[test]
-fn genesis_seeds_the_five_shipped_classes_at_the_format_constants() {
+fn the_five_shipped_classes_read_back_at_the_format_constants() {
     let state = LinkState::genesis();
     // The five shipped endsets read back through reserved_type, at the ghost
     // tumblers the 2026-08-26 ruling pins, in its assignment order.
@@ -289,7 +289,7 @@ fn is_level_uniform_is_coverage_class_s_precondition_and_denotation_is_stronger(
     // Denotation implies level-uniformity (a unit-depth span is its own
     // start's subtree, so start and width share a length) — ⟨⟩ vacuously.
     assert!(Endset::empty().is_level_uniform());
-    assert!(enc(&[ca(1), ra(10)]).is_level_uniform());
+    assert!(enc(&[ca(1), unregistered_ta(10)]).is_level_uniform());
 
     // The one input coverage_class aborts on fails BOTH, so the precondition
     // and its test agree exactly where it matters.
@@ -408,7 +408,7 @@ fn slots_walks_the_whole_value_in_positional_order() {
     // EVERY slot, and it yields them in the order the positional accessors
     // name — so a caller walking it and a caller indexing `1..=arity` cannot
     // disagree. Stated at the store's own shape and at a wider L3 capacity.
-    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2), ca(3)]), enc(&[ra(10)])]).expect("arity 3");
+    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2), ca(3)]), enc(&[unregistered_ta(10)])]).expect("arity 3");
     let walked: Vec<&Endset> = l.slots().collect();
     assert_eq!(walked, vec![l.from_slot(), l.to_slot(), l.type_slot()]);
     for arity in [3usize, 4] {
@@ -429,7 +429,7 @@ fn carrier_types_survive_the_journal_wire_format() {
     let back: Endset = bincode::deserialize(&bytes).expect("endset deserializes");
     assert_eq!(back, e); // structural round trip, decomposition preserved
 
-    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)])]).expect("arity 3");
+    let l = Link::new([enc(&[ca(1)]), enc(&[ca(2)]), enc(&[unregistered_ta(10)])]).expect("arity 3");
     let bytes = bincode::serialize(&l).expect("link serializes");
     let back: Link = bincode::deserialize(&bytes).expect("link deserializes");
     assert_eq!(back, l);
@@ -446,7 +446,7 @@ fn the_arity_floor_holds_at_the_wire_boundary() {
 
     // Arity 3 through the same bytes is admitted, so the refusal is the floor
     // and not the shape.
-    let three = im::Vector::from(vec![enc(&[ca(1)]), enc(&[ca(2)]), enc(&[ra(10)])]);
+    let three = im::Vector::from(vec![enc(&[ca(1)]), enc(&[ca(2)]), enc(&[unregistered_ta(10)])]);
     let bytes = bincode::serialize(&three).expect("the slot sequence serializes");
     let back: Link = bincode::deserialize(&bytes).expect("arity 3 deserializes");
     assert_eq!(back, Link::new(three).expect("arity 3"));

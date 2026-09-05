@@ -251,9 +251,10 @@ impl<'a> Block<'a> {
 
 /// The region a spec-set denotes, as blocks: resolve every spec's span to its
 /// I-run blocks, reconstructing each run's V-start by accumulation. `None`
-/// when the operand reaches [`MAX_COMPARE_OPERAND_BLOCKS`] — refused AS THE
-/// BLOCKS ARE PRODUCED, so an over-budget operand stops resolving rather than
-/// resolving whole and then being measured.
+/// when the operand would resolve to MORE THAN [`MAX_COMPARE_OPERAND_BLOCKS`]
+/// blocks — a block list of exactly the budget is answered, and the block past
+/// it refused AS THE BLOCKS ARE PRODUCED, so an over-budget operand stops
+/// resolving rather than resolving whole and then being measured.
 ///
 /// THE BUDGET'S GRANULARITY IS A SPAN. The walk stops at the first span whose
 /// runs carry the accumulator past the budget, so what the budget bounds is
@@ -378,9 +379,16 @@ fn overlap_pair(pb: &Block<'_>, qb: &Block<'_>) -> Option<CorrPair> {
 /// comprehension over the whole rectangle `P × Q`, so an address in multiple
 /// P-blocks and/or Q-blocks yields the full cross-product, never a lockstep
 /// merge). Sort-by-i_start + sweep (or an interval tree) is a drop-in
-/// optimization of this SAME join (same pair multiset); the independent TEST
-/// ORACLE is a per-position hash join on address. One vocabulary — see the
-/// design's Open build decisions (canonical statement).
+/// optimization of this SAME join (same pair multiset) — with one thing to
+/// carry across: the successor fixes a DIFFERENT presentation among pairs TIED
+/// on the four-component key, since that tie is broken by emission order and
+/// [`deterministic_presentation`]'s sort is stable. R3 holds either way (it
+/// asks that ONE presentation be fixed, not which), and
+/// `compare_lists_two_pairs_that_share_a_presentation_key_in_emission_order`
+/// is restated with the join, exactly as [`fold_adjacent`]'s merge would
+/// restate the fold's. The independent TEST ORACLE is a per-position hash join
+/// on address. One vocabulary — see the design's Open build decisions
+/// (canonical statement).
 ///
 /// `None` when the report would run to MORE THAN [`MAX_COMPARE_PAIRS`]
 /// correspondences — a report of exactly the budget is answered, and the pair

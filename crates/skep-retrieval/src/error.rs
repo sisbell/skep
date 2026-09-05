@@ -1,19 +1,37 @@
 //! §Errors — the typed rejections of M6's seven operations (all surfaced
 //! verbatim by M10 — never a silent skip).
 //!
-//! WHICH REFUSAL SPEAKS, in two clauses a caller may rely on. WITHIN one of
-//! the six OPERATION enums, variant declaration order IS that operation's
-//! check order, so the first variant whose condition holds is the one reported
-//! (`OriginError`'s six read WF_V's conjuncts i, ii/iv, iii, v, vi in that
-//! sequence). ACROSS a request, the first fault in REQUEST order wins whatever
-//! its kind: each gate walks the specs/regions/spans as submitted and stops at
-//! the first, which is what makes `index` / `(region, index)` /
-//! `(operand, region, index)` locate anything — the payload names a position
-//! the caller can trust everything before to be clean of.
+//! WHICH REFUSAL SPEAKS, in three clauses a caller may rely on.
+//!
+//! ONE PASS, REQUEST ORDER. Each gate walks the request as submitted and
+//! reports the FIRST fault it reaches, whatever its kind — a fault at an
+//! earlier position outranks any fault at a later one, which is what makes
+//! `index` / `(region, index)` / `(operand, region, index)` locate anything:
+//! the payload names a position the caller can trust everything before to be
+//! clean of.
+//!
+//! WITHIN ONE POSITION — one spec, or one region and one of its spans — the
+//! checks run in variant declaration order: registry, then (COMPARE) content
+//! residence, then the span gate. [`OriginError`] is the whole-enum case, its
+//! operation naming one document and one span, so its six variants read WF_V's
+//! conjuncts i, ii/iv, iii, v, vi in sequence with no positional clause to
+//! compose against.
+//!
+//! THE BUDGET REFUSALS ARE LOCATED AT NO POSITION. `TooManyBlocks`,
+//! `TooManyPairs` and `TooMuchCoverage` can fire only after their operation's
+//! gate has completed over the WHOLE request, so a shape fault always outranks
+//! a size refusal — which is also their declaration order, the budget variants
+//! being declared last.
+//!
+//! The first two clauses compose, and the composition is what a caller reads
+//! precedence by: a request whose FIRST spec has a malformed span and whose
+//! SECOND names an unregistered document reports `MalformedSpec`, though
+//! `DocNotRegistered` is declared first.
 //!
 //! [`SpanFault`] is a fault VOCABULARY rather than an operation's ladder, so
-//! neither clause applies to it: which of its four a malformed span reports is
-//! `gate_vspan`'s to fix, and that order is stated and tested there.
+//! none of the three applies to it: which of its four a malformed span reports
+//! is fixed by its own decision order, stated on [`SpanFault`] and enforced at
+//! `gate_vspan`, where it is tested.
 //!
 //! Derive policy, in two classes that take different derives for a reason.
 //! The six OPERATION enums are the `E` of a public `Result`, and derive
@@ -24,16 +42,25 @@
 //! impl (both the trait and the type are foreign to it), and M10's `FaultSite`
 //! embeds both, so withholding `Hash` here is what would decide whether that
 //! type can have it. Not `Ord`, and the asymmetry is deliberate:
-//! [`SpanFault`]'s declaration order carries no meaning (`gate_vspan` fixes
-//! the decision order), and a derived `Ord` would give reordering the variants
-//! an observable effect. Not `Hash` on the six either — no consumer keys by a
-//! rejection, and M10 converts each to its own `Rejection` at the seam.
+//! [`SpanFault`]'s declaration order carries no meaning (the decision order is
+//! stated on the type itself), and a derived `Ord` would give reordering the
+//! variants an observable effect. Not `Hash` on the six either — no consumer
+//! keys by a rejection, and M10 converts each to its own `Rejection` at the
+//! seam.
 //!
 //! `DocNotRegistered` carries the offending document wherever
 //! the interface declares a payload (RETRIEVEV/SHOWDELETIONS/COMPARE/
 //! FINDDOCSCONTAINING); the interface declares ExtentError's and OriginError's
 //! as payload-free — the document is recoverable from the single-document
 //! request — and the interface is the verbatim binding.
+//!
+//! WHERE THE DOCUMENT SITS. A registry rejection carries no index, and the
+//! first clause above is what locates it: the offending position is the FIRST
+//! spec or region, in request order and ρ₁ before ρ₂, naming the carried
+//! document. Everything before it is span-clean too, since a span fault there
+//! would have spoken instead. So the payload localizes exactly as an `index`
+//! does, and the before-is-clean promise is one a caller can act on rather
+//! than only read.
 //!
 //! All six carry the workspace's shape for a typed rejection —
 //! `Debug + Display + std::error::Error`, each a LEAF with no `source()`,
@@ -59,6 +86,24 @@ use skep_address::Address;
 /// the span half of the V-spec gate. `StartTooShallow` is `#start < 2`; a
 /// well-formed `#start ≥ 3` span is NOT a fault here — depth-compatibility is
 /// consulting-state, not well-formedness (§Conflicts resolved 8).
+///
+/// THE DECISION ORDER, which a repair loop may rely on. A span can fail
+/// several of the four at once, and the one reported is the first of:
+/// [`NotLevelUniform`], [`NotOrdinalLevel`], [`StartNotZeroFree`],
+/// [`StartTooShallow`]. So a fault means "the clauses before it hold" and
+/// says nothing about the ones after it: a caller repairing a span walks the
+/// ladder forward, in a bounded number of round trips, rather than treating
+/// each report as the only defect.
+///
+/// That is the DECISION order and deliberately NOT the declaration order
+/// below, which carries no meaning — the reason `Ord` is withheld, so that
+/// reordering the variants can have no observable effect. The ladder is
+/// enforced in one place, `gate_vspan`, where it is tested.
+///
+/// [`NotLevelUniform`]: SpanFault::NotLevelUniform
+/// [`NotOrdinalLevel`]: SpanFault::NotOrdinalLevel
+/// [`StartNotZeroFree`]: SpanFault::StartNotZeroFree
+/// [`StartTooShallow`]: SpanFault::StartTooShallow
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize)]
 pub enum SpanFault {
     /// Width does not act at its deepest component (not ordinal-level).

@@ -110,7 +110,8 @@ pub(crate) fn span_vpos(span: &Span) -> Option<VPos> {
 /// fixed HERE and nowhere else — level-uniformity, then ordinal-level, then
 /// zero-freedom, then depth, the first that fails being the one returned. That
 /// is the whole of `SpanFault`'s precedence: its declaration order is a
-/// vocabulary's, not this ladder's.
+/// vocabulary's, not this ladder's. The ladder is PUBLISHED on [`SpanFault`],
+/// since a caller holding one may act on it; this is where it is enforced.
 ///
 /// It deliberately does NOT gate depth-COMPATIBILITY (`#start == 2`):
 /// ASN-0115 is explicit that depth-compatibility is a consulting-state

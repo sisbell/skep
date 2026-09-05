@@ -44,8 +44,11 @@
 //! Five of the seven operations cost what their answer costs, or what the
 //! documents they name cost, and M6 bounds neither: capping request size,
 //! rate and concurrency for a route carrying a read is M10's, as the request
-//! lifecycle's owner, and each operation whose cost outruns its answer says so
-//! on its own card ([`Query::show_deletions`], [`Query::retrieve_v`]).
+//! lifecycle's owner. Two of the five say so on their own cards, and they are
+//! different cases: the one operation whose cost OUTRUNS its answer —
+//! `|R↾d| log |R↾d|` paid in full to return two empty halves — is
+//! [`Query::show_deletions`], and the one whose answer is itself a PRODUCT of
+//! the request the operation may not narrow is [`Query::retrieve_v`].
 //!
 //! Two carry budgets of their own, each for a factor no upstream gate can
 //! price. COMPARE's cost is SUPERLINEAR in its request — the join is `|P|·|Q|`

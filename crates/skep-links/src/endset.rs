@@ -147,7 +147,7 @@ impl Endset {
 
 /// A span is unit-depth (address-denoting) iff it is exactly its own start's
 /// subtree span: `s == subtree_of(s.start())` (§Core data model).
-pub(crate) fn is_unit_depth(s: &Span) -> bool {
+fn is_unit_depth(s: &Span) -> bool {
     *s == subtree_of(s.start())
 }
 

@@ -14,7 +14,7 @@ use skep_address::{
 
 use crate::dedup::DedupKey;
 use crate::endset::{coverage_class, CoverageClass, Link};
-use crate::registry::{registry, Behavior, Registration, ShippedType};
+use crate::registry::{registry, ShippedType};
 
 /// The ONE authoritative delta. Every write — MAKELINK link, Emit_K tuple,
 /// retraction tuple, supersession claim, editlink successor, pdef/pd_stable
@@ -254,21 +254,6 @@ impl LinkState {
             .unwrap_or(0)
     }
 
-    /// The registration of a coverage class, `None` for an unregistered one —
-    /// the slice's delegate to the module's format registry, beside
-    /// `shipped_class` and `declares`, so a gate or a read asks one question
-    /// of one place rather than reaching for the registry itself.
-    pub(crate) fn registration(&self, class: &CoverageClass) -> Option<&'static Registration> {
-        registry().registration(class)
-    }
-
-    /// Whether a registered class declares a behavior — the delegate beside
-    /// `registration`, so the one gate that reads a declaration back asks the
-    /// registry that knows the shipped table (§B).
-    pub(crate) fn declares(&self, class: &CoverageClass, behavior: Behavior) -> bool {
-        registry().declares(class, behavior)
-    }
-
     /// The link an INDEX KEY names. Every key in `type_slices`/`dedup`/
     /// `sup_fwd`, and every key `stab` returns, is a key of `links` —
     /// [`fold_hints`] only ever indexes the address it is inserting — so
@@ -309,11 +294,6 @@ impl LinkState {
             .find(|t| !self.nullified(t))
             .map(lift)
     }
-
-    /// The coverage class of a shipped reserved type (guard/recognition key).
-    pub(crate) fn shipped_class(&self, ty: ShippedType) -> &'static CoverageClass {
-        registry().shipped_class(ty)
-    }
 }
 
 /// `Tumbler → Address` lift of an INDEX KEY — infallible, every key of
@@ -343,7 +323,7 @@ pub(crate) fn lift(t: &Tumbler) -> Address {
 /// registry it recognizes them through is the module's compiled constant, so
 /// this stays a pure function of `(hints, addr, value)`: the same three
 /// arguments give the same hints on every board.
-pub(crate) fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
+fn fold_hints(hints: &Hints, addr: &Tumbler, value: &Link) -> Hints {
     let registry = registry();
     let mut out = hints.clone();
     let class = coverage_class(value.type_slot());

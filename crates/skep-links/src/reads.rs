@@ -301,9 +301,10 @@ impl LinkState {
 
     /// BH2 forward step (§5): the operative successors of `x` — `sup_fwd[x]`
     /// filtered to claims ∉ nullified — deduplicated, Tumbler order. v1
-    /// serves the walk family ONLY for the shipped `Supersedes` class
-    /// (build-enforced, §B); any other REGISTERED `ty` yields the empty vec
-    /// (the service-scope guard).
+    /// serves the walk family ONLY for the shipped `Supersedes` class (the
+    /// registry's population is the compiled shipped table, so no second BH2
+    /// declaration exists — §B); any other REGISTERED `ty` yields the empty
+    /// vec (the service-scope guard).
     ///
     /// `ty` PRECONDITION: address-denoting (a registered or reserved type)
     /// or `iextent`-built — the walk-scope test classifies it, so a
@@ -481,7 +482,7 @@ impl LinkState {
     /// typed refusal.
     pub fn stale(&self, ty: &Endset, horizon: u64) -> Result<Vec<Address>, NotBh4> {
         let class = coverage_class(ty);
-        if !self.declares(&class, Behavior::Age) {
+        if !registry().declares(&class, Behavior::Age) {
             return Err(NotBh4);
         }
         Ok(self
@@ -669,7 +670,7 @@ impl LinkState {
     /// [`LinkState::type_slice`], keyed by class rather than by endset. The
     /// two differ in shape as well — this hands back a walk, that one
     /// collects — so a caller wanting a set says so at its own site.
-    pub(crate) fn type_slice_class<'a>(
+    fn type_slice_class<'a>(
         &'a self,
         class: &CoverageClass,
         view: View,
@@ -692,8 +693,8 @@ impl LinkState {
     /// covers it; collectable, so a read that filters MANY probes derives the
     /// domain once instead of re-walking the slice — and re-deriving each
     /// root's span — per result element.
-    pub(crate) fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
-        let retired = self.shipped_class(ShippedType::Retired);
+    fn retired_roots(&self) -> impl Iterator<Item = &Tumbler> + '_ {
+        let retired = registry().shipped_class(ShippedType::Retired);
         self.type_slice_class(retired, View::Active)
             .flat_map(move |t| self.link_at(t).from_slot().addrs())
     }
@@ -717,7 +718,7 @@ impl LinkState {
         denoted: OrdSet<Tumbler>,
     ) -> Vec<Address> {
         let subtract =
-            view == View::Default && *class != *self.shipped_class(ShippedType::Retired);
+            view == View::Default && *class != *registry().shipped_class(ShippedType::Retired);
         let roots: Vec<&Tumbler> = if subtract {
             self.retired_roots().collect()
         } else {
@@ -742,7 +743,7 @@ impl LinkState {
     /// address-denoting and `iextent`-built endsets those ops document, and
     /// panics naming that precondition on anything else.
     fn serves_walk(&self, ty: &Endset) -> bool {
-        coverage_class(ty) == *self.shipped_class(ShippedType::Supersedes)
+        coverage_class(ty) == *registry().shipped_class(ShippedType::Supersedes)
     }
 
     /// Whether `x` is a SINK — successor-free in the operative graph: `x` has
@@ -753,7 +754,7 @@ impl LinkState {
     /// edge set decides it. [`LinkState::current`] asks only whether a
     /// reached node is a sink; the walk, which needs the successors
     /// themselves, builds them.
-    pub(crate) fn is_sink(&self, x: &Tumbler) -> bool {
+    fn is_sink(&self, x: &Tumbler) -> bool {
         self.hints
             .sup_fwd
             .get(x)
@@ -762,7 +763,7 @@ impl LinkState {
 
     /// Operative successor set `succ_o(x)` — `sup_fwd[x]` filtered to edges
     /// whose CLAIM is unnullified (Df-SUCC), deduplicated over `new`.
-    pub(crate) fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
+    fn succs_operative(&self, x: &Tumbler) -> OrdSet<Tumbler> {
         match self.hints.sup_fwd.get(x) {
             None => OrdSet::new(),
             Some(edges) => edges
@@ -793,13 +794,13 @@ impl LinkState {
     /// Vertices come back ASCENDING, deduplicated, whatever order they arrived
     /// in — sorted here rather than asked of the caller, so the binary search
     /// the walk does is sound by construction.
-    pub(crate) fn out_claims(&self, vertices: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
+    fn out_claims(&self, vertices: Vec<Tumbler>) -> Vec<(Tumbler, Vec<Address>)> {
         let mut out: Vec<(Tumbler, Vec<Address>)> =
             vertices.into_iter().map(|t| (t, Vec::new())).collect();
         out.sort_by(|(a, _), (b, _)| a.cmp(b));
         out.dedup_by(|(a, _), (b, _)| a == b);
         for claim in
-            self.type_slice_class(self.shipped_class(ShippedType::Supersedes), View::Active)
+            self.type_slice_class(registry().shipped_class(ShippedType::Supersedes), View::Active)
         {
             for g in self.link_at(claim).to_slot().addrs() {
                 if let Ok(i) = out.binary_search_by(|(t, _)| t.cmp(g)) {

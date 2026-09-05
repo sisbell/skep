@@ -43,8 +43,8 @@ use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, Caller, EditLinkError, EmitError, Endset, HasLinks, Invalid, Link,
-    LinkWriter, MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, ShippedType,
-    SlotArg, Tip, Tuple, View, FROM, TO, TYPE,
+    LinkWriter, MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, SlotArg, Tip,
+    Tuple, View, FROM, TO, TYPE,
 };
 
 fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
@@ -158,17 +158,8 @@ fn the_class_keyed_reads_serve_an_unregistered_type_verbatim() {
 fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
     let k = kernel();
     let w = writer(&k);
-    let snap = k.snapshot();
-    let sup = snap
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
-    let retraction = snap
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retraction)
-        .clone();
+    let sup = supersedes_ty();
+    let retraction = retraction_ty();
 
     // Pre-transact: non-address-denoting ty (before any class computation).
     let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler())
@@ -256,12 +247,7 @@ fn emit_reports_the_retraction_fence_before_the_shape_gate() {
     // violation. The fence speaks (design: K ≁ R before Sh-conf).
     let k = kernel();
     let w = writer(&k);
-    let retraction = k
-        .snapshot()
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retraction)
-        .clone();
+    let retraction = retraction_ty();
     assert!(matches!(
         w.emit(P1, &doc1(), &retraction, &ca(1), &[ca(2), ca(3)]),
         Err(TxnError::Rejected(EmitError::RetractionClass))
@@ -310,12 +296,7 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
     // P0 and ω, not behind them.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let ghost_home = a(&[1, 0, 1, 0, 7]);
     let wide = skep_address::Span::from_endpoints(ca(1).tumbler().clone(), ca(3).tumbler())
         .expect("well-formed span");
@@ -348,12 +329,7 @@ fn observe_coerces_default_to_active_and_never_filters() {
     // retired — which members(), on the same store, subtracts.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let retired = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retired)
-        .clone();
+    let retired = retired_ty();
     let rel = unregistered_ty(1);
     w.makelink(
         P1,
@@ -477,12 +453,7 @@ fn nullify_tombstones_its_target_and_accepts_its_own_fresh_address() {
 fn assert_sup_claims_dedup_across_homes_and_a_retracted_claim_leaves_the_walk() {
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
     let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     // Schema preconditions.
@@ -543,12 +514,7 @@ fn the_walk_halts_indeterminate_on_a_supersession_cycle() {
     // between it and an unbounded loop inside a read.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
     let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     w.assert_sup(P1, &doc1(), &x, &y).expect("x → y");
@@ -575,12 +541,7 @@ fn nullifying_an_endpoint_leaves_its_claim_s_edge_operative() {
     // still names it and `tip` still reports it as a positive sink.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
     let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
     let (c, _) = w.assert_sup(P1, &doc1(), &x, &y).expect("claim");
@@ -669,17 +630,8 @@ fn nullify_from_a_second_home_deposits_a_distinct_retraction() {
 fn editlink_commits_successor_and_claim_together_and_guards_the_successor_type() {
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
-    let retraction = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retraction)
-        .clone();
+    let sup = supersedes_ty();
+    let retraction = retraction_ty();
     let (orig, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("orig");
 
     // One atomic composite: fresh successor + claim; original untouched.
@@ -797,12 +749,7 @@ fn editlink_rejects_a_claim_typed_successor_with_a_non_resident_endpoint() {
     // though its F and G are distinct unit-depth single addresses.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
@@ -829,12 +776,7 @@ fn current_discloses_every_operative_claim_targeting_a_sink() {
     // too. Walk-side accumulation would report only the reachable one.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
@@ -975,7 +917,7 @@ fn targets_keyed_joins_only_the_reverse_lookup_classes() {
     let links = snap.world().links();
     // The control: that class DOES answer target_of for doc1, so its absence
     // from the join is the behavior scope and not an empty class.
-    let retraction = links.reserved_type(ShippedType::Retraction).clone();
+    let retraction = retraction_ty();
     assert_eq!(links.target_of(&retraction, &doc1()), Some(m1));
     assert!(links.targets_keyed(&doc1()).is_empty());
 }
@@ -1391,12 +1333,7 @@ fn age_answers_ungated_and_the_staleness_family_refuses_every_class() {
     // pre-transact with nothing committed.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     // Three tuples on doc2's chain: ordinals 1..3.
     let (t1, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("t1");
     let (t2, _) = w.emit(P1, &doc2(), &pred_def_ty(), &ca(2), &[]).expect("t2");
@@ -1462,12 +1399,7 @@ fn is_filtered_reads_the_active_retired_slice() {
     // a retirement restores the probe and the Default view with it.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let retired = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retired)
-        .clone();
+    let retired = retired_ty();
     let rel = unregistered_ty(1);
     w.makelink(
         P1,
@@ -1503,12 +1435,7 @@ fn default_view_subtracts_a_filtered_target() {
     // TARGET, not the source, is what the targets_of subtraction can see.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let retired = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retired)
-        .clone();
+    let retired = retired_ty();
     let rel = unregistered_ty(1);
     w.makelink(
         P1,
@@ -1532,12 +1459,7 @@ fn default_view_subtracts_a_filtered_target() {
 fn retired_filter_rewrites_default_views_only() {
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let retired = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retired)
-        .clone();
+    let retired = retired_ty();
     let rel = unregistered_ty(1);
     w.makelink(
         P1,
@@ -1758,12 +1680,7 @@ fn target_of_matches_a_source_by_denotation() {
 fn checkpoint_roundtrip_then_rebuild_derived_restores_every_hint() {
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (a1, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("idem⊤");
     let (m1, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(3), &[]).expect("m1");
     let (m2, _) = w.emit(P1, &doc1(), &pred_stable_ty(), &ca(4), &[]).expect("m2");
@@ -1933,12 +1850,7 @@ fn assert_sup_and_editlink_claim_over_links_the_caller_does_not_own() {
     // hardening pass deletes it and the suite stays green.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (x, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
     let (y, _) = w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
 
@@ -2035,7 +1947,7 @@ fn makelink_cannot_forge_a_supersession_claim() {
     assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
     let snap = k.snapshot();
     let links = snap.world().links();
-    let sup = links.reserved_type(ShippedType::Supersedes).clone();
+    let sup = supersedes_ty();
     assert!(links.succs(&sup, &la(90)).is_empty());
     // The ghost is its own sink with nothing claiming it: no forged edge
     // entered the adjacency, and no forged claim entered the disclosure.
@@ -2282,12 +2194,7 @@ fn editlink_deposits_the_successor_in_d_s_and_the_claim_in_d_a() {
     // append-only store, against the wrong document's link chain.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
@@ -2317,12 +2224,7 @@ fn editlink_rejects_a_claim_typed_successor_whose_endpoint_denotes_several_addre
     // the [K_sup] fence exists to stop, through the surface it admits.
     let k = kernel();
     let w = writer(&k);
-    let snap0 = k.snapshot();
-    let sup = snap0
-        .world()
-        .links()
-        .reserved_type(ShippedType::Supersedes)
-        .clone();
+    let sup = supersedes_ty();
     let (orig, _) = w
         .emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[])
         .expect("orig");
@@ -2965,12 +2867,7 @@ fn the_default_view_subtracts_under_every_active_retired_root() {
     // root must be subtracted exactly as one filtered by the first.
     let k = kernel();
     let w = writer(&k);
-    let retired = k
-        .snapshot()
-        .world()
-        .links()
-        .reserved_type(ShippedType::Retired)
-        .clone();
+    let retired = retired_ty();
     let rel = unregistered_ty(11);
     for (source, target) in [(ca(1), ca(5)), (ca(2), ca(6)), (ca(3), ca(7))] {
         w.makelink(

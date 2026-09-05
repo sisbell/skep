@@ -62,14 +62,14 @@ pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
 ///
 /// Declaring one CONFERS a set of reads and, separately, GATES a smaller set
 /// — in v1 only BH3's join and BH4's `stale` read a declaration back, the
-/// other two being fixed to their shipped class and fenced at build. Each
-/// variant says which is which, because "declared ⇒ served" is the property
-/// the two serving fences buy and it is not the same as "declared ⇒
-/// consulted". The registry's population being the shipped five (no app
-/// decls exist in this format), the only declarations in force are the
-/// note-pinned shipped ones — BH1 on `Retired`, BH2 on `Supersedes` — and
-/// the two declaration-reading gates run over a population that declares
-/// neither BH3 nor BH4.
+/// other two being fixed to their shipped class. Each variant says which is
+/// which, because "declared ⇒ served" is not the same as "declared ⇒
+/// consulted", and what buys the first here is the POPULATION rather than any
+/// check: the registry holds the compiled shipped table and nothing else, so
+/// the only declarations in force are the note-pinned shipped ones — BH1 on
+/// `Retired`, BH2 on `Supersedes` — no second BH1 or BH2 declaration can
+/// exist to be unserved, and the two declaration-reading gates run over a
+/// population that declares neither BH3 nor BH4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Behavior {
     /// BH1 — ASN-0128's `ReadFilter` (⇒ Unary). CONFERS `is_filtered` and the

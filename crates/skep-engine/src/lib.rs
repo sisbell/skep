@@ -19,9 +19,10 @@
 //!
 //! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
 //!   a compiled constant (the reserved type set is format, not
-//!   configuration — owner ruling, 2026-08-26), whose single
-//!   `Arc<TypeRegistry>` M7's slice holds and the engine shares out to M9
-//!   (and any other assembly-time consumer).
+//!   configuration — owner ruling, 2026-08-26). The type registry is M7's
+//!   module constant rather than any slice's state, so genesis carries none
+//!   of it: [`Engine::open`] clones that one `Arc<TypeRegistry>` and shares
+//!   it out to M9 (and any other assembly-time consumer).
 //! * **Recovery order** (`WorldState::rebuild_derived` for `World`) — the
 //!   cross-store rebuild sequence at load, stated and pinned in one place.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a

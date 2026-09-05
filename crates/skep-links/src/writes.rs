@@ -95,32 +95,37 @@ where
     pub fn new(kernel: &'k Kernel<W>) -> LinkWriter<'k, W> {
         LinkWriter { kernel }
     }
+}
 
-    /// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
-    /// class is a REGISTERED idem⊤ one — the same predicate [`emit_core`]
-    /// evaluates on `reg.idem`, so the section is taken exactly when the check
-    /// reads one — then the home's alloc key, always. A caller hands the
-    /// result to `transact` entire and adds nothing.
-    ///
-    /// One derivation of the dedup DECISION, beside [`DedupKey::of`]'s one
-    /// derivation of the key, so "the section M2 serializes is the section the
-    /// check reads" covers taking a section at all and not merely which bytes
-    /// it carries.
-    ///
-    /// The two ops that deliberately take NO dedup section say so at their own
-    /// key sets: MAKELINK, whose open surface faces no dedup check (ML0), and
-    /// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
-    /// second classification of its `ty` — one ascending pass over a type
-    /// slot's denoted addresses, on a path that already pays one.
-    fn deposit_lock_set(&self, value: &Link, home: &Address) -> Vec<LockKey> {
-        let mut keys: Vec<LockKey> = Vec::with_capacity(2);
-        let class = coverage_class(value.type_slot());
-        if registry().registration(&class).is_some_and(|r| r.idem) {
-            keys.push(DedupKey::of(value).lock_key());
-        }
-        keys.push(M3State::link_lock_key(home));
-        keys
+/// The WHOLE M2 lock set a deposit needs: the I0 section iff the value's
+/// class is a REGISTERED idem⊤ one — the same predicate [`emit_core`]
+/// evaluates on `reg.idem`, so the section is taken exactly when the check
+/// reads one — then the home's alloc key, always. A caller hands the
+/// result to `transact` entire and adds nothing.
+///
+/// One derivation of the dedup DECISION, beside [`DedupKey::of`]'s one
+/// derivation of the key, so "the section M2 serializes is the section the
+/// check reads" covers taking a section at all and not merely which bytes
+/// it carries.
+///
+/// A free function beside the gate it mirrors, taking no handle, because the
+/// set is a function of the VALUE and its home: the class comes from the
+/// module's format registry and the keys from M3's spelling, so there is no
+/// world to read and no kernel to hold.
+///
+/// The two ops that deliberately take NO dedup section say so at their own
+/// key sets: MAKELINK, whose open surface faces no dedup check (ML0), and
+/// `editlink`'s claim, whose check is a guaranteed miss. Costs `emit` a
+/// second classification of its `ty` — one ascending pass over a type
+/// slot's denoted addresses, on a path that already pays one.
+fn deposit_lock_set(value: &Link, home: &Address) -> Vec<LockKey> {
+    let mut keys: Vec<LockKey> = Vec::with_capacity(2);
+    let class = coverage_class(value.type_slot());
+    if registry().registration(&class).is_some_and(|r| r.idem) {
+        keys.push(DedupKey::of(value).lock_key());
     }
+    keys.push(M3State::link_lock_key(home));
+    keys
 }
 
 /// Admission DISCIPLINE selector — never the value (effect-identity: the gate
@@ -455,21 +460,25 @@ where
         // discipline is read from the registry rather than restated here,
         // and the two can never disagree.
         Gate::Managed | Gate::Retraction => {
-            let links = stg.working().links();
             // Total: the type slot is level-uniform by upstream validation
             // (emit's ty is address-denoting; the claim's and the retraction
             // tuple's types are the genesis-fixed reserved endsets).
             let class = coverage_class(value.type_slot());
-            let Some(reg) = links.registration(&class) else {
+            let Some(reg) = registry().registration(&class) else {
                 return Err(EmitCoreError::NotRegistered); // (i)
             };
-            if gate == Gate::Managed && class == *links.shipped_class(ShippedType::Retraction) {
+            if gate == Gate::Managed && class == *registry().shipped_class(ShippedType::Retraction)
+            {
                 return Err(EmitCoreError::RetractionClass); // K ≁ R
             }
             if !sh_conf(reg.shape, &value) {
                 return Err(EmitCoreError::ShapeViolation); // (ii)
             }
             if reg.idem {
+                // The one question this gate asks of the WORLD rather than of
+                // the format: the three reads above are the module's compiled
+                // registry, and only this one is per-store state.
+                let links = stg.working().links();
                 if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
                     return Ok(Deposited::Incumbent(incumbent)); // zero-step
                 }
@@ -730,7 +739,7 @@ where
             return Err(TxnError::Rejected(EmitError::SlotTooLarge));
         }
         let value = Link::triple(enc([from]), enc(to), ty.clone());
-        let keys = self.deposit_lock_set(&value, home);
+        let keys = deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
         })
@@ -790,7 +799,7 @@ where
     ) -> Result<(Address, Seq), TxnError<NullifyError>> {
         let retraction = registry().reserved_type(ShippedType::Retraction).clone();
         let value = Link::triple(enc([home]), enc([target]), retraction);
-        let keys = self.deposit_lock_set(&value, home);
+        let keys = deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();
@@ -836,7 +845,7 @@ where
     ) -> Result<(Address, Seq), TxnError<AssertSupError>> {
         let sup = registry().reserved_type(ShippedType::Supersedes).clone();
         let value = Link::triple(enc([old]), enc([new]), sup);
-        let keys = self.deposit_lock_set(&value, home);
+        let keys = deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
             {
                 let base = stg.base();

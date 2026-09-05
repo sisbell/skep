@@ -451,6 +451,8 @@ pub fn registry() -> &'static Arc<TypeRegistry> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use skep_address::{validate, Nat, Tumbler};
     use skep_namespace::GHOST_POSITIONS;
 
@@ -462,6 +464,29 @@ mod tests {
                 .expect("nonempty"),
         )
         .expect("T4-valid")
+    }
+
+    /// [`ShippedType::ALL`] is THE enumeration, and a walk over it must reach
+    /// all five shipped classes. A DROPPED variant is a compile error (the
+    /// array is length-5, [`TypeRegistry::shipped`]'s match is exhaustive, and
+    /// the registry holds five fields); a DUPLICATED one is not, and it would
+    /// leave a class out of every walk — this suite's, and the engine's world
+    /// dump, which compares dumps against each other and so would agree with
+    /// itself about the gap. Distinctness is the whole test: five pairwise
+    /// distinct values of a five-variant enum are all of them, so the property
+    /// is stated without a second copy of the list to fall out of step.
+    #[test]
+    fn a_walk_over_all_reaches_every_shipped_class_once() {
+        let registry = TypeRegistry::build();
+        let classes: HashSet<&CoverageClass> = ShippedType::ALL
+            .iter()
+            .map(|&ty| registry.shipped_class(ty))
+            .collect();
+        assert_eq!(
+            classes.len(),
+            ShippedType::ALL.len(),
+            "ALL names each shipped type exactly once"
+        );
     }
 
     #[test]

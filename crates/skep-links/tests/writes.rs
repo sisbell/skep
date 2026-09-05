@@ -15,8 +15,9 @@
 //! selection, BH1's filter and the class-keyed reads over registered and
 //! unregistered classes alike, the enumeration reads at the cardinality
 //! their loops need, the §G discovery primitives with their
-//! `Default → Active` coercion, their empty-query floor and their
-//! absent-slot rule, the AND-combiner's agreement with its own conjuncts,
+//! `Default → Active` coercion, their empty-query floor, their absent-slot
+//! rule and each of the three overlap relations they admit against the one
+//! they refuse, the AND-combiner's agreement with its own conjuncts,
 //! the verbatim order FOLLOWLINK folds, the ratio a `Resolve` slot amplifies
 //! by and the per-slot span budget at its exact boundary on every op and
 //! slot form that carries one, editlink's canonical two-home lock order,
@@ -197,6 +198,27 @@ fn emit_names_a_distinct_rejection_for_each_gate_it_fails() {
 }
 
 #[test]
+fn emit_refuses_a_non_level_uniform_ty_without_classifying_it() {
+    // `emit` is the one op whose contract promises a REJECTION where the typed
+    // reads promise a panic: `NonAddressDenotingType` fires before ANY class
+    // computation, keeping `coverage_class` off its pinned off-contract abort.
+    // The wide span the gate case above uses is LEVEL-UNIFORM, so it classifies
+    // happily and cannot tell the order apart; this one is the design's own
+    // off-contract witness, T12-valid and wire-buildable (`Op::Emit` carries an
+    // arbitrary `Endset`), so hoisting the classification above the denoting
+    // check turns a typed refusal into an abort inside the daemon.
+    let k = kernel();
+    let w = writer(&k);
+    let skew = skep_address::Span::new(t(&[5, 3]), t(&[0, 2, 7])).expect("T12 admits this span");
+    let before = k.current_seq();
+    assert!(matches!(
+        w.emit(P1, &doc1(), &Endset::from_spans([skew]), &ca(1), &[]),
+        Err(TxnError::Rejected(EmitError::NonAddressDenotingType))
+    ));
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+}
+
+#[test]
 fn the_shape_gate_admits_exactly_the_registered_span_counts() {
     // P3 Sh-conf checks the REGISTERED shape, never one inferred from the
     // tuple: every shape requires |F| = 1 (which emit forces through its own
@@ -265,6 +287,33 @@ fn emit_reports_the_retraction_fence_before_the_shape_gate() {
 }
 
 #[test]
+fn emit_reports_the_supersession_fence_before_the_slot_budget() {
+    // The three pre-transact fences are declared in firing order, and this is
+    // the one pair a caller can collide: a `ty` naming the `[K_sup]` address
+    // past the budget is BOTH, because the class collapses repeats while the
+    // slot keeps every span. (The other two pairs have no shared input: a
+    // non-address-denoting `ty` classifies to an extent class, which is never
+    // a shipped one.)
+    let k = kernel();
+    let w = writer(&k);
+    let over = skep_links::MAX_SLOT_SPANS + 1;
+    assert!(matches!(
+        w.emit(P1, &doc1(), &enc(&vec![ra(4); over]), &ca(1), &[]),
+        Err(TxnError::Rejected(EmitError::SupersessionClass))
+    ));
+    // ...and each is separately reachable, so the above is a precedence and
+    // not the only answer either input can get.
+    assert!(matches!(
+        w.emit(P1, &doc1(), &supersedes_ty(), &ca(1), &[]),
+        Err(TxnError::Rejected(EmitError::SupersessionClass))
+    ));
+    assert!(matches!(
+        w.emit(P1, &doc1(), &enc(&vec![ra(1); over]), &ca(1), &[]),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
+    ));
+}
+
+#[test]
 fn emit_rejects_an_unregistered_home_on_the_dedup_hit_path() {
     // The home check is hoisted ahead of the dedup short-circuit (Conflicts
     // §8): the I0 key excludes home, so this second emit WOULD hit the
@@ -307,6 +356,13 @@ fn pre_transact_fences_outrank_the_home_and_owner_checks() {
     assert!(matches!(
         w.emit(P2, &ghost_home, &sup, &ca(1), &[ca(2)]),
         Err(TxnError::Rejected(EmitError::SupersessionClass))
+    ));
+    // The third of emit's pre-transact fences, at the same ghost home and
+    // under the same stranger: the budget speaks before P0 and ω too.
+    let over: Vec<Address> = (1..=(skep_links::MAX_SLOT_SPANS as u32 + 1)).map(ca).collect();
+    assert!(matches!(
+        w.emit(P2, &ghost_home, &pred_def_ty(), &ca(1), &over),
+        Err(TxnError::Rejected(EmitError::SlotTooLarge))
     ));
     assert!(matches!(
         w.retract_stale(P2, &ghost_home, &unregistered_ty(2), 0),
@@ -1300,6 +1356,22 @@ fn stab_and_match_links_match_overlap_but_never_adjacency() {
         // FROM — but does match TO.
         assert!(!links.stab(FROM, &enc(&[ca(3)]), View::Audit).contains(&l));
         assert!(links.stab(TO, &enc(&[ca(3)]), View::Audit).contains(&l));
+        // ProperOverlap, the third admitted relation and the one REGION
+        // queries produce: this query starts inside [ca1, ca3) and reaches
+        // past it, so neither span contains the other. Every other query in
+        // the suite is unit-depth, which against a same-length extent can
+        // only be Containment, Equal, Adjacent or Separated.
+        let extent = |lo: u32, hi: u32| {
+            Endset::from_spans([skep_address::Span::from_endpoints(
+                ca(lo).tumbler().clone(),
+                ca(hi).tumbler(),
+            )
+            .expect("well-formed span")])
+        };
+        assert!(links.stab(FROM, &extent(2, 5), View::Audit).contains(&l));
+        // The control, so the hit above is the overlap arm and not a query
+        // that matches everything: a Separated extent misses.
+        assert!(!links.stab(FROM, &extent(5, 7), View::Audit).contains(&l));
         // AND-combiner over constrained slots only; empty constraints ⇒ the
         // whole slice.
         assert!(links
@@ -2738,10 +2810,8 @@ fn an_addrs_slot_past_the_span_budget_is_refused() {
 fn emit_rejects_a_to_list_past_the_span_budget() {
     // `to` is one of the two managed slots a caller sizes (`ty` is the other,
     // and `enc({from})` is one span). The per-slot span budget sits here
-    // PRE-TRANSACT — ahead of the shape gate, which every registered class
-    // in this format would also refuse a nonempty `to` under; the at-budget
-    // ADMIT case needs a registered non-Unary class and so lives on the open
-    // surface (`an_addrs_slot_past_the_span_budget_is_refused` carries it).
+    // PRE-TRANSACT — ahead of the shape gate, which every registered class in
+    // this format would also refuse a nonempty `to` under.
     let k = kernel();
     let w = writer(&k);
     let targets = |n: u32| -> Vec<Address> { (1..=n).map(ca).collect() };
@@ -2752,7 +2822,17 @@ fn emit_rejects_a_to_list_past_the_span_budget() {
         w.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &targets(budget + 1)),
         Err(TxnError::Rejected(EmitError::SlotTooLarge))
     ));
-    assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
+    // The boundary itself. `to` has no ADMIT case — every registered class in
+    // this format is Unary or Binary, so no `|G|` this wide is depositable —
+    // but the budget is pinnable all the same, because passing the fence and
+    // failing it give DIFFERENT rejections: exactly the budget is not "past"
+    // it, so the value reaches the shape gate, where a `>=` fence would answer
+    // `SlotTooLarge` here too and silently make the published budget 4095.
+    assert!(matches!(
+        w.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &targets(budget)),
+        Err(TxnError::Rejected(EmitError::ShapeViolation))
+    ));
     // ...and each verdict is separately reachable, so the above is the
     // precedence and not the only answer the input can get.
     assert!(matches!(
@@ -2799,7 +2879,7 @@ fn emit_rejects_a_ty_endset_past_the_span_budget() {
         w.emit(P1, &doc1(), &wide_ty(budget + 1), &ca(3), &[]),
         Err(TxnError::Rejected(EmitError::SlotTooLarge))
     ));
-    assert_eq!(k.current_seq(), before, "pre-transact: nothing opened");
+    assert_eq!(k.current_seq(), before, "the refusal is pre-deposit");
     // The control: the same class at an in-budget width deposits, so the
     // refusal above is the slot and not the class.
     w.emit(P1, &doc1(), &pred_def_ty(), &ca(3), &[])

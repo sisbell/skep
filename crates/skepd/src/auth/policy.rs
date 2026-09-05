@@ -283,7 +283,11 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
 /// the shape token reaches only the owner of the `home` the retraction
 /// would land in, so anyone else answers `None` here, falls through to
 /// execute, and receives ω's own `not_owner` — indistinguishable from its
-/// non-credential answer. Pre-claim the order stands for every caller.
+/// non-credential answer. Pre-claim this producer's answer stands for
+/// every caller — but in [`plain_refusal`]'s order the pre-claim admission
+/// gate answers `claim_first` ahead of it (PUB-6.35, PUB-6.36 slot 4
+/// before slot 5), so over the wire the token is reached only once the
+/// board is claimed.
 pub(crate) fn nullify_refusal(
     _lock: &LockRead<'_>,
     world: &World,
@@ -463,11 +467,29 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 
 // ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
 
-/// The plain path's three producers in their pinned order: the NULLIFY
-/// class, then the MINT class, then the mode-complementary board-state
-/// pair. The ORDER is the pin, so it lives here with the producers rather
-/// than at the call site — the same treatment [`precheck`] gives the
-/// credential path's eight slots.
+/// The plain path's three producers in their pinned order: the MINT class,
+/// then the mode-complementary board-state pair, then the NULLIFY class.
+/// The ORDER is the pin, so it lives here with the producers rather than at
+/// the call site — the same treatment [`precheck`] gives the credential
+/// path's eight slots.
+///
+/// The order is PUB-6.36's write-side order as RES-195 places the
+/// `nullify` cells: MINT-FIRST is slot 2; the board-state pair stands in
+/// slot 4's position (the publish-class gate once claimed, the pre-claim
+/// admission gate before); the credential-typed `nullify` cell takes slot
+/// 5's position — AFTER the gate and never before it, "a session that may
+/// not write here never being told what the target link is". Post-claim
+/// the gate and the cell are disjoint as built — [`publish_gate`] has no
+/// `Nullify` arm, which is PUB-6.43's nullify row and not this function's
+/// to add — so the order is unobservable there. Pre-claim it is not: an
+/// UNCLAIMED board admits no `nullify` at all, so the admission gate
+/// (PUB-6.35; RES-27) answers `claim_first` first and the shape token is
+/// never reached, for the home's own owner as for anyone else.
+///
+/// Re-ordering moves no input: all three are pure functions of the same
+/// `(world, identity, op, principal, signer)` under the same guard, and
+/// [`mint_home_refusal`] fires only on `fork`/`version`, so its position
+/// relative to the `nullify` cell is inert either way.
 ///
 /// `world` and `identity` MUST be the pair taken under the read guard for
 /// this request; the guard argument each producer takes is that contract's
@@ -480,9 +502,9 @@ pub(crate) fn plain_refusal(
     principal: PrincipalId,
     signer: Option<&skep_identity::Fingerprint>,
 ) -> Option<CredentialRefusal> {
-    nullify_refusal(lock, world, identity, op, principal)
-        .or_else(|| mint_home_refusal(lock, world, op, principal))
+    mint_home_refusal(lock, world, op, principal)
         .or_else(|| board_state_refusal(lock, world, identity, op, principal, signer))
+        .or_else(|| nullify_refusal(lock, world, identity, op, principal))
 }
 
 // ── precheck — slots (3)–(8), under the write lock (AUTH-3.15–3.19) ──────

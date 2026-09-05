@@ -939,6 +939,85 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
     sd.shutdown();
 }
 
+/// The plain path's slot order (PUB-6.36 as RES-195 places it): the
+/// credential-typed `nullify` cell takes slot 5's position, BEHIND the
+/// board-state gate in slot 4's — so on an UNCLAIMED board the pre-claim
+/// admission gate (PUB-6.35; RES-27) answers `claim_first` and the shape
+/// token is never reached, for the home's own owner as for a signed
+/// session. Post-claim the two producers are disjoint as built (the publish
+/// gate has no `nullify` arm), so this window is the one place the order is
+/// observable, and the one cell that pins it.
+///
+/// The SAME frame from the SAME bare session answers
+/// `nullify_not_retraction` once the board is claimed: the cell moved
+/// behind the gate; it did not go away.
+#[test]
+fn pre_claim_a_credential_nullify_answers_claim_first_ahead_of_the_nullify_cell() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn_unclaimed(dir.path());
+    let port = sd.port();
+
+    // The ceremony's first four steps (AUTH-5.55 1–4) with the signed claim
+    // WITHHELD: delegate from 0, the home mint, the genesis atom and its
+    // deposit — which leaves one credential-typed link on an unclaimed
+    // board. Spelled out rather than borrowed from `claim_board`, whose
+    // fifth step is the one this cell must not take yet.
+    let boot = open_session(port, 0);
+    let v = op(port, Some(&boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let prefix = expect_resp(&v, "maybe_addr")["addr"].as_str().expect("prefix").to_string();
+    assert_eq!(prefix, CLAIMANT_ACCOUNT, "the ceremony must be the board's first delegate");
+    let v = op(
+        port,
+        Some(&boot),
+        &format!(r#"{{"op":"delegate","new_prefix":"{prefix}","new_id":{CLAIMANT_PRINCIPAL}}}"#),
+    );
+    expect_resp(&v, "ack_addr");
+    let claimant = open_session(port, CLAIMANT_PRINCIPAL);
+    let v = op(
+        port,
+        Some(&claimant),
+        &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"}}"#),
+    );
+    assert_eq!(acked_addr(&v), CLAIMANT_DOC1, "the home mint is doc 1");
+    let v = op(
+        port,
+        Some(&claimant),
+        &format!(
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}]}}"#,
+            enroll_atom_flagged(&[(&anchor_key(), true), (&device_key(), false)])
+        ),
+    );
+    expect_resp(&v, "ack_addr");
+    let credential =
+        acked_addr(&deposit(port, &claimant, &format!("{CLAIMANT_DOC1}.0.1.1"), T_ENROLL));
+    assert!(!claimed(port), "the genesis deposit alone claims nothing");
+
+    let retract = format!(r#"{{"op":"nullify","home":"{CLAIMANT_DOC1}","target":"{credential}"}}"#);
+
+    // The home's owner, bare: the admission gate answers first, in the
+    // pinned shape (credential_refused, permanent).
+    let v = op(port, Some(&claimant), &retract);
+    assert_eq!(rejected_detail(&v), "credential_refused:claim_first");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"));
+    // A signed session fares no better: pre-claim the gate is session-blind
+    // (RES-27: "bare and signed sessions alike").
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let v = op(port, Some(&signed), &retract);
+    assert_eq!(rejected_detail(&v), "credential_refused:claim_first");
+    // The credential link is untouched by either refusal.
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{credential}"}}"#));
+    assert!(!expect_resp(&v, "link_value")["link"].is_null(), "nothing was retracted");
+
+    // Step 5 — the signed claim — and the SAME frame from the SAME bare
+    // session now reaches the cell behind the gate.
+    let v = claim_deposit(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT);
+    expect_resp(&v, "ack_addr");
+    assert!(claimed(port), "the claim link flips the board claimed");
+    let v = op(port, Some(&claimant), &retract);
+    assert_eq!(rejected_detail(&v), "credential_refused:nullify_not_retraction");
+    sd.shutdown();
+}
+
 /// `key_set` (AUTH-6.18–6.20): fingerprint-ordered entries with flags on
 /// `/op`; `not_an_account` on a non-account; the SAME dispatcher as of a
 /// historical position on `/op-at` (empty before the genesis).

@@ -148,14 +148,24 @@ impl Default for FourSet {
 }
 
 /// Windowing cursor (ASN-0108 W2/W3): `None` = ⊥ (start); `Some(a)` = resume
-/// strictly past `a`. The cursor is a permanent link ADDRESS — the whole
-/// continuation is this value, held by the client; there is no server
-/// iterator and no cached list.
+/// strictly past `a`. The whole continuation is this value, held by the
+/// client; there is no server iterator and no cached list.
+///
+/// In ordinary use `a` is the ≺-max of a previous batch — a permanent link
+/// address — but the windowing operations require nothing of it: any
+/// `Address` resumes, because the cut is by key rather than by lookup. Each
+/// states that where a caller meets it.
 pub type Cursor = Option<Address>;
 
-/// One window of an enumeration (ASN-0108): `batch` in ascending address
-/// order; `next` resumes (the ≺-max of the batch, else the cursor unchanged);
-/// `exhausted` — a batch shorter than `n` — is the terminal signal (W9).
+/// One window of an enumeration (ASN-0108). A plain record: its fields are
+/// public and independent, and a caller may build one freely.
+///
+/// The windowing operations RETURN values with three relations among those
+/// fields — `batch` in ascending address order; `next` the ≺-max of the
+/// batch, else the cursor unchanged; `exhausted` iff the batch is shorter
+/// than the `n` asked for, which is the terminal signal (W9). Those are
+/// postconditions of `window_v_on`/`window_ftt_on`, so a value that came
+/// from either holds them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Window {
     pub batch: Vec<Address>,
@@ -186,8 +196,11 @@ pub struct SupClaim {
 /// nullified link that lost its last witness in `d` is NOT reported). The
 /// global-ghost / LP17 escalation is M6 territory, not computed here.
 ///
-/// `orphaned` is in ascending address order — the same permanent key every
-/// enumeration here reads out by.
+/// A plain record: `orphaned` is public and a caller may build one freely.
+/// A report RETURNED by [`crate::delete_orphans_on`] carries it in ascending
+/// address order — the same permanent key every enumeration here reads out
+/// by, and a postcondition of that function rather than a property of this
+/// type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OrphanReport {
     pub orphaned: Vec<Address>,
@@ -253,17 +266,22 @@ impl fmt::Display for QueryError {
 }
 impl Error for QueryError {}
 
-/// The typed rejection of the `delete_orphans` preview, mirroring M5's
-/// `DeleteError` granularity so the refusal is actionable: the preview
-/// declines exactly the requests DELETE would decline, and names the same
-/// fault (§6 states where the two vocabularies label one refusal differently).
+/// The typed rejection of the `delete_orphans` preview: four verdicts drawn
+/// from M5's `DeleteError` at M5's own granularity, so the refusal is
+/// actionable. `OutOfBounds` folds M5's `NotArranged` and `OutOfBounds` into
+/// one (§6 states where the two vocabularies label one refusal differently),
+/// and M5's `NotOwner` has no counterpart here at all — the preview takes no
+/// `Caller`, so ownership is not its word to speak.
 ///
 /// Exhaustively matchable from outside the crate, and promised so, for the
 /// reason [`QueryError`] states.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrphanError {
-    /// `d` is not a registered document (M3) — distinct from a
-    /// registered-but-empty `d`, which yields a defined empty report.
+    /// `d` is not a registered document (M3). A registered-but-empty `d` is
+    /// refused too, but for range — `EmptyWidth` at width 0 and
+    /// `OutOfBounds` otherwise, since `n_C = 0` admits no range — so what
+    /// this variant buys a caller is WHICH fault is named, as M5's DELETE
+    /// likewise refuses every request on an empty document.
     DocNotRegistered,
     /// `p.subspace ≠ s_C` (mirror of M5's variant).
     NotContentSubspace,

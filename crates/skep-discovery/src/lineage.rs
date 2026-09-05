@@ -51,19 +51,30 @@ fn endpoint(e: &Endset, denotes: &'static str) -> Address {
 }
 
 /// The shared claim enumeration: claims naming `key` at `slot`, restricted to
-/// the `[K_sup]` class.
+/// the `[K_sup]` class. TOTAL on every address — the obligations below are
+/// all this function's own, discharged here and owed by no caller.
 ///
 /// **Flipped storage convention** (the M7→M8 seam, diverging from ASN-0125's
 /// textual Df-DIR): `FROM = old/superseded`, `TO = new/superseding` — so
 /// `in(y)` (old = y) probes FROM and `out(x)` (new = x) probes TO.
 ///
-/// **Resident-key gate (enforced, not merely documented):** exactness of the
-/// `match_links ∩ type_slice` composition rests on the `dom(L)`
-/// prefix-antichain (EL4 + R0a); for a NON-link `key`, `enc([key])`'s prefix
-/// coverage could overlap a prefix-comparable claim and silently over-match.
-/// These reads return `Vec`, not `Result`, so the gate short-circuits to `[]`
-/// when `readlink(key)` is `None` — the correct empty lineage, a defensive
-/// backstop, not a license to pass arbitrary tumblers.
+/// **The residence gate is what makes the composition compute the right
+/// function**, not a guard against misuse. `enc([key])` matches by prefix
+/// COVERAGE, and coverage coincides with denotation only on the `dom(L)`
+/// prefix-antichain (EL4 + R0a): for a non-link `key`, its coverage could
+/// reach a prefix-comparable claim, and the read would answer *claims whose
+/// endpoint lies UNDER `key`* rather than *claims whose endpoint IS `key`*.
+/// The gate cuts that off, and `[]` is then the TRUE answer rather than a
+/// fallback — a `[K_sup]` endpoint is `single_denoted` to a resident link
+/// address, so a non-link is no claim's endpoint. Residence, not activity: a
+/// nullified link is resident and remains a legal probe key.
+///
+/// **Two upstream panicking preconditions are discharged here**, in the one
+/// place they are established: `type_slice` faults on a `ty` that is neither
+/// address-denoting nor `iextent`-built, and `sup` comes from
+/// `reserved_type`, which is address-denoting by construction; `match_links`
+/// requires that no constraint carry an empty endset, and `enc([key])` is
+/// one span.
 fn claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     slot: usize,
@@ -84,11 +95,13 @@ fn claims_on<W: DiscoveryWorld>(
 
 /// The claims with `old = y` (ASN-0125 EL11b `in(y)`): probes FROM under the
 /// flipped convention, in ASCENDING CLAIM-ADDRESS order — the same permanent
-/// key the enumeration families page by, read off M7's own index. `y` is
-/// intended as a resident link address (`dom(L)`); a non-link key is gated
-/// internally and returns `[]`. `v = Active` yields the operative graph
-/// (`succ_o`), `Audit` the full history (`succ_h`); `Default` behaves as
-/// `Active` (M7's §G primitives coerce it).
+/// key the enumeration families page by, read off M7's own index.
+///
+/// TOTAL: every `Address` is admitted, and a `y` that is no resident link is
+/// no claim's `old`, so `[]` is the answer rather than a refusal — a caller
+/// owes no residence check before asking. `v = Active` yields the operative
+/// graph (`succ_o`), `Audit` the full history (`succ_h`); `Default` behaves
+/// as `Active` (M7's §G primitives coerce it).
 ///
 /// The view selects which CLAIMS are disclosed, never which endpoints: each
 /// [`SupClaim`]'s `old`/`new` are the addresses the claim names, read out as

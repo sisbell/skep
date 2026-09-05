@@ -6,6 +6,14 @@
 //! `addressably_discoverable_from` conjoins `is_active`, while `project`
 //! reports the recorded coverage M7's `followlink` hands over, retracted
 //! links included.
+//!
+//! Both are DOC-GATED, as the region family is: `d` must be M3-registered,
+//! and that is the first act of each — a registered-but-empty `d` yields a
+//! defined answer (∅ / `Ok(false)`), an unregistered one yields
+//! `DocNotRegistered`, and drawing those apart is the gate's whole purpose.
+//! Each read states its own refusal order, since a call can be faulty in `d`
+//! and in `a` at once and only one verdict speaks.
+//!
 //! The per-link `classify_spans` touch test here is M8's one
 //! pointwise span comparison — a level-gate-free order relation, total on
 //! cross-length spans, categorically distinct from the level-gated set
@@ -39,9 +47,13 @@ use crate::DiscoveryWorld;
 /// BH3 (BH3 is typed reverse *lookup*, target→sources — it yields no
 /// V-positions); it is the scoped-out contextual EL11a, composed above M8.
 ///
-/// `NotALink` subsumes BOTH `a ∉ dom(L)` AND an out-of-range `slot` (M7's
-/// `followlink` conflates them; a `BadSlot` split is deferred — it would cost
-/// an extra `readlink` to read arity).
+/// REFUSES, IN THIS ORDER: `DocNotRegistered` (`d` is not M3-registered),
+/// then `NotALink`, then `ImageTooLarge`. The order is the family's, not this
+/// function's — every argument about `d` is settled before any argument
+/// about `a` — so a call that is faulty in two ways names the document
+/// fault. `NotALink` subsumes BOTH `a ∉ dom(L)` AND an out-of-range `slot`
+/// (M7's `followlink` conflates them; a `BadSlot` split is deferred — it
+/// would cost an extra `readlink` to read arity).
 ///
 /// The result is a NORMALIZED set of depth-2 content V-spans
 /// (`[s_C, ordinal] × [0, count]`) in `d`'s own V-coordinates, M5's `project`
@@ -57,12 +69,14 @@ use crate::DiscoveryWorld;
 /// is already held — M7 caps a stored slot at `MAX_SLOT_SPANS` on every
 /// deposit path, so the coverage a link can hand over is bounded before it is
 /// read. `#runs(d)` is not held anywhere upstream, so it is held here, at
-/// [`crate::MAX_IMAGE_RUNS`] (`ImageTooLarge`) — the same budget
-/// [`addressably_discoverable_from_on`] and the region family's image hold,
-/// so those three reads of `d`'s runs refuse the same documents rather than
-/// one refusing what another answers. The count walks the run set M5
-/// publishes, which is `#runs(d)` itself: bounded by the quantity it prices,
-/// and one small allocation where the budget is nowhere near.
+/// [`crate::MAX_IMAGE_RUNS`] (`ImageTooLarge`), counted over `d`'s CONTENT
+/// runs — the runs M5's `project` actually joins against, so the factor
+/// priced is the factor multiplied. That is a narrower count than
+/// [`addressably_discoverable_from_on`]'s, which must price both subspaces,
+/// so a `d` this answers about may be one that read refuses: one constant,
+/// two quantities, each its own site's. The count walks the run set M5
+/// publishes, which is `#content_runs(d)` itself: bounded by the quantity it
+/// prices, and one small allocation where the budget is nowhere near.
 pub fn project_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,
@@ -121,21 +135,29 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 /// |runs|), never the F-FULL whole-document-stab membership route. The test
 /// iterates the link's full arity, so it carries no arity-3 caveat.
 ///
-/// `Err(NotALink)` iff `a ∉ dom(L)` (aligned with `project`'s non-link
-/// handling). A *nullified* link is still a link: it passes the residence
-/// gate and returns `Ok(false)` through the `is_active` conjunct —
-/// distinguishing "not a link" from "a retracted link". A registered-but-
-/// empty `d` short-circuits to `Ok(false)` (nothing is reachable; `touches`
+/// REFUSES, IN THIS ORDER: `DocNotRegistered`, then `NotALink`, then
+/// `ImageTooLarge` — every argument about `d` settled before any argument
+/// about `a`, so an unregistered `d` with a non-link `a` names the document
+/// fault. Given the document gate passes, `Err(NotALink)` iff `a ∉ dom(L)`
+/// (aligned with `project`'s non-link handling).
+///
+/// A *nullified* link is still a link: it passes the residence gate and
+/// returns `Ok(false)` through the `is_active` conjunct — distinguishing "not
+/// a link" from "a retracted link". A registered-but-empty `d` yields
+/// `Ok(false)` and never `DocNotRegistered` (nothing is reachable; `touches`
 /// over an empty extent list is vacuously false, so the early-out is cheap,
-/// not a correctness guard).
+/// not a correctness guard) — that distinction is what the document gate
+/// exists to draw.
 ///
 /// `Err(ImageTooLarge)` when `ran(M(d))` is past [`crate::MAX_IMAGE_RUNS`]:
 /// the runs are lifted into an I-extent apiece and every one of them is
 /// tested against every span of every slot, so this is where a document's
 /// fragmentation becomes the multiplier M8 itself applies. Refused BEFORE the
-/// lift, so an over-budget `d` costs the count and not the span set. The same
-/// budget the region family's image and [`project_on`] hold, over the same
-/// quantity, so all three refuse the same documents.
+/// lift, so an over-budget `d` costs the count and not the span set. The
+/// count is `#content_runs(d) + #link_runs(d)`, because LP12 ranges over
+/// both subspaces and every extent is tested — so it prices a strictly
+/// larger quantity than [`project_on`]'s content-only count, under the same
+/// constant, and refuses a superset of the documents that read refuses.
 pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     a: &Address,

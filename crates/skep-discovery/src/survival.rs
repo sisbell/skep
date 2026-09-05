@@ -32,19 +32,31 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 /// Pre-edit what-if (ASN-0117): the links the proposed DELETE `[p, p+width)`
 /// would drop from `d` — read-only, never the edit path.
 ///
-/// Refuses exactly the requests DELETE refuses, so the preview is of the
-/// REQUESTED delete and never a silently-clipped different one:
-/// `DocNotRegistered`; non-`s_C` `p` → `NotContentSubspace`; zero `width` →
-/// `EmptyWidth`; and `p < 1 ∨ p + width > n_C + 1` → `OutOfBounds`, the single
-/// check to which M5's `NotArranged` + `OutOfBounds` pair is jointly
-/// equivalent under width ≥ 1.
+/// Refuses the requests DELETE refuses on its ADMISSION checks, so the
+/// preview is of the REQUESTED delete and never a silently-clipped different
+/// one: `DocNotRegistered`; non-`s_C` `p` → `NotContentSubspace`; zero
+/// `width` → `EmptyWidth`; and `p < 1 ∨ p + width > n_C + 1` → `OutOfBounds`,
+/// the single check to which M5's `NotArranged` + `OutOfBounds` pair is
+/// jointly equivalent under width ≥ 1.
 ///
-/// The accepted set is M5's exactly. Two LABELS differ, both where M5 would
-/// say `NotArranged` (`p ∉ [1, n_C]`): this reports `OutOfBounds` when
-/// `width ≥ 1`, and `EmptyWidth` when `width = 0`, because the width check
-/// runs ahead of the bounds check here and behind it in M5. A caller relaying
-/// a refusal verbatim relays a different word for the same refusal, never a
-/// different verdict.
+/// The ω GATE IS NOT AMONG THEM, and its absence is the one place the two
+/// accepted sets differ: M5's DELETE refuses a caller who does not own `d`
+/// with `NotOwner`, and this takes no `Caller`, so it answers alike for
+/// every asker. A non-owner previewing a delete they cannot perform gets the
+/// preview. That is not M8's word to withhold — ownership is M5's rule and
+/// the session is M10's — so what this answers is a question about the
+/// REQUEST's shape, never about the asker's standing.
+///
+/// The accepted set is M5's DELETE admission minus that gate. Two LABELS
+/// differ within it, both where M5 would say `NotArranged` (`p ∉ [1, n_C]`):
+/// this reports `OutOfBounds` when `width ≥ 1`, and `EmptyWidth` when
+/// `width = 0`, because the width check runs ahead of the bounds check here
+/// and behind it in M5. A caller relaying a refusal verbatim relays a
+/// different word for the same refusal, never a different verdict.
+///
+/// The report's `orphaned` is in ascending address order — the permanent key
+/// every enumeration here reads out by, inherited from the `OrdSet` the set
+/// identity below is computed in.
 ///
 /// `orphaned = findlinks(A_del) ∖ findlinks(retained)` where `retained` =
 /// the prefix + suffix content that survives plus the link runs (a text

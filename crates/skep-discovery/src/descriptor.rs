@@ -77,6 +77,13 @@ pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
 /// instantiated over the conjunctive family). `n = 0` is clamped to 1 (total
 /// API, W9).
 ///
+/// EVERY `Address` IS A LEGAL CURSOR, and none is checked: resume is a
+/// key-cut strictly past `cur`, never a lookup of it, so a cursor naming a
+/// link that has since been nullified or has stopped satisfying `q` still
+/// resumes at the right place (W8), and no continuously-matching link is
+/// skipped or duplicated (W4/W5). A caller relaying a cursor from a request
+/// owes it no validation.
+///
 /// The one place `sat` is spelled apart rather than composed: the same
 /// candidate conjunction, then the same residence post-filter, but applied
 /// LAZILY during the range walk — so a home-narrow query never materializes

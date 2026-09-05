@@ -162,8 +162,8 @@ impl<'k, W: DiscoveryWorld> LinkQuery<'k, W> {
         delete_orphans_on(&self.kernel.snapshot(), d, p, width)
     }
 
-    // ── Archival supersession/edit lineage (y/x intended as resident link
-    //    addresses — dom(L)) ──
+    // ── Archival supersession/edit lineage (total on every address: a
+    //    non-link key is no claim's endpoint, so it reads `[]`) ──
 
     /// The supersession claims with `old = y`, under `v` (ASN-0125 EL11b).
     /// See [`in_claims_on`].

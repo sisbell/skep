@@ -8,13 +8,16 @@
 //! pinned-order read-out; the FTT unit/zero/conjunction algebra, the home
 //! address-projection filter and its prefix-coverage reach; the two families'
 //! zeros and their two stabilities; projection, its content-subspace-only
-//! narrowing, and addressable discoverability; the delete-orphan preview
-//! measured against the DELETE it previews, over that operation's whole
-//! accepted domain and against M5's own admission; the flipped lineage probes
-//! with the residence gate, the claim's own home attribution, the endpoints it
-//! reads out as recorded and the write-surface fences that read-out rests on;
-//! the two budgets, each refused at its boundary and on every entry point that
-//! inherits it; the snapshot twins; and — because this file is a crate of its
+//! narrowing, addressable discoverability, and the precedence that settles
+//! their document argument before their address one; the delete-orphan
+//! preview measured against the DELETE it previews, over that operation's
+//! whole accepted domain, against M5's own admission, and at the ω gate where
+//! the two part; the flipped lineage probes with the residence gate, the
+//! claim's own home attribution, the endpoints it reads out as recorded and
+//! the write-surface fences that read-out rests on; the two budgets, each
+//! refused at its boundary and on every entry point that inherits it, and the
+//! two quantities the run constant is held over; the snapshot twins; and —
+//! because this file is a crate of its
 //! own — the promises M8 makes to a consumer rather than to itself: one named
 //! world bound, the standard traits its values carry, and rejection enums that
 //! stay exhaustively matchable.
@@ -25,7 +28,7 @@ use std::collections::HashSet;
 
 use common::*;
 use skep_address::{Address, Span};
-use skep_arrangement::{HasM5, Vstream};
+use skep_arrangement::{Caller, DeleteError, HasM5, Vstream};
 use skep_discovery::{
     content_vspan, count_ftt_on, count_v_on, delete_orphans_on, window_v_on, DiscoveryWorld,
     FourSet, LinkQuery, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
@@ -36,6 +39,7 @@ use skep_links::{
     enc, EditLinkError, Endset, HasLinks, Link, LinkWriter, MakeLinkError, ShippedType, SlotArg,
     View, MAX_SLOT_SPANS,
 };
+use skep_namespace::PrincipalId;
 
 // ───────────────────── §1 — content-region discovery ─────────────────────
 
@@ -270,14 +274,16 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
     }
 }
 
-/// §5 — the same run budget over `ran(M(d))`, which is what makes the three
-/// reads of a document's runs refuse the same documents: a `d` the region
-/// family declines is not one the pointwise family answers about. Both
-/// pointwise reads are checked, since each reaches the runs by its own route
-/// — `project` through M5's join, `addressably_discoverable_from` through the
-/// extents it lifts itself.
+/// §5 — the same run CONSTANT at both pointwise reads, over the two
+/// different quantities each of them multiplies: `project` prices `d`'s
+/// content runs, which is what M5's join reads, and
+/// `addressably_discoverable_from` prices content plus link runs, which is
+/// what LP12 ranges over. So the two do not refuse the same documents, and
+/// the last case here is the one link that separates them — without it the
+/// fixture seats every link in doc1, leaving doc2's link runs at zero, where
+/// the two quantities coincide and the wrong rule passes.
 #[test]
-fn the_pointwise_family_holds_the_same_run_budget_over_the_documents_runs() {
+fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
     let store = LinkWriter::new(&k);
     seed_content(&k, &doc1(), 1);
@@ -300,11 +306,28 @@ fn the_pointwise_family_holds_the_same_run_budget_over_the_documents_runs() {
     vs.copy(SYS, &doc2(), vp(1, 1), &many).expect("copy succeeds");
     let snap = k.snapshot();
     assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 0);
     assert!(lq.project(&e1, FROM, &doc2()).is_ok());
     assert!(lq.addressably_discoverable_from(&e1, &doc2()).is_ok());
 
-    // One run past it, and both routes to `d`'s runs refuse — the region
-    // family's image, checked above, refuses the same document.
+    // ONE link run seated in doc2 — and the two counts part company. The
+    // content runs are untouched, so `project` still answers; the LINK runs
+    // put `addressably_discoverable_from` one over, because LP12 ranges over
+    // both subspaces and it must price both.
+    store
+        .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(103)]), SlotArg::Addrs(vec![ra(10)]))
+        .expect("emit succeeds");
+    let snap = k.snapshot();
+    assert_eq!(snap.world().m5().content_runs(&doc2()).len(), MAX_IMAGE_RUNS);
+    assert_eq!(snap.world().m5().link_runs(&doc2()).len(), 1);
+    assert!(lq.project(&e1, FROM, &doc2()).is_ok());
+    assert_eq!(
+        lq.addressably_discoverable_from(&e1, &doc2()),
+        Err(QueryError::ImageTooLarge)
+    );
+
+    // One CONTENT run past it, and both refuse — the quantities differ, the
+    // constant does not.
     vs.copy(SYS, &doc2(), vp(1, 1), &[spec(&doc1(), 1, 1, 1)])
         .expect("copy succeeds");
     assert_eq!(
@@ -322,6 +345,38 @@ fn the_pointwise_family_holds_the_same_run_budget_over_the_documents_runs() {
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(lq.project(&ca(1), FROM, &doc2()), Err(QueryError::NotALink));
+}
+
+/// §5 — the precedence between the two gates, on the call that is faulty in
+/// BOTH arguments at once. Each read states its refusal order, and only a
+/// doubly-faulty call can tell the stated order from the other one: every
+/// other case in the suite is faulty in `d` alone or in `a` alone, where
+/// either order answers alike. The rule is the family's — every argument
+/// about `d` is settled before any argument about `a` — so an unregistered
+/// document with a non-link address names the document.
+#[test]
+fn the_pointwise_gates_settle_the_document_before_the_address() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let lq = LinkQuery::new(&k);
+
+    // `ca(1)` is arranged content, not a link, and `unregistered_doc()` names
+    // nothing — two faults, one verdict.
+    assert_eq!(
+        lq.project(&ca(1), FROM, &unregistered_doc()),
+        Err(QueryError::DocNotRegistered)
+    );
+    assert_eq!(
+        lq.addressably_discoverable_from(&ca(1), &unregistered_doc()),
+        Err(QueryError::DocNotRegistered)
+    );
+    // Each fault alone, so the doubly-faulty verdict above is a precedence
+    // and not the only refusal either read can give.
+    assert_eq!(lq.project(&ca(1), FROM, &doc1()), Err(QueryError::NotALink));
+    assert_eq!(
+        lq.addressably_discoverable_from(&ca(1), &doc1()),
+        Err(QueryError::NotALink)
+    );
 }
 
 #[test]
@@ -1317,15 +1372,19 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
     );
 }
 
-/// §6 — "the accepted set is M5's exactly" is a cross-module equality, and
-/// the suite checked it from one side only: eight hand-picked points on M8's
-/// own error contract, every one of which would still pass if M5's DELETE
-/// admission moved. This asks BOTH, over a grid that visits requests nobody
-/// chose — an overrun from every start, the `p + width = n_C + 1` equality,
-/// the zero width at an out-of-range start, the link subspace, an empty
-/// document and an unregistered one. Verdicts only: the two vocabularies
-/// label one refusal differently by design, and the example test above is
-/// what pins WHICH word.
+/// §6 — the preview's ADMISSION equality with M5's DELETE, asked from both
+/// sides over a grid that visits requests nobody chose: an overrun from every
+/// start, the `p + width = n_C + 1` equality, the zero width at an
+/// out-of-range start, the link subspace, an empty document and an
+/// unregistered one. Eight hand-picked points on M8's own error contract
+/// would all still pass if M5's admission moved; this would not.
+///
+/// The comparison runs as `SYS`, which is exactly the caller class the
+/// equality holds for: `Caller::System` is exempt from M5's ω gate, so
+/// ownership never enters, and admission is all that is left to compare. For
+/// a caller the gate does NOT exempt the two sets differ, which the test
+/// below pins. Verdicts only here: the two vocabularies label one refusal
+/// differently by design, and the example test above is what pins WHICH word.
 #[test]
 fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
     for doc in [doc1(), doc2(), unregistered_doc()] {
@@ -1357,6 +1416,43 @@ fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
             }
         }
     }
+}
+
+/// §6 — the one check of M5's DELETE the preview does NOT hold: the ω gate.
+/// `delete_orphans_on` takes no `Caller`, so it answers a request DELETE
+/// would refuse the asker — a non-owner previewing a delete they cannot
+/// perform. The grid above cannot see this, because `SYS` is exempt from the
+/// gate by construction, so this is the case that fixes what "the accepted
+/// set is M5's minus the ω gate" means: same document, same request, one
+/// answer and one refusal.
+#[test]
+fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3);
+
+    // `seeded_m3` registers PrincipalId(1) as doc1's account, so id 2 is not
+    // its effective owner — the ω gate's own verdict, not a registration one.
+    let stranger = Caller::Principal(PrincipalId(2));
+
+    // The preview accepts, naming the links the delete would drop …
+    assert!(delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 1), &n(1)).is_ok());
+    // … and the DELETE it previews refuses this caller outright.
+    assert!(matches!(
+        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 1), n(1)),
+        Err(TxnError::Rejected(DeleteError::NotOwner(_)))
+    ));
+
+    // The gate is the only divergence: the same caller is refused the same
+    // way for a request the preview ALSO refuses, so ownership is orthogonal
+    // to admission rather than folded into it.
+    assert_eq!(
+        delete_orphans_on(&k.snapshot(), &doc1(), &vp(1, 9), &n(1)),
+        Err(OrphanError::OutOfBounds)
+    );
+    assert!(matches!(
+        Vstream::new(&k).delete(stranger, &doc1(), vp(1, 9), n(1)),
+        Err(TxnError::Rejected(DeleteError::NotOwner(_)))
+    ));
 }
 
 // ─────────────── §7 — archival supersession lineage ───────────────

@@ -28,11 +28,26 @@ use crate::DiscoveryWorld;
 /// against, and so the ceiling on the multiplier the REQUEST applies to the
 /// world-sized scan behind it.
 ///
-/// ONE quantity read three ways, and held at all three, so no read of a
-/// document's runs refuses what another answers: a region's image
-/// ([`image_on`]), and `ran(M(d))` — the image of `d`'s whole V-extent — on
-/// both pointwise reads ([`crate::project_on`],
-/// [`crate::addressably_discoverable_from_on`]).
+/// ONE constant, held at the three sites that read a document's runs, each
+/// against the run count that site's OWN work multiplies — so the number is
+/// one and the quantities are three:
+///
+/// * [`image_on`] counts the runs the REGION resolves, which is a
+///   request-shaped multiple of `#runs(d)`, so whether a `d` is refused
+///   depends on the region asked and not on `d` alone;
+/// * [`crate::project_on`] counts `#content_runs(d)`, because M5's `project`
+///   joins the coverage against the content runs alone;
+/// * [`crate::addressably_discoverable_from_on`] counts
+///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
+///   subspaces and every one of those extents is tested.
+///
+/// So the three refuse DIFFERENT documents, and the inclusions run only one
+/// way: the pointwise pair's counts differ by `d`'s link runs, so a `d`
+/// `project_on` answers about may be one
+/// [`crate::addressably_discoverable_from_on`] refuses, and neither relates
+/// to `image_on`'s verdict, which the caller's region moves. Each site
+/// prices the factor it multiplies; the budget is what a request may
+/// multiply the world's fragmentation by, not a verdict about `d`.
 ///
 /// The budget: the runs become one side of a join in every case — lifted into
 /// a query `Endset` for M7's `stab`, which walks the whole store testing
@@ -126,10 +141,12 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// image = `W ∩ dom M(d)` — unarranged positions contribute nothing; M5's
 /// `resolve` clips silently, which the up-front gates make harmless).
 ///
-/// The document-existence gate is the first act (`DocNotRegistered` — M5
-/// conflates registered-empty with unallocated), immediately followed by the
-/// region gate (`BadRegion`). A registered-but-empty `d` yields a defined
-/// `Ok(vec![])`.
+/// REFUSES, IN THIS ORDER: `DocNotRegistered` — the document-existence gate
+/// is the first act, M5 conflating registered-empty with unallocated — then
+/// the region gate (`BadRegion`), then the budget (`ImageTooLarge`), which
+/// comes third because it is priced on what the region RESOLVES to and so
+/// cannot be asked until both gates have admitted the request. A
+/// registered-but-empty `d` yields a defined `Ok(vec![])`.
 ///
 /// The result is the I-runs of the image, in region-span order and V-order
 /// within each span, deduped on `(i_start, width)` — the pair a `Run`
@@ -198,6 +215,10 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
 /// result = `findlinks_V ∩ addressable` (`View::Active`) — nullified links
 /// never surface; diverges from ASN-0127's UNFILTERED `findlinks_V`
 /// (Conflicts #8).
+///
+/// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge`. There is no fourth refusal — a registered
+/// `d` with a well-formed region always answers, ∅ included.
 pub fn findlinks_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -211,6 +232,12 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
 /// asserts present unreachability over the active view, not history (D-ZERO)
 /// — the region family's zero, distinct from [`crate::count_ftt_on`]'s
 /// store-wide CN-ZERO.
+///
+/// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge`. The zero above is therefore a census and
+/// never a stand-in for a refusal: an unregistered `d` errs rather than
+/// counting 0, which is precisely the distinction a caller collapsing this
+/// `Result` to a number would lose.
 pub fn count_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -223,6 +250,18 @@ pub fn count_v_on<W: DiscoveryWorld>(
 /// `Match = findlinks_V` reading); result = `findlinks_V ∩ addressable` —
 /// nullified links never surface. `n = 0` is clamped to 1 (the API is total,
 /// W9).
+///
+/// EVERY `Address` IS A LEGAL CURSOR, and none is checked: resume is a
+/// key-cut strictly past `cur`, never a lookup of it, so a cursor naming a
+/// link that has since been nullified or has left the region still resumes
+/// at the right place (W8), and no continuously-matching link is skipped or
+/// duplicated (W4/W5). A caller relaying a cursor from a request owes it no
+/// validation — validating would refuse exactly the case the key-cut exists
+/// to serve.
+///
+/// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge`. A refusal is never reported as an empty
+/// exhausted window.
 pub fn window_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -254,6 +293,11 @@ pub fn window_v_on<W: DiscoveryWorld>(
 /// request stops accumulating and never reaches the sort. A refusal, never a
 /// truncation: a short answer would silently withhold endsets that touch the
 /// region, which is the one thing RE-UNIT does not license.
+///
+/// REFUSES, IN THIS ORDER: [`image_on`]'s three — `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge` — and then this read's own
+/// `EndsetsTooLarge`, which comes last because it is priced on what the
+/// store hands back and so cannot be known until the image is in hand.
 pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,

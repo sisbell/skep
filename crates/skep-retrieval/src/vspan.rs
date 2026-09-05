@@ -1,13 +1,9 @@
-//! §Internal design — what every operation shares: the request-span
-//! well-formedness gate, the subspace numerals and the classifier that reads
-//! them, answer presentation (dedup-and-sort in T1 order), and the D-SEQ★
-//! occupancy tripwire the extent queries stand on.
+//! §Internal design — how M6 reads one request V-span: which subspace its
+//! start names, and whether its shape is well-formed.
 
 use std::sync::LazyLock;
 
-use num_traits::{One, Zero};
-use skep_address::{action_point, content_subspace, link_subspace, zeros, Address, Nat, Span};
-use skep_arrangement::{M5State, VPos};
+use skep_address::{action_point, content_subspace, link_subspace, zeros, Nat, Span};
 
 use crate::error::SpanFault;
 
@@ -39,7 +35,7 @@ pub(crate) enum Subspace {
 }
 
 /// Classify a start subspace numeral (see [`Subspace`]).
-pub(crate) fn subspace_of(s: &Nat) -> Option<Subspace> {
+fn subspace_of(s: &Nat) -> Option<Subspace> {
     if *s == *S_C {
         Some(Subspace::Content)
     } else if *s == *S_L {
@@ -47,6 +43,23 @@ pub(crate) fn subspace_of(s: &Nat) -> Option<Subspace> {
     } else {
         None
     }
+}
+
+/// The subspace a V-span's start names — position 1 of the start, classified.
+///
+/// TOTAL: `Tumbler` indexing is 1-based over a nonempty carrier, so every span
+/// has a position 1 whatever its depth, gated or not. `None` therefore means
+/// the numeral there is neither `s_C` nor `s_L`, NEVER that the start is too
+/// shallow to name one — which is why COMPARE may ask this BEFORE
+/// [`gate_vspan`] and still get an unambiguous answer, and why a one-component
+/// start reports a foreign subspace rather than falling through some
+/// depth-shaped hole.
+pub(crate) fn span_subspace(span: &Span) -> Option<Subspace> {
+    subspace_of(
+        span.start()
+            .get(1)
+            .expect("a nonempty start has a position 1"),
+    )
 }
 
 /// The SPAN half of ASN-0115's V-spec well-formedness: zero-free,
@@ -81,81 +94,14 @@ pub(crate) fn gate_vspan(span: &Span) -> Result<(), SpanFault> {
     Ok(())
 }
 
-/// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
-/// halves are published guarantees, not conveniences: SHOWORIGIN_V answers
-/// "deduplicated origin documents in tumbler order" and SHOWDELETIONS' halves
-/// are each "the deduped, Tumbler-ordered set" (D-ORD), and this is the one
-/// place either is established.
-///
-/// Identity and order are both `Address`'s own — its `Eq` is tumbler equality
-/// (the level is a function of the tumbler) and its `Ord` IS the T1 tumbler
-/// order — so sorting and deduplicating is exactly dedup-by-tumbler, with no
-/// `.tumbler()` detour and no key clone.
-///
-/// Used for origin DOCUMENTS (SHOWORIGIN_V) and content I-ADDRESSES
-/// (SHOWDELETIONS) alike — both are `Address`, so one neutral helper serves
-/// either (the name says "addr", not "doc", because at the SHOWDELETIONS site
-/// the deduped elements are content addresses, not documents).
-pub(crate) fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
-    let mut out: Vec<Address> = it.into_iter().collect();
-    out.sort_unstable(); // T1 order; the dedup below makes stability unobservable
-    out.dedup();
-    out
-}
-
-/// D-SEQ★ defense-in-depth for the extent queries (open build decision,
-/// documented default: trust `content_count`/`link_count` in release, assert
-/// in debug).
-///
-/// D-SEQ★ (PerSubspaceSequentialPositions, ASN-0047) is the invariant the
-/// counts stand on: an occupied subspace's V-positions are exactly the dense,
-/// origin-anchored prefix `V_S(d) = {[S, k] : 1 ≤ k ≤ n_S}` — which is what
-/// ASN-0113 W4 forces, and which ASN-0047 derives from contiguity D-CTG★ plus
-/// minimum-position D-MIN★. Its two ingredients are what the two assertions
-/// check: each subspace's run widths sum to its count (density — a hole would
-/// make the count over-report the extent), and an occupied subspace anchors
-/// at ordinal 1 (D-MIN★ itself; ASN-0112 V8 origin permanence, append-only
-/// link seating). The whole body is compiled out of release builds, which
-/// read the counts directly.
-pub(crate) fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
-    if cfg!(debug_assertions) {
-        for (sub, count, runs) in [
-            (&*S_C, m5.content_count(doc), m5.content_runs(doc)),
-            (&*S_L, m5.link_count(doc), m5.link_runs(doc)),
-        ] {
-            let width_sum = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
-            debug_assert!(
-                width_sum == count,
-                "D-SEQ★: a subspace's run widths must sum to its count"
-            );
-            debug_assert!(
-                count.is_zero()
-                    || m5
-                        .point(
-                            doc,
-                            &VPos {
-                                subspace: sub.clone(),
-                                ordinal: Nat::one(),
-                            },
-                        )
-                        .is_some(),
-                "D-MIN★: an occupied subspace must anchor at ordinal 1"
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skep_address::{validate, Tumbler};
+    use num_traits::Zero;
+    use skep_address::Tumbler;
 
     fn t(comps: &[u32]) -> Tumbler {
         Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty")
-    }
-
-    fn a(comps: &[u32]) -> Address {
-        validate(t(comps)).expect("test addresses are T4-valid")
     }
 
     fn span(start: &[u32], width: &[u32]) -> Span {
@@ -217,11 +163,25 @@ mod tests {
     }
 
     #[test]
-    fn sorted_addr_set_is_deduped_and_t1_ordered() {
-        let d2 = a(&[1, 0, 1, 0, 2]);
-        let d1 = a(&[1, 0, 1, 0, 1]);
-        let got = sorted_addr_set(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
-        assert_eq!(got, vec![d1, d2]);
-        assert!(sorted_addr_set(std::iter::empty()).is_empty());
+    fn span_subspace_is_total_over_every_span_including_the_shallowest() {
+        // Position 1 of a start exists at EVERY depth — `Tumbler` indexing is
+        // 1-based over a nonempty carrier — so this answers for a span the
+        // gate would reject and for one it would not, alike. A `None` here
+        // means "foreign numeral", never "too shallow to have one", which is
+        // what lets COMPARE ask it before gating.
+        assert_eq!(
+            span_subspace(&span(&[1, 1], &[0, 3])),
+            Some(Subspace::Content)
+        );
+        assert_eq!(span_subspace(&span(&[2, 1], &[0, 1])), Some(Subspace::Link));
+        assert_eq!(
+            span_subspace(&span(&[1, 1, 1], &[0, 0, 1])),
+            Some(Subspace::Content)
+        );
+        assert_eq!(span_subspace(&span(&[3, 1], &[0, 1])), None);
+        // Depth 1: too shallow for the gate (`StartTooShallow`), and still an
+        // unambiguous subspace reading.
+        assert_eq!(span_subspace(&span(&[1], &[1])), Some(Subspace::Content));
+        assert_eq!(span_subspace(&span(&[5], &[1])), None);
     }
 }

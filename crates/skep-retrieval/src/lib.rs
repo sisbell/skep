@@ -32,8 +32,9 @@
 //!
 //! M6 owns **no authoritative and no derived-authoritative state**: no
 //! `WorldState` slice, no journal record, no `apply`/`rebuild_derived` fold,
-//! no lock-key space tag. It is a pure consumer of `HasM3 + HasContent +
-//! HasM5`, generic over `W`, naming no concrete `World`/`Record` — so it
+//! no lock-key space tag. It is a pure consumer of `HasM3 + HasM5` — and of
+//! `HasContent` in RETRIEVEV alone, which is the only operation that delivers
+//! bytes — generic over `W`, naming no concrete `World`/`Record`, so it
 //! trivially satisfies the Engine Composition Contract. Its whole "data
 //! model" is the borrowed [`Snapshot`], the returned value types, and
 //! per-query transients dropped at return.
@@ -84,9 +85,9 @@ use std::fmt;
 
 mod compare;
 mod error;
-mod helpers;
 mod query;
 mod types;
+mod vspan;
 
 pub use compare::{MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS};
 pub use error::{
@@ -100,15 +101,24 @@ pub use types::{CompareReport, CorrPair, Deletions, Delivery, DeliveryItem, Regi
 pub use skep_arrangement::VPos;
 
 use skep_arrangement::HasM5;
-use skep_content::HasContent;
 use skep_kernel::{Seq, Snapshot, WorldState};
 use skep_namespace::HasM3;
 
-/// The world bound M6 reads under: three upstream slices, none of its own
-/// (Engine Composition Contract — M6 contributes no slice, no record variant,
-/// no accessor trait, no fold).
-pub trait RetrievalWorld: WorldState + HasM3 + HasContent + HasM5 {}
-impl<W: WorldState + HasM3 + HasContent + HasM5> RetrievalWorld for W {}
+/// The world bound EVERY M6 observation reads under: the registry each one
+/// gates on and the arrangements each one resolves through, and no slice of
+/// its own (Engine Composition Contract — M6 contributes no slice, no record
+/// variant, no accessor trait, no fold).
+///
+/// M4 is deliberately absent. Six of the seven operations answer from
+/// addresses, counts and provenance without ever dereferencing a byte —
+/// COMPARE's join is keyed on address equality, the extents are counts,
+/// SHOWORIGIN projects, and SHOWDELETIONS and FINDDOCSCONTAINING read R — so a
+/// content store is not among their collaborators, and under this bound it is
+/// not in their scope either. RETRIEVEV is the one operation that delivers
+/// bytes, and it declares `HasContent` on its own impl block, which is where
+/// that obligation belongs.
+pub trait RetrievalWorld: WorldState + HasM3 + HasM5 {}
+impl<W: WorldState + HasM3 + HasM5> RetrievalWorld for W {}
 
 /// Stateless reader over ONE pinned snapshot. Owns nothing; holds a borrow.
 ///

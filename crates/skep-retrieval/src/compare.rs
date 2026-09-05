@@ -20,8 +20,8 @@ use skep_address::{ordinal, Address, Nat, Tumbler};
 use skep_arrangement::{M5State, Run, VPos};
 
 use crate::error::{CompareError, Operand};
-use crate::helpers::{gate_vspan, subspace_of, Subspace};
 use crate::types::{CompareReport, CorrPair, RegionSpec};
+use crate::vspan::{gate_vspan, span_subspace, Subspace};
 use crate::{Query, RetrievalWorld};
 
 /// The most blocks one COMPARE operand may resolve to, and so the ceiling on
@@ -114,7 +114,7 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
                     return Err(CompareError::DocNotRegistered(r.doc.clone()));
                 }
                 for (si, span) in r.spans.iter().enumerate() {
-                    if span.start().get(1).and_then(subspace_of) != Some(Subspace::Content) {
+                    if span_subspace(span) != Some(Subspace::Content) {
                         // Start must lie in the content subspace (Open build
                         // decision: reject loudly, the recommended default —
                         // spans that merely DENOTE link positions from a
@@ -184,6 +184,14 @@ impl Block {
         }
     }
 
+    /// The block's inclusive I-start, borrowed — the run's own, unpacked to
+    /// the `Tumbler` a comparison consumes. Paired with the stored `reach` so
+    /// the block answers for BOTH its endpoints and the overlap guard reads as
+    /// the half-open interval it is.
+    fn i_start(&self) -> &Tumbler {
+        self.run.i_start().tumbler()
+    }
+
     /// The V-position of the I-address `i` WITHIN THIS BLOCK — `v_start`
     /// advanced by `i`'s offset from the block's own I-start. Each foot of a
     /// correspondence is computed by the block it comes from, so the
@@ -197,7 +205,7 @@ impl Block {
     fn vpos_at(&self, i: &Tumbler) -> VPos {
         VPos {
             subspace: self.v_start.subspace.clone(),
-            ordinal: &self.v_start.ordinal + &ordinal_gap(i, self.run.i_start().tumbler()),
+            ordinal: &self.v_start.ordinal + &ordinal_gap(i, self.i_start()),
         }
     }
 }
@@ -288,12 +296,12 @@ fn ordinal_gap(hi: &Tumbler, lo: &Tumbler) -> Nat {
 /// of the block it belongs to ([`Block::vpos_at`]), so both resolve to the
 /// shared address `start`.
 ///
-/// The endpoints stay BORROWED across the guard, and each block's reach is
-/// the one it stored: the exhaustive join asks this of every candidate pair,
-/// and most are disjoint, so a rejected pair must build nothing and clone
-/// nothing to be compared.
+/// Each endpoint is asked of the block that owns it — [`Block::i_start`] and
+/// the reach it stores — and both stay BORROWED across the guard: the
+/// exhaustive join asks this of every candidate pair, and most are disjoint,
+/// so a rejected pair must build nothing and clone nothing to be compared.
 fn overlap_pair(pb: &Block, qb: &Block) -> Option<CorrPair> {
-    let start = cmp::max(pb.run.i_start().tumbler(), qb.run.i_start().tumbler());
+    let start = cmp::max(pb.i_start(), qb.i_start());
     let reach = cmp::min(&pb.reach, &qb.reach);
     if start >= reach {
         return None; // disjoint I-intervals ⇒ no correspondence

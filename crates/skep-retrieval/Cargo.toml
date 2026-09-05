@@ -24,8 +24,9 @@ skep-kernel = { path = "../skep-kernel" }
 # M3 — is_registered_document, the universal registry gate (registered-empty
 # vs not registered is M6's owned distinction).
 skep-namespace = { path = "../skep-namespace" }
-# M4 — value_at, RETRIEVEV's content delivery ONLY; COMPARE/extents/
-# containment/deletions never open it.
+# M4 — value_at, plus Val as DeliveryItem's leaf. `HasContent` is the bound of
+# RETRIEVEV's own impl block and of nothing else, so M4 is reachable from
+# exactly one operation and unspellable in the other six.
 skep-content = { path = "../skep-content" }
 # M5 — the workhorse: resolve/point/counts/runs/image/project/
 # docs_ever_containing/deletions; Run, which answers for its own positions; and

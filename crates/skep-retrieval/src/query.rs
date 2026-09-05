@@ -6,12 +6,11 @@
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
 use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
+use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
-use crate::helpers::{
-    debug_assert_sequential_positions, gate_vspan, sorted_addr_set, subspace_of, Subspace, S_C, S_L,
-};
 use crate::types::{Deletions, Delivery, DeliveryItem, RegionSpec, Spec};
+use crate::vspan::{gate_vspan, span_subspace, Subspace, S_C, S_L};
 use crate::{Query, RetrievalWorld};
 
 /// `ext(d, S) = ([S, 1], [0, n_S])` — the per-subspace exact extent span
@@ -59,7 +58,75 @@ fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
     m5.content_runs(d).into_iter().flat_map(Run::into_addrs)
 }
 
-impl<'s, W: RetrievalWorld> Query<'s, W> {
+/// A stream of addresses as the deduplicated, T1-SORTED set it denotes. Both
+/// halves are published guarantees, not conveniences: [`Query::show_origin_v`]
+/// answers "deduplicated origin documents in tumbler order" and
+/// [`Query::show_deletions`]' halves are each "the deduped, Tumbler-ordered
+/// set" (D-ORD), and this is the one place either is established.
+///
+/// Identity and order are both `Address`'s own — its `Eq` is tumbler equality
+/// (the level is a function of the tumbler) and its `Ord` IS the T1 tumbler
+/// order — so sorting and deduplicating is exactly dedup-by-tumbler, with no
+/// `.tumbler()` detour and no key clone.
+///
+/// Used for origin DOCUMENTS (SHOWORIGIN_V) and content I-ADDRESSES
+/// (SHOWDELETIONS) alike — both are `Address`, so one neutral helper serves
+/// either (the name says "addr", not "doc", because at the SHOWDELETIONS site
+/// the deduped elements are content addresses, not documents).
+fn sorted_addr_set(it: impl IntoIterator<Item = Address>) -> Vec<Address> {
+    let mut out: Vec<Address> = it.into_iter().collect();
+    out.sort_unstable(); // T1 order; the dedup below makes stability unobservable
+    out.dedup();
+    out
+}
+
+/// D-SEQ★ defense-in-depth for the extent queries (open build decision,
+/// documented default: trust `content_count`/`link_count` in release, assert
+/// in debug).
+///
+/// D-SEQ★ (PerSubspaceSequentialPositions, ASN-0047) is the invariant the
+/// counts stand on: an occupied subspace's V-positions are exactly the dense,
+/// origin-anchored prefix `V_S(d) = {[S, k] : 1 ≤ k ≤ n_S}` — which is what
+/// ASN-0113 W4 forces, and which ASN-0047 derives from contiguity D-CTG★ plus
+/// minimum-position D-MIN★. Its two ingredients are what the two assertions
+/// check: each subspace's run widths sum to its count (density — a hole would
+/// make the count over-report the extent), and an occupied subspace anchors
+/// at ordinal 1 (D-MIN★ itself; ASN-0112 V8 origin permanence, append-only
+/// link seating). The whole body is compiled out of release builds, which
+/// read the counts directly.
+fn debug_assert_sequential_positions(m5: &M5State, doc: &Address) {
+    if cfg!(debug_assertions) {
+        for (sub, count, runs) in [
+            (&*S_C, m5.content_count(doc), m5.content_runs(doc)),
+            (&*S_L, m5.link_count(doc), m5.link_runs(doc)),
+        ] {
+            let width_sum = runs.iter().fold(Nat::zero(), |acc, r| acc + r.width());
+            debug_assert!(
+                width_sum == count,
+                "D-SEQ★: a subspace's run widths must sum to its count"
+            );
+            debug_assert!(
+                count.is_zero()
+                    || m5
+                        .point(
+                            doc,
+                            &VPos {
+                                subspace: sub.clone(),
+                                ordinal: Nat::one(),
+                            },
+                        )
+                        .is_some(),
+                "D-MIN★: an occupied subspace must anchor at ordinal 1"
+            );
+        }
+    }
+}
+
+/// RETRIEVEV alone opens M4, so RETRIEVEV alone names it: `HasContent` is
+/// this impl block's bound and nowhere else's, which is what makes the other
+/// six operations' value-blindness structural rather than a rule their cards
+/// ask a maintainer to keep.
+impl<'s, W: RetrievalWorld + HasContent> Query<'s, W> {
     /// RETRIEVEV (ASN-0115) — resolve, then dereference, in order (the
     /// load-bearing two-phase factoring): resolve V-spans to I-addresses
     /// (M5), then fetch values (M4, content) or pass the address through
@@ -105,11 +172,10 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         }
         let mut out = Vec::new();
         for spec in specs {
-            // Concatenate per spec, IN ORDER (R5) — no global sort. The gate
-            // guarantees #start ≥ 2 and zero-free, so position 1 is the
-            // subspace at any depth; classify ONCE per spec, because the
-            // answer is constant over the spec's positions.
-            let sub = subspace_of(spec.span.start().get(1).expect("the gate ⇒ #start ≥ 2"));
+            // Concatenate per spec, IN ORDER (R5) — no global sort. Classify
+            // ONCE per spec, because the answer is constant over the spec's
+            // positions.
+            let sub = span_subspace(&spec.span);
             for run in m5.resolve(&spec.doc, &spec.span) {
                 // Per active position, ascending V (R3) — no dedup (R8); the
                 // run answers for its own positions.
@@ -150,7 +216,9 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
         }
         Ok(Delivery(out)) // empty spec-set ⇒ Ok(Delivery(vec![]))
     }
+}
 
+impl<'s, W: RetrievalWorld> Query<'s, W> {
     /// RETRIEVEDOCVSPAN (ASN-0112) — the whole-document bounding span:
     /// singleton `⟨σ_d⟩`, or `⟨⟩` for a registered-empty document; a document
     /// that is not registered ⇒ Err. Across subspaces it is a bounding box
@@ -255,8 +323,8 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspan(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
-        // subspace at any depth (gate ⇒ #start ≥ 2)
-        let n_s = match subspace_of(span.start().get(1).expect("the gate ⇒ #start ≥ 2")) {
+        // The start's subspace, at any depth.
+        let n_s = match span_subspace(span) {
             Some(Subspace::Content) => m5.content_count(doc),
             Some(Subspace::Link) => m5.link_count(doc),
             // Foreign subspace ∉ {s_C, s_L}: distinct from a real-but-empty
@@ -442,5 +510,26 @@ impl<'s, W: RetrievalWorld> Query<'s, W> {
             .into_iter()
             .filter(|d| !m5.project(d, &coverage).is_empty()) // FD-SOUND
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skep_address::{validate, Tumbler};
+
+    fn a(comps: &[u32]) -> Address {
+        let t =
+            Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("test tumblers are nonempty");
+        validate(t).expect("test addresses are T4-valid")
+    }
+
+    #[test]
+    fn sorted_addr_set_is_deduped_and_t1_ordered() {
+        let d2 = a(&[1, 0, 1, 0, 2]);
+        let d1 = a(&[1, 0, 1, 0, 1]);
+        let got = sorted_addr_set(vec![d2.clone(), d1.clone(), d2.clone(), d1.clone()]);
+        assert_eq!(got, vec![d1, d2]);
+        assert!(sorted_addr_set(std::iter::empty()).is_empty());
     }
 }

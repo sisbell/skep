@@ -1,8 +1,8 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 and a
-//! `Coordinator` constructor wiring the engine-injected pieces (the shared
-//! registry — built from the compiled format constants, owner ruling
-//! 2026-08-26 — and the two op-handle factories). Address fixtures follow
+//! `Coordinator` constructor wiring the engine-injected pieces (M7's own
+//! format registry, the compiled constant the owner ruling of 2026-08-26
+//! pins, and the two op-handle factories). Address fixtures follow
 //! M3's minted shapes; the catalog's population is the shipped five, so
 //! rule/marker fixtures lean on the three Unary idem⊤ classes and TO-bearing
 //! tuples enter cataloged classes through the open surface.
@@ -198,10 +198,11 @@ pub fn kernel() -> Arc<Kernel<World>> {
     Arc::new(Kernel::open(cfg, genesis_world()).expect("in-memory open cannot fail"))
 }
 
-/// The ONE engine-built registry — the format constants, same build as
-/// `LinkState::genesis`.
+/// The registry the `Coordinator` is injected with: M7's own module constant,
+/// cloned — so this fixture runs against the instance M7's fold and write
+/// gates run against, which is what the engine hands a real `Coordinator`.
 pub fn registry() -> Arc<TypeRegistry> {
-    Arc::new(TypeRegistry::build())
+    Arc::clone(skep_links::registry())
 }
 
 fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {

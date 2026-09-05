@@ -2327,6 +2327,29 @@ fn makelink_wf_checks_every_slot_s_specs_not_only_the_from_slot() {
 }
 
 #[test]
+fn slot_args_compare_by_form_and_by_the_list_they_carry() {
+    // The equality a caller comparing two requests wants: the same slot, asked
+    // for in the same form, naming the same things in the same order. M10
+    // stores this type in `Op::MakeLink`, so this is what stands between a
+    // codec round trip and a value comparison at that seam.
+    assert_eq!(SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(1)]));
+    assert_ne!(SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]));
+    assert_eq!(
+        SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)]),
+        SlotArg::Resolve(vec![spec(&doc1(), 1, 1, 1)])
+    );
+    // The FORM is part of the value: two empty slots of different forms are
+    // not the same argument, even though both build ⟨⟩.
+    assert_ne!(SlotArg::Addrs(vec![]), SlotArg::Resolve(vec![]));
+    // ...and order is too — it is the order a `Resolve` slot concatenates in
+    // and the order an `Addrs` slot deposits verbatim.
+    assert_ne!(
+        SlotArg::Addrs(vec![ca(1), ca(2)]),
+        SlotArg::Addrs(vec![ca(2), ca(1)])
+    );
+}
+
+#[test]
 fn the_discovery_primitives_read_default_as_active() {
     // `View::Default` is undefined for a raw index probe, so all three §G
     // primitives coerce it to `Active` — which M8 depends on, `View`'s own

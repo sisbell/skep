@@ -22,7 +22,7 @@ use common::*;
 use skep_address::Span;
 use skep_links::{
     coverage_class, enc, Behavior, CoverageClass, Endset, Link, LinkState, Registration, Shape,
-    ShippedType, TypeRegistry, FROM, TO, TYPE,
+    ShippedType, FROM, TO, TYPE,
 };
 
 fn span(from: &skep_address::Address, to: &skep_address::Address) -> Span {
@@ -220,8 +220,10 @@ fn shipped_types_carry_their_pinned_registrations() {
     // §B's note-pinned registrations, including the PredLayer registration
     // agreement (PredDef = PredStable = Unary/⊤/{}) — an M9-negotiated
     // constant, never a local M7 edit. The endsets are read back elsewhere;
-    // these are the registrations they are seeded under.
-    let reg = TypeRegistry::build();
+    // these are the registrations they are seeded under. Read off the
+    // PUBLISHED registry, which is the instance every gate, fold and read
+    // runs against — so what is pinned is what the store enforces.
+    let reg = skep_links::registry();
     let unary_top = |behaviors| Registration {
         shape: Shape::Unary,
         idem: true,

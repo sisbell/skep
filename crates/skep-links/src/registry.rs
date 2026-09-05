@@ -10,7 +10,6 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, LazyLock};
 
-use serde::{Deserialize, Serialize};
 use skep_address::{content_subspace, Address, Level};
 use skep_namespace::ghost_position;
 
@@ -29,7 +28,7 @@ use crate::endset::{coverage_class, enc, CoverageClass, Endset, Link};
 /// class's shape, and a read over a typed slice must not assume otherwise.
 /// The two classes whose STORED discipline is guaranteed are `[R]` and
 /// `[K_sup]`, held by their sole-writer fences rather than by this shape.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     Unary,
     Binary,
@@ -70,7 +69,7 @@ pub(crate) fn sh_conf(shape: Shape, value: &Link) -> bool {
 /// `Retired`, BH2 on `Supersedes` — no second BH1 or BH2 declaration can
 /// exist to be unserved, and the two declaration-reading gates run over a
 /// population that declares neither BH3 nor BH4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Behavior {
     /// BH1 — ASN-0128's `ReadFilter` (⇒ Unary). CONFERS `is_filtered` and the
     /// result-side `View::Default` rewrite. GATES NOTHING at read time: v1's
@@ -104,9 +103,9 @@ pub enum Behavior {
 
 /// One type's registration: shape, idempotence flag, behavior set. A `std`
 /// `BTreeSet` over a four-variant `Copy` enum; every registration is seeded
-/// at [`TypeRegistry::build`] from the note-pinned shipped table and is
-/// immutable thereafter — there are no persistent updates to share, and the
-/// registry holding it is built once per process, so no fold copies it.
+/// from the note-pinned shipped table when the module's [`registry`] is built
+/// and is immutable thereafter — there are no persistent updates to share,
+/// and that registry is built once per process, so no fold copies it.
 ///
 /// `idem` is the MANAGED SURFACE'S DEDUP DISCIPLINE, not a uniqueness
 /// invariant on the class: MAKELINK deposits into a registered idem⊤ class
@@ -114,7 +113,15 @@ pub enum Behavior {
 /// hold several active tuples of one I0 identity. That is why the incumbent
 /// a dedup hit returns is specified as the T1-LEAST active match rather than
 /// as "the one". `shape` is a gate in the same sense — see [`Shape`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// NOT `Serialize`, and neither are [`Shape`] and [`Behavior`]: a
+/// registration is read out of the module's compiled format registry, which
+/// rides no checkpoint (it is keyed by the non-`Serialize` [`CoverageClass`]),
+/// so nothing in the crate's serialized reach contains one. Deriving serde
+/// across the three would fix `Shape`'s and `Behavior`'s variant ORDER for
+/// bincode and their variant NAMES for JSON on behalf of no wire — and
+/// `Behavior` is the one ASN-0128 could extend.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     pub shape: Shape,
     pub idem: bool,
@@ -187,7 +194,7 @@ impl ShippedType {
     /// order. Every walk over them reads it here: M7's own suite, the engine's
     /// world dump, and whatever enumerates next. A second copy is how a walk
     /// silently comes to cover four classes out of five. (The one place that
-    /// names the five WITHOUT walking this is [`TypeRegistry::build`], which
+    /// names the five WITHOUT walking this is `TypeRegistry::build`, which
     /// binds each to its own reserved address; a variant added here without a
     /// binding there is a missing field, not a silent gap.)
     pub const ALL: [ShippedType; 5] = [
@@ -242,20 +249,22 @@ impl Shipped {
 /// The immutable lookup registry: coverage class → registration, plus the five
 /// shipped types held BOTH ways — as the endset a caller names them by and as
 /// the class every guard recognizes them by, the two paired in
-/// one value per type so they cannot fall out of step. Both are fixed at
-/// [`TypeRegistry::build`], so the class a shipped type belongs to is a fact
-/// this registry knows rather than one its callers re-derive. RECOMPUTABLE
-/// from nothing but the compiled format constants — keyed by the
-/// non-`Serialize` [`CoverageClass`], so it never rides a checkpoint, and
-/// carrying no sealed configuration, because none exists.
+/// one value per type so they cannot fall out of step. Both are fixed when
+/// the value is built, so the class a shipped type belongs to is a fact this
+/// registry knows rather than one its callers re-derive. RECOMPUTABLE from
+/// nothing but the compiled format constants — keyed by the non-`Serialize`
+/// [`CoverageClass`], so it never rides a checkpoint, and carrying no sealed
+/// configuration, because none exists.
 ///
-/// INVARIANT, established by [`TypeRegistry::build`], its sole constructor:
-/// the five shipped classes are pairwise distinct, each is registered, and
-/// `shipped_class(t)` is the class of `reserved_type(t)`. Every guard that
-/// recognizes a deposit by its class, and every read that compares one
-/// against a shipped class, leans on all three. `build` is the one way to
-/// make one, so holding a `TypeRegistry` is a FACT the startup assertion
-/// established rather than a value a caller can state.
+/// INVARIANT, established by the crate-internal `TypeRegistry::build`, its
+/// sole constructor: the five shipped classes are pairwise distinct, each is
+/// registered, and `shipped_class(t)` is the class of `reserved_type(t)`.
+/// Every guard that recognizes a deposit by its class, and every read that
+/// compares one against a shipped class, leans on all three. That
+/// constructor is the one way to make one and it is not reachable from
+/// outside this crate, so every `TypeRegistry` a caller can hold is
+/// [`registry`] — a FACT the startup assertion established rather than a
+/// value anyone can state.
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     registrations: im::HashMap<CoverageClass, Registration>,
@@ -282,7 +291,15 @@ impl TypeRegistry {
     /// format constants themselves are edited inconsistently. There is no
     /// caller who could be handed an `Err`, because there is no caller who
     /// chooses the input.
-    pub fn build() -> TypeRegistry {
+    ///
+    /// CRATE-INTERNAL, which is what makes [`registry`] "the ONE instance"
+    /// rather than a convention: a second build would be equal by value and
+    /// distinct by identity, and the property this module publishes — that an
+    /// assembler shares the instance the fold runs against — is an
+    /// `Arc::ptr_eq`. A caller outside the crate has no reason to want a
+    /// second: `build` takes nothing, so [`registry`] answers every question
+    /// it could.
+    pub(crate) fn build() -> TypeRegistry {
         let reserved = ReservedAddrs::format();
         // Each shipped type's endset and its class are built together, so the
         // class this registry hands out for a `ShippedType` is that type's own

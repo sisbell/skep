@@ -64,7 +64,16 @@ impl<W: WorldState> fmt::Debug for LinkWriter<'_, W> {
 /// names are valid). Per-slot either/or — no mixing within a slot in v1 (a
 /// mixed need resolves first via the read surface and passes `Addrs`). Also
 /// M10's successor type slot: the one two-form enum serves both surfaces.
-#[derive(Debug, Clone)]
+///
+/// Equality is structural over the form and its list — the relation a caller
+/// comparing two REQUESTS wants: the same slot, asked for in the same form,
+/// naming the same things in the same order, which is the order both arms
+/// deposit in. It is not a claim about the endset either would become: a
+/// `Resolve` slot's is a function of the txn base as well as the argument, so
+/// two equal `Resolve` slots deposit different endsets against different
+/// bases. Coverage identity is [`coverage_class`], one level down and after
+/// resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotArg {
     /// Content V-specs, wf-checked and resolved to I-extents inside
     /// makelink's transact.

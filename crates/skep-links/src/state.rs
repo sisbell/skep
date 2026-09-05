@@ -179,6 +179,7 @@ impl LinkState {
     /// ≥ 3, and makes ASN-0086's `|Σ.L| = 3` false for that stored value —
     /// which is why `emit_core` asserts it ahead of every mint rather than
     /// leaving it to the type.
+    #[must_use = "apply_link returns the folded state; it does not modify the receiver"]
     pub fn apply_link(&self, r: &LinkRec) -> LinkState {
         match r {
             LinkRec::Deposit { addr, value } => {
@@ -200,6 +201,7 @@ impl LinkState {
     /// under the module's format registry. Required because `hints` is
     /// `#[serde(skip)]` — M2's default identity would leave it empty, and
     /// replay's `apply_link` folds maintain exactly these hints.
+    #[must_use = "rebuild_derived returns the rebuilt state; dropping it keeps the empty hints"]
     pub fn rebuild_derived(self) -> LinkState {
         let mut hints = Hints::default();
         for (addr, value) in self.links.iter() {

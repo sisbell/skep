@@ -62,12 +62,33 @@ impl DocArrangement {
 ///   run-list, which is no part of the content image. Splitting and
 ///   coalescing move the boundaries between runs and not the addresses they
 ///   cover, so the image is stable under both.
+/// * **D-SEQ★ — each subspace's arranged positions are the dense prefix.**
+///   For every `doc` and each subspace `s`, the positions the arrangement
+///   binds are exactly `{[s, k] : 1 ≤ k ≤ n_s}` — anchored at ordinal 1, no
+///   holes. Structural rather than maintained: a [`RunList`] stores no
+///   V-positions, so a run's V-start is a prefix sum (§1; ASN-0047 D-SEQ★, via
+///   contiguity D-CTG★ and minimum-position D-MIN★), and no fold arm can open
+///   a gap because there is nothing in which to open one.
 ///
 /// Two public reads mean what they say only under P4★:
 /// [`deletions`](M5State::deletions) is the deleted set rather than an
 /// arbitrary difference, and [`docs_ever_containing`](M5State::docs_ever_containing)
 /// is a superset with no false negatives — the property that makes narrowing
 /// it by [`project`](M5State::project) sound.
+///
+/// Three things a caller may rely on under D-SEQ★, each restated where it is
+/// answered so a reader need not come here for it:
+///
+/// * [`point`](M5State::point) answers `Some` at `[s, k]` exactly for
+///   `1 ≤ k ≤ n_s` — the arranged positions are an interval, so one bound
+///   settles membership;
+/// * [`content_count`](M5State::content_count) is both the width sum of
+///   [`content_runs`](M5State::content_runs) and the LARGEST arranged content
+///   ordinal, and [`link_count`](M5State::link_count)/[`link_runs`](M5State::link_runs)
+///   likewise — a count, not a total that some hole might over-report;
+/// * the runs [`resolve`](M5State::resolve) hands back tile V CONTIGUOUSLY,
+///   so a caller that needs their V-starts accumulates widths instead of
+///   locating each run again.
 ///
 /// Both key by the document `Address`, which is what every caller holds and
 /// what every insertion site already had. Three consequences, and the key

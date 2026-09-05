@@ -17,19 +17,61 @@
 //! Both routes reach [`Run::iextent`], where the obligation is stated
 //! (Conflicts #8).
 
-use num_traits::{One, Zero};
+use std::sync::LazyLock;
+
+use num_traits::One;
 use skep_address::{content_subspace, difference_sets, union, Address, Nat, Span, SpanSet};
 
 use crate::run::Run;
-use crate::state::M5State;
+use crate::runlist::RunList;
+use crate::state::{DocArrangement, M5State};
 use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos};
 
+/// The arrangement an ABSENT document reads as: the lazy convention stated on
+/// [`M5State`], made a value so [`M5State::arrangement_of`] can hand back a
+/// borrow on either branch. Once-only initialization of a `Default`.
+static EMPTY_ARRANGEMENT: LazyLock<DocArrangement> = LazyLock::new(DocArrangement::default);
+
 impl M5State {
+    /// `doc`'s arrangement, or the EMPTY one — the absent-⇒-empty convention
+    /// (the eager-lazy split with M3, stated on [`M5State`]) applied ONCE, so
+    /// no read decides for itself what an absent document answers and the
+    /// eleventh read inherits the convention rather than restating it. Every
+    /// read in this file reaches its run-lists through here or through the
+    /// two narrowings below, which leaves `arrangements` touched directly only
+    /// by the folds that own it.
+    fn arrangement_of(&self, doc: &Address) -> &DocArrangement {
+        self.arrangements
+            .get(doc)
+            .unwrap_or_else(|| &*EMPTY_ARRANGEMENT)
+    }
+
+    /// `doc`'s content run-list — empty for an absent document.
+    fn content_of(&self, doc: &Address) -> &RunList {
+        &self.arrangement_of(doc).content
+    }
+
+    /// `doc`'s link run-list — empty for an absent document.
+    fn link_of(&self, doc: &Address) -> &RunList {
+        &self.arrangement_of(doc).link
+    }
+
     /// V→I resolution (§2; ASN-0058 C0; ASN-0118 accept-and-intersect):
     /// I-runs covering an ORDINAL-LEVEL depth-2 V-span (width `[0, n]`,
     /// action point 2), V-ordered, clipped to the active range. The span's
     /// subspace, ordinal and count come from the one reader that establishes
     /// it has them.
+    ///
+    /// THE RUNS TILE V CONTIGUOUSLY, which is what lets a caller recover each
+    /// run's V-position without asking a second time: the FIRST run returned
+    /// holds V-ordinal `max(ord, 1)` — the clamp is load-bearing, a span
+    /// opening at ordinal 0 still starting its answer at 1 — and each next run
+    /// begins where the previous one ends, so accumulating widths from that
+    /// start gives every run's V-start. There are no V-gaps to skip because
+    /// there are none to have: a subspace's arranged positions are its dense
+    /// prefix (D-SEQ★, stated on [`M5State`]), so a span reaching past the
+    /// prefix is clipped and one opening past it binds nothing at all rather
+    /// than skipping forward to a later position.
     ///
     /// DEFENSIVE (returns ⟨⟩, cannot fault — no `Result`) unless the span is
     /// usable: a span the shared shape reader refuses — the same shape COPY's
@@ -49,10 +91,7 @@ impl M5State {
         let Some(vspan) = as_ordinal_vspan(span) else {
             return Vec::new();
         };
-        let Some(arr) = self.arrangements.get(doc) else {
-            return Vec::new();
-        };
-        let Some(list) = arr.list(vspan.subspace) else {
+        let Some(list) = self.arrangement_of(doc).list(vspan.subspace) else {
             return Vec::new();
         };
         list.resolve_range(vspan.ordinal, vspan.count)
@@ -60,11 +99,14 @@ impl M5State {
 
     /// `M(d)(p)` (§2): the I-address at V-position `p`, or `None` when
     /// `p.subspace ∉ {s_C, s_L}` (no such run-list) or the ordinal is
-    /// unarranged. Every returned `Address` is T4-valid (synthesis routes
-    /// through `validate`).
+    /// unarranged — which under D-SEQ★ ([`M5State`]) is exactly
+    /// `p.ordinal ∉ [1, n_s]`, a subspace's arranged positions being its dense
+    /// prefix, so one bound settles membership. Every returned `Address` is
+    /// T4-valid (synthesis routes through `validate`).
     pub fn point(&self, doc: &Address, p: &VPos) -> Option<Address> {
-        let arr = self.arrangements.get(doc)?;
-        arr.list(&p.subspace)?.point(&p.ordinal)
+        self.arrangement_of(doc)
+            .list(&p.subspace)?
+            .point(&p.ordinal)
     }
 
     /// The region's I-image as a SpanSet (§2; ASN-0127 `image(W, d, Σ)`, the
@@ -83,36 +125,35 @@ impl M5State {
     }
 
     /// The canonical, V-ordered content run decomposition — maximally merged
-    /// (ASN-0058 M12), the COMPARE surface for M6. Absent doc ⇒ `[]`.
+    /// (ASN-0058 M12), the COMPARE surface for M6. Absent doc ⇒ `[]`. The runs
+    /// tile the whole content prefix `[1, n_C]` contiguously (D-SEQ★, stated
+    /// on [`M5State`]), so the first begins at V-ordinal 1 and each next where
+    /// the previous ends.
     pub fn content_runs(&self, doc: &Address) -> Vec<Run> {
-        self.arrangements
-            .get(doc)
-            .map(|arr| arr.content.runs())
-            .unwrap_or_default()
+        self.content_of(doc).runs()
     }
 
-    /// The canonical, V-ordered link run decomposition. Absent doc ⇒ `[]`.
+    /// The canonical, V-ordered link run decomposition. Absent doc ⇒ `[]`; it
+    /// tiles `[1, n_L]` as [`content_runs`](M5State::content_runs) tiles the
+    /// content prefix, D-SEQ★ holding per subspace.
     pub fn link_runs(&self, doc: &Address) -> Vec<Run> {
-        self.arrangements
-            .get(doc)
-            .map(|arr| arr.link.runs())
-            .unwrap_or_default()
+        self.link_of(doc).runs()
     }
 
-    /// `n_C(d)` — the arranged content width. Absent doc ⇒ 0.
+    /// `n_C(d)` — the arranged content width. Absent doc ⇒ 0. Under D-SEQ★
+    /// ([`M5State`]) it is equally the LARGEST arranged content ordinal and
+    /// the width sum of [`content_runs`](M5State::content_runs): the content
+    /// positions are `[1, n_C]` with no holes, so a count fixes the extent
+    /// (ASN-0113 W2/W4) rather than over-reporting one.
     pub fn content_count(&self, doc: &Address) -> Nat {
-        self.arrangements
-            .get(doc)
-            .map(|arr| arr.content.total_width())
-            .unwrap_or_else(Nat::zero)
+        self.content_of(doc).total_width()
     }
 
-    /// `n_L(d)` — the arranged link width. Absent doc ⇒ 0.
+    /// `n_L(d)` — the arranged link width. Absent doc ⇒ 0; the D-SEQ★ reading
+    /// of [`content_count`](M5State::content_count) holds per subspace, so
+    /// this is likewise the largest arranged link ordinal.
     pub fn link_count(&self, doc: &Address) -> Nat {
-        self.arrangements
-            .get(doc)
-            .map(|arr| arr.link.total_width())
-            .unwrap_or_else(Nat::zero)
+        self.link_of(doc).total_width()
     }
 
     /// Does the content subspace admit `ord` as a PLACEMENT boundary —
@@ -131,9 +172,7 @@ impl M5State {
     /// [`admits_content_boundary`](M5State::admits_content_boundary), which
     /// admits the append boundary as well.
     pub(crate) fn arranges_content_position(&self, doc: &Address, ord: &Nat) -> bool {
-        self.arrangements
-            .get(doc)
-            .is_some_and(|arr| arr.content.locate(ord).is_some())
+        self.content_of(doc).locate(ord).is_some()
     }
 
     /// Does `doc`'s arranged content CONTAIN the whole range `[from, from +
@@ -150,9 +189,7 @@ impl M5State {
     /// link run-list's own membership answer, so a link INTERIOR to a
     /// coalesced link run counts as seated. Absent doc ⇒ not seated.
     pub(crate) fn seats_link(&self, doc: &Address, link: &Address) -> bool {
-        self.arrangements
-            .get(doc)
-            .is_some_and(|arr| arr.link.holds(link))
+        self.link_of(doc).holds(link)
     }
 
     /// I→V projection (§2; ASN-0119 RA7c) — CONTENT subspace ONLY, by
@@ -181,11 +218,10 @@ impl M5State {
     /// caller's, as it is for
     /// [`docs_ever_containing`](M5State::docs_ever_containing).
     pub fn project(&self, doc: &Address, coverage: &SpanSet) -> SpanSet {
-        let Some(arr) = self.arrangements.get(doc) else {
-            return SpanSet::empty();
-        };
         let mut vspans: Vec<Span> = Vec::new();
-        for (v_start, run) in arr.content.iter_runs() {
+        // An absent document is a CASE and not a path: its content run-list is
+        // the empty one, which iterates no runs and answers ⟨⟩.
+        for (v_start, run) in self.content_of(doc).iter_runs() {
             for cspan in coverage.iter() {
                 let Some((k_lo, k_hi)) = run.offsets_covered_by(cspan) else {
                     continue;
@@ -213,10 +249,7 @@ impl M5State {
     /// content runs. Union (concatenation) only; possibly mixed-length across
     /// transcluded origins — never blindly normalized, never a seam.
     fn content_image(&self, doc: &Address) -> SpanSet {
-        self.arrangements
-            .get(doc)
-            .map(|arr| arr.content.image())
-            .unwrap_or_else(SpanSet::empty)
+        self.content_of(doc).image()
     }
 
     /// SHOWDELETIONS primitive (§9; ASN-0047 P2; ASN-0075's
@@ -380,6 +413,76 @@ mod tests {
         assert!(s.seats_link(&doc1(), &la(2)));
         assert!(!s.seats_link(&doc1(), &la(3)));
         assert!(!s.seats_link(&doc2(), &la(1)));
+    }
+
+    #[test]
+    fn each_subspace_arranges_the_dense_prefix_its_count_names() {
+        // D-SEQ★ (§1; ASN-0047, via contiguity D-CTG★ and minimum-position
+        // D-MIN★), which this slice now PUBLISHES rather than merely keeping:
+        // a subspace's arranged positions are exactly [1, n_s], the count is
+        // the largest of them, and `resolve`'s runs tile that prefix
+        // contiguously from max(ord, 1). All three are what a caller walking
+        // an arrangement stands on, so all three are checked — over a
+        // fragmented, mixed-length arrangement, after the one fold arm that
+        // would open a hole in the middle if the representation admitted one.
+        let s = arranged(); // ca(1..3) then vca(1..2): two runs, two lengths
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(1) });
+        let s = s.apply_m5(&M5Rec::LinkSeat { doc: doc1(), link: la(3) }); // not I-adjacent
+        let s = s.apply_m5(&M5Rec::ContentRemove {
+            doc: doc1(),
+            from: n(2),
+            width: n(2),
+        });
+        let at = |subspace: u32, ordinal: &Nat| VPos {
+            subspace: n(subspace),
+            ordinal: ordinal.clone(),
+        };
+        for (subspace, count, runs) in [
+            (1u32, s.content_count(&doc1()), s.content_runs(&doc1())),
+            (2, s.link_count(&doc1()), s.link_runs(&doc1())),
+        ] {
+            assert!(count >= n(2), "the fixture arranges both subspaces");
+            assert_eq!(
+                runs.iter().fold(n(0), |acc, r| acc + r.width()),
+                count,
+                "subspace {subspace}: the count is the run widths' sum"
+            );
+            // Dense from 1: every ordinal below the count is arranged, and the
+            // count is the largest — so one bound settles membership.
+            assert_eq!(s.point(&doc1(), &at(subspace, &n(0))), None);
+            let mut k = n(1);
+            while k <= count {
+                assert!(
+                    s.point(&doc1(), &at(subspace, &k)).is_some(),
+                    "subspace {subspace}: ordinal {k} is arranged"
+                );
+                k = &k + &n(1);
+            }
+            assert_eq!(
+                s.point(&doc1(), &at(subspace, &(&count + &n(1)))),
+                None,
+                "subspace {subspace}: the count is the LARGEST arranged ordinal"
+            );
+            // The runs tile V contiguously: accumulating widths from
+            // max(ord, 1) names each run's own V-start, and the walk ends at
+            // the boundary past the prefix.
+            for open in [0u32, 1, 2] {
+                let mut v = std::cmp::max(n(open), n(1));
+                for r in s.resolve(&doc1(), &vspan(subspace, open, 99)) {
+                    assert_eq!(
+                        s.point(&doc1(), &at(subspace, &v)).as_ref(),
+                        Some(r.i_start()),
+                        "subspace {subspace} from {open}: each run begins at the accumulated V-start"
+                    );
+                    v = &v + r.width();
+                }
+                assert_eq!(
+                    v,
+                    &count + &n(1),
+                    "subspace {subspace} from {open}: the runs tile the whole prefix"
+                );
+            }
+        }
     }
 
     #[test]

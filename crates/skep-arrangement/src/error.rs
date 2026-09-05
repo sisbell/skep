@@ -35,18 +35,19 @@ pub enum InsertError {
 /// `SourceNotRegistered`, `NotOrdinalVSpan` (fails
 /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the lossless narrowing of
 /// Conflicts #7, and named for the predicate a caller runs to pre-validate),
-/// `SourceNotContentSubspace`
-/// (content-residence, `span.start().get(1) ≠ s_C` — the gate that keeps link
-/// addresses out of content V-positions, since `resolve` serves whichever
-/// run-list the numeral selects), `EmptySource`
-/// (registered-but-content-empty source, ASN-0118 enabled(COPY)),
-/// `DanglingSource` (a resolved run start ∉ dom(C) — S3★, checked on starts
-/// alone and sound for the interior by induction over how an address enters
-/// an arrangement), `TooManyRuns`
-/// (the placement exceeds [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and
-/// `EmptyResult` (net placement empty after clipping). `NotOwner` gates the
-/// DESTINATION doc only — reading source spans stays unrestricted:
-/// transclusion of anyone's content is the point of the medium.
+/// `SourceNotContentSubspace` (content-residence,
+/// `span.start().get(1) ≠ s_C`), `EmptySource` (registered-but-content-empty
+/// source, ASN-0118 enabled(COPY)), `DanglingSource` (a resolved run start
+/// ∉ dom(C) — S3★), `TooManyRuns` (the placement exceeds
+/// [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS)), and `EmptyResult` (net
+/// placement empty after clipping). `NotOwner` carries the DESTINATION
+/// document, which is the only one COPY gates.
+///
+/// Why the residence and referential guards exist — what each protects, and
+/// what widening it would oblige — and which document `NotOwner` names are
+/// stated on [`Vstream::copy`](crate::Vstream::copy). An argument about an
+/// invariant belongs with the operation that keeps it, so a widening reads
+/// one statement rather than two that must be edited in step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     DocNotRegistered,

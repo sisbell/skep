@@ -172,11 +172,10 @@ struct Block {
 }
 
 impl Block {
-    /// One block over one resolved run, with its reach taken once. `k = width`
-    /// is the run's own documented exclusive reach, so the lift is inside
-    /// [`Run::tumbler_at`]'s stated window.
+    /// One block over one resolved run, with its reach taken once —
+    /// [`Run::reach`], the run's own exclusive I-end.
     fn new(doc: Address, v_start: VPos, run: Run) -> Block {
-        let reach = run.tumbler_at(run.width());
+        let reach = run.reach();
         Block {
             doc,
             v_start,

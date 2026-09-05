@@ -17,12 +17,12 @@
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
-use skep_address::{shift, Address, Nat, SpanSet};
+use skep_address::{Address, Nat, SpanSet};
 
 use crate::run::Run;
 
-/// I-adjacency (ASN-0058): `a₂ = a₁ + w₁`, the I-extent of the right run
-/// immediately following the left's.
+/// I-adjacency (ASN-0058): the right run starts exactly where the left run
+/// [`reaches`](Run::reach), so their I-extents abut with no address between.
 ///
 /// THE WHOLE RESIDUAL MERGE TEST. ASN-0058's merge condition (M7) is a
 /// conjunction — two blocks may merge iff they are both V-adjacent
@@ -31,13 +31,16 @@ use crate::run::Run;
 /// occupy consecutive V-ordinals, so every neighbouring pair this guard is
 /// asked about is already V-adjacent (§1 — the same representation choice
 /// that makes D-SEQ★/D-CTG★/D-MIN★ hold). I-adjacency is therefore all that
-/// remains to test — and it is also the SAFE half: `shift(a₁, w₁) == a₂`
-/// implies same origin (M16a) and excludes shared-I-extent (M14a), and it is
-/// vacuously false across origin-lengths (`shift` preserves length), so
+/// remains to test — and it is also the SAFE half: `a₂ = a₁ + w₁` implies
+/// same origin (M16a) and excludes shared-I-extent (M14a), and it is
+/// vacuously false across origin-lengths (the reach is length-preserving), so
 /// cross-length runs never merge — never across an origin seam (M16), never
 /// collapsing a transclusion (M14). **Never coalesce on value** (S4).
+///
+/// Asked of the left run rather than computed here: the ordinal advance and
+/// its TA7a safety argument belong to [`Run`], which states them once.
 pub(crate) fn i_adjacent(left: &Run, right_start: &Address) -> bool {
-    shift(left.i_start.tumbler(), &left.width) == *right_start.tumbler()
+    left.reach() == *right_start.tumbler()
 }
 
 /// The placing ops' run accumulator (§1): widen the last run iff I-adjacent,

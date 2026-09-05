@@ -1,7 +1,7 @@
 //! §A — the `Run` value: one contiguous I-extent placed in an arrangement,
-//! the run's own position arithmetic ([`Run::tumbler_at`]/[`Run::addr_at`]/
-//! [`Run::addrs`], [`Run::offsets_covered_by`]), and the ONE admissible
-//! Run→Span lift ([`Run::iextent`]).
+//! the run's own position arithmetic ([`Run::addr_at`]/[`Run::addrs`]/
+//! [`Run::into_addrs`]/[`Run::reach`], [`Run::offsets_covered_by`]), and the
+//! ONE admissible Run→Span lift ([`Run::iextent`]).
 
 use num_traits::{One, Zero};
 use serde::{Deserialize, Serialize};
@@ -135,10 +135,18 @@ impl Run {
     /// invariant ([`admits_start`](Run::admits_start) — an element field of
     /// exactly two components, so the last component IS the ordinal) puts
     /// every such shift inside M1's stated safe window, never the TA7a
-    /// text→link mis-shift of a subspace base. Consumers ask a run for its
-    /// addresses rather than re-deriving them, so the argument is discharged
-    /// once.
-    pub fn tumbler_at(&self, k: &Nat) -> Tumbler {
+    /// text→link mis-shift of a subspace base. Every other position question
+    /// in the crate — [`addr_at`](Run::addr_at), [`reach`](Run::reach),
+    /// [`iextent`](Run::iextent), the run-list's I-adjacency test — is asked
+    /// of the run through one of those, so the argument is discharged once.
+    ///
+    /// CRATE-PRIVATE for the sake of that same precondition: an offset is a
+    /// thing a caller can get wrong, and outside this crate there is no
+    /// question about a run's positions that needs one. A consumer wanting a
+    /// position asks [`addr_at`](Run::addr_at) or [`addrs`](Run::addrs); one
+    /// wanting the exclusive end asks [`reach`](Run::reach), which takes no
+    /// offset at all.
+    pub(crate) fn tumbler_at(&self, k: &Nat) -> Tumbler {
         debug_assert!(
             *k <= self.width,
             "run offset past the reach: k ≤ width is the caller's obligation"
@@ -146,19 +154,35 @@ impl Run {
         shift(self.i_start.tumbler(), k)
     }
 
-    /// The `Address` at offset `k` — [`tumbler_at`](Run::tumbler_at)
-    /// re-validated, and REQUIRING `k ≤ width` as it does. Ordinal-shifting a
-    /// valid element I-start preserves T4-validity, so the `.expect` flags an
-    /// internal-invariant violation, never a domain case.
+    /// The `Address` at offset `k` — the run's start advanced by `k` ordinals
+    /// and re-validated, REQUIRING `k ≤ width` as the shift does.
+    /// Ordinal-shifting a valid element I-start preserves T4-validity, so the
+    /// `.expect` flags an internal-invariant violation, never a domain case.
     pub fn addr_at(&self, k: &Nat) -> Address {
         validate(self.tumbler_at(k))
             .expect("ordinal shift of a valid element I-start is T4-valid by construction")
     }
 
+    /// ONE I-STEP PAST the run's last position — the exclusive end of its
+    /// I-extent, `i_start` advanced by `width`. The half-open upper bound
+    /// every question about where a run *ends* wants: [`iextent`](Run::iextent)
+    /// is `[i_start, reach)`, and two runs are I-adjacent exactly when the
+    /// right one starts where the left one reaches.
+    ///
+    /// NO PRECONDITION, which is the point of publishing it: there is no
+    /// offset to get wrong, so a consumer asking for a run's end cannot ask
+    /// for something else by miscounting. `Tumbler` rather than `Address`
+    /// because the reach is a bound and not a position — it names the first
+    /// address the run does NOT hold, which the run has no claim about.
+    pub fn reach(&self) -> Tumbler {
+        self.tumbler_at(&self.width)
+    }
+
     /// The run's addresses — offsets `[0, width)`, in I-order, which is also
     /// V-order (a run occupies consecutive V-ordinals). The sequence a run
     /// denotes, asked of the run, so a consumer that needs the positions
-    /// rather than the extent does not count them itself.
+    /// rather than the extent does not count them itself. For a caller
+    /// holding the run BY VALUE, [`into_addrs`](Run::into_addrs).
     ///
     /// Yields OWNED addresses because a run stores none: it stores a start and
     /// a width, and each position is [`addr_at`](Run::addr_at) of an offset.
@@ -177,9 +201,32 @@ impl Run {
         })
     }
 
+    /// The run's addresses, TAKING THE RUN — the same sequence
+    /// [`addrs`](Run::addrs) yields, for a caller that owns the run rather
+    /// than keeping it. That is the commoner shape at M5's seams: `resolve`,
+    /// `content_runs` and `link_runs` all hand back `Vec<Run>`, so a consumer
+    /// flat-mapping runs to addresses holds each run only for as long as it
+    /// walks it, and the borrowing form cannot outlive the vector it consumes.
+    ///
+    /// The two share a body rather than one calling the other: expressing this
+    /// through `addrs` would need the run alive beside the iterator, and
+    /// expressing `addrs` through this one would clone a run its caller has
+    /// already borrowed. Owned items and no `ExactSizeIterator`, for the
+    /// reasons stated on [`addrs`](Run::addrs).
+    pub fn into_addrs(self) -> impl Iterator<Item = Address> {
+        let mut k = Nat::zero();
+        std::iter::from_fn(move || {
+            (k < self.width).then(|| {
+                let a = self.addr_at(&k);
+                k = &k + &Nat::one();
+                a
+            })
+        })
+    }
+
     /// The ONE admissible Run→Span lift: the level-uniform, element-level
-    /// I-extent `[i_start, shift(i_start, width))` — the run's own endpoints,
-    /// offset 0 and offset `width`. Centralized (public) so no consumer
+    /// I-extent `[i_start, reach)` — the run's own two endpoints, its start
+    /// and its [`reach`](Run::reach). Centralized (public) so no consumer
     /// re-derives it and none writes the malformed `Span(i_start, [0, width])`
     /// — an element-level start against a depth-2 width gives
     /// `#start ≠ #width`, faulting every downstream
@@ -199,7 +246,7 @@ impl Run {
     /// in particular a coverage-class dedup key is ONE `canonical_key` PER
     /// level class, never one over the raw aggregate.
     pub fn iextent(&self) -> Span {
-        Span::from_endpoints(self.tumbler_at(&Nat::zero()), &self.tumbler_at(&self.width))
+        Span::from_endpoints(self.i_start.tumbler().clone(), &self.reach())
             .expect("width ≥ 1 ⇒ start < reach ∧ #start = #reach ⇒ from_endpoints cannot fault")
     }
 
@@ -301,13 +348,18 @@ mod tests {
 
     #[test]
     fn a_run_answers_for_its_own_positions() {
-        // §A: offset 0 is the start, offset k the k-th position, offset width
-        // the exclusive reach — and addr_at re-validates what tumbler_at
-        // advances.
+        // §A: offset 0 is the start, offset k the k-th position, and `reach`
+        // is one I-step past the last — the same tumbler offset `width`
+        // names, asked without an offset, which is why it is the published
+        // form. addr_at re-validates what the shift advances.
         let r = Run::new(ca(2), n(3)).expect("valid run");
         assert_eq!(r.addr_at(&n(0)), ca(2));
         assert_eq!(r.addr_at(&n(2)), ca(4));
-        assert_eq!(r.tumbler_at(&n(3)), *ca(5).tumbler());
+        assert_eq!(r.reach(), *ca(5).tumbler());
+        assert_eq!(r.reach(), r.tumbler_at(&n(3)));
+        // And it is the extent's own upper endpoint, which is what makes the
+        // lift the run's two endpoints and nothing derived twice.
+        assert_eq!(r.iextent().reach(), r.reach());
     }
 
     #[test]
@@ -336,6 +388,29 @@ mod tests {
             .addrs()
             .enumerate()
             .all(|(k, a)| a == r.addr_at(&n(k as u32))));
+    }
+
+    #[test]
+    fn taking_the_run_yields_the_same_sequence_as_borrowing_it() {
+        // §A: the owned form is the shape M5's own seams hand back — a
+        // `Vec<Run>` flat-mapped to addresses — and it must denote exactly
+        // what the borrowing form does, since the two carry the same body for
+        // the reason stated on `into_addrs` rather than one calling the other.
+        let r = Run::new(ca(2), n(3)).expect("valid run");
+        let borrowed: Vec<_> = r.addrs().collect();
+        assert_eq!(r.clone().into_addrs().collect::<Vec<_>>(), borrowed);
+        assert_eq!(borrowed, vec![ca(2), ca(3), ca(4)]);
+        // Width 1, and the flat-map over owned runs that motivates it.
+        let one = Run::new(ca(7), n(1)).expect("valid run");
+        assert_eq!(one.into_addrs().collect::<Vec<_>>(), vec![ca(7)]);
+        let runs = vec![
+            Run::new(ca(1), n(2)).expect("valid run"),
+            Run::new(vca(1), n(1)).expect("valid run"),
+        ];
+        assert_eq!(
+            runs.into_iter().flat_map(Run::into_addrs).collect::<Vec<_>>(),
+            vec![ca(1), ca(2), vca(1)]
+        );
     }
 
     #[test]

@@ -5,7 +5,7 @@
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, union, Address, Nat, Span, SpanSet};
-use skep_arrangement::{ordinal_vspan, M5State, VPos};
+use skep_arrangement::{ordinal_vspan, M5State, Run, VPos};
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
 use crate::helpers::{
@@ -52,20 +52,11 @@ fn ext_span(s: &Nat, n: &Nat) -> Span {
 /// size of both documents, from a request naming two addresses and nothing
 /// else; streaming makes it the size of the part the caller's filter keeps.
 /// Each run's positions are enumerated by the run that owns them, exactly as
-/// [`Query::retrieve_v`] does — spelled out here rather than delegated to
-/// `Run::addrs`, which borrows the run it walks and so cannot outlive the
-/// run-list this iterator consumes.
+/// [`Query::retrieve_v`] does — `Run::into_addrs`, the owned form, because
+/// this iterator consumes the run-list and each run outlives only its own
+/// walk.
 fn current_content(m5: &M5State, d: &Address) -> impl Iterator<Item = Address> {
-    m5.content_runs(d).into_iter().flat_map(|run| {
-        let mut k = Nat::zero();
-        std::iter::from_fn(move || {
-            (k < *run.width()).then(|| {
-                let a = run.addr_at(&k);
-                k = &k + &Nat::one();
-                a
-            })
-        })
-    })
+    m5.content_runs(d).into_iter().flat_map(Run::into_addrs)
 }
 
 impl<'s, W: RetrievalWorld> Query<'s, W> {

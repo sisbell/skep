@@ -1613,17 +1613,16 @@ fn positions(w: &World, regions: &[RegionSpec]) -> Vec<(Address, Nat, Nat, Addre
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
-            let sub = span.start().get(1).expect("depth 2").clone();
-            let from = span.start().get(2).expect("depth 2").clone();
-            let end = &from + span.width().get(2).expect("ordinal-level");
-            let mut ordinal = from;
-            while ordinal < end {
+            let subspace = span.start().get(1).expect("depth 2").clone();
+            let mut ordinal = span.start().get(2).expect("depth 2").clone();
+            let reach = &ordinal + span.width().get(2).expect("ordinal-level");
+            while ordinal < reach {
                 let p = VPos {
-                    subspace: sub.clone(),
+                    subspace: subspace.clone(),
                     ordinal: ordinal.clone(),
                 };
                 if let Some(addr) = w.m5().point(&r.doc, &p) {
-                    out.push((r.doc.clone(), sub.clone(), ordinal.clone(), addr));
+                    out.push((r.doc.clone(), subspace.clone(), ordinal.clone(), addr));
                 }
                 ordinal += n(1);
             }
@@ -1879,14 +1878,14 @@ fn compare_counts_blocks_and_not_spans_against_the_operand_budget() {
     let s = k.snapshot();
     let q = Query::new(&s);
     let one = vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
-    let spans = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
+    let side = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
     let under = MAX_COMPARE_OPERAND_BLOCKS / 3;
     // Two of doc2's three runs hold ca1 (the third is its own content, on a
     // chain doc1 never touches), so the admitted operand reports the full
     // cross-product and is not merely "not refused".
-    assert_eq!(ok_of(q.compare(&spans(under), &one)).len(), 2 * under);
+    assert_eq!(ok_of(q.compare(&side(under), &one)).len(), 2 * under);
     assert_eq!(
-        err_of(q.compare(&spans(under + 1), &one)),
+        err_of(q.compare(&side(under + 1), &one)),
         CompareError::TooManyBlocks {
             operand: Operand::First
         }
@@ -2106,16 +2105,16 @@ fn find_docs_containing_refuses_a_request_past_its_coverage_budget() {
     insert3(&k); // doc1 is ONE run, so one span ⇒ one coverage span
     let s = k.snapshot();
     let q = Query::new(&s);
-    let spans = |count: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); count])];
+    let request = |count: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); count])];
     // At the budget the same shape still answers, and answers completely.
     assert_eq!(
-        ok_of(q.find_docs_containing(&spans(MAX_FIND_COVERAGE_SPANS))),
+        ok_of(q.find_docs_containing(&request(MAX_FIND_COVERAGE_SPANS))),
         vec![doc1()]
     );
     // One span past it is refused, and the refusal names its own budget, as
     // COMPARE's two do, so a client narrows against the number rather than
     // guessing it.
-    let e = err_of(q.find_docs_containing(&spans(MAX_FIND_COVERAGE_SPANS + 1)));
+    let e = err_of(q.find_docs_containing(&request(MAX_FIND_COVERAGE_SPANS + 1)));
     assert_eq!(e, FindError::TooMuchCoverage);
     assert!(e.to_string().contains(&MAX_FIND_COVERAGE_SPANS.to_string()));
 }
@@ -2133,16 +2132,16 @@ fn find_docs_containing_counts_coverage_spans_and_not_request_spans() {
     three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1] — three runs
     let s = k.snapshot();
     let q = Query::new(&s);
-    let spans = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
+    let request = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
     let under = MAX_FIND_COVERAGE_SPANS / 3;
     // The admitted request answers completely — both containers, not merely
     // "not refused".
     assert_eq!(
-        ok_of(q.find_docs_containing(&spans(under))),
+        ok_of(q.find_docs_containing(&request(under))),
         vec![doc1(), doc2()]
     );
     assert_eq!(
-        err_of(q.find_docs_containing(&spans(under + 1))),
+        err_of(q.find_docs_containing(&request(under + 1))),
         FindError::TooMuchCoverage
     );
 }

@@ -303,7 +303,7 @@ fn resolve_blocks<'a>(m5: &M5State, regions: &'a [RegionSpec]) -> Option<Vec<Blo
     let mut out = Vec::new();
     for r in regions {
         for span in &r.spans {
-            let Some(mut v) = span_vpos(span) else {
+            let Some(mut cursor) = span_vpos(span) else {
                 continue;
             };
             for run in m5.resolve(&r.doc, span) {
@@ -311,13 +311,13 @@ fn resolve_blocks<'a>(m5: &M5State, regions: &'a [RegionSpec]) -> Option<Vec<Blo
                     return None; // the operand's budget, refused as produced
                 }
                 debug_assert!(
-                    m5.point(&r.doc, &v).as_ref() == Some(run.i_start()),
+                    m5.point(&r.doc, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
                 // Accumulate the V offset by run width (no V-gaps in content).
-                let next = &v.ordinal + run.width();
-                out.push(Block::new(&r.doc, v.clone(), run));
-                v.ordinal = next;
+                let next = &cursor.ordinal + run.width();
+                out.push(Block::new(&r.doc, cursor.clone(), run));
+                cursor.ordinal = next;
             }
         }
     }
@@ -501,10 +501,10 @@ mod tests {
     /// A block over `doc`, which the block borrows and the caller therefore
     /// binds first — the same shape `resolve_blocks` has, where the document
     /// belongs to the region that named the span.
-    fn block(doc: &Address, v_ord: u32, i_start: Address, width: u32) -> Block<'_> {
+    fn block(doc: &Address, v_ordinal: u32, i_start: Address, width: u32) -> Block<'_> {
         Block::new(
             doc,
-            vp(1, v_ord),
+            vp(1, v_ordinal),
             Run::new(i_start, n(width)).expect("test runs are well-formed"),
         )
     }
@@ -556,14 +556,14 @@ mod tests {
         // X12 R3: one deterministic lexicographic (d1, u1, d2, u2)
         // presentation; v1's fold is the identity (finer-than-maximal
         // conforms — R4's canonical form is not required).
-        let mk = |u2_ord: u32| CorrPair {
+        let pair = |u2_ordinal: u32| CorrPair {
             d1: a(&[1, 0, 1, 0, 1]),
             u1: vp(1, 1),
             d2: a(&[1, 0, 1, 0, 2]),
-            u2: vp(1, u2_ord),
+            u2: vp(1, u2_ordinal),
             width: n(1),
         };
-        let got = deterministic_presentation(vec![mk(2), mk(1)]);
+        let got = deterministic_presentation(vec![pair(2), pair(1)]);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].u2.ordinal, n(1));
         assert_eq!(got[1].u2.ordinal, n(2));

@@ -215,12 +215,12 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         // Gate the whole request first — VSpec WELL-FORMEDNESS is the only
         // in-model failure (ASN-0115). A well-formed but depth-incompatible
         // (#start ≥ 3) spec is NOT rejected here (R6).
-        for (i, spec) in specs.iter().enumerate() {
+        for (index, spec) in specs.iter().enumerate() {
             if !m3.is_registered_document(&spec.doc) {
                 return Err(RetrieveError::DocNotRegistered(spec.doc.clone()));
             }
             gate_vspan(&spec.span)
-                .map_err(|f| RetrieveError::MalformedSpec { index: i, fault: f })?;
+                .map_err(|fault| RetrieveError::MalformedSpec { index, fault })?;
         }
         let mut out = Vec::new();
         for spec in specs {
@@ -579,39 +579,39 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let (m3, m5) = (w.m3(), w.m5());
         // The gate first, over the WHOLE request — the first fault wins, and
         // no upstream work is done for a request that will be rejected.
-        for (ri, r) in regions.iter().enumerate() {
+        for (region, r) in regions.iter().enumerate() {
             if !m3.is_registered_document(&r.doc) {
                 return Err(FindError::DocNotRegistered(r.doc.clone()));
             }
-            for (si, span) in r.spans.iter().enumerate() {
-                gate_vspan(span).map_err(|f| FindError::MalformedSpan {
-                    region: ri,
-                    index: si,
-                    fault: f,
+            for (index, span) in r.spans.iter().enumerate() {
+                gate_vspan(span).map_err(|fault| FindError::MalformedSpan {
+                    region,
+                    index,
+                    fault,
                 })?;
             }
         }
-        // Phase 1: resolve to content I-coverage. Raw mixed-length cover, and
-        // the union of the region images IS their concatenation, so the
-        // images are gathered in submitted order and the cover is built from
-        // them once. Gathering rather than re-unioning is what keeps the walk
-        // LINEAR in the coverage: `union` answers with a fresh set, so an
-        // accumulator threaded through it copies the cover built so far at
+        // Phase 1: resolve to content I-coverage. Raw mixed-length coverage,
+        // and the union of the region images IS their concatenation, so the
+        // images are gathered in submitted order and the coverage is built
+        // from them once. Gathering rather than re-unioning is what keeps the
+        // walk LINEAR in the coverage: `union` answers with a fresh set, so an
+        // accumulator threaded through it copies the coverage built so far at
         // every span, and the budget below would then bound a quantity that
         // costs its own square to produce.
-        let mut spans: Vec<Span> = Vec::new();
+        let mut coverage_spans: Vec<Span> = Vec::new();
         for r in regions {
             for span in &r.spans {
-                spans.extend(m5.image(&r.doc, span));
+                coverage_spans.extend(m5.image(&r.doc, span));
                 // The coverage budget, refused AS THE COVERAGE IS PRODUCED —
-                // `>` and not `==`, because one span's image adds many spans
-                // at once.
-                if spans.len() > MAX_FIND_COVERAGE_SPANS {
+                // `>` and not `==`, because one span's image adds many
+                // coverage spans at once.
+                if coverage_spans.len() > MAX_FIND_COVERAGE_SPANS {
                     return Err(FindError::TooMuchCoverage);
                 }
             }
         }
-        let coverage: SpanSet = spans.into_iter().collect(); // collect AS GIVEN
+        let coverage: SpanSet = coverage_spans.into_iter().collect(); // collect AS GIVEN
         // Phase 2: the historical superset (tumbler-ordered, level-classes
         // handled inside M5), narrowed by the present-tense filter — one
         // `project` per candidate.

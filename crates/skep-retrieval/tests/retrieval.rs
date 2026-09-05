@@ -2,22 +2,26 @@
 //! design/interface actually makes (§-references inline): the registry gate
 //! every operation opens with, in the form M6 owns it — `is_registered_document`
 //! and never M3's wider `is_allocated`; which error wins when several
-//! conditions fail at once, and that the FIRST fault in request order is the
-//! one reported; the silent-empty degradations RETRIEVEV's R6 mandates and
+//! conditions fail at once, the FIRST fault in request order across a request
+//! and the registry before the spans within one region; the silent-empty
+//! degradations RETRIEVEV's R6 mandates and
 //! the delivery law they are instances of (the span's intersection with the
 //! bound prefix, over the whole grid of starts and widths); delivery
 //! order/multiplicity across every block a span resolves to (R3/R5/R8);
 //! extent synthesis from counts (D-SEQ★) and what the two extent queries
 //! therefore do and do not answer (V9: the box is fixed under a content edit
-//! the extents follow); origin projection and its reject-never-clamp
-//! admissibility, the exact-extent boundary included (WF_V/O13); the
+//! the extents follow); origin projection at whatever depth a document sits
+//! (a fork's own content, against its source's), and its reject-never-clamp
+//! admissibility with the exact-extent boundary (WF_V/O13); the
 //! cross-document SHOWDELETIONS combine (D-IDENT, and M6's T1 presentation
 //! of each set);
 //! COMPARE's address-equal join — per-block feet, overlap widths, fan-out
-//! completeness, region confinement, the four-component presentation, the
-//! whole relation against an independent per-position oracle, and the two
-//! budgets that refuse (never truncate) a request whose `|P|·|Q|` outruns
-//! them, behind a gate that runs over both operands whole;
+//! completeness, region confinement, the four-component presentation head and
+//! the tail that alone orders a fan-out, the whole relation against an
+//! independent per-position oracle, and the two budgets that refuse (never
+//! truncate) a request whose `|P|·|Q|` outruns them — counted in blocks
+//! rather than spans, at their exact boundaries, naming which operand, behind
+//! a gate that runs over both operands whole;
 //! FINDDOCSCONTAINING's present-tense filter (FD-SOUND) over the union of
 //! every region span's coverage; that a query answers from the snapshot it
 //! pinned and never mutates; and the derive policy M10 marshals against.
@@ -26,10 +30,14 @@
 //! policy's consequences: every result and every error M6 hands back renders,
 //! so `assert_eq!` compiles against any of them here exactly as it does for
 //! M10 — a delivery included, whose content items render by BYTE LENGTH and
-//! never by payload. The toy `World`/`Rec` pair is the minimal engine assembly
+//! never by payload; each registry rejection's message names the document it
+//! refused; and the two fault vocabularies key a map, which is the derive a
+//! consumer could not supply for itself. The toy `World`/`Rec` pair is the
+//! minimal engine assembly
 //! the composition contract prescribes; all state is arranged through M5's
 //! real `Vstream` ops (M5Rec is sealed to foreign crates).
 
+use std::collections::HashMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -39,9 +47,9 @@ use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{
-    CompareError, CompareReport, Deletions, DeletionsError, Delivery, DeliveryItem, ExtentError,
-    FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault, Spec,
-    MAX_COMPARE_OPERAND_BLOCKS,
+    CompareError, CompareReport, CorrPair, Deletions, DeletionsError, Delivery, DeliveryItem,
+    ExtentError, FindError, Operand, OriginError, Query, RegionSpec, RetrieveError, SpanFault,
+    Spec, MAX_COMPARE_OPERAND_BLOCKS, MAX_COMPARE_PAIRS,
 };
 
 // ---- the minimal engine assembly (composition contract) ----
@@ -775,6 +783,43 @@ fn the_request_gate_reports_the_first_fault_in_request_order() {
     ));
 }
 
+#[test]
+fn the_request_gate_checks_the_registry_before_the_spans_of_its_own_region() {
+    // §Errors: within one operation enum, declaration order IS check order —
+    // so `CompareError::DocNotRegistered` outranks BOTH `NotContentSubspace`
+    // and `MalformedSpan`, and `FindError`'s outranks `MalformedSpan`. Each
+    // request below is faulty two ways in the SAME region, so only the
+    // within-region order can explain the verdict; every other gate test puts
+    // its two faults in different regions, where position decides instead.
+    // (RETRIEVEV's spec-level twin is pinned in
+    // `retrieve_v_rejects_the_whole_request_on_any_malformed_spec`.)
+    let k = mem_kernel();
+    insert3(&k);
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    assert_eq!(
+        err_of(q.compare(
+            &[region_spec(unregistered(), vec![not_ordinal_level_span()])],
+            &[],
+        )),
+        CompareError::DocNotRegistered(unregistered())
+    );
+    // …and above the residence check too, which itself outranks
+    // well-formedness: a link-started span in an unregistered region reports
+    // the registry, not the subspace.
+    assert_eq!(
+        err_of(q.compare(&[region_spec(unregistered(), vec![vspan(2, 1, 1)])], &[])),
+        CompareError::DocNotRegistered(unregistered())
+    );
+    assert_eq!(
+        err_of(q.find_docs_containing(&[region_spec(
+            unregistered(),
+            vec![not_ordinal_level_span()]
+        )])),
+        FindError::DocNotRegistered(unregistered())
+    );
+}
+
 // ---- §B document extents ----
 
 #[test]
@@ -926,6 +971,38 @@ fn show_origin_v_projects_deduplicated_origins_in_tumbler_order() {
     assert_eq!(
         ok_of(q.show_origin_v(&doc2(), &vspan(2, 1, 1))),
         vec![doc2()]
+    );
+}
+
+#[test]
+fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
+    // ASN-0077 O2 through M1's `document_of`: the origin is the DOCUMENT
+    // PREFIX of a run's I-start, at whatever depth that document sits. A
+    // version fork is a document one component deeper than its source and
+    // mints LENGTH-9 content elements, so a projection that assumed the
+    // source's shape would name doc1 for content doc1 never allocated — and
+    // every other origin case in this suite would still pass, all of them
+    // being five-component documents over eight-component elements.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+    assert_eq!(fork, vdoc()); // one component deeper than its source…
+    let (start, _) = vs
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
+        .expect("fork edit commits");
+    assert_eq!(start, vca(1)); // …and its own chain one component longer
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    // The fork's own position: the origin is the FORK, never its source.
+    assert_eq!(ok_of(q.show_origin_v(&fork, &vspan(1, 4, 1))), vec![vdoc()]);
+    // The shared prefix alone names only the source.
+    assert_eq!(ok_of(q.show_origin_v(&fork, &vspan(1, 1, 3))), vec![doc1()]);
+    // Both runs: two origins at two depths, T1-ordered — and doc1 is a PREFIX
+    // of vdoc, so the listing is the shorter-first rule rather than a
+    // same-length comparison.
+    assert_eq!(
+        ok_of(q.show_origin_v(&fork, &vspan(1, 1, 4))),
+        vec![doc1(), vdoc()]
     );
 }
 
@@ -1329,6 +1406,45 @@ fn compare_presents_pairs_in_lexicographic_d1_u1_d2_u2_order() {
 }
 
 #[test]
+fn compare_orders_pairs_that_share_a_first_foot_by_their_second() {
+    // ASN-0122 X12 R3, on the half of the key X11's strictness clause exists
+    // for: under FAN-OUT several chains land on ONE first foot, so pairs that
+    // share `(d1, u1)` are separated only by `(d2, u2)` — a presentation keyed
+    // on the first foot alone would leave a fanned-out report's order
+    // undetermined. Every pair below shares its first foot, so nothing but the
+    // TAIL can explain the order.
+    //
+    // The fixture is what makes each tail component answerable. doc2 holds ca1
+    // at V1 and V2 and doc1 holds it at V1, so the doc1-sourced pair TIES the
+    // doc2 pair on `u2` and is separated by `d2` alone, while the two doc2
+    // pairs tie on `d2` and are separated by `u2` alone. (A fixture where the
+    // doc1 pair's `u2` were uniquely smallest could not tell `d2` from `u2`.)
+    let k = mem_kernel();
+    fanout_doc2(&k); // doc1 = [a, b, c]; doc2 = [ca1][ca1][own "a"]
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let rep = ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 1, 1)])], // ca1 — ONE first foot
+        &[
+            region_spec(doc2(), vec![vspan(1, 2, 1), vspan(1, 1, 1)]), // emitted 1st, 2nd
+            region_spec(doc1(), vec![vspan(1, 1, 1)]),                 // emitted 3rd
+        ],
+    ));
+    assert!(
+        rep.iter()
+            .all(|c| c.d1 == doc1() && c.u1 == vp(1, 1) && c.width == n(1)),
+        "the premise: one shared first foot, so only the tail can order these"
+    );
+    // Emitted (doc2,2), (doc2,1), (doc1,1) — the exact reverse of the
+    // presentation, which is `d2` ascending and then `u2` ascending.
+    let got: Vec<(Address, Nat)> = rep
+        .iter()
+        .map(|c| (c.d2.clone(), c.u2.ordinal.clone()))
+        .collect();
+    assert_eq!(got, vec![(doc1(), n(1)), (doc2(), n(1)), (doc2(), n(2))]);
+}
+
+#[test]
 fn compare_confines_every_pair_to_the_two_named_regions() {
     // ASN-0122 X12 R1: pairs are confined to R_Σ(ρ₁) × R_Σ(ρ₂) — the WINDOW
     // is the operand, not the document. An address the two documents share is
@@ -1433,6 +1549,41 @@ fn compare_lists_a_repeated_window_of_one_operand_twice() {
         &[region_spec(doc2(), vec![vspan(1, 1, 1)])],
     ));
     assert_eq!(rep.len(), 2);
+}
+
+#[test]
+fn compare_lists_two_pairs_that_share_a_presentation_key_in_emission_order() {
+    // Two NESTED windows of ρ₁ resolve to two blocks with ONE V-start, so
+    // their pairs share ALL FOUR key components and differ only in `width`,
+    // which is not in the key. Both are reported (the report is
+    // finer-than-maximal, and `fold_adjacent` is the identity), each carries
+    // its own window's width, and the tie is broken by emission order — the
+    // wider window was submitted first.
+    let k = mem_kernel();
+    let vs = insert3(&k);
+    vs.copy(
+        P1,
+        &doc2(),
+        vp(1, 1),
+        &[VSpec {
+            source: doc1(),
+            span: vspan(1, 1, 3),
+        }],
+    )
+    .expect("copy commits"); // doc2 = [ca1, ca2, ca3], ONE run
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let rep = ok_of(q.compare(
+        &[region_spec(doc1(), vec![vspan(1, 1, 3), vspan(1, 1, 2)])],
+        &[region_spec(doc2(), vec![vspan(1, 1, 3)])],
+    ));
+    let key = |c: &CorrPair| (c.d1.clone(), c.u1.clone(), c.d2.clone(), c.u2.clone());
+    assert_eq!(rep.len(), 2);
+    assert_eq!(key(&rep.as_slice()[0]), key(&rep.as_slice()[1]));
+    assert_eq!(
+        rep.iter().map(|c| c.width.clone()).collect::<Vec<_>>(),
+        vec![n(3), n(2)]
+    );
 }
 
 #[test]
@@ -1636,6 +1787,25 @@ fn compare_rejects_with_operand_region_index_attribution() {
             fault: SpanFault::StartTooShallow
         }
     ));
+    // All three coordinates off zero at once: the SECOND span of the SECOND
+    // region of the SECOND operand. Every other case here sits at region 0, so
+    // nothing else can tell `region` from a constant — or from `index`, which
+    // would be 2 if the span count ran globally rather than per region.
+    assert!(matches!(
+        err_of(q.compare(
+            &[region_spec(doc1(), vec![vspan(1, 1, 1)])],
+            &[
+                region_spec(doc1(), vec![vspan(1, 1, 1)]),
+                region_spec(doc1(), vec![vspan(1, 1, 1), not_ordinal_level_span()]),
+            ],
+        )),
+        CompareError::MalformedSpan {
+            operand: Operand::Second,
+            region: 1,
+            index: 1,
+            fault: SpanFault::NotOrdinalLevel
+        }
+    ));
 }
 
 #[test]
@@ -1666,6 +1836,15 @@ fn compare_refuses_an_operand_past_its_block_budget() {
             operand: Operand::Second
         }
     );
+    // Both over budget: ρ₁ is resolved FIRST, so ρ₁ is the operand named —
+    // the one request that can tell the two resolution orders apart, since
+    // either order answers the two above identically.
+    assert_eq!(
+        err_of(q.compare(&over, &over)),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
     // The cap refuses only what is PAST it, and refuses the request WHOLE:
     // at the budget the same shape still answers, and answers completely
     // (one pair per block — a truncating cap would answer with fewer and
@@ -1687,6 +1866,34 @@ fn compare_refuses_an_operand_past_its_block_budget() {
 }
 
 #[test]
+fn compare_counts_blocks_and_not_spans_against_the_operand_budget() {
+    // The budget's own card: beyond M10's per-array wire cap it refuses "the
+    // multi-run expansion, where one span over a fragmented document resolves
+    // to many blocks from a single wire element". doc2 resolves to THREE runs,
+    // so the two operands below are `MAX/3` and `MAX/3 + 1` SPANS — both far
+    // under any span cap — and `MAX - (MAX mod 3)` and three more BLOCKS,
+    // which is the only unit that explains one being answered and the other
+    // refused.
+    let k = mem_kernel();
+    three_runs(&k); // doc2 = [doc2_ca1][ca1, ca2][ca1] — three runs
+    let s = k.snapshot();
+    let q = Query::new(&s);
+    let one = vec![region_spec(doc1(), vec![vspan(1, 1, 1)])];
+    let spans = |count: usize| vec![region_spec(doc2(), vec![vspan(1, 1, 4); count])];
+    let under = MAX_COMPARE_OPERAND_BLOCKS / 3;
+    // Two of doc2's three runs hold ca1 (the third is its own content, on a
+    // chain doc1 never touches), so the admitted operand reports the full
+    // cross-product and is not merely "not refused".
+    assert_eq!(ok_of(q.compare(&spans(under), &one)).len(), 2 * under);
+    assert_eq!(
+        err_of(q.compare(&spans(under + 1), &one)),
+        CompareError::TooManyBlocks {
+            operand: Operand::First
+        }
+    );
+}
+
+#[test]
 fn compare_refuses_a_fanout_past_its_pair_budget() {
     // 257 × 257 = 66,049 pairs from 514 blocks — an operand count the block
     // budget admits many times over. Fan-out is bounded ONLY by counting the
@@ -1696,14 +1903,24 @@ fn compare_refuses_a_fanout_past_its_pair_budget() {
     insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    let side = |n: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); n])];
-    assert_eq!(
-        err_of(q.compare(&side(257), &side(257))),
-        CompareError::TooManyPairs
-    );
+    let side = |count: usize| vec![region_spec(doc1(), vec![vspan(1, 1, 1); count])];
+    let e = err_of(q.compare(&side(257), &side(257)));
+    assert_eq!(e, CompareError::TooManyPairs);
+    // The refusal names its own budget, as the block refusal does, so a client
+    // narrows against the number rather than guessing it.
+    assert!(e.to_string().contains(&MAX_COMPARE_PAIRS.to_string()));
     // Under the budget, the same shape reports the FULL cross-product
     // (X12 R2): the cap refuses, and never thins a report it admits.
     assert_eq!(ok_of(q.compare(&side(16), &side(16))).len(), 256);
+    // The EQUAL case, where the two budgets must agree: a report of exactly
+    // the budget is answered and only the pair PAST it refused. The premise is
+    // asserted, so a change to the constant fails here rather than silently
+    // leaving this an interior point.
+    assert_eq!(256 * 256, MAX_COMPARE_PAIRS, "256 × 256 IS the boundary");
+    assert_eq!(
+        ok_of(q.compare(&side(256), &side(256))).len(),
+        MAX_COMPARE_PAIRS
+    );
 }
 
 #[test]
@@ -2014,6 +2231,43 @@ fn every_rejection_is_a_std_error() {
     })
     .to_string()
     .is_empty());
+}
+
+#[test]
+fn every_registry_rejection_names_the_document_it_refused() {
+    // §Errors: `Display` names the offending document in M1's dotted decimal
+    // wherever the variant carries one — which is the whole value of carrying
+    // it, a message that drops the payload localizing nothing.
+    let d = unregistered().to_string();
+    for message in [
+        RetrieveError::DocNotRegistered(unregistered()).to_string(),
+        DeletionsError::DocNotRegistered(unregistered()).to_string(),
+        CompareError::DocNotRegistered(unregistered()).to_string(),
+        FindError::DocNotRegistered(unregistered()).to_string(),
+    ] {
+        assert!(message.contains(&d), "{message} names no document");
+    }
+}
+
+#[test]
+fn the_fault_vocabularies_key_a_map_a_consumer_could_not_key_itself() {
+    // §Errors derive policy: SpanFault and Operand carry `Hash` because a
+    // consumer keying by one cannot supply the impl — both the trait and the
+    // type are foreign to it. A per-(operand, fault) counter is the shape a
+    // transport instruments this surface with, and until M10 derives `Hash` on
+    // `FaultSite` this is the only thing standing between the derive and a
+    // cleanup that removes it as unused.
+    let mut counts: HashMap<(Operand, SpanFault), usize> = HashMap::new();
+    for site in [
+        (Operand::First, SpanFault::NotOrdinalLevel),
+        (Operand::First, SpanFault::NotOrdinalLevel),
+        (Operand::Second, SpanFault::NotOrdinalLevel),
+        (Operand::First, SpanFault::StartTooShallow),
+    ] {
+        *counts.entry(site).or_default() += 1;
+    }
+    assert_eq!(counts[&(Operand::First, SpanFault::NotOrdinalLevel)], 2);
+    assert_eq!(counts.len(), 3, "the three distinct sites key apart");
 }
 
 #[test]

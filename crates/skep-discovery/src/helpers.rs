@@ -46,10 +46,10 @@ pub(crate) fn stab_runs_by_slot(l: &LinkState, runs: &[Run]) -> [(usize, OrdSet<
 /// The disjunctive ASN-0127 `findlinks(I)` core: OR across a v1 link's slots
 /// (M7 has no slot-collapsed primitive). `im`'s sets are persistent, so
 /// collapsing a borrowed triple costs sharing, not copies.
-pub(crate) fn union_slots(slots: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Address> {
-    slots
+pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Address> {
+    by_slot
         .iter()
-        .fold(OrdSet::new(), |acc, (_, set)| acc.union(set.clone()))
+        .fold(OrdSet::new(), |acc, (_, hits)| acc.union(hits.clone()))
 }
 
 /// `findlinks(coverage of runs)` ∩ the active view, as M7's native

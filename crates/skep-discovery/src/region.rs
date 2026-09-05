@@ -113,9 +113,9 @@ pub fn content_vspan(at: &VPos, count: &Nat) -> Option<Span> {
 /// different query (ASN-0127 F-IMG/F-V; the decomposition seam). An empty
 /// region trivially passes.
 fn check_region(region: &[Span]) -> Result<(), QueryError> {
-    for s in region {
-        let in_content = s.start().get(1) == Some(&content_subspace());
-        if !is_ordinal_vspan(s) || !in_content {
+    for span in region {
+        let in_content = span.start().get(1) == Some(&content_subspace());
+        if !is_ordinal_vspan(span) || !in_content {
             return Err(QueryError::BadRegion);
         }
     }
@@ -161,15 +161,15 @@ pub fn image_on<W: DiscoveryWorld>(
     check_region(region)?;
     let mut runs: Vec<Run> = Vec::new();
     let mut seen: HashSet<(Address, Nat)> = HashSet::new(); // internal throwaway
-    let mut resolved: usize = 0;
+    let mut runs_resolved: usize = 0;
     for span in region {
-        let image = w.m5().resolve(d, span);
+        let span_image = w.m5().resolve(d, span);
         // `>` and not `==`: one span's image adds many runs at once.
-        resolved += image.len();
-        if resolved > MAX_IMAGE_RUNS {
+        runs_resolved += span_image.len();
+        if runs_resolved > MAX_IMAGE_RUNS {
             return Err(QueryError::ImageTooLarge);
         }
-        for r in image {
+        for r in span_image {
             if seen.insert((r.i_start().clone(), r.width().clone())) {
                 runs.push(r);
             }
@@ -187,8 +187,8 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
     d: &Address,
     region: &[Span],
 ) -> Result<OrdSet<Address>, QueryError> {
-    let img = image_on(s, d, region)?; // gate + region-check + resolve, on THIS snap
-    Ok(stab_runs(s.world().links(), &img))
+    let image = image_on(s, d, region)?; // gate + region-check + resolve, on THIS snap
+    Ok(stab_runs(s.world().links(), &image))
 }
 
 /// Links touching `region` (ASN-0127 findlinks over the image, disjunctive
@@ -230,8 +230,8 @@ pub fn window_v_on<W: DiscoveryWorld>(
     cur: Cursor,
     n: usize,
 ) -> Result<Window, QueryError> {
-    let m = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
-    Ok(window_over(&m, cur, n, |_| true))
+    let sel = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
+    Ok(window_over(&sel, cur, n, |_| true))
 }
 
 /// RETRIEVEENDSETS (ASN-0131): the `(slot, endset)` pairs touching `region`,
@@ -260,29 +260,29 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     region: &[Span],
 ) -> Result<Vec<(usize, Endset)>, QueryError> {
     let w = s.world();
-    let img = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
-    let slots = stab_runs_by_slot(w.links(), &img); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
-    let cand = union_slots(&slots);
-    let mut out: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
-    let mut spans: usize = 0;
-    for c in cand.iter() {
+    let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
+    let by_slot = stab_runs_by_slot(w.links(), &image); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
+    let sel = union_slots(&by_slot);
+    let mut kept: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
+    let mut spans_kept: usize = 0;
+    for c in sel.iter() {
         let link = w.links().readlink(c).expect("stab keys are resident links");
-        for (i, set) in &slots {
-            if set.contains(c) {
+        for (i, hits) in &by_slot {
+            if hits.contains(c) {
                 let e = link
                     .slot(*i)
                     .expect("a link in slot i's stab set has slot i: M7's per-slot overlap is false for an absent slot");
-                if out.insert((*i, e.clone())) {
+                if kept.insert((*i, e.clone())) {
                     // WHOLE endset, no clip
-                    spans += e.len();
-                    if spans > MAX_ENDSET_SPANS {
+                    spans_kept += e.len();
+                    if spans_kept > MAX_ENDSET_SPANS {
                         return Err(QueryError::EndsetsTooLarge);
                     }
                 }
             }
         }
     }
-    let mut pairs: Vec<(usize, Endset)> = out.into_iter().collect();
+    let mut pairs: Vec<(usize, Endset)> = kept.into_iter().collect();
     pairs.sort_by(|(i, e), (j, f)| {
         i.cmp(j).then_with(|| {
             e.spans()

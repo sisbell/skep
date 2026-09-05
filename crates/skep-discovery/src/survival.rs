@@ -68,34 +68,40 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     if p.subspace != content_subspace() {
         return Err(OrphanError::NotContentSubspace); // s_C only (mirror M5 DeleteError)
     }
-    let np = p.ordinal.clone();
-    let nc = w.m5().content_count(d);
+    let p_ordinal = p.ordinal.clone();
+    let n_c = w.m5().content_count(d);
     if width.is_zero() {
         return Err(OrphanError::EmptyWidth); // mirror M5 EmptyWidth
     }
-    if np < Nat::one() || &np + width > &nc + Nat::one() {
+    if p_ordinal < Nat::one() || &p_ordinal + width > &n_c + Nat::one() {
         return Err(OrphanError::OutOfBounds); // folds M5's NotArranged + OutOfBounds (width ≥ 1)
     }
 
-    let a_del = w.m5().resolve(d, &content_vspan_at(&np, width)); // no clipping now (bounds checked)
-    let pre = if np > Nat::one() {
-        Some(content_vspan_at(&Nat::one(), &(&np - Nat::one())))
+    let a_del = w.m5().resolve(d, &content_vspan_at(&p_ordinal, width)); // no clipping now (bounds checked)
+    let prefix = if p_ordinal > Nat::one() {
+        Some(content_vspan_at(&Nat::one(), &(&p_ordinal - Nat::one())))
     } else {
         None
     };
-    let suf_start = &np + width;
-    let suf = if suf_start <= nc {
-        Some(content_vspan_at(&suf_start, &(&nc - &suf_start + Nat::one())))
+    let suffix_start = &p_ordinal + width;
+    let suffix = if suffix_start <= n_c {
+        Some(content_vspan_at(
+            &suffix_start,
+            &(&n_c - &suffix_start + Nat::one()),
+        ))
     } else {
         None
     };
     let mut retained = w.m5().link_runs(d); // a text delete never touches links
-    for sp in [pre, suf].into_iter().flatten() {
-        retained.extend(w.m5().resolve(d, &sp));
+    for span in [prefix, suffix].into_iter().flatten() {
+        retained.extend(w.m5().resolve(d, &span));
     }
-    let cand = stab_runs(w.links(), &a_del);
-    let surv = stab_runs(w.links(), &retained);
+    let touching_deleted = stab_runs(w.links(), &a_del);
+    let touching_retained = stab_runs(w.links(), &retained);
     Ok(OrphanReport {
-        orphaned: cand.relative_complement(surv).into_iter().collect(),
+        orphaned: touching_deleted
+            .relative_complement(touching_retained)
+            .into_iter()
+            .collect(),
     })
 }

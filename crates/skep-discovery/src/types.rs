@@ -109,14 +109,14 @@ impl FourSet {
         if self.is_unsatisfiable() {
             return None;
         }
-        let mut cons = Vec::new();
+        let mut constraints = Vec::new();
         for (slot, spec) in [(FROM, &self.from), (TO, &self.to), (TYPE, &self.ty)] {
             if let SlotSpec::Spans(e) = spec {
-                cons.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
+                constraints.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
             }
         }
-        cons.sort_by_key(|(_, e)| e.len());
-        Some(cons)
+        constraints.sort_by_key(|(_, e)| e.len());
+        Some(constraints)
     }
 
     /// `athome(a, H)` — ASN-0121/0132's residence test, the companion of

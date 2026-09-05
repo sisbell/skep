@@ -48,11 +48,11 @@ fn region_family_gates_doc_then_region_then_defines_empty() {
     // Unregistered d → DocNotRegistered, even with a bad region: the document
     // gate is the first act, the region gate second.
     assert_eq!(
-        lq.image(&d7(), &[vspan(2, 1, 1)]),
+        lq.image(&unregistered_doc(), &[vspan(2, 1, 1)]),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(
-        lq.retrieve_endsets(&d7(), &[vspan(1, 1, 1)]),
+        lq.retrieve_endsets(&unregistered_doc(), &[vspan(1, 1, 1)]),
         Err(QueryError::DocNotRegistered)
     );
 
@@ -132,7 +132,7 @@ fn every_region_entry_point_answers_both_gates_in_order() {
     ];
     for (name, refusal) in &entries {
         assert_eq!(
-            refusal(&d7(), &[vspan(1, 1, 1)]),
+            refusal(&unregistered_doc(), &[vspan(1, 1, 1)]),
             Some(QueryError::DocNotRegistered),
             "{name}: an unregistered d is refused"
         );
@@ -142,7 +142,7 @@ fn every_region_entry_point_answers_both_gates_in_order() {
             "{name}: a non-content-subspace region is refused"
         );
         assert_eq!(
-            refusal(&d7(), &[vspan(2, 1, 1)]),
+            refusal(&unregistered_doc(), &[vspan(2, 1, 1)]),
             Some(QueryError::DocNotRegistered),
             "{name}: the document gate is the FIRST act"
         );
@@ -318,7 +318,7 @@ fn the_pointwise_family_holds_the_same_run_budget_over_the_documents_runs() {
     // The gates above the budget still answer first: an unregistered `d` and
     // a non-link `a` are not swallowed by it.
     assert_eq!(
-        lq.project(&e1, FROM, &d7()),
+        lq.project(&e1, FROM, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
     assert_eq!(lq.project(&ca(1), FROM, &doc2()), Err(QueryError::NotALink));
@@ -616,7 +616,7 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
 // ─────────────────── §3 — four-set descriptor query ───────────────────
 
 #[test]
-fn ftt_wildcard_unit_empty_zero_and_conjunction() {
+fn ftt_the_unit_matches_all_the_zero_annihilates_and_slots_conjoin() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
     let store = LinkWriter::new(&k);
@@ -938,7 +938,7 @@ fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
     // And CN-ZERO proper, over a home no link resides in: a store-wide
     // verdict, not present unreachability.
     let q_home_none = FourSet {
-        home: SlotSpec::Spans(enc(&[d7()])),
+        home: SlotSpec::Spans(enc(&[unregistered_doc()])),
         ..FourSet::any()
     };
     assert_eq!(lq.count_ftt(&q_home_none), 0);
@@ -1007,7 +1007,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     assert_eq!(lq.project(&e1, 4, &doc1()), Err(QueryError::NotALink));
     // The doc gate comes first.
     assert_eq!(
-        lq.project(&e1, FROM, &d7()),
+        lq.project(&e1, FROM, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
 
@@ -1105,7 +1105,7 @@ fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
         Err(QueryError::NotALink)
     );
     assert_eq!(
-        lq.addressably_discoverable_from(&e1, &d7()),
+        lq.addressably_discoverable_from(&e1, &unregistered_doc()),
         Err(QueryError::DocNotRegistered)
     );
 }
@@ -1119,7 +1119,7 @@ fn delete_orphans_mirrors_delete_preconditions() {
     let lq = LinkQuery::new(&k);
 
     assert_eq!(
-        lq.delete_orphans(&d7(), &vp(1, 1), &n(1)),
+        lq.delete_orphans(&unregistered_doc(), &vp(1, 1), &n(1)),
         Err(OrphanError::DocNotRegistered)
     );
     // Check order mirrors §6: subspace, then width, then the folded bounds.
@@ -1328,7 +1328,7 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// what pins WHICH word.
 #[test]
 fn delete_orphans_refuses_exactly_what_the_delete_refuses() {
-    for doc in [doc1(), doc2(), d7()] {
+    for doc in [doc1(), doc2(), unregistered_doc()] {
         for subspace in 1..=2u32 {
             for ordinal in 0..=4u32 {
                 for width in 0..=4u32 {

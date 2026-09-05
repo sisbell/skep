@@ -142,7 +142,7 @@ pub fn doc2() -> Address {
 
 /// An UNREGISTERED document address: `[1,0,1,0,7]` (the account chain's
 /// frontier is 2, so 7 is beyond it).
-pub fn d7() -> Address {
+pub fn unregistered_doc() -> Address {
     a(&[1, 0, 1, 0, 7])
 }
 

@@ -28,7 +28,7 @@ use crate::DiscoveryWorld;
 pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
     match q.link_constraints() {
         None => OrdSet::new(), // FL-EMP: some slot is the zero
-        Some(cons) => l.match_links(&cons, View::Active),
+        Some(constraints) => l.match_links(&constraints, View::Active),
     }
 }
 

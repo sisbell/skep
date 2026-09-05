@@ -73,7 +73,7 @@ pub fn project_on<W: DiscoveryWorld>(
     if !w.m3().is_registered_document(d) {
         return Err(QueryError::DocNotRegistered);
     }
-    let cov = w
+    let coverage = w
         .links()
         .followlink(a, slot)
         .map_err(|_| QueryError::NotALink)?; // Err(Invalid) ⇒ NotALink (a ∉ dom(L) OR slot OOB)
@@ -82,7 +82,7 @@ pub fn project_on<W: DiscoveryWorld>(
     if w.m5().content_runs(d).len() > MAX_IMAGE_RUNS {
         return Err(QueryError::ImageTooLarge);
     }
-    Ok(w.m5().project(d, &cov)) // I→V, content subspace, level-class-safe inside M5
+    Ok(w.m5().project(d, &coverage)) // I→V, content subspace, level-class-safe inside M5
 }
 
 /// `coverage(e) ∩ ⋃ extents ≠ ∅` — pointwise, mirroring M7's stab overlap
@@ -149,13 +149,13 @@ pub fn addressably_discoverable_from_on<W: DiscoveryWorld>(
     if !w.links().is_active(a) {
         return Ok(false); // the ADDRESSABLE half (Conflicts #8)
     }
-    let (content, links) = (w.m5().content_runs(d), w.m5().link_runs(d));
-    if content.len() + links.len() > MAX_IMAGE_RUNS {
+    let (content_runs, link_runs) = (w.m5().content_runs(d), w.m5().link_runs(d));
+    if content_runs.len() + link_runs.len() > MAX_IMAGE_RUNS {
         return Err(QueryError::ImageTooLarge);
     }
-    let extents: Vec<Span> = content
+    let extents: Vec<Span> = content_runs
         .into_iter()
-        .chain(links)
+        .chain(link_runs)
         .map(|r| r.iextent())
         .collect(); // ran(M(d)) as I-extents, BOTH subspaces (LP12)
     if extents.is_empty() {

@@ -892,3 +892,86 @@ scenario = "prov_identity_after_delete"
 class = "asn-0124-present-tense-containment"
 rationale = "Ruling 14: deleted source filtered present-tense; version still arranges the content."
 
+# Lane 3.1 close-out (2026-09-05): ruling 20 — private documents are versionless.
+# WHOLE-SCENARIO entries (no op_index), the run-7 form: the runner needs every
+# disagreed op covered, and every op after the refused `version` is that
+# refusal's cascade — the version address never mints (DocNotRegistered /
+# SourceNotRegistered / HomeNotRegistered on it, never-bound golden addresses,
+# empty probes) or the same refusal again on the same private source. The op of
+# first disagreement per scenario is recorded in the ruling.
+
+[[allow]]
+scenario = "version_insert_allocation_independence"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_link_allocation_independence"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "fanout_version_and_copy_routes"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "insert_vspace_mapping"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "depth_version_chain_4"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "depth_version_chain_7"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "conflict_copy"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_immediately"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "transitive_link_discovery"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_add_link_check_original"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_transcluded_linked_content"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "ms_version_race"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_address_allocation"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_preserves_transclusion"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+
+[[allow]]
+scenario = "version_with_links"
+class = "pub-2.9-private-versionless"
+rationale = "Ruling 20: PUB-2.9 — a version of an owned PRIVATE source refuses (PrivateSourceVersionless); udanax versions private documents, skep does not."
+

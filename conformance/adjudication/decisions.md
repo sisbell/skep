@@ -213,3 +213,86 @@ boundary. Skep bugs found: still ZERO.**
     sessions wrote into them) is discharged by the projection; no interim
     `prefix_contains` patch ships. Conformance goldens: none moves — no
     recorded scenario exercises a credential deposit or the publish gate.
+
+## 2026-09-05 — PUB round 1, lane 3.1 close-out: private documents are versionless
+
+20. **pub-2.9-private-versionless** (ALLOWLIST, 15 scenarios; owner ruling
+    2026-09-05, lane 3.1 close-out.) Lane 3.1 — the three write-path
+    refusals in the crates (`PublishedTarget` on the in-place arrangement
+    edits, `PrivateVersionOfPublished` and `PrivateSourceVersionless` on
+    `version`) — made PUB-2.9 real: a `version` on a PRIVATE source the
+    caller OWNS is REFUSED at the write path. PRIVATE DOCUMENTS ARE
+    VERSIONLESS; the version chain is publication's own instrument
+    (PUB-2.9). PUB-2.19 states the same fact from the landing side: on a
+    private source the caller owns there is no chain under the document to
+    append to — private history is the pool. And PUB-2.10 is the guarantee
+    the two refusals buy together: "every version address that exists
+    names a PUBLISHED state, forever." The udanax corpus versions private
+    documents freely — udanax has no publication state, so every document
+    it versions is, in skep's terms, an owned private draft — and fifteen
+    goldens now diverge at their `create_version` op (one at its
+    `open_document` conflict-copy op) with `Rejected(PrivateSourceVersionless)`.
+    RULED: these divergences are INTENDED — the spec forbids what udanax
+    did — and the frozen set grows by EXACTLY these fifteen, class
+    `pub-2.9-private-versionless`. No golden is regenerated. No scenario is
+    re-keyed to a published source: a version of a published-born document
+    would test a different program from the one the golden recorded, and
+    the divergence is the finding. The fifteen, each with its
+    first-disagreement op (0-based, from `target/conformance/summary.md`):
+    - allocation_independence/version_insert_allocation_independence — op 3
+      `version_1`
+    - allocation_independence/version_link_allocation_independence — op 3
+      `version_1`
+    - compare_fanout/fanout_version_and_copy_routes — op 4 `create_version`
+    - content/insert_vspace_mapping — op 4 `create_version`
+    - depth_scale/depth_version_chain_4 — op 4 `create_version`
+    - depth_scale/depth_version_chain_7 — op 4 `create_version`
+    - documents/conflict_copy — op 3 `open_document` (the CONFLICT_COPY is
+      a cross-owner-shaped version of the caller's OWN private draft; the
+      PUB-2.9 refusal, not PUB-2.7's, is the one it meets)
+    - edgecases/version_immediately — op 1 `create_version`
+    - interactions/transitive_link_discovery — op 2 `create_version`
+    - interactions/version_add_link_check_original — op 2 `create_version`
+    - interactions/version_transcluded_linked_content — op 5 `create_version`
+    - multisession/ms_version_race — op 7 `create_version`
+    - versions/version_address_allocation — op 2 `create_version`
+    - versions/version_preserves_transclusion — op 5 `create_version`
+    - versions/version_with_links — op 5 `create_version`
+    Count: fifteen scenarios, one WHOLE-SCENARIO entry each in
+    ../allowlist.toml (no op index — the run-7 form) and fifteen names added
+    under `[allowlisted]` in ../ratchet.toml. Whole-scenario because the
+    runner needs every disagreed op covered, and every op after the refused
+    `version` is that refusal's cascade: the version address never mints,
+    so the ops that name it answer DocNotRegistered / SourceNotRegistered /
+    HomeNotRegistered or reference a never-bound golden address, probes of
+    it answer empty, and a second `version` of the same private source
+    meets the same refusal (version_address_allocation's ops 3–5,
+    ms_version_race's ops 8–9, the two allocation_independence
+    `version_2`s). Skep bugs found: none — the refusal is the rule working.
+
+**Recorded at close-out, NOT ruled (agent, 2026-09-05):** seventeen more
+scenarios meet the same refusal at their `create_version` op and are
+INEXPRESSIBLE from there rather than divergent — the version never mints,
+so a later op naming it (`version`, `v1`, `v2`, `version2`, `parent`,
+`version_before`, or a TO endset inside it) has nothing to ground on, and
+the runner's verdict order puts inexpressible ahead of divergent. Sixteen
+passed before lane 3.1; the seventeenth, createnewversion_text_vs_links,
+was allowlisted (ruling 15) and keeps that line. They are parked under
+`[pending]` in ../ratchet.toml — exempt from enforcement, reported on
+every gate run — for the owner's disposition, ruling 20 naming exactly
+fifteen: content/compare_multispan_specsets, content/vcopy_from_version,
+discovery/find_documents_versions, identity/identity_through_rearrange_pivot,
+identity/identity_through_rearrange_swap,
+interactions/compare_versions_with_different_links,
+provenance/createnewversion_text_vs_links, versions/both_versions_modified,
+versions/compare_versions, versions/create_version,
+versions/cross_version_vcopy, versions/delete_from_original_check_version,
+versions/modify_original_after_version,
+versions/multiple_versions_same_source,
+versions/version_delete_preserves_original,
+versions/version_insert_in_middle, versions/version_of_empty_document.
+
+**Lane 3.1 tally: 297 scenarios — 0 divergent, 0 errors; 85 allowlisted
+(run-7's 71, less createnewversion_text_vs_links now inexpressible, plus
+the 15 ruled here); 46 inexpressible (the 29 frozen + the 17 pending); 166
+pass. Twenty rulings.**

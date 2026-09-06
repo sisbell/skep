@@ -79,6 +79,21 @@ scenario = "text_insert_preserves_link_vpositions"
 scenario = "three_links_vspan_growth"
 scenario = "type_c_multiple_crums"
 scenario = "version_copies_link_subspace"
+scenario = "conflict_copy"
+scenario = "depth_version_chain_4"
+scenario = "depth_version_chain_7"
+scenario = "fanout_version_and_copy_routes"
+scenario = "insert_vspace_mapping"
+scenario = "ms_version_race"
+scenario = "transitive_link_discovery"
+scenario = "version_add_link_check_original"
+scenario = "version_address_allocation"
+scenario = "version_immediately"
+scenario = "version_insert_allocation_independence"
+scenario = "version_link_allocation_independence"
+scenario = "version_preserves_transclusion"
+scenario = "version_transcluded_linked_content"
+scenario = "version_with_links"
 
 [inexpressible]
 scenario = "prov_request_surface"
@@ -110,3 +125,30 @@ scenario = "search_multiple_links_selective_removal"
 scenario = "swap_with_links"
 scenario = "version_chain"
 scenario = "version_copies_what"
+
+[pending]
+# Lane 3.1 (2026-09-05), NOT ruled — parked for the owner's disposition
+# (ruling 20 names exactly fifteen). Each of these seventeen meets the
+# PUB-2.9 refusal (PrivateSourceVersionless) at its `create_version` op and
+# is INEXPRESSIBLE from there: the version address never mints, so a later
+# op naming it (`version`, `v1`, `v2`, `version2`, `parent`,
+# `version_before`, a TO endset inside it) has nothing to ground on.
+# createnewversion_text_vs_links keeps its [allowlisted] line (ruling 15)
+# until the owner moves it. Exempt from enforcement, reported on every run.
+scenario = "both_versions_modified"
+scenario = "compare_multispan_specsets"
+scenario = "compare_versions"
+scenario = "compare_versions_with_different_links"
+scenario = "create_version"
+scenario = "createnewversion_text_vs_links"
+scenario = "cross_version_vcopy"
+scenario = "delete_from_original_check_version"
+scenario = "find_documents_versions"
+scenario = "identity_through_rearrange_pivot"
+scenario = "identity_through_rearrange_swap"
+scenario = "modify_original_after_version"
+scenario = "multiple_versions_same_source"
+scenario = "vcopy_from_version"
+scenario = "version_delete_preserves_original"
+scenario = "version_insert_in_middle"
+scenario = "version_of_empty_document"

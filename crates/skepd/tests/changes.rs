@@ -812,10 +812,13 @@ fn pre_feature_positions_answer_bare_entries() {
             }
             other => panic!("create: {}", unexpected(&other)),
         };
+        // Doc 1 is born published (PUB-8.21), so this is a DECLARED deposit-shaped
+        // append at a fresh position (PUB-2.59's shape; PUB-9.13's declared horn) —
+        // the one write a published home admits in place. The subject is unchanged.
         match exec(
             s1,
             &format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"]}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["hi"],"deposit":true}}"#
             ),
         ) {
             Response::AckAddr { at, .. } => {

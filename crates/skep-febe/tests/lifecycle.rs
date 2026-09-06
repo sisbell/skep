@@ -84,25 +84,32 @@ fn a_node_registers_under_any_bound_session_not_only_bootstrap() {
 /// The document family end-to-end: create/insert/retrieve with the V1
 /// coordinates (§1/§3), Fork ≠ Version (§3), origin attribution, COMPARE,
 /// FINDDOCSCONTAINING, COPY, DELETE + SHOWDELETIONS, REARRANGE.
+///
+/// Under the version-chain model a document is either edited in place (a
+/// draft) or versioned (a published edition), never both (PUB-2.9,
+/// PUB-2.11): the content lives in an EDITION it was deposited into
+/// (PUB-2.59), the version is the edition's, and the in-place edits run in a
+/// DRAFT that transcludes the edition's content (PUB-2.27's own staging
+/// shape) — so SHOWDELETIONS still has an address the version holds.
 #[test]
 fn document_lifecycle() {
     let fx = setup();
-    let d = create_doc(&fx);
-    let (_start, at) = insert3(&fx, &d);
+    let e = create_edition(&fx);
+    let (_start, at) = deposit3(&fx, &e);
 
     // Read-your-writes for a sequential client (G0): the later snapshot's
     // as_of is ≥ the write's committed coordinate.
     let (items, as_of) = delivery(ex(
         &fx.febe,
         fx.user,
-        Op::RetrieveV { specs: vec![Spec { doc: d.clone(), span: vspan(1, 1, 3) }] },
+        Op::RetrieveV { specs: vec![Spec { doc: e.clone(), span: vspan(1, 1, 3) }] },
     ));
     assert_eq!(items.0.len(), 3);
     assert!(as_of >= at, "a later read sees at least the coordinate the write committed at");
 
-    let (bound, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: d.clone() }));
+    let (bound, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpan { doc: e.clone() }));
     assert_ne!(bound, SpanSet::empty());
-    let (exact, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: d.clone() }));
+    let (exact, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: e.clone() }));
     assert_ne!(exact, SpanSet::empty());
 
     // Fork mints an EMPTY document (shares no content); Version is the
@@ -110,40 +117,47 @@ fn document_lifecycle() {
     let (f, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork { published: None }));
     let (f_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: f.clone() }));
     assert_eq!(f_set, SpanSet::empty());
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None }));
+    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None }));
     let (v_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: v.clone() }));
     assert_ne!(v_set, SpanSet::empty());
 
-    // The version's content originated in d (SHOWORIGIN reports allocators).
+    // The version's content originated in e (SHOWORIGIN reports allocators).
     let origins = addrs(ex(&fx.febe, fx.user, Op::ShowOrigin { doc: v.clone(), span: vspan(1, 1, 1) }));
-    assert_eq!(origins, vec![d.clone()]);
+    assert_eq!(origins, vec![e.clone()]);
 
-    // COMPARE finds address-equal correspondences between d and its version.
+    // COMPARE finds address-equal correspondences between e and its version.
     let rep = compare(ex(
         &fx.febe,
         fx.user,
         Op::Compare {
-            rho1: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 2)] }],
+            rho1: vec![RegionSpec { doc: e.clone(), spans: vec![vspan(1, 1, 2)] }],
             rho2: vec![RegionSpec { doc: v.clone(), spans: vec![vspan(1, 1, 2)] }],
         },
     ));
-    assert!(!rep.0.is_empty(), "d and its version share address-equal content");
+    assert!(!rep.0.is_empty(), "e and its version share address-equal content");
 
-    // Present-tense containers of d's first element: at least d and v.
+    // Present-tense containers of e's first element: at least e and v.
     let holders = addrs(ex(
         &fx.febe,
         fx.user,
         Op::FindDocsContaining {
-            regions: vec![RegionSpec { doc: d.clone(), spans: vec![vspan(1, 1, 1)] }],
+            regions: vec![RegionSpec { doc: e.clone(), spans: vec![vspan(1, 1, 1)] }],
         },
     ));
-    assert!(holders.contains(&d), "the document that allocated the element contains it");
+    assert!(holders.contains(&e), "the document that allocated the element contains it");
     assert!(holders.contains(&v), "the version that shares it contains it too");
 
     // COPY transcludes into the empty fork; its arrangement is now non-empty.
-    ack(ex(&fx.febe, fx.user, Op::Copy { doc: f.clone(), at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] }));
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: f.clone(), at: vp(1, 1), specs: vec![vspec(&e, 1, 1)] }));
     let (f_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: f.clone() }));
     assert_ne!(f_set, SpanSet::empty());
+
+    // The in-place edits run in a DRAFT staged from the edition (PUB-2.27):
+    // the edition itself refuses them (PUB-2.11).
+    let rej = rejected(ex(&fx.febe, fx.user, Op::Delete { doc: e.clone(), p: vp(1, 3), width: nat(1) }));
+    assert_eq!(rej.code, RejectCode::PublishedTarget);
+    let d = create_doc(&fx);
+    ack(ex(&fx.febe, fx.user, Op::Copy { doc: d.clone(), at: vp(1, 1), specs: vec![vspec(&e, 1, 3)] }));
 
     // DELETE closes the gap in d; the removed I-address is still current in
     // the version — exactly SHOWDELETIONS' a-with-b half.
@@ -162,6 +176,93 @@ fn document_lifecycle() {
     assert!(fx.febe.log_position() >= at, "the log never regresses past a committed write (G0)");
 }
 
+/// The version-chain model's three refusals, as M10 surfaces them (owner
+/// ruling D2b: the crates refuse, M10 lowers): each is its own permanent
+/// code, none carries a site, and the declared deposit is the one insert a
+/// published document admits (PUB-2.11, PUB-2.7, PUB-2.9, PUB-2.59).
+#[test]
+fn the_version_chain_refusals_surface_as_their_own_permanent_codes() {
+    let fx = setup();
+    let e = create_edition(&fx);
+    deposit3(&fx, &e);
+    let d = create_doc(&fx);
+    insert3(&fx, &d);
+    let before = fx.febe.log_position();
+
+    // PUB-2.11: the four in-place edits on the edition.
+    let undeclared = Op::Insert {
+        doc: e.clone(),
+        at: vp(1, 4),
+        values: vec![skep_content::Val::new(vec![b'x'])],
+        deposit: false,
+    };
+    let refusals = vec![
+        (OpKind::Insert, ex(&fx.febe, fx.user, undeclared)),
+        (
+            OpKind::Copy,
+            ex(&fx.febe, fx.user, Op::Copy { doc: e.clone(), at: vp(1, 4), specs: vec![vspec(&d, 1, 1)] }),
+        ),
+        (
+            OpKind::Delete,
+            ex(&fx.febe, fx.user, Op::Delete { doc: e.clone(), p: vp(1, 1), width: nat(1) }),
+        ),
+        (
+            OpKind::Rearrange,
+            ex(&fx.febe, fx.user, Op::Rearrange { doc: e.clone(), cuts: vec![vp(1, 1), vp(1, 2), vp(1, 3)] }),
+        ),
+        // PUB-2.7: an explicit private member of the owner's published edition.
+        (
+            OpKind::Version,
+            ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: Some(false) }),
+        ),
+        // PUB-2.9: any version of the owner's private draft.
+        (OpKind::Version, ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None })),
+    ];
+    let expected = [
+        RejectCode::PublishedTarget,
+        RejectCode::PublishedTarget,
+        RejectCode::PublishedTarget,
+        RejectCode::PublishedTarget,
+        RejectCode::PrivateVersionOfPublished,
+        RejectCode::PrivateSourceVersionless,
+    ];
+    for ((kind, r), code) in refusals.into_iter().zip(expected) {
+        let rej = rejected(r);
+        assert_eq!(rej.op, kind);
+        assert_eq!(rej.code, code, "{kind:?}");
+        assert_eq!(rej.disposition, Disposition::Permanent, "{kind:?}: a permanent class");
+        assert!(rej.site.is_none(), "{kind:?}: the face keys on the code alone");
+    }
+    assert_eq!(fx.febe.log_position(), before, "a refusal commits nothing");
+
+    // The declared deposit at the edition's fresh position lands (PUB-2.59);
+    // declared but touching an arranged position, it is refused the same way
+    // (the declaration is not a bypass).
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: e.clone(),
+            at: vp(1, 4),
+            values: vec![skep_content::Val::new(vec![b'r'])],
+            deposit: true,
+        },
+    ));
+    let rej = rejected(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: e.clone(),
+            at: vp(1, 2),
+            values: vec![skep_content::Val::new(vec![b'r'])],
+            deposit: true,
+        },
+    ));
+    assert_eq!(rej.code, RejectCode::PublishedTarget);
+    // The inherited version of the edition is admitted (PUB-2.8).
+    ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None }));
+}
+
 /// §7: sequential lost-ack retries replay the committed ack without
 /// re-executing; the key is per-session and op-kind-matched; reads are never
 /// memoized; a fresh session re-executes (best-effort, by design).
@@ -173,6 +274,7 @@ fn idempotent_retry() {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'x'])],
+        deposit: false,
     };
 
     let (addr1, at1) = ack_addr(ex_id(&fx.febe, fx.user, b"ins-1", ins()));
@@ -227,6 +329,7 @@ fn an_oversized_request_id_is_answered_and_its_retry_re_executes() {
         doc: d.clone(),
         at: vp(1, 1),
         values: vec![skep_content::Val::new(vec![b'y'])],
+        deposit: false,
     };
 
     let over = vec![b'k'; MAX_REQ_ID_BYTES + 1];
@@ -691,7 +794,12 @@ fn rejection_surface() {
     let rej = rejected(ex(
         &fx.febe,
         stray,
-        Op::Insert { doc: d.clone(), at: vp(1, 1), values: vec![skep_content::Val::new(vec![1u8])] },
+        Op::Insert {
+            doc: d.clone(),
+            at: vp(1, 1),
+            values: vec![skep_content::Val::new(vec![1u8])],
+            deposit: false,
+        },
     ));
     assert_eq!(rej.op, OpKind::Insert);
     assert_eq!(rej.code, RejectCode::Unauthenticated);

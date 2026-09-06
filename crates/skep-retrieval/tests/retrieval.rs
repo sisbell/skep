@@ -174,13 +174,20 @@ fn doc2_la(ordinal: u32) -> Address {
     a(&[1, 0, 1, 0, 2, 0, 2, ordinal])
 }
 
-/// The version fork of doc1 (`(d_src, 1)` chain) and its length-9 content
+/// Document 3 — principal 1's PUBLISHED edition `[1,0,1,0,3]`: the one owned
+/// source `version` admits (PUB-2.9), whose content enters by declared
+/// deposit alone (PUB-2.59).
+fn pdoc() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
+/// The version fork of pdoc (`(d_src, 1)` chain) and its length-9 content
 /// elements — the mixed-length transclusion case.
 fn vdoc() -> Address {
-    a(&[1, 0, 1, 0, 1, 1])
+    a(&[1, 0, 1, 0, 3, 1])
 }
 fn vca(ordinal: u32) -> Address {
-    a(&[1, 0, 1, 0, 1, 1, 0, 1, ordinal])
+    a(&[1, 0, 1, 0, 3, 1, 0, 1, ordinal])
 }
 
 fn vp(subspace: u32, ordinal: u32) -> VPos {
@@ -238,9 +245,11 @@ fn err_of<T: fmt::Debug, E>(r: Result<T, E>) -> E {
 
 /// Genesis with M3 pre-seeded by folding exactly the records its own
 /// delegate/create_new_document ops would stage: account [1,0,1] → principal
-/// 1 (owns doc1, doc2), account [1,0,2] → principal 2. The publication bits
-/// are the flagless create path's (PUB-8.21): doc1 born published, doc2
-/// private; an account's `Allocate` carries no publication state.
+/// 1 (owns doc1, doc2, pdoc), account [1,0,2] → principal 2. doc1 and doc2
+/// are PRIVATE drafts — the documents the edits below are admitted on
+/// (PUB-2.11; doc1 as an explicit-`false` first mint, the state M3 produces
+/// below the daemon's door) — and pdoc is a PUBLISHED edition. An account's
+/// `Allocate` carries no publication state.
 fn genesis() -> World {
     let m3 = M3State::genesis()
         .apply_m3(&M3Rec::Allocate {
@@ -261,11 +270,15 @@ fn genesis() -> World {
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
+            published: false,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
             published: false,
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 3]),
+            published: true,
         });
     World {
         m3,
@@ -285,8 +298,18 @@ fn mem_kernel() -> Kernel<World> {
 /// doc1 arranged with content a, b, c (ca1..ca3).
 fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = Vstream::new(k);
-    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")])
+    vs.insert(P1, &doc1(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], false)
         .expect("insert commits");
+    vs
+}
+
+/// pdoc — the published edition — arranged with a, b, c: a DECLARED deposit
+/// at its fresh positions, the one way content enters a published document
+/// (PUB-2.59, PUB-9.13).
+fn deposit3(k: &Kernel<World>) -> Vstream<'_, World> {
+    let vs = Vstream::new(k);
+    vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], true)
+        .expect("deposit commits");
     vs
 }
 
@@ -296,7 +319,7 @@ fn insert3(k: &Kernel<World>) -> Vstream<'_, World> {
 /// per-run claim in this module is about.
 fn three_runs(k: &Kernel<World>) -> Vstream<'_, World> {
     let vs = insert3(k);
-    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")])
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"x")], false)
         .expect("insert commits");
     vs.copy(
         P1,
@@ -346,7 +369,7 @@ fn fanout_doc2(k: &Kernel<World>) -> Vstream<'_, World> {
         }],
     )
     .expect("copy commits");
-    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")])
+    vs.insert(P1, &doc2(), vp(1, 3), vec![val(b"a")], false)
         .expect("insert commits");
     vs
 }
@@ -421,7 +444,7 @@ fn a_query_answers_from_its_pinned_snapshot_after_later_commits() {
     let vs = insert3(&k);
     let s = k.snapshot();
     let q = Query::new(&s);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], false)
         .expect("insert commits");
     assert_ne!(
         k.current_seq(),
@@ -649,7 +672,7 @@ fn retrieve_v_delivers_exactly_the_spans_intersection_with_the_bound_prefix() {
     // landing exactly on the end) are visited too.
     let k = mem_kernel();
     let vs = insert3(&k);
-    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")])
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d")], false)
         .expect("insert commits");
     let s = k.snapshot();
     let q = Query::new(&s);
@@ -992,27 +1015,30 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     // mints LENGTH-9 content elements, so a projection that assumed the
     // source's shape would name doc1 for content doc1 never allocated — and
     // every other origin case in this suite would still pass, all of them
-    // being five-component documents over eight-component elements.
+    // being five-component documents over eight-component elements. The
+    // source is the PUBLISHED edition — the one owned source `version`
+    // admits (PUB-2.9) — and the fork, a published member, is grown by a
+    // declared deposit at its fresh position (PUB-2.66).
     let k = mem_kernel();
-    let vs = insert3(&k);
-    let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
+    let vs = deposit3(&k);
+    let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // one component deeper than its source…
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
-        .expect("fork edit commits");
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], true)
+        .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // …and its own chain one component longer
     let s = k.snapshot();
     let q = Query::new(&s);
     // The fork's own position: the origin is the FORK, never its source.
     assert_eq!(ok_of(q.show_origin_v(&fork, &vspan(1, 4, 1))), vec![vdoc()]);
     // The shared prefix alone names only the source.
-    assert_eq!(ok_of(q.show_origin_v(&fork, &vspan(1, 1, 3))), vec![doc1()]);
-    // Both runs: two origins at two depths, T1-ordered — and doc1 is a PREFIX
+    assert_eq!(ok_of(q.show_origin_v(&fork, &vspan(1, 1, 3))), vec![pdoc()]);
+    // Both runs: two origins at two depths, T1-ordered — and pdoc is a PREFIX
     // of vdoc, so the listing is the shorter-first rule rather than a
     // same-length comparison.
     assert_eq!(
         ok_of(q.show_origin_v(&fork, &vspan(1, 1, 4))),
-        vec![doc1(), vdoc()]
+        vec![pdoc(), vdoc()]
     );
 }
 
@@ -1976,13 +2002,17 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     // narrowed by the project filter to CURRENT holders; the raw union may
     // be mixed-length (M5 owns the level-class discipline); bare identities,
     // tumbler-ordered.
+    // The length-9 origin is the owned fork of the PUBLISHED edition (the
+    // one owned source `version` admits, PUB-2.9), grown by a declared
+    // deposit; the draft doc1 supplies the length-8 half.
     let k = mem_kernel();
-    let vs = insert3(&k);
-    let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
-    assert_eq!(fork, vdoc()); // shares ca1..ca3
+    let vs = insert3(&k); // doc1 = [ca1, ca2, ca3]
+    deposit3(&k); // pdoc = [pca1, pca2, pca3]
+    let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
+    assert_eq!(fork, vdoc()); // shares pdoc's three
     let (start, _) = vs
-        .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
-        .expect("fork edit commits");
+        .insert(P1, &fork, vp(1, 4), vec![val(b"z")], true)
+        .expect("fork deposit commits");
     assert_eq!(start, vca(1)); // the fork's chain mints LENGTH-9 elements
     vs.copy(
         P1,
@@ -2004,10 +2034,10 @@ fn find_docs_containing_filters_to_present_tense_containers() {
         let s = k.snapshot();
         let q = Query::new(&s);
         // Mixed-length coverage {[ca1,ca2), [vca1,vca2)} passes raw through
-        // M6; all three docs currently hold some of it.
+        // M6; all three docs currently hold some of it, tumbler-ordered.
         assert_eq!(
             ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])])),
-            vec![doc1(), vdoc(), doc2()]
+            vec![doc1(), doc2(), vdoc()]
         );
     }
     // doc1 drops ca1 — it stays an R-candidate (permanence) but the
@@ -2017,7 +2047,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     let q = Query::new(&s);
     assert_eq!(
         ok_of(q.find_docs_containing(&[region_spec(doc2(), vec![vspan(1, 1, 2)])])),
-        vec![vdoc(), doc2()]
+        vec![doc2(), vdoc()]
     );
     // A depth-incompatible span contributes nothing — never a rejection.
     assert_eq!(
@@ -2025,7 +2055,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
             region_spec(doc1(), vec![deep_span(1)]),
             region_spec(doc2(), vec![vspan(1, 1, 2)]),
         ])),
-        vec![vdoc(), doc2()]
+        vec![doc2(), vdoc()]
     );
     // A link-subspace span passes the gate and stays inert: link placement
     // is R-uncoupled (J-LV), so it can add no spurious container.

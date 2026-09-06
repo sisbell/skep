@@ -478,6 +478,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
             values: fields.vals("values")?,
+            deposit: fields.deposit()?,
         },
         "delete" => Op::Delete {
             doc: fields.addr("doc")?,
@@ -700,6 +701,19 @@ impl Fields {
                 .as_bool()
                 .map(Some)
                 .ok_or_else(|| PErr("field 'published': expected true or false".into())),
+        }
+    }
+
+    /// `insert`'s DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner ruling
+    /// 2026-09-05; PUB-2.63): absent and explicit `null` alike read `false` —
+    /// an ordinary edit — and only a literal `true` declares. Any other value
+    /// is a parse fault, never coerced.
+    fn deposit(&mut self) -> PResult<bool> {
+        match self.take_opt("deposit") {
+            None => Ok(false),
+            Some(v) => v
+                .as_bool()
+                .ok_or_else(|| PErr("field 'deposit': expected true or false".into())),
         }
     }
 
@@ -1105,10 +1119,16 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::PrincipalPrefix { id } => {
             (op_name(OpKind::PrincipalPrefix), vec![("principal", j_u64(id.0))])
         }
-        Op::Insert { doc, at, values } => (
-            op_name(OpKind::Insert),
-            vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))],
-        ),
+        Op::Insert { doc, at, values, deposit } => {
+            let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
+            // Canonical: the declaration rides only when made — absent IS
+            // `false` on the wire, so a `false` marshals to no field and
+            // `parse ∘ marshal` is a fixpoint.
+            if *deposit {
+                pairs.push(("deposit", Value::Bool(true)));
+            }
+            (op_name(OpKind::Insert), pairs)
+        }
         Op::Delete { doc, p, width } => (
             op_name(OpKind::Delete),
             vec![("doc", j_addr(doc)), ("p", j_vpos(p)), ("width", j_nat(width))],
@@ -1802,6 +1822,12 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::NotHomeLink => "not_home_link",
         RejectCode::AlreadySeated => "already_seated",
         RejectCode::NotContentSubspace => "not_content_subspace",
+        // The version-chain model's three write-path refusals (PUB-8.2's
+        // routed item; owner ruling D2b) — proposed tokens, the owner to
+        // confirm as `mint_home_public` was.
+        RejectCode::PublishedTarget => "published_target",
+        RejectCode::PrivateVersionOfPublished => "private_version_of_published",
+        RejectCode::PrivateSourceVersionless => "private_source_versionless",
         RejectCode::IllFormedSpec => "ill_formed_spec",
         RejectCode::SlotTooLarge => "slot_too_large",
         RejectCode::EmptyTypeResolution => "empty_type_resolution",

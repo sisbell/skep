@@ -80,17 +80,19 @@ fn retire_atom(fps: &[&str]) -> String {
 }
 
 /// Land one credential record atom at `ordinal` of the claimant's doc 1 and
-/// answer its address. The atom is an ORDINARY write into a published home,
-/// so it needs a session the publish gate admits — a signed one on a
-/// claimed board. Kept apart from [`deposit`] for exactly that reason: the
-/// two writes meet different gates, and only the second is the credential
-/// path's.
+/// answer its address. The atom is a write into a published home, so it
+/// needs a session the publish gate admits — a signed one on a claimed
+/// board — and it carries the DEPOSIT DECLARATION (PUB-2.63; PUB-9.13's
+/// DECLARED horn), since an undeclared insert into a published document is
+/// the in-place edit the write path refuses (PUB-2.11). Kept apart from
+/// [`deposit`] for exactly that reason: the two writes meet different gates,
+/// and only the second is the credential path's.
 fn record_atom(port: u16, signed_token: &str, ordinal: u64, atom: &str) -> String {
     let v = op(
         port,
         Some(signed_token),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -321,13 +323,15 @@ fn publish_gate_shuts_bare_published_writes_and_admits_signed_ones() {
     );
     expect_resp(&v, "ack_addr");
     // Accept: the SIGNED session writes the SAME position into the
-    // published home.
+    // published home — as the DECLARED deposit the write path admits there
+    // (PUB-2.59; an undeclared insert is the refused in-place edit, PUB-2.11,
+    // which is the store's cell, `tests/version_chain.rs`).
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["y"],"deposit":true}}"#
         ),
     );
     expect_resp(&v, "ack_addr");
@@ -479,7 +483,7 @@ fn the_enrolled_cap_refuses_at_sixteen_and_genesis_is_exempt() {
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+                r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{atom_ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
             ),
         );
         expect_resp(&v, "ack_addr");
@@ -557,7 +561,7 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
             port,
             Some(&account_token),
             &format!(
-                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}]}}"#,
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
                 enroll_atom(keys)
             ),
         );
@@ -633,7 +637,7 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
             port,
             Some(&account_token),
             &format!(
-                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}]}}"#,
+                r#"{{"op":"insert","doc":"{doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
                 enroll_atom_with_trailing_non_point(real_keys)
             ),
         );
@@ -846,13 +850,16 @@ fn a_draft_homed_credential_refuses_unpublished_and_the_home_pin_needs_a_publish
     // An enroll deposit homed in `home`, its record atom landed first at the
     // V-position `ordinal`. The atom's I-address is the insert's own ack —
     // a version's content chain is its own, so the I-ordinal is not the
-    // V-ordinal there — and home anchoring puts the record in `home`.
+    // V-ordinal there — and home anchoring puts the record in `home`. The
+    // atom's insert is DECLARED (PUB-2.63): into the published member it is
+    // the deposit the write path admits, and into the draft the flag is
+    // inert.
     let enroll_in = |home: &str, ordinal: u64, atom: &str| -> Value {
         let v = op(
             port,
             Some(&signed),
             &format!(
-                r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}]}}"#
+                r#"{{"op":"insert","doc":"{home}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
             ),
         );
         let atom_addr = acked_addr(&v);
@@ -921,9 +928,11 @@ fn the_publish_gate_projects_a_version_member_to_its_document() {
 
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     // A bare write homed in the member: refused — the member projects to the
-    // published doc 1.
+    // published doc 1. (Declared, and at the member's fresh position, so
+    // the store's in-place refusal is not what answers below: the write is
+    // the deposit a published head admits, PUB-2.59.)
     let insert = format!(
-        r#"{{"op":"insert","doc":"{version}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"]}}"#
+        r#"{{"op":"insert","doc":"{version}","at":{{"subspace":"1","ordinal":"2"}},"values":["x"],"deposit":true}}"#
     );
     assert_eq!(rejected_detail(&op(port, Some(&bare), &insert)), "credential_refused:signed_session_required");
     // A bare version OF the member: refused the same way.
@@ -1089,16 +1098,19 @@ fn drafts_section(port: u16) -> String {
 }
 
 /// PUB-8.17 (§4.4): `version`'s ABSENT flag INHERITS the source's publication
-/// state, and an explicit flag overrides it — in the RECORD: the resolved bit
-/// is what the member's `Allocate` journals (PUB-8.18), and the dump's
-/// exception set shows it. The publish gate reads the DOCUMENT a member
-/// projects to (PUB-2.15), so where the member's bit equals its document's the
-/// two instruments agree, and where the flag makes them differ — an explicit
-/// `false` over a published source — the gate answers the document's state
-/// and the dump the member's. Over empty published/private sources so the
-/// version snapshots no content and ordinal 1 is always free.
+/// state — in the RECORD: the resolved bit is what the member's `Allocate`
+/// journals (PUB-8.18), and the dump's exception set shows it. Since lane 3.1
+/// the write path's own two refusals bound what an OWNER may resolve (owner
+/// ruling D2b, PUB-8.2): a version of the owner's PRIVATE source is
+/// versionless whatever the flag (PUB-2.9, `private_source_versionless`),
+/// and an explicit `false` over the owner's PUBLISHED source is the private
+/// member the chain admits nothing of (PUB-2.7,
+/// `private_version_of_published`) — so the record never holds a private
+/// member, and the publish gate's projection of a member to its document
+/// (PUB-2.15) and the record agree. Over empty published/private sources so
+/// the version snapshots no content and ordinal 1 is always free.
 #[test]
-fn version_inherits_publication_and_an_explicit_flag_overrides() {
+fn version_inherits_publication_and_the_write_path_refuses_the_private_arms() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -1124,51 +1136,77 @@ fn version_inherits_publication_and_an_explicit_flag_overrides() {
             r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"{flag}}}"#
         )))
     };
+    let head = |port: u16| json(&get(port, "/health").1)["log_position"].as_u64().expect("head");
     // Empty PRIVATE and empty PUBLISHED sources (signed, non-first mints).
     let priv_src = create(""); // flagless non-first → private
     let pub_src = create(r#","published":true"#); // explicit true → published
 
-    // Flagless version of a PRIVATE source → private (inherit). A bare draft
-    // version is not gated. (A version of a private source the caller owns
-    // is PUB-2.9's versionless cell — lane 3.1's routed item, PUB-8.2 —
-    // admitted today.)
-    let v_priv = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{priv_src}"}}"#)));
-    assert!(!bare_write_published(&v_priv), "flagless version of a draft inherits private");
+    // PUB-2.9: a version of the owner's PRIVATE source refuses, whatever the
+    // flag and whatever the session — the refusal is the store's, behind
+    // every daemon gate — and nothing mints. ONE code; the face splits on
+    // the flag the client sent, which is the client's to render (PUB-8.3).
+    let before = head(port);
+    for (token, flag) in [
+        (&bare, ""),
+        (&bare, r#","published":false"#),
+        (&signed, ""),
+        (&signed, r#","published":false"#),
+        (&signed, r#","published":true"#),
+    ] {
+        let v = op(port, Some(token), &format!(r#"{{"op":"version","d_src":"{priv_src}"{flag}}}"#));
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("private_source_versionless"), "flag {flag:?}: {v}");
+        assert_eq!(rej["disposition"].as_str(), Some("permanent"), "a permanent class: {v}");
+        assert!(rej.get("detail").is_none(), "the face keys on the code and the flag sent: {v}");
+    }
+    // …and a BARE `published:true` meets the publish-class gate FIRST
+    // (PUB-6.36 slot 4 ahead of slot 5): the face's split arm names the
+    // versionless act there (RES-195), the daemon's code being the gate's.
+    let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{priv_src}","published":true}}"#));
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
+    assert_eq!(head(port), before, "a refused version mints nothing");
 
     // Flagless version of a PUBLISHED source → published (inherit). Needs a
     // signed session (bare would meet the publish gate at the version itself).
     let v_pub = acked_addr(&op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{pub_src}"}}"#)));
     assert!(bare_write_published(&v_pub), "flagless version of an edition inherits published");
+    // An explicit `true` is the same act spelled out.
+    let v_true = acked_addr(&op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{pub_src}","published":true}}"#)));
+    assert!(bare_write_published(&v_true));
 
-    // Explicit `false` over a PUBLISHED source: the flag overrides the
-    // inheritance in the RECORD — the member's own bit is journaled `false`
-    // — but the member is a member of `pub_src`'s chain, and the publish
-    // gate reads the DOCUMENT it projects to (PUB-2.15), which is published:
-    // a bare write into it is still refused. (A private member of a
-    // published chain is PUB-2.7's cell — the same routed item — admitted
-    // today; the flag is admitted as PUB-6.43's explicit-flag input, a draft
-    // mint, so the bare `version` itself is not gated.)
-    let v_false = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{pub_src}","published":false}}"#)));
-    assert!(
-        bare_write_published(&v_false),
-        "a member of a published chain is gated as its document (PUB-2.15)"
-    );
+    // PUB-2.7: an explicit `false` over the owner's PUBLISHED source refuses
+    // — from the bare session (a draft mint, which the publish-class gate
+    // does not take) and the signed one alike — so no private member of a
+    // published chain is ever minted, and the record has none to show.
+    let before = head(port);
+    for token in [&bare, &signed] {
+        let v = op(port, Some(token), &format!(r#"{{"op":"version","d_src":"{pub_src}","published":false}}"#));
+        let rej = expect_resp(&v, "rejected");
+        assert_eq!(rej["code"].as_str(), Some("private_version_of_published"), "{v}");
+        assert_eq!(rej["disposition"].as_str(), Some("permanent"));
+        assert!(rej.get("detail").is_none(), "{v}");
+    }
+    assert_eq!(head(port), before, "a refused version mints nothing");
+    // A member the owner mints is itself a source whose private arm refuses
+    // the same way (PUB-2.10: every version address names a published state).
+    let v = op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{v_pub}","published":false}}"#));
+    assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("private_version_of_published"));
 
-    // The RECORD's bits, off the dump's exception set: the explicit `false`
-    // and the inherited private are drafts of the claimant's account; the
-    // inherited published is not a draft.
+    // The RECORD's bits, off the dump's exception set: the private source is
+    // a draft of the claimant's account; the inherited members are not, and
+    // no member of the published chain is.
     let drafts = drafts_section(port);
     assert!(
-        drafts.contains(&format!(r#""{v_false}": "{CLAIMANT_ACCOUNT}""#)),
-        "an explicit false is the bit the version's record journals: {drafts}"
+        drafts.contains(&format!(r#""{priv_src}": "{CLAIMANT_ACCOUNT}""#)),
+        "the flagless non-first mint is a draft in the record: {drafts}"
     );
     assert!(
-        drafts.contains(&format!(r#""{v_priv}": "{CLAIMANT_ACCOUNT}""#)),
-        "the flagless version of a draft inherits private in the record: {drafts}"
+        !drafts.contains(&format!(r#""{v_pub}""#)) && !drafts.contains(&format!(r#""{v_true}""#)),
+        "the versions of an edition inherit published in the record: {drafts}"
     );
     assert!(
-        !drafts.contains(&format!(r#""{v_pub}""#)),
-        "the flagless version of an edition inherits published in the record: {drafts}"
+        !drafts.contains(&format!(r#""{pub_src}."#)),
+        "no member of the published chain is a draft: {drafts}"
     );
 
     sd.shutdown();
@@ -1196,7 +1234,7 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}]}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
             enroll_atom(&[&distinct_key(3)])
         ),
     );
@@ -1296,7 +1334,7 @@ fn pre_claim_a_credential_nullify_answers_claim_first_ahead_of_the_nullify_cell(
         port,
         Some(&claimant),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}]}}"#,
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
             enroll_atom_flagged(&[(&anchor_key(), true), (&device_key(), false)])
         ),
     );
@@ -1434,14 +1472,15 @@ fn restart_recovers_the_identity_fold() {
         "the rebuilt key table equals the live fold's"
     );
     // The recovered fold verifies a fresh signed handshake, and the signed
-    // session writes into the published home (ordinal 2 — the one legal
-    // insert slot after the ceremony's atom).
+    // session deposits into the published home (ordinal 2 — the one legal
+    // insert slot after the ceremony's atom, and a declared deposit there is
+    // the one insert a published head admits, PUB-2.59).
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let v = op(
         port,
         Some(&signed),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["r"],"deposit":true}}"#
         ),
     );
     expect_resp(&v, "ack_addr");

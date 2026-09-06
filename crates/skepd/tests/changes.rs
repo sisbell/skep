@@ -403,12 +403,14 @@ fn the_key_testimony_names_the_key_that_signed_the_session() {
         .to_string();
 
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    // A declared deposit at the home's fresh position — the one insert a
+    // published document admits (PUB-2.59).
     let (_, entry) = feed_entry(
         port,
         &signed,
         "a signed write",
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["s"],"deposit":true}}"#
         ),
     );
     assert_eq!(
@@ -563,9 +565,13 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
         ),
     ];
     // The two minting rows name a document known only from the ack, so
-    // their expectation is built from it rather than stated up front.
+    // their expectation is built from it rather than stated up front. The
+    // version is the CROSS-OWNER arm — a private copy of the claimant's
+    // published home, minted into principal 1's own account — since a
+    // version of one's own draft is versionless (PUB-2.9, the store's
+    // `private_source_versionless`; `tests/version_chain.rs`).
     let minting = [
-        ("version", format!(r#"{{"op":"version","d_src":"{doc_a}"}}"#)),
+        ("version", format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}","published":false}}"#)),
         ("fork", r#"{"op":"fork"}"#.to_string()),
     ];
 

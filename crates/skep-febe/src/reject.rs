@@ -164,6 +164,22 @@ pub enum RejectCode {
     NotHomeLink,
     AlreadySeated,
     NotContentSubspace,
+    // ── M5 arrangement: the version-chain model's three write-path
+    //    refusals (PUB round 2, lane 3.1; owner ruling D2b). Each is a
+    //    PERMANENT class (PUB-8.3's idiom); the faces are pinned verbatim at
+    //    PUB-2.11's table and are the CLIENT's to render, keyed on the code
+    //    (PUB-6.7) — `private_source_versionless`'s splitting on the flag
+    //    the client itself sent, the code staying one. ──
+    /// PUB-2.11 — an in-place arrangement edit (`insert`, `copy`-into,
+    /// `delete`, `rearrange`) on a PUBLISHED target; a DECLARED deposit at
+    /// fresh positions is the one insert it admits (PUB-2.59, PUB-9.13).
+    PublishedTarget,
+    /// PUB-2.7 — a `version` resolving PRIVATE on a PUBLISHED source the
+    /// caller owns (the explicit-`false` arm; absent inherits, PUB-2.8).
+    PrivateVersionOfPublished,
+    /// PUB-2.9 — a `version` on a PRIVATE source the caller owns, whatever
+    /// the flag: private documents are versionless.
+    PrivateSourceVersionless,
     // ── M7 link ──
     IllFormedSpec,
     SlotTooLarge,
@@ -233,8 +249,12 @@ fn fixed_detail(code: RejectCode) -> Option<&'static str> {
 /// per-transaction byte budget, ruled Permanent 2026-08-21 — no retry
 /// shrinks a transaction; the client splits it), `TxnUnencodable` (a record
 /// M2's serializer refused — the same request re-presented stages the same
-/// record), and the recovery-steering `NotNextForm` (re-derive via
-/// `NextAccountPrefix`, a *different* request).
+/// record), the recovery-steering `NotNextForm` (re-derive via
+/// `NextAccountPrefix`, a *different* request), and the version-chain
+/// model's three refusals `PublishedTarget` / `PrivateVersionOfPublished` /
+/// `PrivateSourceVersionless` (PUB-8.3's "permanent class": publication
+/// never transitions, PUB-1.9, so the same request can never land — the act
+/// that does is another request, the one the face names).
 /// The conservatively-`Permanent` state-dependent codes (`NotArranged`,
 /// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
 /// `EmptySubspace`, `DelegatorUnknown`, `NotAPrincipal`, …) are the
@@ -381,6 +401,9 @@ mod tests {
             RejectCode::NotOwner,
             RejectCode::Unauthenticated,
             RejectCode::Malformed,
+            RejectCode::PublishedTarget,
+            RejectCode::PrivateVersionOfPublished,
+            RejectCode::PrivateSourceVersionless,
         ] {
             assert_eq!(disposition_of(code), Disposition::Permanent);
         }
@@ -550,6 +573,11 @@ mod tests {
             | RejectCode::NotHomeLink
             | RejectCode::AlreadySeated
             | RejectCode::NotContentSubspace
+            // The version-chain refusals: publication never transitions,
+            // so no reissue lands (PUB-8.3's permanent class).
+            | RejectCode::PublishedTarget
+            | RejectCode::PrivateVersionOfPublished
+            | RejectCode::PrivateSourceVersionless
             | RejectCode::IllFormedSpec
             | RejectCode::SlotTooLarge
             | RejectCode::EmptyTypeResolution
@@ -577,7 +605,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 69] = [
+    const ALL_CODES: [RejectCode; 72] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -625,6 +653,9 @@ mod tests {
         RejectCode::NotHomeLink,
         RejectCode::AlreadySeated,
         RejectCode::NotContentSubspace,
+        RejectCode::PublishedTarget,
+        RejectCode::PrivateVersionOfPublished,
+        RejectCode::PrivateSourceVersionless,
         RejectCode::IllFormedSpec,
         RejectCode::SlotTooLarge,
         RejectCode::EmptyTypeResolution,

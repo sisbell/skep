@@ -39,6 +39,26 @@
 //! * ordering, durability, recovery (M2) — M5 stages [`M5Rec`]s through
 //!   `transact` and is recovered by checkpoint-load + replay.
 //!
+//! ## The version-chain model's write-path refusals (PUB round 2, lane 3.1)
+//!
+//! Owner ruling D2b (2026-09-05): the three write-path refusals of the
+//! version-chain model run HERE, at the transact, as typed errors beside the
+//! ownership check — the in-place advance refusal `PublishedTarget` on
+//! `insert`/`copy`/`delete`/`rearrange` (PUB-2.11), the private-member
+//! refusal `PrivateVersionOfPublished` and the versionless sibling
+//! `PrivateSourceVersionless` on `version` (PUB-2.7, PUB-2.9) — all three in
+//! ONE slot, after registration and ω and before each op's own shape checks
+//! (PUB-6.36 slot 5), reading M3's publication bit on REGISTERED addresses
+//! alone (PUB-6.37) after projecting a version member to its document
+//! ([`trunk_of`], PUB-2.15). The daemon maps them to wire codes and adds no
+//! gate logic of its own. The one exemption is the DECLARED deposit
+//! (PUB-9.13's DECLARED horn): `insert` takes a `deposit` declaration, and a
+//! declared insert at fresh positions of a published document is admitted
+//! (PUB-2.59, PUB-2.61); an undeclared append, or a declared one that
+//! touches an arranged position, refuses — the declaration is a claim the
+//! shape must bear out, never a bypass. Link writes are outside the rule
+//! (PUB-2.12): `stage_seat_link` is untouched.
+//!
 //! ## Serialization key
 //!
 //! M5 contributes **no `Space` lock-key tag of its own**: every M5 mutation
@@ -78,7 +98,7 @@ mod vspace;
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use auth::Caller;
+pub use auth::{trunk_of, Caller};
 pub use error::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
 pub use ops::{Vstream, MAX_PLACED_RUNS};
 pub use run::Run;

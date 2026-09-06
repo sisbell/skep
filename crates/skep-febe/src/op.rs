@@ -88,11 +88,12 @@ pub enum Op {
     /// caller's own account — shares NO content (the content-sharing fork is
     /// [`Op::Version`]; §3).
     ///
-    /// `published` is the three-valued flag (PUB-8.16), resolved at M3's
-    /// create path exactly as [`Op::CreateNewDocument`]'s (fork reduces to a
-    /// create in the caller's own account). A first fork into an empty
-    /// account is refused `mint_home_first` at the daemon (PUB-8.22) before
-    /// the flag is consulted.
+    /// `published` is the three-valued flag (PUB-8.16), handed through
+    /// verbatim to `Namespace::fork`, which resolves it at M3's create path
+    /// exactly as [`Op::CreateNewDocument`]'s is (fork reduces to a create in
+    /// the caller's own account — one rule, one place, owner 2026-09-05). A
+    /// first fork into an empty account is refused `mint_home_first` at the
+    /// daemon (PUB-8.22) before the flag is consulted.
     Fork { published: Option<bool> },
     // ── namespace reads (→ M3) ──
     /// M3's next-form delegable prefix — what [`Op::Delegate`] demands (§2).
@@ -104,7 +105,16 @@ pub enum Op {
     // ── arrangement writes (→ M5) ──
     /// INSERT (ASN-0116). `Val` is M4's, carried in the payload verbatim —
     /// M10 names M4's types and calls no M4 function.
-    Insert { doc: Address, at: VPos, values: Vec<Val> },
+    ///
+    /// `deposit` is the DEPOSIT DECLARATION (PUB-9.13's DECLARED horn, owner
+    /// ruling 2026-09-05; PUB-2.59, PUB-2.63): the deposit-class record
+    /// atom's untyped first `insert` says so, and M5 admits a declared insert
+    /// into a PUBLISHED document iff it is deposit-shaped — fresh positions
+    /// past the arranged extent — where an undeclared one, or a declared one
+    /// touching an arranged position, refuses `published_target` (PUB-2.11).
+    /// Absent on the wire is `false`; into a draft the flag is inert. M10
+    /// passes it through verbatim, deciding nothing.
+    Insert { doc: Address, at: VPos, values: Vec<Val>, deposit: bool },
     /// DELETE (ASN-0117).
     Delete { doc: Address, p: VPos, width: Nat },
     /// COPY / transclusion (ASN-0118).
@@ -414,7 +424,10 @@ pub(crate) mod tests {
             (Op::Fork { published: None }, false),
             (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
             (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
-            (Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])] }, false),
+            (
+                Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])], deposit: false },
+                false,
+            ),
             (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
             (Op::Copy { doc: doc(), at: vpos(), specs: vec![vs()] }, false),
             (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),

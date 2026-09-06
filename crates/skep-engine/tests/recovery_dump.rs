@@ -94,7 +94,7 @@ fn populated_dump() -> (String, Deposited) {
     let (_acct, doc) = setup_doc(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], false)
         .expect("insert succeeds");
     let deposited = every_hint_family(&engine, &doc, &start);
     (engine.world_dump().into_string(), deposited)
@@ -203,7 +203,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
         let (acct, doc) = setup_doc(&engine);
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], false)
             .expect("insert succeeds");
         every_hint_family(&engine, &doc, &start);
         for byte in [b'r', b's', b't'] {
@@ -213,7 +213,7 @@ fn two_engines_with_the_same_history_dump_byte_equal() {
                 .expect("the delegated owner may create a document");
             engine
                 .vstream()
-                .insert(OWNER, &d, vp(1, 1), vec![Val::new(vec![byte])])
+                .insert(OWNER, &d, vp(1, 1), vec![Val::new(vec![byte])], false)
                 .expect("insert succeeds");
         }
         engine
@@ -243,7 +243,7 @@ fn a_recovered_world_dumps_byte_equal_to_the_live_fold() {
         // History batch A (below the checkpoint): content.
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], false)
             .expect("insert succeeds");
 
         // Checkpoint mid-history, so recovery is checkpoint + replay, not a
@@ -294,7 +294,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
         let (_acct, doc) = setup_doc(&engine);
         let (start, _) = engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], false)
             .expect("insert succeeds");
         every_hint_family(&engine, &doc, &start);
 
@@ -305,7 +305,7 @@ fn recovery_rebuilds_hints_from_a_checkpoint_that_already_holds_links() {
         // A short replay tail above it, so recovery is genuinely base + fold.
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'r'])])
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'r'])], false)
             .expect("insert succeeds");
 
         dump_live = engine.world_dump();
@@ -332,7 +332,7 @@ fn a_reconstructed_historical_world_carries_faithful_hints() {
     let (_acct, doc) = setup_doc(&engine);
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])])
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'p']), Val::new(vec![b'q'])], false)
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
@@ -358,7 +358,7 @@ fn a_caller_pinned_world_dumps_deterministically() {
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])])
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'v'])], false)
         .expect("insert succeeds");
 
     let snap = engine.kernel().snapshot();

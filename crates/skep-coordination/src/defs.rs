@@ -68,8 +68,12 @@ where
         let vs = (self.mk_vstream)(self.kernel.as_ref());
         // M9's writes run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): the coordination layer holds no wire
-        // principal — M9 ⟂ M10 by architecture.
-        let (start, _insert_seq) = vs.insert(Caller::System, d, at, vec![Val::new(blob)])?;
+        // principal — M9 ⟂ M10 by architecture. A def write is no deposit
+        // (the declaration is a credential-class client's, PUB-2.59), and
+        // `System` is not exempt from the in-place refusal (PUB-6.28): a def
+        // into a PUBLISHED document surfaces as
+        // `Insert(Rejected(PublishedTarget))`.
+        let (start, _insert_seq) = vs.insert(Caller::System, d, at, vec![Val::new(blob)], false)?;
         let (_pdef_tuple, seq) = self.register_pred(d, &start)?;
         Ok((start, seq))
     }

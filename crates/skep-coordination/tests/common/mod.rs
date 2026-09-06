@@ -171,15 +171,17 @@ pub fn uncataloged_ty(k: u32) -> Endset {
 // ─────────────────────────────── world assembly ─────────────────────────────
 
 /// An M3 slice with a principal-owned account and two registered documents,
-/// built by folding exactly the records M3's own ops would stage — the
-/// publication bits being the flagless create path's (PUB-8.21): the first
-/// document born published, the second private; an account's `Allocate`
+/// built by folding exactly the records M3's own ops would stage. Both are
+/// PRIVATE drafts: M9's def writes and the fixtures' seeding are in-place
+/// inserts, which a published document refuses (PUB-2.11, `Caller::System`
+/// included, PUB-6.28) — the first as an explicit-`false` mint, the state M3
+/// produces below the daemon's first-mint door. An account's `Allocate`
 /// carries no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1]), published: false })
         .apply_m3(&M3Rec::RegisterPrincipal { prefix: a(&[1, 0, 1]), id: PrincipalId(1) })
-        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 1]), published: true })
+        .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 1]), published: false })
         .apply_m3(&M3Rec::Allocate { addr: a(&[1, 0, 1, 0, 2]), published: false })
 }
 
@@ -252,7 +254,7 @@ pub fn insert_raw(k: &Arc<Kernel<World>>, doc: &Address, bytes: Vec<u8>) -> Addr
     let n_c = snap.world().m5().content_count(doc);
     let at = VPos { subspace: n(1), ordinal: n_c + n(1) };
     let (start, _) = Vstream::new(k.as_ref())
-        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)])
+        .insert(skep_links::Caller::System, doc, at, vec![Val::new(bytes)], false)
         .expect("test content INSERT succeeds");
     start
 }

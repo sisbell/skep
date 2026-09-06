@@ -208,9 +208,11 @@ pub fn rel_ty() -> Endset {
 
 /// An M3 slice with a principal-owned account and two registered documents,
 /// built by folding exactly the records M3's own `delegate`/
-/// `create_new_document` would stage — the publication bits being the
-/// flagless create path's (PUB-8.21): the first document born published, the
-/// second private; an account's `Allocate` carries no publication state.
+/// `create_new_document` would stage. Both documents are PRIVATE drafts —
+/// the discovery fixtures edit them in place, which a published document
+/// refuses (PUB-2.11); the first as an explicit-`false` mint, the state M3
+/// produces below the daemon's first-mint door. An account's `Allocate`
+/// carries no publication state.
 pub fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(&M3Rec::Allocate {
@@ -223,7 +225,7 @@ pub fn seeded_m3() -> M3State {
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
+            published: false,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
@@ -261,6 +263,6 @@ pub const SYS: skep_arrangement::Caller = skep_arrangement::Caller::System;
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(SYS, doc, vp(1, 1), vals)
+        .insert(SYS, doc, vp(1, 1), vals, false)
         .expect("test content INSERT succeeds");
 }

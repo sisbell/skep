@@ -263,9 +263,14 @@ pub fn seeded_m3() -> M3State {
             prefix: a(&[1, 0, 2]),
             id: PrincipalId(2),
         })
+        // doc1 and doc2 are PRIVATE drafts: the link fixtures seed and
+        // fragment their content in place, which a published document
+        // refuses (PUB-2.11) — doc1 as an explicit-`false` first mint, the
+        // state M3 produces below the daemon's door. The sibling's document
+        // keeps its born-published bit: nothing edits it.
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
+            published: false,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
@@ -308,7 +313,7 @@ pub fn kernel() -> Kernel<World> {
 pub fn seed_content(k: &Kernel<World>, doc: &Address, count: u32) {
     let vals: Vec<Val> = (0..count).map(|i| Val::new(vec![b'a' + i as u8])).collect();
     skep_arrangement::Vstream::new(k)
-        .insert(Caller::System, doc, vp(1, 1), vals)
+        .insert(Caller::System, doc, vp(1, 1), vals, false)
         .expect("test content INSERT succeeds");
 }
 
@@ -327,6 +332,7 @@ pub fn fragment_content(k: &Kernel<World>, doc: &Address, runs: u32) {
                 doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'a' + (i % 26) as u8])],
+                false,
             )
             .expect("test content INSERT succeeds");
     }

@@ -16,6 +16,19 @@
 //! they write (COPY: destination only; VERSION is ungated, non-owner
 //! versioning being denial-as-fork, O10).
 //!
+//! Publication (PUB round 2, lane 3.1; owner ruling D2b): directly after
+//! that gate, in the SAME transact and reading the working state's
+//! publication bit on the registered address the gate just established
+//! (PUB-6.37), each of the four edits refuses `PublishedTarget` when the
+//! target's DOCUMENT is published (PUB-2.11; a version member projects to
+//! its document first, [`trunk_of`], PUB-2.15) — `insert` alone admitting a
+//! DECLARED deposit at a fresh position (PUB-2.59, PUB-9.13) — and `version`
+//! refuses `PrivateSourceVersionless` / `PrivateVersionOfPublished` on the
+//! own-source arm (PUB-2.9, PUB-2.7). That is PUB-6.36's slot 5, evaluated
+//! here and nowhere else; the daemon's publish-class gate (slot 4) has
+//! already run pre-dispatch, and the daemon maps these errors to wire codes
+//! without a gate of its own.
+//!
 //! WHICH ERROR WINS when several conditions fail at once is stated on each op
 //! below, and this is the only statement of it: the error types name verdicts,
 //! not precedence, and the integration suite pins what is written here.
@@ -32,7 +45,7 @@ use skep_content::{stage_write, ContentWrite, HasContent, Val};
 use skep_kernel::{Kernel, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
-use crate::auth::{gate_write, Caller};
+use crate::auth::{gate_write, published_target, trunk_of, Caller};
 use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionError};
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
@@ -110,12 +123,40 @@ where
     /// address (the predicate-def identity for M9) and the commit `Seq`.
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the
-    /// in-txn ω gate) → `EmptyContent` → `NotContentSubspace`
-    /// (`at.subspace ≠ s_C`) → `OutOfBounds` (the arrangement does not admit
-    /// `at.ordinal` as a placement boundary — Valid(First)InsertionPosition,
-    /// so ordinal = 1 when n_C = 0). Then, PER VALUE in the order given,
-    /// `Mint` (the content mint) → `Content` (the byte write), with the FIRST
-    /// value to fail deciding.
+    /// in-txn ω gate) → `PublishedTarget` (below) → `EmptyContent` →
+    /// `NotContentSubspace` (`at.subspace ≠ s_C`) → `OutOfBounds` (the
+    /// arrangement does not admit `at.ordinal` as a placement boundary —
+    /// Valid(First)InsertionPosition, so ordinal = 1 when n_C = 0). Then,
+    /// PER VALUE in the order given, `Mint` (the content mint) → `Content`
+    /// (the byte write), with the FIRST value to fail deciding.
+    ///
+    /// THE PUBLISHED TARGET, and the deposit that clears it (PUB-2.11,
+    /// PUB-2.59, PUB-2.61; PUB-9.13's DECLARED horn, owner-ruled). When the
+    /// document `doc` projects to (PUB-2.15) is PUBLISHED, an insert is an
+    /// in-place advance of the reading surface and refuses `PublishedTarget`
+    /// — UNLESS `deposit` is set AND the insert is deposit-SHAPED: `at` names
+    /// a fresh content position past the arranged extent, so the placement
+    /// appends and disturbs no arrangement. The declaration is a claim the
+    /// shape must bear out, never a bypass: a declared insert at an arranged
+    /// position refuses with the same code, and an UNDECLARED append refuses
+    /// too (the cost RES-209 item 5 named, closed). Into a PRIVATE document
+    /// the declaration is inert — every insert is admitted there as before.
+    /// A declared deposit whose fresh position lies past the append boundary
+    /// clears this refusal and meets `OutOfBounds` below, so it is told its
+    /// position is bad rather than that its target is published.
+    /// `Caller::System` is NOT exempt (PUB-6.28): a rule fire never advances
+    /// a published arrangement in place.
+    ///
+    /// AN ACCOUNT'S HOME IS SUCH A TARGET. The flagless first mint into an
+    /// empty account is born published — M3's own create path resolves that
+    /// bit (PUB-8.21), not a flag the caller sent — so content enters doc 1
+    /// only by a DECLARED deposit at a fresh position: the record atoms that
+    /// accrete there outside the version discipline (PUB-2.4, PUB-2.60), its
+    /// prose advancing by shots like any edition's (PUB-2.58). A client or
+    /// fixture that mints a home and then inserts into it undeclared meets
+    /// this refusal, and that is the rule working; the account's LATER
+    /// flagless mints are private by default (PUB-1.1) and take an ordinary
+    /// insert.
     ///
     /// Only one of those last two is a verdict an honest request can earn.
     /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier;
@@ -152,6 +193,7 @@ where
         doc: &Address,
         at: VPos,
         values: Vec<Val>,
+        deposit: bool,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
         let key = M3State::content_lock_key(doc);
         self.kernel.transact(&[key], |stg| {
@@ -162,6 +204,14 @@ where
                 InsertError::DocNotRegistered,
                 InsertError::NotOwner,
             )?;
+            // PUB-6.36 slot 5: on a registered, owned target, the
+            // published-target refusal — cleared only by a DECLARED deposit
+            // at a FRESH position (PUB-2.59, PUB-9.13).
+            if published_target(stg.working().m3(), doc)
+                && !(deposit && stg.working().m5().names_fresh_content_position(doc, &at))
+            {
+                return Err(InsertError::PublishedTarget);
+            }
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }
@@ -225,8 +275,12 @@ where
     /// Check order (which error wins). Destination first, as INSERT:
     /// `DocNotRegistered` → `NotOwner` (the ω gate on the DESTINATION only;
     /// source spans stay unrestricted, transclusion of anyone's content being
-    /// the point of the medium) → `NotContentSubspace` → `OutOfBounds`. Then,
-    /// per spec: `SourceNotRegistered`
+    /// the point of the medium) → `PublishedTarget` (PUB-2.11 on the
+    /// DESTINATION's document, PUB-2.15 projected; copy-into is the reading
+    /// surface's own mutation class and carries no deposit exemption — the
+    /// sources, published or private, are never what this refuses on) →
+    /// `NotContentSubspace` → `OutOfBounds`. Then, per spec:
+    /// `SourceNotRegistered`
     /// → `NotOrdinalVSpan` (the span fails
     /// [`is_ordinal_vspan`](crate::is_ordinal_vspan) — the one shape `resolve`
     /// folds on, so a span COPY rejects is exactly a span `resolve` would
@@ -284,6 +338,11 @@ where
                     CopyError::DocNotRegistered,
                     CopyError::NotOwner,
                 )?;
+                // PUB-6.36 slot 5: the in-place advance refusal on the
+                // destination (PUB-2.11).
+                if published_target(world.m3(), doc) {
+                    return Err(CopyError::PublishedTarget);
+                }
                 if !at.is_content() {
                     return Err(CopyError::NotContentSubspace);
                 }
@@ -359,16 +418,19 @@ where
     /// run-list).
     ///
     /// Check order (which error wins): `DocNotRegistered` → `NotOwner` (the ω
-    /// gate) → `NotContentSubspace` → `NotArranged` (`p.ordinal ∉ [1, n_C]`)
-    /// → `OutOfBounds` (`ordinal + width − 1 > n_C`) → `EmptyWidth`
-    /// (`width = 0`).
+    /// gate) → `PublishedTarget` (PUB-2.11 on the document `doc` projects
+    /// to, PUB-2.15 — a delete is the reading surface's own mutation and has
+    /// no deposit form) → `NotContentSubspace` → `NotArranged`
+    /// (`p.ordinal ∉ [1, n_C]`) → `OutOfBounds` (`ordinal + width − 1 > n_C`)
+    /// → `EmptyWidth` (`width = 0`).
     ///
-    /// THE FIRST TWO OF THOSE MAY NOT BE TRANSPOSED, and the reason is not
-    /// only which verdict a caller reads: `NotArranged` also DISCHARGES the
-    /// next check's precondition. `contains_content_range` tests the upper
-    /// bound alone and means containment only for `p.ordinal ≥ 1`, which the
-    /// arranged-position check has just established. Asked the other way
-    /// round, a range opening at ordinal 0 would be admitted as contained.
+    /// THE ARRANGED AND CONTAINMENT CHECKS MAY NOT BE TRANSPOSED, and the
+    /// reason is not only which verdict a caller reads: `NotArranged` also
+    /// DISCHARGES the next check's precondition. `contains_content_range`
+    /// tests the upper bound alone and means containment only for
+    /// `p.ordinal ≥ 1`, which the arranged-position check has just
+    /// established. Asked the other way round, a range opening at ordinal 0
+    /// would be admitted as contained.
     pub fn delete(
         &self,
         caller: Caller,
@@ -386,6 +448,10 @@ where
                     DeleteError::DocNotRegistered,
                     DeleteError::NotOwner,
                 )?;
+                // PUB-6.36 slot 5: the in-place advance refusal (PUB-2.11).
+                if published_target(stg.working().m3(), doc) {
+                    return Err(DeleteError::PublishedTarget);
+                }
                 if !p.is_content() {
                     return Err(DeleteError::NotContentSubspace);
                 }
@@ -435,7 +501,9 @@ where
     /// value back.
     ///
     /// Check order (which error wins, per R-PRE): `DocNotRegistered` →
-    /// `NotOwner` (the ω gate) → `BadCutCount` (3|4) →
+    /// `NotOwner` (the ω gate) → `PublishedTarget` (PUB-2.11 on the document
+    /// `doc` projects to, PUB-2.15; a re-arrangement is the reading surface's
+    /// own mutation and has no deposit form) → `BadCutCount` (3|4) →
     /// `NotAscending` (strict) → `NotContentSubspace` (every cut) →
     /// `OutOfBounds` (CS5 lower bound `1 ≤ ord(c₀)` and upper bound
     /// `ord(c_last) ≤ n_C + 1`) → `EmptyContentSubspace` (R-PRE(ii);
@@ -458,6 +526,10 @@ where
                     RearrangeError::DocNotRegistered,
                     RearrangeError::NotOwner,
                 )?;
+                // PUB-6.36 slot 5: the in-place advance refusal (PUB-2.11).
+                if published_target(stg.working().m3(), doc) {
+                    return Err(RearrangeError::PublishedTarget);
+                }
                 if cuts.len() != 3 && cuts.len() != 4 {
                     return Err(RearrangeError::BadCutCount);
                 }
@@ -522,9 +594,31 @@ where
     /// `Some(b)` ⇒ `b`, and ABSENT (`None`) ⇒ INHERIT `published(source)`,
     /// on BOTH branches — a cross-owner fork into an EMPTY account inherits
     /// too, never the create path's born-published rule (lane 0's rider: the
-    /// copy inherits; M3 applies no default). The write-path refusals that
-    /// bound the resolved bit (PUB-2.7, PUB-2.9) are the daemon's routed item
-    /// (PUB-8.2), unbuilt here.
+    /// copy inherits; M3 applies no default). The source's state is read on
+    /// the DOCUMENT a version member projects to (PUB-2.15, [`trunk_of`]).
+    ///
+    /// THE TWO REFUSALS OF THE VERSION-CHAIN MODEL (PUB round 2, lane 3.1;
+    /// owner ruling D2b), both EXACT OF THE OWN-SOURCE ARM (PUB-2.14) and
+    /// evaluated inside the transaction off its working state, in PUB-6.36's
+    /// one slot, after registration:
+    ///
+    /// * `PrivateSourceVersionless` (PUB-2.9) — the caller OWNS `source` and
+    ///   its document is PRIVATE: private documents are versionless, whatever
+    ///   the flag says (absent, `false` or `true` — one code; the FACE splits
+    ///   on the flag the caller SENT, which is the daemon's to render).
+    /// * `PrivateVersionOfPublished` (PUB-2.7) — the caller OWNS `source`,
+    ///   its document is PUBLISHED, and the RESOLVED state is private, which
+    ///   only an explicit `false` produces (absent inherits published and is
+    ///   legal, PUB-2.8).
+    ///
+    /// The CROSS-OWNER branch is refused by NEITHER: it mints a fresh
+    /// document in the caller's own account off the source default plus the
+    /// flag, as round 1 built it — the entitled reader's private working copy
+    /// of published material (an explicit `false`), the inherited copy (an
+    /// absent flag), and the fork of another's draft all stand (PUB-2.18,
+    /// PUB-2.21). Applying the refusals to that arm would forbid every
+    /// private working copy of every published document to every principal,
+    /// which PUB-2.14 forbids.
     ///
     /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
@@ -617,8 +711,21 @@ where
             // INHERIT `published(d_src)` — and pass the RESOLVED bit down as
             // the bit the record journals (PUB-7.10, PUB-8.18). `source` is a
             // registered document (the monotone pre-read above), so the
-            // inherit read is inside `published`'s contract.
-            let resolved = published.unwrap_or_else(|| m3.published(source));
+            // inherit read is inside `published`'s contract; it is read on
+            // the DOCUMENT a version member projects to (PUB-2.15).
+            let source_published = m3.published(&trunk_of(source));
+            let resolved = published.unwrap_or(source_published);
+            // PUB-6.36 slot 5, the own-source arm alone (PUB-2.14): private
+            // documents are versionless (PUB-2.9), and a published one
+            // admits no private member (PUB-2.7).
+            if matches!(&branch, Branch::Owned) {
+                if !source_published {
+                    return Err(VersionError::PrivateSourceVersionless);
+                }
+                if !resolved {
+                    return Err(VersionError::PrivateVersionOfPublished);
+                }
+            }
             let (v, m3rec) = match &branch {
                 Branch::Owned => m3.mint_version(source, resolved),
                 Branch::Cross(prefix) => m3.mint_document(prefix, resolved),
@@ -654,7 +761,7 @@ mod tests {
 
     use super::*;
     use crate::state::M5State;
-    use crate::testutil::{ca, doc1, doc2, n, run, seeded_m3, vp, vspan};
+    use crate::testutil::{ca, doc1, doc2, n, pdoc, run, seeded_m3, vp, vspan};
 
     /// Unwrap an op's typed rejection (`TxnError::Rejected(E)` — surfaced
     /// verbatim, per M2's transact contract).
@@ -947,5 +1054,52 @@ mod tests {
         assert_eq!(m5.point(&doc1(), &vp(1, 1)), Some(ca(3)));
         assert_eq!(m5.point(&doc1(), &vp(1, 2)), Some(ca(1)));
         assert_eq!(m5.point(&doc1(), &vp(1, 3)), Some(ca(4)));
+    }
+
+    #[test]
+    fn the_in_place_refusal_needs_only_the_registry_and_the_arrangement() {
+        // PUB-2.11 in the MINIMAL world: the published-target refusal reads
+        // M3's bit and nothing else, so `delete`/`rearrange` refuse it under
+        // `HasM5 + HasM3` alone — after ω, before every shape check (the
+        // edition is empty, and the shape checks would have said so), and for
+        // `Caller::System` as for the owner (PUB-6.28).
+        let k = mini_kernel();
+        let vs = Vstream::new(&k);
+        let p1 = Caller::Principal(PrincipalId(1));
+        let before = k.current_seq();
+        assert!(matches!(
+            rejected(vs.delete(p1, &pdoc(), vp(1, 1), n(1))),
+            DeleteError::PublishedTarget
+        ));
+        assert!(matches!(
+            rejected(vs.rearrange(p1, &pdoc(), &[vp(1, 1), vp(1, 2), vp(1, 3)])),
+            RearrangeError::PublishedTarget
+        ));
+        assert!(matches!(
+            rejected(vs.delete(Caller::System, &pdoc(), vp(1, 1), n(1))),
+            DeleteError::PublishedTarget
+        ));
+        // ω stands ahead of it: a stranger learns nothing about publication.
+        assert!(matches!(
+            rejected(vs.delete(Caller::Principal(PrincipalId(2)), &pdoc(), vp(1, 1), n(1))),
+            DeleteError::NotOwner(d) if d == pdoc()
+        ));
+        assert_eq!(k.current_seq(), before, "a refusal commits nothing");
+        // And the draft beside it is edited as before.
+        vs.delete(p1, &doc1(), vp(1, 1), n(1)).expect("a draft's delete commits");
+    }
+
+    #[test]
+    fn copy_into_a_published_destination_refuses_before_reading_its_sources() {
+        // PUB-2.11 on COPY's destination, in the content-store world: the
+        // refusal fires ahead of every per-spec check, so a spec that would
+        // otherwise be refused for its own reasons never speaks.
+        let p1 = Caller::Principal(PrincipalId(1));
+        let k = gate_kernel(&[1, 2, 3]);
+        assert!(matches!(
+            rejected(Vstream::new(&k).copy(p1, &pdoc(), vp(2, 99), &[])),
+            CopyError::PublishedTarget
+        ));
+        assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(0));
     }
 }

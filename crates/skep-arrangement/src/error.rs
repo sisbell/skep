@@ -19,10 +19,19 @@ use skep_namespace::MintError;
 /// verdicts, aligned with DELETE's granularity, so M10 gets a
 /// self-describing rejection.) `NotOwner` carries the document that failed
 /// the ω check.
+///
+/// `PublishedTarget` is the version-chain model's in-place advance refusal
+/// (PUB-2.11; owner ruling D2b): the target's DOCUMENT (a version member
+/// projects to it, PUB-2.15) is PUBLISHED, and this insert is not an
+/// admitted deposit — one DECLARED deposit-shaped (PUB-2.59, PUB-2.61,
+/// PUB-9.13's DECLARED horn), which is the one exemption. The face, verbatim
+/// from PUB-2.11's table: "⟨D⟩ is published — it advances by versions. Stage
+/// your change in a draft, then publish it as the next version."
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InsertError {
     DocNotRegistered,
     NotOwner(Address),
+    PublishedTarget,
     NotContentSubspace,
     OutOfBounds,
     EmptyContent,
@@ -48,10 +57,16 @@ pub enum InsertError {
 /// stated on [`Vstream::copy`](crate::Vstream::copy). An argument about an
 /// invariant belongs with the operation that keeps it, so a widening reads
 /// one statement rather than two that must be edited in step.
+///
+/// `PublishedTarget` is PUB-2.11's refusal on the DESTINATION (copy-into is
+/// the reading surface's own mutation class); the sources stay unrestricted.
+/// Same face as [`InsertError::PublishedTarget`]; no deposit exemption —
+/// only a declared `insert` rides it (PUB-2.59).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CopyError {
     DocNotRegistered,
     NotOwner(Address),
+    PublishedTarget,
     NotContentSubspace,
     OutOfBounds,
     SourceNotRegistered,
@@ -64,28 +79,34 @@ pub enum CopyError {
 }
 
 /// DELETE rejection (ASN-0117; §4): the doc is registered, the caller is its
-/// owner, `subspace(p) = s_C`, `p` is arranged (`ordinal ∈ [1, n_C]`), the
-/// range is contained (`ordinal + width − 1 ≤ n_C`), and `width ≥ 1`.
+/// owner, its document is not published (`PublishedTarget` — PUB-2.11's
+/// refusal, the face of [`InsertError::PublishedTarget`]), `subspace(p) =
+/// s_C`, `p` is arranged (`ordinal ∈ [1, n_C]`), the range is contained
+/// (`ordinal + width − 1 ≤ n_C`), and `width ≥ 1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeleteError {
     DocNotRegistered,
     NotOwner(Address),
+    PublishedTarget,
     NotContentSubspace,
     NotArranged,
     OutOfBounds,
     EmptyWidth,
 }
 
-/// REARRANGE rejection (ASN-0119/0084 R-PRE; §6): 3 or 4 cuts, strictly
-/// ascending, all subspace s_C, CS5 lower bound `1 ≤ ord(c₀)` and upper
-/// bound `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), content subspace
-/// non-empty (R-PRE(ii); with ascending in-bounds cuts an empty subspace
-/// always trips `OutOfBounds` first, so `EmptyContentSubspace` is defensive
-/// completeness against the cited R-PRE rather than a reachable verdict).
+/// REARRANGE rejection (ASN-0119/0084 R-PRE; §6): the document is not
+/// published (`PublishedTarget` — PUB-2.11's refusal, the face of
+/// [`InsertError::PublishedTarget`]), 3 or 4 cuts, strictly ascending, all
+/// subspace s_C, CS5 lower bound `1 ≤ ord(c₀)` and upper bound
+/// `ord(c_last) ≤ n_C + 1` (both `OutOfBounds`), content subspace non-empty
+/// (R-PRE(ii); with ascending in-bounds cuts an empty subspace always trips
+/// `OutOfBounds` first, so `EmptyContentSubspace` is defensive completeness
+/// against the cited R-PRE rather than a reachable verdict).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RearrangeError {
     DocNotRegistered,
     NotOwner(Address),
+    PublishedTarget,
     BadCutCount,
     NotAscending,
     NotContentSubspace,
@@ -96,11 +117,38 @@ pub enum RearrangeError {
 /// CREATENEWVERSION rejection (ASN-0123; §7). `NodeTierCrossOwner`: the
 /// P-tier excludes a node-tier cross-owner fork — rejected explicitly before
 /// any mint rather than surfacing obliquely as `Mint(NotAnAccount)`.
+///
+/// The version-chain model's two refusals (owner ruling D2b), both EXACT OF
+/// THE OWN-SOURCE ARM (PUB-2.14 — the cross-owner branch mints in the
+/// caller's account off the source default plus the flag and is never
+/// refused by either):
+///
+/// * `PrivateSourceVersionless` — PUB-2.9: the source the caller OWNS is
+///   PRIVATE, whatever the flag; private documents are versionless, private
+///   history being the pool. ONE code; the FACE splits on the flag the
+///   caller SENT (PUB-8.3, RES-43) — absent or `false`: "⟨D⟩ is private —
+///   private documents are versionless. Mint a sibling draft to hold the
+///   alternative; the version chain is publication's own."; `true`: "⟨D⟩ is
+///   private — publishing means minting a separate edition: select what to
+///   publish and it is minted published-born, your draft re-windowing it;
+///   private documents are versionless."
+/// * `PrivateVersionOfPublished` — PUB-2.7: the source is PUBLISHED and the
+///   RESOLVED state is private (the explicit `false` arm alone — absent
+///   inherits published and is legal, PUB-2.8). The face names both acts
+///   (RES-189): "⟨D⟩ is published — its versions are published. To keep a
+///   private copy of it, mint a sibling draft to hold it; the version chain
+///   is publication's own. To change what the world reads, stage your change
+///   in a draft, then publish it as the next version."
+///
+/// Both read the source's DOCUMENT (PUB-2.15): a version member is judged
+/// as its trunk is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VersionError {
     SourceNotRegistered,
     NotAPrincipal,
     NodeTierCrossOwner,
+    PrivateSourceVersionless,
+    PrivateVersionOfPublished,
     Mint(MintError),
 }
 
@@ -145,6 +193,9 @@ impl fmt::Display for InsertError {
             InsertError::NotOwner(_) => {
                 f.write_str("insert: the caller is not the document's effective owner (ω)")
             }
+            InsertError::PublishedTarget => f.write_str(
+                "insert: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version (an undeclared or non-fresh deposit is an in-place edit)",
+            ),
             InsertError::NotContentSubspace => {
                 f.write_str("insert: at.subspace is not the content subspace s_C")
             }
@@ -177,6 +228,9 @@ impl fmt::Display for CopyError {
             CopyError::NotOwner(_) => {
                 "copy: the caller is not the destination document's effective owner (ω)"
             }
+            CopyError::PublishedTarget => {
+                "copy: the destination document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
             CopyError::NotContentSubspace => "copy: at.subspace is not the content subspace s_C",
             CopyError::OutOfBounds => {
                 "copy: at.ordinal is outside the valid insertion range [1, n_C + 1]"
@@ -206,6 +260,9 @@ impl fmt::Display for DeleteError {
             DeleteError::NotOwner(_) => {
                 "delete: the caller is not the document's effective owner (ω)"
             }
+            DeleteError::PublishedTarget => {
+                "delete: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
+            }
             DeleteError::NotContentSubspace => "delete: p.subspace is not the content subspace s_C",
             DeleteError::NotArranged => "delete: p.ordinal names no arranged content position",
             DeleteError::OutOfBounds => "delete: the range overruns the arranged content (ordinal + width − 1 > n_C)",
@@ -221,6 +278,9 @@ impl fmt::Display for RearrangeError {
             RearrangeError::DocNotRegistered => "rearrange: doc is not a registered document",
             RearrangeError::NotOwner(_) => {
                 "rearrange: the caller is not the document's effective owner (ω)"
+            }
+            RearrangeError::PublishedTarget => {
+                "rearrange: the document is published — it advances by versions; stage the change in a draft, then publish it as the next version"
             }
             RearrangeError::BadCutCount => "rearrange: exactly 3 or 4 cuts are required",
             RearrangeError::NotAscending => "rearrange: cut ordinals must be strictly ascending",
@@ -247,6 +307,12 @@ impl fmt::Display for VersionError {
             VersionError::NotAPrincipal => f.write_str("version: the caller id names no principal"),
             VersionError::NodeTierCrossOwner => f.write_str(
                 "version: a cross-owner fork requires an account-tier forker (P-tier, ASN-0123)",
+            ),
+            VersionError::PrivateSourceVersionless => f.write_str(
+                "version: the source is private — private documents are versionless; mint a sibling draft to hold the alternative, the version chain is publication's own (PUB-2.9)",
+            ),
+            VersionError::PrivateVersionOfPublished => f.write_str(
+                "version: the source is published — its versions are published; to keep a private copy mint a sibling draft, and to change what the world reads stage the change in a draft and publish it as the next version (PUB-2.7)",
             ),
             // This layer only — the mint's own message is the `source`.
             VersionError::Mint(_) => f.write_str("version: identity mint failed"),
@@ -326,5 +392,27 @@ mod tests {
         assert!(InsertError::EmptyContent.source().is_none());
         assert!(VersionError::NotAPrincipal.source().is_none());
         assert!(CopyError::EmptyResult.source().is_none());
+        assert!(InsertError::PublishedTarget.source().is_none());
+        assert!(VersionError::PrivateSourceVersionless.source().is_none());
+        assert!(VersionError::PrivateVersionOfPublished.source().is_none());
+    }
+
+    #[test]
+    fn the_version_chain_refusals_name_the_act_that_clears_them() {
+        // PUB-2.11's table pins the FACES; the store's Display is the
+        // operator-facing line, and what it must carry is the same act — the
+        // next version by way of a draft — so a log line read without the
+        // wire's face still points at the remedy rather than at nothing.
+        for line in [
+            InsertError::PublishedTarget.to_string(),
+            CopyError::PublishedTarget.to_string(),
+            DeleteError::PublishedTarget.to_string(),
+            RearrangeError::PublishedTarget.to_string(),
+        ] {
+            assert!(line.contains("published"), "{line}");
+            assert!(line.contains("next version"), "{line}");
+        }
+        assert!(VersionError::PrivateSourceVersionless.to_string().contains("versionless"));
+        assert!(VersionError::PrivateVersionOfPublished.to_string().contains("sibling draft"));
     }
 }

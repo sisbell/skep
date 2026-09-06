@@ -316,7 +316,7 @@ mod tests {
         // group is a compile error rather than a dependency an external
         // caller silently acquires.
         let ops: Vec<Op> = vec![
-            Op::Insert { doc: doc.clone(), at: at.clone(), values: vec![Val::new(vec![1u8])] }, // M4
+            Op::Insert { doc: doc.clone(), at: at.clone(), values: vec![Val::new(vec![1u8])], deposit: false }, // M4
             Op::Copy { doc: doc.clone(), at, specs: vec![vspec.clone()] },                      // M5
             Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: span.clone() }] },       // M6
             Op::Compare {

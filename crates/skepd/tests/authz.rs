@@ -53,6 +53,13 @@ use serde_json::Value;
 //     claimant's account holds enrolled keys, so it is the account that
 //     can sign. Every OTHER row runs against second, private mints, where
 //     bare sessions keep their standing (CLAIMED-PERMISSIVE local trust).
+//   * The version chain is publication's own (PUB round 2, lane 3.1): the
+//     OWNER's `version` of its own private draft is the store's
+//     `private_source_versionless` — the version row's owner cell — while
+//     the foreign columns' cross-owner forks of that same draft stand.
+//     The three version-chain refusals' own cells are
+//     `tests/version_chain.rs`; here they appear only where they cross
+//     the ownership matrix.
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Column order — indexes into every row's `expect` array.
@@ -64,6 +71,11 @@ const NOT_OWNER: &str = "not_owner";
 const UNAUTHENTICATED: &str = "unauthenticated";
 /// The RES-26 refusal, `code:detail` (the `auth_wire` convention).
 const SIGNED_SESSION_REQUIRED: &str = "credential_refused:signed_session_required";
+/// PUB-2.9's refusal (the store's, lane 3.1): the OWNER's `version` of its
+/// own private draft — the version chain is publication's own, so a draft
+/// is versionless; the foreign columns fork the same source into their
+/// own accounts and are refused by neither version-chain rule.
+const PRIVATE_SOURCE_VERSIONLESS: &str = "private_source_versionless";
 
 struct Row {
     label: &'static str,
@@ -88,7 +100,8 @@ const MATRIX: &[Row] = &[
     Row { label: "rearrange",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "copy (foreign dest)",   expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "copy (foreign source)", expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
-    Row { label: "version (foreign src)", expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "version (foreign src)", expect: [PRIVATE_SOURCE_VERSIONLESS,
+                                                       OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
     // ── link writes (home: a document owned by `owner`) ──
     Row { label: "make_link",             expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
     Row { label: "emit",                  expect: [OK, NOT_OWNER,      NOT_OWNER,      NOT_OWNER,        UNAUTHENTICATED, UNAUTHENTICATED] },
@@ -458,10 +471,15 @@ fn walk_matrix(
 /// the claimant's own published home — the one account with enrolled keys
 /// (the matrix principals hold none, which is exactly why their column is
 /// the refusal). Walked each life: the enrollment derives from the
-/// registry, so a post-restart handshake must still sign in and land.
-fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
+/// registry, so a post-restart handshake must still sign in and land. The
+/// write is a DECLARED deposit at the home's fresh position — the one insert
+/// a published document admits past the gate (PUB-2.59); the undeclared
+/// twin is the store's own refusal, `tests/version_chain.rs`. `ordinal` is
+/// the head's fresh position for THIS walk: the ceremony's atom holds 1,
+/// and each walk's deposit advances the head by one.
+fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str, ordinal: u64) {
     let frame = format!(
-        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"2"}},"values":["z"]}}"#
+        r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
     );
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
     let v = op(port, Some(&bare), &frame);
@@ -503,7 +521,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let tokens = open_tokens(port);
         let fixture = build_fixture(port, &boot, &tokens, &counters);
         walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
-        signed_claimant_writes_its_published_doc1(port, "walk 1");
+        signed_claimant_writes_its_published_doc1(port, "walk 1", 2);
         let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
@@ -518,7 +536,7 @@ fn authorization_matrix_holds_and_survives_restart() {
         let port = sd.port();
         let tokens = open_tokens(port);
         walk_matrix(port, &fixture, &tokens, &stale1, &counters, "walk 2 (post-restart)");
-        signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)");
+        signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)", 3);
         sd.shutdown();
     }
 }

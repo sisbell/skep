@@ -26,10 +26,13 @@ fn cross_store_lifecycle_under_fsync() {
         let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
 
         // M3: bootstrap → delegate → create (the account/document prologue).
-        let (_acct, d) = setup_doc(&engine);
+        // The document is the account's PUBLISHED home: it is the one owned
+        // source the version step below may fork (PUB-2.9), and content
+        // enters it by a DECLARED deposit at its fresh positions (PUB-2.59).
+        let (_acct, d) = setup_home(&engine);
         doc = d;
 
-        // M5+M4+M3 composite: insert three values at the head.
+        // M5+M4+M3 composite: deposit three values at the head.
         let (_start, insert_seq) = engine
             .vstream()
             .insert(
@@ -37,6 +40,7 @@ fn cross_store_lifecycle_under_fsync() {
                 &doc,
                 vp(1, 1),
                 vec![Val::new(vec![b'x']), Val::new(vec![b'y']), Val::new(vec![b'z'])],
+                true,
             )
             .expect("insert succeeds");
 

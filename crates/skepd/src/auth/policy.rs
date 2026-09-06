@@ -4,7 +4,8 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{parent, validate, Address, Nat, Span, Tumbler};
+use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_arrangement::trunk_of;
 use skep_febe::Op;
 use skep_identity::{
     CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
@@ -399,37 +400,23 @@ pub(crate) fn first_mint_private_refusal(
 
 // ── board_state_refusal — the two mode-complementary gates (AUTH-3.78) ───
 
-/// PUB-2.15 — the DOCUMENT a version member projects to: the version
-/// components stripped off the document field, one M1 `parent` peel at a
-/// time, so `A·0·d·v·w` answers `A·0·d` and a document answers itself. Pure
-/// address arithmetic, no read; total on every address (a field of one
-/// component peels nothing), and terminating because each peel shortens the
-/// field by one.
-///
-/// The publish gate reads `published()` on THIS, never on the member: the
-/// engine's `World::published` and `owner_account` take the document, and a
-/// member's own bit is what its own mint journaled (PUB-8.17's inheritance
-/// makes the two agree today; the projection is what keeps the gate exact of
-/// the DOCUMENT's state, which is the state the gate is about). The drift
-/// sweep's claim-2 defect — doc 1's versions read unpublished under the
-/// retired equality compare, so a bare session wrote into them — is closed
-/// here, and no interim `prefix_contains` patch ships.
-fn trunk_of(a: &Address) -> Address {
-    let mut trunk = a.clone();
-    while trunk.document_field().is_some_and(|field| field.len() > 1) {
-        trunk = parent(&trunk)
-            .expect("a document field of two or more components peels to one shorter");
-    }
-    trunk
-}
-
 /// The publish gate's publication read — the engine's ONE definition (owner
 /// ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership miss on
-/// the exception set (PUB-7.5), after the projection above. The retired
-/// `is_published_v1` (a document is published iff it IS its account's doc 1)
-/// answered off address arithmetic what the set now answers off M3's bit,
-/// and the AUTH fold's `is_published` reads the same set, so the two reads
-/// can no longer disagree.
+/// the exception set (PUB-7.5), after the projection of a version member to
+/// its DOCUMENT (PUB-2.15). The projection is M5's `trunk_of` — the ONE
+/// spelling of it, shared with the write-path refusals that run one crate
+/// below this gate (PUB-8.2, D2b), which is why the daemon's own copy was
+/// retired rather than kept beside it. The gate reads `published()` on the
+/// document, never on the member: a member's own bit is what its own mint
+/// journaled (PUB-8.17's inheritance makes the two agree today; the
+/// projection is what keeps the gate exact of the DOCUMENT's state, which is
+/// the state the gate is about). The drift sweep's claim-2 defect — doc 1's
+/// versions read unpublished under the retired equality compare, so a bare
+/// session wrote into them — stays closed, and no interim `prefix_contains`
+/// patch ships. The retired `is_published_v1` (a document is published iff
+/// it IS its account's doc 1) answered off address arithmetic what the set
+/// now answers off M3's bit, and the AUTH fold's `is_published` reads the
+/// same set, so the two reads can no longer disagree.
 ///
 /// CONTRACT — `doc` is a REGISTERED document (PUB-6.37): a membership miss
 /// is also what an unregistered address answers, so every caller below tests
@@ -832,7 +819,9 @@ mod tests {
     /// member answers its document, a document answers itself, a member of
     /// a member peels to the same document — and off the document tier the
     /// arithmetic changes nothing (an account has no document field; an
-    /// element's field is its document's own).
+    /// element's field is its document's own). The projection the gate
+    /// reads is M5's, so this pins the ONE spelling the daemon shares with
+    /// the write path.
     #[test]
     fn a_version_member_projects_to_its_document() {
         let doc = addr_of(&[1, 0, 1, 0, 1]);

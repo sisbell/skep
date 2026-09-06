@@ -334,21 +334,24 @@ where
     /// O10 case is DROPPED, not relocated to `delegate` (Conflicts §6). M5
     /// wires the shared content separately (mechanism/policy split).
     ///
-    /// The publication flag is passed ABSENT — the reduction is literal, so
-    /// the fork's bit is [`Namespace::create_new_document`]'s create-path
-    /// resolution (PUB-8.21): private in a non-empty account, and the home's
-    /// `true` in an empty one, which the daemon's mint-first door refuses
-    /// before this op is reached (PUB-1.18, PUB-8.22). `fork`'s own
-    /// three-valued flag on the wire (PUB-8.16) is lane 2.3's, with the `Op`
-    /// field that carries it.
+    /// `published` is `fork`'s own three-valued flag (PUB-8.16, PUB-8.17's
+    /// sibling on the create path), handed through the literal reduction to
+    /// [`Namespace::create_new_document`], which resolves it exactly as it
+    /// resolves its own (PUB-8.21, owner ruling 2026-09-05 — one rule, one
+    /// place): an empty account with an absent flag is the born-published
+    /// home, and otherwise the bit is the flag's value or PRIVATE. The home
+    /// case is the one the daemon's mint-first door refuses before this op is
+    /// reached (PUB-1.18, PUB-8.22), and the explicit-`false` first mint is
+    /// the daemon's door too (PUB-8.20); here both mint what the rule says.
     pub fn fork(
         &self,
         caller: PrincipalId,
+        published: Option<bool>,
     ) -> Result<(Address, Seq), TxnError<CreateDocumentError>> {
         let snap = self.kernel.snapshot();
         let Some(pfx) = snap.world().m3().principal_prefix(caller) else {
             return Err(TxnError::Rejected(CreateDocumentError::NotOwner));
         };
-        self.create_new_document(caller, pfx, None)
+        self.create_new_document(caller, pfx, published)
     }
 }

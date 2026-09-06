@@ -122,6 +122,17 @@ fn all_requests() -> Vec<Request> {
                     Val::new(vec![0xffu8]),
                     Val::new(vec![0u8, 255]),
                 ],
+                deposit: false,
+            },
+        ),
+        // The deposit declaration (PUB-9.13, DECLARED): rides only when made.
+        rq(
+            None,
+            Op::Insert {
+                doc: d1(),
+                at: vp(1, 2),
+                values: vec![Val::new(b"record".to_vec())],
+                deposit: true,
             },
         ),
         rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
@@ -320,6 +331,41 @@ fn request_id_round_trips() {
     let req = rq(Some("key-9"), Op::Fork { published: None });
     let parsed = parse_ok(&codec, &codec.marshal_request(&req));
     assert_eq!(parsed.id, Some(ReqId(b"key-9".to_vec())));
+}
+
+/// The deposit declaration on `insert` (PUB-9.13's DECLARED horn; owner
+/// 2026-09-05): absent and explicit `null` alike read `false`, `true`
+/// declares, `false` is the same as absent, a non-boolean is a parse fault —
+/// and the canonical form carries the field only when the declaration was
+/// made, so the flag the client sent is what the daemon holds and nothing
+/// is coerced either way.
+#[test]
+fn the_deposit_declaration_reads_absent_null_true_and_false() {
+    let codec = JsonCodec;
+    let frame = |flag: &str| {
+        format!(
+            r#"{{"op":"insert","doc":"1.0.1.0.1","at":{{"subspace":"1","ordinal":"1"}},"values":["a"]{flag}}}"#
+        )
+        .into_bytes()
+    };
+    let declared = |req: &Request| match &req.op {
+        Op::Insert { deposit, .. } => *deposit,
+        _ => panic!("insert expected"),
+    };
+    assert!(!declared(&parse_ok(&codec, &frame(""))), "absent is no declaration");
+    assert!(!declared(&parse_ok(&codec, &frame(r#","deposit":null"#))), "null is absence");
+    assert!(!declared(&parse_ok(&codec, &frame(r#","deposit":false"#))));
+    assert!(declared(&parse_ok(&codec, &frame(r#","deposit":true"#))));
+    for bad in [r#","deposit":1"#, r#","deposit":"true""#, r#","deposit":[]"#] {
+        assert!(codec.parse(&frame(bad)).is_err(), "{bad} is not a declaration, and is never coerced");
+    }
+    // Canonical: the field rides only when the declaration was made.
+    let canon = |flag: &str| -> Value {
+        serde_json::from_slice(&codec.marshal_request(&parse_ok(&codec, &frame(flag)))).expect("json")
+    };
+    assert!(canon("").get("deposit").is_none());
+    assert!(canon(r#","deposit":false"#).get("deposit").is_none());
+    assert_eq!(canon(r#","deposit":true"#)["deposit"], Value::Bool(true));
 }
 
 /// wire v5.2 (PUB-8.16): the three-valued `published` flag on the minting
@@ -595,14 +641,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 66 codes, pinned.
+/// The full `RejectCode` wire-name table — all 72 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 69] = [
+    let table: [(RejectCode, &str); 72] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -650,6 +696,9 @@ fn reject_code_names_are_pinned() {
         (RejectCode::NotHomeLink, "not_home_link"),
         (RejectCode::AlreadySeated, "already_seated"),
         (RejectCode::NotContentSubspace, "not_content_subspace"),
+        (RejectCode::PublishedTarget, "published_target"),
+        (RejectCode::PrivateVersionOfPublished, "private_version_of_published"),
+        (RejectCode::PrivateSourceVersionless, "private_source_versionless"),
         (RejectCode::IllFormedSpec, "ill_formed_spec"),
         (RejectCode::SlotTooLarge, "slot_too_large"),
         (RejectCode::EmptyTypeResolution, "empty_type_resolution"),

@@ -413,8 +413,29 @@ pub fn setup() -> Fixture {
     Fixture { febe, boot, user, account }
 }
 
+/// A DRAFT in the fixture's account — an explicit `false`, since the
+/// account's flagless first mint is its born-published home (PUB-8.21) and a
+/// published document takes no in-place edit (PUB-2.11): the documents these
+/// tests write are drafts. (The explicit-`false` FIRST mint is refused at the
+/// daemon's door alone, PUB-8.20; M10 and M3 mint it.)
 pub fn create_doc(fx: &Fixture) -> Address {
-    ack_addr(ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone(), published: None })).0
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
+    ))
+    .0
+}
+
+/// A PUBLISHED edition in the fixture's account — the one owned source
+/// `version` admits (PUB-2.9), and the target the in-place refusal keys on.
+pub fn create_edition(fx: &Fixture) -> Address {
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::CreateNewDocument { account: fx.account.clone(), published: Some(true) },
+    ))
+    .0
 }
 
 /// Insert three one-byte values at the head of `doc`'s content subspace;
@@ -427,6 +448,23 @@ pub fn insert3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
             doc: doc.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
+            deposit: false,
+        },
+    ))
+}
+
+/// [`insert3`] as a DECLARED deposit — the one way content enters a
+/// PUBLISHED document on this surface (PUB-2.59, PUB-9.13): three values at
+/// the empty edition's fresh positions.
+pub fn deposit3(fx: &Fixture, doc: &Address) -> (Address, Seq) {
+    ack_addr(ex(
+        &fx.febe,
+        fx.user,
+        Op::Insert {
+            doc: doc.clone(),
+            at: vp(1, 1),
+            values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
+            deposit: true,
         },
     ))
 }

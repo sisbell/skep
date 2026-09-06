@@ -193,6 +193,23 @@ impl M5State {
         self.content_list(doc).locate(ord).is_some()
     }
 
+    /// Does `at` name a FRESH content position of `doc` — one PAST the
+    /// arranged extent, `at.subspace = s_C ∧ at.ordinal > n_C` — so that an
+    /// insert there appends and disturbs no arrangement (PUB-2.59, PUB-2.61:
+    /// the deposit shape)? The one fact the write path keys the deposit
+    /// exemption on beside the caller's declaration (PUB-9.13, DECLARED).
+    ///
+    /// Deliberately WIDER than the append boundary: an ordinal past
+    /// `n_C + 1` is fresh too — it touches nothing arranged — and is left for
+    /// the op's own shape check to refuse `OutOfBounds`, so a declared
+    /// deposit aimed past the boundary is told its position is bad rather
+    /// than that its target is published. An insert AT or BELOW `n_C` shifts
+    /// the suffix, which IS a disturbance, and a link-subspace position is
+    /// not a deposit shape at all.
+    pub(crate) fn names_fresh_content_position(&self, doc: &Address, at: &VPos) -> bool {
+        at.is_content() && at.ordinal > self.content_count(doc)
+    }
+
     /// Does `doc`'s arranged content CONTAIN the whole range `[from, from +
     /// width)` — `from + width ≤ n_C + 1`, subtraction-free (§4)? The
     /// containment half of DELETE's admission, stated where `n_C` lives.
@@ -465,6 +482,15 @@ mod tests {
         assert!(!s.arranges_content_position(&doc1(), &n(6)));
         assert!(!s.arranges_content_position(&doc1(), &n(0)));
         assert!(!s.arranges_content_position(&doc2(), &n(1)));
+        // A FRESH position (the deposit shape) is one past the extent: the
+        // append boundary and beyond, in the content subspace alone.
+        assert!(s.names_fresh_content_position(&doc1(), &vp(1, 6)));
+        assert!(s.names_fresh_content_position(&doc1(), &vp(1, 9)));
+        assert!(!s.names_fresh_content_position(&doc1(), &vp(1, 5)));
+        assert!(!s.names_fresh_content_position(&doc1(), &vp(1, 1)));
+        assert!(!s.names_fresh_content_position(&doc1(), &vp(2, 6)));
+        assert!(s.names_fresh_content_position(&doc2(), &vp(1, 1)));
+        assert!(!s.names_fresh_content_position(&doc2(), &vp(1, 0)));
         // Containment: [from, from + width) must fit the arranged content.
         assert!(s.contains_content_range(&doc1(), &n(2), &n(4)));
         assert!(!s.contains_content_range(&doc1(), &n(2), &n(5)));

@@ -172,10 +172,13 @@ fn no_reserved_address_is_ever_minted_and_the_ceremony_is_not_renumbered() {
     assert_eq!(doc1, ghost_home_doc(), "doc-1 IS the ghost home document");
 
     // INSERT drives the content chain: the permascroll writes land from
-    // position GHOST_POSITIONS + 1, and keep going contiguously.
+    // position GHOST_POSITIONS + 1, and keep going contiguously. The
+    // ceremony's doc-1 is born published, so the write is what the ceremony's
+    // own record atom is — a DECLARED deposit at its fresh positions
+    // (PUB-2.59, PUB-2.63).
     let (start, _) = engine
         .vstream()
-        .insert(OWNER, &doc1, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])])
+        .insert(OWNER, &doc1, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], true)
         .expect("insert into the ghost doc succeeds");
     assert_eq!(
         start,

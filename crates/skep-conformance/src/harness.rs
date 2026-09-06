@@ -138,6 +138,7 @@ impl Rig {
             doc: tdoc.clone(),
             at: VPos { subspace: Nat::from(1u64), ordinal: Nat::from(1u64) },
             values: vals,
+            deposit: false,
         }) {
             Response::AckAddr { .. } => {}
             other => return Err(format!("types-doc insert failed: {}", brief(&other))),

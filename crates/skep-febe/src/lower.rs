@@ -169,6 +169,7 @@ impl Lower for InsertError {
         match self {
             InsertError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             InsertError::NotOwner(a) => not_owner(a),
+            InsertError::PublishedTarget => (RejectCode::PublishedTarget, None),
             InsertError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             InsertError::OutOfBounds => (RejectCode::OutOfBounds, None),
             InsertError::EmptyContent => (RejectCode::EmptyContent, None),
@@ -183,6 +184,7 @@ impl Lower for CopyError {
         match self {
             CopyError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             CopyError::NotOwner(a) => not_owner(a),
+            CopyError::PublishedTarget => (RejectCode::PublishedTarget, None),
             CopyError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             CopyError::OutOfBounds => (RejectCode::OutOfBounds, None),
             CopyError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
@@ -205,6 +207,7 @@ impl Lower for DeleteError {
         match self {
             DeleteError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             DeleteError::NotOwner(a) => not_owner(a),
+            DeleteError::PublishedTarget => (RejectCode::PublishedTarget, None),
             DeleteError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
             DeleteError::NotArranged => (RejectCode::NotArranged, None),
             DeleteError::OutOfBounds => (RejectCode::OutOfBounds, None),
@@ -218,6 +221,7 @@ impl Lower for RearrangeError {
         match self {
             RearrangeError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
             RearrangeError::NotOwner(a) => not_owner(a),
+            RearrangeError::PublishedTarget => (RejectCode::PublishedTarget, None),
             RearrangeError::BadCutCount => (RejectCode::BadCutCount, None),
             RearrangeError::NotAscending => (RejectCode::NotAscending, None),
             RearrangeError::NotContentSubspace => (RejectCode::NotContentSubspace, None),
@@ -233,6 +237,14 @@ impl Lower for VersionError {
             VersionError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
             VersionError::NotAPrincipal => (RejectCode::NotAPrincipal, None),
             VersionError::NodeTierCrossOwner => (RejectCode::NodeTierCrossOwner, None),
+            // The version-chain model's two `version` refusals (D2b): the
+            // faces are the client's, keyed on the code — and on the flag
+            // the client itself sent, for the versionless one — so nothing
+            // is threaded into the site.
+            VersionError::PrivateSourceVersionless => (RejectCode::PrivateSourceVersionless, None),
+            VersionError::PrivateVersionOfPublished => {
+                (RejectCode::PrivateVersionOfPublished, None)
+            }
             VersionError::Mint(m) => m.lower(),
         }
     }
@@ -731,11 +743,13 @@ mod tests {
         same_name(SeatError::AlreadySeated);
         same_name(InsertError::DocNotRegistered);
         same_name(InsertError::NotOwner(doc()));
+        same_name(InsertError::PublishedTarget);
         same_name(InsertError::NotContentSubspace);
         same_name(InsertError::OutOfBounds);
         same_name(InsertError::EmptyContent);
         same_name(CopyError::DocNotRegistered);
         same_name(CopyError::NotOwner(doc()));
+        same_name(CopyError::PublishedTarget);
         same_name(CopyError::NotContentSubspace);
         same_name(CopyError::OutOfBounds);
         same_name(CopyError::SourceNotRegistered);
@@ -753,12 +767,14 @@ mod tests {
         );
         same_name(DeleteError::DocNotRegistered);
         same_name(DeleteError::NotOwner(doc()));
+        same_name(DeleteError::PublishedTarget);
         same_name(DeleteError::NotContentSubspace);
         same_name(DeleteError::NotArranged);
         same_name(DeleteError::OutOfBounds);
         same_name(DeleteError::EmptyWidth);
         same_name(RearrangeError::DocNotRegistered);
         same_name(RearrangeError::NotOwner(doc()));
+        same_name(RearrangeError::PublishedTarget);
         same_name(RearrangeError::BadCutCount);
         same_name(RearrangeError::NotAscending);
         same_name(RearrangeError::NotContentSubspace);
@@ -767,6 +783,8 @@ mod tests {
         same_name(VersionError::SourceNotRegistered);
         same_name(VersionError::NotAPrincipal);
         same_name(VersionError::NodeTierCrossOwner);
+        same_name(VersionError::PrivateSourceVersionless);
+        same_name(VersionError::PrivateVersionOfPublished);
 
         // ── M7 (links) ──
         same_name(MakeLinkError::HomeNotRegistered);

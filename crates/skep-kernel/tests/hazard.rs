@@ -310,13 +310,13 @@ fn c_checkpoint_chain_exhausted_with_genesis_unreachable_refuses_loudly() {
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegate");
         let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
+            engine.namespace().create_new_document(USER, &acct, Some(false)).expect("create document");
         // One fat Val is ONE position (a composite atom), so appends land at
         // ordinal i+1; each still journals ~300 KiB, forcing rotation.
         for i in 0..8u32 {
             engine
                 .vstream()
-                .insert(OWNER, &doc, vp(1, i + 1), vec![Val::new(vec![b'a' + i as u8; BLOB])])
+                .insert(OWNER, &doc, vp(1, i + 1), vec![Val::new(vec![b'a' + i as u8; BLOB])], false)
                 .expect("blob insert");
         }
         engine.kernel().checkpoint().expect("blob checkpoint");
@@ -388,7 +388,7 @@ fn hazard_d_child_process_entry() {
         let ord = (i + 1) as u32;
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; BLOB])])
+            .insert(OWNER, &doc, vp(1, ord), vec![Val::new(vec![b'a' + (i % 26) as u8; BLOB])], false)
             .expect("hazard child: insert");
         let seq = engine.kernel().current_seq().0;
         let mut out = stdout.lock();
@@ -437,7 +437,7 @@ fn d_trial(trial: u64) -> (usize, u64) {
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegate");
         let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
+            engine.namespace().create_new_document(USER, &acct, Some(false)).expect("create document");
         tum_str(doc.tumbler())
     };
 

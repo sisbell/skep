@@ -305,7 +305,9 @@ refusals).
 **The ceremony** is the unclaimed board's one admitted write sequence
 (worked end-to-end in §A first board): `delegate` from principal 0 →
 the home mint (`create_new_document`, which becomes doc 1) → the record
-`insert` into doc 1 → the genesis enroll deposit → the claim deposit.
+`insert` into doc 1 (declared, `deposit:true` — the home is published
+from birth, and a record atom is the deposit-class write it admits,
+§Arrangement) → the genesis enroll deposit → the claim deposit.
 The genesis deposit seeds the account's key set (the enrolled-set cap
 does not bind it, and the anchor gate is exempt — the seeding hand
 records the initial set, flags included); the claim deposit flips the
@@ -812,7 +814,10 @@ Arrangement: `empty_content`, `content`, `empty_source`,
 `not_ordinal_vspan`, `dangling_source`, `empty_result`, `not_arranged`,
 `out_of_bounds`, `empty_width`, `bad_cut_count`, `not_ascending`,
 `empty_content_subspace`, `not_a_principal`, `node_tier_cross_owner`,
-`not_home_link`, `already_seated`, `not_content_subspace`.
+`not_home_link`, `already_seated`, `not_content_subspace`,
+`published_target`, `private_version_of_published`,
+`private_source_versionless` (the version-chain model's three write-path
+refusals — §The version-chain refusals below).
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class`, `non_address_denoting_type`, `bad_target`,
@@ -828,6 +833,52 @@ third round also rejects an over-large slot (`SlotTooLarge`, its
 MAX_SLOT_SPANS bound) and refuses through the supersession-class fence.
 Neither has a wire code — the list above deliberately carries none;
 codes are to be assigned when that links family ships on the wire.
+
+### The version-chain refusals
+
+A document is either edited in place or versioned, never both: a
+private document is a draft, edited in place and versionless; a
+published document advances by versions and admits no edit in place.
+Three refusals hold that line (v7.2). They are the STORE's — typed
+errors out of the arrangement's own transaction, evaluated in the one
+slot after registration and ownership (PUB-6.36 slot 5, PUB-6.37) and
+before the operation's own shape checks — so they answer from every
+session the daemon's gates admit, signed sessions included, and the
+daemon adds no gate of its own for them. A version member is judged as
+the document it projects to (PUB-2.15): `1.0.1.0.1.2` refuses exactly as
+`1.0.1.0.1`. All three are `permanent`, carry no `detail` and no `site`,
+and a refused request commits nothing. The daemon's own publish-class
+gate (`signed_session_required`, slot 4) stands ahead: a bare session
+never reaches these codes on a published document.
+
+| code | op | when |
+| --- | --- | --- |
+| `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` with `deposit:true` at fresh content positions past the arranged extent (§Arrangement) |
+| `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
+| `private_source_versionless` | `version` | you own `d_src` and `d_src` is PRIVATE — whatever the flag |
+
+The faces, keyed on the code (PUB-6.7): the client renders them, the
+wire carries the token. ⟨D⟩ is the document named.
+
+* `published_target` — "⟨D⟩ is published — it advances by versions.
+  Stage your change in a draft, then publish it as the next version."
+* `private_version_of_published` — "⟨D⟩ is published — its versions are
+  published. To keep a private copy of it, mint a sibling draft to hold
+  it; the version chain is publication's own. To change what the world
+  reads, stage your change in a draft, then publish it as the next
+  version."
+* `private_source_versionless` — ONE code; the face splits on the flag
+  the client itself sent. Flag absent or `false`: "⟨D⟩ is private —
+  private documents are versionless. Mint a sibling draft to hold the
+  alternative; the version chain is publication's own." Flag `true`:
+  "⟨D⟩ is private — publishing means minting a separate edition: select
+  what to publish and it is minted published-born, your draft
+  re-windowing it; private documents are versionless."
+
+Neither `version` refusal reaches a document you do NOT own: the
+cross-owner `version` mints a fresh document in YOUR account (the
+source's state plus your flag, §Arrangement) and is refused by neither
+rule.
 
 ### Credential refusals
 
@@ -985,9 +1036,13 @@ account. Shares **no** content: the content-sharing fork is `version`.
 ```
 
 `fork` takes the same optional `published` flag as `create_new_document`
-(`true` | `false` | absent), resolved the same way — a first fork into an
-empty account is refused `mint_home_first` before the flag matters, and a
-later fork is private by default.
+(`true` | `false` | absent), resolved the same way at the substrate
+(v7.2: the store's own resolution, the same as the create path's) — a
+first fork into an empty account is refused `mint_home_first` before the
+flag matters, and a later fork is private by default. A forked draft is
+the sibling draft the version-chain refusals point you to (§The
+version-chain refusals): edited in place, and versionless until it is
+published as an edition of its own.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
@@ -1039,6 +1094,13 @@ documents must mint its home before `fork`/`version`) and, on a claimed
 board, `signed_session_required` for a flagless `version` of a PUBLISHED
 source from a bare session (§Credential refusals).
 
+Publication (v7.2): a PUBLISHED `doc` — or a version member of one, which
+is judged as its document (PUB-2.15) — refuses the four in-place edits
+`published_target` (§The version-chain refusals), behind the ownership
+check and ahead of every shape check, from signed sessions too. A draft
+is edited in place as before. The one thing a published document admits
+is the **declared deposit** below.
+
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
 minted I-address). This example inserts **eleven single-byte values at
@@ -1057,6 +1119,26 @@ bytes, and one non-UTF-8 composite — eighteen positions:
 <!-- wire: request insert -->
 ```json
 {"at":{"ordinal":"1","subspace":"1"},"doc":"1.0.1.0.1","op":"insert","values":["per-byte text ",{"atom":"one indivisible value"},{"hex":"c328"},{"atom_hex":"00ff"}]}
+```
+
+The optional `deposit` field is the **deposit declaration** (v7.2;
+PUB-2.59, PUB-9.13): `true` says this insert is a deposit-class record —
+a credential record atom, say — landing at fresh positions past the
+document's arranged extent. `false`, `null` and absent are all "no
+declaration"; any other value is a parse fault. The write path keys on
+the declaration: a published document admits an `insert` if and only if
+it is declared AND deposit-shaped — `at` a content position past every
+arranged one, disturbing no arrangement — and an undeclared append on a
+published head is an in-place edit and refuses `published_target`, as
+does a declared insert at an arranged position or outside the content
+subspace. A declared insert past the append boundary answers the
+arrangement's own `out_of_bounds`. Into a draft the declaration is inert.
+The canonical frame carries the field only when the declaration is made.
+This example deposits one record atom at the head's second position:
+
+<!-- wire: request insert -->
+```json
+{"at":{"ordinal":"2","subspace":"1"},"deposit":true,"doc":"1.0.1.0.1","op":"insert","values":[{"atom":"one credential record"}]}
 ```
 
 **`delete`** — remove `width` positions of `doc` starting at `p`. → `ack`.
@@ -1099,17 +1181,22 @@ version of a published source — is refused `signed_session_required`
 (§Credential refusals).
 
 Where you own `d_src`, the new version is a MEMBER of its chain —
-`1.0.1.0.1.1`, `1.0.1.0.1.2`, … — and the publish gate reads the DOCUMENT a
-member projects to, never the member's own bit (PUB-2.15): a write homed in
-`1.0.1.0.1.1` is gated exactly as a write into `1.0.1.0.1`. So an explicit
-`published:false` over a published document you own mints a member whose
-own journaled bit is private (the dump's `publication.drafts` section
-lists it) while bare writes into it still refuse `signed_session_required`.
-That member is the private member of a published chain the version-chain
-model refuses outright (PUB-2.7); it is admitted today, and its refusal
-rides the routed write-path item (PUB-8.2) together with PUB-2.9's
-versionless sibling. Where you do not own `d_src`, `version` mints a fresh
-document in your own account, gated by its own bit.
+`1.0.1.0.1.1`, `1.0.1.0.1.2`, … — and both the publish gate and the
+store's refusals read the DOCUMENT a member projects to, never the
+member's own bit (PUB-2.15): a write homed in `1.0.1.0.1.1` is judged
+exactly as a write into `1.0.1.0.1`. The version chain is publication's
+own (v7.2, §The version-chain refusals): where you own `d_src` and it is
+PRIVATE, `version` refuses `private_source_versionless` whatever the flag
+— private documents are versionless; mint a sibling draft (`fork`,
+`create_new_document`) to hold the alternative, or publish by minting a
+separate edition. Where you own `d_src` and it is PUBLISHED, an explicit
+`published:false` refuses `private_version_of_published` — every member
+of a published chain is published, so no member's journaled bit ever
+differs from its document's, and the dump's `publication.drafts` never
+lists one. Where you do not own `d_src`, `version` is refused by neither
+rule: it mints a fresh document in your own account — the source's state
+where the flag is absent, your flag where it is not — gated and judged
+by its own bit.
 
 ### Links (writes)
 
@@ -1742,9 +1829,14 @@ seat it in doc 1 as ONE composite value — one position, so one address
 names the whole record:
 
 ```
-POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"},
+POST /op   (session)   {"op": "insert", "doc": <doc 1>, "at": {"subspace": "1", "ordinal": "1"}, "deposit": true,
                         "values": [{"atom": "skep-enroll v1\nanchor ed25519 <64 hex> paper\ned25519 <64 hex> notebook\n"}]}
 ```
+
+The insert is DECLARED (`"deposit": true`, §Arrangement): doc 1 is born
+published, and the record atom is the deposit-class write a published
+document admits — an undeclared insert into it is the in-place edit the
+store refuses `published_target`.
 
 Deposit it — the genesis enrollment, then (from a signed session,
 proving custody before the flip) the claim:
@@ -1776,6 +1868,40 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.2 (the version-chain model's three write-path refusals — PUB round 2,
+lane 3.1, built 2026-09-05 under owner ruling D2b; documented as built):
+
+* Three new `rejected` codes, all `permanent`, none carrying `detail` or
+  `site`, and all the STORE's — typed errors beside the ownership check,
+  behind registration and ownership and ahead of every shape check
+  (PUB-6.36 slot 5, PUB-6.37); the daemon maps them and adds no gate:
+  `published_target` (`insert`/`copy`/`delete`/`rearrange` on a
+  PUBLISHED document, PUB-2.11), `private_version_of_published` (an
+  explicit `published:false` `version` of a published document you own,
+  PUB-2.7), `private_source_versionless` (`version` of a private
+  document you own, whatever the flag, PUB-2.9). A version member is
+  judged as its document (PUB-2.15). The faces are pinned in §The
+  version-chain refusals; PUB-2.9's face splits on the flag the client
+  sent, under one code. v7.1's "admitted today; its refusal rides the
+  routed write-path item" is superseded — the private member of a
+  published chain can no longer be minted, and `publication.drafts`
+  never lists one.
+* New optional `insert` field `deposit` (`true` | `false` | absent, with
+  `null` reading as absent; any other value a parse fault): the deposit
+  declaration, PUB-9.13's DECLARED horn. A published document admits an
+  `insert` iff it is declared and deposit-shaped — fresh content
+  positions past the arranged extent; an undeclared append on a
+  published head is an in-place edit and refuses `published_target`.
+  The canonical frame carries the field only when `true`. Into a draft
+  the flag is inert. The claim ceremony's record atoms are declared
+  deposits (§The claim ceremony and credentials).
+* `fork`'s `published` flag now resolves at the substrate exactly as
+  `create_new_document`'s does (round 1's daemon-side reduction is
+  dropped); the wire's three values and their meaning are unchanged.
+* The daemon's publish-class gate reads the same version-member
+  projection the store's refusals use (one helper, shared); no wire
+  change.
 
 v7.1 (the publication flag and the exception-set publish class — the PUB
 round-1 build of 2026-09-05, documented as built; the version-member

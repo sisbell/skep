@@ -31,6 +31,12 @@ pub(crate) fn doc2() -> Address {
     a(&[1, 0, 1, 0, 2])
 }
 
+/// Document 3: `[1,0,1,0,3]` — the account's PUBLISHED edition, the target
+/// the version-chain refusals (PUB-2.11) key on.
+pub(crate) fn pdoc() -> Address {
+    a(&[1, 0, 1, 0, 3])
+}
+
 /// The first version fork of doc1 on M3's `(d_src, 1)` chain: `[1,0,1,0,1,1]`.
 pub(crate) fn vdoc() -> Address {
     a(&[1, 0, 1, 0, 1, 1])
@@ -74,13 +80,16 @@ pub(crate) fn vp(subspace: u32, ordinal: u32) -> VPos {
     }
 }
 
-/// An M3 slice with two principal-owned accounts and two registered
+/// An M3 slice with two principal-owned accounts and three registered
 /// documents, built by folding exactly the records M3's own `delegate` /
 /// `create_new_document` would stage: account `[1,0,1]` → principal 1 (owns
-/// doc1, doc2), account `[1,0,2]` → principal 2. The publication bits are
-/// the flagless create path's (PUB-8.21): doc1, the account's first
-/// document, born published; doc2 private. An account's `Allocate` carries
-/// no publication state.
+/// doc1, doc2, pdoc), account `[1,0,2]` → principal 2. The publication bits:
+/// doc1 and doc2 are PRIVATE drafts — the working documents the edit ops
+/// admit (doc1 as an explicit-`false` first mint, the state M3 produces
+/// below the daemon's first-mint door, PUB-8.20 being the daemon's alone) —
+/// and pdoc `[1,0,1,0,3]` is a PUBLISHED edition (an explicit `true`), the
+/// target the version-chain model's in-place refusal keys on (PUB-2.11). An
+/// account's `Allocate` carries no publication state.
 pub(crate) fn seeded_m3() -> M3State {
     M3State::genesis()
         .apply_m3(&M3Rec::Allocate {
@@ -101,10 +110,14 @@ pub(crate) fn seeded_m3() -> M3State {
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 1]),
-            published: true,
+            published: false,
         })
         .apply_m3(&M3Rec::Allocate {
             addr: a(&[1, 0, 1, 0, 2]),
             published: false,
+        })
+        .apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 3]),
+            published: true,
         })
 }

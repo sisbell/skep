@@ -48,16 +48,26 @@ fn engine_world_satisfies_the_febe_demand() {
     ));
 
     let session = op.open_session(USER);
+    // A DRAFT (explicit `false`): the account's flagless first mint would
+    // be its published home, which takes no in-place edit (PUB-2.11).
     let doc = ack_addr(op.execute(
         session,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
+        Request {
+            id: None,
+            op: Op::CreateNewDocument { account: acct.clone(), published: Some(false) },
+        },
     ));
 
     ack_addr(op.execute(
         session,
         Request {
             id: None,
-            op: Op::Insert { doc: doc.clone(), at: vp(1, 1), values: vec![Val::new(vec![b'w'])] },
+            op: Op::Insert {
+                doc: doc.clone(),
+                at: vp(1, 1),
+                values: vec![Val::new(vec![b'w'])],
+                deposit: false,
+            },
         },
     ));
 
@@ -87,13 +97,13 @@ fn engine_stores_serves_a_kernel_rooted_at_a_reconstructed_world() {
     let (_acct, doc) = setup_doc(&engine);
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])])
+        .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'x'])], false)
         .expect("insert succeeds");
 
     let past = engine.kernel().current_seq();
     engine
         .vstream()
-        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])])
+        .insert(OWNER, &doc, vp(1, 2), vec![Val::new(vec![b'y'])], false)
         .expect("insert succeeds");
 
     let world = engine.world_at(past).expect("a committed boundary answers");

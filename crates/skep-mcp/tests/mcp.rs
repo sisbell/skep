@@ -178,6 +178,9 @@ fn claim_board(port: u16) {
             .expect("a legal label"),
     ]);
     let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
+    // The record atom's insert is a DECLARED deposit (PUB-2.63; the
+    // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared
+    // insert into it is the in-place edit the write path refuses (PUB-2.11).
     let v = op(
         port,
         Some(&owner),
@@ -186,6 +189,7 @@ fn claim_board(port: u16) {
             "doc": OWNER_DOC1,
             "at": {"subspace": "1", "ordinal": "1"},
             "values": [{"atom": record_text}],
+            "deposit": true,
         })
         .to_string(),
     );

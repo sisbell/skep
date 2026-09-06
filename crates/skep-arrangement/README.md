@@ -17,6 +17,17 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   ancestry is carried by the identity itself, readable by truncation;
   a cross-owner fork's identity is severed from the source's, and what
   records the relationship is provenance.
+- **Write-surface gates** — the four edit ops take a `Caller` and
+  admit only the document's effective owner (ω, exact account match;
+  `Caller::System` is the in-process automation path, exempt from ω
+  alone). A PUBLISHED document refuses every in-place edit
+  (`PublishedTarget`, PUB-2.11) except a DECLARED deposit `insert` at
+  a fresh position past its arranged content — the one way content
+  enters an account's born-published home; `version` refuses a
+  private owned source (`PrivateSourceVersionless`, PUB-2.9) and an
+  explicit-private member of a published one
+  (`PrivateVersionOfPublished`, PUB-2.7). Link seating is outside the
+  rule (PUB-2.12).
 - **Provenance (R)** — the append-only record of which addresses a
   document has ever contained, including a fork's shared ones. It is
   recorded, not recomputable: an arrangement that no longer holds an

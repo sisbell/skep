@@ -480,7 +480,17 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             if shadow.principals[pi].docs.len() >= 6 {
                 return fallback_insert(shadow, state, pi, op_index);
             }
-            let si = *sd as usize % shadow.docs.len();
+            // The CROSS-OWNER arm only: every pooled document is a private
+            // draft, and a version of one's OWN draft is versionless (PUB-2.9,
+            // the store's `private_source_versionless`, lane 3.1 — its cell
+            // is `tests/version_chain.rs`). A foreign draft forks into the
+            // caller's own account as a private copy (the flag absent, the
+            // source's bit inherited), which is the valid-by-construction
+            // write. Three principals each hold a document, so a foreign
+            // one always exists.
+            let foreign: Vec<usize> =
+                (0..shadow.docs.len()).filter(|&i| shadow.docs[i].owner != pi).collect();
+            let si = foreign[*sd as usize % foreign.len()];
             let id = state.next_id();
             let frame =
                 format!(r#"{{"op":"version","id":"{id}","d_src":"{}"}}"#, shadow.docs[si].addr);

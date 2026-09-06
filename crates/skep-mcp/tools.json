@@ -172,6 +172,10 @@
                 }
               ]
             }
+          },
+          "deposit": {
+            "type": "boolean",
+            "description": "The deposit declaration (PUB-2.59, PUB-9.13): true says this insert is a deposit-class record atom landing at fresh positions past the document's arranged extent. A published document admits ONLY declared deposits at fresh positions; an undeclared insert into it, or a declared one touching an arranged position, is refused published_target (stage the change in a draft, then publish it as the next version). Into a draft the flag is inert. Absent means false."
           }
         },
         "required": ["doc", "at", "values"],

@@ -308,45 +308,27 @@ where
             }
             // Fork ≠ Version (§3): mints an EMPTY account-tier document,
             // sharing NO content; the content-sharing fork is Op::Version.
-            //
-            // `Namespace::fork(caller)` takes no publication flag and M3 is
-            // frozen this round (PUB lane 2.3), so the three-valued flag
-            // (PUB-8.16) is threaded here by performing fork's OWN literal
-            // reduction — a create in the caller's own account
-            // (`principal_prefix(caller)`, ASN-0042 O10) — with the flag
-            // passed to M3's create path. This is the one place M10 spells a
-            // store's reduction rather than calling it; it is recorded as a
-            // seam workaround in the round's report. The create-path default
-            // (born-published first mint, private otherwise) and the
-            // daemon's mint-first door are unchanged by threading it.
+            // The three-valued flag (PUB-8.16) rides through verbatim:
+            // `Namespace::fork` resolves it at M3's create path exactly as
+            // `create_new_document` does (owner 2026-09-05 — one rule, one
+            // place; the reduction M10 spelled for itself in round 1 is
+            // retired with it).
             Op::Fork { published } => {
-                let pfx = self
-                    .stores
-                    .kernel()
-                    .snapshot()
-                    .world()
-                    .m3()
-                    .principal_prefix(wc.principal)
-                    .cloned();
-                let Some(pfx) = pfx else {
-                    // fork's own unknown-principal answer (Namespace::fork
-                    // returns CreateDocumentError::NotOwner, opening no txn).
-                    return Err(rejection(kind, RejectCode::NotOwner));
-                };
                 let (addr, at) = self
                     .stores
                     .namespace()
-                    .create_new_document(wc.principal, &pfx, published)
+                    .fork(wc.principal, published)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
-            //    session caller — the ownership ruling, 2026-08-16) ──
-            Op::Insert { doc, at, values } => {
+            //    session caller — the ownership ruling, 2026-08-16; the
+            //    version-chain refusals in-store too, D2b) ──
+            Op::Insert { doc, at, values, deposit } => {
                 let (start, committed_at) = self
                     .stores
                     .vstream()
-                    .insert(wc.caller(), &doc, at, values)
+                    .insert(wc.caller(), &doc, at, values, deposit)
                     .map_err(|e| self.map_txn(kind, e))?; // returns post-commit
                 Ok(Response::AckAddr { addr: start, at: committed_at }) // the exact V1 coordinate
             }
@@ -787,6 +769,7 @@ mod tests {
             doc: addr(&[1, 0, 1, 0, 1]),
             at: VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
             values: vec![Val::new(vec![1u8])],
+            deposit: false,
         }
     }
 

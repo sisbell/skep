@@ -75,8 +75,28 @@ pub fn mem_engine() -> Engine {
 
 /// Bootstrap prologue, all through the real drivers: peek the next delegable
 /// prefix under the genesis node, delegate it to [`USER`], create one
-/// document in the new account. Returns `(account, document)`.
+/// document in the new account — a DRAFT. Returns `(account, document)`.
+///
+/// The draft is an explicit `false` on the account's FIRST mint: flagless,
+/// that mint would be the account's born-published home (PUB-8.21), and a
+/// published document takes no in-place edit (PUB-2.11) — so the scenarios
+/// that write, delete and re-arrange content work here. The explicit-`false`
+/// first mint is refused at the daemon's door alone (PUB-8.20); the engine
+/// mints it, which is the state this prologue wants. [`setup_home`] is the
+/// published twin.
 pub fn setup_doc(engine: &Engine) -> (Address, Address) {
+    setup_with(engine, Some(false))
+}
+
+/// [`setup_doc`]'s published twin: the same prologue, minting the account's
+/// HOME — its flagless first document, born published (PUB-8.21, PUB-1.17).
+/// Returns `(account, home)`. Content enters it by declared deposits alone
+/// (PUB-2.59), and it is the one owned source `version` admits (PUB-2.9).
+pub fn setup_home(engine: &Engine) -> (Address, Address) {
+    setup_with(engine, None)
+}
+
+fn setup_with(engine: &Engine, published: Option<bool>) -> (Address, Address) {
     let prefix = {
         let snap = engine.kernel().snapshot();
         snap.world()
@@ -90,7 +110,7 @@ pub fn setup_doc(engine: &Engine) -> (Address, Address) {
         .expect("delegation of the peeked next-form prefix succeeds");
     let (doc, _) = engine
         .namespace()
-        .create_new_document(USER, &acct, None)
+        .create_new_document(USER, &acct, published)
         .expect("the delegated owner may create a document");
     (acct, doc)
 }

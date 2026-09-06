@@ -43,6 +43,13 @@ pub const USER: PrincipalId = PrincipalId(7);
 /// fixture creates.
 pub const OWNER: Caller = Caller::Principal(USER);
 
+/// The second principal of the mixed fixture: the CROSS-OWNER forker of
+/// [`USER`]'s draft. A draft is versionless to its own owner (PUB-2.9), and
+/// another principal's version of it — a private copy in the forker's
+/// account — is the fork the version-chain model admits (PUB-2.18), so the
+/// fixture's version record comes from here.
+pub const FORKER: PrincipalId = PrincipalId(8);
+
 /// `HAZARD_EXHAUSTIVE=1` unlocks the full sweeps; the default grids keep
 /// the whole suite inside the ~5 minute budget.
 pub fn exhaustive() -> bool {
@@ -225,9 +232,12 @@ pub struct BoundaryOracle {
     pub dump: WorldDump,
 }
 
-/// The mixed-op fixture the ruling names — delegate, create, inserts
+/// The mixed-op fixture the ruling names — two delegates, create, inserts
 /// (multi-record composites), two links, a supersession claim, a nullify, a
-/// version, a delete — built through the public engine drivers only.
+/// version, a delete — built through the public engine drivers only. The
+/// second delegate seats [`FORKER`], whose cross-owner version is the one
+/// version a DRAFT admits (PUB-2.9, PUB-2.18) — and the document is a draft
+/// because a published one takes no delete (PUB-2.11).
 pub struct Fixture {
     pub dir: PathBuf,
     pub genesis_dump: WorldDump,
@@ -284,24 +294,44 @@ impl Fixture {
             .expect("delegate");
         capture(&engine, &mut boundaries);
 
-        // 2: create the document.
-        let (doc, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("create document");
+        // 2: delegate a second account to FORKER — the cross-owner forker of
+        //    step 10.
+        let prefix2 = {
+            let snap = engine.kernel().snapshot();
+            snap.world()
+                .m3()
+                .next_account_prefix(&node1())
+                .expect("the genesis node still has a delegable next-form prefix")
+        };
+        engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix2.tumbler().clone(), FORKER)
+            .expect("delegate the forker");
         capture(&engine, &mut boundaries);
 
-        // 3–4: content (multi-value insert = a multi-record composite).
+        // 3: create the document — a DRAFT (an explicit `false`: the
+        //    account's flagless first mint would be its published home,
+        //    which takes no in-place edit, PUB-2.11; the first-mint door is
+        //    the daemon's, PUB-8.20, and the engine mints it).
+        let (doc, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, Some(false))
+            .expect("create document");
+        capture(&engine, &mut boundaries);
+
+        // 4–5: content (multi-value insert = a multi-record composite).
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])])
+            .insert(OWNER, &doc, vp(1, 1), vec![Val::new(vec![b'a']), Val::new(vec![b'b'])], false)
             .expect("insert ab");
         capture(&engine, &mut boundaries);
         engine
             .vstream()
-            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])])
+            .insert(OWNER, &doc, vp(1, 3), vec![Val::new(vec![b'c'])], false)
             .expect("insert c");
         capture(&engine, &mut boundaries);
 
-        // 5–6: two links (reversed endsets, so no idem dedup collapses them).
+        // 6–7: two links (reversed endsets, so no idem dedup collapses them).
         let (link1, _) = engine
             .linkstore()
             .makelink(
@@ -325,23 +355,24 @@ impl Fixture {
             .expect("makelink link2");
         capture(&engine, &mut boundaries);
 
-        // 7–8: a supersession claim, then a retraction.
+        // 8–9: a supersession claim, then a retraction.
         let _ = engine.linkstore().assert_sup(OWNER, &doc, &link1, &link2).expect("assert_sup");
         capture(&engine, &mut boundaries);
         let _ = engine.linkstore().nullify(OWNER, &doc, &link1).expect("nullify");
         capture(&engine, &mut boundaries);
 
-        // 9: a version (the copy-on-write fork).
-        let _ = engine.vstream().version(USER, &doc, None).expect("version");
+        // 10: a version (the copy-on-write fork) — FORKER's cross-owner
+        //     version of the draft, the one version a draft admits.
+        let _ = engine.vstream().version(FORKER, &doc, None).expect("version");
         capture(&engine, &mut boundaries);
 
-        // 10: a delete.
+        // 11: a delete.
         engine.vstream().delete(OWNER, &doc, vp(1, 1), n(1)).expect("delete");
         capture(&engine, &mut boundaries);
 
         drop(engine); // journal lock released; the fixture is now files.
 
-        assert_eq!(boundaries.len(), 10, "the mixed fixture is ten commits");
+        assert_eq!(boundaries.len(), 11, "the mixed fixture is eleven commits");
         let full_len = fs::metadata(&seg).expect("segment").len();
         assert_eq!(
             full_len,

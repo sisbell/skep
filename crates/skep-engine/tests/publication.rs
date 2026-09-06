@@ -15,8 +15,10 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use skep_address::{validate, Address, Tumbler};
+use skep_arrangement::VersionError;
 use skep_content::Val;
 use skep_engine::{Engine, EngineError, OpenError, World};
+use skep_kernel::TxnError;
 use skep_namespace::HasM3;
 use tempfile::tempdir;
 
@@ -50,7 +52,7 @@ impl Docs {
 }
 
 fn mint_docs(engine: &Engine) -> Docs {
-    let (acct, home) = setup_doc(engine);
+    let (acct, home) = setup_home(engine);
     let ns = engine.namespace();
     let mint = |flag: Option<bool>| {
         ns.create_new_document(USER, &acct, flag).expect("the owner mints a document").0
@@ -194,9 +196,10 @@ fn a_draft_joins_the_set_in_the_commit_that_registers_it() {
 
 /// Test 3 — replay equivalence: the live fold, checkpoint + replay, and a
 /// full replay from genesis (the checkpoint removed) yield one set. The tail
-/// includes a version of a draft, which inherits the private bit and is a
-/// draft member of its own (PUB-8.17), and a version of an edition, which
-/// inherits published and is not.
+/// includes a version of an edition, which inherits published and is not a
+/// member of the set. A version of a DRAFT is no longer a member the tail
+/// can hold: private documents are versionless (PUB-2.9, the write path's
+/// own refusal since lane 3.1), so the attempt is refused and joins nothing.
 #[test]
 fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
     let dir = tempdir().expect("tempdir");
@@ -206,11 +209,17 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
         engine.kernel().checkpoint().expect("checkpoint mid-history");
         engine.namespace().create_new_document(USER, &docs.acct, None).expect("a draft");
         engine.namespace().create_new_document(USER, &docs.acct, Some(true)).expect("an edition");
-        engine.vstream().version(USER, &docs.drafts[0], None).expect("a version of a draft");
+        assert!(
+            matches!(
+                engine.vstream().version(USER, &docs.drafts[0], None),
+                Err(TxnError::Rejected(VersionError::PrivateSourceVersionless))
+            ),
+            "a private owned source is versionless (PUB-2.9)"
+        );
         engine.vstream().version(USER, &docs.edition, None).expect("a version of the edition");
         engine.check_hints().expect("the live fold equals a from-authoritative rebuild");
         let live = drafts_of(engine.kernel().snapshot().world());
-        assert_eq!(live.len(), 5, "three drafts, one more, and the version of a draft");
+        assert_eq!(live.len(), 4, "three drafts and one more; the refused version joined nothing");
         (engine.kernel().current_seq(), live)
     };
 
@@ -310,7 +319,7 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
         // closes the first.
         engine
             .vstream()
-            .insert(OWNER, &docs.drafts[0], vp(1, 1), vec![Val::new(vec![b'x'; (1 << 20) + (1 << 16)])])
+            .insert(OWNER, &docs.drafts[0], vp(1, 1), vec![Val::new(vec![b'x'; (1 << 20) + (1 << 16)])], false)
             .expect("a large insert commits");
         engine.namespace().create_new_document(USER, &docs.acct, None).expect("the rotating commit");
         // The checkpoint at head reclaims the closed first segment below it.

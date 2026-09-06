@@ -43,6 +43,7 @@ fn concurrent_writes_each_get_their_own_linearization_point() {
                             doc,
                             at: vp(1, 1),
                             values: vec![Val::new(vec![b'a' + i])],
+                            deposit: false,
                         },
                     ))
                 })

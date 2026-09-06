@@ -444,9 +444,11 @@ mod tests {
             .namespace()
             .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
             .expect("delegation of the peeked prefix succeeds");
+        // A DRAFT (explicit `false`): the flagless first mint would be the
+        // published home, which takes no in-place edit (PUB-2.11).
         let (doc, _) = engine
             .namespace()
-            .create_new_document(USER, &acct, None)
+            .create_new_document(USER, &acct, Some(false))
             .expect("the delegated owner may create a document");
         engine
             .vstream()
@@ -455,6 +457,7 @@ mod tests {
                 &doc,
                 VPos { subspace: Nat::from(1u32), ordinal: Nat::from(1u32) },
                 vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
+                false,
             )
             .expect("insert succeeds");
         engine

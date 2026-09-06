@@ -288,7 +288,11 @@ fn e_trial(trial: u64) -> (usize, usize) {
     };
 
     // Sustained sequential write load: one distinct byte per ordinal, each
-    // ack recorded — the ground truth the reopened world must honor.
+    // ack recorded — the ground truth the reopened world must honor. The
+    // document is the account's home, born published, so each append is a
+    // DECLARED deposit at the head's fresh position (PUB-2.59; an undeclared
+    // insert into a published document is the in-place edit the store
+    // refuses, PUB-2.11).
     let expect_char = |i: u64| char::from(b'a' + ((i - 1) % 26) as u8);
     let mut inserts_acked: u64 = 0;
     go_tx.send(()).expect("killer is waiting");
@@ -296,7 +300,7 @@ fn e_trial(trial: u64) -> (usize, usize) {
     loop {
         i += 1;
         let frame = format!(
-            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"]}}"#,
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{}"],"deposit":true}}"#,
             expect_char(i)
         );
         match try_op(port, Some(&s1), &frame) {
@@ -428,13 +432,15 @@ fn f_sidecar_mutilation_never_touches_the_world() {
         );
         doc = acked_addr(&v);
         acks.push(v["at"].as_u64().expect("create at"));
+        // Declared deposits at the published home's fresh positions
+        // (PUB-2.59).
         for i in 1..=5u64 {
             let ch = char::from(b'a' + (i - 1) as u8);
             let v = route_op(
                 &d,
                 Some(&s1),
                 &format!(
-                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"]}}"#
+                    r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{i}"}},"values":["{ch}"],"deposit":true}}"#
                 ),
             );
             acks.push(v["at"].as_u64().expect("insert at"));
@@ -704,7 +710,7 @@ fn g_disk_exhaustion_stops_acks_before_durability() {
         stop_code = loop {
             let ord = inserts_acked * W + 1;
             let frame = format!(
-                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"]}}"#
+                r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["{chunk}"],"deposit":true}}"#
             );
             let v = route_op(&d, Some(&s1), &frame);
             match v["resp"].as_str() {

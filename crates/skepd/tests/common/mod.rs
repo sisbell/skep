@@ -118,11 +118,14 @@ pub fn claim_board(port: u16) {
     ]);
     let record_text = String::from_utf8(record).expect("the record grammar is UTF-8");
     let atom = serde_json::to_string(&Value::String(record_text)).expect("json string");
+    // The atom's insert carries the DEPOSIT DECLARATION (PUB-2.63; the
+    // DECLARED horn of PUB-9.13): doc 1 is born published, and an undeclared
+    // insert into it is the in-place edit the write path refuses (PUB-2.11).
     let v = op(
         port,
         Some(&claimant),
         &format!(
-            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}]}}"#
+            r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"1"}},"values":[{{"atom":{atom}}}],"deposit":true}}"#
         ),
     );
     expect_resp(&v, "ack_addr");

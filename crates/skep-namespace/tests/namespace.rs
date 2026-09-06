@@ -1479,22 +1479,36 @@ fn fork_mints_in_the_callers_own_account() {
 
     // O10, account-tier: reduces to create_new_document(caller,
     // pfx(caller)) — a fresh self-owned document one tier below the prefix.
-    let (d1, _) = ns.fork(ID1).expect("fork");
+    // The flag rides the same reduction (PUB-8.16; owner 2026-09-05, one
+    // rule in one place): a flagless fork into the EMPTY account is the
+    // born-published home (PUB-8.21)…
+    let (d1, _) = ns.fork(ID1, None).expect("fork");
     assert_eq!(d1, a(&[1, 0, 1, 0, 1]));
     assert!(prefix_contains(&acct, &d1));
     let snap = k.snapshot();
     assert!(snap.world().m3().is_registered_document(&d1));
     assert!(snap.world().m3().is_effective_owner(ID1, &d1));
+    assert!(snap.world().m3().published(&d1), "the flagless first fork is the home, born published");
     // Shares the (account, 2) chain with create_new_document.
     let (d2, _) = ns.create_new_document(ID1, &acct, None).expect("create");
     assert_eq!(d2, a(&[1, 0, 1, 0, 2]));
+    // …a flagless fork into the NON-empty account is private, and an
+    // explicit flag is honored as sent.
+    let (d3, _) = ns.fork(ID1, None).expect("a later fork");
+    assert_eq!(d3, a(&[1, 0, 1, 0, 3]));
+    let (d4, _) = ns.fork(ID1, Some(true)).expect("an explicit-true fork");
+    let (d5, _) = ns.fork(ID1, Some(false)).expect("an explicit-false fork");
+    let m3 = k.snapshot().world().m3().clone();
+    assert!(!m3.published(&d3), "a flagless non-first fork is private (PUB-1.1)");
+    assert!(m3.published(&d4));
+    assert!(!m3.published(&d5));
 
     // Unknown id: typed NotOwner (an unregistered caller owns nothing).
-    assert_eq!(rejected(ns.fork(UNKNOWN_ID)), CreateDocumentError::NotOwner);
+    assert_eq!(rejected(ns.fork(UNKNOWN_ID, None)), CreateDocumentError::NotOwner);
     // Node-tier caller (π₀ at [1]): the node-tier O10 case is DROPPED —
     // typed Mint(NotAnAccount), never a silent skip (Conflicts §6).
     assert_eq!(
-        rejected(ns.fork(BOOTSTRAP_PRINCIPAL)),
+        rejected(ns.fork(BOOTSTRAP_PRINCIPAL, None)),
         CreateDocumentError::Mint(MintError::NotAnAccount)
     );
 }
@@ -1662,7 +1676,7 @@ fn pre_work_rejections_open_no_transaction() {
             NodeError::NotNode
         );
         assert_eq!(rejected(ns.register_node(t(&too_deep))), NodeError::TooDeep);
-        assert_eq!(rejected(ns.fork(UNKNOWN_ID)), CreateDocumentError::NotOwner);
+        assert_eq!(rejected(ns.fork(UNKNOWN_ID, None)), CreateDocumentError::NotOwner);
         Ok(())
     })
     .expect("the outer transaction is a zero-step commit");
@@ -2158,7 +2172,7 @@ fn the_bit_is_immutable_and_recovers_by_checkpoint_and_replay() {
         let v_published = commit_mint(&k, M3State::version_lock_key(&draft), |m3| {
             m3.mint_version(&draft, true)
         });
-        let (forked, _) = ns.fork(ID1).expect("fork"); // flagless, non-empty: private
+        let (forked, _) = ns.fork(ID1, None).expect("fork"); // flagless, non-empty: private
         let expected = vec![
             (home, true),
             (draft, false),
@@ -2184,7 +2198,7 @@ fn the_bit_is_immutable_and_recovers_by_checkpoint_and_replay() {
         commit_mint(&k, M3State::link_lock_key(home), |m3| m3.mint_link(home));
         ns.create_new_document(ID1, &acct, Some(true))
             .expect("another document");
-        ns.fork(ID1).expect("another fork");
+        ns.fork(ID1, None).expect("another fork");
         assert_eq!(bits(k.snapshot().world().m3()), after_mints);
         let live = k.snapshot().world().m3().clone();
         (expected, live)

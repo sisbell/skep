@@ -618,7 +618,7 @@ impl Cx<'_> {
                 let d = self.skep_doc(doc).ok_or_else(|| format!("setup insert: {doc} unbound"))?;
                 let at = self.shadow.text_len(doc) + 1;
                 let values: Vec<Val> = bytes.iter().map(|b| Val::new(vec![*b])).collect();
-                match self.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values }) {
+                match self.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values, deposit: false }) {
                     Response::AckAddr { .. } => {
                         self.shadow.insert(doc, at, bytes);
                         Ok(())
@@ -1191,7 +1191,7 @@ fn h_create_documents(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome
             if let Some(d) = cx.skep_doc(&id) {
                 let values: Vec<Val> = t.bytes().map(|b| Val::new(vec![b])).collect();
                 if let Response::AckAddr { .. } =
-                    cx.rig.exec(Op::Insert { doc: d, at: vpos(1, 1), values })
+                    cx.rig.exec(Op::Insert { doc: d, at: vpos(1, 1), values, deposit: false })
                 {
                     cx.shadow.insert(&id, 1, t.as_bytes());
                 }
@@ -1428,7 +1428,7 @@ fn h_insert(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: 
             };
             let at = cx.shadow.text_len(docid) + 1;
             let values: Vec<Val> = t.bytes().map(|b| Val::new(vec![b])).collect();
-            let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values });
+            let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(1, at), values, deposit: false });
             cx.shadow.insert(docid, at, t.as_bytes());
             if let Some(code) = rejection_code(&r) {
                 out.status = Status::Disagreed;
@@ -1513,7 +1513,7 @@ fn h_insert(cx: &mut Cx, index: usize, op: &Value, out: &mut OpOutcome, grants: 
     };
     let xf = expected_failure(op);
     let values: Vec<Val> = text.bytes().map(|b| Val::new(vec![b])).collect();
-    let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(sub, ord), values });
+    let r = cx.rig.exec(Op::Insert { doc: d, at: vpos(sub, ord), values, deposit: false });
     // Shadow mirrors the RECORDED reality regardless of skep's verdict, so
     // later translations stay grounded in what udanax saw.
     if sub == 1 {
@@ -1550,6 +1550,7 @@ fn h_insert_loop(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) 
             doc: d.clone(),
             at: vpos(1, at),
             values: vec![Val::new(vec![b])],
+            deposit: false,
         });
         cx.shadow.insert(&doc, at, &[b]);
         if let Some(code) = rejection_code(&r) {
@@ -1591,6 +1592,7 @@ fn h_interior_typing(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Gran
             doc: d.clone(),
             at: vpos(1, ord),
             values: ch.bytes().map(|b| Val::new(vec![b])).collect(),
+            deposit: false,
         });
         cx.shadow.insert(&doc, ord, ch.as_bytes());
         if let Some(code) = rejection_code(&resp) {

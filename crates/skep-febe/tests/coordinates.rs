@@ -50,9 +50,14 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let fx = setup();
     let mut seen: Vec<OpKind> = Vec::new();
 
-    // ── the document family ──
-    let r =
-        ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone(), published: None });
+    // ── the document family — the working document is a DRAFT (an explicit
+    //    `false`: the account's flagless first mint would be its published
+    //    home, which takes no in-place edit, PUB-2.11) ──
+    let r = ex(
+        &fx.febe,
+        fx.user,
+        Op::CreateNewDocument { account: fx.account.clone(), published: Some(false) },
+    );
     committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
     let (d, _) = ack_addr(r);
 
@@ -63,6 +68,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
             doc: d.clone(),
             at: vp(1, 1),
             values: vec![Val::new(vec![b'a']), Val::new(vec![b'b']), Val::new(vec![b'c'])],
+            deposit: false,
         },
     );
     committed(&fx, OpKind::Insert, &r, &mut seen);
@@ -71,7 +77,9 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     committed(&fx, OpKind::Fork, &r, &mut seen);
     let (f, _) = ack_addr(r);
 
-    let r = ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None });
+    // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
+    let e = create_edition(&fx);
+    let r = ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None });
     committed(&fx, OpKind::Version, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
@@ -162,7 +170,11 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let fx = setup();
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None }));
+    // The version's source is a PUBLISHED edition with content — the one
+    // owned source `version` admits (PUB-2.9) — deposited into (PUB-2.59).
+    let e = create_edition(&fx);
+    deposit3(&fx, &e);
+    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None }));
     let mk = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),

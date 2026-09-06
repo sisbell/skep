@@ -115,8 +115,12 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
             if cx.alpha.peek(docid).is_some() {
                 continue; // already bound (defensive; should not happen)
             }
+            // PUB-8.16 `Some(false)`: the harness mints private first
+            // documents at the engine (no daemon door), so the goldens stay
+            // byte-identical (PUB lane 0's promise).
             match cx.rig.exec(skep_febe::Op::CreateNewDocument {
                 account: cx.rig.current_account.clone(),
+                published: Some(false),
             }) {
                 skep_febe::Response::AckAddr { addr, .. } => {
                     cx.alpha.bind(docid, &addr);
@@ -137,6 +141,7 @@ fn run_scenario(scn: &Scenario, allow: &Allowlist) -> ScenarioRecord {
                 if !cx.shadow.knows(doc) {
                     match cx.rig.exec(skep_febe::Op::CreateNewDocument {
                         account: cx.rig.current_account.clone(),
+                        published: Some(false), // private first mint (lane 0)
                     }) {
                         skep_febe::Response::AckAddr { addr, .. } => {
                             cx.alpha.bind(doc, &addr);

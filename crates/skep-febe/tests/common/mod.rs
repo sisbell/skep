@@ -414,7 +414,7 @@ pub fn setup() -> Fixture {
 }
 
 pub fn create_doc(fx: &Fixture) -> Address {
-    ack_addr(ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone() })).0
+    ack_addr(ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone(), published: None })).0
 }
 
 /// Insert three one-byte values at the head of `doc`'s content subspace;

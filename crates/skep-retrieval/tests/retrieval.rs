@@ -995,7 +995,7 @@ fn show_origin_v_projects_an_origin_at_whatever_depth_its_document_sits() {
     // being five-component documents over eight-component elements.
     let k = mem_kernel();
     let vs = insert3(&k);
-    let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+    let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // one component deeper than its source…
     let (start, _) = vs
         .insert(P1, &fork, vp(1, 4), vec![val(b"z")])
@@ -1978,7 +1978,7 @@ fn find_docs_containing_filters_to_present_tense_containers() {
     // tumbler-ordered.
     let k = mem_kernel();
     let vs = insert3(&k);
-    let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+    let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
     assert_eq!(fork, vdoc()); // shares ca1..ca3
     let (start, _) = vs
         .insert(P1, &fork, vp(1, 4), vec![val(b"z")])

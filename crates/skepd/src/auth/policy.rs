@@ -156,7 +156,7 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         Op::CreateNewDocument { .. }
         | Op::Delegate { .. }
         | Op::RegisterNode { .. }
-        | Op::Fork
+        | Op::Fork { .. }
         | Op::NextAccountPrefix { .. }
         | Op::PrincipalPrefix { .. }
         | Op::Insert { .. }
@@ -212,6 +212,11 @@ pub(crate) enum CredentialRefusal {
     TooManyEnrolled,
     /// The MINT class, on the plain path.
     MintHomeFirst,
+    /// The FIRST-MINT publication door (PUB-8.20, owner ruling D2c): an
+    /// explicit `published: false` on an account's first `create_new_document`.
+    /// Proposed token `mint_home_public` (owner to confirm, as R1 confirmed
+    /// `mint_home_first`).
+    MintHomePublic,
     /// Slot (7), and the plain path's publish gate (RES-26).
     SignedSessionRequired,
     /// Slot (8), and the plain path's pre-claim admission gate (RES-27).
@@ -236,6 +241,7 @@ impl CredentialRefusal {
             CredentialRefusal::ResolvedFrom => "resolved_from".into(),
             CredentialRefusal::TooManyEnrolled => "too_many_enrolled".into(),
             CredentialRefusal::MintHomeFirst => "mint_home_first".into(),
+            CredentialRefusal::MintHomePublic => "mint_home_public".into(),
             CredentialRefusal::SignedSessionRequired => "signed_session_required".into(),
             CredentialRefusal::ClaimFirst => "claim_first".into(),
         }
@@ -333,7 +339,7 @@ pub(crate) fn mint_home_refusal(
     op: &Op,
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
-    if !matches!(op, Op::Fork | Op::Version { .. }) {
+    if !matches!(op, Op::Fork { .. } | Op::Version { .. }) {
         return None;
     }
     let subject = world.m3().principal_prefix(principal)?;
@@ -344,6 +350,50 @@ pub(crate) fn mint_home_refusal(
         None
     } else {
         Some(CredentialRefusal::MintHomeFirst)
+    }
+}
+
+// ── first_mint_private_refusal — the first-mint publication door ─────────
+
+/// PUB-8.20 / owner ruling D2c: an account's FIRST `create_new_document`
+/// carrying an explicit `published: false` is REFUSED here, at the DAEMON's
+/// door — the ONLY place this refusal exists. Its class is PERMANENT.
+///
+/// The engine is NOT changed to refuse (D2c): `create_new_document` mints a
+/// private home for an explicit `Some(false)` (PUB-8.19's letter — a typed
+/// `MintError` out of M3's own transaction — is the departure the owner
+/// ruled away), so a first mint that reaches M3 with `Some(false)` commits
+/// a private document. This producer is what a conforming board puts ahead
+/// of it; a build that skips it serves a private "home", inverting PUB-1.17.
+///
+/// The face the client derives from `mint_home_public`, keyed on the token
+/// (PUB-6.7), is PUB-8.20's verbatim (RES-207): "your home page is public
+/// from birth — it is where this board keeps your name and your keys; create
+/// it first, and every other document you make here is private by default."
+///
+/// Placed in the mint slot beside [`mint_home_refusal`] (PUB-8.22's seat),
+/// so ownership stands AHEAD (PUB-6.36 slot 1): only the account's own owner
+/// reaches this refusal — a non-owner falls through to execute's
+/// `not_owner`, which never leaks whether the account is empty — and a
+/// non-empty account is an ordinary private mint that refuses nothing. A
+/// flagless or explicit-`true` first mint is honored, the home born
+/// published (PUB-8.21), by this producer answering `None` for it.
+///
+/// `world` MUST be the snapshot taken under the read guard for this request;
+/// the guard argument is that contract's cheap half.
+pub(crate) fn first_mint_private_refusal(
+    _lock: &LockRead<'_>,
+    world: &World,
+    op: &Op,
+    principal: PrincipalId,
+) -> Option<CredentialRefusal> {
+    let Op::CreateNewDocument { account, published: Some(false) } = op else {
+        return None;
+    };
+    if world.m3().is_effective_owner(principal, account) && !has_documents(world, account) {
+        Some(CredentialRefusal::MintHomePublic)
+    } else {
+        None
     }
 }
 
@@ -414,14 +464,21 @@ pub(crate) fn board_state_refusal(
 
 /// RES-26 (AUTH-3.79–3.81): on a claimed board, an op whose write lands in
 /// the published world is accepted only from a signed session. Domain per
-/// input form: a flagless `version` reads `published(d_src)`; a homed
-/// write reads `published(home)` — both through [`published`], the engine's
-/// exception set with the version-member projection (PUB-2.15, PUB-6.43's
-/// input table). Flagless `create`/`fork` resolve draft (outside),
-/// `delegate`/`register_node`/`nullify` present no input form, and the
-/// mechanical home mint is exempt by AUTH-3.80. Registration and ω stand
-/// AHEAD (PUB-6.37): the gate evaluates only registered addresses the caller
-/// owns, so an unregistered or foreign home answers `execute`'s own code.
+/// input form (PUB-6.43's input table):
+/// * an EXPLICIT flag — the argument itself, resolved pre-dispatch: a
+///   `create`/`fork`/`version` carrying `published: Some(true)` publishes,
+///   so a bare session is refused; `Some(false)` is a draft (outside). The
+///   first mint stays EXEMPT — the content-empty mechanical home (PUB-6.43),
+///   so a first `create` with any flag is accepted from a bare session;
+/// * a flagless `version` reads `published(d_src)` (INHERIT);
+/// * a homed write reads `published(home)` — both through [`published`], the
+///   engine's exception set with the version-member projection (PUB-2.15).
+/// Flagless `create`/`fork` resolve draft (outside),
+/// `delegate`/`register_node`/`nullify` present no input form here.
+/// Registration and ω stand AHEAD (PUB-6.37, PUB-6.36 slot 1): the gate
+/// evaluates only registered addresses the caller owns, so an unregistered
+/// or foreign argument answers `execute`'s own code, and an empty-account
+/// `fork`/`version` is refused `mint_home_first` before this gate is reached.
 fn publish_gate(
     world: &World,
     op: &Op,
@@ -443,11 +500,49 @@ fn publish_gate(
         }
     };
     match op {
-        Op::Version { d_src } => {
-            if world.m3().is_registered_document(d_src) && published(world, d_src) {
+        // An EXPLICIT `published: true` on a mint IS the gate input
+        // (PUB-6.43): it lands in the published world. The first mint stays
+        // exempt — a first `create` into an empty account the caller owns is
+        // the content-empty mechanical home (PUB-6.43's enumerated
+        // exemption), so it answers `None` here (accepted).
+        Op::CreateNewDocument { account, published: Some(true) } => {
+            if world.m3().is_effective_owner(principal, account) && has_documents(world, account) {
                 Some(CredentialRefusal::SignedSessionRequired)
             } else {
                 None
+            }
+        }
+        // `fork` mints into the caller's OWN account; an empty account is
+        // refused `mint_home_first` ahead of this gate, so only a non-first
+        // published fork reaches here.
+        Op::Fork { published: Some(true) } => {
+            if world.m3().principal_prefix(principal).is_some_and(|pfx| {
+                world.m3().is_registered_account(pfx)
+            }) {
+                Some(CredentialRefusal::SignedSessionRequired)
+            } else {
+                None
+            }
+        }
+        // `version` with the flag: explicit `true` publishes; `false` is a
+        // draft; ABSENT INHERITS `published(d_src)`. Registration stands
+        // ahead (PUB-6.37): an unregistered source answers `execute`'s own
+        // `source_not_registered`, not this gate.
+        Op::Version { d_src, published: flag } => {
+            if !world.m3().is_registered_document(d_src) {
+                None
+            } else {
+                match flag {
+                    Some(true) => Some(CredentialRefusal::SignedSessionRequired),
+                    Some(false) => None,
+                    None => {
+                        if published(world, d_src) {
+                            Some(CredentialRefusal::SignedSessionRequired)
+                        } else {
+                            None
+                        }
+                    }
+                }
             }
         }
         Op::Insert { doc, .. }
@@ -458,6 +553,8 @@ fn publish_gate(
             homed(home)
         }
         Op::EditLink { d_s, .. } => homed(d_s),
+        // create/fork with a non-`true` flag: a draft, or the exempt home
+        // mint (the explicit-`false` first mint is the door's, upstream).
         _ => None,
     }
 }
@@ -472,7 +569,10 @@ fn publish_gate(
 fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<CredentialRefusal> {
     let admitted = match op {
         Op::Delegate { .. } => principal == BOOTSTRAP_PRINCIPAL,
-        Op::CreateNewDocument { account } => !has_documents(world, account),
+        // The ceremony's home mint (flagged or not); an explicit `false`
+        // first mint is refused by the door in the mint slot, ahead of this
+        // gate, so it never reaches admission.
+        Op::CreateNewDocument { account, .. } => !has_documents(world, account),
         Op::Insert { doc, .. } => world
             .m3()
             .principal_prefix(principal)
@@ -493,11 +593,19 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 
 // ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
 
-/// The plain path's three producers in their pinned order: the MINT class,
-/// then the mode-complementary board-state pair, then the NULLIFY class.
-/// The ORDER is the pin, so it lives here with the producers rather than at
-/// the call site — the same treatment [`precheck`] gives the credential
-/// path's eight slots.
+/// The plain path's ordered producers: the MINT class — the first-mint
+/// publication door then MINT-FIRST — then the mode-complementary board-state
+/// pair, then the NULLIFY class. The ORDER is the pin, so it lives here with
+/// the producers rather than at the call site — the same treatment
+/// [`precheck`] gives the credential path's eight slots.
+///
+/// [`first_mint_private_refusal`] (PUB-8.20's door) shares the mint slot with
+/// [`mint_home_refusal`] and is disjoint from it — the door reads a
+/// `create` with an explicit `false`, MINT-FIRST reads a `fork`/`version` —
+/// so their relative order is inert; both stand ahead of the board-state
+/// pair (PUB-6.36 slot 2 before slot 4), which is why an explicit-`false`
+/// home mint answers `mint_home_public` and never the pre-claim
+/// `claim_first`.
 ///
 /// The order is PUB-6.36's write-side order as RES-195 places the
 /// `nullify` cells: MINT-FIRST is slot 2; the board-state pair stands in
@@ -528,7 +636,8 @@ pub(crate) fn plain_refusal(
     principal: PrincipalId,
     signer: Option<&skep_identity::Fingerprint>,
 ) -> Option<CredentialRefusal> {
-    mint_home_refusal(lock, world, op, principal)
+    first_mint_private_refusal(lock, world, op, principal)
+        .or_else(|| mint_home_refusal(lock, world, op, principal))
         .or_else(|| board_state_refusal(lock, world, identity, op, principal, signer))
         .or_else(|| nullify_refusal(lock, world, identity, op, principal))
 }

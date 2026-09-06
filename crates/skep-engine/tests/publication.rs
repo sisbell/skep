@@ -206,8 +206,8 @@ fn checkpoint_plus_replay_and_full_replay_yield_the_live_set() {
         engine.kernel().checkpoint().expect("checkpoint mid-history");
         engine.namespace().create_new_document(USER, &docs.acct, None).expect("a draft");
         engine.namespace().create_new_document(USER, &docs.acct, Some(true)).expect("an edition");
-        engine.vstream().version(USER, &docs.drafts[0]).expect("a version of a draft");
-        engine.vstream().version(USER, &docs.edition).expect("a version of the edition");
+        engine.vstream().version(USER, &docs.drafts[0], None).expect("a version of a draft");
+        engine.vstream().version(USER, &docs.edition, None).expect("a version of the edition");
         engine.check_hints().expect("the live fold equals a from-authoritative rebuild");
         let live = drafts_of(engine.kernel().snapshot().world());
         assert_eq!(live.len(), 5, "three drafts, one more, and the version of a draft");

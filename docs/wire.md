@@ -846,35 +846,47 @@ guest write (no token, unknown token, dead entry) answers M10's own
 stays `execute`'s own code — never a `credential_refused` detail — and
 resolves AFTER every token below.
 
-**Ordinary (non-deposit) writes** pass three gates, in order, after the
-actor resolves:
+**Ordinary (non-deposit) writes** pass three gates, in the built order
+(PUB-6.36 as RES-195 places the `nullify` cells), after the actor resolves:
 
-1. `nullify_not_retraction` — a `nullify` whose target link is
-   credential-typed: retraction never edits the key table. On a CLAIMED
-   board the token reaches only the owner of the target's home; any
-   other caller falls through and answers plain `not_owner`,
-   indistinguishable from the non-credential answer (an entitlement
-   scope, not a second rule).
-2. `mint_home_first` — MINT-FIRST: a `fork` or `version` by a principal
-   whose account's space has never held a document. Mint the home first
-   (`create_new_document`, which becomes the account's doc 1). Where
-   these committed before, they now refuse.
-3. The board-state gate, one arm per mode:
+1. The MINT class:
+   * `mint_home_first` — MINT-FIRST: a `fork` or `version` by a
+     principal whose account's space has never held a document. Mint the
+     home first (`create_new_document`, which becomes the account's
+     doc 1). Where these committed before, they now refuse.
+   * `mint_home_public` — the first-mint publication door (PUB-8.20): an
+     explicit `published:false` on the **first** `create_new_document`
+     into an empty account you own. The home is public from birth;
+     create it flagless (or `published:true`), then later documents may
+     be private. A non-owner answers `not_owner` instead, and a later
+     mint refuses nothing.
+2. The board-state gate, one arm per mode:
    * claimed — `signed_session_required` (the publish class): a
-     bare-session op whose write lands in the PUBLISHED world. The one
-     born-published class this build computes is the mechanical home
-     mint — each account's doc 1; flagless mints resolve draft. So: an
-     `insert`/`delete`/`copy`/`rearrange` whose `doc` is a published
-     document the caller owns, a link write homed in one (`edit_link`
-     reads `d_s`), or a flagless `version` of a published source. A
-     foreign or unregistered home answers `execute`'s own code instead
-     (`not_owner`, `*_not_registered`). Signed sessions, draft writes,
-     bare reads, `delegate` and the home mint itself are unchanged.
+     bare-session op whose write lands in the PUBLISHED world. The
+     inputs (PUB-6.43): an **explicit** `published:true` on any mint
+     (`create`/`fork`/`version`) except the exempt content-empty home
+     mint; a flagless `version` of a **published** source (the inherit
+     resolving published); an `insert`/`delete`/`copy`/`rearrange`
+     whose `doc` is a published document the caller owns; and a link
+     write homed in one (`edit_link` reads `d_s`). A foreign or
+     unregistered argument answers `execute`'s own code instead
+     (`not_owner`, `*_not_registered`). Signed sessions, draft mints
+     (flagless or `published:false`), draft writes, bare reads,
+     `delegate` and the home mint itself are unchanged.
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
      `insert` into the caller's own doc 1 — from bare and signed
      sessions alike; every other write refuses. Reads are untouched.
+3. `nullify_not_retraction` — a `nullify` whose target link is
+   credential-typed: retraction never edits the key table. Evaluated
+   **behind** the board-state gate (PUB-6.36 slot 5 behind slot 4): a
+   session that may not write here is never told what the target link
+   is, so pre-claim a credential-typed `nullify` answers `claim_first`
+   (the board-state gate's unclaimed arm), and once claimed the owner of
+   the target's home gets the token while any other caller falls through
+   and answers plain `not_owner`, indistinguishable from the
+   non-credential answer (an entitlement scope, not a second rule).
 
 **Credential deposits** — a write whose TYPE slot names a credential
 type (§The claim ceremony and credentials) — run a stricter order:
@@ -928,6 +940,17 @@ carries the optional idempotency `id`:
 {"account":"1.0.1","id":"req-1","op":"create_new_document"}
 ```
 
+The optional `published` field is the three-valued publication flag:
+`true`, `false`, or absent (absent and `null` alike). The wire
+default is **private**. Absent resolves at the substrate: your account's
+**first** document is born **published** — it is your home page, where the
+board keeps your name and your keys — and every later flagless document is
+private. `true` publishes, `false` keeps it private. One refusal is pinned:
+an explicit `published:false` on the **first** mint into an empty account is
+refused `credential_refused:mint_home_public` (permanent) — the home is
+public from birth; create it first, then everything else is private by
+default.
+
 **`delegate`** — carve `new_prefix` off your account (or node) and register
 principal `new_id` as its owner, atomically. Obtain `new_prefix` from
 `next_account_prefix`; only the owner of the parent may delegate under it. A
@@ -957,6 +980,11 @@ account. Shares **no** content: the content-sharing fork is `version`.
 ```json
 {"op":"fork"}
 ```
+
+`fork` takes the same optional `published` flag as `create_new_document`
+(`true` | `false` | absent), resolved the same way — a first fork into an
+empty account is refused `mint_home_first` before the flag matters, and a
+later fork is private by default.
 
 **`next_account_prefix`** — the next delegable prefix under `parent`
 (what `delegate` demands). → `maybe_addr` (`null` = ineligible parent, or a
@@ -1058,6 +1086,14 @@ identity, not copied bytes). → `ack`.
 ```json
 {"d_src":"1.0.1.0.1","op":"version"}
 ```
+
+`version` takes the optional `published` flag (`true` | `false` | absent).
+Absent means **inherit** `d_src`'s state: a version of a published document
+is published, a version of a draft is a draft. `true` publishes, `false`
+keeps the new version private. On a claimed board a bare session's `version`
+that lands in the published world — an explicit `true`, or a flagless
+version of a published source — is refused `signed_session_required`
+(§Credential refusals).
 
 ### Links (writes)
 
@@ -1652,7 +1688,7 @@ shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
-deterministic world dump — format **`skep-world-dump v3`**, the banner
+deterministic world dump — format **`skep-world-dump v4`**, the banner
 the code emits. (The v2→v3 renumber rode the ghost-tumbler genesis
 rework of 2026-08-30, not the auth delta; its design-side record lands
 as an AUTH RES entry — citation pending, deliberately not invented
@@ -1801,7 +1837,7 @@ build of 2026-08-30, documented as built):
   did not commit the entry (a future mirror's case). The feed examples
   are re-pinned onto a claimed board's positions — the ceremony's five
   commits occupy 2–12 on a fresh board.
-* The dump: the code emits `skep-world-dump v3` — docs and code agree;
+* The dump: the code emits `skep-world-dump v4` — docs and code agree;
   the v2→v3 renumber rode the ghost-tumbler rework (2026-08-30), and
   its design-side record lands as an AUTH RES entry (citation
   pending). As built the dump gains NO identity section: the identity

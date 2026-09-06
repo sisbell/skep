@@ -360,7 +360,7 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
         Op::Delegate { .. } => meta(OpKind::Delegate, AffectedDocs::Named(Vec::new())),
         Op::RegisterNode { .. } => meta(OpKind::RegisterNode, AffectedDocs::Named(Vec::new())),
-        Op::Fork => meta(OpKind::Fork, AffectedDocs::Minted),
+        Op::Fork { .. } => meta(OpKind::Fork, AffectedDocs::Minted),
         Op::Insert { doc, .. } => meta(OpKind::Insert, one(doc)),
         Op::Delete { doc, .. } => meta(OpKind::Delete, one(doc)),
         Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc)),
@@ -506,7 +506,7 @@ mod tests {
     /// M10's partition and this table's answer, agreeing on both sides.
     #[test]
     fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
-        let read = Op::Fork;
+        let read = Op::Fork { published: None };
         assert!(!op_is_read(&read), "fork commits");
         assert!(write_meta(&read).is_some());
         let query = Op::PrincipalPrefix { id: PrincipalId(1) };

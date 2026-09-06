@@ -107,10 +107,10 @@ fn document_lifecycle() {
 
     // Fork mints an EMPTY document (shares no content); Version is the
     // content-sharing fork (§3) — the two must not be conflated.
-    let (f, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork));
+    let (f, _) = ack_addr(ex(&fx.febe, fx.user, Op::Fork { published: None }));
     let (f_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: f.clone() }));
     assert_eq!(f_set, SpanSet::empty());
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone() }));
+    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None }));
     let (v_set, _) = spanset(ex(&fx.febe, fx.user, Op::RetrieveDocVSpanSet { doc: v.clone() }));
     assert_ne!(v_set, SpanSet::empty());
 

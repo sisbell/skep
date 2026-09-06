@@ -515,16 +515,16 @@ where
     /// `document_lock_key(prefix)`. Source untouched (V3); the fork diverges
     /// copy-on-write (V11).
     ///
-    /// THE PUBLICATION BIT (PUB round 1, delta 1): `bit` is the new
-    /// document's RESOLVED publication state, which THIS composite resolves
-    /// off its own working state and passes down (PUB-8.17) — the mints
-    /// apply no default of their own (PUB-8.18). This op carries no flag yet,
-    /// so the resolution is the flag's ABSENT arm alone: INHERIT
-    /// `published(source)`, on both branches — a cross-owner fork into an
-    /// EMPTY account inherits too, never the create path's born-published
-    /// rule. The three-valued wire flag's `Some(..)` arm is lane 2.3's, and
-    /// the write-path refusals that bound the resolved bit (PUB-2.7,
-    /// PUB-2.9) are the daemon's routed item (PUB-8.2).
+    /// THE PUBLICATION BIT (PUB round 1): the new document's RESOLVED
+    /// publication state, which THIS composite resolves off its own working
+    /// state and passes down (PUB-8.17) — the mints apply no default of their
+    /// own (PUB-8.18). `published` is the three-valued wire flag (PUB-8.16):
+    /// `Some(b)` ⇒ `b`, and ABSENT (`None`) ⇒ INHERIT `published(source)`,
+    /// on BOTH branches — a cross-owner fork into an EMPTY account inherits
+    /// too, never the create path's born-published rule (lane 0's rider: the
+    /// copy inherits; M3 applies no default). The write-path refusals that
+    /// bound the resolved bit (PUB-2.7, PUB-2.9) are the daemon's routed item
+    /// (PUB-8.2), unbuilt here.
     ///
     /// ALL THREE PRE-TRANSACTION READS ARE OFF A SNAPSHOT, taken before the
     /// applier lock and so possibly stale by the time the transaction runs,
@@ -585,6 +585,7 @@ where
         &self,
         principal: PrincipalId,
         source: &Address,
+        published: Option<bool>,
     ) -> Result<(Address, Seq), TxnError<VersionError>> {
         enum Branch {
             Owned,
@@ -611,15 +612,16 @@ where
         };
         self.kernel.transact(&[key], |stg| {
             let m3 = stg.working().m3();
-            // PUB-8.17: ABSENT ⇒ INHERIT `published(d_src)`, resolved here off
-            // this composite's own working state and passed down as the
-            // RESOLVED bit the record journals (PUB-7.10, PUB-8.18). `source`
-            // is a registered document (the monotone pre-read above), so the
-            // read is inside `published`'s contract.
-            let published = m3.published(source);
+            // PUB-8.16/8.17: resolve the three-valued flag off this
+            // composite's OWN working state — `Some(b)` ⇒ `b`, ABSENT ⇒
+            // INHERIT `published(d_src)` — and pass the RESOLVED bit down as
+            // the bit the record journals (PUB-7.10, PUB-8.18). `source` is a
+            // registered document (the monotone pre-read above), so the
+            // inherit read is inside `published`'s contract.
+            let resolved = published.unwrap_or_else(|| m3.published(source));
             let (v, m3rec) = match &branch {
-                Branch::Owned => m3.mint_version(source, published),
-                Branch::Cross(prefix) => m3.mint_document(prefix, published),
+                Branch::Owned => m3.mint_version(source, resolved),
+                Branch::Cross(prefix) => m3.mint_document(prefix, resolved),
             }?;
             stg.push(m3rec.into());
             stg.push(

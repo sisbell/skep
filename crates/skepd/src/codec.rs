@@ -462,13 +462,16 @@ fn parse_value(v: Value) -> PResult<Request> {
 /// envelope key `"id"` is the idempotency slot.
 fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
     Ok(match name {
-        "create_new_document" => Op::CreateNewDocument { account: fields.addr("account")? },
+        "create_new_document" => Op::CreateNewDocument {
+            account: fields.addr("account")?,
+            published: fields.published()?,
+        },
         "delegate" => Op::Delegate {
             new_prefix: fields.tum("new_prefix")?,
             new_id: PrincipalId(fields.u64("new_id")?),
         },
         "register_node" => Op::RegisterNode { addr: fields.tum("addr")? },
-        "fork" => Op::Fork,
+        "fork" => Op::Fork { published: fields.published()? },
         "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
         "insert" => Op::Insert {
@@ -487,7 +490,10 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             specs: fields.vspecs("specs")?,
         },
         "rearrange" => Op::Rearrange { doc: fields.addr("doc")?, cuts: fields.vposes("cuts")? },
-        "version" => Op::Version { d_src: fields.addr("d_src")? },
+        "version" => Op::Version {
+            d_src: fields.addr("d_src")?,
+            published: fields.published()?,
+        },
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
             from: fields.slotarg("from")?,
@@ -681,6 +687,20 @@ impl Fields {
 
     fn fourset(&mut self, k: &'static str) -> PResult<FourSet> {
         self.field(k, p_fourset)
+    }
+
+    /// The three-valued publication flag on the minting ops (PUB-8.16):
+    /// `absent | true | false`, with absent and explicit `null` reading the
+    /// same absence (`take_opt`'s rule) → `None`. Any non-boolean value is a
+    /// parse fault, never silently coerced.
+    fn published(&mut self) -> PResult<Option<bool>> {
+        match self.take_opt("published") {
+            None => Ok(None),
+            Some(v) => v
+                .as_bool()
+                .map(Some)
+                .ok_or_else(|| PErr("field 'published': expected true or false".into())),
+        }
     }
 
     /// Absent ≡ null ≡ ⊥ (start of the enumeration).
@@ -1053,19 +1073,32 @@ fn p_successor_ty(v: &Value) -> PResult<SlotArg> {
 
 // ── marshal (Request → wire, the canonical inverse) ──────────────────────
 
+/// The optional `published` pair on a minting op: emitted only when the flag
+/// is present (PUB-8.16 — absent is the wire default, so a `None` marshals to
+/// no field and `parse ∘ marshal` is a fixpoint). `Some` renders the bare
+/// boolean.
+fn published_pair(published: &Option<bool>) -> Vec<(&'static str, Value)> {
+    match published {
+        Some(b) => vec![("published", Value::Bool(*b))],
+        None => Vec::new(),
+    }
+}
+
 /// One arm per `Op` variant; the name comes from the SAME [`op_name`] table
 /// the rejection marshal uses, so the two directions cannot drift.
 fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
     match op {
-        Op::CreateNewDocument { account } => {
-            (op_name(OpKind::CreateNewDocument), vec![("account", j_addr(account))])
+        Op::CreateNewDocument { account, published } => {
+            let mut pairs = vec![("account", j_addr(account))];
+            pairs.extend(published_pair(published));
+            (op_name(OpKind::CreateNewDocument), pairs)
         }
         Op::Delegate { new_prefix, new_id } => (
             op_name(OpKind::Delegate),
             vec![("new_prefix", j_tum(new_prefix)), ("new_id", j_u64(new_id.0))],
         ),
         Op::RegisterNode { addr } => (op_name(OpKind::RegisterNode), vec![("addr", j_tum(addr))]),
-        Op::Fork => (op_name(OpKind::Fork), vec![]),
+        Op::Fork { published } => (op_name(OpKind::Fork), published_pair(published)),
         Op::NextAccountPrefix { parent } => {
             (op_name(OpKind::NextAccountPrefix), vec![("parent", j_addr(parent))])
         }
@@ -1087,7 +1120,11 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::Rearrange { doc, cuts } => {
             (op_name(OpKind::Rearrange), vec![("doc", j_addr(doc)), ("cuts", j_vposes(cuts))])
         }
-        Op::Version { d_src } => (op_name(OpKind::Version), vec![("d_src", j_addr(d_src))]),
+        Op::Version { d_src, published } => {
+            let mut pairs = vec![("d_src", j_addr(d_src))];
+            pairs.extend(published_pair(published));
+            (op_name(OpKind::Version), pairs)
+        }
         Op::MakeLink { home, from, to, ty } => (
             op_name(OpKind::MakeLink),
             vec![

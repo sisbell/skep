@@ -276,15 +276,16 @@ where
         let kind = op.kind();
         match op {
             // ── namespace writes (→ M3) ──
-            // The publication flag is passed ABSENT until the `Op` carries
-            // it (lane 2.3): M3 resolves the create-path default — the
+            // The three-valued publication flag rides the op verbatim
+            // (PUB-8.16); M3's create path resolves the ABSENT arm — the
             // account's first document born published, every later flagless
-            // one private (PUB-8.21).
-            Op::CreateNewDocument { account } => {
+            // one private (PUB-8.21). The explicit-false FIRST-mint refusal
+            // is the DAEMON's door (PUB-8.20, D2c), not this dispatch's.
+            Op::CreateNewDocument { account, published } => {
                 let (addr, at) = self
                     .stores
                     .namespace()
-                    .create_new_document(wc.principal, &account, None)
+                    .create_new_document(wc.principal, &account, published)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -307,9 +308,36 @@ where
             }
             // Fork ≠ Version (§3): mints an EMPTY account-tier document,
             // sharing NO content; the content-sharing fork is Op::Version.
-            Op::Fork => {
-                let (addr, at) =
-                    self.stores.namespace().fork(wc.principal).map_err(|e| self.map_txn(kind, e))?;
+            //
+            // `Namespace::fork(caller)` takes no publication flag and M3 is
+            // frozen this round (PUB lane 2.3), so the three-valued flag
+            // (PUB-8.16) is threaded here by performing fork's OWN literal
+            // reduction — a create in the caller's own account
+            // (`principal_prefix(caller)`, ASN-0042 O10) — with the flag
+            // passed to M3's create path. This is the one place M10 spells a
+            // store's reduction rather than calling it; it is recorded as a
+            // seam workaround in the round's report. The create-path default
+            // (born-published first mint, private otherwise) and the
+            // daemon's mint-first door are unchanged by threading it.
+            Op::Fork { published } => {
+                let pfx = self
+                    .stores
+                    .kernel()
+                    .snapshot()
+                    .world()
+                    .m3()
+                    .principal_prefix(wc.principal)
+                    .cloned();
+                let Some(pfx) = pfx else {
+                    // fork's own unknown-principal answer (Namespace::fork
+                    // returns CreateDocumentError::NotOwner, opening no txn).
+                    return Err(rejection(kind, RejectCode::NotOwner));
+                };
+                let (addr, at) = self
+                    .stores
+                    .namespace()
+                    .create_new_document(wc.principal, &pfx, published)
+                    .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // ── arrangement writes (→ M5; ω-gated in-store under the
@@ -346,11 +374,14 @@ where
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::Ack { at })
             }
-            Op::Version { d_src } => {
+            Op::Version { d_src, published } => {
                 let (addr, at) = self
                     .stores
                     .vstream()
-                    .version(wc.principal, &d_src) // M5 does the owned/cross-owner branch
+                    // M5 does the owned/cross-owner branch AND resolves the
+                    // three-valued flag: None ⇒ INHERIT published(d_src),
+                    // off its own working state (PUB-8.17/8.18).
+                    .version(wc.principal, &d_src, published)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
@@ -586,7 +617,7 @@ where
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
-            | Op::Fork
+            | Op::Fork { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }

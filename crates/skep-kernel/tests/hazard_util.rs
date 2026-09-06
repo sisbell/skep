@@ -332,7 +332,7 @@ impl Fixture {
         capture(&engine, &mut boundaries);
 
         // 9: a version (the copy-on-write fork).
-        let _ = engine.vstream().version(USER, &doc).expect("version");
+        let _ = engine.vstream().version(USER, &doc, None).expect("version");
         capture(&engine, &mut boundaries);
 
         // 10: a delete.

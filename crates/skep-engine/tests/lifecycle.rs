@@ -79,7 +79,7 @@ fn cross_store_lifecycle_under_fsync() {
         }
 
         // M5+M3: version — a copy-on-write fork sharing the content.
-        let (vd, _version_seq) = engine.vstream().version(USER, &doc).expect("version succeeds");
+        let (vd, _version_seq) = engine.vstream().version(USER, &doc, None).expect("version succeeds");
         version_doc = vd;
         {
             let snap = engine.kernel().snapshot();

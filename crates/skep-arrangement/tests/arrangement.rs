@@ -718,7 +718,7 @@ fn owned_version_shares_the_map_and_diverges_copy_on_write() {
     let vs = insert_abc(&k);
     seat_link(&k, &doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1])).expect("seat commits");
     let (fork, _) = vs
-        .version(PrincipalId(1), &doc1())
+        .version(PrincipalId(1), &doc1(), None)
         .expect("owned fork commits");
     assert_eq!(fork, vdoc());
     {
@@ -753,7 +753,7 @@ fn cross_owner_version_mints_under_the_forkers_account() {
     let k = mem_kernel();
     let vs = insert_abc(&k);
     let (fork, _) = vs
-        .version(PrincipalId(2), &doc1())
+        .version(PrincipalId(2), &doc1(), None)
         .expect("cross-owner fork commits");
     assert_eq!(fork, a(&[1, 0, 2, 0, 1]));
     let s = k.snapshot();
@@ -768,7 +768,7 @@ fn version_of_an_empty_source_has_a_zero_content_footprint() {
     let k = mem_kernel();
     let vs = Vstream::new(&k);
     let (fork, _) = vs
-        .version(PrincipalId(1), &doc2())
+        .version(PrincipalId(1), &doc2(), None)
         .expect("empty-source fork commits");
     let s = k.snapshot();
     assert!(s.world().m3().is_registered_document(&fork));
@@ -782,18 +782,18 @@ fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     let vs = insert_abc(&k);
     let un = a(&[1, 0, 1, 0, 9]);
     assert!(matches!(
-        rejected(vs.version(PrincipalId(1), &un)),
+        rejected(vs.version(PrincipalId(1), &un, None)),
         VersionError::SourceNotRegistered
     ));
     assert!(matches!(
-        rejected(vs.version(PrincipalId(99), &doc1())),
+        rejected(vs.version(PrincipalId(99), &doc1(), None)),
         VersionError::NotAPrincipal
     ));
     // Principal 0 is the bootstrap NODE-tier principal ([1], zeros = 0): a
     // cross-owner fork by it is outside VERSION's domain — rejected
     // explicitly, never as a downstream Mint(NotAnAccount).
     assert!(matches!(
-        rejected(vs.version(PrincipalId(0), &doc1())),
+        rejected(vs.version(PrincipalId(0), &doc1(), None)),
         VersionError::NodeTierCrossOwner
     ));
     // Which wins when both are bad: registration first, so a fork aimed at
@@ -801,7 +801,7 @@ fn version_rejects_unregistered_unknown_and_node_tier_callers() {
     // caller here is a principal the registry does not know, and the verdict
     // is still about the source.
     assert!(matches!(
-        rejected(vs.version(PrincipalId(99), &un)),
+        rejected(vs.version(PrincipalId(99), &un, None)),
         VersionError::SourceNotRegistered
     ));
 }
@@ -953,7 +953,7 @@ fn copy_reads_foreign_sources_into_an_owned_destination() {
     let vs = insert_abc(&k);
     let p2 = Caller::Principal(PrincipalId(2));
     let (fork, _) = vs
-        .version(PrincipalId(2), &doc2())
+        .version(PrincipalId(2), &doc2(), None)
         .expect("cross-owner fork commits");
     vs.copy(
         p2,
@@ -1054,7 +1054,7 @@ fn mixed_length_transclusion_flows_through_the_level_class_discipline() {
     // total under cross-length coverage.
     let k = mem_kernel();
     let vs = insert_abc(&k);
-    let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+    let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
     vs.insert(P1, &fork, vp(1, 4), vec![val(b"y"), val(b"z")])
         .expect("fork edit commits"); // mints vca(1..2), length 9
     vs.copy(
@@ -1161,7 +1161,7 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         k.checkpoint().expect("checkpoint");
         vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         seat_link(&k, &doc1(), &link1).expect("seat commits");
-        let (fork, _) = vs.version(PrincipalId(1), &doc1()).expect("fork commits");
+        let (fork, _) = vs.version(PrincipalId(1), &doc1(), None).expect("fork commits");
         assert_eq!(fork, vdoc());
         // A source edit AFTER the fork: on replay the VersionSnapshot must
         // fold at its own journal slot and read doc1 as it was there, not as

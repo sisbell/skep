@@ -61,7 +61,15 @@ pub const MAX_REQ_ID_BYTES: usize = 256;
 pub enum Op {
     // ── namespace writes (→ M3) ──
     /// CREATENEWDOCUMENT (ASN-0103): baptize a fresh empty document.
-    CreateNewDocument { account: Address },
+    ///
+    /// `published` is the three-valued publication flag (PUB-8.16:
+    /// `absent | true | false`, `None` being absent). The wire default is
+    /// PRIVATE (PUB-1.1); the ABSENT arm resolves at M3's create path — the
+    /// account's FIRST document born published, every later flagless one
+    /// private (PUB-8.21). M10 passes it through verbatim; the explicit-false
+    /// FIRST-mint refusal is the DAEMON's door alone (PUB-8.20, owner ruling
+    /// D2c), never this type's.
+    CreateNewDocument { account: Address, published: Option<bool> },
     /// Delegation (ASN-0042 O15): baptize an account prefix + register its
     /// principal atomically.
     Delegate { new_prefix: Tumbler, new_id: PrincipalId },
@@ -79,7 +87,13 @@ pub enum Op {
     /// Denial-as-fork (O10, account tier): a fresh EMPTY document in the
     /// caller's own account — shares NO content (the content-sharing fork is
     /// [`Op::Version`]; §3).
-    Fork,
+    ///
+    /// `published` is the three-valued flag (PUB-8.16), resolved at M3's
+    /// create path exactly as [`Op::CreateNewDocument`]'s (fork reduces to a
+    /// create in the caller's own account). A first fork into an empty
+    /// account is refused `mint_home_first` at the daemon (PUB-8.22) before
+    /// the flag is consulted.
+    Fork { published: Option<bool> },
     // ── namespace reads (→ M3) ──
     /// M3's next-form delegable prefix — what [`Op::Delegate`] demands (§2).
     NextAccountPrefix { parent: Address },
@@ -98,7 +112,12 @@ pub enum Op {
     /// REARRANGE (pivot/swap).
     Rearrange { doc: Address, cuts: Vec<VPos> },
     /// CREATENEWVERSION (ASN-0123) — the content-sharing, copy-on-write fork.
-    Version { d_src: Address },
+    ///
+    /// `published` is the three-valued flag with `None` ⇒ INHERIT
+    /// `published(d_src)` (PUB-8.17). M5's `version` composite resolves the
+    /// inheritance off its own working state and passes the resolved bit
+    /// down (PUB-8.18); M10 hands the flag through unresolved.
+    Version { d_src: Address, published: Option<bool> },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120, as amended 2026-08-16): open link from three
     /// two-form slots — each content V-specs (resolved by M7 inside its
@@ -290,7 +309,7 @@ impl Op {
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
-            | Op::Fork
+            | Op::Fork { .. }
             | Op::Insert { .. }
             | Op::Delete { .. }
             | Op::Copy { .. }
@@ -316,7 +335,7 @@ impl Op {
             Op::CreateNewDocument { .. } => OpKind::CreateNewDocument,
             Op::Delegate { .. } => OpKind::Delegate,
             Op::RegisterNode { .. } => OpKind::RegisterNode,
-            Op::Fork => OpKind::Fork,
+            Op::Fork { .. } => OpKind::Fork,
             Op::NextAccountPrefix { .. } => OpKind::NextAccountPrefix,
             Op::PrincipalPrefix { .. } => OpKind::PrincipalPrefix,
             Op::Insert { .. } => OpKind::Insert,
@@ -389,17 +408,17 @@ pub(crate) mod tests {
     /// fixture, in `operation.rs`.
     pub(crate) fn all_ops() -> Vec<(Op, bool)> {
         vec![
-            (Op::CreateNewDocument { account: addr(&[1, 0, 1]) }, false),
+            (Op::CreateNewDocument { account: addr(&[1, 0, 1]), published: None }, false),
             (Op::Delegate { new_prefix: tum(&[1, 0, 1]), new_id: PrincipalId(1) }, false),
             (Op::RegisterNode { addr: tum(&[1, 1]) }, false),
-            (Op::Fork, false),
+            (Op::Fork { published: None }, false),
             (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
             (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
             (Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])] }, false),
             (Op::Delete { doc: doc(), p: vpos(), width: Nat::from(1u32) }, false),
             (Op::Copy { doc: doc(), at: vpos(), specs: vec![vs()] }, false),
             (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
-            (Op::Version { d_src: doc() }, false),
+            (Op::Version { d_src: doc(), published: None }, false),
             (
                 Op::MakeLink {
                     home: doc(),

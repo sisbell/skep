@@ -98,10 +98,15 @@ fn parse_ok(codec: &JsonCodec, frame: &[u8]) -> Request {
 /// runs, a UTF-8 atom, a non-UTF-8 run, a non-UTF-8 atom).
 fn all_requests() -> Vec<Request> {
     vec![
-        rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]) }),
+        rq(Some("idem-1"), Op::CreateNewDocument { account: a(&[1, 0, 1]), published: None }),
+        // The three-valued flag on the minting ops (PUB-8.16): absent, and
+        // both explicit values, so parse ∘ marshal covers every arm.
+        rq(None, Op::CreateNewDocument { account: a(&[1, 0, 1]), published: Some(false) }),
+        rq(None, Op::CreateNewDocument { account: a(&[1, 0, 1]), published: Some(true) }),
         rq(None, Op::Delegate { new_prefix: t(&[1, 0, 2]), new_id: PrincipalId(2) }),
         rq(None, Op::RegisterNode { addr: t(&[1, 1]) }),
-        rq(None, Op::Fork),
+        rq(None, Op::Fork { published: None }),
+        rq(None, Op::Fork { published: Some(true) }),
         rq(None, Op::NextAccountPrefix { parent: a(&[1]) }),
         rq(None, Op::PrincipalPrefix { id: PrincipalId(2) }),
         rq(
@@ -122,7 +127,8 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::Delete { doc: d1(), p: vp(1, 3), width: n(2) }),
         rq(None, Op::Copy { doc: d1(), at: vp(1, 6), specs: vec![vs(d2(), 1, 5)] }),
         rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)] }),
-        rq(None, Op::Version { d_src: d1() }),
+        rq(None, Op::Version { d_src: d1(), published: None }),
+        rq(None, Op::Version { d_src: d1(), published: Some(false) }),
         rq(
             None,
             Op::MakeLink {
@@ -311,9 +317,63 @@ fn every_op_round_trips_canonically() {
 #[test]
 fn request_id_round_trips() {
     let codec = JsonCodec;
-    let req = rq(Some("key-9"), Op::Fork);
+    let req = rq(Some("key-9"), Op::Fork { published: None });
     let parsed = parse_ok(&codec, &codec.marshal_request(&req));
     assert_eq!(parsed.id, Some(ReqId(b"key-9".to_vec())));
+}
+
+/// wire v5.2 (PUB-8.16): the three-valued `published` flag on the minting
+/// ops. Absent and explicit `null` are the SAME absence (`None`); `true` and
+/// `false` are honored; a non-boolean is a parse fault; and an unknown
+/// sibling field is refused (never-silent), the flag having been consumed
+/// first so `finish()` sees the stray key.
+#[test]
+fn the_publication_flag_reads_absent_null_true_and_false() {
+    let codec = JsonCodec;
+    // (op name, argument fragment) for each op that carries the flag.
+    let ops: [(&str, &str); 3] = [
+        ("create_new_document", r#""account":"1.0.1""#),
+        ("fork", ""),
+        ("version", r#""d_src":"1.0.1.0.1""#),
+    ];
+    let flag_of = |op: &Op| -> Option<bool> {
+        match op {
+            Op::CreateNewDocument { published, .. }
+            | Op::Fork { published }
+            | Op::Version { published, .. } => *published,
+            _ => panic!("expected a minting op"),
+        }
+    };
+    for (name, arg) in ops {
+        let sep = if arg.is_empty() { "" } else { "," };
+        let frame = |flag: &str| format!(r#"{{"op":"{name}"{sep}{arg}{flag}}}"#).into_bytes();
+        // absent
+        assert_eq!(flag_of(&parse_ok(&codec, &frame("")).op), None, "{name}: absent");
+        // explicit null == absent
+        assert_eq!(
+            flag_of(&parse_ok(&codec, &frame(r#","published":null"#)).op),
+            None,
+            "{name}: null is absence"
+        );
+        // true / false
+        assert_eq!(
+            flag_of(&parse_ok(&codec, &frame(r#","published":true"#)).op),
+            Some(true),
+            "{name}: true"
+        );
+        assert_eq!(
+            flag_of(&parse_ok(&codec, &frame(r#","published":false"#)).op),
+            Some(false),
+            "{name}: false"
+        );
+        // a non-boolean is a parse fault, never coerced
+        assert!(codec.parse(&frame(r#","published":"yes""#)).is_err(), "{name}: string flag");
+        // an unknown sibling field is still refused, the flag consumed first
+        assert!(
+            codec.parse(&frame(r#","published":true,"surprise":1"#)).is_err(),
+            "{name}: unknown sibling field"
+        );
+    }
 }
 
 /// Every non-rejected `Response` shape, built fresh on each call so

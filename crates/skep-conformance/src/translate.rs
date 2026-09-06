@@ -592,7 +592,10 @@ impl Cx<'_> {
             return Some(d);
         }
         let id = self.shadow.synthesize_docid();
-        match self.rig.exec(Op::CreateNewDocument { account: self.rig.current_account.clone() }) {
+        match self.rig.exec(Op::CreateNewDocument {
+            account: self.rig.current_account.clone(),
+            published: Some(false), // private first mint at the engine (PUB lane 0)
+        }) {
             Response::AckAddr { addr, .. } => {
                 out.adaptations.push("implied-create:first-touch".into());
                 self.alpha.bind(&id, &addr);
@@ -1085,7 +1088,10 @@ fn h_create_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             cx.shadow.set_current(golden);
             continue;
         }
-        let r = cx.rig.exec(Op::CreateNewDocument { account: cx.rig.current_account.clone() });
+        let r = cx.rig.exec(Op::CreateNewDocument {
+            account: cx.rig.current_account.clone(),
+            published: Some(false), // private first mint at the engine (PUB lane 0)
+        });
         match r {
             Response::AckAddr { addr, .. } => {
                 cx.alpha.bind(golden, &addr);
@@ -1216,7 +1222,10 @@ fn create_one(cx: &mut Cx, out: &mut OpOutcome, id: &str, name: Option<&str>) {
         cx.shadow.set_current(id);
         return;
     }
-    match cx.rig.exec(Op::CreateNewDocument { account: cx.rig.current_account.clone() }) {
+    match cx.rig.exec(Op::CreateNewDocument {
+        account: cx.rig.current_account.clone(),
+        published: Some(false), // private first mint at the engine (PUB lane 0)
+    }) {
         Response::AckAddr { addr, .. } => {
             cx.alpha.bind(id, &addr);
             cx.shadow.create_doc(id, name);
@@ -1295,7 +1304,7 @@ fn h_open_document(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             out.note = Some(format!("open_document(conflict=copy) of unresolvable doc {doc}"));
             return;
         };
-        match cx.rig.exec(Op::Version { d_src: src }) {
+        match cx.rig.exec(Op::Version { d_src: src, published: None }) {
             Response::AckAddr { addr, .. } => {
                 if let Some(g) = &result {
                     cx.alpha.bind(g, &addr);
@@ -1373,7 +1382,7 @@ fn h_create_version(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
         out.note = Some(format!("version of unresolvable doc {src}"));
         return;
     };
-    match cx.rig.exec(Op::Version { d_src }) {
+    match cx.rig.exec(Op::Version { d_src, published: None }) {
         Response::AckAddr { addr, .. } => {
             if !settle_ack(out, xf, None) {
                 return;

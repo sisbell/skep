@@ -125,7 +125,11 @@ impl Rig {
         // each the identity of one link-type name (names are assigned to
         // ordinals on first use). Created through the same op surface the
         // scenarios use — the harness holds no back door.
-        let tdoc = match rig.exec(Op::CreateNewDocument { account: account.clone() }) {
+        // Minted PRIVATE at the engine (PUB-8.16 `Some(false)`): the harness
+        // drives M10 directly, with no daemon door, so each scenario
+        // account's first document is born private and the goldens stay
+        // byte-identical (PUB lane 0's verified promise).
+        let tdoc = match rig.exec(Op::CreateNewDocument { account: account.clone(), published: Some(false) }) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("types-doc create failed: {}", brief(&other))),
         };

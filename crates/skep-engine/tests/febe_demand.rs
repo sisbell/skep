@@ -50,7 +50,7 @@ fn engine_world_satisfies_the_febe_demand() {
     let session = op.open_session(USER);
     let doc = ack_addr(op.execute(
         session,
-        Request { id: None, op: Op::CreateNewDocument { account: acct.clone() } },
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
     ));
 
     ack_addr(op.execute(

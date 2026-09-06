@@ -151,6 +151,18 @@ fn seat_account(port: u16, by: &str, parent: &str, id: u64) -> (String, String, 
     (account, doc1, session)
 }
 
+/// Delegate a fresh EMPTY account under principal 0 — no home mint — and
+/// answer `(account, a bare session bound to it)`. The seat every first-mint
+/// cell is judged against, before its home exists.
+fn delegate_empty_account(port: u16, boot: &str, id: u64) -> (String, String) {
+    let v = op(port, Some(boot), r#"{"op":"next_account_prefix","parent":"1"}"#);
+    let account =
+        expect_resp(&v, "maybe_addr")["addr"].as_str().expect("a delegable prefix").to_string();
+    let v = op(port, Some(boot), &format!(r#"{{"op":"delegate","new_prefix":"{account}","new_id":{id}}}"#));
+    expect_resp(&v, "ack_addr");
+    (account, open_session(port, id))
+}
+
 fn rejected_detail(v: &Value) -> String {
     assert_eq!(v["resp"].as_str(), Some("rejected"), "expected a rejection: {v}");
     format!(
@@ -340,6 +352,13 @@ fn mint_home_first_refuses_until_the_home_exists() {
     expect_resp(&v, "ack_addr");
     let account_token = open_session(port, 77);
     let v = op(port, Some(&account_token), r#"{"op":"fork"}"#);
+    assert_eq!(rejected_detail(&v), "credential_refused:mint_home_first");
+    // version into the empty account refuses the same way (§4.3): MINT-FIRST
+    // reads the caller's account, never the source, so any registered source
+    // meets it — the mint slot stands ahead of the board-state gate, so this
+    // is `mint_home_first`, not the published-source `signed_session_required`.
+    let v =
+        op(port, Some(&account_token), &format!(r#"{{"op":"version","d_src":"{CLAIMANT_DOC1}"}}"#));
     assert_eq!(rejected_detail(&v), "credential_refused:mint_home_first");
     let v = op(
         port,
@@ -947,6 +966,159 @@ fn the_publish_gate_reads_publication_only_on_registered_addresses() {
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("doc_not_registered"), "{v}");
     let v = op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{never}"}}"#));
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("source_not_registered"), "{v}");
+
+    sd.shutdown();
+}
+
+/// PUB-8.20 / the H1 first-mint pair (PUB-6.58): an explicit `published:false`
+/// on an account's FIRST document is REFUSED at the daemon's door
+/// (`mint_home_public`, permanent, nothing committed), and a FLAGLESS first
+/// mint is HONORED — the home born PUBLISHED. Also the door's neighbours
+/// (PUB-8.21, §4.2): explicit `true` on a first mint is honored public, and
+/// once the home exists a flagless or explicit-`false` mint is an ordinary
+/// private draft that refuses nothing.
+///
+/// "Born published" is read behaviourally: a bare session's write into a
+/// published home hits the publish gate (`signed_session_required`), while a
+/// write into a draft it owns commits — so the gate's verdict on a bare
+/// insert reports the mint's resolved publication state.
+#[test]
+fn the_first_mint_door_refuses_explicit_false_and_a_flagless_first_mint_is_public() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path()); // claimed, CLAIMED-PERMISSIVE (bare binds honored)
+    let port = sd.port();
+    let boot = open_session(port, 0);
+
+    let (account, session) = delegate_empty_account(port, &boot, 808);
+    let create = |flag: &str| {
+        op(port, Some(&session), &format!(r#"{{"op":"create_new_document","account":"{account}"{flag}}}"#))
+    };
+    // A bare write into `doc` at `ord`: published ⇒ the publish gate refuses;
+    // draft ⇒ it commits. `ord` is chosen free so the arrangement is silent.
+    let bare_write_published = |doc: &str, ord: u64| -> bool {
+        let v = op(port, Some(&session), &format!(
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"{ord}"}},"values":["p"]}}"#
+        ));
+        match v["resp"].as_str() {
+            Some("rejected") => {
+                assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required",
+                    "a bare write into {doc} refused for another reason: {v}");
+                true
+            }
+            Some("ack_addr") => false,
+            _ => panic!("unexpected insert response for {doc}: {v}"),
+        }
+    };
+
+    // H1 cell 1: explicit `false` on the FIRST mint is refused, nothing commits.
+    let v = create(r#","published":false"#);
+    assert_eq!(rejected_detail(&v), "credential_refused:mint_home_public");
+    assert_eq!(v["disposition"].as_str(), Some("permanent"));
+
+    // H1 cell 2: a FLAGLESS first mint is honored, the home born PUBLISHED.
+    let home = acked_addr(&create(""));
+    assert!(bare_write_published(&home, 1), "a flagless first mint is born published");
+
+    // Once the home exists, a flagless mint is a PRIVATE draft (§4.2).
+    let draft = acked_addr(&create(""));
+    assert!(!bare_write_published(&draft, 1), "a later flagless mint is a private draft");
+
+    // …and an explicit `false` on a non-first mint refuses nothing — private.
+    let priv2 = acked_addr(&create(r#","published":false"#));
+    assert!(!bare_write_published(&priv2, 1), "a non-first explicit-false mint is private, not refused");
+
+    // §4.2 empty + `true`: a fresh account's first mint with explicit `true`
+    // is honored public (the exemption admits the content-empty home under
+    // any flag).
+    let (account2, session2) = delegate_empty_account(port, &boot, 809);
+    let v = op(port, Some(&session2), &format!(r#"{{"op":"create_new_document","account":"{account2}","published":true}}"#));
+    let home2 = acked_addr(&v);
+    let v = op(port, Some(&session2), &format!(
+        r#"{{"op":"insert","doc":"{home2}","at":{{"subspace":"1","ordinal":"1"}},"values":["p"]}}"#
+    ));
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required",
+        "an explicit-true first mint is honored public");
+
+    sd.shutdown();
+}
+
+/// The publish gate's EXPLICIT-FLAG row (PUB-6.43, §4.5): on a claimed board a
+/// bare session's `published:true` mint into a NON-empty account lands in the
+/// published world and is refused `signed_session_required`; a draft mint
+/// (flagless or explicit `false`) from the same bare session is accepted; and
+/// a signed session publishes.
+#[test]
+fn the_publish_gate_refuses_an_explicit_true_mint_from_a_bare_session() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    let create = |token: &str, flag: &str| {
+        op(port, Some(token), &format!(r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"{flag}}}"#))
+    };
+
+    // Explicit `true` into the claimant's non-empty account → published write.
+    let v = create(&bare, r#","published":true"#);
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
+    // Draft mints from the same bare session are accepted.
+    expect_resp(&create(&bare, ""), "ack_addr");
+    expect_resp(&create(&bare, r#","published":false"#), "ack_addr");
+    // A signed session publishes it.
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    expect_resp(&create(&signed, r#","published":true"#), "ack_addr");
+
+    sd.shutdown();
+}
+
+/// PUB-8.17 (§4.4): `version`'s ABSENT flag INHERITS the source's publication
+/// state, and an explicit flag overrides it. Read behaviourally through the
+/// publish gate, over empty published/private sources so the version snapshots
+/// no content and ordinal 1 is always free.
+#[test]
+fn version_inherits_publication_and_an_explicit_flag_overrides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let bare = open_session(port, CLAIMANT_PRINCIPAL);
+    // A bare insert into `doc` at ordinal 1: `Ok` ⇒ private (it commits),
+    // the publish refusal ⇒ published.
+    let bare_write_published = |doc: &str| -> bool {
+        let v = op(port, Some(&bare), &format!(
+            r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["p"]}}"#
+        ));
+        match v["resp"].as_str() {
+            Some("rejected") => {
+                assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required", "{v}");
+                true
+            }
+            Some("ack_addr") => false,
+            _ => panic!("unexpected response for {doc}: {v}"),
+        }
+    };
+    let create = |flag: &str| {
+        acked_addr(&op(port, Some(&signed), &format!(
+            r#"{{"op":"create_new_document","account":"{CLAIMANT_ACCOUNT}"{flag}}}"#
+        )))
+    };
+    // Empty PRIVATE and empty PUBLISHED sources (signed, non-first mints).
+    let priv_src = create(""); // flagless non-first → private
+    let pub_src = create(r#","published":true"#); // explicit true → published
+
+    // Flagless version of a PRIVATE source → private (inherit). A bare draft
+    // version is not gated.
+    let v_priv = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{priv_src}"}}"#)));
+    assert!(!bare_write_published(&v_priv), "flagless version of a draft inherits private");
+
+    // Flagless version of a PUBLISHED source → published (inherit). Needs a
+    // signed session (bare would meet the publish gate at the version itself).
+    let v_pub = acked_addr(&op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{pub_src}"}}"#)));
+    assert!(bare_write_published(&v_pub), "flagless version of an edition inherits published");
+
+    // Explicit `false` over a PUBLISHED source → private (the flag overrides
+    // inheritance; this cell is lane 3.1's PUB-2.9 territory, admitted today).
+    let v_false = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{pub_src}","published":false}}"#)));
+    assert!(!bare_write_published(&v_false), "an explicit false overrides published inheritance");
 
     sd.shutdown();
 }

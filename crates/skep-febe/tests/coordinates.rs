@@ -51,7 +51,8 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let mut seen: Vec<OpKind> = Vec::new();
 
     // ── the document family ──
-    let r = ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone() });
+    let r =
+        ex(&fx.febe, fx.user, Op::CreateNewDocument { account: fx.account.clone(), published: None });
     committed(&fx, OpKind::CreateNewDocument, &r, &mut seen);
     let (d, _) = ack_addr(r);
 
@@ -66,11 +67,11 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     );
     committed(&fx, OpKind::Insert, &r, &mut seen);
 
-    let r = ex(&fx.febe, fx.user, Op::Fork);
+    let r = ex(&fx.febe, fx.user, Op::Fork { published: None });
     committed(&fx, OpKind::Fork, &r, &mut seen);
     let (f, _) = ack_addr(r);
 
-    let r = ex(&fx.febe, fx.user, Op::Version { d_src: d.clone() });
+    let r = ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None });
     committed(&fx, OpKind::Version, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
@@ -161,7 +162,7 @@ fn every_read_reports_the_log_head_as_its_as_of() {
     let fx = setup();
     let d = create_doc(&fx);
     insert3(&fx, &d);
-    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone() }));
+    let (v, _) = ack_addr(ex(&fx.febe, fx.user, Op::Version { d_src: d.clone(), published: None }));
     let mk = || Op::MakeLink {
         home: d.clone(),
         from: SlotArg::Resolve(vec![vspec(&d, 1, 1)]),

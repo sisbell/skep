@@ -473,12 +473,21 @@ pub(crate) fn board_state_refusal(
 /// * a flagless `version` reads `published(d_src)` (INHERIT);
 /// * a homed write reads `published(home)` — both through [`published`], the
 ///   engine's exception set with the version-member projection (PUB-2.15).
-/// Flagless `create`/`fork` resolve draft (outside),
+///
+/// Flagless `create`/`fork` resolve draft (outside), and
 /// `delegate`/`register_node`/`nullify` present no input form here.
 /// Registration and ω stand AHEAD (PUB-6.37, PUB-6.36 slot 1): the gate
 /// evaluates only registered addresses the caller owns, so an unregistered
 /// or foreign argument answers `execute`'s own code, and an empty-account
 /// `fork`/`version` is refused `mint_home_first` before this gate is reached.
+///
+/// The projection reaches every arm that reads an address: `published(home)`
+/// on a version member answers its DOCUMENT's bit, so a member minted
+/// `Some(false)` under a published document — PUB-2.7's private-member
+/// cell, admitted until the routed write-path item lands (PUB-8.2) — is
+/// gated as published, its own journaled bit notwithstanding. The explicit
+/// flag on the `version` itself is the argument's own input (row 1 of the
+/// table), which is why that mint is admitted from a bare session.
 fn publish_gate(
     world: &World,
     op: &Op,

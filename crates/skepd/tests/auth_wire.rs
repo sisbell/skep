@@ -1070,10 +1070,33 @@ fn the_publish_gate_refuses_an_explicit_true_mint_from_a_bare_session() {
     sd.shutdown();
 }
 
+/// The dump's exception set — the `publication.drafts` hint, draft document →
+/// owner account (PUB-7.5) — as its rendered text. The one wire surface that
+/// shows a version MEMBER's own journaled bit: the publish gate reads the
+/// DOCUMENT a member projects to (PUB-2.15), so a bare-write probe answers
+/// the document's state and never the member's.
+fn drafts_section(port: u16) -> String {
+    let (st, body) = get(port, "/dump");
+    assert_eq!(st, 200);
+    let text = String::from_utf8(body).expect("dump is utf-8 text");
+    let start = text
+        .find(r#""publication.drafts": {"#)
+        .expect("the dump's hints section renders the exception set");
+    let rest = &text[start..];
+    // The map's values are quoted addresses, so the first brace closes it.
+    let end = rest.find('}').expect("a rendered map closes");
+    rest[..=end].to_string()
+}
+
 /// PUB-8.17 (§4.4): `version`'s ABSENT flag INHERITS the source's publication
-/// state, and an explicit flag overrides it. Read behaviourally through the
-/// publish gate, over empty published/private sources so the version snapshots
-/// no content and ordinal 1 is always free.
+/// state, and an explicit flag overrides it — in the RECORD: the resolved bit
+/// is what the member's `Allocate` journals (PUB-8.18), and the dump's
+/// exception set shows it. The publish gate reads the DOCUMENT a member
+/// projects to (PUB-2.15), so where the member's bit equals its document's the
+/// two instruments agree, and where the flag makes them differ — an explicit
+/// `false` over a published source — the gate answers the document's state
+/// and the dump the member's. Over empty published/private sources so the
+/// version snapshots no content and ordinal 1 is always free.
 #[test]
 fn version_inherits_publication_and_an_explicit_flag_overrides() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1081,8 +1104,8 @@ fn version_inherits_publication_and_an_explicit_flag_overrides() {
     let port = sd.port();
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
-    // A bare insert into `doc` at ordinal 1: `Ok` ⇒ private (it commits),
-    // the publish refusal ⇒ published.
+    // A bare insert into `doc` at ordinal 1: `Ok` ⇒ its document is private
+    // (it commits), the publish refusal ⇒ its document is published.
     let bare_write_published = |doc: &str| -> bool {
         let v = op(port, Some(&bare), &format!(
             r#"{{"op":"insert","doc":"{doc}","at":{{"subspace":"1","ordinal":"1"}},"values":["p"]}}"#
@@ -1106,7 +1129,9 @@ fn version_inherits_publication_and_an_explicit_flag_overrides() {
     let pub_src = create(r#","published":true"#); // explicit true → published
 
     // Flagless version of a PRIVATE source → private (inherit). A bare draft
-    // version is not gated.
+    // version is not gated. (A version of a private source the caller owns
+    // is PUB-2.9's versionless cell — lane 3.1's routed item, PUB-8.2 —
+    // admitted today.)
     let v_priv = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{priv_src}"}}"#)));
     assert!(!bare_write_published(&v_priv), "flagless version of a draft inherits private");
 
@@ -1115,10 +1140,36 @@ fn version_inherits_publication_and_an_explicit_flag_overrides() {
     let v_pub = acked_addr(&op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{pub_src}"}}"#)));
     assert!(bare_write_published(&v_pub), "flagless version of an edition inherits published");
 
-    // Explicit `false` over a PUBLISHED source → private (the flag overrides
-    // inheritance; this cell is lane 3.1's PUB-2.9 territory, admitted today).
+    // Explicit `false` over a PUBLISHED source: the flag overrides the
+    // inheritance in the RECORD — the member's own bit is journaled `false`
+    // — but the member is a member of `pub_src`'s chain, and the publish
+    // gate reads the DOCUMENT it projects to (PUB-2.15), which is published:
+    // a bare write into it is still refused. (A private member of a
+    // published chain is PUB-2.7's cell — the same routed item — admitted
+    // today; the flag is admitted as PUB-6.43's explicit-flag input, a draft
+    // mint, so the bare `version` itself is not gated.)
     let v_false = acked_addr(&op(port, Some(&bare), &format!(r#"{{"op":"version","d_src":"{pub_src}","published":false}}"#)));
-    assert!(!bare_write_published(&v_false), "an explicit false overrides published inheritance");
+    assert!(
+        bare_write_published(&v_false),
+        "a member of a published chain is gated as its document (PUB-2.15)"
+    );
+
+    // The RECORD's bits, off the dump's exception set: the explicit `false`
+    // and the inherited private are drafts of the claimant's account; the
+    // inherited published is not a draft.
+    let drafts = drafts_section(port);
+    assert!(
+        drafts.contains(&format!(r#""{v_false}": "{CLAIMANT_ACCOUNT}""#)),
+        "an explicit false is the bit the version's record journals: {drafts}"
+    );
+    assert!(
+        drafts.contains(&format!(r#""{v_priv}": "{CLAIMANT_ACCOUNT}""#)),
+        "the flagless version of a draft inherits private in the record: {drafts}"
+    );
+    assert!(
+        !drafts.contains(&format!(r#""{v_pub}""#)),
+        "the flagless version of an edition inherits published in the record: {drafts}"
+    );
 
     sd.shutdown();
 }

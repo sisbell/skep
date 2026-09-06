@@ -867,7 +867,8 @@ resolves AFTER every token below.
      (`create`/`fork`/`version`) except the exempt content-empty home
      mint; a flagless `version` of a **published** source (the inherit
      resolving published); an `insert`/`delete`/`copy`/`rearrange`
-     whose `doc` is a published document the caller owns; and a link
+     whose `doc` is a published document the caller owns — a version
+     member reading as its document (PUB-2.15, §Arrangement); and a link
      write homed in one (`edit_link` reads `d_s`). A foreign or
      unregistered argument answers `execute`'s own code instead
      (`not_owner`, `*_not_registered`). Signed sessions, draft mints
@@ -904,8 +905,10 @@ type (§The claim ceremony and credentials) — run a stricter order:
   doc 1); `no_holder`; `not_genesis_registry`; `not_holder_retirement`;
   `would_empty` (a retirement naming the whole enrolled set);
   `nothing_changed`; `already_claimed`; `claimant_keyless`;
-  `claimant_not_top_level`; `unpublished` (unreachable on this daemon —
-  v1 wires publication constant-true); and the payload joins
+  `claimant_not_top_level`; `unpublished` (the deposit's home is a DRAFT
+  document — read off the journaled bit, ahead of the home pin and of the
+  payload parse, so a draft-homed deposit answers it whatever its record
+  says); and the payload joins
   `malformed_payload:<sub>` with `<sub>` one of `too_large`,
   `foreign_content`, `missing_value`, `not_utf8`, `bad_header`,
   `bad_line:<n>`, `duplicate_key:<n>`, `empty` (`<n>` a 1-based line
@@ -1094,6 +1097,19 @@ keeps the new version private. On a claimed board a bare session's `version`
 that lands in the published world — an explicit `true`, or a flagless
 version of a published source — is refused `signed_session_required`
 (§Credential refusals).
+
+Where you own `d_src`, the new version is a MEMBER of its chain —
+`1.0.1.0.1.1`, `1.0.1.0.1.2`, … — and the publish gate reads the DOCUMENT a
+member projects to, never the member's own bit (PUB-2.15): a write homed in
+`1.0.1.0.1.1` is gated exactly as a write into `1.0.1.0.1`. So an explicit
+`published:false` over a published document you own mints a member whose
+own journaled bit is private (the dump's `publication.drafts` section
+lists it) while bare writes into it still refuse `signed_session_required`.
+That member is the private member of a published chain the version-chain
+model refuses outright (PUB-2.7); it is admitted today, and its refusal
+rides the routed write-path item (PUB-8.2) together with PUB-2.9's
+versionless sibling. Where you do not own `d_src`, `version` mints a fresh
+document in your own account, gated by its own bit.
 
 ### Links (writes)
 
@@ -1692,9 +1708,13 @@ deterministic world dump — format **`skep-world-dump v4`**, the banner
 the code emits. (The v2→v3 renumber rode the ghost-tumbler genesis
 rework of 2026-08-30, not the auth delta; its design-side record lands
 as an AUTH RES entry — citation pending, deliberately not invented
-here.) Byte-comparable across processes for run reconstruction: two
-dumps of equal worlds are byte-equal. As built the dump carries NO
-dedicated identity section: the identity table is DERIVED state — a
+here. v3→v4 is the publication round's, 2026-09-05: the hints section
+gained `publication.drafts` — the exception set, every draft document
+mapped to its owner account, address-sorted — and the banner moved with
+the section set, PUB-8.29/PUB-8.30.) Byte-comparable across processes
+for run reconstruction: two dumps of equal worlds are byte-equal. As
+built the dump carries NO dedicated identity section: the identity
+table is DERIVED state — a
 pure function of the credential deposits, which are ordinary links
 already in the dump's links slice — so byte-equal dumps imply equal
 identity tables, and `key_set` (not the dump) is the identity read
@@ -1756,6 +1776,51 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.1 (the publication flag and the exception-set publish class — the PUB
+round-1 build of 2026-09-05, documented as built; the version-member
+projection note is the 2026-09-05 reconcile's):
+
+* The three-valued `published` flag on the three minting ops —
+  `create_new_document`, `fork`, `version`: `true` | `false` | absent
+  (`null` reads as absent; any other value is a parse fault, never
+  coerced). The wire default is PRIVATE (PUB-8.16). Resolution: on
+  `create`/`fork` an absent flag makes the account's FIRST document —
+  the home — born published and every later flagless mint private; on
+  `version` an absent flag INHERITS `d_src`'s state (PUB-8.17). The
+  RESOLVED bit is what the mint's record journals; the flag itself never
+  rides the journal (PUB-8.18).
+* New `credential_refused` token `mint_home_public` (permanent): an
+  explicit `published:false` on the first mint into an empty account you
+  own is refused at the daemon's door (PUB-8.20); a flagless or
+  explicit-`true` first mint is honored, the home born published
+  (PUB-8.21). A non-owner answers `not_owner`; a later mint refuses
+  nothing.
+* The publish class (`signed_session_required`) now reads the journaled
+  bit — the engine's exception set over M3's per-document publication
+  map (PUB-7.5), the same function the credential fold reads — with
+  PUB-6.43's inputs: an explicit `published:true` on any non-exempt
+  mint, a flagless `version` of a published source, and a write homed in
+  a published document you own. v7's "today an account's doc 1" is
+  superseded: doc 1 is published because its mint journaled it so, and
+  any document minted `published:true` is gated the same way.
+* A version member is gated as its DOCUMENT (PUB-2.15): the gate
+  projects `1.0.1.0.3.2` to `1.0.1.0.3` before it reads. So an explicit
+  `published:false` `version` of a published document you own mints a
+  member whose own journaled bit is private — the dump's
+  `publication.drafts` lists it — while bare writes into it still refuse
+  `signed_session_required`. That member is the private member of a
+  published chain the version-chain model refuses outright (PUB-2.7);
+  admitted today, its refusal rides the routed write-path item
+  (PUB-8.2) with PUB-2.9's versionless sibling.
+* `unpublished` is reachable: a credential deposit homed in a DRAFT
+  document refuses it, ahead of the home pin and the payload parse.
+  v7's "unreachable — v1 wires publication constant-true" is
+  superseded.
+* The dump banner moves to `skep-world-dump v4`: the hints section
+  gained `publication.drafts` — the exception set, draft document →
+  owner account, address-sorted — and the banner moved with the section
+  set (PUB-8.29, PUB-8.30). v3 was the ghost-tumbler format (v6.2).
 
 v7 (the AUTH surface — sessions, credentials, the write gates; the AUTH
 build of 2026-08-30, documented as built):
@@ -1837,10 +1902,11 @@ build of 2026-08-30, documented as built):
   did not commit the entry (a future mirror's case). The feed examples
   are re-pinned onto a claimed board's positions — the ceremony's five
   commits occupy 2–12 on a fresh board.
-* The dump: the code emits `skep-world-dump v4` — docs and code agree;
-  the v2→v3 renumber rode the ghost-tumbler rework (2026-08-30), and
-  its design-side record lands as an AUTH RES entry (citation
-  pending). As built the dump gains NO identity section: the identity
+* The dump: the code emitted `skep-world-dump v3` at this delta (v4 is
+  v7.1's, the publication slice) — docs and code agree; the v2→v3
+  renumber rode the ghost-tumbler rework (2026-08-30), and its
+  design-side record lands as an AUTH RES entry (citation pending). As
+  built the dump gains NO identity section: the identity
   table is derived state, a pure function of deposits the links slice
   already carries — the sealed spec's per-account dump section
   (AUTH-6.28) rides to the engine round with the build report, and

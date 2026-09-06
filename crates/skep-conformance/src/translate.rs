@@ -3100,7 +3100,7 @@ fn h_follow_link(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) 
                         .iter()
                         .filter(|sp| {
                             skep_address::validate(sp.start().clone())
-                                .map(|a| !cx.rig.is_types_addr(&a))
+                                .map(|a| !cx.rig.is_infra_addr(&a))
                                 .unwrap_or(true)
                         })
                         .count();
@@ -3367,7 +3367,7 @@ fn h_traverse(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
                         &want,
                         &found,
                         cx.alpha,
-                        |a| rig.is_types_addr(a),
+                        |a| rig.is_infra_addr(a),
                         &mut adaptations,
                     );
                     out.adaptations = adaptations;
@@ -3500,7 +3500,13 @@ fn find_links_at(cx: &mut Cx, doc: &str, reverse: bool) -> Vec<skep_address::Add
         FourSet { home: SlotSpec::Any, from: spec, to: SlotSpec::Any, ty: SlotSpec::Any }
     };
     match cx.rig.exec(Op::FindLinksFtt { q }) {
-        Response::Addrs { addrs, .. } => addrs,
+        // The rig's setup grant (ruling 21) is FROM the account's subtree
+        // span, so every forward hop over a rig account's content surfaces
+        // it: harness infrastructure, dropped here so neither the per-hop
+        // count nor the address set nor the landing follow ever sees it.
+        Response::Addrs { addrs, .. } => {
+            addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
+        }
         _ => Vec::new(),
     }
 }
@@ -3885,12 +3891,16 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let q = FourSet { home, from, to, ty };
     let xf = expected_failure(op);
     let r = cx.rig.exec(Op::FindLinksFtt { q });
-    let addrs = match r {
+    let addrs: Vec<skep_address::Address> = match r {
         Response::Addrs { addrs, .. } => {
             if !settle_ack(out, xf, None) {
                 return;
             }
-            addrs
+            // Harness infrastructure out BEFORE either comparator: the
+            // rig's setup grant (ruling 21) answers every FROM-constrained
+            // or unconstrained query over a rig account's content, and a
+            // count expectation has no α-binding step to drop it in.
+            addrs.into_iter().filter(|a| !cx.rig.is_infra_addr(a)).collect()
         }
         other => {
             settle_ack(out, xf, rejection_code(&other));
@@ -3946,7 +3956,7 @@ fn h_find_links(cx: &mut Cx, op: &Value, out: &mut OpOutcome, grants: &Grants) {
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
     let verdict =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_types_addr(a), &mut adaptations);
+        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
     match verdict {
         Ok(()) => out.status = Status::Agreed,
@@ -4139,7 +4149,7 @@ fn h_find_documents(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
     let rig = &*cx.rig;
     let mut adaptations = std::mem::take(&mut out.adaptations);
     let verdict =
-        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_types_addr(a), &mut adaptations);
+        compare_addr_sets(&want, &addrs, cx.alpha, |a| rig.is_infra_addr(a), &mut adaptations);
     out.adaptations = adaptations;
     match verdict {
         Ok(()) => out.status = Status::Agreed,
@@ -5010,7 +5020,8 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
                 }
             }
         }
-        // Skep side: the recorded endset spans, types-doc spans excluded.
+        // Skep side: the recorded endset spans, infrastructure spans (the
+        // types doc, the rig homes, ruling 21's grant) excluded.
         let mut got_ranges: Vec<(String, u64, u64)> = Vec::new();
         for (i, e) in &pairs {
             if *i != slot {
@@ -5018,7 +5029,7 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
             for sp in e.spans() {
                 if let Ok(a) = skep_address::validate(sp.start().clone()) {
-                    if cx.rig.is_types_addr(&a) {
+                    if cx.rig.is_infra_addr(&a) {
                         continue;
                     }
                 }
@@ -5055,7 +5066,7 @@ fn h_endsets(cx: &mut Cx, op: &Value, out: &mut OpOutcome) {
             }
             for sp in e.spans() {
                 let Ok(a) = skep_address::validate(sp.start().clone()) else { continue };
-                if cx.rig.is_types_addr(&a) {
+                if cx.rig.is_infra_addr(&a) {
                     continue;
                 }
                 let doc = skep_address::document_of(&a)

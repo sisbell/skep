@@ -222,6 +222,27 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
     /// specifies. The only cap that closes it is a spec-count or response-size
     /// cap on the route, which is M10's as the request lifecycle's owner.
     pub fn retrieve_v(&self, specs: &[Spec]) -> Result<Delivery, RetrieveError> {
+        // The UNFILTERED delivery — every origin readable. The daemon's read
+        // surface calls [`Query::retrieve_v_masked`] with its per-request
+        // predicate; this delegate serves the principal-free callers (the
+        // engine's own lifecycle read, the suites) unchanged.
+        self.retrieve_v_masked(specs, &|_| true)
+    }
+
+    /// RETRIEVEV with the source consult (PUB round 2, lane 3.3, §2/§4): the
+    /// same delivery, but each RUN is tested per PUB-6.41 against its origin
+    /// DOCUMENT through `readable`, and a masked run — its origin unreadable to
+    /// the reading principal, OR unregistered — is emitted as the seventh
+    /// shape [`DeliveryItem::Withheld`] AT ITS OWN POSITION rather than
+    /// delivered (PUB-6.58: one item per run, never coalesced). The NAMED
+    /// document's own readability is the caller's doc-argument consult
+    /// (PUB-6.12), run pre-dispatch; this masks only the ORIGINS its runs
+    /// window.
+    pub fn retrieve_v_masked(
+        &self,
+        specs: &[Spec],
+        readable: &dyn Fn(&Address) -> bool,
+    ) -> Result<Delivery, RetrieveError> {
         let w = self.0.world();
         let (m3, m5, content) = (w.m3(), w.m5(), w.content());
         // Gate the whole request first — VSpec WELL-FORMEDNESS is the only
@@ -244,6 +265,17 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
             let sub = span_subspace(&spec.span);
             let surface = reading_surface(m3, &spec.doc);
             for run in m5.resolve(&surface, &spec.span) {
+                // The per-run source consult (PUB-6.41): the run's origin
+                // DOCUMENT, tested BEFORE the run is expanded. An unregistered
+                // origin, or one the reading principal may not read, masks the
+                // WHOLE run as one withheld item at its own position — never
+                // coalesced with a neighbour (PUB-6.58).
+                let origin = document_of(run.i_start())
+                    .expect("an element-level I-address has a Document prefix");
+                if !m3.is_registered_document(&origin) || !readable(&origin) {
+                    out.push(DeliveryItem::Withheld { origin, width: run.width().clone() });
+                    continue;
+                }
                 // Per active position, ascending V (R3) — no dedup (R8); the
                 // run answers for its own positions, in the owned form, since
                 // `resolve` hands the run over and it outlives only this walk.
@@ -598,6 +630,23 @@ impl<W: RetrievalWorld> Query<'_, W> {
     /// they stay with request rate and concurrency, which are M10's as the
     /// request lifecycle's owner.
     pub fn find_docs_containing(&self, regions: &[RegionSpec]) -> Result<Vec<Address>, FindError> {
+        // The UNFILTERED containers — every one readable. The daemon's read
+        // surface calls [`Query::find_docs_containing_filtered`] with its
+        // per-request predicate.
+        self.find_docs_containing_filtered(regions, &|_| true)
+    }
+
+    /// FINDDOCSCONTAINING with the container filter (PUB round 2, lane 3.3,
+    /// §3; PUB-6.13/6.19): the same answer, minus every CONTAINER the reading
+    /// principal may not read. The filter is at container IDENTITY — a
+    /// candidate document `readable` answers false for is dropped, exactly as a
+    /// result-set link's unreadable home is. The region-spec DOCUMENTS are the
+    /// caller's doc-argument consult (pre-dispatch), not filtered here.
+    pub fn find_docs_containing_filtered(
+        &self,
+        regions: &[RegionSpec],
+        readable: &dyn Fn(&Address) -> bool,
+    ) -> Result<Vec<Address>, FindError> {
         let w = self.0.world();
         let (m3, m5) = (w.m3(), w.m5());
         // The gate first, over the WHOLE request — the first fault wins, and
@@ -641,7 +690,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
         let candidates = m5.docs_ever_containing(&coverage);
         Ok(candidates
             .into_iter()
-            .filter(|d| !m5.project(d, &coverage).is_empty()) // FD-SOUND
+            // FD-SOUND — the present-tense containment filter — AND the
+            // container consult (lane 3.3, §3): a container the reader may not
+            // read is dropped at its identity, before it reaches the answer.
+            .filter(|d| readable(d) && !m5.project(d, &coverage).is_empty())
             .collect())
     }
 }

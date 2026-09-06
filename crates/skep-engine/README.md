@@ -22,6 +22,12 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
   publication bit (`World::published`, `World::owner_account`):
   seeded at load, folded on every document-minting record, never
   checkpointed. The daemon's one publication definition.
+- **The read predicate and the grant fold** — `World::readable`,
+  the one function every read surface answers through
+  (published ∨ owner subtree ∨ grant), and the second derived
+  index it rests on: a fold over the link store recognizing
+  grant-typed records as values, seeded at load, folded on every
+  link deposit, never checkpointed.
 - **`Engine::open`** — genesis-or-recover in one call; the
   `Stores<World>` factory the operation surface injects.
 

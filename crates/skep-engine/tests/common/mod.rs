@@ -121,6 +121,7 @@ pub fn delivered_bytes(d: &Delivery) -> Vec<Vec<u8>> {
         .map(|item| match item {
             DeliveryItem::Content(v) => v.as_bytes().to_vec(),
             DeliveryItem::Ref(_) => panic!("expected a content item, got a link reference"),
+            DeliveryItem::Withheld { .. } => panic!("expected a content item, got a withheld run"),
         })
         .collect()
 }

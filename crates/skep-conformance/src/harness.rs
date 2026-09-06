@@ -15,7 +15,7 @@ use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::{Op, Operation, Request, Response, SessionId};
 use skep_kernel::{CheckpointPolicy, Durability, KernelConfig};
-use skep_links::Endset;
+use skep_links::{Endset, SlotArg};
 use skep_namespace::PrincipalId;
 
 use std::collections::BTreeMap;
@@ -59,6 +59,11 @@ pub struct Rig {
     pub types_doc: Address,
     type_ordinals: BTreeMap<String, u64>,
     types_capacity: u64,
+    /// Every rig account's HOME — its flagless first mint, born published
+    /// (PUB-8.21), holding that account's setup grant (ruling 21). Harness
+    /// infrastructure, like the types document: never bound in the α-map,
+    /// excluded from every comparison through [`Rig::is_infra_addr`].
+    pub homes: Vec<Address>,
     /// Content deletions in execution order (see [`DeletedRegion`]).
     pub deleted: Vec<DeletedRegion>,
 }
@@ -67,7 +72,54 @@ pub struct Rig {
 /// scenario verdict `error` (harness bug class), never as a finding.
 pub type RigError = String;
 
+/// The GRANTS class type address (COMMONS DECISION 5 — `1.1.0.1.0.1.0.3.90`),
+/// named here as a client names it: the engine's constant is crate-private,
+/// and the fold keys on the VALUE.
+pub fn t_grant() -> Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90]).expect("the grants type address validates")
+}
+
 impl Rig {
+    /// The rig's SETUP GRANT for one account (ruling 21, exit B — the
+    /// privash grant; PUB-1.31, PUB-5.8): mint the account's home flagless
+    /// (its first mint, born published, PUB-8.21) and deposit there, under
+    /// the account's own session, an ANY-PRINCIPAL account-rung grant —
+    /// `ty` the grants class, `from` the account, `to` empty. Every document
+    /// the account mints afterwards is then readable to every bound
+    /// principal (the fold's coverage is containment, forward-inclusive),
+    /// which is what the udanax corpus assumes: it has no publication state,
+    /// so every cross-session read in a golden is a read of what skep calls
+    /// an owned private draft. Through `make_link` — the harness holds no
+    /// back door.
+    fn setup_grant(
+        op: &Operation<World>,
+        session: SessionId,
+        account: &Address,
+    ) -> Result<Address, RigError> {
+        let home = match op.execute(
+            session,
+            Request { id: None, op: Op::CreateNewDocument { account: account.clone(), published: None } },
+        ) {
+            Response::AckAddr { addr, .. } => addr,
+            other => return Err(format!("home mint failed: {}", brief(&other))),
+        };
+        match op.execute(
+            session,
+            Request {
+                id: None,
+                op: Op::MakeLink {
+                    home: home.clone(),
+                    from: SlotArg::Addrs(vec![account.clone()]),
+                    to: SlotArg::Addrs(vec![]),
+                    ty: SlotArg::Addrs(vec![t_grant()]),
+                },
+            },
+        ) {
+            Response::AckAddr { .. } => Ok(home),
+            other => Err(format!("setup grant failed: {}", brief(&other))),
+        }
+    }
+
     pub fn new() -> Result<Rig, RigError> {
         let cfg = KernelConfig {
             durability: Durability::InMemory,
@@ -103,6 +155,9 @@ impl Rig {
             other => return Err(format!("bootstrap delegate failed: {}", brief(&other))),
         };
         let session = op.open_session(PrincipalId(1));
+        // The account's home and its setup grant come FIRST: the home must
+        // be the account's doc 1 (the fold's residence pin, PUB-5.17).
+        let home = Rig::setup_grant(&op, session, &account)?;
 
         let mut rig = Rig {
             _engine: engine,
@@ -116,6 +171,7 @@ impl Rig {
             types_doc: addr(&[1]).expect("placeholder, replaced below"),
             type_ordinals: BTreeMap::new(),
             types_capacity: 8,
+            homes: vec![home],
             deleted: Vec::new(),
         };
         rig.sessions
@@ -125,10 +181,11 @@ impl Rig {
         // each the identity of one link-type name (names are assigned to
         // ordinals on first use). Created through the same op surface the
         // scenarios use — the harness holds no back door.
-        // Minted PRIVATE at the engine (PUB-8.16 `Some(false)`): the harness
-        // drives M10 directly, with no daemon door, so each scenario
-        // account's first document is born private and the goldens stay
-        // byte-identical (PUB lane 0's verified promise).
+        // Minted PRIVATE (PUB-8.16 `Some(false)`): the harness drives M10
+        // directly, with no daemon door. It is the account's SECOND mint —
+        // the home above is its first — so the scenario documents shift by
+        // one more ordinal than they did; the α-map is a bijection built
+        // from the acks, and absorbs the shift as it absorbed this one.
         let tdoc = match rig.exec(Op::CreateNewDocument { account: account.clone(), published: Some(false) }) {
             Response::AckAddr { addr, .. } => addr,
             other => return Err(format!("types-doc create failed: {}", brief(&other))),
@@ -248,6 +305,10 @@ impl Rig {
             other => return Err(format!("delegate: {}", brief(&other))),
         };
         let session = self.op.open_session(id);
+        // Every rig-delegated account carries the setup grant (ruling 21),
+        // deposited under ITS session — the owner of the home it goes in.
+        let home = Rig::setup_grant(&self.op, session, &account)?;
+        self.homes.push(home);
         self.sessions
             .insert(crate::tum::addr_str(&account), (session, id));
         if make_current {
@@ -290,6 +351,22 @@ impl Rig {
     /// would compare encodings, not behavior).
     pub fn is_types_addr(&self, a: &Address) -> bool {
         skep_address::is_prefix(self.types_doc.tumbler(), a.tumbler())
+    }
+
+    /// Is `a` harness INFRASTRUCTURE — inside the types document, inside a
+    /// rig account's home (the setup grant's residence, ruling 21), a rig
+    /// account itself, or the grants class address? The `type_registry`
+    /// exclusion, widened to the setup grant: the grant's FROM endset is the
+    /// account's subtree span, which M7's overlap (pure tumbler order, no
+    /// level gate) counts as touching every content address under the
+    /// account — so a FROM-constrained `find_links_ftt` over a rig account's
+    /// content surfaces the grant link, which no golden can speak. Excluded
+    /// before positional binding, exactly as the types document is.
+    pub fn is_infra_addr(&self, a: &Address) -> bool {
+        self.is_types_addr(a)
+            || self.homes.iter().any(|h| skep_address::is_prefix(h.tumbler(), a.tumbler()))
+            || self.sessions.contains_key(&crate::tum::addr_str(a))
+            || *a == t_grant()
     }
 
     /// Capture a content region's I-extents just before it is deleted

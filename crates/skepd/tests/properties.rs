@@ -195,8 +195,11 @@ struct Capture {
     at: u64,
     /// `None` when built without the `observe` feature.
     dump: Option<Vec<u8>>,
-    /// (frame, live response body) — replayed via `/op-at` later.
-    reads: Vec<(String, Vec<u8>)>,
+    /// (frame, the document owner's principal index, live response body) —
+    /// replayed via `/op-at` later under that owner's session. The owner
+    /// index rather than the token, since tokens die with the process and
+    /// the restart oracle replays under fresh ones.
+    reads: Vec<(String, usize, Vec<u8>)>,
 }
 
 struct RunState {
@@ -292,15 +295,32 @@ fn dump_at(port: u16, at: u64) -> Option<Vec<u8>> {
     }
 }
 
-/// Setup: bootstrap → principals 1 and 2 under node [1], principal 3
-/// sub-delegated under 1's account; one empty document each.
+/// Setup: bootstrap → principal 1 under node [1], principal 2 sub-delegated
+/// under 1's account, principal 3 under 2's — a CHAIN, so every account is
+/// inside its predecessor's subtree; one empty document each.
+///
+/// THE SUBTREE WORLD. Every pooled document is a private draft, and the read
+/// predicate admits a foreign draft only by the SUBTREE clause — the reader's
+/// account lies INSIDE the draft owner's account, one prefix compare, so a
+/// sub-account reads its ancestors' drafts and never the reverse (PUB-1.32;
+/// `World::readable`; the engine's `the_subtree_clause_runs_downward_only`)
+/// — or by a grant, which is a signed-session write into the granting
+/// account's published home (RES-26) that these bare sessions cannot make.
+/// The chain makes the subtree clause carry every cross-owner arm this suite
+/// generates: a writer's copy/version SOURCES are drawn from
+/// [`readable_by`] — its own drafts and its ancestors' — so each source is
+/// readable to the writer at the write (PUB-6.23's consult, when it lands)
+/// and every run's origin is readable to the destination's owner on
+/// read-back, and the naive byte shadow stays exact with no withheld item
+/// (PUB-1.55). Reads by an ancestor or a sibling are `read_surface.rs`'s
+/// cells.
 fn setup(port: u16) -> Shadow {
     let boot = open_session(port, 0);
     let acc_a = delegate(port, &boot, "1", 1);
-    let acc_b = delegate(port, &boot, "1", 2);
     let ta = open_session(port, 1);
+    let acc_b = delegate(port, &ta, &acc_a, 2);
     let tb = open_session(port, 2);
-    let acc_c = delegate(port, &ta, &acc_a, 3);
+    let acc_c = delegate(port, &tb, &acc_b, 3);
     let tc = open_session(port, 3);
     let mut shadow = Shadow {
         principals: [
@@ -359,6 +379,13 @@ fn commit(
 fn own_doc(shadow: &Shadow, pi: usize, sel: u8) -> usize {
     let pool = &shadow.principals[pi].docs;
     pool[sel as usize % pool.len()]
+}
+
+/// The documents principal `pi` can READ under the predicate's subtree clause
+/// in the chain [`setup`] builds: its own, and every ancestor account's (a
+/// lower index). Never empty — the caller's own pool is never empty.
+fn readable_by(shadow: &Shadow, pi: usize) -> Vec<usize> {
+    (0..shadow.docs.len()).filter(|&i| shadow.docs[i].owner <= pi).collect()
 }
 
 /// The deterministic degradation target: one byte prepended to the caller's
@@ -426,7 +453,8 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
         PlanOp::Copy { p, d, at, sd, f, w: wd } => {
             let pi = *p as usize % 3;
             let di = own_doc(shadow, pi, *d);
-            let si = *sd as usize % shadow.docs.len();
+            let readable = readable_by(shadow, pi);
+            let si = readable[*sd as usize % readable.len()];
             let srclen = shadow.docs[si].content.len() as u64;
             if srclen == 0 {
                 return fallback_insert(shadow, state, pi, op_index);
@@ -486,10 +514,16 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
             // is `tests/version_chain.rs`). A foreign draft forks into the
             // caller's own account as a private copy (the flag absent, the
             // source's bit inherited), which is the valid-by-construction
-            // write. Three principals each hold a document, so a foreign
-            // one always exists.
-            let foreign: Vec<usize> =
-                (0..shadow.docs.len()).filter(|&i| shadow.docs[i].owner != pi).collect();
+            // write — and the foreign draft must be READABLE to the caller,
+            // which in the chain is an ancestor's (the subtree world,
+            // [`setup`]); the first principal has none and degrades.
+            let foreign: Vec<usize> = readable_by(shadow, pi)
+                .into_iter()
+                .filter(|&i| shadow.docs[i].owner != pi)
+                .collect();
+            if foreign.is_empty() {
+                return fallback_insert(shadow, state, pi, op_index);
+            }
             let si = foreign[*sd as usize % foreign.len()];
             let id = state.next_id();
             let frame =
@@ -755,10 +789,17 @@ fn render_items(content: &[ContentItem]) -> Value {
 }
 
 /// Oracle 4 for one document: per-subspace extents against the shadow, and
-/// the full content read-back, granularity intact.
+/// the full content read-back, granularity intact. Read as the document's
+/// OWNER — every pooled document is a private draft, which the read
+/// predicate withholds from a guest (PUB-6.1).
 fn check_doc(shadow: &Shadow, state: &mut RunState, di: usize) {
     let d = &shadow.docs[di];
-    let v = op(state.port, None, &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{}"}}"#, d.addr));
+    let owner = shadow.principals[d.owner].token.as_str();
+    let v = op(
+        state.port,
+        Some(owner),
+        &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{}"}}"#, d.addr),
+    );
     let set = expect_resp(&v, "span_set")["set"].as_array().expect("span set").clone();
     // Extent spans may be doc-qualified (full V-address depth, as the wire's
     // span_set example) or bare depth-2; the subspace is the component after
@@ -800,7 +841,7 @@ fn check_doc(shadow: &Shadow, state: &mut RunState, di: usize) {
             d.addr,
             d.content.len()
         );
-        let v = op(state.port, None, &frame);
+        let v = op(state.port, Some(owner), &frame);
         let items = &expect_resp(&v, "delivery")["items"];
         let want = render_items(&d.content);
         assert_eq!(
@@ -821,10 +862,13 @@ fn check_all_docs(shadow: &Shadow, state: &mut RunState) {
 /// Oracle 3 for one link: audit-resident forever; for ghost-typed links,
 /// the exact-type active probe answers it iff not nullified (and nothing
 /// else — the ghost type name is globally unique). Content-typed links get
-/// the residence half only.
+/// the residence half only. Read as the link's OWNER: every pooled link is
+/// homed in a private draft, which the link-address rule answers as absent
+/// to a guest (PUB-6.6) and the result-set filter drops (PUB-6.13).
 fn check_link(shadow: &Shadow, state: &mut RunState, li: usize) {
     let l = &shadow.links[li];
-    let v = op(state.port, None, &format!(r#"{{"op":"read_link","a":"{}"}}"#, l.addr));
+    let owner = shadow.principals[l.owner].token.as_str();
+    let v = op(state.port, Some(owner), &format!(r#"{{"op":"read_link","a":"{}"}}"#, l.addr));
     assert!(
         !expect_resp(&v, "link_value")["link"].is_null(),
         "FINDING: link {} vanished from the audit store (audit only grows)",
@@ -833,7 +877,7 @@ fn check_link(shadow: &Shadow, state: &mut RunState, li: usize) {
     if let Some(ty) = &l.ty {
         let v = op(
             state.port,
-            None,
+            Some(owner),
             &format!(
                 r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{ty}","width":"{}"}}]}}}}"#,
                 unit_w(ty)
@@ -898,16 +942,19 @@ fn capture_position(shadow: &Shadow, state: &mut RunState) {
             d.addr,
             d.content.len()
         );
-        let (st, body) = http(state.port, "POST", "/op", None, frame.as_bytes());
+        let token = shadow.principals[d.owner].token.as_str();
+        let (st, body) = http(state.port, "POST", "/op", Some(token), frame.as_bytes());
         assert_eq!(st, 200, "the captured position's read failed");
-        reads.push((frame, body));
+        reads.push((frame, d.owner, body));
     }
     state.captures.push(Capture { at: state.head, dump, reads });
 }
 
 /// Oracles 1 + 2: every captured position must answer byte-identically from
-/// history — the dump via `/dump?at`, the reads via `/op-at`.
-fn replay_captures(state: &RunState) {
+/// history — the dump via `/dump?at`, the reads via `/op-at`, each read
+/// replayed under the document owner's CURRENT session (the predicate is the
+/// head's, PUB-6.48; the class is the reader's, PUB-8.13).
+fn replay_captures(shadow: &Shadow, state: &RunState) {
     for c in &state.captures {
         assert_eq!(
             dump_at(state.port, c.at),
@@ -915,9 +962,10 @@ fn replay_captures(state: &RunState) {
             "FINDING: /dump?at={} is not byte-equal to the dump captured live there",
             c.at
         );
-        for (frame, body) in &c.reads {
+        for (frame, owner, body) in &c.reads {
             let env = format!(r#"{{"at":{},"frame":{frame}}}"#, c.at);
-            let (st, got) = http(state.port, "POST", "/op-at", None, env.as_bytes());
+            let token = shadow.principals[*owner].token.as_str();
+            let (st, got) = http(state.port, "POST", "/op-at", Some(token), env.as_bytes());
             assert_eq!(st, 200, "/op-at at={} failed: {}", c.at, String::from_utf8_lossy(&got));
             assert_eq!(
                 &got, body,
@@ -967,7 +1015,7 @@ fn run_case(plan: &[PlanOp]) {
     check_all_docs(&shadow, &mut state);
     check_links(&shadow, &mut state, LinkScope::All);
     capture_position(&shadow, &mut state);
-    replay_captures(&state);
+    replay_captures(&shadow, &state);
 
     // Oracle 6 — restart equivalence: reopen the same store; the head, the
     // head dump, a historical dump, a historical read, and the full oracle
@@ -977,6 +1025,12 @@ fn run_case(plan: &[PlanOp]) {
     srv.shutdown();
     let sd2 = spawn(dir.path());
     state.port = sd2.port();
+    // Sessions are uptime-scoped (wire.md §Sessions): the three principals
+    // re-authenticate, and every oracle read below runs under the fresh
+    // tokens — the same principals, so the same answers.
+    for (pi, id) in [(0usize, 1u64), (1, 2), (2, 3)] {
+        shadow.principals[pi].token = open_session(state.port, id);
+    }
     assert_eq!(
         health_pos(state.port),
         final_head,
@@ -995,9 +1049,10 @@ fn run_case(plan: &[PlanOp]) {
             "FINDING: /dump?at={} diverges after restart",
             c.at
         );
-        if let Some((frame, body)) = c.reads.first() {
+        if let Some((frame, owner, body)) = c.reads.first() {
             let env = format!(r#"{{"at":{},"frame":{frame}}}"#, c.at);
-            let (st, got) = http(state.port, "POST", "/op-at", None, env.as_bytes());
+            let token = shadow.principals[*owner].token.as_str();
+            let (st, got) = http(state.port, "POST", "/op-at", Some(token), env.as_bytes());
             assert_eq!(st, 200);
             assert_eq!(
                 &got, body,

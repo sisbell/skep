@@ -95,10 +95,70 @@ document's account (the nearest registered account prefix of its address —
 never mere prefix containment, so a parent account does not own a
 sub-delegated account's documents and a sub-account does not own its
 parent's). Anything else is the `not_owner` rejection with the failing
-address in `site.addr`. Reads remain principal-free. The sanctioned way to
+address in `site.addr`. Reads answer through the read predicate (§The read
+predicate, v7.4). The sanctioned way to
 build on someone else's document is `version` (fork it into your own
 account, content shared) and `copy` (transclude their content into your own
 document) — proposing a change is forking, never editing in place.
+
+### The read predicate
+
+**Reads are class-gated** (v7.4, PUB round 2 lane 3.3): every read
+answers through ONE predicate — `readable(doc, principal) =
+published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
+principal)` — evaluated against the one committed snapshot the read is
+answered from. The reader classes: the GUEST (no token, or a dead one)
+sees published documents alone; a session principal additionally sees
+every document of its own account and of the accounts above it — the
+subtree runs DOWNWARD only, so a parent account reads none of a
+sub-account's drafts, org members are siblings to each other, and the
+node-tier principal 0 reads no draft by subtree; a GRANT-HOLDER sees
+what a grant record opens to it. A grant is an ordinary `make_link` in
+the owner's doc 1: `ty` the grants class `1.1.0.1.0.1.0.3.90`, `from`
+the content-prefix (a document, or an account — covering every document
+under it, those minted later included), `to` the grantee account, or
+empty for EVERY bound principal. A grant never opens anything to the
+guest. A later grant whose `from` names an earlier grant's own address
+revokes it. A grant homed anywhere but the issuer's own doc 1, or issued
+by anyone but the document's owner, opens nothing.
+
+How a masked read answers:
+
+* **A document argument you may not read is the `withheld` rejection**
+  (§Rejections): `disposition` reorder, `site.addr` the document, no
+  `detail`, ever. Every document argument of a read is consulted, in
+  declaration order, before the read runs. An UNREGISTERED address is
+  never masked — it answers the store's own `doc_not_registered` — so a
+  withheld answer is only ever a registered private document.
+* **A result set is filtered** at your class: `find_links_v`,
+  `find_links_ftt`, `count_v`, `count_ftt`, `window_v`, `window_ftt`,
+  `retrieve_endsets`, `find_docs_containing` and `delete_orphans` answer
+  the rows whose home you may read — the census counts the filtered set,
+  the page turns over it.
+* **A link address you may not read is absent**: `read_link` answers
+  `link: null`, `follow_link` answers `{"err": "invalid"}`,
+  `discoverable_from` answers `false`, `project` answers `not_a_link` —
+  exactly as a never-deposited address, never a distinct signal. Where a
+  read carries both a document and a link address (`project`,
+  `discoverable_from`), the document is consulted FIRST.
+* **A delivery masks per run**: a published arrangement that windows a
+  draft you may not read delivers the `withheld` item at that run's own
+  position (§Value encodings); extents are never shrunk.
+* The namespace reads (`next_account_prefix`, `principal_prefix`) and
+  the lineage reads (`in_claims`, `out_claims`) are exempt — registry
+  data, served to every class.
+
+The same predicate answers `/op-at` (against the HEAD's sets, §Reading
+history) and the source gate of `publish` (§The publish shot and
+head-float).
+
+**The serving bound** (PUB-8.43): the wire serves the subtree clause,
+the read-surface sweep above, and the routed write refusals
+(`published_target` and its two siblings) — that interval is CLOSED. Not
+yet served: the audit-view lookup (PUB-8.46), and the source consult on
+the V-spec slots of `copy`, `version`, `make_link` and `edit_link` — a
+write may today transclude, fork or link to content its session may not
+read; that gate rides a later lane.
 
 ### Cross-origin access — a scope decision
 
@@ -246,11 +306,12 @@ Rules:
   set (or from a non-loopback peer) runs that one request as a guest:
   the entry lives untouched and no header is sent.
 * A request with **no token** (or an unparseable one) still gets a full
-  answer: read operations are principal-free and succeed normally;
-  write operations are rejected with code `unauthenticated`
-  (permanent) — still the first gate in the write order, ahead of every
-  credential token (§Credential refusals). That rejection is your
-  signal to (re)open a session.
+  answer: read operations run at GUEST class — a published document
+  answers normally, a private draft is the `withheld` rejection (§The
+  read predicate); write operations are rejected with code
+  `unauthenticated` (permanent) — still the first gate in the write
+  order, ahead of every credential token (§Credential refusals). That
+  rejection is your signal to (re)open a session.
 * The signal is additive: reads and writes are otherwise unchanged.
 
 ### The claim ceremony and credentials
@@ -491,12 +552,16 @@ position-value sequences never render alike.
   value per item, never coalesced.
 * A **link position** renders `{"ref": "<address>"}`.
 
-(Routed, not yet in the protocol: the publication rounds add a fourth
-item — `{"withheld": {"origin": "<address>", "width": "<nat>"}}`, a run
-the reader may not read, emitted at its own position rather than
-dropped. Its rendering is pinned now, beside the rules above: one item
-per withheld RUN — two non-contiguous withheld runs, even from one
-origin, are two items, never one coalesced item of the summed width.)
+* A **withheld run** renders `{"withheld": {"origin": "<address>",
+  "width": "<nat>"}}` (v7.4, PUB round 2 lane 3.3): a run the reading
+  principal may not read, emitted at its OWN position rather than
+  dropped — `origin` the run's origin DOCUMENT, `width` its position
+  count. One item per withheld RUN: two non-contiguous withheld runs,
+  even from one origin, are two items, never one coalesced item of the
+  summed width. Only `retrieve_v` emits it (the extent forms deliver no
+  positions); a masked run is the reader's, not the named document's —
+  a document the reader may not read at all is a `withheld` REJECTION
+  (§Rejections), never a delivery.
 
 Count positions, not items: `{"content": "hello"}` spans five positions,
 `{"atom": "hello"}` spans one.
@@ -591,6 +656,15 @@ coalesced into the run beside it:
 <!-- wire: response delivery_atom -->
 ```json
 {"as_of":9,"items":[{"content":"hi"},{"atom":"chunk"}],"resp":"delivery"}
+```
+
+One readable per-byte position, then a RUN the reader may not read — a
+withheld item at its own position, never coalesced (v7.4, PUB round 2 lane
+3.3):
+
+<!-- wire: response delivery_withheld -->
+```json
+{"as_of":9,"items":[{"content":"a"},{"withheld":{"origin":"1.0.1.0.2","width":"3"}}],"resp":"delivery"}
 ```
 
 **`span_set`** — retrieve_doc_v_span / retrieve_doc_v_span_set / project.
@@ -764,7 +838,9 @@ Fields:
   is a position *within* that slot; `addr` names the offending document in
   multi-document lookups — on a `not_owner` rejection, the document
   (or target link) that failed the ownership check; on a `withheld`
-  rejection (v7.3), the origin DOCUMENT a `publish` shot may not read.
+  rejection, the origin DOCUMENT a `publish` shot may not read (v7.3),
+  or the document argument a READ may not (v7.4) — a read carrying
+  several document arguments names the first, in declaration order.
   Span faults: `not_ordinal_level`, `not_level_uniform`,
   `start_not_zero_free`, `start_too_shallow`.
 * `detail` — optional message (always present on `unparseable`, where
@@ -820,8 +896,9 @@ Arrangement: `empty_content`, `content`, `empty_source`,
 `private_source_versionless` (the version-chain model's three write-path
 refusals — §The version-chain refusals below), and the publish shot's
 own (v7.3, §The publish shot and head-float below): `withheld` — the
-source gate; the one code of this family whose disposition is reorder,
-carrying `site.addr` (the origin's document) and never a `detail` —
+source gate, and since v7.4 every READ's document-argument consult
+(§The read predicate); the one code of this family whose disposition is
+reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
 `base_extent_too_large`.
 
@@ -1654,9 +1731,10 @@ comes from the substrate's journal itself, never from a client-side
 reconstruction.
 
 **`POST /op-at`** — body `{"at": <position>, "frame": {…}}`, where `frame`
-is an ordinary `/op` frame (§Operations, same codec, no session needed —
-reads are principal-free). The answer is the ordinary response document
-for that operation, its `as_of` reporting `at`:
+is an ordinary `/op` frame (§Operations, same codec; the session token is
+honored exactly as on `/op`, so present one to read as its principal —
+without one the read runs as the guest). The answer is the ordinary
+response document for that operation, its `as_of` reporting `at`:
 
 <!-- wire: op_at retrieve_v -->
 ```json
@@ -1698,16 +1776,29 @@ Rules:
   that frozen state — a `reorder` cannot resolve by waiting; reissue at a
   later position instead.
 
+* **The reader's class is the presented session's; the predicate is the
+  HEAD's** (v7.4). The content is the position's, but the sets that
+  decide what you may read — publication and grants (§The read
+  predicate) — are the CURRENT head's, never the position's: a grant made
+  after the position opens the draft at every position it exists at, and
+  a revocation closes it everywhere. A document argument you may not read
+  at the head answers `withheld` before anything is rebuilt — ahead of
+  `history_busy`, `history_reclaimed` and the position's own
+  `doc_not_registered` — and consumes no reconstruction slot. A masked
+  `withheld` is a reorder that CAN resolve by waiting: for a grant.
+
 * Envelope faults (missing or non-integer `at`, missing `frame`, unknown
   fields) are `400 {"error": "malformed_op_at", "detail": …}`. An
   unparseable `frame` is answered exactly as `/op` answers it: `200` with
   the `unparseable` rejection. An `id` inside the frame is accepted and
   ignored — reads are never memoized (§Correlation and idempotency).
 
-**Determinism.** The same `at` with the same frame yields a byte-identical
-response body — across repeats and across daemon restarts. A freshly
-started daemon answers positions committed long before it started. `/op-at`
-at the current head is byte-identical to the same frame on `/op`.
+**Determinism.** The same `at` with the same frame, read at the same
+class, yields a byte-identical response body — across repeats and across
+daemon restarts (sessions are uptime-scoped; the same principal under a
+fresh token is the same class). A freshly started daemon answers
+positions committed long before it started. `/op-at` at the current head
+is byte-identical to the same frame on `/op`.
 
 **Cost and retention.** Each historical read rebuilds the state at `at` by
 folding the journal forward from the nearest on-disk checkpoint at or
@@ -1749,8 +1840,9 @@ and realm verification. No such op exists today.
 
 **`GET /events`** answers `200 Content-Type: text/event-stream` and never
 ends on its own: it is the daemon's push channel for log movement, so
-clients stop polling `/health`. No session is needed — like every read it
-is principal-free — but the route is token-accepting (§Sessions): a dead
+clients stop polling `/health`. No session is needed — the stream carries
+positions alone, nothing the read predicate gates — but the route is
+token-accepting (§Sessions): a dead
 or unknown token presented here meets `Skepd-Session: closed` on the
 stream's own head, written once, at open. On connect the daemon
 immediately sends one event
@@ -1801,7 +1893,8 @@ Rules:
   not a mechanism the current daemon adds.
 * **No payload beyond the position in v1**: no op kinds, no document
   addresses, no per-document filtering. React to movement by re-querying
-  what you care about — reads are cheap and principal-free.
+  what you care about — reads are cheap, and answer at your session's
+  class.
 * **Keepalive.** After 15 seconds of silence the daemon writes the comment
   line `:ka` (followed by a blank line). Treat a stream silent well past
   that as dead, and reconnect.
@@ -2028,6 +2121,46 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.4 (the read-surface sweep — PUB round 2, lane 3.3, built 2026-09-06;
+documented as built):
+
+* READS ARE CLASS-GATED (§The read predicate): `readable(doc, principal)
+  = published ∨ subtree ∨ grant` (PUB-1.31) answers every read, off the
+  one snapshot the read is answered from. A document argument the
+  session may not read is `withheld` — reorder, `site.addr` the
+  document, no `detail` (PUB-8.4, PUB-8.5) — consulted per argument in
+  declaration order, unregistered addresses excepted (they keep
+  `doc_not_registered`, PUB-7.5). Result sets are filtered at the
+  reader's class (PUB-6.13); a link homed in a document the reader may
+  not read is ABSENT by address (PUB-6.6); `project` and
+  `discoverable_from` consult `d` first (PUB-6.8); a delivery masks a
+  windowed draft run as the `withheld` item at its own position, one
+  per run, never coalesced, extents unshrunk. Sharing is by GRANT
+  (PUB-5.8): an ordinary `make_link` in the owner's doc 1, `ty` the
+  grants class `1.1.0.1.0.1.0.3.90`, `from` the content-prefix (a
+  document or an account, forward-inclusive), `to` the grantee account
+  or empty for ANY-PRINCIPAL; revoked by a later grant naming the
+  earlier grant's address in `from`. Nothing opens to the guest but
+  publication.
+* `/op-at` honors the session token exactly as `/op` (PUB-8.13): the
+  content is the position's, the predicate is the HEAD's (PUB-6.48) —
+  and `withheld` precedes `history_busy`, `history_reclaimed` and the
+  position's own `doc_not_registered` (PUB-6.49), consuming no
+  reconstruction slot.
+* `publish`'s source gate is now the same predicate: a sharing grant
+  fills a run's `withheld` origin (v7.3's "later lane" landed).
+* Not wire-visible, recorded for the audit trail: M9's rule fires run at
+  GUEST class — a fire whose home or bound argument lies in a draft is
+  refused before any deposit.
+* The serving bound (PUB-8.43) is CLOSED for the subtree clause, the
+  read-surface sweep and the routed write refusals. Owed: PUB-8.46's
+  audit-view lookup, and the source consult on the V-spec slots of
+  `copy`, `version`, `make_link` and `edit_link` (PUB-6.23) — those
+  writes read their sources ungated today.
+* No new op, no new code, no dump change, no change to the credential
+  surface. v5.1's "reads remain principal-free" and v7's "every read
+  remains principal-free" are superseded here.
 
 v7.3 (the publish shot and head-float — PUB round 2, lane 3.2, built
 2026-09-05; documented as built):
@@ -2367,7 +2500,8 @@ ruling; no encoding change, new rejection paths):
   the CALLER's account (denial-as-fork) and is the sanctioned
   "propose a change" path. (Since qualified twice at v7 — MINT-FIRST and
   the publish class; the OWNER gate it never had, it still has not.)
-* Reads are unchanged: every read remains principal-free.
+* Reads are unchanged: every read remains principal-free (superseded at
+  v7.4 — reads answer through the read predicate).
 
 v5 (address-denoting endsets on the open link surface — the 2026-08-16
 ruling; spec anchors ASN-0043 L4/L8/L9/L13, Literary Machines 4/44):

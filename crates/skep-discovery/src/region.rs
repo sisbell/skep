@@ -20,7 +20,7 @@ use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, Run, VP
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::helpers::{stab_runs, stab_runs_by_slot, union_slots, window_over};
+use crate::helpers::{home_of, stab_runs, stab_runs_by_slot, union_slots, window_over};
 use crate::types::{Cursor, QueryError, Window};
 use crate::DiscoveryWorld;
 
@@ -234,7 +234,24 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
     d: &Address,
     region: &[Span],
 ) -> Result<Vec<Address>, QueryError> {
-    Ok(findlinks_v_set_on(s, d, region)?.into_iter().collect())
+    findlinks_v_on_where(s, d, region, &|_| true)
+}
+
+/// [`findlinks_v_on`] with the result-set filter (PUB round 2, lane 3.3, §3;
+/// PUB-6.13): every link whose HOME the reading principal may not read is
+/// DROPPED, at link IDENTITY, before the caller sees it. M7's link readers
+/// stay principal-free (Conflicts #1); the filter is M8's, applied over the
+/// selection index.
+pub fn findlinks_v_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Result<Vec<Address>, QueryError> {
+    Ok(findlinks_v_set_on(s, d, region)?
+        .into_iter()
+        .filter(|a| home_readable(&home_of(a)))
+        .collect())
 }
 
 /// Present-tense census of region-reaching links; the cardinality of
@@ -253,7 +270,23 @@ pub fn count_v_on<W: DiscoveryWorld>(
     d: &Address,
     region: &[Span],
 ) -> Result<usize, QueryError> {
-    Ok(findlinks_v_set_on(s, d, region)?.len())
+    count_v_on_where(s, d, region, &|_| true)
+}
+
+/// [`count_v_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
+/// §3; PUB-6.15): the count is of the links surviving the home consult, by
+/// ENUMERATION — the same set [`findlinks_v_on_where`] returns, counted rather
+/// than collected, so the two cannot disagree.
+pub fn count_v_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Result<usize, QueryError> {
+    Ok(findlinks_v_set_on(s, d, region)?
+        .into_iter()
+        .filter(|a| home_readable(&home_of(a)))
+        .count())
 }
 
 /// Windowed enumeration of the region family (ASN-0108, the
@@ -279,8 +312,23 @@ pub fn window_v_on<W: DiscoveryWorld>(
     cur: Cursor,
     n: usize,
 ) -> Result<Window, QueryError> {
+    window_v_on_where(s, d, region, cur, n, &|_| true)
+}
+
+/// [`window_v_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
+/// the home consult is applied LAZILY during the key-cut, at link identity and
+/// BEFORE the window slice (PUB-6.14), so a masked link is skipped rather than
+/// counted against `n`.
+pub fn window_v_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    cur: Cursor,
+    n: usize,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Result<Window, QueryError> {
     let sel = findlinks_v_set_on(s, d, region)?; // gate + region-check inside
-    Ok(window_over(&sel, cur, n, |_| true))
+    Ok(window_over(&sel, cur, n, |a| home_readable(&home_of(a))))
 }
 
 /// RETRIEVEENDSETS (ASN-0131): the `(slot, endset)` pairs touching `region`,
@@ -313,6 +361,21 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     d: &Address,
     region: &[Span],
 ) -> Result<Vec<(usize, Endset)>, QueryError> {
+    retrieve_endsets_on_where(s, d, region, &|_| true)
+}
+
+/// [`retrieve_endsets_on`] with the result-set filter (PUB round 2, lane 3.3,
+/// §3; PUB-6.15): filtered at link HOME, UNFILTERED at origin — a link whose
+/// home the reader may not read contributes no pair, but a surviving link's
+/// endset is surfaced WHOLE, its spans never masked by their origin. So the
+/// consult is at the CANDIDATE link's identity, once, before its slots are
+/// read.
+pub fn retrieve_endsets_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    region: &[Span],
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Result<Vec<(usize, Endset)>, QueryError> {
     let w = s.world();
     let image = image_on(s, d, region)?; // gate + region-check inside, on THIS snap
     let by_slot = stab_runs_by_slot(w.links(), &image); // KEPT SEPARATE — slot i of a touches iff a ∈ its set
@@ -320,6 +383,12 @@ pub fn retrieve_endsets_on<W: DiscoveryWorld>(
     let mut kept: HashSet<(usize, Endset)> = HashSet::new(); // internal throwaway dedup by structural Eq
     let mut spans_kept: usize = 0;
     for c in sel.iter() {
+        // The home consult, at the candidate link's identity (§3): a link whose
+        // home is unreadable contributes no pair. Its endset — if it survived —
+        // is unfiltered at origin (PUB-6.15).
+        if !home_readable(&home_of(c)) {
+            continue;
+        }
         let link = w.links().readlink(c).expect("stab keys are resident links");
         for (i, hits) in &by_slot {
             if hits.contains(c) {

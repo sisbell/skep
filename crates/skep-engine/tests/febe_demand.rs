@@ -9,10 +9,12 @@ mod common;
 use std::sync::Arc;
 
 use common::*;
+use skep_address::Address;
 use skep_content::Val;
 use skep_engine::{Engine, EngineStores};
-use skep_febe::{Op, Operation, Request, Response};
+use skep_febe::{Disposition, Op, Operation, RejectCode, Request, Response};
 use skep_kernel::Kernel;
+use skep_namespace::PrincipalId;
 use skep_retrieval::Spec;
 use tempfile::tempdir;
 
@@ -83,6 +85,108 @@ fn engine_world_satisfies_the_febe_demand() {
         }
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         _ => panic!("expected Delivery"),
+    }
+}
+
+/// The read surface through the demand side (PUB round 2, lane 3.3): M10 builds
+/// its per-request predicate off `ReadableWorld`, which the assembled `World`
+/// implements with the engine's own `readable` (published ∨ subtree ∨ grant,
+/// PUB-1.31). So over this engine a private draft is delivered to its owner and
+/// answers WITHHELD — `reorder`, `site.addr` the document, no `detail`
+/// (PUB-8.4, PUB-8.5) — to a retired (guest) session and to a principal outside
+/// the owner's subtree, while the account's published home answers every
+/// class. The predicate's clauses are `tests/grants.rs`'s; what this pins is
+/// that `Operation<World>` reaches them at all.
+#[test]
+fn m10_s_read_surface_answers_through_the_engine_s_predicate() {
+    let engine = mem_engine();
+    let op: Operation<skep_engine::World> = Operation::new(Box::new(engine.stores()));
+
+    let boot = op.bootstrap_session();
+    let prefix = match op.execute(
+        boot,
+        Request { id: None, op: Op::NextAccountPrefix { parent: node1() } },
+    ) {
+        Response::MaybeAddr { addr: Some(a), .. } => a,
+        Response::Rejected(rej) => panic!("rejected: {rej:?}"),
+        _ => panic!("expected MaybeAddr"),
+    };
+    let acct = ack_addr(op.execute(
+        boot,
+        Request {
+            id: None,
+            op: Op::Delegate { new_prefix: prefix.tumbler().clone(), new_id: USER },
+        },
+    ));
+    let owner = op.open_session(USER);
+    // The flagless first mint is the account's HOME, born published
+    // (PUB-8.21); the second is a private draft.
+    let home = ack_addr(op.execute(
+        owner,
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
+    ));
+    let draft = ack_addr(op.execute(
+        owner,
+        Request { id: None, op: Op::CreateNewDocument { account: acct.clone(), published: None } },
+    ));
+    ack_addr(op.execute(
+        owner,
+        Request {
+            id: None,
+            op: Op::Insert {
+                doc: draft.clone(),
+                at: vp(1, 1),
+                values: vec![Val::new(vec![b'w'])],
+                deposit: false,
+            },
+        },
+    ));
+
+    let read = |session, doc: &Address| {
+        op.execute(
+            session,
+            Request {
+                id: None,
+                op: Op::RetrieveV { specs: vec![Spec { doc: doc.clone(), span: vspan(1, 1, 1) }] },
+            },
+        )
+    };
+    let withheld = |resp: Response, doc: &Address| match resp {
+        Response::Rejected(rej) => {
+            assert_eq!(rej.code, RejectCode::Withheld, "{rej:?}");
+            assert_eq!(rej.disposition, Disposition::Reorder, "{rej:?}");
+            assert_eq!(rej.site.as_ref().and_then(|s| s.addr.as_ref()), Some(doc), "{rej:?}");
+            assert!(rej.detail.is_none(), "withheld carries no detail: {rej:?}");
+        }
+        _ => panic!("expected the withheld rejection for {doc}"),
+    };
+
+    // SUBTREE — the owner reads its own draft.
+    match read(owner, &draft) {
+        Response::Delivery { items, .. } => {
+            assert_eq!(delivered_bytes(&items), vec![b"w".to_vec()]);
+        }
+        Response::Rejected(rej) => panic!("the owner was refused its own draft: {rej:?}"),
+        _ => panic!("expected Delivery"),
+    }
+    // GUEST — a retired session carries no principal (the daemon's guest
+    // pattern): the guest predicate is published alone.
+    let guest = op.open_session(PrincipalId(4242));
+    op.close_session(guest);
+    withheld(read(guest, &draft), &draft);
+    // NON-ENTITLED — a bound principal outside the owner's subtree, no grant.
+    let stranger = op.open_session(PrincipalId(77));
+    withheld(read(stranger, &draft), &draft);
+    // The published home answers both classes — a span set (empty, nothing
+    // deposited), never a withheld answer: a published document never
+    // answers withheld (PUB-6.3).
+    for session in [guest, stranger] {
+        match op.execute(session, Request { id: None, op: Op::RetrieveDocVSpanSet { doc: home.clone() } })
+        {
+            Response::SpanSet { .. } => {}
+            Response::Rejected(rej) => panic!("the published home was refused: {rej:?}"),
+            _ => panic!("expected SpanSet"),
+        }
     }
 }
 

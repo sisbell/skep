@@ -113,6 +113,12 @@ pub enum RetractError {
 /// Nullify (H-HOME — never a silent skip).
 #[derive(Debug)]
 pub enum FireError {
+    /// The action's home, or the bound argument's document, is not readable
+    /// at GUEST class (PUB round 2, lane 3.3, §5): the fire would cross the
+    /// draft boundary, and is refused before any deposit — carrying the
+    /// document that failed. Ahead of `HomeNotRegistered`: the check runs off
+    /// the fire snapshot, before M7's write path is entered.
+    DraftBoundary(Address),
     HomeNotRegistered,
     Emit(TxnError<EmitError>),
     Nullify(TxnError<NullifyError>),

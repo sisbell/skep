@@ -189,6 +189,15 @@ fn fixture(name: &str) -> Response {
             ]),
             as_of: Seq(9),
         },
+        // The withheld arm (v7.4, lane 3.3, §4): a readable per-byte run, then
+        // a masked run at its own position — one item, never coalesced.
+        "delivery_withheld" => Response::Delivery {
+            items: Delivery(vec![
+                DeliveryItem::Content(Val::new(vec![b'a'])),
+                DeliveryItem::Withheld { origin: a(&[1, 0, 1, 0, 2]), width: n(3) },
+            ]),
+            as_of: Seq(9),
+        },
         "span_set" => Response::SpanSet {
             set: [ispan()].into_iter().collect::<SpanSet>(),
             as_of: Seq(9),

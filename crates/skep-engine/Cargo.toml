@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 license.workspace = true
-description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, the constant genesis, the pinned recovery order, the exception set over M3's publication bit, and the world dump surface"
+description = "The single assembler (Engine Composition Contract): the one concrete World over every store slice, the one central Record enum, the constant genesis, the pinned recovery order, the exception set over M3's publication bit, the read predicate with its grant fold, and the world dump surface"
 readme = "README.md"
 
 [features]

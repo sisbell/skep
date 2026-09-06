@@ -76,6 +76,15 @@ impl HasLinks for World {
         &self.links
     }
 }
+impl skep_febe::ReadableWorld for World {
+    // Masking (published ∨ subtree ∨ grant) is the engine's predicate; this
+    // miniature world carries no exception set or grant fold, and these suites
+    // (lifecycle, coordinates, concurrency) are orthogonal to it — so every
+    // read is admitted.
+    fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
+        true
+    }
+}
 impl From<M3Rec> for Record {
     fn from(r: M3Rec) -> Record {
         Record::M3(r)

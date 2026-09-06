@@ -146,7 +146,7 @@ fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
     expect_resp(&op(port, Some(&bare), &insert(&d, 5, "z", false)), "ack_addr");
     let v = op(
         port,
-        None,
+        Some(&bare),
         &format!(r#"{{"op":"retrieve_v","specs":[{{"doc":"{d}","span":{{"start":"1.1","width":"0.5"}}}}]}}"#),
     );
     let text: String = expect_resp(&v, "delivery")["items"]

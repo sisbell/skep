@@ -74,11 +74,12 @@ fn sibling_insert_rejects_not_owner_with_the_document_in_site_addr() {
     );
 
     // The owner's own append still lands, and the content is untouched by
-    // the rejected write.
+    // the rejected write — read as the owner (the document is a private
+    // draft, withheld from a guest).
     expect_resp(&op(port, Some(&s1), &append), "ack_addr");
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.10"}}}}]}}"#
         ),
@@ -172,8 +173,9 @@ fn foreign_nullify_target_rejects_not_owner_naming_the_link() {
         "site.addr must name the target link: {v}"
     );
 
-    // The link is still active: the owner's discovery view is unchanged.
-    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
+    // The link is still active: the owner's view is unchanged (read as the
+    // owner — a draft-homed link is ABSENT to a guest, PUB-6.6).
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
     assert!(
         !expect_resp(&v, "link_value")["link"].is_null(),
         "the foreign retraction must not have landed"

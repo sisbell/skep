@@ -10,7 +10,7 @@ use skep_address::{content_subspace, Address, Nat, Span};
 use skep_arrangement::VPos;
 use skep_kernel::Snapshot;
 
-use crate::helpers::stab_runs;
+use crate::helpers::{home_of, stab_runs};
 use crate::region::content_vspan;
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
@@ -73,6 +73,20 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
     p: &VPos,
     width: &Nat,
 ) -> Result<OrphanReport, OrphanError> {
+    delete_orphans_on_where(s, d, p, width, &|_| true)
+}
+
+/// [`delete_orphans_on`] with the result-set filter (PUB round 2, lane 3.3,
+/// §3): the orphaned set drops every link whose HOME the reader may not read,
+/// at link identity — a `d` argument's own readability is the caller's
+/// doc-argument consult (pre-dispatch), not this preview's.
+pub fn delete_orphans_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    d: &Address,
+    p: &VPos,
+    width: &Nat,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Result<OrphanReport, OrphanError> {
     let w = s.world();
     if !w.m3().is_registered_document(d) {
         return Err(OrphanError::DocNotRegistered);
@@ -114,6 +128,7 @@ pub fn delete_orphans_on<W: DiscoveryWorld>(
         orphaned: touching_deleted
             .relative_complement(touching_retained)
             .into_iter()
+            .filter(|a| home_readable(&home_of(a))) // §3 — drop unreadable-home orphans
             .collect(),
     })
 }

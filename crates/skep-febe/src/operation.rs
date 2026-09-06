@@ -10,45 +10,50 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
-use skep_address::Address;
-use skep_arrangement::{trunk_of, Caller, M5Rec};
+use skep_address::{document_of, Address};
+use skep_arrangement::{Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
-    addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
-    findlinks_ftt_on, findlinks_v_on, image_on, in_claims_on, out_claims_on, project_on,
-    retrieve_endsets_on, window_ftt_on, window_v_on,
+    addressably_discoverable_from_on, count_ftt_on_where, count_v_on_where,
+    delete_orphans_on_where, findlinks_ftt_on_where, findlinks_v_on_where, image_on,
+    in_claims_on_where, out_claims_on_where, project_on, retrieve_endsets_on_where,
+    window_ftt_on_where, window_v_on_where, QueryError,
 };
 use skep_kernel::{Seq, TxnError, WorldState};
-use skep_links::LinkRec;
+use skep_links::{Invalid, LinkRec};
 use skep_namespace::{M3Rec, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use skep_retrieval::Query;
 
 use crate::idem::IdemCache;
 use crate::lower::{lower_read, lower_txn, Lower};
 use crate::op::{Op, OpKind, Request};
-use crate::reject::{reject, rejection, RejectCode, Rejection};
+use crate::reject::{reject, rejection, FaultSite, RejectCode, Rejection};
 use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
 
-/// The source gate's CONSULT (PUB-6.23, PUB-8.1's second constraint; the
-/// pack's `Fn(&Address) -> bool` shape, per principal): may `principal` read
-/// the document `origin`? Asked by M5's publish composite, inside its
-/// transaction, of every distinct origin a supplied run windows that the base
-/// does not already arrange — after the destination's ω and before any
-/// existence answer — and answered on the origin's DOCUMENT, known registered
-/// (PUB-6.37).
+/// THE read predicate, as the transport may SUPPLY it (PUB-1.31; PUB-6.39's
+/// one-per-request shape; PUB round 2, lane 3.3 — the `Consult` widened from
+/// the publish shot's source gate to the whole read surface): may `principal`
+/// (`None` = the GUEST) read the document `doc`? Consulted by every read arm
+/// — the doc-argument consult, the per-run withheld arm, the result-set
+/// filter — and by the publish composite's source gate (PUB-6.23, PUB-8.1's
+/// second constraint), always on a DOCUMENT known registered (PUB-6.37).
 ///
-/// The DAEMON supplies it ([`Operation::with_consult`]): today the
-/// publication read — a published origin is readable to everyone, a private
-/// one to its owner — and lane 3.3 widens what the daemon passes (the
-/// subtree and grant clauses of PUB-1.31) without touching the composite or
-/// this seam. Absent, M10 answers that same publication read off its own
-/// snapshot, so an embedder that supplies nothing gets today's answer rather
-/// than an open gate. `Send + Sync + 'static`, since the front door is shared
+/// Absent ([`Operation::new`] alone), M10 answers the world's own
+/// [`ReadableWorld::readable`] off the ONE snapshot it pins per request, which
+/// is the live daemon's case: the answer and the `as_of` it is stamped with
+/// stand on one committed state. Supplied ([`Operation::with_consult`]), it
+/// OVERRIDES the world the predicate is evaluated over — what a HISTORICAL
+/// read needs: `/op-at N` answers the N-world's content through the HEAD's
+/// exception set and grant set (PUB-6.48), so the daemon's throwaway front
+/// door over the reconstructed world consults a predicate closed over one
+/// head snapshot. `Send + Sync + 'static`, since the front door is shared
 /// across a transport's worker pool.
-pub type Consult = dyn Fn(PrincipalId, &Address) -> bool + Send + Sync;
+///
+/// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
+pub type Consult = dyn Fn(Option<PrincipalId>, &Address) -> bool + Send + Sync;
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
 /// substrate state and **no** `im` structure — its fields are the ephemeral
@@ -70,8 +75,9 @@ pub struct Operation<W: WorldState> {
     /// Hint: recomputable by attempting `transact`; latched by the first
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
     poisoned: AtomicBool,
-    /// The daemon's source-gate consult ([`Consult`]), or none — in which
-    /// case the publish arm answers today's publication read itself.
+    /// The supplied read predicate ([`Consult`]), or none — in which case
+    /// every read arm and the publish arm answer the world's own predicate
+    /// off the one snapshot the request pins.
     consult: Option<Box<Consult>>,
 }
 
@@ -119,28 +125,31 @@ where
         }
     }
 
-    /// Supply the source gate's consult ([`Consult`]) — the daemon's
-    /// `readable(document, principal)` for the publish shot's supplied-run
-    /// origins (PUB-6.23, PUB-8.1). Without it the publish arm answers today's
-    /// publication read off its own snapshot: a published origin readable to
-    /// everyone, a private one to its owner.
+    /// Supply the read predicate ([`Consult`]) this front door answers
+    /// through instead of its own world's — the transport's HEAD predicate
+    /// for a historical read (PUB-6.48), closed over one head snapshot per
+    /// request (PUB-6.39). Without it every read arm and the publish shot's
+    /// source gate answer [`ReadableWorld::readable`] off the one snapshot
+    /// the request pins, which is what a live front door wants.
+    ///
+    /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
     pub fn with_consult(mut self, consult: Box<Consult>) -> Self {
         self.consult = Some(consult);
         self
     }
 
-    /// The consult's answer for `principal` and `origin`: the daemon's
-    /// predicate where one was supplied, else the publication read over
-    /// `world` — a published origin (its document projected, PUB-2.15) is
-    /// readable to everyone, a private one to its owner. `origin` is a
-    /// registered document by the composite's own gate (PUB-6.37).
-    fn readable(&self, world: &W, principal: PrincipalId, origin: &Address) -> bool {
+    /// `readable(doc, principal)` for this front door: the supplied
+    /// [`Consult`] where one was given, else the world's own
+    /// [`ReadableWorld::readable`] off `world` — the snapshot the calling arm
+    /// pinned. `None` is the guest. Every consult of the predicate, read
+    /// path and publish shot alike, goes through here, so a front door
+    /// answers ONE predicate.
+    ///
+    /// [`ReadableWorld::readable`]: crate::ReadableWorld::readable
+    fn readable(&self, world: &W, principal: Option<PrincipalId>, doc: &Address) -> bool {
         match &self.consult {
-            Some(consult) => consult(principal, origin),
-            None => {
-                let m3 = world.m3();
-                m3.published(&trunk_of(origin)) || m3.is_effective_owner(principal, origin)
-            }
+            Some(consult) => consult(principal, doc),
+            None => world.readable(principal, doc),
         }
     }
 
@@ -274,7 +283,11 @@ where
                 None => return reject(kind, RejectCode::Unauthenticated), // ⇒ Permanent
             }
         } else {
-            self.dispatch_read(op) // reads tolerate an unbound session
+            // Reads tolerate an unbound session (§2): the principal is
+            // resolved for the READ PREDICATE — the doc-argument consult, the
+            // per-run withheld arm, the result-set filter — never to GATE the
+            // read. `None` (unbound/guest) builds the guest predicate.
+            self.dispatch_read(op, self.sessions.principal_of(session))
         }
         .unwrap_or_else(Response::Rejected);
         // (d) memoize ONLY a committed-write ack. `as_ack` is what decides —
@@ -423,7 +436,7 @@ where
             // committed state. The ack is the member's address (PUB-2.37).
             Op::Publish { doc, shot } => {
                 let snap = self.stores.kernel().snapshot();
-                let principal = wc.principal;
+                let principal = Some(wc.principal);
                 let readable = |origin: &Address| self.readable(snap.world(), principal, origin);
                 let (addr, at) = self
                     .stores
@@ -535,10 +548,39 @@ where
     /// (A1), and have no commit-before-ack obligation. No principal, no
     /// session. Exhaustive over `Op` with the complementary (write) half as
     /// one explicit rejecting |-list — see `dispatch_write`.
-    fn dispatch_read(&self, op: Op) -> Result<Response, Rejection> {
+    fn dispatch_read(&self, op: Op, principal: Option<PrincipalId>) -> Result<Response, Rejection> {
         let kind = op.kind();
         let snap = self.stores.kernel().snapshot();
         let as_of = snap.seq();
+        let world = snap.world();
+        // THE read predicate for this request (PUB-6.39), built ONCE off THIS
+        // read snapshot — or off the supplied `Consult`, which a historical
+        // front door closes over one HEAD snapshot (PUB-6.48) — so the answer
+        // and the `as_of` it is stamped with stand on one committed state. An
+        // opaque `Fn(&Address) -> bool` threaded down: M6/M8 filter and mask
+        // through it and never see the principal (the STRUCK second form).
+        // `None` principal is the guest predicate.
+        let readable = |a: &Address| self.readable(world, principal, a);
+        // The doc-argument consult (§2, PUB-6.12): the FIRST unreadable NAMED
+        // document, in declaration order, answers WITHHELD (reorder, `site.addr`
+        // the document, no detail — lane 3.2's shape). It runs after
+        // registration — an unregistered document is fail-open readable here
+        // (PUB-7.5) and defers to its store's own `*NotRegistered` — and before
+        // any other validation. A published document never answers withheld.
+        for arg in op.doc_arguments() {
+            if !readable(arg) {
+                return Err(Rejection::classified(
+                    kind,
+                    RejectCode::Withheld,
+                    Some(FaultSite { addr: Some(arg.clone()), ..FaultSite::default() }),
+                ));
+            }
+        }
+        // A link-ADDRESS op answers ABSENCE for a link homed in an unreadable
+        // document (§2, PUB-6.6): its home is unreadable ⟹ the read behaves as
+        // if the link is not there. A non-element `a` has no home and is left
+        // to the store.
+        let home_readable = |a: &Address| document_of(a).is_none_or(|h| readable(&h));
         match op {
             // ── namespace reads (→ M3, §2): the M3-internal frontier/
             //    registry values Delegate/CreateNewDocument demand. Total —
@@ -557,7 +599,13 @@ where
             // ── raw link reads (→ M7, §2): no driver handle — straight off
             //    the one snapshot.
             Op::ReadLink { a } => {
-                let link = snap.world().links().readlink(&a).cloned();
+                // A link homed in an unreadable document reads as ABSENT
+                // (PUB-6.6): `⊥`, exactly as a never-deposited address.
+                let link = if home_readable(&a) {
+                    world.links().readlink(&a).cloned()
+                } else {
+                    None
+                };
                 Ok(Response::LinkValue { link, as_of })
             }
             // Carries its own Result in-band, deliberately (§2): M7 defines
@@ -565,13 +613,25 @@ where
             // Rejection would erase an unforgeable distinction. Contrast
             // Project, where M8's NotALink IS a precondition failure.
             Op::FollowLink { a, slot } => {
-                let result = snap.world().links().followlink(&a, slot);
+                // Absence for an unreadable home (PUB-6.6): `⊥`, the same
+                // `Err(Invalid)` a non-link answers — never ⟨⟩, which is a
+                // present link's empty slot.
+                let result = if home_readable(&a) {
+                    world.links().followlink(&a, slot)
+                } else {
+                    Err(Invalid)
+                };
                 Ok(Response::Follow { result, as_of })
             }
             // ── content/provenance reads (→ M6, §2) ──
             Op::RetrieveV { specs } => {
-                let items =
-                    Query::new(&snap).retrieve_v(&specs).map_err(|e| lower_read(kind, e))?;
+                // The delivery masks per RUN through the threaded predicate
+                // (§4, PUB-6.41): each spec's NAMED doc was consulted above; the
+                // runs its arrangement windows are masked here, a masked run
+                // emitted as the withheld arm at its own position.
+                let items = Query::new(&snap)
+                    .retrieve_v_masked(&specs, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Delivery { items, as_of })
             }
             Op::RetrieveDocVSpan { doc } => {
@@ -598,8 +658,11 @@ where
                 Ok(Response::Compare { rep, as_of })
             }
             Op::FindDocsContaining { regions } => {
+                // The container filter (§3): a candidate the reader may not
+                // read is dropped at its identity; the region-spec docs were
+                // consulted above.
                 let addrs = Query::new(&snap)
-                    .find_docs_containing(&regions)
+                    .find_docs_containing_filtered(&regions, &readable)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
@@ -609,55 +672,71 @@ where
                 let runs = image_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Runs { runs, as_of })
             }
+            // The result-set family (§3): every reader drops each link whose
+            // HOME the reader may not read, threaded the predicate. `d` was
+            // consulted above; the filter is on the RESULT links' homes.
             Op::FindLinksV { d, region } => {
-                let addrs = findlinks_v_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
+                let addrs = findlinks_v_on_where(&snap, &d, &region, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::FindLinksFtt { q } => {
-                let addrs = findlinks_ftt_on(&snap, &q); // total — no error map
+                let addrs = findlinks_ftt_on_where(&snap, &q, &readable); // total
                 Ok(Response::Addrs { addrs, as_of })
             }
             Op::CountV { d, region } => {
-                let n = count_v_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
+                let n = count_v_on_where(&snap, &d, &region, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Count { n, as_of })
             }
             Op::CountFtt { q } => {
-                let n = count_ftt_on(&snap, &q); // total
+                let n = count_ftt_on_where(&snap, &q, &readable); // total
                 Ok(Response::Count { n, as_of })
             }
             Op::WindowV { d, region, cur, n } => {
-                let window =
-                    window_v_on(&snap, &d, &region, cur, n).map_err(|e| lower_read(kind, e))?;
+                let window = window_v_on_where(&snap, &d, &region, cur, n, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Page { window, as_of })
             }
             Op::WindowFtt { q, cur, n } => {
-                let window = window_ftt_on(&snap, &q, cur, n); // total
+                let window = window_ftt_on_where(&snap, &q, cur, n, &readable); // total
                 Ok(Response::Page { window, as_of })
             }
             Op::RetrieveEndsets { d, region } => {
-                let pairs = retrieve_endsets_on(&snap, &d, &region).map_err(|e| lower_read(kind, e))?;
+                let pairs = retrieve_endsets_on_where(&snap, &d, &region, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Endsets { pairs, as_of })
             }
+            // `project` and `discoverable_from` gate `d` FIRST (the dual row,
+            // PUB-6.8 — `d` is in the consult above), then answer ABSENCE for a
+            // link `a` homed in an unreadable document (PUB-6.6). `project` is
+            // UNFILTERED at origin otherwise (PUB-6.15).
             Op::Project { a, slot, d } => {
+                if !home_readable(&a) {
+                    return Err(lower_read(kind, QueryError::NotALink));
+                }
                 let set = project_on(&snap, &a, slot, &d).map_err(|e| lower_read(kind, e))?;
                 Ok(Response::SpanSet { set, as_of })
             }
             Op::DiscoverableFrom { a, d } => {
+                if !home_readable(&a) {
+                    return Ok(Response::Bool { val: false, as_of }); // absent ⟹ not discoverable
+                }
                 let val = addressably_discoverable_from_on(&snap, &a, &d)
                     .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Bool { val, as_of })
             }
             Op::DeleteOrphans { d, p, width } => {
-                let report =
-                    delete_orphans_on(&snap, &d, &p, &width).map_err(|e| lower_read(kind, e))?;
+                let report = delete_orphans_on_where(&snap, &d, &p, &width, &readable)
+                    .map_err(|e| lower_read(kind, e))?;
                 Ok(Response::Orphans { report, as_of })
             }
             Op::InClaims { y, view } => {
-                let claims = in_claims_on(&snap, &y, view); // total
+                let claims = in_claims_on_where(&snap, &y, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
             Op::OutClaims { x, view } => {
-                let claims = out_claims_on(&snap, &x, view); // total
+                let claims = out_claims_on_where(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
             // Complementary half — see dispatch_write's twin arm (§1).
@@ -767,6 +846,15 @@ mod tests {
     impl HasLinks for World {
         fn links(&self) -> &LinkState {
             &self.links
+        }
+    }
+    impl crate::ReadableWorld for World {
+        // The test world admits every read: masking (published ∨ subtree ∨
+        // grant) is the engine's predicate, exercised by skepd's suite and the
+        // engine's own; M10's lifecycle tests are principal-partition and
+        // dispatch tests, orthogonal to it.
+        fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
+            true
         }
     }
     impl From<M3Rec> for Record {
@@ -1096,7 +1184,7 @@ mod tests {
             let wrong_table = if is_read {
                 febe.dispatch_write(WriteCtx { principal: PrincipalId(1) }, op)
             } else {
-                febe.dispatch_read(op)
+                febe.dispatch_read(op, Some(PrincipalId(1)))
             };
             match wrong_table {
                 Err(rej) => {

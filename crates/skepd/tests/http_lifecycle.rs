@@ -57,11 +57,13 @@ fn insert_at(port: u16, session: &str, doc: &str, ordinal: u64, value: &str) -> 
     )
 }
 
-/// Concatenated text of a delivery over `width` positions from ordinal 1.
-fn read_text(port: u16, doc: &str, width: u64) -> String {
+/// Concatenated text of a delivery over `width` positions from ordinal 1,
+/// read as `token` — the document's owner for the private drafts these
+/// tests write (a guest is answered `withheld` on a draft, PUB-6.1).
+fn read_text(port: u16, token: Option<&str>, doc: &str, width: u64) -> String {
     let v = op(
         port,
-        None,
+        token,
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.{width}"}}}}]}}"#
         ),
@@ -105,10 +107,14 @@ fn writes_read_back_and_their_links_are_discoverable() {
     expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
     expect_resp(&insert_at(port, &s1, &doc1, 12, r#"" and more""#), "ack_addr");
 
-    assert_eq!(read_text(port, &doc1, 20), "hello, wire and more");
-    assert_eq!(read_text(port, &doc2, 11), "linked text");
+    // Each owner reads its own draft: doc2 is the sub-account's, and the
+    // subtree runs DOWNWARD only (PUB-1.32), so principal 1 — account2's
+    // delegator — is no reader of it; only s2 is.
+    assert_eq!(read_text(port, Some(&s1), &doc1, 20), "hello, wire and more");
+    assert_eq!(read_text(port, Some(&s2), &doc2, 11), "linked text");
 
-    // principal_prefix resolves the account the session was told at open.
+    // principal_prefix resolves the account the session was told at open —
+    // an exempt read (PUB-6.50): registry data, served to the guest.
     let v = op(port, None, r#"{"op":"principal_prefix","principal":2}"#);
     assert_eq!(expect_resp(&v, "maybe_addr")["addr"].as_str(), Some(account2.as_str()));
 
@@ -132,10 +138,11 @@ fn writes_read_back_and_their_links_are_discoverable() {
     );
     let link = acked_addr(&v);
 
-    // Discovery finds it from the covered region of doc1.
+    // Discovery finds it from the covered region of doc1 — read as doc1's
+    // owner, whose draft the link is homed in.
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"find_links_v","d":"{doc1}","region":[{{"start":"1.1","width":"0.1"}}]}}"#
         ),
@@ -147,10 +154,10 @@ fn writes_read_back_and_their_links_are_discoverable() {
     );
 
     // Raw read-back and slot coverage.
-    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"read_link","a":"{link}"}}"#));
     let slots = expect_resp(&v, "link_value")["link"]["slots"].as_array().expect("slots");
     assert_eq!(slots.len(), 3);
-    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{link}","slot":2}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"follow_link","a":"{link}","slot":2}}"#));
     let covered = expect_resp(&v, "follow")["result"]["ok"].as_array().expect("ok spans");
     assert!(!covered.is_empty(), "TO slot coverage must be nonempty");
 
@@ -204,13 +211,13 @@ fn addrs_form_endsets_and_ghost_types() {
         unit_w(&name1)
     ))
     .expect("json");
-    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l1}"}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"read_link","a":"{l1}"}}"#));
     let slots = expect_resp(&v, "link_value")["link"]["slots"].as_array().expect("slots");
     assert_eq!(slots[2], ty_endset, "the addrs-form ty records the name verbatim");
     assert_eq!(slots[1], Value::Array(vec![]), "the empty addrs to-endset is ⟨⟩");
 
     // follow slot 3 answers the name span.
-    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{l1}","slot":3}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"follow_link","a":"{l1}","slot":3}}"#));
     assert_eq!(expect_resp(&v, "follow")["result"]["ok"], ty_endset);
 
     // The two answers wire.md keeps apart, PRODUCED here rather than only
@@ -220,7 +227,7 @@ fn addrs_form_endsets_and_ghost_types() {
     // lower it to a rejection; nothing in this suite had ever seen either
     // shape, since every live follow returns a non-empty `ok` and every
     // fixture carries exactly one span.
-    let v = op(port, None, &format!(r#"{{"op":"follow_link","a":"{l1}","slot":2}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"follow_link","a":"{l1}","slot":2}}"#));
     assert_eq!(
         expect_resp(&v, "follow")["result"],
         serde_json::json!({"ok": []}),
@@ -231,7 +238,7 @@ fn addrs_form_endsets_and_ghost_types() {
         ("slot 0 — the wire is 1-based", format!(r#"{{"op":"follow_link","a":"{l1}","slot":0}}"#)),
         ("an address holding no link", format!(r#"{{"op":"follow_link","a":"{doc}","slot":1}}"#)),
     ] {
-        let v = op(port, None, &frame);
+        let v = op(port, Some(&s1), &frame);
         assert_eq!(
             expect_resp(&v, "follow")["result"],
             serde_json::json!({"err": "invalid"}),
@@ -248,7 +255,7 @@ fn addrs_form_endsets_and_ghost_types() {
         ),
     );
     let l2 = acked_addr(&v);
-    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l2}"}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"read_link","a":"{l2}"}}"#));
     let to_expect: Value =
         serde_json::from_str(&format!(r#"[{{"start":"{l1}","width":"{}"}}]"#, unit_w(&l1)))
             .expect("json");
@@ -275,7 +282,7 @@ fn addrs_form_endsets_and_ghost_types() {
     };
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{name1}","width":"{}"}}]}}}}"#,
             unit_w(&name1)
@@ -290,7 +297,7 @@ fn addrs_form_endsets_and_ghost_types() {
     let prefix = format!("{registry}.0.3.6");
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"find_links_ftt","q":{{"home":"any","from":"any","to":"any","ty":[{{"start":"{prefix}","width":"{}"}}]}}}}"#,
             unit_w(&prefix)
@@ -311,7 +318,7 @@ fn addrs_form_endsets_and_ghost_types() {
         ),
     );
     let l4 = acked_addr(&v);
-    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{l4}"}}"#));
+    let v = op(port, Some(&s1), &format!(r#"{{"op":"read_link","a":"{l4}"}}"#));
     let expect: Value = serde_json::from_str(&format!(
         r#"[{{"start":"{name2}","width":"{}"}},{{"start":"{name1}","width":"{}"}}]"#,
         unit_w(&name2),
@@ -363,7 +370,7 @@ fn atom_values_round_trip_through_the_store() {
     // UTF-8 as a whole, fails, and renders on the hex path.
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.7"}}}}]}}"#
         ),
@@ -377,7 +384,7 @@ fn atom_values_round_trip_through_the_store() {
     // The whole composite value sits at ONE position.
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.3","width":"0.1"}}}}]}}"#
         ),
@@ -688,8 +695,8 @@ fn concurrent_clients_share_one_world() {
         h.join().expect("client thread");
     }
 
-    assert_eq!(read_text(port, &doc_a, 10), "a1a2a3a4a5");
-    assert_eq!(read_text(port, &doc_b, 10), "b1b2b3b4b5");
+    assert_eq!(read_text(port, Some(&s1), &doc_a, 10), "a1a2a3a4a5");
+    assert_eq!(read_text(port, Some(&s1), &doc_b, 10), "b1b2b3b4b5");
 
     sd.shutdown();
 }

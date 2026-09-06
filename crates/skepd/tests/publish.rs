@@ -141,9 +141,17 @@ fn edition(port: u16, signed: &str) -> String {
 }
 
 /// The content extent a bare address answers — `retrieve_doc_v_span_set`'s
-/// content span width, `0` when the set carries none.
+/// content span width, `0` when the set carries none. Read as the guest: the
+/// published documents these tests probe answer every class (PUB-6.3); a
+/// DRAFT is withheld from the guest and is read through
+/// [`content_extent_as`] with its owner's token.
 fn content_extent(port: u16, doc: &str) -> u64 {
-    let v = op(port, None, &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{doc}"}}"#));
+    content_extent_as(port, None, doc)
+}
+
+/// [`content_extent`] as `token`'s principal.
+fn content_extent_as(port: u16, token: Option<&str>, doc: &str) -> u64 {
+    let v = op(port, token, &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{doc}"}}"#));
     expect_resp(&v, "span_set")["set"]
         .as_array()
         .expect("set")
@@ -161,11 +169,17 @@ fn content_extent(port: u16, doc: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// The per-byte text at content ordinals `from ..` of `doc`.
+/// The per-byte text at content ordinals `from ..` of `doc`, read as the
+/// guest (a published document; see [`content_extent`]).
 fn text(port: u16, doc: &str, from: u64, width: u64) -> String {
+    text_as(port, None, doc, from, width)
+}
+
+/// [`text`] as `token`'s principal — how a DRAFT is read.
+fn text_as(port: u16, token: Option<&str>, doc: &str, from: u64, width: u64) -> String {
     let v = op(
         port,
-        None,
+        token,
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.{from}","width":"0.{width}"}}}}]}}"#
         ),
@@ -178,11 +192,23 @@ fn text(port: u16, doc: &str, from: u64, width: u64) -> String {
         .collect()
 }
 
-/// The V→I image of content ordinals `from ..` of `doc`: `(i_start, width)`.
+/// The V→I image of content ordinals `from ..` of `doc`: `(i_start, width)`,
+/// read as the guest (a published document; see [`content_extent`]).
 fn image(port: u16, doc: &str, from: u64, width: u64) -> Vec<(String, String)> {
+    image_as(port, None, doc, from, width)
+}
+
+/// [`image`] as `token`'s principal — how a DRAFT is imaged.
+fn image_as(
+    port: u16,
+    token: Option<&str>,
+    doc: &str,
+    from: u64,
+    width: u64,
+) -> Vec<(String, String)> {
     let v = op(
         port,
-        None,
+        token,
         &format!(
             r#"{{"op":"image","d":"{doc}","region":[{{"start":"1.{from}","width":"0.{width}"}}]}}"#
         ),
@@ -284,9 +310,10 @@ fn the_shot_appends_the_next_member_in_one_commit_and_the_bare_address_floats() 
         "every run is doc 1's own I-space: {img:?}"
     );
     assert_eq!(image(port, &member, 4, 2), vec![("1.0.1.0.1.0.1.4".to_string(), "2".to_string())]);
-    // The draft is what it was: the shot read its bytes, not its arrangement.
-    assert_eq!(content_extent(port, &d), 5);
-    assert_eq!(image(port, &d, 4, 2), vec![(d_text.clone(), "2".to_string())]);
+    // The draft is what it was: the shot read its bytes, not its arrangement
+    // (read as its owner — a draft is withheld from the guest).
+    assert_eq!(content_extent_as(port, Some(&bare), &d), 5);
+    assert_eq!(image_as(port, Some(&bare), &d, 4, 2), vec![(d_text.clone(), "2".to_string())]);
 
     // Head-float (PUB-2.49): the bare address answers the member.
     assert_eq!(content_extent(port, CLAIMANT_DOC1), 5);
@@ -494,8 +521,8 @@ fn every_arrangement_reader_of_a_bare_address_answers_the_trunk_head() {
     assert_eq!(content_extent(port, &e), 2);
     assert_eq!(text(port, &e, 1, 2), "xy");
     let d = draft_with(port, &bare, "abc");
-    assert_eq!(content_extent(port, &d), 3);
-    assert_eq!(text(port, &d, 1, 3), "abc");
+    assert_eq!(content_extent_as(port, Some(&bare), &d), 3);
+    assert_eq!(text_as(port, Some(&bare), &d, 1, 3), "abc");
     sd.shutdown();
 }
 

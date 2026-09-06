@@ -103,7 +103,7 @@ fn as_nat(v: Value) -> Nat {
     }
 }
 
-fn concrete<'t>(tr: &'t TypeRef) -> &'t TypeKey {
+fn concrete(tr: &TypeRef) -> &TypeKey {
     match tr {
         TypeRef::Concrete(k) => k,
         TypeRef::ClassVar(v) => {

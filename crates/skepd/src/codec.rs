@@ -1684,6 +1684,14 @@ fn j_items(items: &[DeliveryItem]) -> Value {
         match it {
             DeliveryItem::Content(v) => out.value(v),
             DeliveryItem::Ref(a) => out.item(obj(vec![("ref", j_addr(a))])),
+            // The withheld arm (lane 3.3, §4; PUB-6.41): one item per masked
+            // RUN at its own position, `{"withheld": {"origin", "width"}}` —
+            // `out.item` breaks the pending run, so it is never coalesced with
+            // a neighbour (PUB-6.58).
+            DeliveryItem::Withheld { origin, width } => out.item(obj(vec![(
+                "withheld",
+                obj(vec![("origin", j_addr(origin)), ("width", j_nat(width))]),
+            )])),
         }
     }
     out.finish()

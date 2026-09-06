@@ -518,9 +518,7 @@ impl<'de> Deserializer<'de> for TreeDe<'de> {
                     MapDeserializer::new(entries.iter().map(|(k, v)| (TreeDe(k), TreeDe(v))));
                 map.deserialize_any(visitor)
             }
-            SerdeTree::Named(variant, inner) => {
-                visitor.visit_enum(EnumDe { variant: *variant, inner })
-            }
+            SerdeTree::Named(variant, inner) => visitor.visit_enum(EnumDe { variant, inner }),
         }
     }
 
@@ -548,9 +546,7 @@ impl<'de> Deserializer<'de> for TreeDe<'de> {
         visitor: V,
     ) -> Result<V::Value, CanonError> {
         match self.0 {
-            SerdeTree::Named(variant, inner) => {
-                visitor.visit_enum(EnumDe { variant: *variant, inner })
-            }
+            SerdeTree::Named(variant, inner) => visitor.visit_enum(EnumDe { variant, inner }),
             // A unit variant a caller spelled as its bare name.
             SerdeTree::Str(s) => {
                 let name: de::value::StrDeserializer<'de, CanonError> =

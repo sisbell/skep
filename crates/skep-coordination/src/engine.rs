@@ -352,6 +352,34 @@ where
             return Ok(FireOutcome::NoOp);
         }
         let a = elem.key_addr();
+        // THE GUEST-CLASS FILTER (PUB round 2, lane 3.3, §5): a fire runs at
+        // pinned GUEST class — its home and the bound argument's document
+        // must both be readable at guest class off the fire's own snapshot,
+        // else the fire is refused BEFORE any deposit, as a `Failed` step
+        // (never a silent skip). The predicate is the engine's
+        // (`World::readable_guest` = `published(doc)`, injected at assembly);
+        // a document address bound as the argument is judged as itself.
+        //
+        // What this does NOT pin: the VALUE-KEYED gates inside M7's
+        // `emit_core` (idempotency's incumbent lookup, the dc-constraint,
+        // `assert_sup`'s dedup) still run at System class, so a guest-
+        // invisible incumbent in a draft can still absorb a fire as
+        // `Deduped`. Pinning those to guest class needs a `Caller`-class-
+        // aware incumbent lookup INSIDE M7 — outside lane 3.3's fence (M7 is
+        // edit-locked to the fold's seed read); PUB-6.28's three REGISTRATION
+        // conditions are likewise not built. See the round's ESCALATE.
+        {
+            let w = snap.world();
+            let home = match &rule.action {
+                FireAction::Marker { home, .. } | FireAction::Nullify { home } => home,
+            };
+            let arg_doc = document_of(&a).unwrap_or_else(|| a.clone());
+            for d in [home, &arg_doc] {
+                if !(self.guest)(w, d) {
+                    return Err(FireError::DraftBoundary(d.clone()));
+                }
+            }
+        }
         let ls = (self.mk_link_store)(self.kernel.as_ref());
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire

@@ -24,9 +24,11 @@ use std::sync::Arc;
 
 #[cfg(feature = "observe")]
 use skep_engine::dump::WorldDump;
+use skep_address::Address;
 use skep_engine::{Engine, EngineStores, HistoryError, World};
 use skep_febe::{Operation, Request, Response};
-use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq};
+use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, Snapshot};
+use skep_namespace::PrincipalId;
 
 use crate::server::open_guest_session;
 
@@ -119,14 +121,27 @@ impl History {
     /// discharges [`execute_read_on`]'s precondition on it — and the permit
     /// that call hands back is held across the read, so the world is
     /// accounted for as long as it is resident.
+    ///
+    /// THE READER, NOT THE GUEST (PUB-8.13, PUB-6.48; PUB round 2, lane
+    /// 3.3): `principal` is the presented session's resolved principal
+    /// (`None` = guest), and `head` is the ONE head snapshot the route took
+    /// at admission — the read predicate for the N-world's answer is
+    /// `readable()` against the HEAD's exception set and grant set, never
+    /// the N-world's: a grant committed after `at` satisfies a read at `at`.
+    /// The caller has already run the doc-argument consult against that same
+    /// snapshot ahead of the reconstruction (PUB-6.49); what runs here is the
+    /// rest of the read surface — the per-run masks and the result-set
+    /// filter — through the same predicate.
     pub fn read_at(
         &self,
         engine: &Engine,
         at: Seq,
         req: Request,
+        principal: Option<PrincipalId>,
+        head: &Snapshot<World>,
     ) -> Result<Response, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        let mut resp = execute_read_on(world, req);
+        let mut resp = execute_read_on(world, req, principal, head.world().clone());
         stamp_as_of(&mut resp, at);
         Ok(resp)
     }
@@ -184,9 +199,22 @@ impl Drop for ReconstructPermit<'_> {
 /// Run one already-classified READ frame against a historical world: a
 /// throwaway in-memory M2 kernel rooted at that world, a throwaway M10 over
 /// it, one `execute`. All the read semantics stay M10's and the stores' —
-/// the daemon only assembles. The session is minted and retired up front
-/// (the guest pattern): reads are principal-free, and even a misclassified
-/// write would meet M10's own `Unauthenticated` wall rather than a store.
+/// the daemon only assembles. The session is the reader's own principal, or
+/// the retired guest (the guest pattern) when the request presented none:
+/// the read predicate resolves off it, and even a misclassified write would
+/// meet M10's own `Unauthenticated` wall rather than a store.
+///
+/// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
+/// N-world's, the PREDICATE it is answered through is the HEAD's. The
+/// throwaway front door is given M10's `Consult` closed over `head` — the
+/// world of the one snapshot the route took at admission — so `readable()`
+/// is evaluated against the head's exception set and grant set for every
+/// per-run mask and every result-set filter of this read, and a grant
+/// committed after `at` satisfies a read at `at`. Left to its own world, the
+/// front door would read the N-world's sets: a document minted after `at`
+/// is absent from them and so reads PUBLISHED (the fail-open sign,
+/// PUB-7.5), and every masking decision would turn on state the reader may
+/// not hold today.
 ///
 /// PRECONDITION: `world` is one `Engine::world_at` produced. That is what
 /// discharges `Durability::InMemory`'s genesis obligation — this mode does
@@ -200,16 +228,27 @@ impl Drop for ReconstructPermit<'_> {
 /// The `Stores<World>` factory is the engine's [`EngineStores`], over this
 /// throwaway kernel rather than the live one: which store driver fills which
 /// slot is assembly knowledge, and the daemon holds none of it. The `Arc` is
-/// one allocation against a whole-world replay.
-fn execute_read_on(world: World, req: Request) -> Response {
+/// one allocation against a whole-world replay; `head` is one root clone.
+fn execute_read_on(
+    world: World,
+    req: Request,
+    principal: Option<PrincipalId>,
+    head: World,
+) -> Response {
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,
     };
     let kernel =
         Kernel::open(cfg, world).expect("in-memory open runs no recovery and cannot fail");
-    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel))));
-    febe.execute(open_guest_session(&febe), req)
+    let febe = Operation::new(Box::new(EngineStores::new(Arc::new(kernel)))).with_consult(
+        Box::new(move |p: Option<PrincipalId>, doc: &Address| head.readable(p, doc)),
+    );
+    let session = match principal {
+        Some(p) => febe.open_session(p),
+        None => open_guest_session(&febe),
+    };
+    febe.execute(session, req)
 }
 
 /// Stamp the requested position as `as_of`: the throwaway kernel is rooted

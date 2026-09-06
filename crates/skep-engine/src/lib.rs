@@ -15,7 +15,7 @@
 //!
 //! **The engine adds no semantics.** Every function here is dispatch,
 //! lifting, construction, or rendering; every guard, policy, and
-//! computation lives in a store. Four obligations are the engine's alone:
+//! computation lives in a store. Five obligations are the engine's alone:
 //!
 //! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
 //!   a compiled constant (the reserved type set is format, not
@@ -34,6 +34,15 @@
 //!   definition), seeded at load and folded on every document-minting
 //!   record (PUB-7.7). The daemon's every publication read answers
 //!   `doc ∉ exception_set` and nothing else.
+//! * **The read predicate and the grant fold** ([`World::readable`]; the
+//!   `grants` module) — the one function `readable(doc, principal) =
+//!   published(doc) ∨ subtree ∨ grant_exists` (PUB-1.31, lane 3.3, §1), and
+//!   the second derived index it rests on: a fold over the LINK slice keyed
+//!   grantee × content-prefix, seeded at load and folded on every link
+//!   deposit (PUB-7.7), with NO checkpoint slice. Every read surface — M6's
+//!   deliveries and doc-argument consults, M8's result-set filters, the
+//!   publish source gate — answers through this one predicate, threaded down
+//!   as an opaque `Fn(&Address) -> bool` (PUB-6.39).
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the authoritative observable
 //!   state plus the recomputable hints (the exception set among them), for
@@ -44,6 +53,7 @@
 mod canon;
 mod engine;
 mod genesis;
+mod grants;
 mod publication;
 mod world;
 

@@ -13,6 +13,7 @@ use skep_content::ContentStore;
 use skep_links::LinkState;
 use skep_namespace::M3State;
 
+use crate::grants::Grants;
 use crate::publication::Drafts;
 use crate::world::{FormatStamp, World};
 
@@ -69,6 +70,10 @@ impl World {
             arrangement: M5State::genesis(),
             links: LinkState::genesis(),
             drafts: Drafts::new(),
+            // Σ₀ has no links, so no grants — the fold's fail-open sign
+            // (PUB-7.68: an empty fold ⟺ an empty link map) holds trivially
+            // here, the one world where empty and "nothing granted" coincide.
+            grants: Grants::new(),
         }
     }
 }

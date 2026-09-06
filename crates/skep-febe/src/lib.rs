@@ -193,10 +193,30 @@ use skep_kernel::{Kernel, WorldState};
 use skep_links::{HasLinks, LinkWriter};
 use skep_namespace::{HasM3, Namespace};
 
+/// THE read predicate as a capability of the world M10 reads (PUB round 2,
+/// lane 3.3, §1; PUB-1.31, PUB-6.39). M10 is generic over `W` and names no
+/// concrete `World`, so it reaches the engine's derived predicate — published ∨
+/// subtree ∨ grant — through this one accessor, off M10's OWN read snapshot, so
+/// the answer and the `as_of` it is stamped with stand on one committed state.
+///
+/// `principal` is `None` for the GUEST (published alone). Implemented by the
+/// engine's `World` (the exception set beside the grant fold); the daemon's
+/// source-gate [`Consult`] is the same predicate reached the write path's way.
+/// The STRUCK second form — handing readers the principal's account and grant
+/// set — is deliberately absent: what threads down is this opaque `bool`, never
+/// the sets behind it.
+pub trait ReadableWorld {
+    /// `readable(doc, principal)` — the one predicate every read surface
+    /// answers through. `None` ⟹ the guest (published documents only).
+    fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
+}
+
 /// The world the front door dispatches over: M2's fold contract plus every
 /// upstream accessor, since M10 reaches all four store slices — the widest
 /// bound set in the engine, and M10's own slice count is zero (Engine
-/// Composition Contract — no state, no record variant, no fold).
+/// Composition Contract — no state, no record variant, no fold). The read
+/// predicate ([`ReadableWorld`]) joins the set for lane 3.3: every read builds
+/// its per-request `Fn(&Address) -> bool` off it.
 ///
 /// Named for the reason M6 names `RetrievalWorld` and M7 `LinkWorld`: one word for
 /// the seam, so a consumer generic over the same world writes one bound
@@ -204,8 +224,8 @@ use skep_namespace::{HasM3, Namespace};
 /// accessors gets this for free; the record lift each write path needs
 /// (`W::Record: From<M3Rec>` and its three siblings) stays on the impl that
 /// requires it.
-pub trait FebeWorld: WorldState + HasM3 + HasM5 + HasLinks + HasContent {}
-impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent> FebeWorld for W {}
+pub trait FebeWorld: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld {}
+impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld> FebeWorld for W {}
 
 /// The injected acquisition path for the three transact-driving store-driver
 /// handles (§Public interface). The binary/engine builds the one production

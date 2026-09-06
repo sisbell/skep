@@ -367,3 +367,53 @@ pass. Twenty rulings.**
 **Disposition tally (2026-09-05): 297 scenarios — 0 divergent, 0 errors,
 0 pending; 85 allowlisted; 46 inexpressible (run-7's 29 + the 17 ruled
 here); 166 pass. Twenty rulings and one addendum.**
+
+## 2026-09-06 — PUB round 2, lane 3.3: the read-surface sweep; the rig's setup grant
+
+21. **The rig's setup grant — exit B, the privash grant** (RIG SETUP, no
+    allowlist entry, no golden regenerated; owner ruling 2026-09-06, lane
+    3.3 §6; PUB-1.31, PUB-5.8.) Lane 3.3 made the read predicate real on
+    every read surface: `readable(doc, principal) = published ∨ subtree ∨
+    grant` (PUB-1.31), consulted per document argument, a REGISTERED
+    private draft answering `Withheld` to a reader outside its owner's
+    subtree who holds no grant. The udanax corpus has no publication
+    state: every document a golden creates is, in skep's terms, an owned
+    private draft, and every cross-session read in a multisession golden
+    — session B reading, linking to, comparing against what session A
+    wrote — is a read of another account's draft. Fourteen goldens went
+    red at exactly those reads. RULED: the rig grants what udanax assumed.
+    In `Rig::new` and at every account-delegating site (`switch_account`,
+    `create_node`'s sub-account mint — one path, `delegate_under`), the
+    rig mints the account's home FLAGLESS (its first mint, born published,
+    PUB-8.21, the fold's residence pin PUB-5.17) and deposits there, under
+    the account's own session and through the ordinary `make_link`, an
+    ANY-PRINCIPAL account-rung grant: `ty` = `1.1.0.1.0.1.0.3.90` (the
+    grants class, COMMONS DECISION 5), `from` = the account, `to` = empty
+    (PUB-5.8's universal form). Coverage is containment, forward-
+    inclusive, so every document the account mints afterwards is readable
+    to every bound principal — the rig's sessions are all principals — and
+    the fourteen answer as recorded. Not exit A (the goldens re-keyed to
+    published sources): a version of a published-born document tests a
+    different program from the one the golden recorded, and a re-keyed
+    corpus would no longer be udanax's. The grant is HARNESS
+    INFRASTRUCTURE, like the types document: its home is never bound in
+    the α-map, and `Rig::is_infra_addr` (the `type_registry` exclusion,
+    widened) drops the rig homes, the rig accounts and the grants class
+    from every address-set comparison, count and endset comparison before
+    positional binding. Byte-diff class found and absorbed: the grant's
+    FROM endset is the account's SUBTREE span, and M7's overlap is pure
+    tumbler order, so the grant link surfaces in every FROM-constrained
+    (or unconstrained) `find_links_ftt` over a rig account's content — the
+    traversal macros' per-hop query and the general handler both. Neither
+    an address nor a position any golden compares moves: scenario
+    documents shift one ordinal further (the home is doc 1, the types
+    document doc 2) exactly as they already shifted for the types
+    document, and the α-map — a bijection built from the acks — absorbs
+    the shift. The 297 verdicts are to be byte-identical; the fifteen
+    `pub-2.9-private-versionless` and the seventeen inexpressible are
+    unchanged (a version of a private draft is refused whatever the
+    grant); `report_is_deterministic` and the ratchet are green with NO
+    new allowlist entry. Skep bugs found: none — the withheld answers were
+    the predicate working. Recorded, not ruled: the setup grant is the
+    corpus's assumption made explicit, not a skep behavior; a golden that
+    ever reads as the GUEST would meet the predicate unaided.

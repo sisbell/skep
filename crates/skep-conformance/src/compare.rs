@@ -73,6 +73,10 @@ pub fn compare_content(
     enum RawSeg {
         Text(String),
         Addr(Address),
+        // A masked run (lane 3.3, §4): its own segment, matching no golden
+        // content, so a delivery carrying one diverges from a golden that does
+        // not (the two-account goldens item 6 names).
+        Withheld(String),
     }
     let mut raw: Vec<RawSeg> = Vec::new();
     for it in items {
@@ -85,6 +89,10 @@ pub fn compare_content(
                 }
             }
             DeliveryItem::Ref(a) => raw.push(RawSeg::Addr(a.clone())),
+            DeliveryItem::Withheld { origin, width } => raw.push(RawSeg::Withheld(format!(
+                "«withheld {} w{width}»",
+                crate::tum::addr_str(origin)
+            ))),
         }
     }
     // Opportunistic index-aligned binding: an unbound golden address paired
@@ -129,6 +137,7 @@ pub fn compare_content(
         .map(|r| match r {
             RawSeg::Text(t) => Segment::Text(t),
             RawSeg::Addr(a) => Segment::Addr(alpha.render_skep(&a)),
+            RawSeg::Withheld(m) => Segment::Text(m),
         })
         .collect();
     Err((render_segments(&want), render_segments(&got)))

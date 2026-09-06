@@ -14,6 +14,7 @@ use skep_kernel::WorldState;
 use skep_links::{HasLinks, LinkRec, LinkState};
 use skep_namespace::{HasM3, M3Rec, M3State};
 
+use crate::grants::{self, Grants};
 use crate::publication::{self, Drafts};
 
 /// The ONE concrete world: every store's authoritative slice, composed
@@ -82,6 +83,14 @@ pub struct World {
     /// note above).
     #[serde(skip)]
     pub(crate) drafts: Drafts,
+    /// The grant fold (PUB-1.31 §1, lane 3.3): the second derived index, over
+    /// the LINK slice — seeded by [`WorldState::rebuild_derived`], folded by
+    /// [`WorldState::apply`] on the `Links` arm, NO checkpoint slice. Empty on
+    /// a decoded world until the rebuild runs, exactly as `drafts` is; its
+    /// fail-open sign is the exception set's the other way (PUB-7.68 — an empty
+    /// fold means an empty link map).
+    #[serde(skip)]
+    pub(crate) grants: Grants,
 }
 
 /// The World checkpoint FORMAT — the version the layout of [`World`]'s bytes
@@ -176,7 +185,17 @@ impl WorldState for World {
             Record::Arrangement(x) => {
                 World { arrangement: self.arrangement.apply_m5(x), ..self.clone() }
             }
-            Record::Links(x) => World { links: self.links.apply_link(x), ..self.clone() },
+            Record::Links(x) => {
+                // The grant fold rides the Links arm, from the record just
+                // folded (PUB-7.7's fold half): a `t_grant` deposit that
+                // admits joins the fold, a superseding one leaves it, and the
+                // registration and grant reach a reader in one snapshot. A
+                // link deposit changes neither M3 nor the exception set, so
+                // both are read as they stand.
+                let links = self.links.apply_link(x);
+                let grants = grants::fold(&self.grants, &self.namespace, &self.drafts, x);
+                World { links, grants, ..self.clone() }
+            }
         }
     }
 
@@ -210,15 +229,19 @@ impl WorldState for World {
     /// method never sees: `FormatStamp` and M3's own field order refuse it
     /// before any rebuild, and M2's fallback chain does get its turn.
     fn rebuild_derived(self) -> Self {
-        let World { format, namespace, content, arrangement, links, drafts: _ } = self;
+        let World { format, namespace, content, arrangement, links, drafts: _, grants: _ } = self;
         // M3, then M4: neither rebuilds — both slices are fully serialized, so
         // M2's default identity is the whole of their recovery, and their
         // places in the order are held open rather than skipped.
         let arrangement = arrangement.rebuild_derived();
         let links = links.rebuild_derived();
-        // Then the engine's own index, over the restored M3 slice.
+        // Then the engine's own indexes, in dependency order: the exception
+        // set over the restored M3 slice, then the grant fold, which reads the
+        // rebuilt LINK slice and the exception set it stands beside (a grant is
+        // admitted only when its home is a published document).
         let drafts = publication::seed(&namespace);
-        World { format, namespace, content, arrangement, links, drafts }
+        let grants = grants::seed(&namespace, &links, &drafts);
+        World { format, namespace, content, arrangement, links, drafts, grants }
     }
 }
 
@@ -246,6 +269,21 @@ impl HasM5 for World {
 impl HasLinks for World {
     fn links(&self) -> &LinkState {
         &self.links
+    }
+}
+
+/// The read predicate as M10's capability (lane 3.3, §1): M10 is generic over
+/// its world and names no `World`, so it reaches the engine's derived
+/// predicate — published ∨ subtree ∨ grant ([`World::readable`]) — through this
+/// one accessor, off its own read snapshot. The inherent method is the real
+/// one; this is the seam the generic front door calls.
+impl skep_febe::ReadableWorld for World {
+    fn readable(
+        &self,
+        principal: Option<skep_namespace::PrincipalId>,
+        doc: &skep_address::Address,
+    ) -> bool {
+        World::readable(self, principal, doc)
     }
 }
 

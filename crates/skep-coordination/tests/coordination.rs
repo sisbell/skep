@@ -779,6 +779,80 @@ fn marker_rule_certifies_fires_and_quiesces() {
     assert_eq!(c.armer_cycles(), vec![vec![id]]);
 }
 
+/// The guest-class filter (lane 3.3 §5): a fire whose Marker HOME, or whose
+/// bound argument's DOCUMENT, the injected guest predicate answers `false`
+/// for is refused BEFORE any deposit — a `Failed` step carrying
+/// `DraftBoundary(doc)`, never a silent skip and never a link. Under an
+/// all-readable predicate the same rule fires.
+#[test]
+fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
+    // doc2 is the "draft": unreadable at guest class under this predicate.
+    let refuse_doc2 = || -> Box<dyn Fn(&World, &skep_address::Address) -> bool + Send + Sync> {
+        Box::new(|_: &World, d: &skep_address::Address| *d != doc2())
+    };
+
+    // (1) The action's HOME is the draft: the member lives in doc1.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: FireAction::Marker { home: doc2(), ty: key(&marker_ty()) },
+    };
+    let id = c.register_rule(rule).expect("register");
+    match c.step(&k.snapshot()) {
+        StepOutcome::Failed { rule, arg, err: FireError::DraftBoundary(d) } => {
+            assert_eq!(rule, id);
+            assert_eq!(arg, ca(1));
+            assert_eq!(d, doc2(), "the refusal names the document that failed");
+        }
+        other => panic!("expected Failed(DraftBoundary(doc2)), got {other:?}"),
+    }
+    assert!(
+        !k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()),
+        "nothing was deposited"
+    );
+    assert_eq!(c.fire_count(id, &ca(1)), 0);
+
+    // (2) The ARGUMENT's document is the draft: a member inside doc2, the
+    // home in doc1 — refused the same way, naming doc2.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    let in_doc2 = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &in_doc2, &[]).expect("rel");
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    c.register_rule(rule).expect("register");
+    match c.step(&k.snapshot()) {
+        StepOutcome::Failed { arg, err: FireError::DraftBoundary(d), .. } => {
+            assert_eq!(arg, in_doc2);
+            assert_eq!(d, doc2());
+        }
+        other => panic!("expected Failed(DraftBoundary(doc2)), got {other:?}"),
+    }
+    assert!(!k.snapshot().world().links().is_k(&marker_ty(), in_doc2.tumbler()));
+
+    // (3) Both readable: the same rule shape fires, and the deposit is real.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel");
+    let rule = Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: always_addr(&c),
+        view: View::Audit,
+        action: marker_action(),
+    };
+    c.register_rule(rule).expect("register");
+    assert!(matches!(c.step(&k.snapshot()), StepOutcome::Fired { .. }));
+    assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
+}
+
 /// A Nullify rule is always Uncertified (fails the Marker leg), fires as one
 /// atomic retraction on a tuple domain, and — on the documented-contract
 /// misuse (an Addr-over-M_K domain) — surfaces `BadTarget` as a `Failed`

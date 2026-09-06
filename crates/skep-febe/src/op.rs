@@ -396,6 +396,74 @@ impl Op {
             Op::OutClaims { .. } => OpKind::OutClaims,
         }
     }
+
+    /// The DOC-ARGUMENT list of a read op, in DECLARATION ORDER (PUB-6.1,
+    /// PUB-6.4; PUB round 2, lane 3.3 §2): the named documents the
+    /// doc-argument consult tests, so the first unreadable one is the
+    /// `site.addr` a WITHHELD rejection carries. Within a list, in index
+    /// order; across an op's lists, in declaration order (a spec-set's docs,
+    /// then ρ₁'s regions before ρ₂'s, `d_a` before `d_b`, and
+    /// `project`/`discoverable_from`'s `d` — the dual row's FIRST, PUB-6.8).
+    /// Every other read — the FTT descriptor family (its `home` is a coverage
+    /// constraint, not a named document), the raw link reads (link-address
+    /// ABSENCE, PUB-6.6, never withheld), the lineage probes (`y`/`x` are
+    /// probe keys, PUB-6.12), the namespace reads — names no document to
+    /// withhold and answers the empty list; and every write answers it too,
+    /// its source consult being the write path's own (PUB-6.23).
+    ///
+    /// Public because the consult has TWO sites that must agree on the list:
+    /// [`Operation::execute`] runs it over the snapshot it pins, and a
+    /// transport answering a HISTORICAL read runs it over the HEAD before
+    /// any reconstruction (PUB-6.49: the head-set check precedes the
+    /// N-world's registration check and the history refusals), reading the
+    /// same list rather than restating it.
+    ///
+    /// [`Operation::execute`]: crate::Operation::execute
+    pub fn doc_arguments(&self) -> Vec<&Address> {
+        match self {
+            Op::RetrieveV { specs } => specs.iter().map(|s| &s.doc).collect(),
+            Op::RetrieveDocVSpan { doc } | Op::RetrieveDocVSpanSet { doc } => vec![doc],
+            Op::ShowOrigin { doc, .. } => vec![doc],
+            Op::ShowDeletions { d_a, d_b } => vec![d_a, d_b],
+            Op::Compare { rho1, rho2 } => rho1.iter().chain(rho2).map(|r| &r.doc).collect(),
+            Op::FindDocsContaining { regions } => regions.iter().map(|r| &r.doc).collect(),
+            Op::Image { d, .. }
+            | Op::FindLinksV { d, .. }
+            | Op::CountV { d, .. }
+            | Op::WindowV { d, .. }
+            | Op::RetrieveEndsets { d, .. }
+            | Op::DeleteOrphans { d, .. }
+            | Op::Project { d, .. }
+            | Op::DiscoverableFrom { d, .. } => vec![d],
+            // No named document to withhold (see above); written out rather
+            // than wildcarded so a new read variant is classified here on
+            // purpose, never defaulted to "consults nothing".
+            Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowFtt { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Copy { .. }
+            | Op::Rearrange { .. }
+            | Op::Version { .. }
+            | Op::Publish { .. }
+            | Op::MakeLink { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::AssertSup { .. }
+            | Op::EditLink { .. } => Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -527,5 +595,48 @@ pub(crate) mod tests {
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
         assert_eq!(seen.len(), 39);
+    }
+
+    /// PUB-6.4: the doc-argument list runs in DECLARATION order across an
+    /// op's lists and by index within each — `d_a` before `d_b`, ρ₁'s regions
+    /// before ρ₂'s, the dual row's `d` alone (PUB-6.8) — and a read that
+    /// names no document to withhold (the FTT family, the raw link reads,
+    /// the lineage probes, the namespace reads) answers the empty list, as
+    /// every write does.
+    #[test]
+    fn doc_arguments_run_in_declaration_order() {
+        let a = addr(&[1, 0, 1, 0, 1]);
+        let b = addr(&[1, 0, 1, 0, 2]);
+        let c = addr(&[1, 0, 1, 0, 3]);
+        let op = Op::ShowDeletions { d_a: a.clone(), d_b: b.clone() };
+        assert_eq!(op.doc_arguments(), vec![&a, &b]);
+        let op = Op::Compare {
+            rho1: vec![RegionSpec { doc: b.clone(), spans: vec![sp()] }],
+            rho2: vec![
+                RegionSpec { doc: c.clone(), spans: vec![] },
+                RegionSpec { doc: a.clone(), spans: vec![] },
+            ],
+        };
+        assert_eq!(op.doc_arguments(), vec![&b, &c, &a]);
+        let op = Op::Project { a: a.clone(), slot: 1, d: c.clone() };
+        assert_eq!(op.doc_arguments(), vec![&c], "the dual row consults `d`, never the link");
+        for (op, is_read) in all_ops() {
+            let named = !op.doc_arguments().is_empty();
+            let expects_consult = is_read
+                && !matches!(
+                    op,
+                    Op::NextAccountPrefix { .. }
+                        | Op::PrincipalPrefix { .. }
+                        | Op::ReadLink { .. }
+                        | Op::FollowLink { .. }
+                        | Op::FindLinksFtt { .. }
+                        | Op::CountFtt { .. }
+                        | Op::WindowFtt { .. }
+                        | Op::InClaims { .. }
+                        | Op::OutClaims { .. }
+                        | Op::Compare { .. }
+                );
+            assert_eq!(named, expects_consult, "{:?}: the doc-argument row", op.kind());
+        }
     }
 }

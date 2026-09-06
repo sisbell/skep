@@ -126,15 +126,19 @@ mod region;
 mod survival;
 mod types;
 
-pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
+pub use descriptor::{
+    count_ftt_on, count_ftt_on_where, findlinks_ftt_on, findlinks_ftt_on_where, window_ftt_on,
+    window_ftt_on_where,
+};
 pub use handle::LinkQuery;
-pub use lineage::{in_claims_on, out_claims_on};
+pub use lineage::{in_claims_on, in_claims_on_where, out_claims_on, out_claims_on_where};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
-    content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
+    content_vspan, count_v_on, count_v_on_where, findlinks_v_on, findlinks_v_on_where, image_on,
+    retrieve_endsets_on, retrieve_endsets_on_where, window_v_on, window_v_on_where,
     MAX_ENDSET_SPANS, MAX_IMAGE_RUNS,
 };
-pub use survival::delete_orphans_on;
+pub use survival::{delete_orphans_on, delete_orphans_on_where};
 pub use types::{
     Cursor, FourSet, OrphanError, OrphanReport, QueryError, SlotSpec, SupClaim, Window,
 };

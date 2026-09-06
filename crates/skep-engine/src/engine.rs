@@ -150,18 +150,22 @@ impl Engine {
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
-    /// shared kernel, the one registry, and the two op-handle factories whose
+    /// shared kernel, the one registry, the two op-handle factories whose
     /// bodies discharge M9's standing assembly obligation (constructing
-    /// `Vstream`/`LinkWriter` from `&Kernel<W>`). Infallible: M9's catalog is
-    /// a pure projection of the injected registry — with the type set
-    /// compiled into the format there is no twice-passed configuration whose
-    /// drift a validate-once-or-fail step would catch.
+    /// `Vstream`/`LinkWriter` from `&Kernel<W>`), and the GUEST-class read
+    /// predicate M9's fires run at (PUB round 2, lane 3.3, §5) —
+    /// [`World::readable_guest`], `published(doc)`, so a rule's effect never
+    /// crosses the draft boundary. Infallible: M9's catalog is a pure
+    /// projection of the injected registry — with the type set compiled into
+    /// the format there is no twice-passed configuration whose drift a
+    /// validate-once-or-fail step would catch.
     pub fn coordinator(&self) -> Coordinator<World> {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),
             Arc::clone(&self.registry),
             Box::new(mk_vstream),
             Box::new(mk_link_store),
+            Box::new(|w: &World, d: &skep_address::Address| w.readable_guest(d)),
         )
     }
 

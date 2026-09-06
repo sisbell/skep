@@ -209,12 +209,14 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
 
     common::claim_board(port);
     let doc = seed_flow(port);
+    let s1 = open_session(port, 1);
 
     // Reads and rejected writes are not in the feed: issue both, then
-    // assert the feed holds exactly the five committed writes.
+    // assert the feed holds exactly the five committed writes. The read is
+    // the owner's — the seeded document is a private draft.
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.2"}}}}]}}"#
         ),
@@ -308,7 +310,6 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
 
     // An idempotent retry re-acks the original commit and records nothing
     // new: the feed gains exactly one entry for the pair.
-    let s1 = open_session(port, 1);
     let frame = format!(
         r#"{{"op":"insert","doc":"{doc}","id":"dup-1","at":{{"subspace":"1","ordinal":"3"}},"values":["x"]}}"#
     );

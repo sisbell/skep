@@ -66,14 +66,18 @@ fn world_survives_a_restart() {
             expect_resp(&v, "ack_addr");
         }
 
+        // Read as the owner: the document is a private draft, which the
+        // read predicate withholds from a guest — the bodies captured here
+        // are deliveries, not two identical `withheld` rejections.
         retrieve_frame = format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.12"}}}}]}}"#
         );
         spanset_frame = format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{doc}"}}"#);
-        let (st, body) = http(port, "POST", "/op", None, retrieve_frame.as_bytes());
+        let (st, body) = http(port, "POST", "/op", Some(&s1), retrieve_frame.as_bytes());
         assert_eq!(st, 200);
+        assert_eq!(json(&body)["resp"].as_str(), Some("delivery"), "{}", String::from_utf8_lossy(&body));
         before_retrieve = body;
-        let (st, body) = http(port, "POST", "/op", None, spanset_frame.as_bytes());
+        let (st, body) = http(port, "POST", "/op", Some(&s1), spanset_frame.as_bytes());
         assert_eq!(st, 200);
         before_spanset = body;
         #[cfg(feature = "observe")]
@@ -92,10 +96,12 @@ fn world_survives_a_restart() {
     {
         let sd = spawn(dir.path());
         let port = sd.port();
+        // The same principal, a fresh token (sessions are uptime-scoped).
+        let s1 = open_session(port, 1);
 
         // The recovered world answers the same reads with byte-identical
         // bodies — as_of included (recovery restores the log position).
-        let (st, after_retrieve) = http(port, "POST", "/op", None, retrieve_frame.as_bytes());
+        let (st, after_retrieve) = http(port, "POST", "/op", Some(&s1), retrieve_frame.as_bytes());
         assert_eq!(st, 200);
         assert_eq!(
             before_retrieve,
@@ -104,7 +110,7 @@ fn world_survives_a_restart() {
             String::from_utf8_lossy(&before_retrieve),
             String::from_utf8_lossy(&after_retrieve),
         );
-        let (st, after_spanset) = http(port, "POST", "/op", None, spanset_frame.as_bytes());
+        let (st, after_spanset) = http(port, "POST", "/op", Some(&s1), spanset_frame.as_bytes());
         assert_eq!(st, 200);
         assert_eq!(before_spanset, after_spanset, "doc_v_span_set drifted across restart");
 
@@ -129,8 +135,7 @@ fn world_survives_a_restart() {
         );
         assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
 
-        // Re-authenticating works and the world accepts new writes.
-        let s1 = open_session(port, 1);
+        // The re-authenticated session's world accepts new writes.
         let v = op(
             port,
             Some(&s1),
@@ -194,12 +199,15 @@ fn a_dropped_server_releases_the_journal_lock() {
         // whole point — this is what an unwinding test leaves behind.
     };
 
-    // Reopening the same dir is the proof the lock was released.
+    // Reopening the same dir is the proof the lock was released. The read is
+    // the owner's — a fresh session for principal 1 — since the document is
+    // a private draft.
     let sd = spawn(dir.path());
     let port = sd.port();
+    let s1 = open_session(port, 1);
     let v = op(
         port,
-        None,
+        Some(&s1),
         &format!(
             r#"{{"op":"retrieve_v","specs":[{{"doc":"{doc}","span":{{"start":"1.1","width":"0.7"}}}}]}}"#
         ),

@@ -80,6 +80,7 @@ fn claims_on<W: DiscoveryWorld>(
     slot: usize,
     key: &Address,
     v: View,
+    home_readable: &dyn Fn(&Address) -> bool,
 ) -> Vec<SupClaim> {
     let l = s.world().links();
     if l.readlink(key).is_none() {
@@ -90,7 +91,13 @@ fn claims_on<W: DiscoveryWorld>(
     let hits = l
         .match_links(&[(slot, &named)], v) // claims naming `key` at `slot`
         .intersection(l.type_slice(sup, v)); // restrict to supersession claims (Ŝ^Σ = S^Σ)
-    hits.iter().map(|c| claim_at(l, c)).collect()
+    hits.iter()
+        .map(|c| claim_at(l, c))
+        // The result-set filter (PUB round 2, lane 3.3, §3): a claim whose HOME
+        // the reader may not read is dropped — `SupClaim::home` is that home
+        // (EL8b). The endpoints (`old`/`new`) stay as recorded, unfiltered.
+        .filter(|c| home_readable(&c.home))
+        .collect()
 }
 
 /// The claims with `old = y` (ASN-0125 EL11b `in(y)`): probes FROM under the
@@ -108,12 +115,34 @@ fn claims_on<W: DiscoveryWorld>(
 /// recorded, so under any view a live claim can name a nullified link. A
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
 pub fn in_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, y: &Address, v: View) -> Vec<SupClaim> {
-    claims_on(s, FROM, y, v)
+    in_claims_on_where(s, y, v, &|_| true)
+}
+
+/// [`in_claims_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
+/// claims homed in a document the reader may not read are dropped.
+pub fn in_claims_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    y: &Address,
+    v: View,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Vec<SupClaim> {
+    claims_on(s, FROM, y, v, home_readable)
 }
 
 /// The claims with `new = x` (ASN-0125 EL11b `out(x)`): probes TO under the
 /// flipped convention. Same key, view, order and endpoint-disclosure contract
 /// as [`in_claims_on`].
 pub fn out_claims_on<W: DiscoveryWorld>(s: &Snapshot<W>, x: &Address, v: View) -> Vec<SupClaim> {
-    claims_on(s, TO, x, v)
+    out_claims_on_where(s, x, v, &|_| true)
+}
+
+/// [`out_claims_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
+/// claims homed in a document the reader may not read are dropped.
+pub fn out_claims_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    x: &Address,
+    v: View,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Vec<SupClaim> {
+    claims_on(s, TO, x, v, home_readable)
 }

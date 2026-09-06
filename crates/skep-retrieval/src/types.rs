@@ -72,21 +72,39 @@ pub struct RegionSpec {
 /// content position delivers its stored value (an `Arc` clone — cheap, never
 /// a byte copy); a link position delivers the address-as-reference and never
 /// reads M4.
+///
+/// The WITHHELD arm (PUB round 2, lane 3.3, §4; PUB-6.41) is the seventh
+/// delivery shape: a RUN the reading principal may not read is emitted AT ITS
+/// OWN POSITION rather than dropped — one item per masked RUN, carrying the
+/// origin DOCUMENT and the run's width. It MUST NOT coalesce (PUB-6.58): two
+/// non-contiguous masked runs, one origin or not, are two items, never one of
+/// the summed width. The consult is per-run against the run's ORIGIN document
+/// (M5's `document_of` of the run's start); an unregistered origin takes this
+/// arm directly. The extent forms (`doc_vspan`/`doc_vspanset`) are EXCLUDED —
+/// they deliver no positions.
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub enum DeliveryItem {
     Content(Val),
     Ref(Address),
+    /// A masked run (PUB-6.41): `origin` is the run's origin DOCUMENT and
+    /// `width` the number of positions withheld, emitted at the run's own
+    /// position.
+    Withheld { origin: Address, width: Nat },
 }
 
 /// Renders a content item by its payload's BYTE LENGTH and a link item by its
 /// address (M1's dotted decimal) — never a payload byte, which is the whole of
 /// M4's reason for withholding `Debug` from `Val` and is kept here by hand
-/// because a derive could not. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)`.
+/// because a derive could not. Shape: `Content(n bytes)` / `Ref(c₁.….c_#t)` /
+/// `Withheld(origin, width wide)`.
 impl fmt::Debug for DeliveryItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             DeliveryItem::Content(v) => write!(f, "Content({} bytes)", v.len()),
             DeliveryItem::Ref(a) => write!(f, "Ref({a})"),
+            DeliveryItem::Withheld { origin, width } => {
+                write!(f, "Withheld({origin}, {width} wide)")
+            }
         }
     }
 }

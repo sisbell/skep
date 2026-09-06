@@ -10,7 +10,7 @@ use skep_address::Address;
 use skep_kernel::Snapshot;
 use skep_links::{LinkState, View};
 
-use crate::helpers::window_over;
+use crate::helpers::{home_of, window_over};
 use crate::types::{Cursor, FourSet, Window};
 use crate::DiscoveryWorld;
 
@@ -54,7 +54,22 @@ pub(crate) fn satisfying(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
 /// slot ⇒ `[]` (FL-EMP). Monotone absent retraction (FL-MON): a found link
 /// stays found unless nullified.
 pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<Address> {
-    satisfying(s.world().links(), q).into_iter().collect()
+    findlinks_ftt_on_where(s, q, &|_| true)
+}
+
+/// [`findlinks_ftt_on`] with the result-set filter (PUB round 2, lane 3.3,
+/// §3): every satisfying link whose HOME the reader may not read is dropped at
+/// its identity. The descriptor's own `home` slot is a COVERAGE constraint
+/// (CN-STAB); this consult is the authorization one, orthogonal to it.
+pub fn findlinks_ftt_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    q: &FourSet,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Vec<Address> {
+    satisfying(s.world().links(), q)
+        .into_iter()
+        .filter(|a| home_readable(&home_of(a)))
+        .collect()
 }
 
 /// The count operation over the descriptor family (ASN-0132 CN-*): the
@@ -69,7 +84,21 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> Vec<
 /// is answerable off the descriptor alone through
 /// [`FourSet::is_unsatisfiable`]: same number, different assertion.
 pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
-    satisfying(s.world().links(), q).len()
+    count_ftt_on_where(s, q, &|_| true)
+}
+
+/// [`count_ftt_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
+/// §3; PUB-6.15): the count is of the satisfying links surviving the home
+/// consult, by ENUMERATION — the same set [`findlinks_ftt_on_where`] returns.
+pub fn count_ftt_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    q: &FourSet,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> usize {
+    satisfying(s.world().links(), q)
+        .into_iter()
+        .filter(|a| home_readable(&home_of(a)))
+        .count()
 }
 
 /// Windowed enumeration over the descriptor family (ASN-0108, the
@@ -95,6 +124,20 @@ pub fn window_ftt_on<W: DiscoveryWorld>(
     cur: Cursor,
     n: usize,
 ) -> Window {
+    window_ftt_on_where(s, q, cur, n, &|_| true)
+}
+
+/// [`window_ftt_on`] with the result-set filter (PUB round 2, lane 3.3, §3):
+/// the home consult joins the residence post-filter in the lazy `keep`, so a
+/// masked link is skipped before the window slice (PUB-6.14), never counted
+/// against `n`.
+pub fn window_ftt_on_where<W: DiscoveryWorld>(
+    s: &Snapshot<W>,
+    q: &FourSet,
+    cur: Cursor,
+    n: usize,
+    home_readable: &dyn Fn(&Address) -> bool,
+) -> Window {
     let cand = candidates(s.world().links(), q);
-    window_over(&cand, cur, n, |a| q.at_home(a))
+    window_over(&cand, cur, n, |a| q.at_home(a) && home_readable(&home_of(a)))
 }

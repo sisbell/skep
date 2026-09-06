@@ -219,9 +219,22 @@ fn mk_ls(k: &Kernel<World>) -> LinkWriter<'_, World> {
 }
 
 /// The engine-assembled Coordinator over the shared kernel — infallible: the
-/// catalog is a pure read of the injected registry.
+/// catalog is a pure read of the injected registry. The guest-class read
+/// predicate answers `true` everywhere: this miniature world carries no
+/// publication state (M3's `published` bit is folded engine-side), so every
+/// fire crosses no draft boundary — [`coord_with_guest`] injects a refusing
+/// one.
 pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
-    Coordinator::new(Arc::clone(k), registry(), Box::new(mk_vs), Box::new(mk_ls))
+    coord_with_guest(k, Box::new(|_: &World, _: &Address| true))
+}
+
+/// [`coord`] under a caller-chosen guest-class predicate (lane 3.3 §5).
+#[allow(clippy::type_complexity)]
+pub fn coord_with_guest(
+    k: &Arc<Kernel<World>>,
+    guest: Box<dyn Fn(&World, &Address) -> bool + Send + Sync>,
+) -> Coordinator<World> {
+    Coordinator::new(Arc::clone(k), registry(), Box::new(mk_vs), Box::new(mk_ls), guest)
 }
 
 /// A TO-bearing tuple in a CATALOGED class, deposited through the open

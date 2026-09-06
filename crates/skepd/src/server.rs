@@ -122,12 +122,14 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_arrangement::trunk_of;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Disposition, Operation, OpKind, Request, Response, SessionId, Stores};
+use skep_febe::{
+    Codec, Disposition, FaultSite, Operation, OpKind, RejectCode, Rejection, Request, Response,
+    SessionId,
+};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
@@ -726,7 +728,7 @@ pub struct Daemon {
     /// take apart.
     writes: WritePath,
     /// The history surface behind `/op-at` and `/dump?at`, holding its own
-    /// reconstruction budget: neither route needs a session and replay is
+    /// reconstruction budget: a guest may ask either route and replay is
     /// per-call uncached, so without that budget any local caller could pin
     /// every worker on reconstruction.
     history: History,
@@ -784,22 +786,21 @@ impl Daemon {
         };
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
-        // The source gate's consult for the publish shot (PUB-6.23, PUB-8.1;
-        // lane 3.2), the daemon's to supply: TODAY's publication read — a
-        // published origin is readable to everyone, a private one to its
-        // owner — off a head snapshot of the one kernel, the origin's
-        // DOCUMENT projected first (PUB-2.15). Lane 3.3 widens this closure
-        // with PUB-1.31's subtree and grant clauses and touches no composite.
-        let febe = {
-            let consult = engine.stores();
-            Operation::new(Box::new(engine.stores())).with_consult(Box::new(
-                move |principal: PrincipalId, origin: &skep_address::Address| {
-                    let snap = consult.kernel().snapshot();
-                    snap.world().published(&trunk_of(origin))
-                        || snap.world().m3().is_effective_owner(principal, origin)
-                },
-            ))
-        };
+        // THE READ PREDICATE (PUB-1.31; PUB-6.39's one-per-request shape;
+        // PUB round 2, lane 3.3). The live front door is given NO consult:
+        // M10 answers `World::readable` — published ∨ subtree ∨ grant, with
+        // the version member projected to its document (PUB-2.15) — off the
+        // ONE snapshot it pins per request, so every named argument, every
+        // per-run mask and the result-set filter of one request stand on one
+        // committed state, the state its `as_of` names; and the publish
+        // shot's source gate (PUB-6.23, PUB-8.1) reads the same predicate off
+        // the snapshot pinned for the whole shot. A consult closed over a
+        // per-call snapshot of the live kernel — lane 3.2's shape — would
+        // judge one request's arguments against different heads. The one
+        // front door that DOES take a consult is history's (`history.rs`): a
+        // read as of N answers the N-world's content through the HEAD's sets
+        // (PUB-6.48), which no world of its own can supply.
+        let febe = Operation::new(Box::new(engine.stores()));
         let guest = open_guest_session(&febe);
         let auth = {
             let snap = engine.kernel().snapshot();
@@ -892,7 +893,7 @@ impl Daemon {
                 self.token_route(req, |r| self.post_session_close(r, req))
             }
             ("POST", "/op") => self.token_route(req, |r| self.post_op(r, req)),
-            ("POST", "/op-at") => self.token_route(req, |_| self.op_at_reply(&req.body)),
+            ("POST", "/op-at") => self.token_route(req, |r| self.op_at_reply(r, &req.body)),
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => {
                 self.token_route(req, |_| self.get_changes(req.query.as_deref()))
@@ -1369,7 +1370,29 @@ impl Daemon {
     /// `as_of` reporting `at`. History is not a place you can act — a write
     /// frame is a transport-level 400 before anything runs; an unparseable
     /// frame gets the same `unparseable` rejection `/op` gives it.
-    fn op_at_reply(&self, body: &[u8]) -> Reply {
+    ///
+    /// THE READER IS THE PRESENTED SESSION's (PUB-8.13; PUB round 2, lane
+    /// 3.3): the route resolved `resolved` against the head, and the read
+    /// runs as that principal — the retired guest when none was presented —
+    /// never as a guest regardless of the token. And the read predicate is
+    /// the HEAD's (PUB-6.48): ONE head snapshot is taken here, at admission,
+    /// and every consult of this request reads its exception set and grant
+    /// set — the doc-argument consult below, and, threaded into the throwaway
+    /// front door `history.rs` builds over the reconstructed world, the
+    /// per-run masks and the result-set filter. A grant committed after `at`
+    /// therefore satisfies a read at `at`.
+    ///
+    /// THE HEAD-SET CHECK COMES FIRST (PUB-6.49): the doc-argument consult
+    /// runs BEFORE the reconstruction — before the N-world's registration
+    /// check, so a document in the head's exception set answers `withheld` at
+    /// EVERY `at` to a requester the predicate refuses, never
+    /// `doc_not_registered` for a position before its creation; and before
+    /// `history_reclaimed` and `history_busy`, so one op has one code, and a
+    /// withheld answer occupies no reconstruction permit (PUB-7.11). The
+    /// list of named documents is M10's own (`Op::doc_arguments`, declaration
+    /// order, PUB-6.4), the rejection M10's own classification (PUB-8.4,
+    /// PUB-8.5: `withheld`, `reorder`, `site.addr` the document, no detail).
+    fn op_at_reply(&self, resolved: &Resolved, body: &[u8]) -> Reply {
         let (at, frame) = match op_at_envelope(body) {
             Ok(x) => x,
             Err(detail) => return refuse(TransportError::MalformedOpAt, Some(&detail)),
@@ -1383,7 +1406,8 @@ impl Daemon {
                 // The SAME dispatcher as /op's, over the reconstructed
                 // world and its canonical identity rebuild (AUTH-6.20) —
                 // under the reconstruction budget like every historical
-                // answer.
+                // answer. Exempt from the predicate (PUB-6.50): it reads
+                // only the born-published credential class.
                 match self.history.reconstruct(&self.engine, at) {
                     Ok((_permit, world)) => {
                         let identity = canonical_identity(&world);
@@ -1397,7 +1421,22 @@ impl Daemon {
                     // The ruling-fixed body, exactly: {"error": "write_at_history"}.
                     return refuse(TransportError::WriteAtHistory, None);
                 }
-                match self.history.read_at(&self.engine, at, *frame) {
+                let principal = match &resolved.actor {
+                    Actor::Principal(binding) => Some(binding.principal),
+                    Actor::Guest(_) => None,
+                };
+                // ONE head snapshot per request (PUB-6.39, PUB-6.48).
+                let head = self.engine.kernel().snapshot();
+                for arg in frame.op.doc_arguments() {
+                    if !head.world().readable(principal, arg) {
+                        return self.op_reply(&Response::Rejected(Rejection::classified(
+                            frame.op.kind(),
+                            RejectCode::Withheld,
+                            Some(FaultSite { addr: Some(arg.clone()), ..FaultSite::default() }),
+                        )));
+                    }
+                }
+                match self.history.read_at(&self.engine, at, *frame, principal, &head) {
                     Ok(resp) => self.op_reply(&resp),
                     Err(e) => refuse_unavailable(e),
                 }

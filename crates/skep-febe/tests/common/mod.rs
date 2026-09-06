@@ -17,7 +17,7 @@ use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
-    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter,
+    enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
@@ -185,8 +185,10 @@ impl Stores<World> for KernelStores {
     fn kernel(&self) -> &Kernel<World> {
         &self.kernel
     }
-    fn linkstore(&self) -> LinkWriter<'_, World> {
-        LinkWriter::new(&self.kernel)
+    /// The writer at the class M10 hands in — the session principal's, which
+    /// this world's `ReadableWorld` answers `true` for everywhere.
+    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, World>) -> LinkWriter<'a, World> {
+        LinkWriter::new(&self.kernel, visibility)
     }
 }
 

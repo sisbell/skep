@@ -284,17 +284,37 @@ impl LinkState {
         .expect("P0 discharged: home is a Document; s_L ≥ 1; ordinal ≥ 1 (§4)")
     }
 
-    /// The active-view dedup incumbent of an I0 class (§3 step 2): the audit
-    /// matches filtered by `∉ nullified`, T1-least first. Reading the ACTIVE
-    /// view (I2) is what gives resurrection — a nullified tuple is invisible
-    /// here, so re-emitting lands fresh.
-    pub(crate) fn active_incumbent(&self, key: &DedupKey) -> Option<Address> {
+    /// The active-view dedup incumbent of an I0 class VISIBLE to the caller
+    /// (§3 step 2; PUB-6.25): the audit matches filtered by `∉ nullified` and
+    /// by `readable_home(home(addr))`, T1-least first — the EARLIEST READABLE
+    /// incumbent, never merely the earliest. Reading the ACTIVE view (I2) is
+    /// what gives resurrection — a nullified tuple is invisible here, so
+    /// re-emitting lands fresh — and reading it through the caller's
+    /// visibility class is what keeps a dedup hit from acking an address the
+    /// caller could not learn by any read (PUB-6.26).
+    ///
+    /// The filter is applied at link-HOME identity: `home(addr)` is
+    /// `document_of`, address arithmetic on the index key, no read. Every key
+    /// here is element-level (the fold's frontier expect), so the home
+    /// exists. The predicate itself is the caller's — M7 learns nothing about
+    /// principals; it asks "may this caller read this document" of a closure
+    /// the caller threaded in, over the world the caller is writing.
+    pub(crate) fn active_incumbent(
+        &self,
+        key: &DedupKey,
+        readable_home: impl Fn(&Address) -> bool,
+    ) -> Option<Address> {
         self.hints
             .dedup
             .get(key)?
             .iter()
-            .find(|t| !self.nullified(t))
+            .filter(|t| !self.nullified(t))
             .map(lift)
+            .find(|addr| {
+                let home = document_of(addr)
+                    .expect("every stored link key is element-level, so its home Document exists");
+                readable_home(&home)
+            })
     }
 }
 

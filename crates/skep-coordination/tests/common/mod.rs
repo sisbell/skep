@@ -19,6 +19,7 @@ use skep_coordination::Coordinator;
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
     enc, Caller, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg, TypeRegistry,
+    Visibility,
 };
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
@@ -214,16 +215,30 @@ fn mk_vs(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
-fn mk_ls(k: &Kernel<World>) -> LinkWriter<'_, World> {
-    LinkWriter::new(k)
+/// The writer factory the Coordinator builds its M7 handles through: the
+/// kernel and the visibility class the Coordinator lends it (its injected
+/// `guest`, lane 3.3b).
+fn mk_ls<'k>(k: &'k Kernel<World>, visibility: &'k Visibility<'k, World>) -> LinkWriter<'k, World> {
+    LinkWriter::new(k, visibility)
+}
+
+/// The ALL-VISIBLE class for the suite's direct upstream writes: this
+/// miniature world carries no publication state (M3's `published` bit is
+/// folded engine-side), so every document is readable to every caller here.
+pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
+
+fn every_document(_: &World, _: &Address) -> bool {
+    true
 }
 
 /// The engine-assembled Coordinator over the shared kernel — infallible: the
 /// catalog is a pure read of the injected registry. The guest-class read
 /// predicate answers `true` everywhere: this miniature world carries no
 /// publication state (M3's `published` bit is folded engine-side), so every
-/// fire crosses no draft boundary — [`coord_with_guest`] injects a refusing
-/// one.
+/// fire crosses no draft boundary — and, THREADED into every writer the
+/// Coordinator builds (lane 3.3b), every fire and def write sees every
+/// incumbent, the PRIVATE seed's included. [`coord_with_guest`] injects a
+/// refusing one.
 pub fn coord(k: &Arc<Kernel<World>>) -> Coordinator<World> {
     coord_with_guest(k, Box::new(|_: &World, _: &Address| true))
 }
@@ -242,7 +257,7 @@ pub fn coord_with_guest(
 /// the open surface is shape-blind) — the M9 domain/eval tests' way of
 /// putting a relation with a G slot into a class the catalog speaks about.
 pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address) -> Address {
-    LinkWriter::new(k.as_ref())
+    LinkWriter::new(k.as_ref(), &EVERYONE)
         .makelink(
             Caller::System,
             &doc1(),
@@ -254,9 +269,10 @@ pub fn deposit_rel(k: &Arc<Kernel<World>>, ty: u32, from: &Address, to: &Address
         .0
 }
 
-/// A LinkWriter handle for direct upstream writes in tests.
+/// A LinkWriter handle for direct upstream writes in tests, at the
+/// all-visible class.
 pub fn links(k: &Arc<Kernel<World>>) -> LinkWriter<'_, World> {
-    LinkWriter::new(k.as_ref())
+    LinkWriter::new(k.as_ref(), &EVERYONE)
 }
 
 /// Insert one raw content Val into `doc` (M5's placement composite) and

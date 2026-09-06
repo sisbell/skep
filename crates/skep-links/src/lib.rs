@@ -49,7 +49,11 @@
 //! `link_lock_key`. The type registry every gate and fold reads is the
 //! module's own compiled constant, [`registry`], so an assembler that needs it
 //! (M9's catalog, the world dump) shares that one value rather than building a
-//! second from the same constants.
+//! second from the same constants. The one thing a caller THREADS IN is its
+//! [`Visibility`] class (PUB round 2, lane 3.3b): the write handle takes the
+//! caller's read predicate at construction, and the value-keyed gates
+//! (idempotency, `assert_sup`'s dedup) see only the incumbents that
+//! predicate admits at link-home identity — M7 names no principal.
 
 #![forbid(unsafe_code)]
 
@@ -78,7 +82,7 @@ pub use registry::{
     registry, Behavior, Registration, ReservedAddrs, Shape, ShippedType, TypeRegistry,
 };
 pub use state::{LinkRec, LinkState};
-pub use writes::{Edit, LinkWriter, SlotArg, MAX_SLOT_SPANS};
+pub use writes::{Edit, LinkWriter, SlotArg, Visibility, MAX_SLOT_SPANS};
 
 /// The auto traits M7's slice promises without saying. `WorldState` is
 /// `Send + Sync + 'static`, so the engine's `impl WorldState for World` owes

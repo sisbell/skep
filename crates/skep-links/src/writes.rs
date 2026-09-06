@@ -13,6 +13,14 @@
 //! [`emit_core`] (hit AND miss) with per-op hoists pinning error order;
 //! `nullify` additionally requires owning the TARGET link (self-retraction
 //! only in v1).
+//!
+//! Visibility (PUB round 2, lane 3.3b; PUB-6.25–6.27): the value-keyed gates
+//! — `emit`'s idempotency lookup and `assert_sup`'s dedup, both the one
+//! incumbent question [`emit_core`] asks of the world — run over the type
+//! class FILTERED by the caller's [`Visibility`] predicate at link-HOME
+//! identity, inside the write transaction. The predicate is THREADED FROM THE
+//! CALLER at construction ([`LinkWriter::new`]): M7 fetches nothing from the
+//! engine and learns nothing about principals.
 
 use std::fmt;
 
@@ -31,9 +39,33 @@ use crate::registry::{registry, sh_conf, ShippedType};
 use crate::state::LinkRec;
 use crate::LinkWorld;
 
-/// M7's single writer of link values — the transact-driving handle, and
-/// nothing but `&'k Kernel<W>`. The registration and reserved-class reads of
-/// §3's pre-transact steps go to the module's format registry
+/// The caller's VISIBILITY CLASS (PUB round 2, lane 3.3b; PUB-6.25): `true`
+/// iff the caller a [`LinkWriter`] writes for may READ the document `doc` of
+/// the world `w` — the read predicate `readable(doc, principal)` of PUB-1.31,
+/// closed over the caller by whoever holds the caller: M10 over the
+/// session's principal, M9 over the engine-injected GUEST class
+/// (PUB-6.28), an engine-direct caller over its own. M7 names no principal
+/// and no publication state; it applies the closure at link-HOME identity to
+/// decide which incumbents a value-keyed gate may SEE.
+///
+/// The world handed in is the TRANSACTION's working world (`stg.working()`),
+/// never a snapshot pinned before the transaction: the incumbent set is the
+/// staged world's, and so is each home's publication state. The one
+/// question this predicate answers is asked of a REGISTERED home — every
+/// incumbent's home is a document a deposit landed in — so the registered-
+/// only evaluation PUB-6.37 pins holds at every consult.
+///
+/// The same shape the coordinator holds its guest predicate in
+/// (`Box<dyn Fn(&W, &Address) -> bool + Send + Sync>`), BORROWED: a writer is
+/// built per operation and lends the very closure its caller holds, so the
+/// pass-through is a borrow with no adapter, and a closure may capture the
+/// request it serves (`'a` is that borrow, not `'static`).
+pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
+
+/// M7's single writer of link values — the transact-driving handle: the
+/// kernel it deposits through and the caller's [`Visibility`] class, both
+/// borrowed for the handle's lifetime. The registration and reserved-class
+/// reads of §3's pre-transact steps go to the module's format registry
 /// ([`registry`]), a compiled constant: there is no per-handle copy to keep,
 /// so the question of whether a cache agrees with what `emit_core` consults
 /// inside the txn does not arise.
@@ -42,8 +74,13 @@ use crate::LinkWorld;
 /// [`crate::LinkState`]'s map, reached through [`crate::HasLinks`] and read
 /// by `readlink`; this type is the write half, the counterpart to M8's
 /// `LinkQuery`.
+///
+/// A `LinkWriter` with NO visibility class does not exist: every
+/// construction names the class its writes run at ([`LinkWriter::new`]), and
+/// the value-keyed gates read the store through it ([`emit_core`]).
 pub struct LinkWriter<'k, W: WorldState> {
     kernel: &'k Kernel<W>,
+    visibility: &'k Visibility<'k, W>,
 }
 
 /// The handle prints as itself: `Kernel` is deliberately opaque, so it is not
@@ -98,11 +135,14 @@ impl<'k, W> LinkWriter<'k, W>
 where
     W: WorldState,
 {
-    /// Construct the writer handle: it holds the borrow and nothing else —
-    /// no snapshot, no state, exactly as `Namespace::new` and `Vstream::new`
-    /// do (§C).
-    pub fn new(kernel: &'k Kernel<W>) -> LinkWriter<'k, W> {
-        LinkWriter { kernel }
+    /// Construct the writer handle: it holds the two borrows and nothing
+    /// else — no snapshot, no state — exactly as `Namespace::new` and
+    /// `Vstream::new` hold theirs (§C), plus the caller's [`Visibility`]
+    /// class, which is a REQUIRED constructor parameter rather than a
+    /// builder step so that a writer whose gates run at no stated class
+    /// cannot be built at all (lane 3.3b §2).
+    pub fn new(kernel: &'k Kernel<W>, visibility: &'k Visibility<'k, W>) -> LinkWriter<'k, W> {
+        LinkWriter { kernel, visibility }
     }
 }
 
@@ -430,6 +470,28 @@ impl From<HomeFault> for EditLinkError {
 /// before the transact (§3 step 1); this does the hoisted home check and the
 /// in-txn dedup CHECK.
 ///
+/// THE DEDUP CHECK RUNS AT THE CALLER'S VISIBILITY CLASS (lane 3.3b;
+/// PUB-6.25): the one question this gate asks of the world — the active
+/// incumbent of the value's I0 class — is answered over the class FILTERED
+/// by `visibility` at link-HOME identity, against the WORKING world. An
+/// incumbent homed in a document the caller cannot read is invisible here,
+/// and the write proceeds exactly as in a world without it: a fresh mint,
+/// never an ack naming an address inside a draft's link subspace. The
+/// consequences are pinned (PUB-6.26): value-identical tuples MAY coexist
+/// across the visibility boundary, and a hit is the EARLIEST incumbent the
+/// caller's class can read. The dedup LOCK is unchanged — the I0 section
+/// serializes same-class deposits whatever class their callers read at — so
+/// two callers of different classes racing on one value are serialized and
+/// each sees, or does not see, the other's deposit per its own class.
+///
+/// The filter reaches every caller of this gate uniformly. For `nullify`
+/// (`Gate::Retraction`) it is vacuous by construction: a retraction tuple's
+/// I0 carries its own home in F, its sole writer deposits it into that home,
+/// and the caller ω-owns that home. For `editlink`'s claim it is vacuous too
+/// (PUB-6.27): the claim's I0 carries a successor minted in this same
+/// transaction, so the lookup is a guaranteed miss and no incumbent — of
+/// any class — can exist for it. Neither op threads a filter of its own.
+///
 /// The hoisted home check (Conflicts §8, a deliberate divergence from
 /// ASN-0128 I1's miss-only read) runs ahead of EVERY gate/dedup
 /// short-circuit, so an unregistered-home emit is rejected on every path —
@@ -452,6 +514,7 @@ impl From<HomeFault> for EditLinkError {
 /// [`Deposited::minted`], which states that reliance where it is relied on.
 fn emit_core<W>(
     stg: &mut Staging<W>,
+    visibility: &Visibility<'_, W>,
     caller: Caller,
     home: &Address,
     value: Link,
@@ -502,9 +565,15 @@ where
             if reg.idem {
                 // The one question this gate asks of the WORLD rather than of
                 // the format: the three reads above are the module's compiled
-                // registry, and only this one is per-store state.
-                let links = stg.working().links();
-                if let Some(incumbent) = links.active_incumbent(&DedupKey::of(&value)) {
+                // registry, and only this one is per-store state. Asked at
+                // the caller's visibility class (PUB-6.25): the predicate is
+                // evaluated over the WORKING world — the world this
+                // transaction is writing — at each candidate's home.
+                let world = stg.working();
+                if let Some(incumbent) = world
+                    .links()
+                    .active_incumbent(&DedupKey::of(&value), |home| visibility(world, home))
+                {
                     return Ok(Deposited::Incumbent(incumbent)); // zero-step
                 }
             }
@@ -689,7 +758,7 @@ where
                 let value = Link::triple(e1, e2, e3);
                 // `minted`, because the seat below names this address: the
                 // Open gate runs no dedup, so it cannot be an incumbent.
-                let addr = emit_core(stg, caller, home, value, Gate::Open)?.minted();
+                let addr = emit_core(stg, self.visibility, caller, home, value, Gate::Open)?.minted();
                 let seat = stage_seat_link(stg.working().m5(), home, &addr)?;
                 stg.push(seat.into());
                 Ok(addr)
@@ -705,16 +774,22 @@ where
     /// Emit_K (ASN-0086/0126/0128): gated typed-relation emission —
     /// `value = Link[enc({from}), enc(to), ty]` (`|F| = 1` forced, `to`'s
     /// SPAN COUNT shape-checked, `ty` stored verbatim as e₃). Does NOT
-    /// seat. idem⊤ ⇒ dedup against the ACTIVE view; a hit returns the
-    /// incumbent with the base `Seq` and commits NOTHING.
+    /// seat. idem⊤ ⇒ dedup against the ACTIVE view WITHIN THE CALLER'S
+    /// VISIBILITY CLASS (PUB-6.25); a hit returns the incumbent with the base
+    /// `Seq` and commits NOTHING.
     ///
     /// The shape gate counts spans, not distinct addresses: `enc(to)` yields
     /// one span per element, so `to = [x, x]` carries `|G| = 2` here and is
     /// refused under Binary, where ASN-0126's set-valued `|G|` admits it
     /// ([`Shape`](crate::Shape)).
     ///
-    /// WHAT A HIT RETURNS: the T1-LEAST ACTIVE tuple of the I0 class, which
-    /// is the class's incumbent and not a tuple this call admitted. The gate
+    /// WHAT A HIT RETURNS: the T1-LEAST ACTIVE tuple of the I0 class THE
+    /// CALLER CAN READ — the earliest incumbent homed in a document its
+    /// [`Visibility`] class admits (PUB-6.26; deterministic given the class)
+    /// — which is the class's incumbent and not a tuple this call admitted.
+    /// An incumbent homed in a document the caller cannot read is invisible,
+    /// and the emit mints fresh beside it: value-identical tuples MAY coexist
+    /// across the visibility boundary. The gate
     /// runs over the value this call BUILT; the incumbent may have been
     /// deposited through the open surface, which applies neither the shape
     /// gate nor a dedup check ([`Shape`](crate::Shape),
@@ -766,7 +841,7 @@ where
         let value = Link::triple(enc([from]), enc(to), ty.clone());
         let keys = deposit_lock_set(&value, home);
         self.kernel.transact(&keys, |stg| {
-            Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
         })
     }
 
@@ -838,7 +913,7 @@ where
                     return Err(NullifyError::BadTarget); // P-tgt
                 }
             }
-            Ok(emit_core(stg, caller, home, value, Gate::Retraction)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Retraction)?.address())
         })
     }
 
@@ -847,7 +922,10 @@ where
     /// per Conflicts §2: F holds the OLD/superseded link; edges run
     /// old → new). Idem⊤ keyed on `([K_sup], {old}, {new})` — home excluded,
     /// so a duplicate `(old, new)` even from a different home dedups to the
-    /// first claim (Conflicts §9). Requires `home` registered, both
+    /// first claim (Conflicts §9) — WITHIN THE CALLER'S VISIBILITY CLASS
+    /// (PUB-6.25): a claim homed in a document the caller cannot read is
+    /// invisible to the dedup, and the caller's own claim is minted beside
+    /// it. Requires `home` registered, both
     /// endpoints resident, `old ≠ new` (Df-DISC(ii)); checked in that order.
     ///
     /// RETURNS `(claim, seq)`: the address of the `[K_sup]` claim — never an
@@ -883,7 +961,7 @@ where
                     return Err(AssertSupError::SelfSupersession); // irreflexive
                 }
             }
-            Ok(emit_core(stg, caller, home, value, Gate::Managed)?.address())
+            Ok(emit_core(stg, self.visibility, caller, home, value, Gate::Managed)?.address())
         })
     }
 
@@ -1005,9 +1083,11 @@ where
             // Both `minted`: this op reports each address as one it deposited,
             // and the claim's own I0 carries `successor`, minted a line above
             // in this same transaction, so no incumbent of that class exists.
-            let successor = emit_core(stg, caller, d_s, successor, Gate::Open)?.minted();
+            let successor =
+                emit_core(stg, self.visibility, caller, d_s, successor, Gate::Open)?.minted();
             let claim_value = Link::triple(enc([original]), enc([&successor]), sup);
-            let claim = emit_core(stg, caller, d_a, claim_value, Gate::Managed)?.minted();
+            let claim =
+                emit_core(stg, self.visibility, caller, d_a, claim_value, Gate::Managed)?.minted();
             Ok(Edit { successor, claim })
         })
     }

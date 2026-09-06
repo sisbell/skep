@@ -45,7 +45,7 @@
 
 use im::{HashMap, OrdMap, OrdSet};
 use skep_address::{document_of, parent, validate, Address};
-use skep_arrangement::trunk_of;
+use skep_arrangement::{trunk_of, Caller};
 use skep_links::{Link, LinkRec, LinkState, View};
 use skep_namespace::{first_document_address, prefix_contains, M3State, PrincipalId};
 
@@ -111,6 +111,27 @@ impl World {
     /// answers through it.
     pub fn readable_guest(&self, doc: &Address) -> bool {
         self.readable(None, doc)
+    }
+
+    /// THE VISIBILITY CLASS A CALLER WRITES AT (PUB round 2, lane 3.3b): the
+    /// predicate a `LinkWriter` is built with when `caller` deposits, so
+    /// M7's value-keyed gates — `emit`'s idempotency, `assert_sup`'s dedup —
+    /// see exactly the incumbents that caller could read (PUB-6.25). A
+    /// principal writes at its own class, [`World::readable`] over
+    /// `Some(principal)`; the System path — M9's fires and def writes, the
+    /// one caller with no session — writes at GUEST class,
+    /// [`World::readable_guest`] (PUB-6.28). This mapping is the engine's to
+    /// state: M7 takes a closure and names no principal, M10 closes its own
+    /// over the session's principal, and [`crate::Engine::coordinator`]
+    /// hands M9 the guest half of it directly. Engine-direct callers — the
+    /// harnesses and this crate's tests — thread it through here.
+    pub fn visible_to(
+        caller: Caller,
+    ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
+        move |world: &World, doc: &Address| match caller {
+            Caller::Principal(p) => world.readable(Some(p), doc),
+            Caller::System => world.readable_guest(doc),
+        }
     }
 }
 

@@ -285,7 +285,7 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 #[test]
 fn the_pointwise_family_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     seed_content(&k, &doc1(), 1);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -383,7 +383,7 @@ fn the_pointwise_gates_settle_the_document_before_the_address() {
 fn findlinks_v_is_disjunctive_and_active_filtered() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
 
     // e1 reaches position 1 via FROM (emit encodes from = enc({ca1})).
@@ -434,7 +434,7 @@ fn findlinks_v_is_disjunctive_and_active_filtered() {
 fn window_v_pages_by_key_cut_and_survives_orphaning() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     for to in [ca(101), ca(102), ca(103)] {
         store
@@ -485,7 +485,7 @@ fn window_v_pages_by_key_cut_and_survives_orphaning() {
 fn region_count_enumeration_and_window_read_out_one_selection_index() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     // Varied slot reach, so the regions below select different subsets …
     for (from, to) in [
@@ -568,7 +568,7 @@ fn region_count_enumeration_and_window_read_out_one_selection_index() {
 fn retrieve_endsets_withholds_identity_whole_endsets_pinned_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     // Two distinct links with VALUE-IDENTICAL from-endsets (dedup collapse),
     // plus one makelink whose from spans all three positions.
@@ -633,7 +633,7 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
 
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let region = [vspan(1, 1, 1)];
     let deposit = |i: u32| {
@@ -674,7 +674,7 @@ fn retrieve_endsets_refuses_an_answer_past_the_span_budget() {
 fn ftt_the_unit_matches_all_the_zero_annihilates_and_slots_conjoin() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -768,7 +768,7 @@ fn the_descriptor_states_its_own_zero() {
 fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ra(10)]))
@@ -805,7 +805,7 @@ fn ftt_hands_the_smallest_constraint_first_without_moving_the_answer() {
 fn ftt_home_filter_is_an_address_projection_applied_lazily() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -871,7 +871,7 @@ fn ftt_home_filter_is_an_address_projection_applied_lazily() {
 fn ftt_home_is_prefix_coverage_not_address_equality() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -912,7 +912,7 @@ fn ftt_home_is_prefix_coverage_not_address_equality() {
 fn ftt_count_enumeration_and_window_read_out_one_sat() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -975,7 +975,7 @@ fn ftt_count_enumeration_and_window_read_out_one_sat() {
 fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc2(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1010,7 +1010,7 @@ fn the_region_zero_and_the_descriptor_zero_assert_different_things() {
 fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1040,7 +1040,7 @@ fn the_region_census_drops_when_content_leaves_while_the_descriptor_census_holds
 fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(2)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1090,7 +1090,7 @@ fn project_is_content_subspace_i_to_v_with_conflated_notalink() {
 fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subspace() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (m1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1113,7 +1113,7 @@ fn project_is_content_subspace_only_where_discoverability_reaches_the_link_subsp
 fn addressably_discoverable_from_is_lp12_and_addressable_over_both_subspaces() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1212,7 +1212,7 @@ fn delete_orphans_mirrors_delete_preconditions() {
 fn delete_orphans_reports_active_last_witness_losses() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     // link_a witnesses positions 1 (FROM) and 2 (TO); link_b only 3.
     let (_link_a, _) = store
@@ -1252,7 +1252,7 @@ fn survival_world() -> Kernel<World> {
     let k = kernel();
     seed_content(&k, &doc1(), 4); // V 1..4 → ca(1..4)
     {
-        let store = LinkWriter::new(&k);
+        let store = LinkWriter::new(&k, &EVERYONE);
         let make = |from: Address, to: Address| {
             store
                 .makelink(SYS, &doc1(), SlotArg::Addrs(vec![from]), SlotArg::Addrs(vec![to]), SlotArg::Addrs(vec![ra(10)]))
@@ -1324,7 +1324,7 @@ fn delete_orphans_previews_exactly_what_the_delete_drops() {
 fn delete_orphans_keeps_a_link_witnessed_by_the_retained_prefix() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(3)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1353,7 +1353,7 @@ fn delete_orphans_keeps_a_link_witnessed_by_the_retained_prefix() {
 fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_never_touches() {
     let k = kernel();
     seed_content(&k, &doc1(), 3);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (seated, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1461,7 +1461,7 @@ fn the_preview_answers_a_request_the_delete_refuses_for_ownership() {
 fn lineage_probes_flipped_slots_with_residence_gate() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1512,7 +1512,7 @@ fn lineage_probes_flipped_slots_with_residence_gate() {
 fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1547,7 +1547,7 @@ fn lineage_attributes_a_claim_to_its_own_home_not_its_endpoints() {
 fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1593,7 +1593,7 @@ fn a_live_claim_names_a_nullified_endpoint_and_a_nullified_key_still_probes() {
 fn lineage_reads_out_in_claim_address_order() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     let mut made = Vec::new();
     for to in [ca(101), ca(102), ca(103)] {
@@ -1645,7 +1645,7 @@ fn lineage_reads_out_in_claim_address_order() {
 fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let (e1, _) = store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
@@ -1724,7 +1724,7 @@ fn lineage_endpoints_rest_on_a_fence_the_write_surface_keeps() {
 fn snapshot_twins_read_one_pinned_state() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     let lq = LinkQuery::new(&k);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
@@ -1774,7 +1774,7 @@ fn region_and_home_census<W: DiscoveryWorld>(
 fn one_named_bound_and_the_unit_descriptor_serve_a_composing_caller() {
     let k = kernel();
     seed_content(&k, &doc1(), 2);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");
@@ -1867,7 +1867,7 @@ fn the_value_surface_is_hashable_and_keys_by_representation() {
 fn the_handle_debugs_and_copies_like_the_borrow_it_is() {
     let k = kernel();
     seed_content(&k, &doc1(), 1);
-    let store = LinkWriter::new(&k);
+    let store = LinkWriter::new(&k, &EVERYONE);
     store
         .makelink(SYS, &doc1(), SlotArg::Addrs(vec![ca(1)]), SlotArg::Addrs(vec![ca(101)]), SlotArg::Addrs(vec![ra(10)]))
         .expect("emit succeeds");

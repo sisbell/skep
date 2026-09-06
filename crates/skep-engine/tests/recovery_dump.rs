@@ -15,7 +15,7 @@ mod common;
 use common::*;
 use skep_address::Address;
 use skep_content::Val;
-use skep_engine::{Engine, ReservedAddrs};
+use skep_engine::{Engine, ReservedAddrs, World};
 use skep_links::{enc, SlotArg};
 use tempfile::tempdir;
 
@@ -60,9 +60,11 @@ impl Deposited {
 /// under the shipped `PredDef` class. `start` is the first I-address the
 /// document's content occupies, which the emission points from.
 fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposited {
+    // Every write below is the OWNER's, at the owner's own visibility class.
+    let class = World::visible_to(OWNER);
     let make_link = |from: (u32, u32), to: (u32, u32)| {
         engine
-            .linkstore()
+            .linkstore(&class)
             .makelink(
                 OWNER,
                 doc,
@@ -77,10 +79,10 @@ fn every_hint_family(engine: &Engine, doc: &Address, start: &Address) -> Deposit
     let sup_new = make_link((2, 1), (1, 1));
     let nullified = make_link((1, 2), (1, 1));
     let (sup_claim, _) =
-        engine.linkstore().assert_sup(OWNER, doc, &sup_old, &sup_new).expect("assert_sup");
-    let (retraction, _) = engine.linkstore().nullify(OWNER, doc, &nullified).expect("nullify");
+        engine.linkstore(&class).assert_sup(OWNER, doc, &sup_old, &sup_new).expect("assert_sup");
+    let (retraction, _) = engine.linkstore(&class).nullify(OWNER, doc, &nullified).expect("nullify");
     let (emitted, _) = engine
-        .linkstore()
+        .linkstore(&class)
         .emit(OWNER, doc, &pred_def_ty(), start, &[])
         .expect("pred_def-typed emit");
     Deposited { sup_old, sup_new, nullified, sup_claim, retraction, emitted }

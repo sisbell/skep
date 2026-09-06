@@ -190,7 +190,7 @@ pub use skep_links::{enc, Endset, Invalid, Link, SlotArg, View, FROM, MAX_SLOT_S
 use skep_arrangement::{HasM5, Vstream};
 use skep_content::HasContent;
 use skep_kernel::{Kernel, WorldState};
-use skep_links::{HasLinks, LinkWriter};
+use skep_links::{HasLinks, LinkWriter, Visibility};
 use skep_namespace::{HasM3, Namespace};
 
 /// THE read predicate as a capability of the world M10 reads (PUB round 2,
@@ -238,10 +238,11 @@ impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld> Febe
 /// `W: WorldState` alone, exactly this trait's bound, and each handle holds
 /// nothing but the borrow — so they are given here rather than transcribed
 /// into every impl. [`Stores::linkstore`] is asked of the implementer
-/// instead: M7's handle has the same shape as its two siblings (the borrow
-/// and nothing else, bound by `W: WorldState`), so what the implementer
-/// writes is one line, and where the trait's own default would sit is the
-/// engine's decision rather than M10's.
+/// instead: M7's handle takes, beside the borrow, the VISIBILITY class of the
+/// caller whose write it serves (PUB round 2, lane 3.3b) — which M10 closes
+/// per write over the session's principal and hands in — so what the
+/// implementer writes is still one line, and where the trait's own default
+/// would sit is the engine's decision rather than M10's.
 ///
 /// PRECONDITION on the implementer: **every accessor names ONE kernel.**
 /// [`Stores::kernel`] answers with the same `Kernel<W>` on every call, and
@@ -259,11 +260,12 @@ impl<W: WorldState + HasM3 + HasM5 + HasLinks + HasContent + ReadableWorld> Febe
 /// The design flagged the engine-facing store-driver constructors as a
 /// required upstream interface amendment (Conflicts resolved #6); the as-built
 /// crates already publish them — `Namespace::new(&Kernel<W>)`,
-/// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>)`. The binary —
-/// which holds the recovered kernel from M2 recovery — builds a `Stores` impl
-/// over them; M10 takes it INJECTED for decoupling/testability (an
-/// in-memory-kernel-backed `Stores` exercises the whole lifecycle with no
-/// disk/recovery), not because the constructors are unreachable.
+/// `Vstream::new(&Kernel<W>)`, and `LinkWriter::new(&Kernel<W>,
+/// &Visibility<W>)`. The binary — which holds the recovered kernel from M2
+/// recovery — builds a `Stores` impl over them; M10 takes it INJECTED for
+/// decoupling/testability (an in-memory-kernel-backed `Stores` exercises the
+/// whole lifecycle with no disk/recovery), not because the constructors are
+/// unreachable.
 pub trait Stores<W: WorldState>: Send + Sync {
     /// M2 — reads/snapshots/`current_seq`/the latent composite `transact`.
     fn kernel(&self) -> &Kernel<W>;
@@ -275,8 +277,13 @@ pub trait Stores<W: WorldState>: Send + Sync {
     fn vstream(&self) -> Vstream<'_, W> {
         Vstream::new(self.kernel())
     }
-    /// M7 driver — borrows the held kernel for the call.
-    fn linkstore(&self) -> LinkWriter<'_, W>;
+    /// M7 driver — borrows the held kernel for the call, at the caller's
+    /// VISIBILITY class (lane 3.3b, PUB-6.25): M10 builds `visibility` per
+    /// link write from the session's principal — `readable(doc, principal)`
+    /// — and M7 applies it INSIDE the write transaction, to the working
+    /// world, at link-home identity, so its idempotency and dedup lookups see
+    /// only the incumbents this principal could read.
+    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, W>) -> LinkWriter<'a, W>;
 }
 
 #[cfg(test)]

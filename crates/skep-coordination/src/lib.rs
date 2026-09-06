@@ -47,7 +47,9 @@
 //! ## Standing assembly obligations (not dischargeable here)
 //!
 //! * the injected `mk_vstream`/`mk_link_store` factories presuppose the
-//!   engine can construct a `Vstream`/`LinkWriter` from `&Kernel<W>`;
+//!   engine can construct a `Vstream` from `&Kernel<W>` and a `LinkWriter`
+//!   from `&Kernel<W>` plus a visibility class — the injected `guest`
+//!   predicate, lent at every construction (lane 3.3b);
 //! * **PR-DISC**: no holder of M7's `emit` other than M9's
 //!   `register_pred`/`certify_stable` may route a typed emit whose `ty` is
 //!   `pdef`/`pd_stable` (M7's gate rejects only R-class; M9's own

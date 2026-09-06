@@ -360,14 +360,11 @@ where
         // (`World::readable_guest` = `published(doc)`, injected at assembly);
         // a document address bound as the argument is judged as itself.
         //
-        // What this does NOT pin: the VALUE-KEYED gates inside M7's
-        // `emit_core` (idempotency's incumbent lookup, the dc-constraint,
-        // `assert_sup`'s dedup) still run at System class, so a guest-
-        // invisible incumbent in a draft can still absorb a fire as
-        // `Deduped`. Pinning those to guest class needs a `Caller`-class-
-        // aware incumbent lookup INSIDE M7 — outside lane 3.3's fence (M7 is
-        // edit-locked to the fold's seed read); PUB-6.28's three REGISTRATION
-        // conditions are likewise not built. See the round's ESCALATE.
+        // This filter refuses before any deposit; what the deposit's own
+        // VALUE-KEYED gates see is governed one step below (lane 3.3b): the
+        // writer is built at the same guest class, so a guest-invisible
+        // incumbent in a draft cannot absorb a fire as `Deduped` (PUB-6.28).
+        // PUB-6.28's three REGISTRATION conditions remain not built.
         {
             let w = snap.world();
             let home = match &rule.action {
@@ -380,7 +377,10 @@ where
                 }
             }
         }
-        let ls = (self.mk_link_store)(self.kernel.as_ref());
+        // The writer at GUEST class (lane 3.3b, PUB-6.28): the fire's
+        // idempotency lookup sees only guest-readable incumbents, so a fire
+        // commits byte-identically to a world with no drafts.
+        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
         // Rule fires run as `Caller::System` (the ownership ruling's
         // automation path, 2026-08-16): M9 ⟂ M10 — a fire carries no wire
         // principal, and its authority is the operator's certified rule set,

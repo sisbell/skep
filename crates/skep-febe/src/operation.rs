@@ -153,6 +153,25 @@ where
         }
     }
 
+    /// THE VISIBILITY CLASS OF A WRITE (PUB round 2, lane 3.3b; PUB-6.25,
+    /// PUB-6.28): the predicate M7's value-keyed gates run under for a link
+    /// write of this session — `readable(doc, principal)` for the session's
+    /// PRINCIPAL, closed here and lent to the store driver for the one write.
+    /// M7 evaluates it INSIDE the write transaction, over the WORKING world
+    /// it hands the closure, at each candidate incumbent's home — never over
+    /// the snapshot a read pins. Where this front door carries a supplied
+    /// [`Consult`] (the historical door), that is what answers here too — one
+    /// front door, one predicate — and the world M7 hands in is then not
+    /// consulted, the head snapshot the `Consult` closed over being the world
+    /// it reads; such a door dispatches no write today, and the case is the
+    /// round's escalated one.
+    fn visible_to(
+        &self,
+        principal: PrincipalId,
+    ) -> impl Fn(&W, &Address) -> bool + Send + Sync + '_ {
+        move |world: &W, doc: &Address| self.readable(world, Some(principal), doc)
+    }
+
     // ── session binding (M10-owned, ephemeral — §6) ──
 
     /// Record the binding and return a fresh `SessionId`, unique within one
@@ -446,40 +465,47 @@ where
                 Ok(Response::AckAddr { addr, at })
             }
             // ── link writes (→ M7; ω-gated in-store on each written home —
-            //    the ownership ruling, 2026-08-16) ──
+            //    the ownership ruling, 2026-08-16; the value-keyed gates at
+            //    the session principal's VISIBILITY class — lane 3.3b, the
+            //    writer built per write over `visible_to`) ──
             Op::MakeLink { home, from, to, ty } => {
                 // M7 handles both slot forms INSIDE its transact: Resolve
                 // V-specs off the txn base, Addrs deposited verbatim.
+                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
-                    .linkstore()
+                    .linkstore(&visibility)
                     .makelink(wc.caller(), &home, from, to, ty)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             // Idempotent zero-step ops need no special case (§3): a dedup hit
             // returns (incumbent, base_seq) with no commit; marshaled
-            // identically to a miss (ASN-0134 §A1).
+            // identically to a miss (ASN-0134 §A1). The incumbent a hit names
+            // is one this principal can read (PUB-6.25, PUB-6.26).
             Op::Emit { home, ty, from, to } => {
+                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
-                    .linkstore()
+                    .linkstore(&visibility)
                     .emit(wc.caller(), &home, &ty, &from, &to)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::Nullify { home, target } => {
+                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
-                    .linkstore()
+                    .linkstore(&visibility)
                     .nullify(wc.caller(), &home, &target)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
             Op::AssertSup { home, old, new } => {
+                let visibility = self.visible_to(wc.principal);
                 let (addr, at) = self
                     .stores
-                    .linkstore()
+                    .linkstore(&visibility)
                     .assert_sup(wc.caller(), &home, &old, &new)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
@@ -488,13 +514,17 @@ where
             // V-specs resolve through M5 off a PRIOR snapshot — deliberately
             // not in editlink's write transaction (recorded I-addresses are
             // permanent, so d_s's arrangement may move underneath with no
-            // hazard). One operation ⇒ still one M2 transaction.
+            // hazard). One operation ⇒ still one M2 transaction. The
+            // visibility class rides the writer as on every link write; the
+            // claim's dedup is a guaranteed miss (PUB-6.27), so no ack here
+            // can name an address this principal could not read.
             Op::EditLink { original, successor, d_s, d_a } => {
                 let snap = self.stores.kernel().snapshot();
                 let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
+                let visibility = self.visible_to(wc.principal);
                 let (edit, at) = self
                     .stores
-                    .linkstore()
+                    .linkstore(&visibility)
                     .editlink(wc.caller(), &original, link, &d_s, &d_a)
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckEdit { successor: edit.successor, claim: edit.claim, at })
@@ -786,7 +816,7 @@ mod tests {
     use skep_kernel::{
         CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, TxnError, WorldState,
     };
-    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter};
+    use skep_links::{HasLinks, LinkRec, LinkState, LinkWriter, Visibility};
     use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
     use super::*;
@@ -909,8 +939,11 @@ mod tests {
         fn kernel(&self) -> &Kernel<World> {
             &self.kernel
         }
-        fn linkstore(&self) -> LinkWriter<'_, World> {
-            LinkWriter::new(&self.kernel)
+        fn linkstore<'a>(
+            &'a self,
+            visibility: &'a Visibility<'a, World>,
+        ) -> LinkWriter<'a, World> {
+            LinkWriter::new(&self.kernel, visibility)
         }
     }
 

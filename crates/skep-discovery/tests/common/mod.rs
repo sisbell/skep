@@ -29,6 +29,16 @@ pub struct World {
     pub links: LinkState,
 }
 
+/// The ALL-VISIBLE class the suite's M7 fixture writes run at (lane 3.3b):
+/// this miniature world carries no publication state — M3's bit is folded
+/// engine-side — so every document is readable to every caller here, and no
+/// M8 verdict turns on what a writer could read.
+pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
+
+fn every_document(_: &World, _: &Address) -> bool {
+    true
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum Record {
     M3(M3Rec),

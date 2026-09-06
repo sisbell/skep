@@ -25,6 +25,17 @@ pub const P1: Caller = Caller::Principal(PrincipalId(1));
 /// caller.
 pub const P2: Caller = Caller::Principal(PrincipalId(2));
 
+/// The ALL-VISIBLE class: the visibility predicate that admits every
+/// document (lane 3.3b). This miniature world carries no publication state
+/// — M3's bit is folded engine-side — so it is the honest class for a suite
+/// whose verdicts never turn on what a caller may read; a test about the
+/// class-filtered lookup builds a narrower one of its own.
+pub static EVERYONE: fn(&World, &Address) -> bool = every_document;
+
+fn every_document(_: &World, _: &Address) -> bool {
+    true
+}
+
 // ───────────────────────── the assembled test world ─────────────────────────
 
 #[derive(Clone, Serialize, Deserialize)]

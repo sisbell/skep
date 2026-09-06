@@ -13,7 +13,7 @@ use skep_content::{ContentWrite, HasContent};
 use skep_kernel::{Kernel, Snapshot, WorldState};
 use skep_links::{
     Endset, HasLinks, LinkRec, LinkWriter, Pattern, ShippedType,
-    TypeRegistry, View,
+    TypeRegistry, View, Visibility,
 };
 use skep_namespace::{HasM3, M3Rec};
 
@@ -90,15 +90,25 @@ pub struct Coordinator<W: WorldState> {
     pub(crate) next_rule: u64,
     pub(crate) cursor: usize,
     pub(crate) mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-    pub(crate) mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkWriter<'k, W> + Send + Sync>,
+    /// The M7 write-handle factory: a writer over the kernel AT A VISIBILITY
+    /// CLASS (lane 3.3b) — every construction M9 makes hands it `guest`, so
+    /// the value-keyed gates of every fire and every def write run at guest
+    /// class.
+    pub(crate) mk_link_store: Box<
+        dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W> + Send + Sync,
+    >,
     /// The GUEST-class read predicate over a document address (PUB round 2,
     /// lane 3.3, §5): `true` iff the document is readable at guest class —
     /// the engine supplies `published(doc)`. A fire consults it, off the
     /// fire's own pinned snapshot, on the action's HOME and on the bound
     /// argument's document before any deposit, so a rule's effect never
     /// crosses the draft boundary in either direction (a marker on a draft's
-    /// content, or a deposit into a draft home). M9 holds no publication
-    /// state of its own — the predicate is injected like the factories.
+    /// content, or a deposit into a draft home). And every `LinkWriter` M9
+    /// builds is built AT this class (lane 3.3b, PUB-6.28): the same closure
+    /// is lent to `mk_link_store`, so M7's idempotency and dedup lookups see
+    /// only guest-readable incumbents and a fire commits byte-identically to
+    /// a world with no drafts. M9 holds no publication state of its own —
+    /// the predicate is injected like the factories.
     pub(crate) guest: Box<dyn Fn(&W, &Address) -> bool + Send + Sync>,
 }
 
@@ -113,7 +123,9 @@ where
     /// retain; and two op-handle factories minting a borrow-scoped
     /// `Vstream`/`LinkWriter` off `&Kernel<W>` per call (the engine — the one
     /// crate that can name those constructors — supplies them; HRTB because
-    /// each handle borrows the kernel).
+    /// each handle borrows the kernel). The `LinkWriter` factory takes the
+    /// VISIBILITY class beside the kernel (lane 3.3b): M9 lends it `guest`
+    /// at every construction, a borrow of the one closure it holds.
     ///
     /// Infallible: the registry's population is the compiled shipped five
     /// (owner ruling, 2026-08-26), so the projection is a pure read of the
@@ -123,13 +135,18 @@ where
     /// `guest` is the GUEST-class read predicate (lane 3.3 §5): the engine
     /// passes `World::readable_guest`; a fire refuses, before any deposit,
     /// an action whose home or bound argument's document it answers `false`
-    /// for (`FireError::DraftBoundary`).
+    /// for (`FireError::DraftBoundary`), and every write M9 makes runs its
+    /// value-keyed gates at this class (PUB-6.28).
     #[allow(clippy::type_complexity)] // the factory types are the interface's, verbatim
     pub fn new(
         kernel: Arc<Kernel<W>>,
         registry: Arc<TypeRegistry>,
         mk_vstream: Box<dyn for<'k> Fn(&'k Kernel<W>) -> Vstream<'k, W> + Send + Sync>,
-        mk_link_store: Box<dyn for<'k> Fn(&'k Kernel<W>) -> LinkWriter<'k, W> + Send + Sync>,
+        mk_link_store: Box<
+            dyn for<'k> Fn(&'k Kernel<W>, &'k Visibility<'k, W>) -> LinkWriter<'k, W>
+                + Send
+                + Sync,
+        >,
         guest: Box<dyn Fn(&W, &Address) -> bool + Send + Sync>,
     ) -> Coordinator<W> {
         let catalog = TypeCatalog::project(&registry);

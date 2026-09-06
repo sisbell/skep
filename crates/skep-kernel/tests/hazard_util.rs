@@ -32,7 +32,7 @@ use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{Caller, VPos, VSpec};
 use skep_content::Val;
 use skep_engine::dump::WorldDump;
-use skep_engine::{Engine, EngineError};
+use skep_engine::{Engine, EngineError, World};
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq};
 use skep_links::SlotArg;
 use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -332,8 +332,10 @@ impl Fixture {
         capture(&engine, &mut boundaries);
 
         // 6–7: two links (reversed endsets, so no idem dedup collapses them).
+        // The owner's writes run at the owner's own visibility class.
+        let class = World::visible_to(OWNER);
         let (link1, _) = engine
-            .linkstore()
+            .linkstore(&class)
             .makelink(
                 OWNER,
                 &doc,
@@ -344,7 +346,7 @@ impl Fixture {
             .expect("makelink link1");
         capture(&engine, &mut boundaries);
         let (link2, _) = engine
-            .linkstore()
+            .linkstore(&class)
             .makelink(
                 OWNER,
                 &doc,
@@ -356,9 +358,9 @@ impl Fixture {
         capture(&engine, &mut boundaries);
 
         // 8–9: a supersession claim, then a retraction.
-        let _ = engine.linkstore().assert_sup(OWNER, &doc, &link1, &link2).expect("assert_sup");
+        let _ = engine.linkstore(&class).assert_sup(OWNER, &doc, &link1, &link2).expect("assert_sup");
         capture(&engine, &mut boundaries);
-        let _ = engine.linkstore().nullify(OWNER, &doc, &link1).expect("nullify");
+        let _ = engine.linkstore(&class).nullify(OWNER, &doc, &link1).expect("nullify");
         capture(&engine, &mut boundaries);
 
         // 10: a version (the copy-on-write fork) — FORKER's cross-owner

@@ -39,17 +39,175 @@
 mod common;
 
 use common::*;
-use skep_address::{Address, SpanSet};
+use skep_address::{document_of, Address, SpanSet};
 use skep_arrangement::HasM5;
 use skep_kernel::TxnError;
 use skep_links::{
     enc, AssertSupError, Caller, Edit, EditLinkError, EmitError, Endset, HasLinks, Invalid, Link,
     LinkWriter, MakeLinkError, NotBh4, NullifyError, Pattern, RetractStaleError, SlotArg, Tip,
-    Tuple, View, FROM, TO, TYPE,
+    Tuple, View, Visibility, FROM, TO, TYPE,
 };
 
+/// The suite's writer: every test below runs at the ALL-VISIBLE class — the
+/// one predicate supplied once for the whole suite (lane 3.3b's repair
+/// line). This miniature world carries no publication state, so no verdict
+/// here depends on a hit against an incumbent the caller cannot read; the
+/// tests that exercise the class-filtered lookup build their own classes
+/// (`writer_at`).
 fn writer(k: &skep_kernel::Kernel<World>) -> LinkWriter<'_, World> {
-    LinkWriter::new(k)
+    writer_at(k, &EVERYONE)
+}
+
+/// A writer at a caller-chosen visibility class.
+fn writer_at<'k>(
+    k: &'k skep_kernel::Kernel<World>,
+    visibility: &'k Visibility<'k, World>,
+) -> LinkWriter<'k, World> {
+    LinkWriter::new(k, visibility)
+}
+
+// ---- the value-keyed gates at the caller's visibility class (lane 3.3b) ----
+
+/// PUB-6.25/PUB-6.26: the idempotency lookup runs over the I0 class FILTERED
+/// by the caller's visibility predicate at link-home identity, inside the
+/// write transaction. An incumbent homed in a document the caller cannot read
+/// is invisible — the emit mints fresh beside it, and value-identical tuples
+/// coexist across the boundary; a hit is the EARLIEST incumbent the caller's
+/// class can read, never merely the earliest; and the answer is deterministic
+/// given the class.
+#[test]
+fn a_dedup_hit_is_the_earliest_incumbent_the_caller_can_read() {
+    let k = kernel();
+    let hide_doc1 = |_: &World, home: &Address| *home != doc1();
+    let hide_both = |_: &World, home: &Address| *home != doc1() && *home != doc2();
+    let all = writer(&k);
+    let no_doc1 = writer_at(&k, &hide_doc1);
+    let no_p1_docs = writer_at(&k, &hide_both);
+
+    // The incumbent: P1's tuple, homed in doc1.
+    let (first, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("incumbent");
+    assert_eq!(first, la(1));
+
+    // A class blind to doc1 mints the same value afresh, in its own home —
+    // the ack never names an address inside a home the caller cannot read.
+    let before = k.current_seq();
+    let (second, seq) = no_doc1
+        .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
+        .expect("fresh beside an invisible incumbent");
+    assert_eq!(second, la2(1));
+    assert!(seq > before, "a fresh deposit commits");
+    {
+        // Both stand ACTIVE: value-identical tuples coexist across the
+        // visibility boundary, and the class-keyed reads — which take no
+        // class — see one member.
+        let snap = k.snapshot();
+        let links = snap.world().links();
+        assert!(links.is_active(&first) && links.is_active(&second));
+        assert_eq!(links.members(&pred_def_ty(), View::Active), vec![ca(1)]);
+    }
+
+    // EARLIEST READABLE, not earliest: the all-visible class acks the
+    // T1-least (doc1's) …
+    let before = k.current_seq();
+    let (hit, seq) = all.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit");
+    assert_eq!(hit, first);
+    assert_eq!(seq, before);
+    assert_eq!(k.current_seq(), before, "zero-step: nothing committed");
+    // … the class blind to doc1 acks doc2's, the earliest it can read …
+    let (hit, seq) = no_doc1
+        .emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[])
+        .expect("a hit within the class");
+    assert_eq!(hit, second);
+    assert_eq!(seq, before);
+    assert_eq!(k.current_seq(), before, "still zero-step");
+    // … and, asked again, answers the same — deterministic given the class.
+    let (again, _) = no_doc1.emit(P1, &doc2(), &pred_def_ty(), &ca(1), &[]).expect("hit again");
+    assert_eq!(again, second);
+
+    // A class blind to both of P1's homes mints a THIRD, in the sibling's own
+    // home …
+    let (third, _) = no_p1_docs
+        .emit(P2, &sib_doc(), &pred_def_ty(), &ca(1), &[])
+        .expect("fresh in the sibling's home");
+    assert_eq!(document_of(&third), Some(sib_doc()));
+    assert!(k.current_seq() > before);
+    // … while the sibling at the all-visible class acks doc1's tuple — an
+    // address in a home it does not own, exactly what an entitled reader is
+    // handed (PUB-6.26): the incumbent's ω is not consulted, its readability
+    // is.
+    let (hit, _) = all
+        .emit(P2, &sib_doc(), &pred_def_ty(), &ca(1), &[])
+        .expect("the entitled sibling's hit");
+    assert_eq!(hit, first);
+}
+
+/// PUB-6.25 at `assert_sup`: its cross-home dedup — the same `(old, new)`
+/// from another home hits the first claim — holds WITHIN a visibility class
+/// only. Blind to the first claim's home, a caller mints a claim of its own;
+/// each class then acks the earliest claim it can read; and the supersession
+/// walk, which takes no class, reads the two claims as one edge.
+#[test]
+fn assert_sup_dedups_only_within_the_caller_s_visibility_class() {
+    let k = kernel();
+    let hide_doc1 = |_: &World, home: &Address| *home != doc1();
+    let all = writer(&k);
+    let no_doc1 = writer_at(&k, &hide_doc1);
+    let sup = supersedes_ty();
+    let (x, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    let (c1, _) = all.assert_sup(P1, &doc1(), &x, &y).expect("the claim, homed in doc1");
+
+    // Cross-home dedup within the all-visible class (Conflicts §9) …
+    let (hit, _) = all.assert_sup(P1, &doc2(), &x, &y).expect("cross-home hit");
+    assert_eq!(hit, c1);
+    // … and not across the boundary: blind to doc1, the same (old, new) from
+    // doc2 is a second, coexisting claim.
+    let before = k.current_seq();
+    let (c2, seq) = no_doc1.assert_sup(P1, &doc2(), &x, &y).expect("a claim of its own");
+    assert_ne!(c2, c1);
+    assert_eq!(document_of(&c2), Some(doc2()));
+    assert!(seq > before, "a fresh claim commits");
+
+    // Each class acks the earliest claim it can read.
+    let before = k.current_seq();
+    let (hit, _) = no_doc1.assert_sup(P1, &doc2(), &x, &y).expect("hit within the class");
+    assert_eq!(hit, c2);
+    let (hit, _) = all.assert_sup(P1, &doc2(), &x, &y).expect("hit at the all-visible class");
+    assert_eq!(hit, c1);
+    assert_eq!(k.current_seq(), before, "both hits are zero-step");
+
+    // The supersession graph is the world's, not a class's: two claims, one
+    // operative edge, and retracting one leaves the other's edge standing.
+    let snap = k.snapshot();
+    assert_eq!(snap.world().links().succs(&sup, &x), vec![y.clone()]);
+    all.nullify(P1, &doc1(), &c1).expect("retract the first claim");
+    let snap = k.snapshot();
+    assert_eq!(snap.world().links().succs(&sup, &x), vec![y.clone()]);
+    assert_eq!(snap.world().links().tip(&sup, &x), Tip::Sink(y));
+}
+
+/// PUB-6.27: `editlink`'s claim meets no incumbent whatever the class — its
+/// I0 carries a successor minted in the same transaction — so both of its
+/// acks land in the homes the caller named, never in another home's link
+/// subspace, even beside a standing claim over the same original that the
+/// caller cannot read.
+#[test]
+fn editlink_s_acks_land_in_the_caller_s_homes_whatever_the_class() {
+    let k = kernel();
+    let hide_doc1 = |_: &World, home: &Address| *home != doc1();
+    let all = writer(&k);
+    let no_doc1 = writer_at(&k, &hide_doc1);
+    let (x, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(1), &[]).expect("x");
+    let (y, _) = all.emit(P1, &doc1(), &pred_def_ty(), &ca(2), &[]).expect("y");
+    all.assert_sup(P1, &doc1(), &x, &y).expect("a doc1-homed claim over x");
+    let succ = Link::new([enc(&[ca(3)]), enc(&[ca(4)]), unregistered_ty(30)]).expect("arity 3");
+    for w in [&all, &no_doc1] {
+        let (edit, _) = w
+            .editlink(P1, &x, succ.clone(), &doc2(), &doc2())
+            .expect("an edit from doc2, at either class");
+        assert_eq!(document_of(&edit.successor), Some(doc2()));
+        assert_eq!(document_of(&edit.claim), Some(doc2()));
+    }
 }
 
 #[test]

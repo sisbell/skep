@@ -130,8 +130,11 @@ where
             return Err(RegisterError::HomeNotRegistered);
         }
         // Valid ⇒ emit(d, [pdef], start, &[]) — Unary, |F| = 1; idem⊤ dedups
-        // to ≤1 active pdef per start.
-        let ls = (self.mk_link_store)(self.kernel.as_ref());
+        // to ≤1 active pdef per start WITHIN THE GUEST CLASS the System path
+        // writes at (lane 3.3b, PUB-6.28): the writer is built at `guest`,
+        // so a pdef tuple homed in a document unreadable at guest class is
+        // invisible to the dedup and a second is minted beside it.
+        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
         let (tuple, seq) = ls.emit(Caller::System, d, &pdef, start, &[])?;
         // Memoize the freshly-derived hint (immutable-once-defined).
         self.memo_defined(start, DefEntry {
@@ -253,7 +256,7 @@ where
         }
         let (new_start, _pdef_seq) = self.define_core(d, &new_term)?;
         let sup = self.catalog.reserved(ShippedType::Supersedes).clone();
-        let ls = (self.mk_link_store)(self.kernel.as_ref());
+        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
         let (_claim, seq) =
             ls.emit(Caller::System, d, &sup, old_start, slice::from_ref(&new_start))?;
         Ok((new_start, seq))
@@ -298,7 +301,7 @@ where
         if !a.st {
             return Err(CertifyError::NotStable);
         }
-        let ls = (self.mk_link_store)(self.kernel.as_ref());
+        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
         let (tuple, seq) =
             ls.emit(Caller::System, d, self.catalog.reserved(ShippedType::PredStable), start, &[])?;
         Ok((tuple, seq))
@@ -330,7 +333,7 @@ where
                 .addr
                 .clone()
         };
-        let ls = (self.mk_link_store)(self.kernel.as_ref());
+        let ls = (self.mk_link_store)(self.kernel.as_ref(), &*self.guest);
         let (r, seq) = ls.nullify(Caller::System, d, &target)?;
         Ok((r, seq))
     }

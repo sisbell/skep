@@ -11,7 +11,7 @@ mod common;
 use common::*;
 use skep_content::Val;
 use skep_discovery::LinkQuery;
-use skep_engine::Engine;
+use skep_engine::{Engine, World};
 use skep_links::{HasLinks, SlotArg};
 use skep_retrieval::{Query, Spec};
 use tempfile::tempdir;
@@ -58,7 +58,7 @@ fn cross_store_lifecycle_under_fsync() {
 
         // M7+M3+M5 composite: an open content link over the inserted content.
         let (l, link_seq) = engine
-            .linkstore()
+            .linkstore(&World::visible_to(OWNER))
             .makelink(
                 OWNER,
                 &doc,

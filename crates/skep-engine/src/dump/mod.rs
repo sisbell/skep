@@ -461,7 +461,7 @@ mod tests {
             )
             .expect("insert succeeds");
         engine
-            .linkstore()
+            .linkstore(&World::visible_to(Caller::Principal(USER)))
             .makelink(
                 Caller::Principal(USER),
                 &doc,

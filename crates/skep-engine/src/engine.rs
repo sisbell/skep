@@ -11,7 +11,7 @@ use skep_arrangement::Vstream;
 use skep_coordination::Coordinator;
 use skep_febe::Stores;
 use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
-use skep_links::{LinkWriter, TypeRegistry};
+use skep_links::{LinkWriter, TypeRegistry, Visibility};
 use skep_namespace::Namespace;
 
 use crate::world::World;
@@ -144,18 +144,26 @@ impl Engine {
         self.stores.vstream()
     }
 
-    /// M7's driver (borrows the kernel, and holds nothing else).
-    pub fn linkstore(&self) -> LinkWriter<'_, World> {
-        self.stores.linkstore()
+    /// M7's driver (borrows the kernel and the caller's VISIBILITY class, and
+    /// holds nothing else). The class is the caller's to thread (lane 3.3b):
+    /// an engine-direct caller passes [`World::visible_to`] of the `Caller`
+    /// it will write as; M10 passes its session principal's through
+    /// [`EngineStores`]; M9 receives the guest class through
+    /// [`Engine::coordinator`].
+    pub fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, World>) -> LinkWriter<'a, World> {
+        self.stores.linkstore(visibility)
     }
 
     /// Assemble M9's `Coordinator` (M9 interface: "engine-assembled"): the
     /// shared kernel, the one registry, the two op-handle factories whose
     /// bodies discharge M9's standing assembly obligation (constructing
-    /// `Vstream`/`LinkWriter` from `&Kernel<W>`), and the GUEST-class read
-    /// predicate M9's fires run at (PUB round 2, lane 3.3, §5) —
+    /// `Vstream` from `&Kernel<W>`, and `LinkWriter` from `&Kernel<W>` plus
+    /// the visibility class M9 lends it), and the GUEST-class read predicate
+    /// M9's fires run at (PUB round 2, lane 3.3, §5) —
     /// [`World::readable_guest`], `published(doc)`, so a rule's effect never
-    /// crosses the draft boundary. Infallible: M9's catalog is a pure
+    /// crosses the draft boundary — which M9 also threads into every writer
+    /// it builds (lane 3.3b, PUB-6.28), so a fire's value-keyed gates see
+    /// only guest-readable incumbents. Infallible: M9's catalog is a pure
     /// projection of the injected registry — with the type set compiled into
     /// the format there is no twice-passed configuration whose drift a
     /// validate-once-or-fail step would catch.
@@ -190,8 +198,11 @@ fn mk_vstream(k: &Kernel<World>) -> Vstream<'_, World> {
     Vstream::new(k)
 }
 
-fn mk_link_store(k: &Kernel<World>) -> LinkWriter<'_, World> {
-    LinkWriter::new(k)
+fn mk_link_store<'k>(
+    k: &'k Kernel<World>,
+    visibility: &'k Visibility<'k, World>,
+) -> LinkWriter<'k, World> {
+    LinkWriter::new(k, visibility)
 }
 
 /// The concrete `Stores<World>` impl (M10 §Seams: "at startup, the `Stores`
@@ -239,8 +250,11 @@ impl Stores<World> for EngineStores {
         &self.kernel
     }
 
-    fn linkstore(&self) -> LinkWriter<'_, World> {
-        LinkWriter::new(&self.kernel)
+    /// M7's writer at the class M10 hands in — the session principal's read
+    /// predicate, closed by M10 per write (lane 3.3b) and applied by M7 to
+    /// the transaction's working world.
+    fn linkstore<'a>(&'a self, visibility: &'a Visibility<'a, World>) -> LinkWriter<'a, World> {
+        LinkWriter::new(&self.kernel, visibility)
     }
 }
 

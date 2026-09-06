@@ -73,8 +73,9 @@ fn grant(
     from: &skep_address::Address,
     to: Vec<skep_address::Address>,
 ) -> skep_address::Address {
-    match engine.linkstore().makelink(
-        Caller::Principal(PrincipalId(1)),
+    let issuer = Caller::Principal(PrincipalId(1));
+    match engine.linkstore(&World::visible_to(issuer)).makelink(
+        issuer,
         home,
         SlotArg::Addrs(vec![from.clone()]),
         SlotArg::Addrs(to),
@@ -258,7 +259,7 @@ fn a_grant_from_a_non_owner_opens_nothing() {
         .create_new_document(b.b, &b.acct_b, None)
         .expect("B's published home");
     // B tries to grant A's draft to itself, from B's home.
-    match engine.linkstore().makelink(
+    match engine.linkstore(&World::visible_to(Caller::Principal(b.b))).makelink(
         Caller::Principal(b.b),
         &home_b,
         SlotArg::Addrs(vec![b.draft_a.clone()]),

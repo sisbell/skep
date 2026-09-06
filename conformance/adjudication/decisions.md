@@ -296,3 +296,74 @@ versions/version_insert_in_middle, versions/version_of_empty_document.
 (run-7's 71, less createnewversion_text_vs_links now inexpressible, plus
 the 15 ruled here); 46 inexpressible (the 29 frozen + the 17 pending); 166
 pass. Twenty rulings.**
+
+20a. **pub-2.9-private-versionless — addendum: the seventeen PENDING
+    scenarios are INEXPRESSIBLE** (INEXPRESSIBLE, 17 scenarios; owner
+    disposition 2026-09-05 of lane 3.1's `[pending]` block.) The close-out
+    found seventeen scenarios beyond ruling 20's fifteen that the PUB-2.9
+    refusal reaches: each `create_version`s an owned PRIVATE draft, the
+    version never mints (`Rejected(PrivateSourceVersionless)` at that op),
+    and a later op naming it — `version`, `v1`, `version2`,
+    `version_before`, `doc2` (that golden's own name for its version), or
+    a TO endset defaulted into it — has nothing to ground on:
+    INEXPRESSIBLE, not divergent, under the harness's own classes (the
+    runner's verdict order puts inexpressible ahead of divergent). The
+    owner RULES: the seventeen are INEXPRESSIBLE for the same reason
+    ruling 20 allowlists the fifteen (PUB-2.9; PUB-2.10; PUB-2.19) —
+    udanax versions private documents, skep does not, and a scenario whose
+    later ops depend on that version cannot be expressed against skep.
+    Frozen as such: the seventeen names move from `[pending]` into
+    `[inexpressible]` in ../ratchet.toml (29 → 46) and the `[pending]`
+    block is dissolved; no golden regenerated, no re-key to a published
+    source, no allowlist entry (an inexpressible verdict is not an allowed
+    disagreement). The seventeen, each with the op the refusal meets and
+    the first op the harness cannot ground (0-based, from
+    `target/conformance/summary.md` and report.jsonl):
+    - content/compare_multispan_specsets — refused op 2; op 3 `insert`
+      into `doc2`
+    - content/vcopy_from_version — refused op 2; op 3 `insert` into
+      `version`
+    - discovery/find_documents_versions — refused op 2 (ops 3–4 refuse
+      again); op 5 `insert` into `version2`
+    - identity/identity_through_rearrange_pivot — refused op 2; op 5
+      `contents` of `version_before`
+    - identity/identity_through_rearrange_swap — refused op 2; op 5
+      `contents` of `version_before`
+    - interactions/compare_versions_with_different_links — refused op 2;
+      op 4 `create_link` on `version`, nothing to ground the TO endset
+    - provenance/createnewversion_text_vs_links — refused op 4; op 5
+      `vspanset` of `version`
+    - versions/both_versions_modified — refused op 2; op 4 `insert` into
+      `version`
+    - versions/compare_versions — refused op 2; op 3 `insert` into
+      `version`
+    - versions/create_version — refused op 5; op 10 `retrieve_contents`
+      of `version`
+    - versions/cross_version_vcopy — refused op 2; op 3 `insert` into
+      `version`
+    - versions/delete_from_original_check_version — refused op 2; op 5
+      `retrieve_contents` of `version`
+    - versions/modify_original_after_version — refused op 2; op 5
+      `retrieve_contents` of `version`
+    - versions/multiple_versions_same_source — refused op 2 (op 4 refuses
+      again); op 3 `insert` into `v1`
+    - versions/version_delete_preserves_original — refused op 2; op 3
+      `delete` in `version`
+    - versions/version_insert_in_middle — refused op 2; op 3 `insert`
+      into `version`
+    - versions/version_of_empty_document — refused op 1; op 2 `insert`
+      into `version`
+    createnewversion_text_vs_links (ruling 15, allowlisted) is now
+    INEXPRESSIBLE for the same reason and moves: its `[allowlisted]` line
+    in ../ratchet.toml is removed and it is listed under `[inexpressible]`.
+    Ruling 15's entry gains its one-line note HERE, this ledger being
+    append-only: of ruling 15's three version-link-carryover scenarios,
+    link_to_transcluded_then_version and version_copies_link_subspace
+    remain allowlisted; createnewversion_text_vs_links is inexpressible
+    from this addendum, and its ruling-15 `[[allow]]` entry in
+    ../allowlist.toml stands but no longer decides its verdict. Skep bugs
+    found: none — the refusal is the rule working.
+
+**Disposition tally (2026-09-05): 297 scenarios — 0 divergent, 0 errors,
+0 pending; 85 allowlisted; 46 inexpressible (run-7's 29 + the 17 ruled
+here); 166 pass. Twenty rulings and one addendum.**

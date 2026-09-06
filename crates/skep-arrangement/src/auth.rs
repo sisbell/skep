@@ -122,6 +122,55 @@ pub fn trunk_of(a: &Address) -> Address {
     trunk
 }
 
+/// PUB-2.53 — the TRUNK HEAD of the document `doc` belongs to: the latest
+/// member of the top-level version sequence `D.1, D.2, …` anchored at
+/// `trunk_of(doc)`, or `None` while that document has no member. THE ONE
+/// pin of "the latest version" (PUB-2.49): a daughter chain — `D.2.1, D.2.2,
+/// …`, anchored at a member — floats nothing and is never answered here,
+/// whichever member `doc` names. M3's `latest_version` is the chain read;
+/// the projection to the trunk is this crate's `trunk_of`, so a member, a
+/// daughter and the bare document all ask about one chain.
+///
+/// CONTRACT — `doc` is a registered document or a member of one (PUB-6.37);
+/// every caller gates registration first, as [`reading_surface`] does
+/// through M3's publication read.
+pub fn trunk_head(m3: &M3State, doc: &Address) -> Option<Address> {
+    m3.latest_version(&trunk_of(doc))
+}
+
+/// HEAD-FLOAT — the arrangement a READER of `doc` answers from (PUB-2.49,
+/// PUB-2.50, PUB-2.53, PUB-2.66): the ONE place the reader's resolve is
+/// pinned, so every reader routes through it rather than deciding for itself.
+///
+/// * A VERSION address answers ITSELF, forever (PUB-2.50): a member pins.
+/// * A BARE document address that is PUBLISHED answers its TRUNK HEAD
+///   (PUB-2.53) — and, while it has no member yet, its OWN arrangement: a
+///   published document between its birth and its first shot serves what it
+///   holds, its deposits landing there until a head member exists
+///   (PUB-2.66's memberless reading).
+/// * A PRIVATE document answers itself: head-float is INERT there. A
+///   private document is versionless (PUB-2.9) and so has no member to
+///   float to; and a member a pre-model fixture stamped under a private
+///   document (`genesis_with_members` in this crate's tests) is not a
+///   reading surface — the float keys on the document's publication bit,
+///   which is what keeps the conformance corpus's private documents
+///   answering their own arrangements.
+///
+/// Pure over M3's slice: one projection, one publication read, one frontier
+/// read. CONTRACT — `doc` is a REGISTERED document (PUB-6.37): M3's
+/// publication read is answered for registered addresses alone, and every
+/// reader that floats has already refused an unregistered argument with its
+/// own registration code.
+pub fn reading_surface(m3: &M3State, doc: &Address) -> Address {
+    if trunk_of(doc) != *doc {
+        return doc.clone();
+    }
+    if !m3.published(doc) {
+        return doc.clone();
+    }
+    trunk_head(m3, doc).unwrap_or_else(|| doc.clone())
+}
+
 /// PUB-2.11's input: is the DOCUMENT `doc` projects to (PUB-2.15) published?
 /// M3's one publication bit ([`M3State::published`], the record its minting
 /// `Allocate` journaled), read after [`trunk_of`] — never the member's own
@@ -141,7 +190,45 @@ pub(crate) fn published_target(m3: &M3State, doc: &Address) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testutil::a;
+    use crate::testutil::{a, doc1, pdoc, seeded_m3};
+    use skep_namespace::M3Rec;
+
+    /// PUB-2.49/2.50/2.53/2.66 — the one reader's resolve, over every case
+    /// it decides: a private document answers itself whether or not a member
+    /// exists under it; a published document answers itself while
+    /// memberless, its trunk head once one exists, and a version address
+    /// answers itself forever — a daughter never floating anything.
+    #[test]
+    fn a_bare_published_address_floats_to_its_trunk_head_and_nothing_else_moves() {
+        let m3 = seeded_m3();
+        // Memberless: a published document answers its own arrangement.
+        assert_eq!(trunk_head(&m3, &pdoc()), None);
+        assert_eq!(reading_surface(&m3, &pdoc()), pdoc());
+        // The chain grows two trunk members and a daughter of the first.
+        let m1 = a(&[1, 0, 1, 0, 3, 1]);
+        let m2 = a(&[1, 0, 1, 0, 3, 2]);
+        let daughter = a(&[1, 0, 1, 0, 3, 1, 1]);
+        let m3 = m3
+            .apply_m3(&M3Rec::Allocate { addr: m1.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: m2.clone(), published: true })
+            .apply_m3(&M3Rec::Allocate { addr: daughter.clone(), published: true });
+        assert_eq!(trunk_head(&m3, &pdoc()), Some(m2.clone()));
+        assert_eq!(reading_surface(&m3, &pdoc()), m2, "the bare address floats to the head");
+        // Every member pins, the head included — and asked about the trunk
+        // head, a member and a daughter both name the one trunk.
+        for member in [&m1, &m2, &daughter] {
+            assert_eq!(reading_surface(&m3, member), *member, "a version address pins");
+            assert_eq!(trunk_head(&m3, member), Some(m2.clone()), "one trunk, whoever asks");
+        }
+        // Inert on a private document, even one a fixture stamped a member
+        // under: the float keys on the publication bit.
+        let stamped = m3.apply_m3(&M3Rec::Allocate {
+            addr: a(&[1, 0, 1, 0, 1, 1]),
+            published: true,
+        });
+        assert_eq!(trunk_head(&stamped, &doc1()), Some(a(&[1, 0, 1, 0, 1, 1])));
+        assert_eq!(reading_surface(&stamped, &doc1()), doc1(), "a private document never floats");
+    }
 
     /// PUB-2.15's projection is address arithmetic and total: a version
     /// member answers its document, a document answers itself, a member of

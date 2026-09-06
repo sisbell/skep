@@ -1339,6 +1339,37 @@ impl M3State {
         self.entity_level(a) == Some(Level::Account)
     }
 
+    /// The LATEST member of `source`'s version chain `(source, 1)` — `c_m`
+    /// for the chain's frontier `m` — or `None` when the chain holds no
+    /// member yet. [M5: the trunk head a bare document address floats to,
+    /// PUB-2.49/PUB-2.53, and the head/older distinction the publish shot
+    /// decides at commit, PUB-2.39] A pure frontier read off any snapshot:
+    /// the chain is contiguous from 1 (B1) and never loses a member (B0), so
+    /// the answer is exactly `c₁` shifted by `m − 1`, and a `Some` never
+    /// regresses across snapshots — a later read answers the same member or
+    /// a later one.
+    ///
+    /// CONTRACT — `source` is a registered DOCUMENT, a trunk or a member:
+    /// its `(source, 1)` chain is the version chain, and its members are
+    /// documents this read can name. The same key anchored at an ACCOUNT is
+    /// the sub-account chain (Conflicts §8), so asked of an account this
+    /// answers its latest sub-account; every caller gates on
+    /// [`M3State::is_registered_document`] first, as the readers that float
+    /// do (PUB-6.37's polarity: registration precedes every chain read).
+    pub fn latest_version(&self, source: &Address) -> Option<Address> {
+        let key = version_ns(source);
+        let m = self.frontiers.get(&key)?;
+        if m.is_zero() {
+            return None;
+        }
+        let c1 = first_in(&key).ok()?;
+        let last = m - &Nat::from(1u32);
+        Some(
+            validate(shift(c1.tumbler(), &last))
+                .expect("differs from gated c1 only in a non-negative ordinal step"),
+        )
+    }
+
     /// `published(doc)` — THE engine's one definition of a document's
     /// publication state (owner ruling D1; PUB-1.68, PUB-7.8): the bit its
     /// minting `Allocate` journaled, read off the publication map at one

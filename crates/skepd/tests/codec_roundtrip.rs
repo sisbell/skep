@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Run, VPos, VSpec};
+use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -76,6 +76,12 @@ fn ispan() -> Span {
     sp(&[1, 0, 1, 0, 1, 0, 1, 1], &[0, 0, 0, 0, 0, 0, 0, 5])
 }
 
+/// One run of a publish shot: `width` positions from the content element
+/// `i_start`, windowing `origin`.
+fn shot_run(origin: Address, i_start: Address, width: u64) -> ShotRun {
+    ShotRun { origin, run: Run::new(i_start, n(width)).expect("a content run") }
+}
+
 fn q_all() -> FourSet {
     FourSet { home: SlotSpec::Any, from: SlotSpec::Any, to: SlotSpec::Any, ty: SlotSpec::Any }
 }
@@ -140,6 +146,35 @@ fn all_requests() -> Vec<Request> {
         rq(None, Op::Rearrange { doc: d1(), cuts: vec![vp(1, 1), vp(1, 3), vp(1, 6)] }),
         rq(None, Op::Version { d_src: d1(), published: None }),
         rq(None, Op::Version { d_src: d1(), published: Some(false) }),
+        // The publish shot (wire v7.3): the ordinary shot off a member with
+        // a draft-native run and a window, and the birth version — base and
+        // draft both absent — so both optional forms ride the round trip.
+        rq(
+            None,
+            Op::Publish {
+                doc: d1(),
+                shot: Shot {
+                    base: Some(Base { member: a(&[1, 0, 1, 0, 1, 2]), extent: n(3) }),
+                    draft: Some(d3()),
+                    runs: vec![
+                        shot_run(d1(), a(&[1, 0, 1, 0, 1, 0, 1, 1]), 3),
+                        shot_run(d3(), a(&[1, 0, 1, 0, 3, 0, 1, 1]), 2),
+                        shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 4]), 1),
+                    ],
+                },
+            },
+        ),
+        rq(
+            None,
+            Op::Publish {
+                doc: d2(),
+                shot: Shot {
+                    base: None,
+                    draft: None,
+                    runs: vec![shot_run(d2(), a(&[1, 0, 1, 0, 2, 0, 1, 1]), 5)],
+                },
+            },
+        ),
         rq(
             None,
             Op::MakeLink {
@@ -257,7 +292,7 @@ fn all_requests() -> Vec<Request> {
     ]
 }
 
-const OP_NAMES: [&str; 38] = [
+const OP_NAMES: [&str; 39] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -269,6 +304,7 @@ const OP_NAMES: [&str; 38] = [
     "copy",
     "rearrange",
     "version",
+    "publish",
     "make_link",
     "emit",
     "nullify",
@@ -299,7 +335,7 @@ const OP_NAMES: [&str; 38] = [
 ];
 
 /// parse ∘ marshal_request is the identity on canonical frames, for every
-/// variant; and the emitted op-name set is exactly the documented 38.
+/// variant; and the emitted op-name set is exactly the documented 39.
 #[test]
 fn every_op_round_trips_canonically() {
     let codec = JsonCodec;
@@ -322,6 +358,45 @@ fn every_op_round_trips_canonically() {
     let mut expected: Vec<&str> = OP_NAMES.to_vec();
     expected.sort();
     assert_eq!(seen, expected, "op-name coverage drifted");
+}
+
+/// The publish shot's base travels with the extent its copy took, or not at
+/// all (wire v7.3): `base` without `base_extent` and `base_extent` without
+/// `base` are both parse faults, and a run that is no run — a zero width, a
+/// start that is not a full element position — is refused at the door
+/// through M5's own `Run::new`, never coerced.
+#[test]
+fn a_shot_base_travels_with_its_extent_and_a_run_is_a_run() {
+    let codec = JsonCodec;
+    let frame = |fields: &str| {
+        format!(
+            r#"{{"op":"publish","doc":"1.0.1.0.1","runs":[{{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"3"}}]{fields}}}"#
+        )
+        .into_bytes()
+    };
+    parse_ok(&codec, &frame(""));
+    parse_ok(&codec, &frame(r#","base":"1.0.1.0.1.2","base_extent":"3""#));
+    parse_ok(&codec, &frame(r#","base":"1.0.1.0.1.2","base_extent":"3","draft":"1.0.1.0.7""#));
+    for bad in [
+        r#","base":"1.0.1.0.1.2""#,
+        r#","base_extent":"3""#,
+        r#","base":"1.0.1.0.1.2","base_extent":"three""#,
+        r#","draft":"not-an-address""#,
+    ] {
+        assert!(codec.parse(&frame(bad)).is_err(), "{bad} must not parse");
+    }
+    let run = |body: &str| {
+        format!(r#"{{"op":"publish","doc":"1.0.1.0.1","runs":[{body}]}}"#).into_bytes()
+    };
+    for bad in [
+        r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"0"}"#,
+        r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1","width":"1"}"#,
+        r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1","width":"1"}"#,
+        r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1"}"#,
+        r#"{"origin":"1.0.1.0.1","i_start":"1.0.1.0.1.0.1.1","width":"1","extra":1}"#,
+    ] {
+        assert!(codec.parse(&run(bad)).is_err(), "{bad} is no run");
+    }
 }
 
 /// The idempotency id rides the frame and survives the round trip.
@@ -641,14 +716,14 @@ fn documented_reject_codes() -> Vec<String> {
     out
 }
 
-/// The full `RejectCode` wire-name table — all 72 codes, pinned.
+/// The full `RejectCode` wire-name table — all 77 codes, pinned.
 /// `code_name` is exhaustive over the enum, so the compiler forces a new
 /// variant to be NAMED; this forces the name to be the one wire.md
 /// publishes, and the harvest above forces the table to hold every code
 /// the document lists save the one the daemon originates itself.
 #[test]
 fn reject_code_names_are_pinned() {
-    let table: [(RejectCode, &str); 72] = [
+    let table: [(RejectCode, &str); 77] = [
         (RejectCode::Unauthenticated, "unauthenticated"),
         (RejectCode::Malformed, "malformed"),
         (RejectCode::Durability, "durability"),
@@ -699,6 +774,11 @@ fn reject_code_names_are_pinned() {
         (RejectCode::PublishedTarget, "published_target"),
         (RejectCode::PrivateVersionOfPublished, "private_version_of_published"),
         (RejectCode::PrivateSourceVersionless, "private_source_versionless"),
+        (RejectCode::Withheld, "withheld"),
+        (RejectCode::BadRun, "bad_run"),
+        (RejectCode::BaseNotInChain, "base_not_in_chain"),
+        (RejectCode::BaseSuperseded, "base_superseded"),
+        (RejectCode::BaseExtentTooLarge, "base_extent_too_large"),
         (RejectCode::IllFormedSpec, "ill_formed_spec"),
         (RejectCode::SlotTooLarge, "slot_too_large"),
         (RejectCode::EmptyTypeResolution, "empty_type_resolution"),

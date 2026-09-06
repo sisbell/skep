@@ -40,17 +40,20 @@
 use std::fmt;
 
 use num_traits::{One, Zero};
-use skep_address::{Address, Nat};
+use skep_address::{content_subspace, document_of, Address, Nat};
 use skep_content::{stage_write, ContentWrite, HasContent, Val};
-use skep_kernel::{Kernel, Seq, TxnError, WorldState};
+use skep_kernel::{Kernel, LockKey, Seq, TxnError, WorldState};
 use skep_namespace::{HasM3, M3Rec, M3State, PrincipalId};
 
-use crate::auth::{gate_write, published_target, trunk_of, Caller};
-use crate::error::{CopyError, DeleteError, InsertError, RearrangeError, VersionError};
+use crate::auth::{gate_write, published_target, reading_surface, trunk_head, trunk_of, Caller};
+use crate::error::{
+    CopyError, DeleteError, InsertError, PublishError, RearrangeError, VersionError,
+};
 use crate::run::Run;
 use crate::runlist::extend_or_push_run;
+use crate::shot::Shot;
 use crate::state::M5Rec;
-use crate::vspace::{as_ordinal_vspan, VPos, VSpec};
+use crate::vspace::{as_ordinal_vspan, ordinal_vspan, VPos, VSpec};
 use crate::HasM5;
 
 /// The most runs one COPY may place, and so the ceiling on what one request
@@ -158,6 +161,20 @@ where
     /// flagless mints are private by default (PUB-1.1) and take an ordinary
     /// insert.
     ///
+    /// WHICH ARRANGEMENT THE DEPOSIT LANDS IN (PUB-2.65, PUB-2.66; lane 3.2's
+    /// pin): the HEAD member's, ALONE. A published document's reading surface
+    /// is its trunk head once it has one ([`trunk_head`]), and a deposit
+    /// appends to that arrangement whichever address of the chain the caller
+    /// named — the bare document, the head itself, or a pinned member, which
+    /// never grows. `at` is therefore judged fresh against the HEAD's extent,
+    /// and the placement record names the head. While the document has no
+    /// member the deposit lands in its own arrangement, which is what its
+    /// readers answer from until a head exists (PUB-2.66's memberless
+    /// reading). The atom's IDENTITY is minted under the content chain of the
+    /// address the caller NAMED (`mint_content(doc)`) — the document's own
+    /// I-space for a bare address, one prefix down the chain (PUB-2.52) —
+    /// so the start returned is under that chain; only the placement floats.
+    ///
     /// Only one of those last two is a verdict an honest request can earn.
     /// `Mint(MintError::Gate)` is M3's defence against a corrupted frontier;
     /// `Mint(MintError::HomeNotRegistered)` cannot arrive past the gate above
@@ -195,8 +212,27 @@ where
         values: Vec<Val>,
         deposit: bool,
     ) -> Result<(Address, Seq), TxnError<InsertError>> {
-        let key = M3State::content_lock_key(doc);
-        self.kernel.transact(&[key], |stg| {
+        // The mint chain's key, and — for a deposit into a chain with a head
+        // — the head's content key too, since that is the arrangement the
+        // placement lands in (PUB-2.66). Read off a snapshot: exact under v1's
+        // single applier, where no shot can advance the head between this read
+        // and the transaction; a future M2 realization that lets disjoint-key
+        // commits land in that window re-examines this with
+        // `VersionSnapshot`'s linearization note.
+        let keys: Vec<LockKey> = {
+            let snap = self.kernel.snapshot();
+            let m3 = snap.world().m3();
+            let mut keys = vec![M3State::content_lock_key(doc)];
+            if deposit && m3.is_registered_document(doc) && published_target(m3, doc) {
+                if let Some(head) = trunk_head(m3, doc) {
+                    if head != *doc {
+                        keys.push(M3State::content_lock_key(&head));
+                    }
+                }
+            }
+            keys
+        };
+        self.kernel.transact(&keys, |stg| {
             gate_write(
                 stg.working().m3(),
                 caller,
@@ -206,19 +242,31 @@ where
             )?;
             // PUB-6.36 slot 5: on a registered, owned target, the
             // published-target refusal — cleared only by a DECLARED deposit
-            // at a FRESH position (PUB-2.59, PUB-9.13).
-            if published_target(stg.working().m3(), doc)
-                && !(deposit && stg.working().m5().names_fresh_content_position(doc, &at))
-            {
-                return Err(InsertError::PublishedTarget);
-            }
+            // at a FRESH position (PUB-2.59, PUB-9.13) of the arrangement the
+            // deposit lands in: the HEAD member's, or the document's own
+            // while it has none (PUB-2.66).
+            let target = {
+                let m3 = stg.working().m3();
+                if published_target(m3, doc) {
+                    if !deposit {
+                        return Err(InsertError::PublishedTarget);
+                    }
+                    let head = trunk_head(m3, doc).unwrap_or_else(|| trunk_of(doc));
+                    if !stg.working().m5().names_fresh_content_position(&head, &at) {
+                        return Err(InsertError::PublishedTarget);
+                    }
+                    head
+                } else {
+                    doc.clone()
+                }
+            };
             if values.is_empty() {
                 return Err(InsertError::EmptyContent);
             }
             if !at.is_content() {
                 return Err(InsertError::NotContentSubspace);
             }
-            if !stg.working().m5().admits_content_boundary(doc, &at.ordinal) {
+            if !stg.working().m5().admits_content_boundary(&target, &at.ordinal) {
                 return Err(InsertError::OutOfBounds);
             }
             let mut runs: Vec<Run> = Vec::new();
@@ -245,7 +293,7 @@ where
                 .clone();
             stg.push(
                 M5Rec::ContentPlace {
-                    doc: doc.clone(),
+                    doc: target,
                     at: at.ordinal,
                     runs,
                 }
@@ -254,6 +302,294 @@ where
             Ok(start)
         })
     }
+
+    /// PUBLISH — the SHOT (PUB-2.33; PUB round 2, lane 3.2): append the next
+    /// member of `doc`'s chain, born PUBLISHED, in ONE commit, its
+    /// arrangement taken from the CLIENT-SUPPLIED runs of `shot` (PUB-8.1)
+    /// and from nothing any draft holds at commit. Returns the member's
+    /// address and the commit `Seq`. The birth version of the mint ceremony
+    /// (PUB-2.34) is this same composite with `shot.base` absent.
+    ///
+    /// DESTINATION (PUB-2.37, PUB-2.39, PUB-2.55): the next member of the
+    /// chain anchored at the base, decided AT COMMIT — the trunk's next
+    /// member (`mint_version(doc)`, `D.4`) when the base is still the trunk
+    /// head, the base's own DAUGHTER (`mint_version(base)`, `D.3.1`) when it
+    /// is not. Two shots racing off one head both commit, the first on the
+    /// trunk and the second as the head's daughter (PUB-2.44); nothing is
+    /// positionally applied to an advanced head and nothing is refused for
+    /// want of a base (PUB-2.38). A memberless document is its own base — the
+    /// chain's first member is `D.1` either way — and the base absent is that
+    /// same birth shape (PUB-2.34), admitted only while the chain is empty:
+    /// once a member exists the document's own pre-chain arrangement is no
+    /// base, and the shot must name the member it was staged from
+    /// (`BaseSuperseded`).
+    ///
+    /// THE MEMBER'S ARRANGEMENT (PUB-2.40, PUB-2.41, PUB-2.42): each supplied
+    /// run by its ORIGIN — the document that minted its addresses, which
+    /// the run's own start settles (`document_of`, projected to the trunk,
+    /// PUB-2.15) and the client's stated `origin` must agree with. The
+    /// document's OWN I-space (its own chain or any member's) is placed by
+    /// reference; the STAGING DRAFT's is RE-INSERTED as fresh identity under
+    /// the document's own I-space, one `mint_content(doc)` and one content
+    /// write per value, the bytes read at the draft's addresses — a byte
+    /// read, never an arrangement read — so the committed member references
+    /// no address of the draft; any OTHER document's stays a window,
+    /// answering its origin. The runs are placed in the order given, then
+    /// the BASE'S POST-RENDER DEPOSITS after them: a published member changes
+    /// only by exempt deposits appended at fresh positions (PUB-2.43), so its
+    /// positions past `base.extent` — the extent the staged copy took — are
+    /// exactly the deposits the render post-dates, carried unchanged
+    /// (PUB-2.45, PUB-2.67). What the shot un-arranges is what the stager
+    /// un-arranged and nothing else. One `ContentPlace` at ordinal 1 journals
+    /// the whole arrangement — the fold appends every placed run's extent to
+    /// R (J1★), the by-reference runs as COPY's are and the fresh ones as
+    /// INSERT's; an empty placement stages no record, the member then reading
+    /// as the lazy empty arrangement.
+    ///
+    /// Check order (which error wins), PUB-6.36's slots: `DocNotRegistered`
+    /// → `NotOwner` (slot 1, the destination's ω) → registration (slot 3):
+    /// `SourceNotRegistered` for the base, then the draft, then each run's
+    /// origin in run order, each run's SHAPE (`BadRun`) settled as its origin
+    /// is derived → `PrivateSourceVersionless` (slot 5: a private document
+    /// has no chain, PUB-2.9's `true` face) → the base's shape:
+    /// `BaseNotInChain` → `BaseSuperseded` → `BaseExtentTooLarge` → the
+    /// SOURCE GATE (slot 6, PUB-6.23; PUB-8.1's second constraint):
+    /// `readable` consulted PER DISTINCT ORIGIN, in run order, skipping the
+    /// document's own I-space and every run the base already arranges
+    /// (PUB-6.24's carried cell), the FIRST unreadable origin answering
+    /// `Withheld(origin)` — BEFORE any existence answer, so a run onto an
+    /// unreadable origin is refused whether or not its addresses exist →
+    /// existence, `DanglingSource` on the first run any of whose addresses
+    /// M4 does not hold → `TooManyRuns` as the placement is accumulated →
+    /// `Mint` / `Content` from the mints and writes.
+    ///
+    /// `readable` is the DAEMON's predicate (the pack's `Fn(&Address) ->
+    /// bool` shape): today the publication read — a published origin is
+    /// readable to everyone, a private one to its owner — and lane 3.3
+    /// widens what the daemon passes without touching this composite. It is
+    /// asked about an origin's DOCUMENT (PUB-2.15), only after that document
+    /// is known registered (PUB-6.37).
+    ///
+    /// LOCKS: `version_lock_key(doc)` (the trunk's frontier),
+    /// `content_lock_key(doc)` (the fresh-identity mints), and the base's
+    /// own version key when the base is a member — the daughter chain's
+    /// frontier, taken since which chain the member joins is decided inside.
+    /// Every origin is read off the composite's consistent base; no origin is
+    /// locked (a window is a reference).
+    ///
+    /// A member address given as `doc` is projected to its document first:
+    /// the shot is the document's, whichever member names it.
+    ///
+    /// COST, AND WHO OWNS IT: the re-insert stages `2n + 1` records for `n`
+    /// draft-native values, exactly as INSERT does, plus one placement whose
+    /// run count — the client's runs, coalesced, plus the base's deposit
+    /// runs — is capped at [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS); the
+    /// carried-run test costs one sweep of the base's runs per supplied run.
+    /// The wire caps the run list; a route that carries this op owes the
+    /// value count.
+    pub fn publish(
+        &self,
+        caller: Caller,
+        doc: &Address,
+        shot: &Shot,
+        readable: &dyn Fn(&Address) -> bool,
+    ) -> Result<(Address, Seq), TxnError<PublishError>> {
+        let trunk = trunk_of(doc);
+        let mut keys = vec![
+            M3State::version_lock_key(&trunk),
+            M3State::content_lock_key(&trunk),
+        ];
+        if let Some(base) = &shot.base {
+            if base.member != trunk {
+                keys.push(M3State::version_lock_key(&base.member));
+            }
+        }
+        self.kernel.transact(&keys, |stg| {
+            // Slot 1: the destination's registration and ω.
+            gate_write(
+                stg.working().m3(),
+                caller,
+                doc,
+                PublishError::DocNotRegistered,
+                PublishError::NotOwner,
+            )?;
+            let world = stg.working();
+            let (m3, m5, content) = (world.m3(), world.m5(), world.content());
+            // Slot 3: registration — the base, the draft, every origin
+            // (PUB-6.37: an unregistered argument answers registration and
+            // nothing later).
+            if let Some(base) = &shot.base {
+                if !m3.is_registered_document(&base.member) {
+                    return Err(PublishError::SourceNotRegistered);
+                }
+            }
+            let draft: Option<Address> = shot.draft.as_ref().map(trunk_of);
+            if let Some(d) = &draft {
+                if !m3.is_registered_document(d) {
+                    return Err(PublishError::SourceNotRegistered);
+                }
+            }
+            // Each run's origin, derived from its own start (address
+            // arithmetic, no read) and required to agree with the client's
+            // statement — then registered.
+            let mut origins: Vec<Address> = Vec::with_capacity(shot.runs.len());
+            for r in &shot.runs {
+                let origin = run_origin(&r.run).ok_or(PublishError::BadRun)?;
+                if origin != trunk_of(&r.origin) {
+                    return Err(PublishError::BadRun);
+                }
+                if !m3.is_registered_document(&origin) {
+                    return Err(PublishError::SourceNotRegistered);
+                }
+                origins.push(origin);
+            }
+            // Slot 5: the model's refusal — a private document has no chain
+            // to append to (PUB-2.9).
+            if !m3.published(&trunk) {
+                return Err(PublishError::PrivateSourceVersionless);
+            }
+            // The base's shape, and the anchor the member is minted under.
+            let head = m3.latest_version(&trunk);
+            let anchor: Address = match &shot.base {
+                None => {
+                    if head.is_some() {
+                        return Err(PublishError::BaseSuperseded);
+                    }
+                    trunk.clone()
+                }
+                Some(base) => {
+                    if base.member == trunk {
+                        if head.is_some() {
+                            return Err(PublishError::BaseSuperseded);
+                        }
+                    } else if trunk_of(&base.member) != trunk {
+                        return Err(PublishError::BaseNotInChain);
+                    }
+                    if base.extent > m5.content_count(&base.member) {
+                        return Err(PublishError::BaseExtentTooLarge);
+                    }
+                    // The head/older distinction is the commit's own
+                    // (PUB-2.39): the memberless document, or a base that is
+                    // still the head ⇒ the trunk's next member; else the
+                    // base's daughter.
+                    if base.member == trunk || head.as_ref() == Some(&base.member) {
+                        trunk.clone()
+                    } else {
+                        base.member.clone()
+                    }
+                }
+            };
+            // Slot 6: the source gate, per distinct origin, in run order —
+            // the document's own I-space needs no consult, a run the base
+            // already arranges takes none (PUB-6.24), and the FIRST
+            // unreadable origin speaks before any existence answer.
+            let mut decided: Vec<Address> = Vec::new();
+            for (r, origin) in shot.runs.iter().zip(&origins) {
+                if *origin == trunk || decided.contains(origin) {
+                    continue;
+                }
+                let carried = shot
+                    .base
+                    .as_ref()
+                    .is_some_and(|base| m5.arranges_run(&base.member, &r.run));
+                if carried {
+                    continue;
+                }
+                if !readable(origin) {
+                    return Err(PublishError::Withheld(origin.clone()));
+                }
+                decided.push(origin.clone());
+            }
+            // Existence (S3★): every address a run names holds a value —
+            // the draft-native run's bytes are what is re-inserted, and a
+            // by-reference run is the CLIENT's extent rather than one an
+            // arrangement resolved, so each address is asked, not only the
+            // start.
+            for r in &shot.runs {
+                if !r.run.addrs().all(|a| content.contains(a.tumbler())) {
+                    return Err(PublishError::DanglingSource);
+                }
+            }
+            // The member's arrangement: the client's runs in order — the
+            // draft-native ones re-minted as fresh identity under the
+            // document's own I-space — then the base's post-render deposits.
+            let mut placed: Vec<Run> = Vec::new();
+            for (r, origin) in shot.runs.iter().zip(&origins) {
+                if draft.as_ref() == Some(origin) {
+                    for a in r.run.addrs() {
+                        let val = stg
+                            .working()
+                            .content()
+                            .value_at(a.tumbler())
+                            .cloned()
+                            .expect("every address of every run was found present above");
+                        let (addr, m3rec) = stg.working().m3().mint_content(&trunk)?;
+                        stg.push(m3rec.into());
+                        let write = stage_write(stg.working().content(), &addr, val)?;
+                        stg.push(write.into());
+                        extend_or_push_run(
+                            &mut placed,
+                            Run {
+                                i_start: addr,
+                                width: Nat::one(),
+                            },
+                        );
+                    }
+                } else {
+                    extend_or_push_run(&mut placed, r.run.clone());
+                }
+                if placed.len() > MAX_PLACED_RUNS {
+                    return Err(PublishError::TooManyRuns);
+                }
+            }
+            if let Some(base) = &shot.base {
+                let m5 = stg.working().m5();
+                let count = m5.content_count(&base.member);
+                if base.extent < count {
+                    let from = VPos {
+                        subspace: content_subspace(),
+                        ordinal: &base.extent + &Nat::one(),
+                    };
+                    let deposits = &count - &base.extent;
+                    let span = ordinal_vspan(&from, &deposits)
+                        .expect("extent < count ⇒ at least one deposited position");
+                    for run in m5.resolve(&base.member, &span) {
+                        extend_or_push_run(&mut placed, run);
+                    }
+                    if placed.len() > MAX_PLACED_RUNS {
+                        return Err(PublishError::TooManyRuns);
+                    }
+                }
+            }
+            // The member: born published (PUB-2.5, PUB-2.10), under the
+            // anchor decided above.
+            let (member, m3rec) = stg.working().m3().mint_version(&anchor, true)?;
+            stg.push(m3rec.into());
+            if !placed.is_empty() {
+                stg.push(
+                    M5Rec::ContentPlace {
+                        doc: member.clone(),
+                        at: Nat::one(),
+                        runs: placed,
+                    }
+                    .into(),
+                );
+            }
+            Ok(member)
+        })
+    }
+}
+
+/// The DOCUMENT a supplied run's addresses were minted under — `document_of`
+/// of its start, projected to the trunk (PUB-2.15) — provided the start is a
+/// CONTENT element; `None` for a link element or an address with no
+/// document. Pure address arithmetic: it is what a shot's stated `origin`
+/// must agree with, and it reads nothing.
+fn run_origin(run: &Run) -> Option<Address> {
+    if run.i_start().subspace() != Some(&content_subspace()) {
+        return None;
+    }
+    document_of(run.i_start()).map(|d| trunk_of(&d))
 }
 
 impl<W> Vstream<'_, W>
@@ -653,6 +989,15 @@ where
     /// (ASN-0123 V1). Every read answers for it as it does for any document
     /// M5 has not yet touched.
     ///
+    /// WHICH ARRANGEMENT IS SNAPSHOTTED (lane 3.2's head-float): the source's
+    /// READING SURFACE ([`reading_surface`]) — a bare published source with
+    /// members forks its trunk HEAD's arrangement, the one its readers answer
+    /// from (PUB-2.49), never its own pre-chain arrangement, which a shot has
+    /// superseded and which a trunk member built from it would have the bare
+    /// address float back to. A version address forks its own member
+    /// (PUB-2.50); a private or memberless source forks itself, as before.
+    /// The record's `source` is that surface.
+    ///
     /// COST, AND WHO OWNS IT. One request names one address, and the record
     /// it stages names two; what the fold then does is share the source's
     /// run-list (O(1), structural) and append `#runs(source)` freshly-built
@@ -730,10 +1075,13 @@ where
                 Branch::Owned => m3.mint_version(source, resolved),
                 Branch::Cross(prefix) => m3.mint_document(prefix, resolved),
             }?;
+            // The arrangement shared is the source's reading surface — its
+            // trunk head when it has one (head-float, PUB-2.49).
+            let surface = reading_surface(m3, source);
             stg.push(m3rec.into());
             stg.push(
                 M5Rec::VersionSnapshot {
-                    source: source.clone(),
+                    source: surface,
                     new: v.clone(),
                 }
                 .into(),

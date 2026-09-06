@@ -16,7 +16,7 @@ use std::collections::HashSet;
 
 use im::OrdSet;
 use skep_address::{content_subspace, Address, Nat, Span};
-use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, Run, VPos};
+use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, Run, VPos};
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
@@ -166,6 +166,15 @@ fn check_region(region: &[Span]) -> Result<(), QueryError> {
 /// PRODUCED, so an over-budget request stops resolving instead of resolving
 /// whole and then being measured. A refusal, never a truncation: a truncated
 /// image drops links from every read-out composed on it, silently.
+///
+/// HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
+/// arrangement resolved is `d`'s READING SURFACE — M5's `reading_surface`,
+/// the one pin — so a bare PUBLISHED address images its trunk head, a version
+/// address its own member forever, and a memberless or private document its
+/// own arrangement. The whole region family inherits it through this
+/// function: `findlinks_v`, `count_v`, `window_v` and `retrieve_endsets`
+/// float exactly as `image` does. The registry gate runs on the address
+/// named, ahead of the float (PUB-6.37).
 pub fn image_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -176,11 +185,12 @@ pub fn image_on<W: DiscoveryWorld>(
         return Err(QueryError::DocNotRegistered);
     }
     check_region(region)?;
+    let surface = reading_surface(w.m3(), d);
     let mut runs: Vec<Run> = Vec::new();
     let mut seen: HashSet<(Address, Nat)> = HashSet::new(); // internal throwaway
     let mut runs_resolved: usize = 0;
     for span in region {
-        let span_image = w.m5().resolve(d, span);
+        let span_image = w.m5().resolve(&surface, span);
         // `>` and not `==`: one span's image adds many runs at once.
         runs_resolved += span_image.len();
         if runs_resolved > MAX_IMAGE_RUNS {

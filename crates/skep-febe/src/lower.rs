@@ -10,7 +10,9 @@
 //! `FaultSite::addr` — the same address-localization shape M6's
 //! `DocNotRegistered(Address)` established.
 
-use skep_arrangement::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
+use skep_arrangement::{
+    CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
+};
 use skep_content::ContentError;
 use skep_discovery::{OrphanError, QueryError};
 use skep_kernel::TxnError;
@@ -246,6 +248,34 @@ impl Lower for VersionError {
                 (RejectCode::PrivateVersionOfPublished, None)
             }
             VersionError::Mint(m) => m.lower(),
+        }
+    }
+}
+
+impl Lower for PublishError {
+    fn lower(self) -> (RejectCode, Option<FaultSite>) {
+        match self {
+            PublishError::DocNotRegistered => (RejectCode::DocNotRegistered, None),
+            PublishError::NotOwner(a) => not_owner(a),
+            PublishError::SourceNotRegistered => (RejectCode::SourceNotRegistered, None),
+            PublishError::BadRun => (RejectCode::BadRun, None),
+            PublishError::BaseNotInChain => (RejectCode::BaseNotInChain, None),
+            PublishError::BaseSuperseded => (RejectCode::BaseSuperseded, None),
+            PublishError::BaseExtentTooLarge => (RejectCode::BaseExtentTooLarge, None),
+            // ONE code with `version`'s (PUB-2.9): the face is that code's
+            // `true` arm, the intent being publication.
+            PublishError::PrivateSourceVersionless => (RejectCode::PrivateSourceVersionless, None),
+            // PUB-8.4's pinned shape: `site.addr` is the withheld document —
+            // the first unreadable origin — and nothing else rides the code
+            // (PUB-8.5: no detail, ever).
+            PublishError::Withheld(origin) => (
+                RejectCode::Withheld,
+                Some(FaultSite { addr: Some(origin), ..FaultSite::default() }),
+            ),
+            PublishError::DanglingSource => (RejectCode::DanglingSource, None),
+            PublishError::TooManyRuns => (RejectCode::TooManyRuns, None),
+            PublishError::Mint(m) => m.lower(),
+            PublishError::Content(c) => c.lower(),
         }
     }
 }
@@ -527,6 +557,13 @@ mod tests {
         assert_eq!(code, RejectCode::HomeNotRegistered);
         let (code, _) = MakeLinkError::Seat(SeatError::AlreadySeated).lower();
         assert_eq!(code, RejectCode::AlreadySeated);
+        let (code, _) = PublishError::Mint(MintError::SourceNotRegistered).lower();
+        assert_eq!(code, RejectCode::SourceNotRegistered);
+        let (code, _) = PublishError::Content(ContentError::AlreadyPresent(
+            Tumbler::new([1u32].map(Nat::from)).expect("nonempty"),
+        ))
+        .lower();
+        assert_eq!(code, RejectCode::Content);
     }
 
     /// §5: `Content(ContentError)` collapses wholesale to `Content`
@@ -576,6 +613,23 @@ mod tests {
         assert_eq!(site.expect("localized").addr, Some(doc()));
     }
 
+    /// PUB-8.4/PUB-8.5, at the lowering: the shot's `withheld` carries the
+    /// withheld document in `site.addr` and NOTHING else — the code, the
+    /// `reorder` disposition, and the site; the detail slot stays empty. The
+    /// shape is what `wire.md` pins and `tests/publish.rs` reads back over
+    /// the wire; this is where it is decided.
+    #[test]
+    fn withheld_names_the_document_and_carries_no_detail() {
+        let rej = lower_txn(
+            OpKind::Publish,
+            TxnError::Rejected(PublishError::Withheld(doc())),
+        );
+        assert_eq!(rej.code, RejectCode::Withheld);
+        assert_eq!(rej.disposition, Disposition::Reorder, "a later grant is the one filling event");
+        assert_eq!(rej.site.expect("the withheld document rides the site").addr, Some(doc()));
+        assert!(rej.detail.is_none(), "PUB-8.5: detail is ABSENT on this code, always");
+    }
+
     /// Ownership ruling (2026-08-16): every gated write enum's
     /// `NotOwner(Address)` lowers to the `NotOwner` code with the failing
     /// address threaded into `site.addr`.
@@ -586,6 +640,7 @@ mod tests {
             CopyError::NotOwner(doc()).lower(),
             DeleteError::NotOwner(doc()).lower(),
             RearrangeError::NotOwner(doc()).lower(),
+            PublishError::NotOwner(doc()).lower(),
             MakeLinkError::NotOwner(doc()).lower(),
             EmitError::NotOwner(doc()).lower(),
             NullifyError::NotOwner(doc()).lower(),
@@ -785,6 +840,19 @@ mod tests {
         same_name(VersionError::NodeTierCrossOwner);
         same_name(VersionError::PrivateSourceVersionless);
         same_name(VersionError::PrivateVersionOfPublished);
+        // The publish shot (lane 3.2): every flat verdict same-named, the
+        // withheld one threading its document through the site.
+        same_name(PublishError::DocNotRegistered);
+        same_name(PublishError::NotOwner(doc()));
+        same_name(PublishError::SourceNotRegistered);
+        same_name(PublishError::BadRun);
+        same_name(PublishError::BaseNotInChain);
+        same_name(PublishError::BaseSuperseded);
+        same_name(PublishError::BaseExtentTooLarge);
+        same_name(PublishError::PrivateSourceVersionless);
+        same_name(PublishError::Withheld(doc()));
+        same_name(PublishError::DanglingSource);
+        same_name(PublishError::TooManyRuns);
 
         // ── M7 (links) ──
         same_name(MakeLinkError::HomeNotRegistered);

@@ -212,6 +212,40 @@ impl RunList {
         self.0.iter().any(|r| r.iextent().contains(a.tumbler()))
     }
 
+    /// Does this list hold EVERY address of `run` — is the run's whole
+    /// I-extent arranged here, as one resident run or split across several?
+    /// [`holds`](RunList::holds) asked of an extent rather than a point: the
+    /// carried-run test of the publish shot (PUB-6.24, PUB-8.1) — a supplied
+    /// run the base already arranges takes no source gate.
+    ///
+    /// Answered per resident run by the run's own offset arithmetic
+    /// ([`Run::offsets_covered_by`](crate::Run::offsets_covered_by) — which of
+    /// `run`'s offsets each resident extent covers) and then by one sweep over
+    /// the covered ranges, so the cost is `O(#runs log #runs)` and never
+    /// `width × #runs`. A resident run of another origin length covers
+    /// nothing, by the level-class discipline that method applies.
+    /// Transclusion multiplicity is harmless: an address this list arranges
+    /// twice covers its offset twice, and a sweep over a union counts once.
+    pub(crate) fn covers(&self, run: &Run) -> bool {
+        let mut covered: Vec<(Nat, Nat)> = self
+            .0
+            .iter()
+            .filter_map(|resident| run.offsets_covered_by(&resident.iextent()))
+            .map(|range| (range.lo().clone(), range.lo() + &range.width()))
+            .collect();
+        covered.sort();
+        let mut reached = Nat::zero();
+        for (lo, hi) in covered {
+            if lo > reached {
+                return false;
+            }
+            if hi > reached {
+                reached = hi;
+            }
+        }
+        reached >= *run.width()
+    }
+
     /// [`split_runs`] over this list's runs.
     fn split_at(&self, ord: &Nat) -> (Vec<Run>, Vec<Run>) {
         split_runs(self.0.iter(), ord)
@@ -439,6 +473,27 @@ mod tests {
         assert!(!empty.holds(&ca(1)));
         // A different origin length is held by nobody here.
         assert!(!apart.holds(&vca(1)));
+    }
+
+    #[test]
+    fn covers_asks_membership_of_a_whole_extent() {
+        // §8/PUB-6.24: an extent is carried when every one of its addresses
+        // is arranged — as one run, or split across several by a foreign run
+        // between them — and not when any address is missing, whatever the
+        // rest.
+        let l = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(3), 2)]); // ca1..4, split
+        assert!(l.covers(&run(&ca(1), 4)), "split across two residents, still whole");
+        assert!(l.covers(&run(&ca(2), 2)), "an interior extent");
+        assert!(l.covers(&run(&vca(5), 1)));
+        assert!(!l.covers(&run(&ca(4), 2)), "ca(5) is arranged nowhere");
+        assert!(!l.covers(&run(&ca(9), 1)));
+        assert!(!l.covers(&run(&vca(1), 1)), "another origin length covers nothing");
+        assert!(!RunList::default().covers(&run(&ca(1), 1)));
+        // A document arranging the same address twice — transclusion
+        // multiplicity — counts it once, and the sweep is unbothered.
+        let twice = list(vec![run(&ca(1), 2), run(&vca(5), 1), run(&ca(1), 2)]);
+        assert!(twice.covers(&run(&ca(1), 2)));
+        assert!(!twice.covers(&run(&ca(1), 3)));
     }
 
     #[test]

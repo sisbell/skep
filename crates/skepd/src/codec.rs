@@ -52,7 +52,7 @@ use std::str::FromStr;
 
 use serde_json::{Map, Value};
 use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
-use skep_arrangement::{Run, VPos, VSpec};
+use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
@@ -495,6 +495,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
             d_src: fields.addr("d_src")?,
             published: fields.published()?,
         },
+        "publish" => Op::Publish { doc: fields.addr("doc")?, shot: fields.shot()? },
         "make_link" => Op::MakeLink {
             home: fields.addr("home")?,
             from: fields.slotarg("from")?,
@@ -719,12 +720,46 @@ impl Fields {
 
     /// Absent ≡ null ≡ ⊥ (start of the enumeration).
     fn cursor(&mut self, k: &'static str) -> PResult<Option<Address>> {
+        self.opt_addr(k)
+    }
+
+    /// An optional address field: absent and explicit `null` alike read
+    /// `None`; present, it must parse as an address.
+    fn opt_addr(&mut self, k: &'static str) -> PResult<Option<Address>> {
         match self.take_opt(k) {
             None => Ok(None),
             Some(v) => {
                 p_addr(&v).map(Some).map_err(|e| PErr(format!("field '{k}': {e}")))
             }
         }
+    }
+
+    /// The publish shot's own fields (wire v7.3, PUB-8.1): `base` and
+    /// `base_extent` travel TOGETHER — a base without the extent its copy
+    /// took is a base the composite cannot compose against (PUB-2.42), and
+    /// an extent without a base measures nothing — so either both are
+    /// present or neither is (the birth version, PUB-2.34); `draft` is
+    /// optional; `runs` is the client-rendered arrangement, each run its
+    /// origin, its start and its width.
+    fn shot(&mut self) -> PResult<Shot> {
+        let member = self.opt_addr("base")?;
+        let extent = match self.take_opt("base_extent") {
+            None => None,
+            Some(v) => Some(p_nat(&v).map_err(|e| PErr(format!("field 'base_extent': {e}")))?),
+        };
+        let base = match (member, extent) {
+            (Some(member), Some(extent)) => Some(Base { member, extent }),
+            (None, None) => None,
+            (Some(_), None) => {
+                return Err(PErr("field 'base_extent': required beside 'base'".into()))
+            }
+            (None, Some(_)) => {
+                return Err(PErr("field 'base_extent': carried without 'base'".into()))
+            }
+        };
+        let draft = self.opt_addr("draft")?;
+        let runs = self.field("runs", |v| p_list(v, p_shot_run))?;
+        Ok(Shot { base, draft, runs })
     }
 
     fn successor(&mut self, k: &'static str) -> PResult<SuccessorSpec> {
@@ -874,6 +909,20 @@ fn p_vpos(v: &Value) -> PResult<VPos> {
 fn p_vspec(v: &Value) -> PResult<VSpec> {
     let m = p_obj(v, &["source", "span"])?;
     Ok(VSpec { source: field(m, "source", p_addr)?, span: field(m, "span", p_span)? })
+}
+
+/// One run of a publish shot (wire.md §Arrangement, `publish`): the origin
+/// document, the run's start, and its width — through M5's own `Run::new`, so
+/// no zero-width run and no start that is not a full element position
+/// survives the trust boundary.
+fn p_shot_run(v: &Value) -> PResult<ShotRun> {
+    let m = p_obj(v, &["i_start", "origin", "width"])?;
+    let origin = field(m, "origin", p_addr)?;
+    let i_start = field(m, "i_start", p_addr)?;
+    let width = field(m, "width", p_nat)?;
+    let run = Run::new(i_start, width)
+        .ok_or_else(|| PErr("a run is a full element position and a width ≥ 1".into()))?;
+    Ok(ShotRun { origin, run })
 }
 
 /// A `make_link` endset slot (wire v5): a V-spec array (content-resolved,
@@ -1144,6 +1193,20 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
             let mut pairs = vec![("d_src", j_addr(d_src))];
             pairs.extend(published_pair(published));
             (op_name(OpKind::Version), pairs)
+        }
+        // Canonical: `base`/`base_extent` and `draft` ride only when present,
+        // so an absent one marshals to no field and `parse ∘ marshal` is a
+        // fixpoint.
+        Op::Publish { doc, shot } => {
+            let mut pairs = vec![("doc", j_addr(doc)), ("runs", j_shot_runs(&shot.runs))];
+            if let Some(base) = &shot.base {
+                pairs.push(("base", j_addr(&base.member)));
+                pairs.push(("base_extent", j_nat(&base.extent)));
+            }
+            if let Some(draft) = &shot.draft {
+                pairs.push(("draft", j_addr(draft)));
+            }
+            (op_name(OpKind::Publish), pairs)
         }
         Op::MakeLink { home, from, to, ty } => (
             op_name(OpKind::MakeLink),
@@ -1437,6 +1500,19 @@ fn j_vspecs(vs: &[VSpec]) -> Value {
     Value::Array(vs.iter().map(j_vspec).collect())
 }
 
+/// [`p_shot_run`]'s inverse: the origin, the run's start and its width.
+fn j_shot_run(r: &ShotRun) -> Value {
+    obj(vec![
+        ("origin", j_addr(&r.origin)),
+        ("i_start", j_addr(r.run.i_start())),
+        ("width", j_nat(r.run.width())),
+    ])
+}
+
+fn j_shot_runs(rs: &[ShotRun]) -> Value {
+    Value::Array(rs.iter().map(j_shot_run).collect())
+}
+
 /// [`p_slotarg`]'s inverse: the Resolve form is the bare v-spec array
 /// (byte-identical to v4), the Addrs form the tagged object.
 fn j_slotarg(s: &SlotArg) -> Value {
@@ -1716,6 +1792,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::Copy => "copy",
         OpKind::Rearrange => "rearrange",
         OpKind::Version => "version",
+        OpKind::Publish => "publish",
         OpKind::MakeLink => "make_link",
         OpKind::Emit => "emit",
         OpKind::Nullify => "nullify",
@@ -1828,6 +1905,13 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::PublishedTarget => "published_target",
         RejectCode::PrivateVersionOfPublished => "private_version_of_published",
         RejectCode::PrivateSourceVersionless => "private_source_versionless",
+        // The publish shot's codes (lane 3.2): `withheld` is PUB-8.4's pinned
+        // token; the four beside it are proposed, the owner to confirm.
+        RejectCode::Withheld => "withheld",
+        RejectCode::BadRun => "bad_run",
+        RejectCode::BaseNotInChain => "base_not_in_chain",
+        RejectCode::BaseSuperseded => "base_superseded",
+        RejectCode::BaseExtentTooLarge => "base_extent_too_large",
         RejectCode::IllFormedSpec => "ill_formed_spec",
         RejectCode::SlotTooLarge => "slot_too_large",
         RejectCode::EmptyTypeResolution => "empty_type_resolution",

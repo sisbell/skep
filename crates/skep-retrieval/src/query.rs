@@ -2,10 +2,22 @@
 //! in `compare`). Every operation begins by reading its slices off the single
 //! bound snapshot, runs its gate (typed rejection), then composes upstream
 //! primitives.
+//!
+//! HEAD-FLOAT (PUB round 2, lane 3.2; PUB-2.49, PUB-2.50, PUB-2.53): the
+//! arrangement readers of a document answer from is M5's `reading_surface` —
+//! a bare PUBLISHED address answers its trunk head, a version address its own
+//! member forever, a memberless or private document its own arrangement. The
+//! three arrangement-resolving readers here (RETRIEVEV, the two extent
+//! queries, SHOWORIGIN) and COMPARE route through it; the resolve is pinned in
+//! ONE place and decided nowhere in this crate. The registry gate runs on the
+//! address the caller NAMED, ahead of the float (PUB-6.37), and the answer is
+//! reported under that name. SHOWDELETIONS and FINDDOCSCONTAINING read R and
+//! the arrangement of the address named and do not float — recorded in the
+//! lane's report as the seam this file leaves.
 
 use num_traits::{One, Zero};
 use skep_address::{document_of, ordinal, Address, Nat, Span, SpanSet};
-use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, M5State, Run, VPos};
+use skep_arrangement::{is_ordinal_vspan, ordinal_vspan, reading_surface, M5State, Run, VPos};
 use skep_content::HasContent;
 
 use crate::error::{DeletionsError, ExtentError, FindError, OriginError, RetrieveError};
@@ -226,9 +238,12 @@ impl<W: RetrievalWorld + HasContent> Query<'_, W> {
         for spec in specs {
             // Concatenate per spec, IN ORDER (R5) — no global sort. Classify
             // ONCE per spec, because the answer is constant over the spec's
-            // positions.
+            // positions. The arrangement resolved is the document's reading
+            // surface (head-float, PUB-2.49): the named address gated
+            // registration above, the surface answers.
             let sub = span_subspace(&spec.span);
-            for run in m5.resolve(&spec.doc, &spec.span) {
+            let surface = reading_surface(m3, &spec.doc);
+            for run in m5.resolve(&surface, &spec.span) {
                 // Per active position, ascending V (R3) — no dedup (R8); the
                 // run answers for its own positions, in the owned form, since
                 // `resolve` hands the run over and it outlives only this walk.
@@ -331,8 +346,12 @@ impl<W: RetrievalWorld> Query<'_, W> {
         if !m3.is_registered_document(doc) {
             return Err(ExtentError::DocNotRegistered); // not registered ⇒ fail
         }
-        debug_assert_sequential_positions(m5, doc);
-        let (nc, nl) = (m5.content_count(doc), m5.link_count(doc));
+        // The extents are the reading surface's (head-float, PUB-2.49): a
+        // bare published address reports its trunk head's counts, a version
+        // address its own member's.
+        let surface = reading_surface(m3, doc);
+        debug_assert_sequential_positions(m5, &surface);
+        let (nc, nl) = (m5.content_count(&surface), m5.link_count(&surface));
         let extents: SpanSet = [(Subspace::Content, &nc), (Subspace::Link, &nl)]
             .into_iter()
             .filter(|(_, n)| !n.is_zero())
@@ -380,6 +399,10 @@ impl<W: RetrievalWorld> Query<'_, W> {
             return Err(OriginError::DocNotRegistered); // WF_V (i)
         }
         gate_vspan(span).map_err(OriginError::MalformedSpan)?; // (ii)/(iv)
+        // Every arrangement read below is the reading surface's (head-float,
+        // PUB-2.49); the gate above ran on the address named.
+        let surface = reading_surface(m3, doc);
+        let doc = &surface;
         // The start's subspace, at any depth.
         let n_s = match span_subspace(span) {
             Some(Subspace::Content) => m5.content_count(doc),

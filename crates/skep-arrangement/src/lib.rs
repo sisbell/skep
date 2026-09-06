@@ -59,6 +59,28 @@
 //! shape must bear out, never a bypass. Link writes are outside the rule
 //! (PUB-2.12): `stage_seat_link` is untouched.
 //!
+//! ## The publish shot and head-float (PUB round 2, lane 3.2)
+//!
+//! A published document advances by the SHOT (PUB-2.33): [`Vstream::publish`]
+//! appends the next member of the chain anchored at the base the draft was
+//! staged from — the trunk's next member when the base is still the head,
+//! the base's daughter when it is not (PUB-2.37, PUB-2.39, decided at
+//! commit) — born published, in ONE commit, from CLIENT-SUPPLIED I-address
+//! runs ([`Shot`], PUB-8.1) and never from any draft's arrangement. The
+//! document's own runs stay by reference, the staging draft's are re-minted
+//! as fresh identity under the document's own I-space, and any other
+//! document's stay windows behind the source gate (PUB-2.40, PUB-6.23);
+//! the base's post-render deposits are carried after them (PUB-2.42,
+//! PUB-2.45). The BIRTH VERSION is the same composite with the base absent
+//! (PUB-2.34).
+//!
+//! Readers of a BARE published address answer its TRUNK HEAD
+//! ([`reading_surface`], PUB-2.49/2.53), a version address its own member
+//! forever (PUB-2.50), and a memberless or private document its own
+//! arrangement; a DECLARED deposit into a published chain appends to the
+//! HEAD member's arrangement alone (PUB-2.66), whichever address of the
+//! chain the deposit names.
+//!
 //! ## Serialization key
 //!
 //! M5 contributes **no `Space` lock-key tag of its own**: every M5 mutation
@@ -92,17 +114,21 @@ mod reads;
 mod run;
 mod runlist;
 mod seat;
+mod shot;
 mod state;
 mod vspace;
 
 #[cfg(test)]
 pub(crate) mod testutil;
 
-pub use auth::{trunk_of, Caller};
-pub use error::{CopyError, DeleteError, InsertError, RearrangeError, SeatError, VersionError};
+pub use auth::{reading_surface, trunk_head, trunk_of, Caller};
+pub use error::{
+    CopyError, DeleteError, InsertError, PublishError, RearrangeError, SeatError, VersionError,
+};
 pub use ops::{Vstream, MAX_PLACED_RUNS};
 pub use run::Run;
 pub use seat::{seat_link, stage_seat_link};
+pub use shot::{Base, Shot, ShotRun};
 pub use state::{M5Rec, M5State};
 pub use vspace::{is_ordinal_vspan, ordinal_vspan, VPos, VSpec};
 

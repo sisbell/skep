@@ -558,8 +558,9 @@ with its tested example:
 ```
 
 **`ack_addr`** — a write that minted (or found) an address:
-create_new_document / insert (start address) / version / make_link / emit /
-nullify / assert_sup / fork / delegate / register_node.
+create_new_document / insert (start address) / version / publish (the
+member) / make_link / emit / nullify / assert_sup / fork / delegate /
+register_node.
 
 <!-- wire: response ack_addr -->
 ```json
@@ -761,19 +762,19 @@ Fields:
   `edit_link` successor fault to one of its three slots, in the read-back
   slot numbering (`1` = from, `2` = to, `3` = ty), so the `index` beside it
   is a position *within* that slot; `addr` names the offending document in
-  multi-document lookups — and, on a `not_owner` rejection, the document
-  (or target link) that failed the ownership check. Span faults:
-  `not_ordinal_level`, `not_level_uniform`, `start_not_zero_free`,
-  `start_too_shallow`.
+  multi-document lookups — on a `not_owner` rejection, the document
+  (or target link) that failed the ownership check; on a `withheld`
+  rejection (v7.3), the origin DOCUMENT a `publish` shot may not read.
+  Span faults: `not_ordinal_level`, `not_level_uniform`,
+  `start_not_zero_free`, `start_too_shallow`.
 * `detail` — optional message (always present on `unparseable`, where
   it says what failed to parse). On `credential_refused` the field is a
   MACHINE token — the code:detail convention, one pinned token per
   refusal, e.g. `signed_session_required` — and the one place clients
   dispatch on `detail` (§Credential refusals). One exclusion is
-  pinned ahead of its code: the publication rounds' planned `withheld`
-  rejection carries no `detail`, ever — its whole diagnosis is `code`
-  plus `site.addr` — so no daemon drifts into describing, one field
-  over, the extent that code exists to withhold.
+  pinned: `withheld` carries no `detail`, ever — its whole diagnosis is
+  `code` plus `site.addr` — so no daemon drifts into describing, one
+  field over, the extent that code exists to withhold.
 
 <!-- wire: response rejected_site -->
 ```json
@@ -817,7 +818,12 @@ Arrangement: `empty_content`, `content`, `empty_source`,
 `not_home_link`, `already_seated`, `not_content_subspace`,
 `published_target`, `private_version_of_published`,
 `private_source_versionless` (the version-chain model's three write-path
-refusals — §The version-chain refusals below).
+refusals — §The version-chain refusals below), and the publish shot's
+own (v7.3, §The publish shot and head-float below): `withheld` — the
+source gate; the one code of this family whose disposition is reorder,
+carrying `site.addr` (the origin's document) and never a `detail` —
+`bad_run`, `base_not_in_chain`, `base_superseded`,
+`base_extent_too_large`.
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class`, `non_address_denoting_type`, `bad_target`,
@@ -855,7 +861,7 @@ never reaches these codes on a published document.
 | --- | --- | --- |
 | `published_target` | `insert`, `copy`, `delete`, `rearrange` | `doc` is a PUBLISHED document (or a member of one) — the one exemption is a **declared deposit**, `insert` with `deposit:true` at fresh content positions past the arranged extent (§Arrangement) |
 | `private_version_of_published` | `version` | you own `d_src`, `d_src` is PUBLISHED, and an explicit `published:false` asks for a private member |
-| `private_source_versionless` | `version` | you own `d_src` and `d_src` is PRIVATE — whatever the flag |
+| `private_source_versionless` | `version`, `publish` | you own `d_src` (or the shot's `doc`) and it is PRIVATE — whatever the flag; a private document has no chain to append to (v7.3: on `publish` this is the flag-`true` face below) |
 
 The faces, keyed on the code (PUB-6.7): the client renders them, the
 wire carries the token. ⟨D⟩ is the document named.
@@ -879,6 +885,130 @@ Neither `version` refusal reaches a document you do NOT own: the
 cross-owner `version` mints a fresh document in YOUR account (the
 source's state plus your flag, §Arrangement) and is refused by neither
 rule.
+
+### The publish shot and head-float
+
+v7.3 (PUB round 2, lane 3.2). A published document advances by the
+**shot**: `publish` (§Arrangement) appends the next member of `doc`'s
+version chain, born published, in ONE commit, its arrangement taken
+from the runs the client supplies (PUB-2.33, PUB-8.1) and from nothing
+any draft holds at commit. The draft is the client's rendering surface;
+what it holds when the shot lands is not read.
+
+**Destination** (PUB-2.37, PUB-2.39, PUB-2.44, PUB-2.55): the next
+member of the chain anchored at `base`, decided at commit. A base that
+is still the trunk head yields the trunk's next member (`1.0.1.0.1.2`
+after `1.0.1.0.1.1`); a base the trunk has moved past yields the base's
+own DAUGHTER, in the nested form (`1.0.1.0.1.1.1`) — so two shots
+staged off one head both land, the first on the trunk and the second
+under it, and nothing is refused for want of a base. A memberless
+document is its own base (`base` = `doc`), and `base` absent is that
+same **birth version** (PUB-2.34): the chain's first member, `.1`,
+either way. Once a member exists the memberless base and the birth
+shape are superseded — the shot must name the member it was staged
+from (`base_superseded`). A member address given as `doc` is the
+document's shot.
+
+**The member's arrangement** (PUB-2.40, PUB-2.41, PUB-2.42): `runs` is
+the client's WHOLE rendered arrangement, in order, each run its
+`origin`, its `i_start` and its `width`. A run is placed by its
+origin's relation to `doc`: the document's own I-space (its own chain
+or any member's) by reference; the staging `draft`'s RE-INSERTED as
+fresh identity under the document's own I-space — one content mint
+and one write per value, the bytes read at the draft's addresses — so
+no address of the draft survives in the member; any OTHER document's
+stays a window, answering its origin. `origin` must be the document
+that minted the run's addresses (`bad_run` otherwise; a link element is
+no content run). Then the composite APPENDS the base's positions past
+`base_extent` — the extent the staged copy took: a published member
+changes only by declared deposits at fresh positions (PUB-2.43), so
+what lies past that extent is exactly the deposits the render
+post-dates, carried unchanged after the client's runs (PUB-2.45,
+PUB-2.67). That is how the whole-arrangement reading (PUB-2.33) and the
+deposit cell (PUB-2.42) hold together: the client renders, the
+composite appends what the client could not have seen; nothing is
+positionally applied to an advanced head. `base` and `base_extent`
+travel together — either both or neither. An empty `runs` lands an
+empty member.
+
+**Head-float** (PUB-2.49, PUB-2.50, PUB-2.53). Every arrangement reader
+of a bare DOCUMENT address answers the document's trunk HEAD — the
+latest trunk member — and never the pre-chain arrangement a shot
+superseded: `retrieve_v`, `retrieve_doc_v_span`,
+`retrieve_doc_v_span_set`, `show_origin`, `compare`, and the whole
+region family — `image`, `find_links_v`, `count_v`, `window_v`,
+`retrieve_endsets`; `version` of a bare address shares the head's
+arrangement. Daughters never float: the bare address is the trunk's.
+A VERSION address answers its own member, forever. A memberless
+published document answers its own arrangement — the pin taken here:
+until the first shot, the document's pre-chain arrangement (the home's
+ceremony atom, say) IS its reading surface, and the birth version then
+carries what the client re-supplies of it. A private document is
+untouched: it has no chain, and a stamped member under one does not
+move it. The registration check runs on the address named, ahead of
+the float (PUB-6.37). NOT floated, pinned as the seam it is:
+`show_deletions`, `find_docs_containing`, `project`,
+`discoverable_from`, `delete_orphans`, and `copy`'s source spans read
+the address named — a client comparing versions names the members.
+
+**The deposit cell** (PUB-2.65, PUB-2.66). A declared deposit into a
+published chain — `insert` with `deposit:true`, named by the bare
+address, by the head, or by a pinned older member — lands in the HEAD
+member's arrangement and nowhere else, judged fresh against the head's
+extent; the atom's identity is minted under the chain of the address
+named (`1.0.1.0.1.0.1.4` for the bare address, `1.0.1.0.1.1.0.1.1` for
+the member). A pinned member's arrangement never grows. The in-place
+refusal (`published_target`) stands on every address of the chain as
+before. The change feed's entry for the deposit names the address
+written to (§The change feed).
+
+**The source gate** (PUB-8.1's second constraint, PUB-8.4, PUB-8.5,
+PUB-6.23, PUB-6.24). Every run's origin must be readable to the
+session principal, consulted per DISTINCT origin in run order, after
+ownership and before any existence answer: the FIRST unreadable
+origin refuses `withheld` — disposition reorder (a later grant is the
+one event that fills it), `site.addr` the origin's DOCUMENT, no
+`detail` and no other site field, whether or not the run's addresses
+exist. The document's own I-space needs no consult, and a run the base
+already arranges is carried without one. Today the consult is the
+publication read: a published origin is readable to everyone, a
+private one to its owner; a sharing grant is a later lane's, and it
+widens what the daemon consults without changing this shape.
+
+The shot's refusals, in the order they answer (PUB-6.36, PUB-6.37) —
+every one commits nothing:
+
+| code | disposition | `site` | when |
+| --- | --- | --- | --- |
+| `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (slot 1) |
+| `doc_not_registered` | reorder | — | `doc` is not registered |
+| `source_not_registered` | reorder | — | `base`, `draft`, or a run's `origin` is not registered (in that order) |
+| `bad_run` | permanent | — | a run's `origin` is not the document that minted its `i_start`, or `i_start` is not a content element |
+| `private_source_versionless` | permanent | — | `doc` is PRIVATE — a private document has no chain (PUB-2.9's flag-`true` face) |
+| `base_not_in_chain` | permanent | — | `base` is a document, or a member, outside `doc`'s chain |
+| `base_superseded` | permanent | — | `doc` already has a member and the shot names the memberless base (or none) |
+| `base_extent_too_large` | permanent | — | `base_extent` exceeds the base's arranged content count |
+| `withheld` | reorder | `addr` = the origin's document | a run's origin is not readable to the session principal |
+| `dangling_source` | permanent | — | an address a run names holds no value |
+| `too_many_runs` | permanent | — | the placement exceeds the arrangement's run budget |
+
+The daemon's own publish-class gate (`signed_session_required`, slot 4)
+stands ahead of the store: a shot is publication's own act whatever
+`doc`'s state, so from a bare session it is refused there even on a
+private document. The faces (PUB-6.7), ⟨D⟩ the document named and ⟨O⟩
+the origin withheld:
+
+* `withheld` — "⟨O⟩ is not shared with you — the shot windows it.
+  Remove that window, or wait for its owner's grant." Nothing about
+  how much of ⟨O⟩ the shot named (PUB-8.5).
+* `base_superseded` — "⟨D⟩ has versions now — name the version your
+  draft was staged from as the base."
+* `base_not_in_chain` — "the base is not a version of ⟨D⟩."
+* `bad_run`, `base_extent_too_large` — the client's own arithmetic is
+  wrong; there is no user-facing act to offer.
+* `private_source_versionless` on `publish` — the flag-`true` face of
+  §The version-chain refusals: "⟨D⟩ is private — publishing means
+  minting a separate edition."
 
 ### Credential refusals
 
@@ -1085,7 +1215,9 @@ lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 Ownership (v5.1): `insert`, `delete`, and `rearrange` require the session
 principal to own `doc`; `copy` requires owning the **destination** `doc`
 only — its source spans may read anyone's content (transclusion is
-unrestricted). A non-owner gets `not_owner` (permanent) with the document
+unrestricted); `publish` (v7.3) requires owning `doc`, and its runs'
+origins must be READABLE to the principal (§The publish shot and
+head-float). A non-owner gets `not_owner` (permanent) with the document
 in `site.addr`. `version` is deliberately un-owner-gated: forking a
 foreign document into your own account IS the sanctioned "propose a
 change" path. Since v7 that sentence carries two qualifications, neither
@@ -1099,7 +1231,11 @@ is judged as its document (PUB-2.15) — refuses the four in-place edits
 `published_target` (§The version-chain refusals), behind the ownership
 check and ahead of every shape check, from signed sessions too. A draft
 is edited in place as before. The one thing a published document admits
-is the **declared deposit** below.
+is the **declared deposit** below — and it advances by the **shot**,
+`publish` (v7.3). Once a shot has landed, a bare document address reads
+as its trunk HEAD in every arrangement reader (head-float), and a
+declared deposit into the chain lands in the head member's arrangement
+(§The publish shot and head-float).
 
 **`insert`** — insert content into `doc` at V-position `at`; each element
 of `values` is a §Content values write form. → `ack_addr` (the first
@@ -1197,6 +1333,24 @@ lists one. Where you do not own `d_src`, `version` is refused by neither
 rule: it mints a fresh document in your own account — the source's state
 where the flag is absent, your flag where it is not — gated and judged
 by its own bit.
+
+**`publish`** — the SHOT (v7.3): append the next member of `doc`'s
+version chain, born published, in one commit, its arrangement the
+client's own `runs` (§The publish shot and head-float). `base` is the
+member the draft was staged from — `doc` itself while the chain is
+empty — with `base_extent` the number of content positions the staged
+copy took, both present or neither (neither is the birth version);
+`draft` names the staging draft whose runs are re-inserted as fresh
+identity under `doc`'s own I-space; each run is `origin`, `i_start`,
+`width`. Owner-gated, and the publish class's input from any session.
+→ `ack_addr` (the member's address). This example publishes a draft
+staged off the second member: the edition's own three positions by
+reference and the draft's two as fresh identity:
+
+<!-- wire: request publish -->
+```json
+{"base":"1.0.1.0.1.2","base_extent":"3","doc":"1.0.1.0.1","draft":"1.0.1.0.7","op":"publish","runs":[{"i_start":"1.0.1.0.1.0.1.1","origin":"1.0.1.0.1","width":"3"},{"i_start":"1.0.1.0.7.0.1.1","origin":"1.0.1.0.7","width":"2"}]}
+```
 
 ### Links (writes)
 
@@ -1672,8 +1826,14 @@ Each entry:
 * `docs` — the document(s) whose state that commit touched, or `null`:
   the write's target doc for `insert`/`delete`/`copy`/`rearrange`; a link
   write names its **home** (`edit_link` both its homes, successor's first);
-  the **minted** document for `create_new_document`/`fork`/`version`;
-  `delegate` and `register_node` touch no document and carry `[]`.
+  the **minted** document for `create_new_document`/`fork`/`version`,
+  and the minted MEMBER for `publish` (v7.3 — `1.0.1.0.1.2`, whose
+  trunk is the document it advances); `delegate` and `register_node`
+  touch no document and carry `[]`. A declared deposit into a
+  published chain names the address the `insert` was written to,
+  though the arrangement it lands in is the chain's head member (§The
+  publish shot and head-float) — a client refreshing the head re-reads
+  the bare address, which floats.
 * `key` (v7) — the write's AUTH testimony: the 64-hex fingerprint of the
   enrolled key whose signed session committed it; `"bare"` for a
   bare-session write; `null` ONLY for lost metadata (a bare entry, or a
@@ -1868,6 +2028,49 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.3 (the publish shot and head-float — PUB round 2, lane 3.2, built
+2026-09-05; documented as built):
+
+* New op `publish` (write, `ack_addr`; 39 ops, 15 writes): the SHOT.
+  `doc`, `runs` (each `origin`/`i_start`/`width`), optional `base` +
+  `base_extent` (together or neither — neither is the birth version,
+  PUB-2.34) and optional `draft`. The next member of `doc`'s chain, born
+  published, in ONE commit, from the client's runs alone (PUB-2.33,
+  PUB-8.1): the document's own I-space by reference, the draft's
+  re-inserted as fresh identity under the document's own I-space, any
+  other document's a window; the base's positions past `base_extent`
+  appended after them — the deposit cell (PUB-2.42, PUB-2.45).
+  Destination decided at commit: a base still the head ⇒ the trunk's
+  next member, an older base ⇒ its daughter in the nested form
+  (PUB-2.39, PUB-2.44, PUB-2.55). Owner-gated (`not_owner` with
+  `site.addr`), and the publish class's input from any session
+  (`signed_session_required` on a bare one, whatever `doc`'s state).
+* Five new `rejected` codes (§The publish shot and head-float):
+  `withheld` — the SOURCE GATE (PUB-8.1, PUB-8.4, PUB-8.5): a run's
+  origin the session principal may not read, consulted per distinct
+  origin after ownership and before existence; `reorder`, `site.addr`
+  the origin's DOCUMENT, no `detail` ever (the v6-pinned exclusion,
+  now live) — and `bad_run`, `base_not_in_chain`, `base_superseded`,
+  `base_extent_too_large`, all `permanent`, none carrying `detail` or
+  `site`. `private_source_versionless` now also answers `publish` on a
+  private document (PUB-2.9's flag-`true` face, one code). Today's
+  consult is the publication read; a sharing grant is a later lane's.
+* HEAD-FLOAT (PUB-2.49, PUB-2.50, PUB-2.53): a bare DOCUMENT address
+  answers its trunk head in `retrieve_v`, `retrieve_doc_v_span`,
+  `retrieve_doc_v_span_set`, `show_origin`, `compare`, `image`,
+  `find_links_v`, `count_v`, `window_v`, `retrieve_endsets`, and in
+  the arrangement `version` shares; a version address answers itself;
+  a memberless document answers its own arrangement; private
+  documents are untouched. `show_deletions`, `find_docs_containing`,
+  `project`, `discoverable_from`, `delete_orphans` and `copy`'s source
+  spans read the address named — pinned as the seam.
+* THE DEPOSIT CELL (PUB-2.66): a declared deposit into a published
+  chain — named bare, by the head, or by a pinned member — lands in
+  the HEAD member's arrangement, its identity minted under the chain
+  of the address named; a pinned member never grows. The change feed
+  names the address written to.
+* No dump change; no change to the credential surface.
 
 v7.2 (the version-chain model's three write-path refusals — PUB round 2,
 lane 3.1, built 2026-09-05 under owner ruling D2b; documented as built):

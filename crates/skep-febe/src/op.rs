@@ -3,7 +3,7 @@
 //! read/write partition the lifecycle gates on (§1).
 
 use skep_address::{Address, Nat, Span, Tumbler};
-use skep_arrangement::{VPos, VSpec};
+use skep_arrangement::{Shot, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{Cursor, FourSet};
 use skep_links::{Endset, SlotArg, View};
@@ -128,6 +128,17 @@ pub enum Op {
     /// inheritance off its own working state and passes the resolved bit
     /// down (PUB-8.18); M10 hands the flag through unresolved.
     Version { d_src: Address, published: Option<bool> },
+    /// PUBLISH — the SHOT (PUB-2.33, PUB-8.1; PUB round 2, lane 3.2): append
+    /// the next member of `doc`'s chain, born published, in one commit, from
+    /// the CLIENT-SUPPLIED runs of `shot`. M5's composite decides the
+    /// destination at commit (the trunk's next member, or the base's
+    /// daughter — PUB-2.39), places the runs by their origin (PUB-2.40) and
+    /// runs the source gate (PUB-6.23) through the consult the daemon
+    /// supplies ([`Operation::with_consult`]); M10 hands the shot through
+    /// verbatim and names no policy of its own.
+    ///
+    /// [`Operation::with_consult`]: crate::Operation::with_consult
+    Publish { doc: Address, shot: Shot },
     // ── link writes (→ M7) ──
     /// MAKELINK (ASN-0120, as amended 2026-08-16): open link from three
     /// two-form slots — each content V-specs (resolved by M7 inside its
@@ -239,6 +250,7 @@ pub enum OpKind {
     Copy,
     Rearrange,
     Version,
+    Publish,
     MakeLink,
     Emit,
     Nullify,
@@ -325,6 +337,7 @@ impl Op {
             | Op::Copy { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
             | Op::Nullify { .. }
@@ -353,6 +366,7 @@ impl Op {
             Op::Copy { .. } => OpKind::Copy,
             Op::Rearrange { .. } => OpKind::Rearrange,
             Op::Version { .. } => OpKind::Version,
+            Op::Publish { .. } => OpKind::Publish,
             Op::MakeLink { .. } => OpKind::MakeLink,
             Op::Emit { .. } => OpKind::Emit,
             Op::Nullify { .. } => OpKind::Nullify,
@@ -433,6 +447,10 @@ pub(crate) mod tests {
             (Op::Rearrange { doc: doc(), cuts: vec![vpos()] }, false),
             (Op::Version { d_src: doc(), published: None }, false),
             (
+                Op::Publish { doc: doc(), shot: Shot { base: None, draft: None, runs: vec![] } },
+                false,
+            ),
+            (
                 Op::MakeLink {
                     home: doc(),
                     from: SlotArg::Resolve(vec![vs()]),
@@ -479,11 +497,12 @@ pub(crate) mod tests {
     }
 
     /// §1: the read/write partition is exhaustive and two-sided
-    /// (`is_write == !is_read`), with 24 reads and 14 writes.
+    /// (`is_write == !is_read`), with 24 reads and 15 writes (the publish
+    /// shot joining the fourteen of the design, lane 3.2).
     #[test]
     fn partition_matches_the_design_grouping() {
         let ops = all_ops();
-        assert_eq!(ops.len(), 38);
+        assert_eq!(ops.len(), 39);
         let reads = ops.iter().filter(|(_, r)| *r).count();
         assert_eq!(reads, 24);
         for (op, expect_read) in &ops {
@@ -507,6 +526,6 @@ pub(crate) mod tests {
             assert_ne!(kind, OpKind::Unparseable);
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
-        assert_eq!(seen.len(), 38);
+        assert_eq!(seen.len(), 39);
     }
 }

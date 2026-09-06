@@ -122,11 +122,12 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
+use skep_arrangement::trunk_of;
 use skep_engine::{Engine, EngineError, HistoryError, World};
-use skep_febe::{Codec, Disposition, Operation, OpKind, Request, Response, SessionId};
+use skep_febe::{Codec, Disposition, Operation, OpKind, Request, Response, SessionId, Stores};
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
-use skep_namespace::PrincipalId;
+use skep_namespace::{HasM3, PrincipalId};
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
@@ -783,7 +784,22 @@ impl Daemon {
         };
         let engine = Engine::open(cfg).map_err(DaemonError::Engine)?;
         let writes = WritePath::open(data_dir, &engine).map_err(DaemonError::Sidecar)?;
-        let febe = Operation::new(Box::new(engine.stores()));
+        // The source gate's consult for the publish shot (PUB-6.23, PUB-8.1;
+        // lane 3.2), the daemon's to supply: TODAY's publication read — a
+        // published origin is readable to everyone, a private one to its
+        // owner — off a head snapshot of the one kernel, the origin's
+        // DOCUMENT projected first (PUB-2.15). Lane 3.3 widens this closure
+        // with PUB-1.31's subtree and grant clauses and touches no composite.
+        let febe = {
+            let consult = engine.stores();
+            Operation::new(Box::new(engine.stores())).with_consult(Box::new(
+                move |principal: PrincipalId, origin: &skep_address::Address| {
+                    let snap = consult.kernel().snapshot();
+                    snap.world().published(&trunk_of(origin))
+                        || snap.world().m3().is_effective_owner(principal, origin)
+                },
+            ))
+        };
         let guest = open_guest_session(&febe);
         let auth = {
             let snap = engine.kernel().snapshot();

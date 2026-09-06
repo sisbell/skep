@@ -152,6 +152,66 @@ pub enum VersionError {
     Mint(MintError),
 }
 
+/// PUBLISH rejection (PUB-2.33, PUB-8.1; PUB round 2, lane 3.2) — the shot's
+/// verdicts, in the slot order PUB-6.36 pins (stated in full on
+/// [`Vstream::publish`](crate::Vstream::publish)):
+///
+/// * `DocNotRegistered` / `NotOwner(doc)` — the destination's registration
+///   and ω (slot 1; the payload names the failing document).
+/// * `SourceNotRegistered` — the base, the draft, or a run's origin is not
+///   a registered document (slot 3, PUB-6.37: registration answers ahead of
+///   any publication or existence verdict).
+/// * `BadRun` — a supplied run is not a content run of its stated origin:
+///   its start is not a content element, or the document that minted it is
+///   not the `origin` the client named. Address arithmetic on the request
+///   alone; it discloses nothing about what exists.
+/// * `BaseNotInChain` — `base` names a document that is neither `doc` nor a
+///   member of `doc`'s chain (PUB-2.37: a shot lands under its own base).
+/// * `BaseSuperseded` — the base is absent, or is `doc` itself, while `doc`
+///   already has a member: the birth shape (PUB-2.34) and the memberless
+///   base (PUB-2.66) both name the document's own pre-chain arrangement,
+///   which the chain has superseded; name the member the draft was staged
+///   from.
+/// * `BaseExtentTooLarge` — `base.extent` exceeds the base's current content
+///   count: the render claims to have seen more than the member holds.
+/// * `PrivateSourceVersionless` — `doc` is PRIVATE: private documents are
+///   versionless (PUB-2.9), and a shot appends a version. ONE code with
+///   `version`'s own (the wire's `private_source_versionless`); the face is
+///   PUB-2.9's `true` arm, the intent being publication: "⟨D⟩ is private —
+///   publishing means minting a separate edition: select what to publish
+///   and it is minted published-born, your draft re-windowing it; private
+///   documents are versionless."
+/// * `Withheld(origin)` — the source gate (PUB-6.23, PUB-8.1's second
+///   constraint): the FIRST supplied run whose origin the base does not
+///   already arrange and the shooter may not read, in run order; the
+///   payload is that origin's DOCUMENT (PUB-8.4's `site.addr`). Answered
+///   BEFORE any existence, extent or emptiness answer (PUB-6.2), so a run
+///   onto a non-existent address in an unreadable origin answers this and
+///   never `DanglingSource`.
+/// * `DanglingSource` — an I-address a run names has no stored value
+///   (S3★): a by-reference run whose extent M4 does not hold whole, or a
+///   draft-native run whose bytes are not all there to re-insert.
+/// * `TooManyRuns` — the member's placement exceeds
+///   [`MAX_PLACED_RUNS`](crate::MAX_PLACED_RUNS), COPY's own budget.
+/// * `Mint` / `Content` — the identity mint, a content mint, or a content
+///   write refused (M3/M4's own boundary refusals; defensive).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PublishError {
+    DocNotRegistered,
+    NotOwner(Address),
+    SourceNotRegistered,
+    BadRun,
+    BaseNotInChain,
+    BaseSuperseded,
+    BaseExtentTooLarge,
+    PrivateSourceVersionless,
+    Withheld(Address),
+    DanglingSource,
+    TooManyRuns,
+    Mint(MintError),
+    Content(ContentError),
+}
+
 /// Link-seating rejection (ASN-0047 CL-OWN/CL-UNIQ; §8): `NotLinkAddress` —
 /// `link` is not a full element position `doc·0·s_L·ordinal`, the shape a
 /// seated run's start must have; `NotHomeLink` — `origin(link) ≠ doc` (via
@@ -183,6 +243,70 @@ impl From<ContentError> for InsertError {
 impl From<MintError> for VersionError {
     fn from(e: MintError) -> Self {
         VersionError::Mint(e)
+    }
+}
+
+impl From<MintError> for PublishError {
+    fn from(e: MintError) -> Self {
+        PublishError::Mint(e)
+    }
+}
+
+impl From<ContentError> for PublishError {
+    fn from(e: ContentError) -> Self {
+        PublishError::Content(e)
+    }
+}
+
+impl fmt::Display for PublishError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PublishError::DocNotRegistered => {
+                f.write_str("publish: doc is not a registered document")
+            }
+            PublishError::NotOwner(_) => {
+                f.write_str("publish: the caller is not the document's effective owner (ω)")
+            }
+            PublishError::SourceNotRegistered => f.write_str(
+                "publish: the base, the draft, or a run's origin is not a registered document",
+            ),
+            PublishError::BadRun => f.write_str(
+                "publish: a supplied run is not a content run of its stated origin",
+            ),
+            PublishError::BaseNotInChain => f.write_str(
+                "publish: the base is neither the document nor a member of its chain",
+            ),
+            PublishError::BaseSuperseded => f.write_str(
+                "publish: the document already has a member, so its own pre-chain arrangement is no base — name the member the draft was staged from",
+            ),
+            PublishError::BaseExtentTooLarge => f.write_str(
+                "publish: the base extent exceeds the base's current content count",
+            ),
+            PublishError::PrivateSourceVersionless => f.write_str(
+                "publish: the document is private — publishing means minting a separate edition; private documents are versionless (PUB-2.9)",
+            ),
+            PublishError::Withheld(_) => f.write_str(
+                "publish: a supplied run windows an origin the shooter may not read (withheld)",
+            ),
+            PublishError::DanglingSource => f.write_str(
+                "publish: a supplied run names an I-address with no stored value (S3★)",
+            ),
+            PublishError::TooManyRuns => {
+                f.write_str("publish: the placement exceeds the per-transaction run budget")
+            }
+            // This layer only — the inner message is the `source`.
+            PublishError::Mint(_) => f.write_str("publish: an identity or content mint failed"),
+            PublishError::Content(_) => f.write_str("publish: a content write was rejected"),
+        }
+    }
+}
+impl Error for PublishError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            PublishError::Mint(e) => Some(e),
+            PublishError::Content(e) => Some(e),
+            _ => None,
+        }
     }
 }
 
@@ -395,6 +519,33 @@ mod tests {
         assert!(InsertError::PublishedTarget.source().is_none());
         assert!(VersionError::PrivateSourceVersionless.source().is_none());
         assert!(VersionError::PrivateVersionOfPublished.source().is_none());
+
+        // The shot's wrappers take the same discipline as INSERT's.
+        let publish_mint = PublishError::Mint(cause);
+        assert_eq!(publish_mint.to_string(), "publish: an identity or content mint failed");
+        assert_eq!(
+            publish_mint
+                .source()
+                .expect("the mint failure is the cause")
+                .to_string(),
+            cause.to_string()
+        );
+        let publish_write = PublishError::Content(refusal.clone());
+        assert_eq!(
+            publish_write
+                .source()
+                .expect("the write refusal is the cause")
+                .to_string(),
+            refusal.to_string()
+        );
+        assert!(PublishError::Withheld(t_doc()).source().is_none());
+        assert!(PublishError::BaseSuperseded.source().is_none());
+    }
+
+    /// The one document a shot's payload-carrying verdicts name in these
+    /// tests.
+    fn t_doc() -> Address {
+        skep_address::validate(t(&[1, 0, 1, 0, 1])).expect("T4-valid")
     }
 
     #[test]

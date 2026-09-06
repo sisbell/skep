@@ -69,9 +69,11 @@ pub enum Disposition {
 /// COMPARE's `{operand, region, index}`, and the offending document `Address`
 /// of the multi-document `DocNotRegistered(Address)` variants), from M5's and
 /// M7's `NotOwner(Address)` — the ownership ruling (2026-08-16) — whose `addr`
-/// names the document (or target link) that failed the ω check, and from
-/// M10's own EDITLINK successor guard, which fills `slot` and `index`. Every
-/// other M5/M8 variant still lowers with `site = None` (§5; M8's
+/// names the document (or target link) that failed the ω check, from M5's
+/// publish shot's `Withheld(Address)`, whose `addr` names the withheld
+/// document (PUB-8.4's pinned `site.addr`, the first unreadable origin), and
+/// from M10's own EDITLINK successor guard, which fills `slot` and `index`.
+/// Every other M5/M8 variant still lowers with `site = None` (§5; M8's
 /// `DocNotRegistered` is fieldless, unlike M6's).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct FaultSite {
@@ -178,8 +180,32 @@ pub enum RejectCode {
     /// caller owns (the explicit-`false` arm; absent inherits, PUB-2.8).
     PrivateVersionOfPublished,
     /// PUB-2.9 — a `version` on a PRIVATE source the caller owns, whatever
-    /// the flag: private documents are versionless.
+    /// the flag: private documents are versionless. ALSO the publish shot's
+    /// refusal on a private document (lane 3.2): a shot appends a version,
+    /// and the face is this code's `true` arm — publishing means minting a
+    /// separate edition.
     PrivateSourceVersionless,
+    // ── M5 arrangement: the publish shot (PUB round 2, lane 3.2). The
+    //    source gate's `withheld` is the one code here whose disposition is
+    //    not `Permanent`: it is `Reorder` in EVERY cell (PUB-8.4, PUB-8.6),
+    //    names the withheld document in `site.addr` and carries no `detail`
+    //    (PUB-8.5). The four request-shape refusals beside it are the
+    //    shot's own, permanent. ──
+    /// PUB-6.23 / PUB-8.1 / PUB-8.4 — a supplied run windows an origin the
+    /// shooter may not read; `site.addr` is that origin's document.
+    Withheld,
+    /// A supplied run is not a content run of its stated origin (address
+    /// arithmetic on the request; discloses nothing about what exists).
+    BadRun,
+    /// The base is neither the document nor a member of its chain
+    /// (PUB-2.37).
+    BaseNotInChain,
+    /// The base is absent or the document itself while the document already
+    /// has a member: its pre-chain arrangement is no base (PUB-2.34,
+    /// PUB-2.66).
+    BaseSuperseded,
+    /// The base extent exceeds the base's current content count.
+    BaseExtentTooLarge,
     // ── M7 link ──
     IllFormedSpec,
     SlotTooLarge,
@@ -255,6 +281,10 @@ fn fixed_detail(code: RejectCode) -> Option<&'static str> {
 /// `PrivateSourceVersionless` (PUB-8.3's "permanent class": publication
 /// never transitions, PUB-1.9, so the same request can never land — the act
 /// that does is another request, the one the face names).
+///
+/// `Withheld` is `Reorder` in EVERY cell (PUB-8.4, PUB-8.6): the one filling
+/// event is a later grant commit, and the wire token stays `reorder`
+/// wherever no such event can exist — the FACE derives the honest answer.
 /// The conservatively-`Permanent` state-dependent codes (`NotArranged`,
 /// `OutOfBounds`, `EmptySource`, `EmptyContentSubspace`, `RangeNotPresent`,
 /// `EmptySubspace`, `DelegatorUnknown`, `NotAPrincipal`, …) are the
@@ -270,7 +300,8 @@ pub fn disposition_of(code: RejectCode) -> Disposition {
         | RejectCode::NotAnAccount
         | RejectCode::OriginalNotResident
         | RejectCode::EndpointNotResident
-        | RejectCode::ParentNotRegistered => Disposition::Reorder,
+        | RejectCode::ParentNotRegistered
+        | RejectCode::Withheld => Disposition::Reorder,
         _ => Disposition::Permanent,
     }
 }
@@ -374,6 +405,7 @@ mod tests {
             RejectCode::OriginalNotResident,
             RejectCode::EndpointNotResident,
             RejectCode::ParentNotRegistered,
+            RejectCode::Withheld,
         ] {
             assert_eq!(disposition_of(code), Disposition::Reorder);
         }
@@ -404,6 +436,10 @@ mod tests {
             RejectCode::PublishedTarget,
             RejectCode::PrivateVersionOfPublished,
             RejectCode::PrivateSourceVersionless,
+            RejectCode::BadRun,
+            RejectCode::BaseNotInChain,
+            RejectCode::BaseSuperseded,
+            RejectCode::BaseExtentTooLarge,
         ] {
             assert_eq!(disposition_of(code), Disposition::Permanent);
         }
@@ -534,6 +570,9 @@ mod tests {
             | RejectCode::OriginalNotResident
             | RejectCode::EndpointNotResident
             | RejectCode::ParentNotRegistered => Disposition::Reorder,
+            // The source gate's withheld: a later grant is the one event
+            // that fills it, in every cell (PUB-8.4, PUB-8.6).
+            RejectCode::Withheld => Disposition::Reorder,
             // Everything else: reissuing the identical request cannot help.
             RejectCode::Unauthenticated
             | RejectCode::Malformed
@@ -578,6 +617,11 @@ mod tests {
             | RejectCode::PublishedTarget
             | RejectCode::PrivateVersionOfPublished
             | RejectCode::PrivateSourceVersionless
+            // The publish shot's four request-shape refusals (lane 3.2).
+            | RejectCode::BadRun
+            | RejectCode::BaseNotInChain
+            | RejectCode::BaseSuperseded
+            | RejectCode::BaseExtentTooLarge
             | RejectCode::IllFormedSpec
             | RejectCode::SlotTooLarge
             | RejectCode::EmptyTypeResolution
@@ -605,7 +649,7 @@ mod tests {
     /// Every code, in declaration order — the domain the policy is total
     /// over. A newly added code lands here and in
     /// [`documented_disposition`].
-    const ALL_CODES: [RejectCode; 72] = [
+    const ALL_CODES: [RejectCode; 77] = [
         RejectCode::Unauthenticated,
         RejectCode::Malformed,
         RejectCode::Durability,
@@ -656,6 +700,11 @@ mod tests {
         RejectCode::PublishedTarget,
         RejectCode::PrivateVersionOfPublished,
         RejectCode::PrivateSourceVersionless,
+        RejectCode::Withheld,
+        RejectCode::BadRun,
+        RejectCode::BaseNotInChain,
+        RejectCode::BaseSuperseded,
+        RejectCode::BaseExtentTooLarge,
         RejectCode::IllFormedSpec,
         RejectCode::SlotTooLarge,
         RejectCode::EmptyTypeResolution,

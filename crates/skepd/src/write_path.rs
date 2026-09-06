@@ -352,7 +352,7 @@ pub(crate) enum AffectedDocs {
 /// position's time AS the head's, the one thing that method's contract says
 /// it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 14 writes of 38.
+/// The two tables agree at 15 writes of 39.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs| Some(FrameMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
@@ -366,6 +366,9 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::Copy { doc, .. } => meta(OpKind::Copy, one(doc)),
         Op::Rearrange { doc, .. } => meta(OpKind::Rearrange, one(doc)),
         Op::Version { .. } => meta(OpKind::Version, AffectedDocs::Minted),
+        // The shot mints the chain's next member, known only from its ack —
+        // the document it advances is the member's own trunk.
+        Op::Publish { .. } => meta(OpKind::Publish, AffectedDocs::Minted),
         Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home)),
         Op::Emit { home, .. } => meta(OpKind::Emit, one(home)),
         Op::Nullify { home, .. } => meta(OpKind::Nullify, one(home)),

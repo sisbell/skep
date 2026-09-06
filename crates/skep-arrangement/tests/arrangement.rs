@@ -17,11 +17,14 @@
 
 use std::path::Path;
 
+use std::cell::RefCell;
+
 use serde::{Deserialize, Serialize};
 use skep_address::{subtree_of, validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{
-    ordinal_vspan, seat_link, stage_seat_link, Caller, CopyError, DeleteError, HasM5, InsertError,
-    M5State, RearrangeError, SeatError, VPos, VSpec, VersionError, Vstream,
+    ordinal_vspan, reading_surface, seat_link, stage_seat_link, trunk_head, Base, Caller,
+    CopyError, DeleteError, HasM5, InsertError, M5State, PublishError, RearrangeError, Run,
+    SeatError, Shot, ShotRun, VPos, VSpec, VersionError, Vstream,
 };
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_kernel::{
@@ -319,6 +322,52 @@ fn deposit_abc(kernel: &Kernel<World>) -> Vstream<'_, World> {
     vs.insert(P1, &pdoc(), vp(1, 1), vec![val(b"a"), val(b"b"), val(b"c")], true)
         .expect("a declared deposit at the edition's fresh positions commits");
     vs
+}
+
+/// One run of a shot: `width` positions from `start`, windowing `origin`.
+fn shot_run(origin: &Address, start: &Address, width: u32) -> ShotRun {
+    ShotRun {
+        origin: origin.clone(),
+        run: Run::new(start.clone(), n(width)).expect("a content run"),
+    }
+}
+
+/// The base a draft was staged from, and how much of it the copy took.
+fn base(member: &Address, extent: u32) -> Base {
+    Base {
+        member: member.clone(),
+        extent: n(extent),
+    }
+}
+
+/// Today's consult, as the daemon supplies it: a published origin is readable
+/// to everyone, a private one to its owner. Read off the kernel's head — the
+/// composite runs it inside its own transaction, and a snapshot is a read.
+fn readable_by(kernel: &Kernel<World>, p: PrincipalId) -> impl Fn(&Address) -> bool + '_ {
+    move |origin: &Address| {
+        let s = kernel.snapshot();
+        let m3 = s.world().m3();
+        m3.published(&skep_arrangement::trunk_of(origin)) || m3.is_effective_owner(p, origin)
+    }
+}
+
+/// The addresses a document's content runs start at, in V-order — what "no
+/// address of the draft" is asserted over.
+fn run_starts(m5: &M5State, doc: &Address) -> Vec<Address> {
+    m5.content_runs(doc).iter().map(|r| r.i_start().clone()).collect()
+}
+
+/// A consult that reads `allowed` alone and records every origin it is
+/// asked about, in order — what "each origin once, in run order, and never
+/// before ω" is asserted over.
+fn consult_reading<'a>(
+    asked: &'a RefCell<Vec<Address>>,
+    allowed: Vec<Address>,
+) -> impl Fn(&Address) -> bool + 'a {
+    move |origin: &Address| {
+        asked.borrow_mut().push(origin.clone());
+        allowed.contains(origin)
+    }
 }
 
 // ---- §B INSERT ----
@@ -1282,6 +1331,496 @@ fn an_accounts_home_is_a_published_target_from_its_flagless_first_mint() {
         .expect("an undeclared insert into the account's draft commits");
 }
 
+// ---- §B the publish shot and head-float (PUB round 2, lane 3.2) ----
+
+#[test]
+fn a_shot_appends_the_next_trunk_member_from_the_clients_runs() {
+    // PUB-2.33/2.37/2.40/2.41: the ordinary shot. The staging draft (doc1)
+    // holds the edition's three positions by `copy` (PUB-2.27) and two
+    // draft-native bytes; the client supplies that whole arrangement as
+    // runs; the member born is the trunk's first, holding the edition's own
+    // addresses by reference and the draft-native text as FRESH identity
+    // under the edition's own I-space — no address of the draft survives.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: pdoc(), span: vspan(1, 1, 3) }])
+        .expect("the staging copy shares identity");
+    vs.insert(P1, &doc1(), vp(1, 4), vec![val(b"d"), val(b"e")], false)
+        .expect("the stager types");
+    let readable = readable_by(&k, PrincipalId(1));
+    let shot = Shot {
+        base: Some(base(&pdoc(), 3)),
+        draft: Some(doc1()),
+        runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc1(), &ca(1), 2)],
+    };
+    let before = k.current_seq();
+    let (member, at) = vs.publish(P1, &pdoc(), &shot, &readable).expect("the shot commits");
+    assert_eq!(member, vdoc(), "the chain's first member");
+    assert_eq!(at, k.current_seq(), "one commit");
+    assert!(at > before);
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert!(s.world().m3().published(&member), "born published (PUB-2.5)");
+    assert_eq!(m5.content_count(&member), n(5));
+    // The re-minted text continues the edition's own content chain, so it
+    // coalesces with the by-reference run: ONE run under pdoc.
+    assert_eq!(m5.content_runs(&member), vec![Run::new(pca(1), n(5)).expect("a run")]);
+    assert_eq!(read_v(&s, &member, 4), b"d".to_vec());
+    assert_eq!(read_v(&s, &member, 5), b"e".to_vec());
+    assert!(
+        run_starts(m5, &member).iter().all(|a| skep_arrangement::trunk_of(
+            &skep_address::document_of(a).expect("an element")
+        ) == pdoc()),
+        "nothing in the member resolves through the draft (PUB-2.41)"
+    );
+    // The fresh identities are R-recorded for the member (J1★), as COPY's
+    // by-reference placements are — read the way FINDDOCSCONTAINING reads R
+    // (§9): `docs_ever_containing` is the overlap SUPERSET, and it admits an
+    // ADJACENT record — the edition's and the draft's `[pca1, pca4)` touches
+    // the fresh `[pca4, pca6)` — so the member is asserted a candidate rather
+    // than the only one, and the present-containment narrowing `project`
+    // picks it out alone: neither the edition's pre-chain arrangement nor the
+    // draft arranges a fresh address.
+    let fresh = SpanSet::singleton(Run::new(pca(4), n(2)).expect("a run").iextent());
+    let candidates = m5.docs_ever_containing(&fresh);
+    assert!(candidates.contains(&member), "the member placed the fresh run: {candidates:?}");
+    assert!(!m5.project(&member, &fresh).is_empty(), "the member arranges the fresh run");
+    assert!(m5.project(&pdoc(), &fresh).is_empty(), "the pre-chain arrangement holds no fresh address");
+    assert!(m5.project(&doc1(), &fresh).is_empty(), "nor does the draft");
+    // Head-float: the bare address now answers the member; the draft and the
+    // edition's own arrangement are what they were.
+    assert_eq!(trunk_head(s.world().m3(), &pdoc()), Some(member.clone()));
+    assert_eq!(reading_surface(s.world().m3(), &pdoc()), member);
+    assert_eq!(m5.content_count(&pdoc()), n(3));
+    assert_eq!(m5.content_count(&doc1()), n(5));
+}
+
+#[test]
+fn a_window_stays_a_window_and_a_daughter_lands_under_its_base() {
+    // PUB-2.40 (c), PUB-2.39/2.44/2.55: a run onto ANOTHER document stays a
+    // window answering its origin; two shots staged off one head both
+    // commit, the first advancing the trunk and the second landing as the
+    // head's DAUGHTER in the nested form — and the bare address floats to
+    // the trunk alone (PUB-2.53).
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let readable = readable_by(&k, PrincipalId(1));
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &readable,
+        )
+        .expect("the first member");
+    assert_eq!(m1, vdoc());
+    // The window's origin: doc2, P1's own private draft (readable to P1).
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w")], false).expect("doc2 holds a byte");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let staged = |member: &Address| Shot {
+        base: Some(base(member, 3)),
+        draft: None,
+        runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 1)],
+    };
+    // Shot A off the head m1 → the trunk's next member.
+    let (m2, _) = vs.publish(P1, &pdoc(), &staged(&m1), &readable).expect("A commits");
+    assert_eq!(m2, a(&[1, 0, 1, 0, 3, 2]));
+    // Shot B, ALSO staged off m1, after A landed → m1's daughter, and no
+    // refusal (PUB-2.38: the gesture never fails for want of a base).
+    let (daughter, _) = vs.publish(P1, &pdoc(), &staged(&m1), &readable).expect("B commits");
+    assert_eq!(daughter, a(&[1, 0, 1, 0, 3, 1, 1]), "the nested form (PUB-2.55)");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    for member in [&m2, &daughter] {
+        assert_eq!(m5.content_count(member), n(4));
+        assert_eq!(m5.point(member, &vp(1, 4)), Some(w.clone()), "the window answers doc2");
+        assert_eq!(read_v(&s, member, 4), b"w".to_vec());
+    }
+    // The bare address floats to the trunk head; the daughter is reached by
+    // its own address alone; every member pins.
+    assert_eq!(reading_surface(s.world().m3(), &pdoc()), m2);
+    assert_eq!(trunk_head(s.world().m3(), &daughter), Some(m2.clone()));
+    assert_eq!(reading_surface(s.world().m3(), &daughter), daughter);
+    assert_eq!(reading_surface(s.world().m3(), &m1), m1);
+    // And a member is itself a base: a shot off the daughter nests again.
+    let (grand, _) = vs.publish(P1, &pdoc(), &staged(&daughter), &readable).expect("nests again");
+    assert_eq!(grand, a(&[1, 0, 1, 0, 3, 1, 1, 1]));
+    // A shot may name a member as `doc`: it is the document's shot.
+    let (m3_, _) = vs.publish(P1, &m2, &staged(&m2), &readable).expect("named by a member");
+    assert_eq!(m3_, a(&[1, 0, 1, 0, 3, 3]));
+}
+
+#[test]
+fn a_deposit_in_the_staging_interval_is_carried_by_the_shot() {
+    // PUB-2.42/2.43/2.45 (F22): a deposit lands at the HEAD's fresh position
+    // while a draft is staged from it; the shot supplies the whole rendered
+    // arrangement with the extent the copy took, and the composite APPENDS
+    // the deposit the render post-dates — no positional apply, nothing lost.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let readable = readable_by(&k, PrincipalId(1));
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![shot_run(&pdoc(), &pca(1), 3)] },
+            &readable,
+        )
+        .expect("the head");
+    // The stager copies the head's three positions and drops the middle one.
+    vs.copy(P1, &doc1(), vp(1, 1), &[VSpec { source: m1.clone(), span: vspan(1, 1, 3) }])
+        .expect("staged");
+    vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("the stager un-arranges b");
+    // The interval's deposit: into the BARE address, landing in the head.
+    let (atom, _) = vs
+        .insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true)
+        .expect("a deposit at the head's fresh position");
+    assert_eq!(atom, pca(4), "minted under the document's own chain");
+    assert_eq!(k.snapshot().world().m5().content_count(&m1), n(4), "it landed in the HEAD (PUB-2.66)");
+    assert_eq!(k.snapshot().world().m5().content_count(&pdoc()), n(3), "not in the pre-chain arrangement");
+    // The shot: the client's rendering (a, c) with the extent its copy took.
+    let (m2, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&m1, 3)),
+                draft: None,
+                runs: vec![shot_run(&pdoc(), &pca(1), 1), shot_run(&pdoc(), &pca(3), 1)],
+            },
+            &readable,
+        )
+        .expect("the shot commits");
+    let s = k.snapshot();
+    let got: Vec<Vec<u8>> = (1..=3).map(|i| read_v(&s, &m2, i)).collect();
+    assert_eq!(got, vec![b"a".to_vec(), b"c".to_vec(), b"z".to_vec()], "the delta, then the deposit");
+    assert_eq!(s.world().m5().content_count(&m2), n(3));
+    // A pinned base never grows, so a daughter shot with the full extent
+    // carries nothing extra; an extent past the base's count is refused.
+    let daughter_shot = Shot {
+        base: Some(base(&m1, 4)),
+        draft: None,
+        runs: vec![shot_run(&pdoc(), &pca(1), 4)],
+    };
+    let (d, _) = vs.publish(P1, &pdoc(), &daughter_shot, &readable).expect("a daughter");
+    assert_eq!(d, a(&[1, 0, 1, 0, 3, 1, 1]));
+    assert_eq!(k.snapshot().world().m5().content_count(&d), n(4));
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&m1, 9)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::BaseExtentTooLarge
+    ));
+}
+
+#[test]
+fn the_source_gate_runs_after_ownership_and_before_any_existence_answer() {
+    // PUB-8.1's second constraint, PUB-6.36's order, PUB-6.24's carried cell:
+    // the consult is asked per DISTINCT origin, in run order, of exactly the
+    // origins the base does not already arrange and the document does not
+    // own; the FIRST unreadable one answers `Withheld` — ahead of a dangling
+    // run's `DanglingSource` — and `NotOwner` stands ahead of the consult.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    // Two foreign private documents: doc2 (P1's draft) and the sub-account's
+    // document, owned by principal 3.
+    vs.insert(P1, &doc2(), vp(1, 1), vec![val(b"w"), val(b"x")], false).expect("doc2");
+    let sub = Caller::Principal(PrincipalId(3));
+    let subdoc = a(&[1, 0, 1, 1, 0, 1]);
+    vs.insert(sub, &subdoc, vp(1, 1), vec![val(b"s")], false).expect("subdoc");
+    let w = a(&[1, 0, 1, 0, 2, 0, 1, 1]);
+    let sca = a(&[1, 0, 1, 1, 0, 1, 0, 1, 1]);
+    // A counting consult that reads only what it is handed.
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    // (1) not_owner first: principal 2 shooting P1's edition, with a run
+    //     onto an origin it may not read — the consult is never asked.
+    let consult = consult_reading(&asked, vec![]);
+    assert!(matches!(
+        rejected(vs.publish(
+            Caller::Principal(PrincipalId(2)),
+            &pdoc(),
+            &Shot { base: None, draft: None, runs: vec![shot_run(&subdoc, &sca, 1)] },
+            &consult
+        )),
+        PublishError::NotOwner(d) if d == pdoc()
+    ));
+    assert!(asked.borrow().is_empty(), "no consult before ω");
+    // (2) the first unreadable origin speaks, in run order, and a DANGLING
+    //     run onto an unreadable origin answers withheld, never dangling —
+    //     even listed behind a readable window.
+    let dangling = a(&[1, 0, 1, 1, 0, 1, 0, 1, 9]);
+    let consult = consult_reading(&asked, vec![doc2()]);
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: None,
+                draft: None,
+                runs: vec![
+                    shot_run(&pdoc(), &pca(1), 3),
+                    shot_run(&doc2(), &w, 1),
+                    shot_run(&subdoc, &dangling, 1),
+                    shot_run(&doc2(), &w, 1),
+                ],
+            },
+            &consult
+        )),
+        PublishError::Withheld(d) if d == subdoc
+    ));
+    assert_eq!(
+        asked.borrow().as_slice(),
+        &[doc2(), subdoc.clone()],
+        "the document's own space is not consulted; each origin once, in run order"
+    );
+    // (3) readable origins are placed; and an origin the BASE already
+    //     arranges is NOT consulted again on the next shot.
+    asked.borrow_mut().clear();
+    let consult = consult_reading(&asked, vec![doc2(), subdoc.clone()]);
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: None,
+                draft: None,
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
+            },
+            &consult,
+        )
+        .expect("readable windows are placed");
+    assert_eq!(asked.borrow().as_slice(), &[doc2(), subdoc.clone()]);
+    assert_eq!(k.snapshot().world().m5().content_count(&m1), n(6));
+    asked.borrow_mut().clear();
+    // The next shot re-supplies the doc2 window and the subdoc run exactly
+    // as m1 arranges them: both are CARRIED (PUB-6.24), and a consult that
+    // would now refuse doc2 is never asked.
+    let consult = consult_reading(&asked, vec![subdoc.clone()]);
+    let (m2, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&m1, 6)),
+                draft: None,
+                runs: vec![shot_run(&pdoc(), &pca(1), 3), shot_run(&doc2(), &w, 2), shot_run(&subdoc, &sca, 1)],
+            },
+            &consult,
+        )
+        .expect("carried runs need no consult");
+    assert_eq!(asked.borrow().as_slice(), &[] as &[Address], "every run was carried by the base");
+    assert_eq!(m2, a(&[1, 0, 1, 0, 3, 2]));
+    // (4) existence, behind the gate: a readable origin's non-existent
+    //     address answers dangling.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&m2, 6)), draft: None, runs: vec![shot_run(&pdoc(), &pca(9), 1)] },
+            &consult
+        )),
+        PublishError::DanglingSource
+    ));
+}
+
+#[test]
+fn a_shot_refuses_a_private_document_and_a_malformed_request_and_commits_nothing() {
+    // PUB-2.9's `true` face on the shot, the base's three shape refusals, a
+    // run that is no content run of its stated origin, an unregistered
+    // origin — each a clean no-op, and each behind registration and ω.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    insert_abc(&k);
+    let readable = readable_by(&k, PrincipalId(1));
+    let before = k.current_seq();
+    let plain = |runs: Vec<ShotRun>| Shot { base: None, draft: None, runs };
+    // A private document has no chain (PUB-2.9).
+    assert!(matches!(
+        rejected(vs.publish(P1, &doc1(), &plain(vec![shot_run(&doc1(), &ca(1), 1)]), &readable)),
+        PublishError::PrivateSourceVersionless
+    ));
+    // Registration ahead of everything (PUB-6.37): the document, then the
+    // base, then an origin.
+    let un = a(&[1, 0, 1, 0, 9]);
+    assert!(matches!(
+        rejected(vs.publish(P1, &un, &plain(vec![]), &readable)),
+        PublishError::DocNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&un, 1)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::SourceNotRegistered
+    ));
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&un, &a(&[1, 0, 1, 0, 9, 0, 1, 1]), 1)]), &readable)),
+        PublishError::SourceNotRegistered
+    ));
+    // A run whose stated origin is not the document that minted it, and a
+    // run whose start is a LINK element: neither is a content run of its
+    // origin — refused on the request's own arithmetic.
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&doc2(), &ca(1), 1)]), &readable)),
+        PublishError::BadRun
+    ));
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &plain(vec![shot_run(&doc1(), &a(&[1, 0, 1, 0, 1, 0, 2, 1]), 1)]), &readable)),
+        PublishError::BadRun
+    ));
+    // The base: another document is not in the chain.
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&doc1(), 1)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::BaseNotInChain
+    ));
+    assert_eq!(k.current_seq(), before, "every refusal is a clean no-op");
+    // Once a member exists, the birth shape and the memberless base are both
+    // superseded (PUB-2.34, PUB-2.66) — the member must be named.
+    let (m1, _) = vs.publish(P1, &pdoc(), &plain(vec![shot_run(&pdoc(), &pca(1), 3)]), &readable).expect("birth");
+    let after = k.current_seq();
+    assert!(matches!(
+        rejected(vs.publish(P1, &pdoc(), &plain(vec![]), &readable)),
+        PublishError::BaseSuperseded
+    ));
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot { base: Some(base(&pdoc(), 3)), draft: None, runs: vec![] },
+            &readable
+        )),
+        PublishError::BaseSuperseded
+    ));
+    assert_eq!(k.current_seq(), after);
+    assert!(!k.snapshot().world().m3().is_registered_document(&a(&[1, 0, 1, 0, 3, 2])), "no member was minted");
+    // Named, the member is a base — and a shot with no runs lands an EMPTY
+    // member, read as the lazy empty arrangement.
+    let (m2, _) = vs
+        .publish(P1, &pdoc(), &Shot { base: Some(base(&m1, 3)), draft: None, runs: vec![] }, &readable)
+        .expect("an empty member");
+    assert_eq!(k.snapshot().world().m5().content_count(&m2), n(0));
+    assert_eq!(reading_surface(k.snapshot().world().m3(), &pdoc()), m2);
+}
+
+#[test]
+fn a_shot_refused_at_its_last_check_leaves_no_member_no_mint_and_no_placement() {
+    // PUB-2.33's ONE COMMIT, from the refusal side. The composite's mints
+    // and writes are staged inside the one closure whose rejection M2
+    // discards whole, and the kernel offers no fault-injection point
+    // between them and the commit — so the residue claim is witnessed at
+    // the one seam the kernel has: a shot refused at its LAST check (the
+    // dangling run, listed behind the draft-native run it would have
+    // re-minted) leaves the head, the chain, the content chain and the
+    // arrangement exactly as they were.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    insert_abc(&k);
+    let readable = readable_by(&k, PrincipalId(1));
+    let before = k.current_seq();
+    assert!(matches!(
+        rejected(vs.publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&pdoc(), 3)),
+                draft: Some(doc1()),
+                runs: vec![
+                    shot_run(&pdoc(), &pca(1), 3),
+                    shot_run(&doc1(), &ca(1), 3),
+                    shot_run(&pdoc(), &pca(9), 1),
+                ],
+            },
+            &readable
+        )),
+        PublishError::DanglingSource
+    ));
+    assert_eq!(k.current_seq(), before, "nothing committed");
+    let s = k.snapshot();
+    assert!(!s.world().m3().is_registered_document(&vdoc()), "no member");
+    assert_eq!(trunk_head(s.world().m3(), &pdoc()), None);
+    // The content chain did not move: the next deposit lands at ordinal 4.
+    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true).expect("deposit");
+    assert_eq!(atom, pca(4), "no content mint was committed by the refused shot");
+    // And the ordinary shot still lands, so the refusal above is about the
+    // dangling run and not about the surface being closed.
+    let (m1, _) = vs
+        .publish(
+            P1,
+            &pdoc(),
+            &Shot {
+                base: Some(base(&pdoc(), 4)),
+                draft: Some(doc1()),
+                runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(1), 3)],
+            },
+            &readable,
+        )
+        .expect("the ordinary shot");
+    assert_eq!(k.snapshot().world().m5().content_count(&m1), n(7));
+}
+
+#[test]
+fn a_deposit_into_a_published_chain_lands_in_the_head_member_alone() {
+    // PUB-2.65/2.66 (lane 3.2's pin): once a head exists, a declared deposit
+    // appends to the HEAD member's arrangement — named by the bare address,
+    // by the head, or by a pinned member — and to nothing else; the atom's
+    // identity is minted under the chain of the address named; and the
+    // in-place refusal on the chain stands as before. `version` of the bare
+    // address then shares the HEAD's arrangement, not the pre-chain one.
+    let k = mem_kernel();
+    let vs = deposit_abc(&k);
+    let (m1, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the first member");
+    assert_eq!(m1, vdoc());
+    // Named by the bare address: minted under pdoc's chain, placed in m1.
+    let (atom, _) = vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"z")], true).expect("deposit");
+    assert_eq!(atom, pca(4));
+    {
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        assert_eq!(m5.content_count(&m1), n(4), "the head grew");
+        assert_eq!(m5.point(&m1, &vp(1, 4)), Some(pca(4)));
+        assert_eq!(m5.content_count(&pdoc()), n(3), "the pre-chain arrangement did not");
+    }
+    // Named by the head itself: minted under the member's chain, placed in
+    // it; judged fresh against the head's extent.
+    let (atom2, _) = vs.insert(P1, &m1, vp(1, 5), vec![val(b"y")], true).expect("deposit");
+    assert_eq!(atom2, vca(1));
+    assert!(matches!(
+        rejected(vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"q")], true)),
+        InsertError::PublishedTarget
+    ), "ordinal 4 is arranged in the head: not a deposit shape");
+    // A second member: `version` shares the HEAD's arrangement (five
+    // positions), and the bare address floats to it.
+    let (m2, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("the second member");
+    {
+        let s = k.snapshot();
+        let m5 = s.world().m5();
+        assert_eq!(m5.content_count(&m2), n(5));
+        assert_eq!(m5.content_runs(&m2), m5.content_runs(&m1));
+        assert_eq!(reading_surface(s.world().m3(), &pdoc()), m2);
+    }
+    // Named by the PINNED member m1: the deposit lands in the head m2, and
+    // m1 never grows (PUB-2.66).
+    vs.insert(P1, &m1, vp(1, 6), vec![val(b"x")], true).expect("deposit named by a pinned member");
+    let s = k.snapshot();
+    let m5 = s.world().m5();
+    assert_eq!(m5.content_count(&m1), n(5), "a pinned member's arrangement never grows");
+    assert_eq!(m5.content_count(&m2), n(6), "the head's did");
+    assert_eq!(read_v(&s, &m2, 6), b"x".to_vec());
+    // The in-place refusal still holds on every address of the chain.
+    assert!(matches!(rejected(vs.delete(P1, &pdoc(), vp(1, 1), n(1))), DeleteError::PublishedTarget));
+    assert!(matches!(rejected(vs.delete(P1, &m2, vp(1, 1), n(1))), DeleteError::PublishedTarget));
+}
+
 // ---- §B ownership gate (as amended 2026-08-16) ----
 
 #[test]
@@ -1646,10 +2185,17 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // §10: M5 owns no recovery machinery — M2 loads the checkpoint
     // (deserializing the slice) and replays the tail through apply → apply_m5.
     // The draft's insert and the edition's deposit ride the checkpoint path;
-    // the delete, the seat, the fork and the post-fork source deposit ride
-    // the replay path; the recovered slice is byte-identical.
+    // the delete, the seat, the fork, the post-fork source deposit and the
+    // shot ride the replay path; the recovered slice is byte-identical.
+    //
+    // The fork is the CROSS-OWNER one (principal 2's copy of the edition):
+    // an owned fork would be the edition's first member, and the deposit
+    // after it would then land in that member rather than in the source
+    // (PUB-2.66) — the source-changes-after-the-fork case this test is about
+    // needs a source that still takes deposits itself.
     let dir = tempdir().expect("tempdir");
     let link1 = a(&[1, 0, 1, 0, 3, 0, 2, 1]);
+    let fork = a(&[1, 0, 2, 0, 1]);
     let bytes_before;
     {
         let k = Kernel::<World>::open(cfg_fsync(dir.path()), genesis()).expect("open");
@@ -1661,13 +2207,29 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
         k.checkpoint().expect("checkpoint");
         vs.delete(P1, &doc1(), vp(1, 2), n(1)).expect("delete commits");
         seat_link(&k, &pdoc(), &link1).expect("seat commits");
-        let (fork, _) = vs.version(PrincipalId(1), &pdoc(), None).expect("fork commits");
-        assert_eq!(fork, vdoc());
+        let (minted, _) = vs.version(PrincipalId(2), &pdoc(), None).expect("fork commits");
+        assert_eq!(minted, fork);
         // A source deposit AFTER the fork: on replay the VersionSnapshot must
         // fold at its own journal slot and read pdoc as it was there, not as
         // the source ends up.
         vs.insert(P1, &pdoc(), vp(1, 4), vec![val(b"d")], true)
             .expect("post-fork source deposit commits");
+        // The shot: the edition's four positions by reference and doc1's
+        // surviving `c` re-minted as fresh identity — the member holds five.
+        let readable = readable_by(&k, PrincipalId(1));
+        let (member, _) = vs
+            .publish(
+                P1,
+                &pdoc(),
+                &Shot {
+                    base: Some(base(&pdoc(), 4)),
+                    draft: Some(doc1()),
+                    runs: vec![shot_run(&pdoc(), &pca(1), 4), shot_run(&doc1(), &ca(3), 1)],
+                },
+                &readable,
+            )
+            .expect("the shot commits");
+        assert_eq!(member, vdoc());
         let s = k.snapshot();
         bytes_before = bincode::serialize(s.world().m5()).expect("slice serializes");
     }
@@ -1689,10 +2251,17 @@ fn the_arrangement_survives_durable_recovery_by_checkpoint_and_replay() {
     // The fork replayed at ITS slot: it holds what pdoc held at the fork
     // point, not what pdoc holds now. Byte-identity above would fail either
     // way; these say which value is the right one.
-    assert_eq!(m5.content_count(&vdoc()), n(3));
-    assert_eq!(m5.point(&vdoc(), &vp(1, 1)), Some(pca(1)));
-    assert_eq!(m5.point(&vdoc(), &vp(1, 3)), Some(pca(3)));
-    assert_eq!(m5.point(&vdoc(), &vp(1, 4)), None);
+    assert_eq!(m5.content_count(&fork), n(3));
+    assert_eq!(m5.point(&fork, &vp(1, 1)), Some(pca(1)));
+    assert_eq!(m5.point(&fork, &vp(1, 3)), Some(pca(3)));
+    assert_eq!(m5.point(&fork, &vp(1, 4)), None);
+    // The shot replayed as one placement: the member holds the four by
+    // reference and the fresh `c` under the edition's own chain, and the
+    // bare address floats to it.
+    assert_eq!(m5.content_count(&vdoc()), n(5));
+    assert_eq!(m5.point(&vdoc(), &vp(1, 5)), Some(pca(5)));
+    assert_eq!(read_v(&s, &vdoc(), 5), b"c".to_vec());
+    assert_eq!(reading_surface(s.world().m3(), &pdoc()), vdoc());
     // The recovered arrangement still drives edits.
     let vs = Vstream::new(&k);
     vs.insert(P1, &doc1(), vp(1, 3), vec![val(b"e")], false)

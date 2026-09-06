@@ -230,6 +230,16 @@ impl M5State {
         from + width <= &self.content_count(doc) + &Nat::one()
     }
 
+    /// Does `doc`'s CONTENT arrangement hold every address of `run` — the
+    /// membership question of [`seats_link`](M5State::seats_link) asked of a
+    /// content EXTENT? The publish shot's carried-run test (PUB-6.24,
+    /// PUB-8.1): a supplied run the base already arranges takes no source
+    /// gate, the base having answered for those addresses when it was
+    /// published. Absent doc ⇒ nothing is carried.
+    pub(crate) fn arranges_run(&self, doc: &Address, run: &Run) -> bool {
+        self.content_list(doc).covers(run)
+    }
+
     /// Is `link` already seated in `doc`'s link subspace (§8, CL-UNIQ)? The
     /// link run-list's own membership answer, so a link INTERIOR to a
     /// coalesced link run counts as seated. Absent doc ⇒ not seated.

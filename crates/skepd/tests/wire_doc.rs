@@ -63,7 +63,7 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 38] = [
+const OP_NAMES: [&str; 39] = [
     "create_new_document",
     "delegate",
     "register_node",
@@ -75,6 +75,7 @@ const OP_NAMES: [&str; 38] = [
     "copy",
     "rearrange",
     "version",
+    "publish",
     "make_link",
     "emit",
     "nullify",
@@ -105,7 +106,7 @@ const OP_NAMES: [&str; 38] = [
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 38 ops appear.
+/// value), is tagged with the marker's own op name — and all 39 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;

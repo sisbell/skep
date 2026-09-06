@@ -10,7 +10,7 @@ mod common;
 use common::*;
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec};
-use skep_febe::{Op, OpKind, Response, SlotArg, SuccessorSpec, FROM};
+use skep_febe::{Base, Op, OpKind, Response, Run, Shot, ShotRun, SlotArg, SuccessorSpec, FROM};
 use skep_kernel::Seq;
 use skep_links::{enc, View};
 use skep_namespace::PrincipalId;
@@ -79,8 +79,23 @@ fn every_write_acks_at_the_coordinate_it_committed() {
 
     // A version needs a PUBLISHED owned source (PUB-2.9): the edition.
     let e = create_edition(&fx);
-    let r = ex(&fx.febe, fx.user, Op::Version { d_src: e, published: None });
+    let (e_start, _) = deposit3(&fx, &e);
+    let r = ex(&fx.febe, fx.user, Op::Version { d_src: e.clone(), published: None });
     committed(&fx, OpKind::Version, &r, &mut seen);
+    let (member, _) = ack_addr(r);
+
+    // The shot (lane 3.2): the next member off the head just minted, the
+    // edition's own three positions supplied by reference.
+    let shot = Shot {
+        base: Some(Base { member, extent: nat(3) }),
+        draft: None,
+        runs: vec![ShotRun {
+            origin: e.clone(),
+            run: Run::new(e_start, nat(3)).expect("a content run"),
+        }],
+    };
+    let r = ex(&fx.febe, fx.user, Op::Publish { doc: e, shot });
+    committed(&fx, OpKind::Publish, &r, &mut seen);
 
     let r = ex(&fx.febe, fx.user, Op::Copy { doc: f, at: vp(1, 1), specs: vec![vspec(&d, 1, 1)] });
     committed(&fx, OpKind::Copy, &r, &mut seen);
@@ -153,7 +168,7 @@ fn every_write_acks_at_the_coordinate_it_committed() {
     let r = ex(&fx.febe, fx.boot, Op::RegisterNode { addr: tum(&[1, 4]) });
     committed(&fx, OpKind::RegisterNode, &r, &mut seen);
 
-    assert_eq!(seen.len(), 14, "the write half of the partition is 14 operations: {seen:?}");
+    assert_eq!(seen.len(), 15, "the write half of the partition is 15 operations: {seen:?}");
 }
 
 /// A2/V1: `as_of` on EVERY read is the coordinate of the snapshot the answer

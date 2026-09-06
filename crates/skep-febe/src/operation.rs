@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
-use skep_arrangement::{Caller, M5Rec};
+use skep_address::Address;
+use skep_arrangement::{trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on, count_v_on, delete_orphans_on,
@@ -30,6 +31,24 @@ use crate::response::Response;
 use crate::session::{SessionId, Sessions};
 use crate::successor::successor_link;
 use crate::{FebeWorld, Stores};
+
+/// The source gate's CONSULT (PUB-6.23, PUB-8.1's second constraint; the
+/// pack's `Fn(&Address) -> bool` shape, per principal): may `principal` read
+/// the document `origin`? Asked by M5's publish composite, inside its
+/// transaction, of every distinct origin a supplied run windows that the base
+/// does not already arrange — after the destination's ω and before any
+/// existence answer — and answered on the origin's DOCUMENT, known registered
+/// (PUB-6.37).
+///
+/// The DAEMON supplies it ([`Operation::with_consult`]): today the
+/// publication read — a published origin is readable to everyone, a private
+/// one to its owner — and lane 3.3 widens what the daemon passes (the
+/// subtree and grant clauses of PUB-1.31) without touching the composite or
+/// this seam. Absent, M10 answers that same publication read off its own
+/// snapshot, so an embedder that supplies nothing gets today's answer rather
+/// than an open gate. `Send + Sync + 'static`, since the front door is shared
+/// across a transport's worker pool.
+pub type Consult = dyn Fn(PrincipalId, &Address) -> bool + Send + Sync;
 
 /// M10's front-door handle (§Public interface). Owns **no** authoritative
 /// substrate state and **no** `im` structure — its fields are the ephemeral
@@ -51,6 +70,9 @@ pub struct Operation<W: WorldState> {
     /// Hint: recomputable by attempting `transact`; latched by the first
     /// `TxnError::Poisoned` in [`Operation::map_txn`] (§5/§9).
     poisoned: AtomicBool,
+    /// The daemon's source-gate consult ([`Consult`]), or none — in which
+    /// case the publish arm answers today's publication read itself.
+    consult: Option<Box<Consult>>,
 }
 
 /// The proven-bound write context (§1). Step (b) resolves the principal
@@ -93,6 +115,32 @@ where
             sessions: Sessions::new(),
             idem: IdemCache::new(),
             poisoned: AtomicBool::new(false),
+            consult: None,
+        }
+    }
+
+    /// Supply the source gate's consult ([`Consult`]) — the daemon's
+    /// `readable(document, principal)` for the publish shot's supplied-run
+    /// origins (PUB-6.23, PUB-8.1). Without it the publish arm answers today's
+    /// publication read off its own snapshot: a published origin readable to
+    /// everyone, a private one to its owner.
+    pub fn with_consult(mut self, consult: Box<Consult>) -> Self {
+        self.consult = Some(consult);
+        self
+    }
+
+    /// The consult's answer for `principal` and `origin`: the daemon's
+    /// predicate where one was supplied, else the publication read over
+    /// `world` — a published origin (its document projected, PUB-2.15) is
+    /// readable to everyone, a private one to its owner. `origin` is a
+    /// registered document by the composite's own gate (PUB-6.37).
+    fn readable(&self, world: &W, principal: PrincipalId, origin: &Address) -> bool {
+        match &self.consult {
+            Some(consult) => consult(principal, origin),
+            None => {
+                let m3 = world.m3();
+                m3.published(&trunk_of(origin)) || m3.is_effective_owner(principal, origin)
+            }
         }
     }
 
@@ -367,6 +415,23 @@ where
                     .map_err(|e| self.map_txn(kind, e))?;
                 Ok(Response::AckAddr { addr, at })
             }
+            // The SHOT (PUB-2.33, PUB-8.1): M5's composite decides the
+            // destination, places the runs by origin and runs the source
+            // gate; what M10 adds is the consult it hands down — the
+            // daemon's, or today's publication read off ONE snapshot pinned
+            // here for the whole shot, so every origin is judged against one
+            // committed state. The ack is the member's address (PUB-2.37).
+            Op::Publish { doc, shot } => {
+                let snap = self.stores.kernel().snapshot();
+                let principal = wc.principal;
+                let readable = |origin: &Address| self.readable(snap.world(), principal, origin);
+                let (addr, at) = self
+                    .stores
+                    .vstream()
+                    .publish(wc.caller(), &doc, &shot, &readable)
+                    .map_err(|e| self.map_txn(kind, e))?;
+                Ok(Response::AckAddr { addr, at })
+            }
             // ── link writes (→ M7; ω-gated in-store on each written home —
             //    the ownership ruling, 2026-08-16) ──
             Op::MakeLink { home, from, to, ty } => {
@@ -605,6 +670,7 @@ where
             | Op::Copy { .. }
             | Op::Rearrange { .. }
             | Op::Version { .. }
+            | Op::Publish { .. }
             | Op::MakeLink { .. }
             | Op::Emit { .. }
             | Op::Nullify { .. }

@@ -165,6 +165,7 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         | Op::Copy { .. }
         | Op::Rearrange { .. }
         | Op::Version { .. }
+        | Op::Publish { .. }
         | Op::Nullify { .. }
         | Op::AssertSup { .. }
         | Op::ReadLink { .. }
@@ -539,6 +540,21 @@ fn publish_gate(
                         }
                     }
                 }
+            }
+        }
+        // The SHOT (lane 3.2) is a mint resolving PUBLISHED by definition —
+        // every member is published-born (PUB-2.5) — so it is this gate's
+        // input whatever the document's own state: on a private document
+        // the signed session then meets the store's
+        // `private_source_versionless` (slot 5), exactly as a bare
+        // `version(d, published:true)` does. Registration and ω stand ahead
+        // (PUB-6.37, PUB-6.36 slot 1), as everywhere.
+        Op::Publish { doc, .. } => {
+            let m3 = world.m3();
+            if m3.is_registered_document(doc) && m3.is_effective_owner(principal, doc) {
+                Some(CredentialRefusal::SignedSessionRequired)
+            } else {
+                None
             }
         }
         Op::Insert { doc, .. }

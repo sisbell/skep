@@ -124,7 +124,7 @@ mod successor;
 
 pub use codec::{Codec, ParseError};
 pub use op::{Op, OpKind, ReqId, Request, SuccessorSpec, MAX_REQ_ID_BYTES};
-pub use operation::Operation;
+pub use operation::{Consult, Operation};
 // `disposition_of` and `Rejection::classified` are public for the reason the
 // disposition is documented as recomputable: a transport that raises one of
 // M10's own codes on its own channel asks the table — or builds the whole
@@ -157,7 +157,10 @@ pub use skep_address::{
     elem_addr, validate, Address, ElemError, ElemPos, EmptySequence, Nat, Span, SpanSet, T4Error,
     T12Clause, Tumbler,
 };
-pub use skep_arrangement::{Run, VPos, VSpec}; // M5
+// M5, the publish shot's three request values included: `Op::Publish` is
+// unbuildable without them, and `Run::new` is the one constructor of the
+// runs a shot carries.
+pub use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 pub use skep_content::Val; // M4
 // M8, `SlotSpec` included: every field of a `FourSet` is one, so the three
 // descriptor ops are unbuildable without it.

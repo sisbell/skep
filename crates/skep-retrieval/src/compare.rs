@@ -18,7 +18,7 @@ use std::cmp;
 
 use num_traits::CheckedSub;
 use skep_address::{ordinal, Address, Nat, Tumbler};
-use skep_arrangement::{M5State, Run, VPos};
+use skep_arrangement::{reading_surface, M5State, Run, VPos};
 
 use skep_namespace::M3State;
 
@@ -117,12 +117,18 @@ impl<W: RetrievalWorld> Query<'_, W> {
         // BOTH operands whole, before either resolves.
         gate_spec_set(m3, Operand::First, rho1)?;
         gate_spec_set(m3, Operand::Second, rho2)?;
+        // Each region resolves through its document's READING SURFACE
+        // (head-float, PUB-2.49): a bare published address compares its trunk
+        // head's arrangement, a version address its own member's. The feet
+        // still name the document the caller asked about.
+        let surfaces1: Vec<Address> = rho1.iter().map(|r| reading_surface(m3, &r.doc)).collect();
+        let surfaces2: Vec<Address> = rho2.iter().map(|r| reading_surface(m3, &r.doc)).collect();
         // p = R_Σ(ρ₁), q = R_Σ(ρ₂), as blocks — reads ONLY M5, each operand
         // within its own block budget.
-        let p = resolve_blocks(m5, rho1).ok_or(CompareError::TooManyBlocks {
+        let p = resolve_blocks(m5, rho1, &surfaces1).ok_or(CompareError::TooManyBlocks {
             operand: Operand::First,
         })?;
-        let q = resolve_blocks(m5, rho2).ok_or(CompareError::TooManyBlocks {
+        let q = resolve_blocks(m5, rho2, &surfaces2).ok_or(CompareError::TooManyBlocks {
             operand: Operand::Second,
         })?;
         // Cross-product per overlap (`corr` is a comprehension over `P × Q`),
@@ -300,19 +306,29 @@ impl<'a> Block<'a> {
 /// document of the spec that named it, so the lifetime is written out rather
 /// than elided — two input lifetimes and no `&self` leave nothing for elision
 /// to pick.
-fn resolve_blocks<'a>(m5: &M5State, regions: &'a [RegionSpec]) -> Option<Vec<Block<'a>>> {
+///
+/// `surfaces` is the reading surface of each region's document, one per
+/// region in order (head-float, PUB-2.49): the arrangement RESOLVED is the
+/// surface's, while the block's document — the foot a correspondence reports
+/// — stays the one the region NAMED.
+fn resolve_blocks<'a>(
+    m5: &M5State,
+    regions: &'a [RegionSpec],
+    surfaces: &[Address],
+) -> Option<Vec<Block<'a>>> {
+    debug_assert_eq!(regions.len(), surfaces.len(), "one reading surface per region");
     let mut out = Vec::new();
-    for r in regions {
+    for (r, surface) in regions.iter().zip(surfaces) {
         for span in &r.spans {
             let Some(mut cursor) = span_vpos(span) else {
                 continue;
             };
-            for run in m5.resolve(&r.doc, span) {
+            for run in m5.resolve(surface, span) {
                 if out.len() >= MAX_COMPARE_OPERAND_BLOCKS {
                     return None; // the operand's budget, refused as produced
                 }
                 debug_assert!(
-                    m5.point(&r.doc, &cursor).as_ref() == Some(run.i_start()),
+                    m5.point(surface, &cursor).as_ref() == Some(run.i_start()),
                     "D-SEQ★: each content run must begin at the V-cursor (gap-free tiling)"
                 );
                 // Accumulate the V offset by run width (no V-gaps in content).

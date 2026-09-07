@@ -96,7 +96,11 @@
 //! * the fine-grained ownership check `ω` — the owning store's, passed through
 //!   verbatim (§6); M10 pre-checks only "is there a principal at all", and
 //!   only on the write path, a read being served against any `SessionId` and
-//!   reaching its store with no principal ([`Operation::execute`]).
+//!   reaching its store with no principal ([`Operation::execute`]). The one
+//!   place M10 ASKS ω without wording it is the write door's source consult
+//!   (lane 3.3c, PUB-6.36/6.38): it defers to the store wherever the
+//!   destination's own ownership gate would refuse, through the store's own
+//!   `Caller::is_owner`, so no source is judged ahead of `not_owner`.
 //!
 //! ## Composition
 //!

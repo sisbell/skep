@@ -99,6 +99,62 @@ impl WriteCtx {
     }
 }
 
+/// The WRITE DESTINATIONS whose ownership stands AHEAD of the door's consult
+/// (PUB-6.36 slot 1, PUB-6.38 — see [`Operation::consult_write`]): `Some` for
+/// exactly the writes the consult reaches — a source-reading write or one
+/// validating a link by address — listing the documents the store's own
+/// `not_owner` is judged on; `Some(empty)` for `version`, whose mint lands in
+/// the caller's own account and which no destination gate precedes (MINT-FIRST
+/// is the daemon's, slot 2); `None` for a write with nothing to consult and
+/// for every read. `nullify` is `None` on purpose: its target takes PUB-6.9's
+/// ω-first order and the slot-5 nullify-class refusals (lane 3.5), not this
+/// consult. `emit`'s endpoints are address-form (PUB-6.11) and `publish`'s
+/// source gate is the composite's own, threaded per origin (PUB-8.1).
+/// EXHAUSTIVE with no `_` arm: a new `Op` decides its row here.
+fn consulted_destinations(op: &Op) -> Option<Vec<&Address>> {
+    match op {
+        Op::Copy { doc, .. } => Some(vec![doc]),
+        Op::Version { .. } => Some(Vec::new()),
+        Op::MakeLink { home, .. } => Some(vec![home]),
+        Op::AssertSup { home, .. } => Some(vec![home]),
+        Op::EditLink { d_s, d_a, .. } => Some(vec![d_s, d_a]),
+        Op::CreateNewDocument { .. }
+        | Op::Delegate { .. }
+        | Op::RegisterNode { .. }
+        | Op::Fork { .. }
+        | Op::Insert { .. }
+        | Op::Delete { .. }
+        | Op::Rearrange { .. }
+        | Op::Publish { .. }
+        | Op::Emit { .. }
+        | Op::Nullify { .. }
+        | Op::NextAccountPrefix { .. }
+        | Op::PrincipalPrefix { .. }
+        | Op::ReadLink { .. }
+        | Op::FollowLink { .. }
+        | Op::RetrieveV { .. }
+        | Op::RetrieveDocVSpan { .. }
+        | Op::RetrieveDocVSpanSet { .. }
+        | Op::ShowOrigin { .. }
+        | Op::ShowDeletions { .. }
+        | Op::Compare { .. }
+        | Op::FindDocsContaining { .. }
+        | Op::Image { .. }
+        | Op::FindLinksV { .. }
+        | Op::FindLinksFtt { .. }
+        | Op::CountV { .. }
+        | Op::CountFtt { .. }
+        | Op::WindowV { .. }
+        | Op::WindowFtt { .. }
+        | Op::RetrieveEndsets { .. }
+        | Op::Project { .. }
+        | Op::DiscoverableFrom { .. }
+        | Op::DeleteOrphans { .. }
+        | Op::InClaims { .. }
+        | Op::OutClaims { .. } => None,
+    }
+}
+
 impl<W> Operation<W>
 where
     W: FebeWorld,
@@ -170,6 +226,98 @@ where
         principal: PrincipalId,
     ) -> impl Fn(&W, &Address) -> bool + Send + Sync + '_ {
         move |world: &W, doc: &Address| self.readable(world, Some(principal), doc)
+    }
+
+    /// THE WRITE SIDE'S CONSULT (PUB round 2, lane 3.3c; PUB-6.23, PUB-6.24,
+    /// PUB-6.36 slot 6, PUB-6.38): the door's pre-dispatch check on a write
+    /// that READS a document before it writes — `copy`'s sources, `version`'s
+    /// `d_src`, the RESOLVE-form slots of `make_link` and `edit_link` — and
+    /// the LINK-ADDRESS rule on the links a write validates by address
+    /// (PUB-6.6: `edit_link.original`, `assert_sup.old`/`new`). Consulted off
+    /// `world`, the one snapshot the door pinned for this write, through the
+    /// same [`Operation::readable`] every read arm answers — one front door,
+    /// one predicate — and BEFORE the store call (or the EDITLINK successor
+    /// build) that would read the source's arrangement.
+    ///
+    /// ORDER, as PUB-6.36 pins it and PUB-6.38 places it: slot 1, the
+    /// DESTINATION's `not_owner`, stands AHEAD of this consult. The store
+    /// words that verdict inside its own transaction, so the door realizes
+    /// the order by DEFERRING: the consult runs only where the destination's
+    /// own gate would pass — registered, and ω-owned by the caller, asked
+    /// through the store's one spelling of ω (`Caller::is_owner`, M5's, which
+    /// is M3's `is_effective_owner`) — and where it would not, nothing here
+    /// speaks and the store answers its own `doc_not_registered` /
+    /// `home_not_registered` / `not_owner`. A session that may not write here
+    /// is never told whether it may read there (PUB-6.43's ground). M10 words
+    /// no ownership verdict of its own; it only declines to judge a source
+    /// ahead of one. Registration of the SOURCE stands ahead too (PUB-6.37),
+    /// by the predicate's own construction: an unregistered address is
+    /// fail-open readable (PUB-7.5), so it passes here and takes the store's
+    /// `source_not_registered` — a withheld answer is only ever a REGISTERED
+    /// private document.
+    ///
+    /// WHAT THIS ORDER CANNOT REACH, stated rather than hidden: the model's
+    /// refusals of slot 5 (`published_target` and its two siblings) are
+    /// evaluated INSIDE the store transaction (owner ruling D2b), so on the
+    /// one cell where both apply — a source the caller may not read, copied
+    /// into a PUBLISHED destination the caller owns — this door answers
+    /// `withheld` where PUB-6.36 would have slot 5 speak first. The
+    /// versionless sibling never meets it: `private_source_versionless`
+    /// fires only on a source the caller OWNS, which the subtree clause makes
+    /// readable, so no source is both unreadable and versionless.
+    ///
+    /// The two verdicts this consult can speak are the read side's own,
+    /// wire-identical to what the store would say of the same address in a
+    /// world without the draft: `withheld` — `reorder`, `site.addr` the
+    /// FIRST unreadable source in declaration order (PUB-6.4,
+    /// [`Op::source_arguments`]), no `detail` (PUB-8.5) — and, for a link
+    /// homed in a document the caller may not read, the op's OWN
+    /// never-deposited answer (`original_not_resident`,
+    /// `endpoint_not_resident`), never a withheld that confirms a
+    /// draft-homed link exists (PUB-6.6). `document_of(a)` is address
+    /// arithmetic — no read (PUB-6.38). Within `edit_link` the link-address
+    /// argument speaks first: `original` is declared ahead of `successor`,
+    /// and the store's own residence check precedes its slot checks.
+    /// `nullify.target` takes no rule here — PUB-6.9's ω-first order and the
+    /// slot-5 nullify-class refusals govern it (lane 3.5).
+    fn consult_write(&self, wc: &WriteCtx, op: &Op, world: &W) -> Result<(), Rejection> {
+        let kind = op.kind();
+        let Some(destinations) = consulted_destinations(op) else {
+            return Ok(()); // no source and no link-address argument (see the table)
+        };
+        // Slot 1 ahead of slot 6: defer to the store wherever the
+        // destination's own gate would refuse.
+        let m3 = world.m3();
+        let caller = wc.caller();
+        if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
+            return Ok(());
+        }
+        let principal = Some(wc.principal);
+        let readable = |a: &Address| self.readable(world, principal, a);
+        let home_readable = |a: &Address| document_of(a).is_none_or(|h| readable(&h));
+        // §2 — the link-address rule on writes (PUB-6.6): the op's own absence
+        // answer, exactly as for an address no link occupies.
+        match op {
+            Op::EditLink { original, .. } if !home_readable(original) => {
+                return Err(rejection(kind, RejectCode::OriginalNotResident));
+            }
+            Op::AssertSup { old, new, .. } if !home_readable(old) || !home_readable(new) => {
+                return Err(rejection(kind, RejectCode::EndpointNotResident));
+            }
+            _ => {}
+        }
+        // §1 — the source consult: the first unreadable source, in
+        // declaration order, answers WITHHELD naming itself.
+        for source in op.source_arguments() {
+            if !readable(source) {
+                return Err(Rejection::classified(
+                    kind,
+                    RejectCode::Withheld,
+                    Some(FaultSite { addr: Some(source.clone()), ..FaultSite::default() }),
+                ));
+            }
+        }
+        Ok(())
     }
 
     // ── session binding (M10-owned, ephemeral — §6) ──
@@ -354,6 +502,12 @@ where
     /// two spellings; a third would make one concept read as two.
     fn dispatch_write(&self, wc: WriteCtx, op: Op) -> Result<Response, Rejection> {
         let kind = op.kind();
+        // ONE snapshot for the door's own pre-dispatch reads (the write side's
+        // consult below, and the EDITLINK successor build) — a PRIOR
+        // snapshot, deliberately not the write transaction's base (§4); the
+        // store's own gates re-run against the base they commit on.
+        let snap = self.stores.kernel().snapshot();
+        self.consult_write(&wc, &op, snap.world())?;
         match op {
             // ── namespace writes (→ M3) ──
             // The three-valued publication flag rides the op verbatim
@@ -454,7 +608,6 @@ where
             // here for the whole shot, so every origin is judged against one
             // committed state. The ack is the member's address (PUB-2.37).
             Op::Publish { doc, shot } => {
-                let snap = self.stores.kernel().snapshot();
                 let principal = Some(wc.principal);
                 let readable = |origin: &Address| self.readable(snap.world(), principal, origin);
                 let (addr, at) = self
@@ -517,9 +670,10 @@ where
             // hazard). One operation ⇒ still one M2 transaction. The
             // visibility class rides the writer as on every link write; the
             // claim's dedup is a guaranteed miss (PUB-6.27), so no ack here
-            // can name an address this principal could not read.
+            // can name an address this principal could not read. The
+            // successor's sources were consulted at the door above, BEFORE
+            // this build reads their arrangements (PUB-6.38).
             Op::EditLink { original, successor, d_s, d_a } => {
-                let snap = self.stores.kernel().snapshot();
                 let link = successor_link(snap.world().m3(), snap.world().m5(), &successor)?;
                 let visibility = self.visible_to(wc.principal);
                 let (edit, at) = self

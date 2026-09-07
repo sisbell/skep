@@ -409,7 +409,8 @@ impl Op {
     /// ABSENCE, PUB-6.6, never withheld), the lineage probes (`y`/`x` are
     /// probe keys, PUB-6.12), the namespace reads — names no document to
     /// withhold and answers the empty list; and every write answers it too,
-    /// its source consult being the write path's own (PUB-6.23).
+    /// its source consult being the write door's own list,
+    /// [`Op::source_arguments`] (PUB-6.23).
     ///
     /// Public because the consult has TWO sites that must agree on the list:
     /// [`Operation::execute`] runs it over the snapshot it pins, and a
@@ -462,6 +463,91 @@ impl Op {
             | Op::Nullify { .. }
             | Op::AssertSup { .. }
             | Op::EditLink { .. } => Vec::new(),
+        }
+    }
+
+    /// The SOURCE-ARGUMENT list of a write op, in DECLARATION ORDER (PUB-6.23,
+    /// PUB-6.24, PUB-6.4; PUB round 2, lane 3.3c §1): the documents whose
+    /// ARRANGEMENT the write READS before it writes, so the first unreadable
+    /// one is the `site.addr` the write door's WITHHELD rejection carries.
+    /// `copy` names each `specs[].source` by index; `version` its `d_src`;
+    /// `make_link` and `edit_link` the document of every RESOLVE-form slot's
+    /// V-spec — slots in the wire's declared order `from`, `to`, `ty`, specs
+    /// by index within a slot. An ADDRESS-FORM slot names no source: an
+    /// address is not secret and needs no read to write (PUB-1.13,
+    /// PUB-6.24), so it is ungated and contributes nothing here.
+    ///
+    /// `fork` reads no source (PUB-6.23) and answers the empty list, as does
+    /// every other write — `publish`'s source gate is the composite's own,
+    /// threaded per ORIGIN through the consult M10 hands M5 (PUB-8.1), and
+    /// `emit`'s endpoints are address-form (PUB-6.11) — and every read, whose
+    /// consult is [`Op::doc_arguments`]. Written out, no wildcard, so a new
+    /// variant is classified here on purpose.
+    ///
+    /// Public for the reason [`Op::doc_arguments`] is: the list is a fact
+    /// about the request, and a transport that wants to know which documents
+    /// a write will read before it dispatches it reads the same list.
+    pub fn source_arguments(&self) -> Vec<&Address> {
+        fn resolve_sources<'a>(slot: &'a SlotArg, out: &mut Vec<&'a Address>) {
+            if let SlotArg::Resolve(specs) = slot {
+                out.extend(specs.iter().map(|s| &s.source));
+            }
+        }
+        match self {
+            Op::Copy { specs, .. } => specs.iter().map(|s| &s.source).collect(),
+            Op::Version { d_src, .. } => vec![d_src],
+            Op::MakeLink { from, to, ty, .. } => {
+                let mut out = Vec::new();
+                resolve_sources(from, &mut out);
+                resolve_sources(to, &mut out);
+                resolve_sources(ty, &mut out);
+                out
+            }
+            // The successor's `from`/`to` are content-resolved by their type
+            // ([`SuccessorSpec`]); only its `ty` has the address form.
+            Op::EditLink { successor, .. } => {
+                let mut out: Vec<&Address> =
+                    successor.from.iter().chain(&successor.to).map(|s| &s.source).collect();
+                resolve_sources(&successor.ty, &mut out);
+                out
+            }
+            // No source to consult (see above); written out rather than
+            // wildcarded so a new write variant decides whether it reads one.
+            Op::CreateNewDocument { .. }
+            | Op::Delegate { .. }
+            | Op::RegisterNode { .. }
+            | Op::Fork { .. }
+            | Op::Insert { .. }
+            | Op::Delete { .. }
+            | Op::Rearrange { .. }
+            | Op::Publish { .. }
+            | Op::Emit { .. }
+            | Op::Nullify { .. }
+            | Op::AssertSup { .. }
+            | Op::NextAccountPrefix { .. }
+            | Op::PrincipalPrefix { .. }
+            | Op::ReadLink { .. }
+            | Op::FollowLink { .. }
+            | Op::RetrieveV { .. }
+            | Op::RetrieveDocVSpan { .. }
+            | Op::RetrieveDocVSpanSet { .. }
+            | Op::ShowOrigin { .. }
+            | Op::ShowDeletions { .. }
+            | Op::Compare { .. }
+            | Op::FindDocsContaining { .. }
+            | Op::Image { .. }
+            | Op::FindLinksV { .. }
+            | Op::FindLinksFtt { .. }
+            | Op::CountV { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowV { .. }
+            | Op::WindowFtt { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::Project { .. }
+            | Op::DiscoverableFrom { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. } => Vec::new(),
         }
     }
 }
@@ -637,6 +723,58 @@ pub(crate) mod tests {
                         | Op::Compare { .. }
                 );
             assert_eq!(named, expects_consult, "{:?}: the doc-argument row", op.kind());
+        }
+    }
+
+    /// PUB-6.23 / PUB-6.24 / PUB-6.4, lane 3.3c: the source-argument list
+    /// runs in DECLARATION order — `copy`'s specs by index, `version`'s
+    /// `d_src`, and the two link writes' RESOLVE-form slots in the wire's
+    /// declared order `from`, `to`, `ty` with specs by index inside a slot —
+    /// while an ADDRESS-FORM slot is ungated and names nothing. Exactly the
+    /// four source-reading writes answer a non-empty list; `fork`, every other
+    /// write and every read answer the empty one.
+    #[test]
+    fn source_arguments_run_in_declaration_order_and_skip_address_form_slots() {
+        let a = addr(&[1, 0, 1, 0, 1]);
+        let b = addr(&[1, 0, 1, 0, 2]);
+        let c = addr(&[1, 0, 1, 0, 3]);
+        let spec = |d: &Address| VSpec { source: d.clone(), span: sp() };
+
+        let op = Op::Copy { doc: a.clone(), at: vpos(), specs: vec![spec(&b), spec(&c)] };
+        assert_eq!(op.source_arguments(), vec![&b, &c], "copy: each spec's source, by index");
+        let op = Op::Version { d_src: b.clone(), published: None };
+        assert_eq!(op.source_arguments(), vec![&b]);
+        let op = Op::MakeLink {
+            home: a.clone(),
+            from: SlotArg::Resolve(vec![spec(&c)]),
+            to: SlotArg::Addrs(vec![b.clone()]),
+            ty: SlotArg::Resolve(vec![spec(&b), spec(&a)]),
+        };
+        assert_eq!(
+            op.source_arguments(),
+            vec![&c, &b, &a],
+            "make_link: from, then ty — the address-form `to` names no source"
+        );
+        let op = Op::EditLink {
+            original: a.clone(),
+            successor: SuccessorSpec {
+                from: vec![spec(&c)],
+                to: vec![spec(&b)],
+                ty: SlotArg::Addrs(vec![a.clone()]),
+            },
+            d_s: a.clone(),
+            d_a: a.clone(),
+        };
+        assert_eq!(op.source_arguments(), vec![&c, &b], "edit_link: the successor's slots in order");
+
+        for (op, is_read) in all_ops() {
+            let reads_a_source = !op.source_arguments().is_empty();
+            let expects = !is_read
+                && matches!(
+                    op,
+                    Op::Copy { .. } | Op::Version { .. } | Op::MakeLink { .. } | Op::EditLink { .. }
+                );
+            assert_eq!(reads_a_source, expects, "{:?}: the source-reading-writes row", op.kind());
         }
     }
 }

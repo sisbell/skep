@@ -20,41 +20,14 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use skep_identity::{encode_enroll, encode_retire, Enrollment, Fingerprint, PublicKey};
 
-fn distinct_key(n: u8) -> SigningKey {
-    let mut seed = [n; 32];
-    seed[0] = 0x40 ^ n;
-    SigningKey::from_bytes(&seed)
-}
-
-fn public_key_of(sk: &SigningKey) -> PublicKey {
-    PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
-}
+// `distinct_key`, `public_key_of`, `json_atom`, `enroll_atom` and
+// `enroll_atom_flagged` are the shared helpers in `common` (lane 3.3c
+// promoted them: the hire helper and the source-gate suite key delegated
+// principals with the same deterministic seeds).
 
 /// The fingerprint hex `key_set` publishes for a signing key.
 fn fingerprint_hex(sk: &SigningKey) -> String {
     Fingerprint::of(&public_key_of(sk)).to_hex()
-}
-
-/// Arbitrary record text as its atom JSON fragment — the escape every
-/// record atom in this file takes, so a payload no parser admits is written
-/// the same way a well-formed one is.
-fn json_atom(text: &str) -> String {
-    serde_json::to_string(&Value::String(text.to_string())).expect("json string")
-}
-
-/// One enroll record (device-flagged keys) as its atom JSON fragment.
-fn enroll_atom(keys: &[&SigningKey]) -> String {
-    let flagged: Vec<(&SigningKey, bool)> = keys.iter().map(|sk| (*sk, false)).collect();
-    enroll_atom_flagged(&flagged)
-}
-
-/// One enroll record with the anchor flag named per key.
-fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
-    let entries: Vec<Enrollment> = keys
-        .iter()
-        .map(|(sk, anchor)| Enrollment::new(public_key_of(sk), *anchor, None).expect("no label"))
-        .collect();
-    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
 }
 
 /// One enroll record of `n` real keys with a valid-hex NON-POINT key

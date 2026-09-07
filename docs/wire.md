@@ -152,13 +152,39 @@ The same predicate answers `/op-at` (against the HEAD's sets, §Reading
 history) and the source gate of `publish` (§The publish shot and
 head-float).
 
+**Writes that READ a source take the same predicate** (v7.5, PUB round 2
+lane 3.3c; PUB-6.23, PUB-6.24): `copy`'s `specs[].source`, `version`'s
+`d_src`, and every V-SPEC slot of `make_link` and of `edit_link`'s
+successor are consulted at the write door, pre-dispatch, before any
+content of the source is read. A source the session principal may not
+read is the `withheld` rejection — `reorder`, `site.addr` the FIRST
+unreadable source in declared order (`copy`'s specs by index; the link
+writes' slots `from`, `to`, `ty`, specs by index within a slot), no
+`detail`, ever. The gate is per ARGUMENT document and delivery stays per
+ORIGIN: a principal MAY copy, fork or link from a PUBLIC document over runs
+whose origin is a draft it cannot read, and the minted document holds
+those I-positions withheld to it exactly as the source does. ADDRESS-FORM
+slots are ungated — an address is not secret and needs no read to write.
+`fork` reads no source and takes no gate. The consult stands BEHIND the
+destination's `not_owner`, MINT-FIRST and the publish-class gate
+(§Credential refusals), and ahead of the store's read of the source;
+registration stands ahead of it too — an unregistered source answers the
+store's own `source_not_registered`, never `withheld`. One cell the door
+cannot order as the design pins it (PUB-6.36, the model's refusals ahead
+of the consult): a `copy` from a source you may not read INTO a published
+destination you own answers `withheld` at the door, ahead of the store's
+`published_target`. The link-address rule reaches the write side too:
+`edit_link`'s `original` and `assert_sup`'s `old`/`new` homed in a
+document you may not read answer the op's own `original_not_resident` /
+`endpoint_not_resident` — exactly as for a never-deposited address, never
+a `withheld` that confirms a draft-homed link exists (§Links (writes)).
+`nullify`'s `target` takes no such rule; its ω-first order stands.
+
 **The serving bound** (PUB-8.43): the wire serves the subtree clause,
-the read-surface sweep above, and the routed write refusals
-(`published_target` and its two siblings) — that interval is CLOSED. Not
-yet served: the audit-view lookup (PUB-8.46), and the source consult on
-the V-spec slots of `copy`, `version`, `make_link` and `edit_link` — a
-write may today transclude, fork or link to content its session may not
-read; that gate rides a later lane.
+the read-surface sweep above, the routed write refusals
+(`published_target` and its two siblings) and the write side's source
+consult — that interval is CLOSED. Not yet served: the audit-view lookup
+(PUB-8.46).
 
 ### Cross-origin access — a scope decision
 
@@ -1291,17 +1317,21 @@ lists; an `id` is accepted and ignored, as on every read. → `key_set`.
 
 Ownership (v5.1): `insert`, `delete`, and `rearrange` require the session
 principal to own `doc`; `copy` requires owning the **destination** `doc`
-only — its source spans may read anyone's content (transclusion is
-unrestricted); `publish` (v7.3) requires owning `doc`, and its runs'
+only — its source spans may read any content the principal may READ
+(transclusion is unrestricted across the published docuverse and, since
+v7.5, qualified for drafts: a source you may not read is `withheld`, §The
+read predicate); `publish` (v7.3) requires owning `doc`, and its runs'
 origins must be READABLE to the principal (§The publish shot and
 head-float). A non-owner gets `not_owner` (permanent) with the document
 in `site.addr`. `version` is deliberately un-owner-gated: forking a
 foreign document into your own account IS the sanctioned "propose a
-change" path. Since v7 that sentence carries two qualifications, neither
-an ownership gate: `mint_home_first` (a principal whose account holds no
-documents must mint its home before `fork`/`version`) and, on a claimed
+change" path. Since v7 that sentence carries qualifications, none an
+ownership gate: `mint_home_first` (a principal whose account holds no
+documents must mint its home before `fork`/`version`); on a claimed
 board, `signed_session_required` for a flagless `version` of a PUBLISHED
-source from a bare session (§Credential refusals).
+source from a bare session (§Credential refusals); and, since v7.5, the
+source consult — a `d_src` you may not read is `withheld` (§The read
+predicate).
 
 Publication (v7.2): a PUBLISHED `doc` — or a version member of one, which
 is judged as its document (PUB-2.15) — refuses the four in-place edits
@@ -1442,6 +1472,17 @@ retraction should be open with viewer-side filtering, is a genuine
 governance question for the lattice — explicitly deferred, not decided by
 omission. Failures are `not_owner` (permanent) with the failing home or
 target in `site.addr`.
+
+Readability (v7.5; §The read predicate): a V-SPEC slot of `make_link`, or
+of `edit_link`'s successor, that resolves a document the session
+principal may not read is `withheld` naming it — address-form slots are
+ungated; and a link named by ADDRESS whose home the principal may not
+read — `edit_link`'s `original`, `assert_sup`'s `old` and `new` — answers
+exactly as an address no link occupies: `original_not_resident` and
+`endpoint_not_resident` (reorder), never `withheld`, never `not_owner`.
+Both consults run after the ownership check on the homes you write and
+before the store reads anything. `nullify`'s `target` takes neither: its
+ω-first order stands as above.
 
 Credential deposits (v7): a `make_link` whose `ty` names a credential
 type address (§The claim ceremony and credentials) is a credential
@@ -2121,6 +2162,37 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.5 (the write side's consult — PUB round 2, lane 3.3c, built 2026-09-06;
+documented as built):
+
+* WRITES THAT READ A SOURCE ARE CLASS-GATED (§The read predicate;
+  PUB-6.23, PUB-6.24, PUB-6.38): `copy`'s `specs[].source`, `version`'s
+  `d_src`, and the V-spec slots of `make_link` and `edit_link`'s successor
+  are consulted at the write door, pre-dispatch, per argument, through the
+  one predicate every read answers — a source the session principal may
+  not read is `withheld` (reorder, `site.addr` the first unreadable source
+  in declared order, no `detail`). Address-form slots are ungated; `fork`
+  takes no gate. Behind the destination's `not_owner`, MINT-FIRST and the
+  publish-class gate; ahead of the store's read; registration ahead of it
+  (`source_not_registered`, never `withheld`). v7.4's "those writes read
+  their sources ungated today" is superseded; v5.1's "transclusion is
+  unrestricted" and "`version` is deliberately ungated" are qualified to
+  readable sources (§Arrangement).
+* THE LINK-ADDRESS RULE ON WRITES (§Links (writes); PUB-6.6):
+  `edit_link.original` and `assert_sup.old`/`new` homed in a document the
+  principal may not read answer the op's own `original_not_resident` /
+  `endpoint_not_resident` — the never-deposited address's answer — never
+  `withheld`, never `not_owner`. `nullify.target` is untouched (its
+  ω-first order; the nullify-class refusals are a later lane's).
+* Recorded, not decided here: on a `copy` from an unreadable source into a
+  PUBLISHED destination the caller owns, the door's `withheld` precedes the
+  store's `published_target` (PUB-6.36 orders the model's refusals first;
+  the consult is pre-dispatch by PUB-6.38 and the refusal is the store's
+  by D2b).
+* No new op, no new code, no dump change, no change to the credential
+  surface. The serving bound (PUB-8.43) is CLOSED for the source consult;
+  PUB-8.46's audit-view lookup stays the one owed item.
 
 v7.4 (the read-surface sweep — PUB round 2, lane 3.3, built 2026-09-06;
 documented as built):

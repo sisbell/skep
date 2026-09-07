@@ -21,9 +21,6 @@ mod common;
 use common::*;
 use serde_json::Value;
 
-/// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
-const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
-
 /// The shipped `retired` class in the wire's endset form: the one Unary
 /// idem⊤ class the open `emit` surface may write under standard genesis
 /// (`[K_sup]` and `[R]` are fenced), so the tuple every cell emits is
@@ -92,18 +89,8 @@ fn owner_draft(port: u16, owner: &str) -> String {
     create_doc(port, owner, CLAIMANT_ACCOUNT)
 }
 
-/// A grant link in the claimant's published home doc 1 (from the SIGNED
-/// session — a write into the published world): `from` the content-prefix,
-/// `to` the grantee account.
-fn deposit_grant(port: u16, signed: &str, content_prefix: &str, grantee: &str) {
-    acked_addr(&op(
-        port,
-        Some(signed),
-        &format!(
-            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{content_prefix}"]}},"to":{{"addrs":["{grantee}"]}},"ty":{{"addrs":["{T_GRANT}"]}}}}"#
-        ),
-    ));
-}
+// Grants are deposited through `common::deposit_grant` (lane 3.3c's shared
+// helper) into the claimant's published doc 1 from the SIGNED session.
 
 /// A PUBLIC link — homed in the claimant's published doc 1, from the signed
 /// session — an endpoint every class can read, so `assert_sup`'s own
@@ -191,7 +178,7 @@ fn a_draft_homed_incumbent_dedups_only_for_callers_who_can_read_the_draft() {
     let (c_account, c) = stranger(port, 902);
     let c_home = own_draft(port, &c, &c_account);
     assert_ne!(emit_t(port, &c, &c_home), incumbent, "before the grant: a stranger, fresh");
-    deposit_grant(port, &signed, &draft, &c_account);
+    deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&c_account));
     assert_eq!(emit_t(port, &c, &c_home), incumbent, "granted: the draft's incumbent is readable, and acked");
 
     // COEXISTENCE (cell 4): both sides stand; each owner's re-emit acks the
@@ -242,7 +229,7 @@ fn a_draft_homed_claim_dedups_only_for_callers_who_can_read_the_draft() {
     assert_eq!(assert_sup(port, &sub, &sub_home, &old, &new), incumbent);
     let (c_account, c) = stranger(port, 912);
     let c_home = own_draft(port, &c, &c_account);
-    deposit_grant(port, &signed, &draft, &c_account);
+    deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&c_account));
     assert_eq!(assert_sup(port, &c, &c_home, &old, &new), incumbent);
 
     // The owner's re-assertion acks the draft's claim, the earliest it reads.

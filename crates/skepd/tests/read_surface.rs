@@ -11,9 +11,6 @@ mod common;
 use common::*;
 use serde_json::Value;
 
-/// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
-const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
-
 /// A stranger account under node 1, delegated from the bootstrap principal,
 /// with its own session. Returns `(account, session)`.
 fn stranger(port: u16, id: u64) -> (String, String) {
@@ -50,23 +47,8 @@ fn private_draft(port: u16, owner: &str, text: &str) -> String {
     d
 }
 
-/// A grant link in the claimant's published home doc 1 (from the SIGNED
-/// session — a write into the published world): `from` the content-prefix, `to`
-/// the grantee account (empty ⟹ ANY-PRINCIPAL). Returns the grant link's
-/// address.
-fn deposit_grant(port: u16, signed: &str, content_prefix: &str, grantee: Option<&str>) -> String {
-    let to = match grantee {
-        Some(g) => format!(r#"{{"addrs":["{g}"]}}"#),
-        None => r#"{"addrs":[]}"#.to_string(),
-    };
-    acked_addr(&op(
-        port,
-        Some(signed),
-        &format!(
-            r#"{{"op":"make_link","home":"{CLAIMANT_DOC1}","from":{{"addrs":["{content_prefix}"]}},"to":{to},"ty":{{"addrs":["{T_GRANT}"]}}}}"#
-        ),
-    ))
-}
+// The grant is deposited through `common::deposit_grant` — the shared helper
+// (lane 3.3c) — into the claimant's published doc 1 from the SIGNED session.
 
 /// Read ordinal 1 of `doc` as `token` (None = guest).
 fn read1(port: u16, token: Option<&str>, doc: &str) -> Value {
@@ -117,7 +99,7 @@ fn pub_8_43_the_read_surface_serves_the_four_reader_classes() {
     assert_withheld(&read1(port, Some(&b), &draft), &draft);
 
     // Grant the draft to B, then B reads it — GRANT-HOLDER.
-    deposit_grant(port, &signed, &draft, Some(&b_account));
+    deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, Some(&b_account));
     assert_delivers(&read1(port, Some(&b), &draft), "s");
     // The guest is STILL masked — a grant is to a principal, not the guest.
     assert_withheld(&read1(port, None, &draft), &draft);
@@ -141,7 +123,7 @@ fn an_any_principal_grant_opens_a_draft_to_every_principal_but_not_the_guest() {
     let (_b_account, b) = stranger(port, 903);
 
     assert_withheld(&read1(port, Some(&b), &draft), &draft); // before
-    deposit_grant(port, &signed, &draft, None); // ANY-PRINCIPAL
+    deposit_grant(port, &signed, CLAIMANT_DOC1, &draft, None); // ANY-PRINCIPAL
     assert_delivers(&read1(port, Some(&b), &draft), "o"); // any principal reads
     assert_withheld(&read1(port, None, &draft), &draft); // the guest still does not
     sd.shutdown();

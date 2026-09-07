@@ -102,7 +102,7 @@ fn writes_read_back_and_their_links_are_discoverable() {
     let s2 = open_session(port, 2);
 
     // account2's home mint — the same MINT-FIRST discipline as account1's.
-    create_doc(port, &s2, &account2);
+    let account2_doc1 = create_doc(port, &s2, &account2);
     let doc2 = create_doc(port, &s2, &account2);
     expect_resp(&insert_at(port, &s2, &doc2, 1, r#""linked text""#), "ack_addr");
     expect_resp(&insert_at(port, &s1, &doc1, 12, r#"" and more""#), "ack_addr");
@@ -112,6 +112,21 @@ fn writes_read_back_and_their_links_are_discoverable() {
     // delegator — is no reader of it; only s2 is.
     assert_eq!(read_text(port, Some(&s1), &doc1, 20), "hello, wire and more");
     assert_eq!(read_text(port, Some(&s2), &doc2, 11), "linked text");
+
+    // THE GRANT (lane 3.3c): the link below puts doc2 — the sub-account's
+    // private draft — in principal 1's `to` V-spec, and the write door's
+    // source consult (PUB-6.23) refuses a source the session may not read,
+    // so principal 2 GRANTS account2 to account1 first. A grant is a write
+    // into account2's PUBLISHED doc 1, admitted from a SIGNED session alone
+    // (RES-26), and every principal here is delegated and keyless — so the
+    // claimant hires principal 1 (registry: the claimant's doc 1) and
+    // principal 1 hires principal 2 (registry: account1's doc 1), AUTH-5.58,
+    // and principal 2's signed session deposits the grant (PUB-5.8).
+    let claimant = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let s1_signed = hire(port, &claimant, CLAIMANT_DOC1, &account1, 1, &distinct_key(1));
+    let account1_doc1 = format!("{account1}.0.1");
+    let s2_signed = hire(port, &s1_signed, &account1_doc1, &account2, 2, &distinct_key(2));
+    deposit_grant(port, &s2_signed, &account2_doc1, &account2, Some(&account1));
 
     // principal_prefix resolves the account the session was told at open —
     // an exempt read (PUB-6.50): registry data, served to the guest.

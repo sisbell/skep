@@ -309,11 +309,16 @@ fn dump_at(port: u16, at: u64) -> Option<Vec<u8>> {
 /// The chain makes the subtree clause carry every cross-owner arm this suite
 /// generates: a writer's copy/version SOURCES are drawn from
 /// [`readable_by`] — its own drafts and its ancestors' — so each source is
-/// readable to the writer at the write (PUB-6.23's consult, when it lands)
-/// and every run's origin is readable to the destination's owner on
-/// read-back, and the naive byte shadow stays exact with no withheld item
-/// (PUB-1.55). Reads by an ancestor or a sibling are `read_surface.rs`'s
-/// cells.
+/// readable to the writer at the write (PUB-6.23's consult at M10's door,
+/// lane 3.3c) and every run's origin is readable to the destination's owner
+/// on read-back, and the naive byte shadow stays exact with no withheld item
+/// (PUB-1.55); and the links a write VALIDATES BY ADDRESS —
+/// `assert_sup.old`/`new`, `edit_link.original` — are drawn from
+/// [`readable_links`], those homed in a document the writer reads, since a
+/// link homed in a descendant's draft answers the writer ABSENCE at the same
+/// door (PUB-6.6's link-address rule on writes, lane 3.3c). Reads by an
+/// ancestor or a sibling are `read_surface.rs`'s cells; the write door's own
+/// refusals are `source_gate.rs`'s.
 fn setup(port: u16) -> Shadow {
     let boot = open_session(port, 0);
     let acc_a = delegate(port, &boot, "1", 1);
@@ -386,6 +391,19 @@ fn own_doc(shadow: &Shadow, pi: usize, sel: u8) -> usize {
 /// lower index). Never empty — the caller's own pool is never empty.
 fn readable_by(shadow: &Shadow, pi: usize) -> Vec<usize> {
     (0..shadow.docs.len()).filter(|&i| shadow.docs[i].owner <= pi).collect()
+}
+
+/// The links principal `pi` can NAME as a write's link-address argument —
+/// `assert_sup.old`/`new`, `edit_link.original` — and have the write land:
+/// those homed in a document [`readable_by`] `pi`. A link homed in a
+/// DESCENDANT's draft is unreadable to its ancestor, and the write door
+/// answers it exactly as for an address no link occupies —
+/// `endpoint_not_resident` / `original_not_resident` (PUB-6.6's link-address
+/// rule on writes, lane 3.3c) — the specified answer, so the generator never
+/// names one; that refusal's cell is `source_gate.rs`'s. May be empty.
+fn readable_links(shadow: &Shadow, pi: usize) -> Vec<usize> {
+    let home_readable = |k: &usize| shadow.docs[shadow.links[*k].home_doc].owner <= pi;
+    (0..shadow.links.len()).filter(home_readable).collect()
 }
 
 /// The deterministic degradation target: one byte prepended to the caller's
@@ -603,14 +621,22 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
         }
         PlanOp::AssertSup { p, d, x, y } => {
             let pi = *p as usize % 3;
-            if shadow.links.len() < 2 {
+            // Both endpoints RESIDENT to the caller — homed in a document it
+            // reads (PUB-6.6's link-address rule at the write door) — and
+            // distinct (irreflexive). The claim is homed in the caller's own
+            // draft; a duplicate `(old, new)` pair this caller can read dedups
+            // to the incumbent's ack, one it cannot read mints afresh
+            // (PUB-6.25, PUB-6.26) — an ack either way.
+            let resident = readable_links(shadow, pi);
+            if resident.len() < 2 {
                 return fallback_insert(shadow, state, pi, op_index);
             }
-            let xi = *x as usize % shadow.links.len();
-            let mut yi = *y as usize % shadow.links.len();
-            if yi == xi {
-                yi = (yi + 1) % shadow.links.len();
+            let xk = *x as usize % resident.len();
+            let mut yk = *y as usize % resident.len();
+            if yk == xk {
+                yk = (yk + 1) % resident.len();
             }
+            let (xi, yi) = (resident[xk], resident[yk]);
             let di = own_doc(shadow, pi, *d);
             let id = state.next_id();
             let frame = format!(
@@ -639,10 +665,14 @@ fn step(op_index: usize, planned: &PlanOp, shadow: &mut Shadow, state: &mut RunS
         }
         PlanOp::EditLink { p, d, l, resolve_from } => {
             let pi = *p as usize % 3;
-            if shadow.links.is_empty() {
+            // The original RESIDENT to the caller — homed in a document it
+            // reads (PUB-6.6, as for assert_sup's endpoints); the successor's
+            // one resolve-form slot reads the caller's own home.
+            let resident = readable_links(shadow, pi);
+            if resident.is_empty() {
                 return fallback_insert(shadow, state, pi, op_index);
             }
-            let oi = *l as usize % shadow.links.len();
+            let oi = resident[*l as usize % resident.len()];
             let di = own_doc(shadow, pi, *d);
             let home = shadow.docs[di].addr.clone();
             let ghost = format!("{home}.0.3.6.{}", state.next_ghost());

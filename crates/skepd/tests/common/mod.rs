@@ -27,6 +27,11 @@ pub const T_ENROLL: &str = "1.1.0.1.0.1.0.3.1";
 pub const T_RETIRE: &str = "1.1.0.1.0.1.0.3.2";
 pub const T_CLAIM: &str = "1.1.0.1.0.1.0.3.3";
 
+/// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90):
+/// the type a sharing grant's link carries (PUB-5.8, wire.md §The read
+/// predicate).
+pub const T_GRANT: &str = "1.1.0.1.0.1.0.3.90";
+
 /// The claim ceremony's fixed test identity: a high principal id so suite
 /// principals (0, 1, 2, …) never collide with it, and deterministic key
 /// seeds so a reopened board verifies against the same keys.
@@ -44,8 +49,43 @@ pub fn anchor_key() -> SigningKey {
     SigningKey::from_bytes(&ANCHOR_SEED)
 }
 
-fn public_key_of(sk: &SigningKey) -> PublicKey {
+pub fn public_key_of(sk: &SigningKey) -> PublicKey {
     PublicKey::parse("ed25519", &hex(&sk.verifying_key().to_bytes())).expect("a real point")
+}
+
+/// A deterministic per-principal signing key: seed `n` in every byte, the
+/// first byte XORed with `0x40` so no `distinct_key(n)` collides with the
+/// ceremony's [`DEVICE_SEED`]/[`ANCHOR_SEED`] (constant-byte seeds) at any
+/// `n`. The suites that hire delegated principals key each one with the
+/// principal's own number.
+pub fn distinct_key(n: u8) -> SigningKey {
+    let mut seed = [n; 32];
+    seed[0] = 0x40 ^ n;
+    SigningKey::from_bytes(&seed)
+}
+
+/// Arbitrary record text as its atom JSON fragment — the escape every record
+/// atom the suites insert takes, so a payload no parser admits is written the
+/// same way a well-formed one is.
+pub fn json_atom(text: &str) -> String {
+    serde_json::to_string(&Value::String(text.to_string())).expect("json string")
+}
+
+/// One enroll record of DEVICE-flagged keys (no anchor lines — AUTH-5.63's
+/// rule for a machine-composed genesis), as its atom JSON fragment.
+pub fn enroll_atom(keys: &[&SigningKey]) -> String {
+    let flagged: Vec<(&SigningKey, bool)> = keys.iter().map(|sk| (*sk, false)).collect();
+    enroll_atom_flagged(&flagged)
+}
+
+/// One enroll record with the anchor flag named per key, as its atom JSON
+/// fragment.
+pub fn enroll_atom_flagged(keys: &[(&SigningKey, bool)]) -> String {
+    let entries: Vec<Enrollment> = keys
+        .iter()
+        .map(|(sk, anchor)| Enrollment::new(public_key_of(sk), *anchor, None).expect("no label"))
+        .collect();
+    json_atom(&String::from_utf8(encode_enroll(&entries)).expect("utf-8"))
 }
 
 pub fn hex(bytes: &[u8]) -> String {
@@ -149,6 +189,107 @@ pub fn claim_board(port: u16) {
     );
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
+}
+
+/// The next FREE content ordinal of `doc` — one past its arranged content
+/// extent, read off `retrieve_doc_v_span_set` (the content extent is the
+/// `1.1`-started span, its width `0.N`; an empty document has none). Read as
+/// `token` (`None` = the guest, enough for a published doc 1). The position a
+/// declared deposit into a published document must land at (PUB-2.59), so
+/// the helpers that deposit into a doc 1 read it rather than assume it: the
+/// claimant's doc 1 already holds the claim atom at 1, and every hire and
+/// every walk's deposit advances the head by one.
+pub fn next_content_ordinal(port: u16, token: Option<&str>, doc: &str) -> u64 {
+    let v = op(port, token, &format!(r#"{{"op":"retrieve_doc_v_span_set","doc":"{doc}"}}"#));
+    let set = expect_resp(&v, "span_set")["set"].as_array().expect("a span set");
+    let width = set
+        .iter()
+        .find(|s| s["start"].as_str() == Some("1.1"))
+        .and_then(|s| s["width"].as_str())
+        .and_then(|w| w.rsplit('.').next())
+        .map(|n| n.parse::<u64>().expect("an extent's width ends in its count"))
+        .unwrap_or(0);
+    width + 1
+}
+
+/// THE HIRE (AUTH-5.58, AUTH-2.62, AUTH-2.70): key a DELEGATED, keyless
+/// principal so it can open a SIGNED session — what a write into a published
+/// home needs on a claimed board (AUTH-3.79; `policy.rs::publish_gate`), a
+/// grant being one such write (PUB-5.8). The agent's GENESIS enrollment is
+/// homed in its GENESIS REGISTRY — its DELEGATOR's doc 1; for a
+/// bootstrap-delegated account, the CLAIMANT's doc 1 (AUTH-2.62) — written
+/// from the delegator's SIGNED session as the one-atom verified deposit
+/// (AUTH-5.4): the enroll atom of the agent's DEVICE-flagged public key
+/// (device-flagged only, AUTH-5.63) inserted into the registry doc 1 at its
+/// next free position with `deposit: true`, then the `make_link` naming the
+/// atom, the agent's account and `T_ENROLL`. The fold's genesis arm latches
+/// the set (AUTH-2.70); the agent then opens a signed session with `key`.
+///
+/// `registrar_signed` is the delegator's SIGNED session and `registrar_doc1`
+/// that delegator's doc 1. A refused deposit is an AUTH finding, not a
+/// fixture to bend: the panic names the verdict token.
+pub fn hire(
+    port: u16,
+    registrar_signed: &str,
+    registrar_doc1: &str,
+    agent_account: &str,
+    agent_id: u64,
+    key: &SigningKey,
+) -> String {
+    let ordinal = next_content_ordinal(port, Some(registrar_signed), registrar_doc1);
+    let v = op(
+        port,
+        Some(registrar_signed),
+        &format!(
+            r#"{{"op":"insert","doc":"{registrar_doc1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":[{{"atom":{}}}],"deposit":true}}"#,
+            enroll_atom(&[key])
+        ),
+    );
+    assert_eq!(
+        v["resp"].as_str(),
+        Some("ack_addr"),
+        "hire of {agent_id}: the enroll atom's deposit into {registrar_doc1}: {v}"
+    );
+    let atom_addr = acked_addr(&v);
+    let v = op(
+        port,
+        Some(registrar_signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{registrar_doc1}","from":{{"addrs":["{atom_addr}"]}},"to":{{"addrs":["{agent_account}"]}},"ty":{{"addrs":["{T_ENROLL}"]}}}}"#
+        ),
+    );
+    assert_eq!(
+        v["resp"].as_str(),
+        Some("ack_addr"),
+        "hire of {agent_id} ({agent_account}) refused by the fold — an AUTH finding: {v}"
+    );
+    open_signed_session(port, agent_id, key)
+}
+
+/// A GRANT link in `home_doc1`, the issuer's published doc 1, from the
+/// issuer's SIGNED session `signed` — a write into the published world:
+/// `from` the content-prefix shared (a document, or an account — covering
+/// every document under it, later mints included), `to` the grantee account,
+/// or `None` for the ANY-PRINCIPAL form (`to: []`, PUB-5.8). Returns the
+/// grant link's address.
+pub fn deposit_grant(
+    port: u16,
+    signed: &str,
+    home_doc1: &str,
+    content_prefix: &str,
+    grantee: Option<&str>,
+) -> String {
+    let to = match grantee {
+        Some(g) => format!(r#"{{"addrs":["{g}"]}}"#),
+        None => r#"{"addrs":[]}"#.to_string(),
+    };
+    acked_addr(&op(
+        port,
+        Some(signed),
+        &format!(
+            r#"{{"op":"make_link","home":"{home_doc1}","from":{{"addrs":["{content_prefix}"]}},"to":{to},"ty":{{"addrs":["{T_GRANT}"]}}}}"#
+        ),
+    ))
 }
 
 /// Spawn with the local-trust flag NAMED and the board left UNCLAIMED —

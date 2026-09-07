@@ -36,11 +36,25 @@ use serde_json::Value;
 //   * `register_node` takes NO principal in the store (provisioning is
 //     authentication-gated only) — every bound session may admit a fresh
 //     node. Recorded here as a reviewed fact of the local-trust scope.
-//   * `version` and `copy`-from-foreign-source are DELIBERATELY ungated
-//     (denial-as-fork / transclusion is the medium); an accidental gate on
-//     either is a cell mismatch.
+//   * `version` and `copy`-from-foreign-source are un-OWNER-gated
+//     (denial-as-fork / transclusion is the medium) and, since PUB round 2
+//     lane 3.3c, SOURCE-gated at M10's door (PUB-6.23, PUB-6.38): a source
+//     the caller may not read answers `withheld`. The matrix's premise —
+//     every target X's — stands because X GRANTS its account to every
+//     principal (`build_fixture`, the ruling of 2026-09-06); the same cells
+//     WITHOUT the grant are the second table below, where the sibling and
+//     the parent are withheld and the child still reads by the subtree
+//     clause (PUB-1.32).
 //   * `edit_link` of a FOREIGN original with both homes your own is the
-//     sanctioned "propose a change" path for links: allowed.
+//     sanctioned "propose a change" path for links: allowed — where the
+//     original's home is readable. Homed in a document the caller may not
+//     read, the original answers the op's own `original_not_resident`
+//     (PUB-6.6's write half), never `withheld` and never `not_owner`.
+//   * The hires: every matrix principal is delegated and keyless, and a
+//     grant is a write into a PUBLISHED doc 1, admitted only from a SIGNED
+//     session (RES-26) — so the claimant hires P, P hires X and S, X hires
+//     C (`common::hire`, AUTH-5.58), and X's signed session deposits the
+//     grant. The bare tokens the cells run under are unchanged.
 //   * guest (no token) and stale-token (token from a daemon lifetime that
 //     has ended) never reach a store: M10's `unauthenticated`, permanent.
 //   * RES-26, the public-permanent gate: an account's doc 1 is born
@@ -76,7 +90,14 @@ const SIGNED_SESSION_REQUIRED: &str = "credential_refused:signed_session_require
 /// is versionless; the foreign columns fork the same source into their
 /// own accounts and are refused by neither version-chain rule.
 const PRIVATE_SOURCE_VERSIONLESS: &str = "private_source_versionless";
+/// PUB-6.23's refusal at the write door (lane 3.3c): a source the caller may
+/// not read — `copy`'s spec, `version`'s `d_src`.
+const WITHHELD: &str = "withheld";
+/// PUB-6.6's write half (lane 3.3c): `edit_link`'s original homed in a
+/// document the caller may not read answers as a never-deposited address.
+const ORIGINAL_NOT_RESIDENT: &str = "original_not_resident";
 
+#[derive(Clone, Copy)]
 struct Row {
     label: &'static str,
     expect: [&'static str; 6],
@@ -113,6 +134,39 @@ const MATRIX: &[Row] = &[
     Row { label: "edit_link (foreign original)",
                                           expect: [OK, OK,             OK,             OK,               UNAUTHENTICATED, UNAUTHENTICATED] },
 ];
+
+/// The cells that turn WITHOUT X's grant (lane 3.3c, PUB-6.23, PUB-6.6): the
+/// SIBLING and the PARENT cannot read X's drafts — the subtree clause runs
+/// downward only (PUB-1.32), so the parent reads none of X's — while the
+/// CHILD, delegated under X, reads them and keeps its cell. Every other row
+/// is unchanged: a foreign DESTINATION is `not_owner` ahead of any source
+/// consult (PUB-6.36 slot 1), and the guest and stale columns never reach a
+/// store.
+#[rustfmt::skip]
+const NO_GRANT_ROWS: &[Row] = &[
+    //                                              owner sibling         child           parent            guest            stale
+    Row { label: "copy (foreign source)", expect: [OK, WITHHELD,       OK,             WITHHELD,         UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "version (foreign src)", expect: [PRIVATE_SOURCE_VERSIONLESS,
+                                                       WITHHELD,       OK,             WITHHELD,         UNAUTHENTICATED, UNAUTHENTICATED] },
+    Row { label: "edit_link (foreign original)",
+                                          expect: [OK, ORIGINAL_NOT_RESIDENT,
+                                                                       OK,             ORIGINAL_NOT_RESIDENT,
+                                                                                                         UNAUTHENTICATED, UNAUTHENTICATED] },
+];
+
+/// The contract table for a fixture WITH or WITHOUT X's grant: [`MATRIX`] as
+/// written, or with [`NO_GRANT_ROWS`] standing in for the rows they name.
+fn table(granted: bool) -> Vec<Row> {
+    MATRIX
+        .iter()
+        .map(|row| {
+            if granted {
+                return *row;
+            }
+            NO_GRANT_ROWS.iter().find(|r| r.label == row.label).copied().unwrap_or(*row)
+        })
+        .collect()
+}
 
 // ── fixture plumbing ─────────────────────────────────────────────────────
 
@@ -240,7 +294,21 @@ fn mint_link(port: u16, session: &str, home: &str, counters: &Counters) -> Strin
     acked_addr(&v)
 }
 
-fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) -> Fixture {
+/// Build the persistent fixture. `granted` decides whether X's SIGNED session
+/// deposits the ACCOUNT-rung ANY-PRINCIPAL grant over `acc_x` in `pub_doc`
+/// (X's doc 1) — the grant that keeps the matrix's premise (every target X's,
+/// every foreign caller able to READ it) under the source consult
+/// (PUB-6.23). The hires run either way: the grant needs X's signed session,
+/// and X's signed session needs the chain of genesis enrollments the
+/// delegation tree implies (AUTH-2.62) — the claimant keys P into the
+/// claimant's doc 1, P keys X and S into P's, X keys C into X's.
+fn build_fixture(
+    port: u16,
+    boot: &str,
+    tokens: &Tokens,
+    counters: &Counters,
+    granted: bool,
+) -> Fixture {
     // Relationships: boot → P under node [1]; P → X and S under Ap
     // (siblings); X → C under Ax (sub-delegation).
     let acc_p = delegate(port, boot, "1", P_PARENT);
@@ -256,7 +324,26 @@ fn build_fixture(port: u16, boot: &str, tokens: &Tokens, counters: &Counters) ->
     let pub_doc = create_doc(port, x, &acc_x);
     create_doc(port, &tokens.by_col[1], &acc_s);
     create_doc(port, &tokens.by_col[2], &acc_c);
-    create_doc(port, p, &acc_p);
+    let p_doc1 = create_doc(port, p, &acc_p);
+
+    // THE HIRES (AUTH-5.58; the ruling of 2026-09-06): each principal is
+    // keyed by its delegator's signed session into that delegator's doc 1 —
+    // P by the claimant (registry: the claimant's doc 1), X and S by P
+    // (registry: P's doc 1), C by X (registry: X's doc 1) — and only X's
+    // signed session is used further, for the grant. The bare tokens the
+    // matrix cells run under are untouched by this.
+    let key_of = |id: u64| distinct_key(u8::try_from(id).expect("a matrix principal id fits a seed byte"));
+    let claimant = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
+    let p_signed = hire(port, &claimant, CLAIMANT_DOC1, &acc_p, P_PARENT, &key_of(P_PARENT));
+    let x_signed = hire(port, &p_signed, &p_doc1, &acc_x, P_OWNER, &key_of(P_OWNER));
+    hire(port, &p_signed, &p_doc1, &acc_s, P_SIBLING, &key_of(P_SIBLING));
+    hire(port, &x_signed, &pub_doc, &acc_c, P_CHILD, &key_of(P_CHILD));
+    if granted {
+        // X's ACCOUNT-rung grant to EVERY principal (`to: []`, PUB-5.8): every
+        // draft X has or will mint is readable to the sibling and the parent,
+        // so the foreign columns' source-reading cells stay `ok`.
+        deposit_grant(port, &x_signed, &pub_doc, &acc_x, None);
+    }
 
     let own_doc = [
         create_doc(port, x, &acc_x),
@@ -440,11 +527,12 @@ fn walk_matrix(
     tokens: &Tokens,
     stale_token: &str,
     counters: &Counters,
+    table: &[Row],
     walk: &str,
 ) {
     let mut mismatches: Vec<String> = Vec::new();
     let mut cells = 0usize;
-    for row in MATRIX {
+    for row in table {
         for (col, expected) in row.expect.iter().enumerate() {
             let got = run_cell(port, fixture, tokens, stale_token, counters, row.label, col);
             cells += 1;
@@ -463,21 +551,23 @@ fn walk_matrix(
         mismatches.len(),
         mismatches.join("\n")
     );
-    println!("{walk}: {} rows × {} columns = {cells} cells, all verdicts match", MATRIX.len(), COLS.len());
+    println!("{walk}: {} rows × {} columns = {cells} cells, all verdicts match", table.len(), COLS.len());
 }
 
 /// The publish row's signed-session arm: the same write class the bare
 /// owner cell refuses is ACCEPTED from a signed session. Asserted against
-/// the claimant's own published home — the one account with enrolled keys
-/// (the matrix principals hold none, which is exactly why their column is
-/// the refusal). Walked each life: the enrollment derives from the
-/// registry, so a post-restart handshake must still sign in and land. The
-/// write is a DECLARED deposit at the home's fresh position — the one insert
-/// a published document admits past the gate (PUB-2.59); the undeclared
-/// twin is the store's own refusal, `tests/version_chain.rs`. `ordinal` is
-/// the head's fresh position for THIS walk: the ceremony's atom holds 1,
-/// and each walk's deposit advances the head by one.
-fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str, ordinal: u64) {
+/// the claimant's own published home (the matrix principals' own keys are
+/// the hires' — a device key apiece, used for the grant alone; their column
+/// runs bare, which is exactly why it is the refusal). Walked each life: the
+/// enrollment derives from the registry, so a post-restart handshake must
+/// still sign in and land. The write is a DECLARED deposit at the home's
+/// fresh position — the one insert a published document admits past the gate
+/// (PUB-2.59); the undeclared twin is the store's own refusal,
+/// `tests/version_chain.rs`. The position is READ off the head for THIS walk
+/// (`next_content_ordinal`): the ceremony's atom holds 1, the claimant's hire
+/// of P holds 2, and each walk's deposit advances the head by one.
+fn signed_claimant_writes_its_published_doc1(port: u16, walk: &str) {
+    let ordinal = next_content_ordinal(port, None, CLAIMANT_DOC1);
     let frame = format!(
         r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"1","ordinal":"{ordinal}"}},"values":["z"],"deposit":true}}"#
     );
@@ -514,14 +604,15 @@ fn authorization_matrix_holds_and_survives_restart() {
     };
 
     // Life 1: fixture + first walk, then the publish row's signed arm.
+    let granted = table(true);
     let (fixture, stale1) = {
         let sd = spawn(dir.path());
         let port = sd.port();
         let boot = open_session(port, 0);
         let tokens = open_tokens(port);
-        let fixture = build_fixture(port, &boot, &tokens, &counters);
-        walk_matrix(port, &fixture, &tokens, &stale0, &counters, "walk 1");
-        signed_claimant_writes_its_published_doc1(port, "walk 1", 2);
+        let fixture = build_fixture(port, &boot, &tokens, &counters, true);
+        walk_matrix(port, &fixture, &tokens, &stale0, &counters, &granted, "walk 1");
+        signed_claimant_writes_its_published_doc1(port, "walk 1");
         let stale1 = tokens.owner.clone();
         sd.shutdown();
         (fixture, stale1)
@@ -530,15 +621,47 @@ fn authorization_matrix_holds_and_survives_restart() {
     // Life 2: recovery, fresh sessions, full re-walk — the signed arm
     // included, on a handshake freshly bound against the recovered
     // registry. The stale column now carries life 1's owner token — once
-    // the legitimate owner, now dead.
+    // the legitimate owner, now dead. The grant and the hires are links in
+    // the journal, so the source consult reads the same fold it did in
+    // life 1 — authorization AND readability derive from the registry.
     {
         let sd = spawn(dir.path());
         let port = sd.port();
         let tokens = open_tokens(port);
-        walk_matrix(port, &fixture, &tokens, &stale1, &counters, "walk 2 (post-restart)");
-        signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)", 3);
+        walk_matrix(port, &fixture, &tokens, &stale1, &counters, &granted, "walk 2 (post-restart)");
+        signed_claimant_writes_its_published_doc1(port, "walk 2 (post-restart)");
         sd.shutdown();
     }
+}
+
+/// The matrix WITHOUT X's grant (lane 3.3c, §5): the same fixture — hires
+/// included, grant withheld — walked once against [`table`]`(false)`. The
+/// three rows that turn are the source-reading and link-address cells:
+/// `copy (foreign source)` and `version (foreign src)` answer `withheld` to
+/// the SIBLING and the PARENT (PUB-6.23; the parent reads none of X's drafts,
+/// the subtree clause running downward only, PUB-1.32) and stay `ok` for the
+/// CHILD; `edit_link (foreign original)` answers `original_not_resident` to
+/// the two — the original's home unreadable, the link ABSENT to them
+/// (PUB-6.6) — never `withheld`, never `not_owner`. Every other cell holds:
+/// a foreign DESTINATION is `not_owner` ahead of any consult (PUB-6.36 slot
+/// 1), and the guest and stale columns never reach a store.
+#[test]
+fn without_x_s_grant_the_sibling_and_parent_are_withheld_from_x_s_sources() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counters = Counters::new();
+    let stale0 = {
+        let sd = spawn(dir.path());
+        let tok = open_session(sd.port(), P_OWNER);
+        sd.shutdown();
+        tok
+    };
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let boot = open_session(port, 0);
+    let tokens = open_tokens(port);
+    let fixture = build_fixture(port, &boot, &tokens, &counters, false);
+    walk_matrix(port, &fixture, &tokens, &stale0, &counters, &table(false), "no grant");
+    sd.shutdown();
 }
 
 /// Session-shaped abuse of the idempotency hint, beyond the matrix: the

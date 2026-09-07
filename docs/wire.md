@@ -1204,26 +1204,66 @@ resolves AFTER every token below.
      mint; a flagless `version` of a **published** source (the inherit
      resolving published); an `insert`/`delete`/`copy`/`rearrange`
      whose `doc` is a published document the caller owns — a version
-     member reading as its document (PUB-2.15, §Arrangement); and a link
-     write homed in one (`edit_link` reads `d_s`). A foreign or
-     unregistered argument answers `execute`'s own code instead
-     (`not_owner`, `*_not_registered`). Signed sessions, draft mints
-     (flagless or `published:false`), draft writes, bare reads,
-     `delegate` and the home mint itself are unchanged.
+     member reading as its document (PUB-2.15, §Arrangement); a link
+     write homed in one (`edit_link` reads `d_s`); and — v7.7,
+     PUB-6.43's `nullify` row — a `nullify` whose record `home` OR whose
+     `target` link's own home is published (a retraction LANDS at its
+     target, so a draft-homed record against a published-homed link is a
+     published write, while a draft-homed record against a draft-homed
+     target stays a draft write). A foreign or unregistered argument
+     answers `execute`'s own code instead (`not_owner`,
+     `*_not_registered`) — for `nullify`, ω on BOTH the home and the
+     target stands ahead of the gate, so a caller owning either alone
+     answers `not_owner` and is never told what is published. Signed
+     sessions, draft mints (flagless or `published:false`), draft writes,
+     bare reads, `delegate` and the home mint itself are unchanged.
    * unclaimed — `claim_first`: an unclaimed daemon admits only the
      ceremony's own shape — `delegate` from principal 0, a
      `create_new_document` into an account holding no documents, an
      `insert` into the caller's own doc 1 — from bare and signed
      sessions alike; every other write refuses. Reads are untouched.
-3. `nullify_not_retraction` — a `nullify` whose target link is
-   credential-typed: retraction never edits the key table. Evaluated
-   **behind** the board-state gate (PUB-6.36 slot 5 behind slot 4): a
-   session that may not write here is never told what the target link
-   is, so pre-claim a credential-typed `nullify` answers `claim_first`
-   (the board-state gate's unclaimed arm), and once claimed the owner of
-   the target's home gets the token while any other caller falls through
-   and answers plain `not_owner`, indistinguishable from the
-   non-credential answer (an entitlement scope, not a second rule).
+3. The `nullify` CLASS — three cells, one for each class of target link
+   the write path recognizes off its own type-recognition input (the
+   credential kinds, the GRANTS class, and PUB-6.64's audit-view classes;
+   a subtype by prefix is its class's member). Evaluated **behind** the
+   board-state gate (PUB-6.36 slot 5 behind slot 4): a session that may
+   not write here is never told what the target link is — so pre-claim
+   any `nullify` answers `claim_first` (the unclaimed arm), and once
+   claimed a BARE owner's retraction that lands in the published world
+   answers `signed_session_required` (the gate's `nullify` row above),
+   never a class token. Once claimed and admitted by the gate, the
+   record's OWNER gets the token while any other caller falls through and
+   answers plain `not_owner`, byte-identical to its answer on a plain link
+   (an entitlement scope, not a second rule; PUB-6.9's ω-first order):
+   * `nullify_not_retraction` — the target is CREDENTIAL-typed: retraction
+     never edits the key table (PUB-6.10; the token reaches the owner of
+     the home the record is filed in).
+   * `nullify_not_revocation` — v7.7 (PUB-6.30; **token OWNER CONFIRM
+     OWED**): the target is GRANT-typed (`1.1.0.1.0.1.0.3.90`, §The read
+     predicate). The grant fold reads the audit view, so retraction is
+     never a second revocation path — a share is withdrawn by REVOKING it
+     (a superseding grant record naming the grant's address). The token
+     reaches the owner of BOTH the record's home and the target.
+   * `nullify_audit_view` — v7.7 (PUB-6.64; **token OWNER CONFIRM OWED**):
+     the target is of a class whose honored state is read under the
+     AUDIT view, so a landed retraction would drop the record from the
+     active-view reads that serve it (`find_links_*`, `count_*`,
+     `window_*`) while the record still counted: the succession pair —
+     `successor-of` `1.1.0.1.0.1.0.3.59` and the delegator endorsement
+     (`endorse`, `1.1.0.1.0.1.0.3.42`); the consumption marker
+     (`1.1.0.1.0.1.0.3.91`, provisional) and the journal designation
+     (`1.1.0.1.0.1.0.3.22`, provisional); the rail record
+     (`1.1.0.1.0.1.0.3.60`, provisional); and the steward's classification
+     link (`1.1.0.1.0.1.0.3.61`, provisional) where the LINK's OWN HOME is
+     published — draft-homed, it is an ordinary link and its owner's
+     retraction lands. ONE code for the class list; a client splits the
+     face by the target's type, which the owner can read. The classes are
+     the members' list, never the boundary: the next audit-view class
+     joins the list and inherits the code. The R20 edition claim
+     (`…3.14`) is OUTSIDE by the same test — read under the ACTIVE view,
+     so its owner's retraction clears the state its faces read and is
+     admitted. The token reaches the owner of BOTH the record's home and
+     the target.
 
 **Credential deposits** — a write whose TYPE slot names a credential
 type (§The claim ceremony and credentials) — run a stricter order:
@@ -1560,6 +1600,20 @@ targeting a credential link is `nullify_not_retraction` — retraction
 never edits the key table (§Credential refusals for all four, and for
 the entitlement scope on the last).
 
+The `nullify` class (v7.7): the same write path recognizes two more
+classes of target off its own type-recognition input — a GRANT-typed
+link is refused `nullify_not_revocation` (a share is withdrawn by
+revoking it, never by retracting its record), and a link of a class the
+publication spec reads under the AUDIT view (the succession pair, the
+consumption marker, the journal designation, the rail record, the
+steward's classification link with a published home) is refused
+`nullify_audit_view` — each to the record's owner alone, anyone else
+answering plain `not_owner` (§Credential refusals, item 3). And the
+publish-class gate now reads a `nullify` (PUB-6.43's row): a retraction
+lands at its TARGET, so on a claimed board a bare session's `nullify`
+whose record home OR target home is published is
+`signed_session_required`, ahead of every class cell.
+
 **`make_link`** — create an open link homed in `home`. Each of `from`,
 `to`, `ty` takes **one of two forms** (wire v5; no mixing within one slot):
 
@@ -1616,7 +1670,12 @@ addresses in the changelog): Unary, so `to` is empty.
 
 **`nullify`** — the sole retraction path: retract `target` (a link) from
 the active view, by a retraction homed in `home`. → `ack_addr` (the
-retraction's address).
+retraction's address). Retraction lands at its target: on a claimed
+board a bare session's `nullify` whose `home` or whose target's home is
+published is `signed_session_required` (v7.7), and a target that is
+credential-typed, grant-typed, or of an audit-view class is refused to
+its owner with the class's token — retraction is not how those records
+end (§Links (writes) above; §Credential refusals, item 3).
 
 <!-- wire: request nullify -->
 ```json
@@ -2261,6 +2320,50 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.7 (the `nullify` class's remaining cells — PUB round 2, lane 3.5, built
+2026-09-06; documented as built):
+
+* Two new `credential_refused` tokens (both PERMANENT, both **OWNER
+  CONFIRM OWED** — the codes are the wire's to name, proposed here in the
+  family's convention beside `nullify_not_retraction`), in slot 5's
+  position (PUB-6.36 as RES-195 places the `nullify` cells; §Credential
+  refusals, item 3): `nullify_not_revocation` — a `nullify` whose target
+  is GRANT-typed (PUB-6.30: the grant fold reads the audit view, so
+  retraction is never a second revocation path; revoke instead) — and
+  `nullify_audit_view` — a `nullify` whose target is of a class whose
+  honored state the publication spec reads under the AUDIT view
+  (PUB-6.64): the succession pair (`successor-of` `…3.59`, the delegator
+  endorsement `endorse` `…3.42`), the consumption marker (`…3.91`), the
+  journal designation (`…3.22`), the rail record (`…3.60`), and the
+  steward's classification link (`…3.61`) where the link's own home is
+  published; ONE code for the class list, the face split by the target's
+  type client-side. Each token reaches the owner of both the record's
+  home and the target; anyone else answers plain `not_owner`,
+  byte-identical to its answer on a plain link. The R20 edition claim
+  (`…3.14`) is outside — read under the ACTIVE view — and its owner's
+  `nullify` is admitted, as before.
+* The write path's TYPE-RECOGNITION INPUT is widened beside the
+  credential kinds (owner ruling D3, 2026-09-05): the same one-span
+  `Equal`-to-subtree test the fold's `kind_of` applies, over the grant
+  and audit-view class addresses, a subtype by prefix a member of its
+  class; `kind_of` and the fold are untouched. The class addresses are
+  the engine's commons pins; four are PROVISIONAL (the marker, the
+  designation, the rail, the classification link — **OWNER CONFIRM
+  OWED**, exact at seeding), as is the grant's own since v7.4.
+* The publish-class gate gains PUB-6.43's `nullify` ROW (RES-3's owed
+  input): a retraction lands at its target, so on a claimed board a bare
+  session's `nullify` is `signed_session_required` where the record's
+  home OR the target link's home is published — ω on both standing
+  ahead, so a caller owning either alone still answers `not_owner`. v7's
+  observation that the gate and the credential-nullify cell were
+  disjoint post-claim is superseded: a bare owner's `nullify` of a
+  credential, grant or audit-class record in its published doc 1 now
+  answers the gate (slot 4) and never a class token, exactly as PUB-6.36
+  orders them. What the row also hides behind the gate is occupancy: a
+  bare owner's `nullify` of an empty address in its published doc 1
+  answers the gate, never `bad_target`. Draft-homed records against
+  draft-homed targets stay bare-writable draft writes.
 
 v7.6 (the two publication reads and the per-class dump — PUB round 2, lane
 3.4, built 2026-09-06; documented as built):

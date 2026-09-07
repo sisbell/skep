@@ -48,6 +48,11 @@
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
 //!   a type address pinned beside the grants class; M10's
 //!   `ReadableWorld::edition_claims` reaches it and applies the home rule.
+//! * **The commons type pins** (the public [`types`] module) — every commons
+//!   type address the engine or the daemon keys on as a VALUE, in one ledger:
+//!   the grant and edition classes the two indexes above read, and the
+//!   audit-view classes the daemon's write path refuses a `nullify` at
+//!   (PUB-6.30, PUB-6.64; lane 3.5). None is a registered M7 type.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the authoritative observable
 //!   state (the publication slice and the grant fold's operative set as
@@ -64,6 +69,7 @@ mod engine;
 mod genesis;
 mod grants;
 mod publication;
+pub mod types;
 mod world;
 
 #[cfg(feature = "dump")]

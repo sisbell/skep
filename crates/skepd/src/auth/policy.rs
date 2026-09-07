@@ -4,11 +4,16 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{validate, Address, Nat, Span, Tumbler};
+use skep_address::{document_of, validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::trunk_of;
+use skep_engine::types::{
+    t_consumption_marker, t_delegator_endorsement, t_grant, t_journal_designation, t_rail_record,
+    t_steward_classification, t_successor_of,
+};
 use skep_febe::Op;
 use skep_identity::{
-    CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
+    AuditClass, CredentialKind, Effect, IdentityState, Inert, LinkDeposit, TypeAddrs, Verdict,
+    WriteClass, WriteTypes,
 };
 use skep_links::{enc, HasLinks, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -92,6 +97,42 @@ fn addr_of(comps: &[u32]) -> Address {
 pub(crate) fn identity_types() -> &'static TypeAddrs {
     static TYPES: LazyLock<TypeAddrs> = LazyLock::new(|| {
         TypeAddrs::new(addr_of(&T_ENROLL), addr_of(&T_RETIRE), addr_of(&T_CLAIM))
+    });
+    &TYPES
+}
+
+/// The WRITE PATH's type-recognition input (PUB-6.30, PUB-6.64; owner ruling
+/// D3, 2026-09-05) — [`identity_types`]'s sibling: the same three credential
+/// kinds (a clone of the one frozen instance, so the fold and the write path
+/// cannot disagree about a credential), WIDENED beside them by the GRANTS
+/// class and PUB-6.64's audit-view members. Read by [`nullify_refusal`]
+/// alone; the fold and `deposits_credential_link` keep reading
+/// [`identity_types`] (`kind_of`, the I2 rule, is untouched — a class here
+/// is never a credential there).
+///
+/// The class addresses are the engine's commons pins (`skep_engine::types`):
+/// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
+/// marker `3.91`, the journal designation `3.22`, the rail record `3.60`, the
+/// steward's classification link `3.61` — each cited to its commons row
+/// there, the provisional ones marked OWNER CONFIRM OWED. Adding a member of
+/// PUB-6.64's class is one `AuditClass` arm and one address in this list;
+/// the refusal that reads them takes no edit. The list order is the
+/// recognition order and every address is pairwise prefix-free
+/// (`WriteTypes::new` asserts it, once, here).
+pub(crate) fn write_types() -> &'static WriteTypes {
+    static TYPES: LazyLock<WriteTypes> = LazyLock::new(|| {
+        WriteTypes::new(
+            identity_types().clone(),
+            t_grant(),
+            [
+                (AuditClass::SuccessorOf, t_successor_of()),
+                (AuditClass::DelegatorEndorsement, t_delegator_endorsement()),
+                (AuditClass::ConsumptionMarker, t_consumption_marker()),
+                (AuditClass::JournalDesignation, t_journal_designation()),
+                (AuditClass::RailRecord, t_rail_record()),
+                (AuditClass::StewardClassification, t_steward_classification()),
+            ],
+        )
     });
     &TYPES
 }
@@ -206,8 +247,26 @@ pub(crate) enum CredentialRefusal {
     EmitNotMakeLink,
     /// Slot (4).
     UndecodableKey,
-    /// The NULLIFY class, under the read lock, outside slots (1)–(8).
+    /// The NULLIFY class, under the read lock, outside slots (1)–(8): a
+    /// `nullify` whose target is CREDENTIAL-typed (PUB-6.10).
     NullifyNotRetraction,
+    /// The NULLIFY class's GRANT-TYPED cell (PUB-6.30): retraction is never a
+    /// second revocation path — a share is withdrawn by revoking it, and the
+    /// grant fold reads the audit view (PUB-6.31). Token `nullify_not_revocation`
+    /// — OWNER CONFIRM OWED (the code is the wire's to name; proposed in the
+    /// family's convention beside `nullify_not_retraction`, naming the ground
+    /// the rule states).
+    NullifyNotRevocation,
+    /// The NULLIFY class's AUDIT-VIEW cell (PUB-6.64): a target of a class
+    /// whose honored state the spec reads under the AUDIT view — the
+    /// succession pair, the consumption marker, the journal designation, the
+    /// rail record, the steward's classification link in a published home —
+    /// ONE code for the class list; the client splits the face by the
+    /// target's type, which the owner can read. Token `nullify_audit_view` —
+    /// OWNER CONFIRM OWED (proposed as the token that names the ground: the
+    /// honored state is read under the audit view, so a retraction clears
+    /// nothing).
+    NullifyAuditView,
     /// Slot (6).
     AnchorSessionRequired,
     /// Slot (2), ahead of the write lock.
@@ -241,6 +300,8 @@ impl CredentialRefusal {
             CredentialRefusal::EmitNotMakeLink => "emit_not_make_link".into(),
             CredentialRefusal::UndecodableKey => "undecodable_key".into(),
             CredentialRefusal::NullifyNotRetraction => "nullify_not_retraction".into(),
+            CredentialRefusal::NullifyNotRevocation => "nullify_not_revocation".into(),
+            CredentialRefusal::NullifyAuditView => "nullify_audit_view".into(),
             CredentialRefusal::AnchorSessionRequired => "anchor_session_required".into(),
             CredentialRefusal::ResolvedFrom => "resolved_from".into(),
             CredentialRefusal::TooManyEnrolled => "too_many_enrolled".into(),
@@ -280,24 +341,60 @@ pub(crate) fn op_shape_refusal(op: &Op) -> Option<CredentialRefusal> {
     }
 }
 
-// ── nullify_refusal — the NULLIFY class, read lock (AUTH-3.7–3.9) ────────
+// ── nullify_refusal — the NULLIFY class, read lock (AUTH-3.7–3.9; PUB-6.10,
+//    PUB-6.30, PUB-6.64 — slot 5's three cells) ─────────────────────────────
 
-/// `Some(NullifyNotRetraction)` iff `op` is a `Nullify` whose target's
-/// `readlink` type slot is credential-typed AND the shape token is the
-/// caller's to receive. The op-kind test is INSIDE and first (one match
-/// arm for the common case); `world` MUST be the snapshot taken under the
-/// read guard for this request — the guard argument is that contract's
-/// cheap half.
+/// The NULLIFY class — slot 5's position in [`plain_refusal`]'s order
+/// (PUB-6.36 as RES-195 places it): `Some(token)` iff `op` is a `Nullify`
+/// whose target's `readlink` type slot the write path's recognition input
+/// ([`write_types`]) classifies, AND that class's token is the caller's to
+/// receive. The op-kind test is INSIDE and first (one match arm for the
+/// common case); `world` MUST be the snapshot taken under the read guard for
+/// this request — the guard argument is that contract's cheap half.
 ///
-/// RES-32's entitlement scope is the second conjunct: on a CLAIMED board
-/// the shape token reaches only the owner of the `home` the retraction
-/// would land in, so anyone else answers `None` here, falls through to
-/// execute, and receives ω's own `not_owner` — indistinguishable from its
-/// non-credential answer. Pre-claim this producer's answer stands for
-/// every caller — but in [`plain_refusal`]'s order the pre-claim admission
-/// gate answers `claim_first` ahead of it (PUB-6.35, PUB-6.36 slot 4
-/// before slot 5), so over the wire the token is reached only once the
-/// board is claimed.
+/// ONE READ SHAPE FOR EVERY CALLER, THE TOKEN CHOSEN LAST (PUB-6.10, extended
+/// by lane 3.5 to the two new cells): the target's link and its class are
+/// read before entitlement is decided, so the arms are byte- and
+/// timing-identical except the token — a non-owner's answer on a classified
+/// target is `None` here, the op reaches `execute`, and ω answers `not_owner`
+/// exactly as it would for a plain link (occupancy-blind: PUB-6.9's ω-first
+/// order stands ahead of `bad_target` in M7's own gate). Three cells:
+///
+/// * CREDENTIAL-typed (PUB-6.10; RES-32) → `nullify_not_retraction`, the cell
+///   lane 3.3c built, its token and scope UNCHANGED: on a CLAIMED board the
+///   token reaches only the owner of the `home` the retraction record is
+///   filed in; anyone else falls through. (A credential-typed link is never
+///   draft-homed — the credential path refuses `unpublished` — so the home
+///   test alone admits no occupancy oracle here.)
+/// * GRANT-typed (PUB-6.30) → `nullify_not_revocation`: the grant fold reads
+///   the AUDIT view (PUB-6.31), so retraction is never a second revocation
+///   path — a share is withdrawn by REVOKING it (a superseding grant record,
+///   lane 3.3's supersession shape).
+/// * AUDIT-VIEW class (PUB-6.64) → `nullify_audit_view`, ONE code for the
+///   class list: the honored state is read under the audit view, so a landed
+///   retraction would drop the record from the ACTIVE-view reads that serve
+///   it (PUB-6.13, PUB-6.20) and make PUB-4.12's "a nullified marker STILL
+///   CONSUMES" false. The steward's classification link is a member only
+///   where the LINK's OWN HOME is published (RES-207, keyed on the type AND
+///   on `published(document_of(target))` — the same read the publish gate
+///   takes one slot earlier, no read added); draft-homed it is an ordinary
+///   link, admitted.
+///
+/// THE TWO NEW CELLS' ENTITLEMENT is the caller who could otherwise open the
+/// path — M7's own v1 gate mirrored: ω of the record's `home` AND ω of the
+/// TARGET (address arithmetic; the target-home owner PUB-6.30 and PUB-6.64
+/// name). The target half is load-bearing HERE where it is not at the
+/// credential cell: a grant-typed or audit-class link CAN sit in a draft's
+/// link subspace (an ordinary `make_link`, nothing refuses it), so a token
+/// keyed on the record's home alone would tell a stranger filing from a home
+/// of its own which addresses in the draft hold one — the occupancy oracle
+/// PUB-6.9 forbids. Pre-claim every producer's answer stands for every
+/// caller, but in [`plain_refusal`]'s order the pre-claim admission gate
+/// answers `claim_first` ahead of this one (PUB-6.35, PUB-6.36 slot 4 before
+/// slot 5), so over the wire a token is reached only once the board is
+/// claimed — and once claimed, the publish-class gate's `nullify` row
+/// (PUB-6.43) stands ahead too, so a BARE owner's retraction landing in the
+/// published world answers `signed_session_required` and never a token here.
 pub(crate) fn nullify_refusal(
     _lock: &LockRead<'_>,
     world: &World,
@@ -306,13 +403,55 @@ pub(crate) fn nullify_refusal(
     principal: PrincipalId,
 ) -> Option<CredentialRefusal> {
     let Op::Nullify { home, target } = op else { return None };
+    // The same reads for every caller: the target's link, then its class.
     let link = world.links().readlink(target)?;
     let spans: Vec<Span> = link.type_slot().spans().cloned().collect();
-    identity_types().kind_of(&spans)?;
-    if identity.claimant().is_some() && !world.m3().is_effective_owner(principal, home) {
-        return None;
+    let class = write_types().write_class(&spans)?;
+    let m3 = world.m3();
+    let claimed = identity.claimant().is_some();
+    match class {
+        WriteClass::Credential(_) => {
+            // RES-32's entitlement scope: ω of the home the retraction
+            // record is filed in AND ω of the TARGET — PUB-6.10 names the
+            // target-home OWNER; keyed on the record's home alone, a
+            // stranger filing from a home of its own would be told the
+            // target's class (lane 3.5, aligned with the two arms below).
+            if claimed
+                && !(m3.is_effective_owner(principal, home)
+                    && m3.is_effective_owner(principal, target))
+            {
+                return None;
+            }
+            Some(CredentialRefusal::NullifyNotRetraction)
+        }
+        WriteClass::Grant => {
+            if claimed
+                && !(m3.is_effective_owner(principal, home)
+                    && m3.is_effective_owner(principal, target))
+            {
+                return None;
+            }
+            Some(CredentialRefusal::NullifyNotRevocation)
+        }
+        WriteClass::AuditView(audit) => {
+            // The classification link's second key (RES-207): the link's own
+            // home published. A resident link's home is registered (M7's
+            // HomeNotRegistered gate), so `published()`'s registered-only
+            // contract (PUB-6.37) holds on it.
+            if audit == AuditClass::StewardClassification
+                && !document_of(target).as_ref().is_some_and(|d| published(world, d))
+            {
+                return None;
+            }
+            if claimed
+                && !(m3.is_effective_owner(principal, home)
+                    && m3.is_effective_owner(principal, target))
+            {
+                return None;
+            }
+            Some(CredentialRefusal::NullifyAuditView)
+        }
     }
-    Some(CredentialRefusal::NullifyNotRetraction)
 }
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
@@ -464,8 +603,12 @@ pub(crate) fn board_state_refusal(
 /// * a homed write reads `published(home)` — both through [`published`], the
 ///   engine's exception set with the version-member projection (PUB-2.15).
 ///
+/// * a `nullify` reads `published(home) ∨ published(document_of(target))` —
+///   PUB-6.43's own row for the one op whose effect and record home part
+///   (lane 3.5; RES-3's owed input).
+///
 /// Flagless `create`/`fork` resolve draft (outside), and
-/// `delegate`/`register_node`/`nullify` present no input form here.
+/// `delegate`/`register_node` present no input form here.
 /// Registration and ω stand AHEAD (PUB-6.37, PUB-6.36 slot 1): the gate
 /// evaluates only registered addresses the caller owns, so an unregistered
 /// or foreign argument answers `execute`'s own code, and an empty-account
@@ -567,6 +710,37 @@ fn publish_gate(
             homed(home)
         }
         Op::EditLink { d_s, .. } => homed(d_s),
+        // PUB-6.43's `nullify` ROW (RES-3; landed with lane 3.5, whose
+        // bare-owner cell presupposes it): a retraction LANDS AT ITS TARGET
+        // (PUB-6.20), so the gate keys on the target link's home BESIDE the
+        // record's — `published(home) ∨ published(document_of(target))`. A
+        // draft-homed record against a published-homed link takes the gate
+        // exactly as a published-homed write does; a draft-homed record
+        // against a draft-homed target stays a bare-writable draft write.
+        // Registration and ω stand AHEAD on BOTH addresses (PUB-6.37;
+        // PUB-6.9's target ω beside slot 1's home ω — M7's own v1
+        // self-retraction gate, mirrored): a caller owning neither, or the
+        // home alone, or naming an unregistered home, falls through to
+        // execute's own code and is never told whether either is published.
+        // `document_of(target)` is address arithmetic (PUB-6.38);
+        // `published()` on it takes PUB-6.37's registered-only evaluation.
+        // What this row hides behind the gate is occupancy too: a bare
+        // owner's `nullify` of an EMPTY address in its published doc 1
+        // answers here, never `bad_target`.
+        Op::Nullify { home, target } => {
+            let m3 = world.m3();
+            if !m3.is_registered_document(home)
+                || !m3.is_effective_owner(principal, home)
+                || !m3.is_effective_owner(principal, target)
+            {
+                return None;
+            }
+            let lands_published = published(world, home)
+                || document_of(target)
+                    .as_ref()
+                    .is_some_and(|d| m3.is_registered_document(d) && published(world, d));
+            lands_published.then_some(CredentialRefusal::SignedSessionRequired)
+        }
         // create/fork with a non-`true` flag: a draft, or the exempt home
         // mint (the explicit-`false` first mint is the door's, upstream).
         _ => None,
@@ -624,15 +798,18 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// The order is PUB-6.36's write-side order as RES-195 places the
 /// `nullify` cells: MINT-FIRST is slot 2; the board-state pair stands in
 /// slot 4's position (the publish-class gate once claimed, the pre-claim
-/// admission gate before); the credential-typed `nullify` cell takes slot
-/// 5's position — AFTER the gate and never before it, "a session that may
-/// not write here never being told what the target link is". Post-claim
-/// the gate and the cell are disjoint as built — [`publish_gate`] has no
-/// `Nullify` arm, which is PUB-6.43's nullify row and not this function's
-/// to add — so the order is unobservable there. Pre-claim it is not: an
-/// UNCLAIMED board admits no `nullify` at all, so the admission gate
-/// (PUB-6.35; RES-27) answers `claim_first` first and the shape token is
-/// never reached, for the home's own owner as for anyone else.
+/// admission gate before); the `nullify` class's three cells — the
+/// credential-typed (PUB-6.10), the grant-typed (PUB-6.30) and the
+/// audit-view class (PUB-6.64) — take slot 5's position, AFTER the gate and
+/// never before it, "a session that may not write here never being told
+/// what the target link is". The order is observable on BOTH sides of the
+/// claim. Post-claim, since lane 3.5 gave [`publish_gate`] PUB-6.43's
+/// `nullify` row: a BARE owner's retraction of a grant record in its own
+/// published doc 1 answers `signed_session_required`, never the grant-typed
+/// token — the cell the delta pins. Pre-claim: an UNCLAIMED board admits no
+/// `nullify` at all, so the admission gate (PUB-6.35; RES-27) answers
+/// `claim_first` first and no token is reached, for the home's own owner as
+/// for anyone else.
 ///
 /// Re-ordering moves no input: all three are pure functions of the same
 /// `(world, identity, op, principal, signer)` under the same guard, and
@@ -860,5 +1037,48 @@ mod tests {
         // Content position 1 of some ordinary doc: <doc>.0.1.1.
         let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
         assert_eq!(identity_types().kind_of(&[content]), None);
+    }
+
+    /// The write path's input as wired (lane 3.5 §1): every pinned class
+    /// address classifies to its own arm, the credential kinds answer through
+    /// the same input as `kind_of` does, the edition class is NO class
+    /// (PUB-6.32 — its owner's retraction is admitted), and a content span
+    /// is nothing. The wiring itself — the `LazyLock` constructing without
+    /// the prefix-free assertion firing — is what the first call proves.
+    #[test]
+    fn the_write_path_input_recognizes_every_pinned_class() {
+        let types = write_types();
+        let unit = |a: &Address| vec![subtree_of(a.tumbler())];
+        assert_eq!(
+            types.write_class(&unit(&addr_of(&T_ENROLL))),
+            Some(WriteClass::Credential(CredentialKind::Enroll))
+        );
+        assert_eq!(types.write_class(&unit(&t_grant())), Some(WriteClass::Grant));
+        for (class, addr) in [
+            (AuditClass::SuccessorOf, t_successor_of()),
+            (AuditClass::DelegatorEndorsement, t_delegator_endorsement()),
+            (AuditClass::ConsumptionMarker, t_consumption_marker()),
+            (AuditClass::JournalDesignation, t_journal_designation()),
+            (AuditClass::RailRecord, t_rail_record()),
+            (AuditClass::StewardClassification, t_steward_classification()),
+        ] {
+            assert_eq!(
+                types.write_class(&unit(&addr)),
+                Some(WriteClass::AuditView(class)),
+                "{} is {class:?}",
+                addr.tumbler()
+            );
+        }
+        // The edition class (3.14) is read under the ACTIVE view: no class.
+        assert_eq!(types.write_class(&unit(&skep_engine::types::t_edition())), None);
+        // A content I-span names nothing here either.
+        let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
+        assert_eq!(types.write_class(&[content]), None);
+        // A subtype by prefix is its class's member (L10): `endorse.trust`.
+        let trust = addr_of(&[1, 1, 0, 1, 0, 1, 0, 3, 42, 2]);
+        assert_eq!(
+            types.write_class(&unit(&trust)),
+            Some(WriteClass::AuditView(AuditClass::DelegatorEndorsement))
+        );
     }
 }

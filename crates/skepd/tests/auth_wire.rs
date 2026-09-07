@@ -1273,13 +1273,14 @@ fn a_credential_nullify_refuses_the_home_owner_and_masks_everyone_else() {
 /// board-state gate in slot 4's — so on an UNCLAIMED board the pre-claim
 /// admission gate (PUB-6.35; RES-27) answers `claim_first` and the shape
 /// token is never reached, for the home's own owner as for a signed
-/// session. Post-claim the two producers are disjoint as built (the publish
-/// gate has no `nullify` arm), so this window is the one place the order is
-/// observable, and the one cell that pins it.
-///
-/// The SAME frame from the SAME bare session answers
-/// `nullify_not_retraction` once the board is claimed: the cell moved
-/// behind the gate; it did not go away.
+/// session. Post-claim the order is observable too, since lane 3.5 gave the
+/// publish-class gate PUB-6.43's `nullify` row (a retraction lands at its
+/// target, so a record against a link in the published doc 1 is a
+/// published write): the SAME frame from the SAME bare session answers
+/// `signed_session_required` once the board is claimed — slot 4 still ahead
+/// of slot 5 — and the SIGNED session, which the gate admits, reaches the
+/// cell: `nullify_not_retraction`. The cell moved behind the gate; it did
+/// not go away.
 #[test]
 fn pre_claim_a_credential_nullify_answers_claim_first_ahead_of_the_nullify_cell() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1337,13 +1338,21 @@ fn pre_claim_a_credential_nullify_answers_claim_first_ahead_of_the_nullify_cell(
     let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{credential}"}}"#));
     assert!(!expect_resp(&v, "link_value")["link"].is_null(), "nothing was retracted");
 
-    // Step 5 — the signed claim — and the SAME frame from the SAME bare
-    // session now reaches the cell behind the gate.
+    // Step 5 — the signed claim. The SAME frame from the SAME bare session
+    // now meets the publish-class gate (slot 4, its claimed arm: the
+    // retraction lands in the published doc 1, PUB-6.43's `nullify` row),
+    // still ahead of the cell…
     let v = claim_deposit(port, &signed, CLAIMANT_DOC1, CLAIMANT_ACCOUNT);
     expect_resp(&v, "ack_addr");
     assert!(claimed(port), "the claim link flips the board claimed");
     let v = op(port, Some(&claimant), &retract);
+    assert_eq!(rejected_detail(&v), "credential_refused:signed_session_required");
+    // …and the signed session, which that gate admits, reaches the cell
+    // behind it.
+    let v = op(port, Some(&signed), &retract);
     assert_eq!(rejected_detail(&v), "credential_refused:nullify_not_retraction");
+    let v = op(port, None, &format!(r#"{{"op":"read_link","a":"{credential}"}}"#));
+    assert!(!expect_resp(&v, "link_value")["link"].is_null(), "nothing was retracted");
     sd.shutdown();
 }
 

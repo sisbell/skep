@@ -24,7 +24,11 @@
 //!   AUTH-2.36–2.45);
 //! * the key set — [`Enrolled`], [`KeySet`] (AUTH-1.29–1.37);
 //! * shape recognition — [`CredentialKind`], [`TypeAddrs`], [`LinkDeposit`],
-//!   [`single_address`] (AUTH-2.20–2.28);
+//!   [`single_address`] (AUTH-2.20–2.28) — and, beside the fold's kinds, the
+//!   write path's wider type-recognition input [`WriteTypes`]/[`WriteClass`]
+//!   /[`AuditClass`] (PUB-6.30, PUB-6.64; owner ruling D3): the grant and
+//!   audit-view classes a `nullify` is refused at, answered off the same
+//!   one-span `Equal`-to-subtree discipline, `kind_of` untouched;
 //! * the fold seam — [`Values`], [`FoldCtx`], [`Owner`] (AUTH-2.29–2.35);
 //! * the fold itself — [`IdentityState`] with `classify`/`step`, [`Verdict`],
 //!   [`Effect`], [`Inert`], [`HasIdentity`] (AUTH-1.38–1.41, AUTH-2.51–2.60,
@@ -79,6 +83,8 @@ pub use payload::{
 };
 pub use read::record_bytes;
 pub use seam::{FoldCtx, Owner, Values};
-pub use shape::{single_address, CredentialKind, LinkDeposit, TypeAddrs};
+pub use shape::{
+    single_address, AuditClass, CredentialKind, LinkDeposit, TypeAddrs, WriteClass, WriteTypes,
+};
 pub use state::{HasIdentity, IdentityState};
 pub use verdict::{Effect, Inert, Verdict};

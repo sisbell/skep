@@ -50,6 +50,7 @@ use skep_links::{Link, LinkRec, LinkState, View};
 use skep_namespace::{first_document_address, prefix_contains, M3State, PrincipalId};
 
 use crate::publication::Drafts;
+use crate::types::t_grant;
 use crate::world::World;
 
 impl World {
@@ -135,55 +136,9 @@ impl World {
     }
 }
 
-/// A COMMONS type address: the ghost document's subspace-3 element `ordinal`
-/// — `1.1.0.1.0.1 · 0 · 3 · ordinal`, the core vocabulary's home
-/// (`commons-map.md`), where the credential types (`3.{1,2,3}`, the AUTH
-/// round's own) already sit. The engine keys on these as VALUES (denotation
-/// equality for the grant fold, prefix for the edition class) — none is a
-/// registered M7 type, so `TypeRegistry` is untouched.
-fn commons_type(ordinal: u32) -> Address {
-    validate(
-        skep_address::Tumbler::new(
-            [1u32, 1, 0, 1, 0, 1, 0, 3, ordinal].into_iter().map(skep_address::Nat::from),
-        )
-        .expect("the commons type components are nonempty"),
-    )
-    .expect("a subspace-3 element of the ghost document is T4-valid by construction")
-}
-
-/// The GRANTS class type address.
-///
-/// COMMONS DECISION 5 — verify against commons-map.md at the grants round.
-///
-/// The first address of the Commerce range 3.90–3.99 (decision 5): ghost-doc
-/// subspace 3, ordinal 90 — beside the credential type addresses
-/// (`1.1.0.1.0.1.0.3.{1,2,3}`, subspace 3 of the ghost document, the AUTH
-/// round's own). `commons-map.md` was not present in the tree at this build;
-/// the constant is pinned here and marked so the grants round confirms it.
-/// The fold keys on this as a VALUE (denotation equality) — it is NOT a
-/// registered M7 type, so `TypeRegistry` is untouched.
-pub(crate) fn t_grant() -> Address {
-    // 1.1.0.1.0.1 · 0 · 3 · 90 — the ghost document's subspace-3 element 90.
-    commons_type(90)
-}
-
-/// The EDITION-CLAIM class type address (R20; PUB round 2, lane 3.4 §2) —
-/// `1.1.0.1.0.1.0.3.14`, pinned here beside [`t_grant`] and read by
-/// `crate::editions`.
-///
-/// OWNER CONFIRM OWED. `commons-seeding.md` seats the core vocabulary in the
-/// ghost document's subspace 3 and its row `3.14 | edition` carries the
-/// descriptive subtypes `.1 abridged .2 expanded .3 translated .4 revised
-/// .5 annotated` beneath it (note 3: "a descriptive edition relation is
-/// `edition.*`"); `commons-map.md` places the core vocabulary at `3.1–3.21`
-/// with `edition` listed. Neither document is in this tree, so the ordinal
-/// is pinned from those readings and marked for the owner to confirm. Class
-/// membership is by PREFIX: a type slot denoting `3.14.k` is a subtype's
-/// member and counts — the lookup names the CLASS, not one address.
-pub(crate) fn t_edition() -> Address {
-    // 1.1.0.1.0.1 · 0 · 3 · 14 — the ghost document's subspace-3 element 14.
-    commons_type(14)
-}
+// The GRANTS class type address the fold keys on — `crate::types::t_grant`
+// (`1.1.0.1.0.1.0.3.90`, COMMONS DECISION 5): pinned in `types.rs` beside
+// every other commons address the engine and the daemon read as a VALUE.
 
 /// One admitted, unsuperseded grant record — enough to answer queries and to
 /// remove it from the query indexes when a later record supersedes it. The

@@ -44,7 +44,7 @@ use skep_address::{document_of, is_prefix, subtree_of, Address};
 use skep_febe::EditionClaim;
 use skep_links::{Endset, ShippedType, View, TO, TYPE};
 
-use crate::grants::t_edition;
+use crate::types::t_edition;
 use crate::world::World;
 
 impl World {

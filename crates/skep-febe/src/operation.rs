@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // `FebeWorld` names the accessor bound set, and its supertraits carry the
 // `m3()`/`m5()`/`links()` methods the read arms call, so no accessor trait
 // is imported here by name.
-use skep_address::{document_of, Address};
-use skep_arrangement::{Caller, M5Rec};
+use skep_address::{checked_inc, document_of, Address};
+use skep_arrangement::{trunk_of, Caller, M5Rec};
 use skep_content::ContentWrite;
 use skep_discovery::{
     addressably_discoverable_from_on, count_ftt_on_where, count_v_on_where,
@@ -151,7 +151,9 @@ fn consulted_destinations(op: &Op) -> Option<Vec<&Address>> {
         | Op::DiscoverableFrom { .. }
         | Op::DeleteOrphans { .. }
         | Op::InClaims { .. }
-        | Op::OutClaims { .. } => None,
+        | Op::OutClaims { .. }
+        | Op::DocMetadata { .. }
+        | Op::EditionClaims { .. } => None,
     }
 }
 
@@ -711,7 +713,9 @@ where
             | Op::DiscoverableFrom { .. }
             | Op::DeleteOrphans { .. }
             | Op::InClaims { .. }
-            | Op::OutClaims { .. } => Err(rejection(kind, RejectCode::Malformed)),
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. } => Err(rejection(kind, RejectCode::Malformed)),
         }
     }
 
@@ -923,6 +927,53 @@ where
                 let claims = out_claims_on_where(&snap, &x, view, &readable); // total
                 Ok(Response::Claims { claims, as_of })
             }
+            // ── publication reads (lane 3.4) ──
+            // The doc-metadata read (PUB-8.12): `doc` was consulted above,
+            // so a withheld answer has already spoken for a private document
+            // the caller cannot read; registration is the store's contract
+            // (PUB-6.37) and an unregistered address answers its own code.
+            // A version member projects to its DOCUMENT (PUB-2.15), whose
+            // state is the one every gate keys on. The owner is M3's ω,
+            // carried rather than recomputed by the client (`Some` on every
+            // registered document — ω is total over the registered space —
+            // the `Option` standing only so the shape never invents one).
+            // The birth version is `D.1` while the chain has a member, and
+            // its extent is that member's arranged content count, which a
+            // version never changes (PUB-2.50) — the base extent PUB-3.19's
+            // edition test images over. No arrangement is read for a
+            // document with no member: the field is absent, not zero.
+            Op::DocMetadata { doc } => {
+                let m3 = world.m3();
+                if !m3.is_registered_document(&doc) {
+                    return Err(rejection(kind, RejectCode::DocNotRegistered));
+                }
+                let document = trunk_of(&doc);
+                let published = m3.published(&document);
+                let owner = m3.effective_owner_prefix(&document).cloned();
+                let birth = m3.latest_version(&document).map(|_| {
+                    checked_inc(&document, 1).expect("k = 1 passes the TA5a gate on every address")
+                });
+                let birth_extent = birth.as_ref().map(|b| world.m5().content_count(b));
+                Ok(Response::DocMetadata { doc: document, published, owner, birth, birth_extent, as_of })
+            }
+            // The audit-view edition-claim lookup (PUB-8.46): the world
+            // answers the CLASS over `target`'s subtree — admitted,
+            // unsuperseded, retracted-or-not — and this door keeps each row
+            // whose HOME the caller reads (PUB-6.13, the result-set rule),
+            // off the one predicate above. A draft edition's claim is thereby
+            // invisible to a stranger and listed for its owner; the client's
+            // own PUB-3.19 admission test runs over the home this row names.
+            Op::EditionClaims { target } => {
+                if !world.m3().is_registered_document(&target) {
+                    return Err(rejection(kind, RejectCode::DocNotRegistered));
+                }
+                let claims = world
+                    .edition_claims(&target)
+                    .into_iter()
+                    .filter(|claim| readable(&claim.home))
+                    .collect();
+                Ok(Response::EditionClaims { claims, as_of })
+            }
             // Complementary half — see dispatch_write's twin arm (§1).
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
@@ -1039,6 +1090,12 @@ mod tests {
         // dispatch tests, orthogonal to it.
         fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
             true
+        }
+        // The edition-claim class is the engine's composition (the pinned
+        // type address lives there); this world carries none, so the lookup
+        // answers the empty class and the arm's shape is what is exercised.
+        fn edition_claims(&self, _target: &Address) -> Vec<crate::EditionClaim> {
+            Vec::new()
         }
     }
     impl From<M3Rec> for Record {
@@ -1181,7 +1238,7 @@ mod tests {
     /// session — no principal, no session. Every read arm is driven through
     /// `execute` on an id that was never opened; each may reject for its own
     /// reasons against a genesis world, but never for authentication. Driving
-    /// all 24 also exercises `execute`'s Total contract on the read half: an
+    /// all 26 also exercises `execute`'s Total contract on the read half: an
     /// arm that panics fails here.
     #[test]
     fn no_read_is_ever_rejected_for_an_unbound_session() {

@@ -136,7 +136,7 @@ pub use operation::{Consult, Operation};
 // transcribing the row, so the two cannot come to advise the same code
 // differently.
 pub use reject::{disposition_of, Disposition, FaultSite, RejectCode, Rejection};
-pub use response::Response;
+pub use response::{EditionClaim, Response};
 pub use session::SessionId;
 
 // Every upstream type or constructor named on the request/response path, plus
@@ -213,6 +213,19 @@ pub trait ReadableWorld {
     /// `readable(doc, principal)` — the one predicate every read surface
     /// answers through. `None` ⟹ the guest (published documents only).
     fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool;
+
+    /// The audit-view edition-claim lookup (PUB-8.46; PUB round 2, lane 3.4
+    /// §2): every link of the edition-claim class whose `to` slot denotes
+    /// `target`, ADMITTED to the class (type slot address-denoting, every
+    /// denoted address under the pinned edition type by prefix) and
+    /// UNSUPERSEDED (no operative ⟦supersedes⟧ successor, PUB-6.32),
+    /// WHETHER OR NOT RETRACTED, in link-address order. UNFILTERED by
+    /// principal: M10 applies the home rule (PUB-6.13) per row off the same
+    /// snapshot, so the world answers the class and the front door the class
+    /// the caller reads. The engine composes M7's own audit reads for it
+    /// (`match_links`, `succs`, `is_active`) and names no type-vocabulary
+    /// semantics of its own beyond the pinned address.
+    fn edition_claims(&self, target: &Address) -> Vec<EditionClaim>;
 }
 
 /// The world the front door dispatches over: M2's fold contract plus every

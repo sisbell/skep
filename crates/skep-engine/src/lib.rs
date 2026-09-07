@@ -43,14 +43,23 @@
 //!   deliveries and doc-argument consults, M8's result-set filters, the
 //!   publish source gate — answers through this one predicate, threaded down
 //!   as an opaque `Fn(&Address) -> bool` (PUB-6.39).
+//! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
+//!   module) — the audit-view `to`-range lookup over the R20 edition-claim
+//!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
+//!   a type address pinned beside the grants class; M10's
+//!   `ReadableWorld::edition_claims` reaches it and applies the home rule.
 //! * **The world dump** ([`dump`], behind the `dump` feature) — a
 //!   deterministic, byte-comparable rendering of the authoritative observable
-//!   state plus the recomputable hints (the exception set among them), for
-//!   the conformance and crash harnesses.
+//!   state (the publication slice and the grant fold's operative set as
+//!   sections of their own since v5) plus the recomputable hints (the
+//!   exception set among them), for the conformance and crash harnesses —
+//!   and, since lane 3.4, the same tree post-filtered at a READER'S CLASS
+//!   for the daemon's `/dump`.
 
 #![forbid(unsafe_code)]
 
 mod canon;
+mod editions;
 mod engine;
 mod genesis;
 mod grants;

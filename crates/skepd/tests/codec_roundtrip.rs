@@ -11,8 +11,8 @@ use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, OrphanReport, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection, ReqId, Request,
-    Response, SlotArg, SuccessorSpec,
+    Codec, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection,
+    ReqId, Request, Response, SlotArg, SuccessorSpec,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link, View, MAX_SLOT_SPANS};
@@ -289,16 +289,20 @@ fn all_requests() -> Vec<Request> {
         // The third documented view (wire.md §Value encodings), so all
         // three ride the canonical round trip and not just two.
         rq(None, Op::InClaims { y: link2(), view: View::Default }),
+        // The two publication reads (lane 3.4).
+        rq(None, Op::DocMetadata { doc: d1() }),
+        rq(None, Op::EditionClaims { target: d1() }),
     ]
 }
 
-const OP_NAMES: [&str; 39] = [
+const OP_NAMES: [&str; 41] = [
     "create_new_document",
     "delegate",
     "register_node",
     "fork",
     "next_account_prefix",
     "principal_prefix",
+    "doc_metadata",
     "insert",
     "delete",
     "copy",
@@ -332,10 +336,11 @@ const OP_NAMES: [&str; 39] = [
     "delete_orphans",
     "in_claims",
     "out_claims",
+    "edition_claims",
 ];
 
 /// parse ∘ marshal_request is the identity on canonical frames, for every
-/// variant; and the emitted op-name set is exactly the documented 39.
+/// variant; and the emitted op-name set is exactly the documented 41.
 #[test]
 fn every_op_round_trips_canonically() {
     let codec = JsonCodec;
@@ -618,6 +623,40 @@ fn all_responses() -> Vec<(&'static str, Response)> {
                     new: link2(),
                     home: d1(),
                     active: true,
+                }],
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "doc_metadata",
+            Response::DocMetadata {
+                doc: d1(),
+                published: true,
+                owner: Some(a(&[1, 0, 1])),
+                birth: Some(a(&[1, 0, 1, 0, 1, 1])),
+                birth_extent: Some(n(5)),
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "doc_metadata_unborn",
+            Response::DocMetadata {
+                doc: d2(),
+                published: false,
+                owner: Some(a(&[1, 0, 1])),
+                birth: None,
+                birth_extent: None,
+                as_of: Seq(9),
+            },
+        ),
+        (
+            "edition_claims",
+            Response::EditionClaims {
+                claims: vec![EditionClaim {
+                    claim: a(&[1, 0, 1, 0, 5, 0, 2, 1]),
+                    home: a(&[1, 0, 1, 0, 5]),
+                    to: Endset::from_spans([sp(&[1, 0, 1, 0, 1], &[0, 0, 0, 0, 1])]),
+                    active: false,
                 }],
                 as_of: Seq(9),
             },

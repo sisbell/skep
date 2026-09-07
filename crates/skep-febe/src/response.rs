@@ -2,7 +2,7 @@
 //! write carries the committed `Seq` and every read answer the snapshot `Seq`
 //! (ASN-0134 A1/A2/V1), while a rejection carries neither.
 
-use skep_address::{Address, SpanSet};
+use skep_address::{Address, Nat, SpanSet};
 use skep_arrangement::Run;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_kernel::Seq;
@@ -10,6 +10,29 @@ use skep_links::{Endset, Invalid, Link};
 use skep_retrieval::{CompareReport, Deletions, Delivery};
 
 use crate::reject::Rejection;
+
+/// One row of the audit-view edition-claim lookup (PUB-8.46, PUB round 2,
+/// lane 3.4 §2): a link of the edition-claim class whose `to` slot denotes
+/// the target document, ADMITTED to the class and UNSUPERSEDED, with its
+/// retraction stated rather than hidden — the client's PUB-3.19 admission
+/// test runs over the `home` this row carries (one `doc_metadata` read of it),
+/// and nowhere in the engine.
+///
+/// `active` is M7's active-view membership: `false` names a claim the home
+/// has nullified (retracted), which the audit view still lists (PUB-8.46,
+/// PUB-6.32). `to` is the claim's `to` endset as deposited, so a client can
+/// tell a whole-document claim from one denoting a version of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditionClaim {
+    /// The claim link's address.
+    pub claim: Address,
+    /// The link's home document — the EDITION.
+    pub home: Address,
+    /// The `to` endset, denoting the target.
+    pub to: Endset,
+    /// `true` unless the home has nullified the claim (the retraction).
+    pub active: bool,
+}
 
 /// The marshaled response. Every variant but [`Response::Rejected`] carries
 /// one coordinate — `at` on the three acknowledging shapes, `as_of` on every
@@ -72,6 +95,27 @@ pub enum Response {
     Orphans { report: OrphanReport, as_of: Seq },
     /// in_claims / out_claims.
     Claims { claims: Vec<SupClaim>, as_of: Seq },
+    /// doc_metadata (PUB-8.12): the publication state a client's own
+    /// admission tests need, and nothing else. `doc` is the trunk document
+    /// the argument projects to (a version member names its document's
+    /// state); `owner` is M3's effective owner account, CARRIED rather than
+    /// recomputed client-side because ω is the store's word (`None` is
+    /// unreachable for a registered document and stands only so the shape
+    /// never invents an account); `birth` is the chain's first member `D.1`
+    /// when the document has one, with `birth_extent` its content count —
+    /// the base extent PUB-3.19's edition test images over.
+    DocMetadata {
+        doc: Address,
+        published: bool,
+        owner: Option<Address>,
+        birth: Option<Address>,
+        birth_extent: Option<Nat>,
+        as_of: Seq,
+    },
+    /// edition_claims (PUB-8.46): the audit-view lookup of the edition-claim
+    /// class over `target`, unsuperseded, retracted-or-not stated, homed
+    /// where the caller can read (PUB-6.13).
+    EditionClaims { claims: Vec<EditionClaim>, as_of: Seq },
     /// The never-silent surface: every failure of a parsed `Op` (Invariants).
     Rejected(Rejection),
 }
@@ -144,6 +188,8 @@ impl Response {
             | Response::Compare { .. }
             | Response::Orphans { .. }
             | Response::Claims { .. }
+            | Response::DocMetadata { .. }
+            | Response::EditionClaims { .. }
             | Response::Rejected(_) => None,
         }
     }

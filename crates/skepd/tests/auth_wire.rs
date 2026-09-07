@@ -1057,8 +1057,12 @@ fn the_publish_gate_refuses_an_explicit_true_mint_from_a_bare_session() {
 /// shows a version MEMBER's own journaled bit: the publish gate reads the
 /// DOCUMENT a member projects to (PUB-2.15), so a bare-write probe answers
 /// the document's state and never the member's.
-fn drafts_section(port: u16) -> String {
-    let (st, body) = get(port, "/dump");
+///
+/// Read at `token`'s CLASS (lane 3.4 §4): the dump filters at the presented
+/// principal, so this probe presents the OWNER's session — a guest sees an
+/// empty slice — to read the owner's own drafts back.
+fn drafts_section(port: u16, token: &str) -> String {
+    let (st, body) = http(port, "GET", "/dump", Some(token), b"");
     assert_eq!(st, 200);
     let text = String::from_utf8(body).expect("dump is utf-8 text");
     let start = text
@@ -1165,10 +1169,11 @@ fn version_inherits_publication_and_the_write_path_refuses_the_private_arms() {
     let v = op(port, Some(&signed), &format!(r#"{{"op":"version","d_src":"{v_pub}","published":false}}"#));
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("private_version_of_published"));
 
-    // The RECORD's bits, off the dump's exception set: the private source is
-    // a draft of the claimant's account; the inherited members are not, and
-    // no member of the published chain is.
-    let drafts = drafts_section(port);
+    // The RECORD's bits, off the dump's exception set at the OWNER's class
+    // (the guest's slice is empty since lane 3.4): the private source is a
+    // draft of the claimant's account; the inherited members are not, and no
+    // member of the published chain is.
+    let drafts = drafts_section(port, &signed);
     assert!(
         drafts.contains(&format!(r#""{priv_src}": "{CLAIMANT_ACCOUNT}""#)),
         "the flagless non-first mint is a draft in the record: {drafts}"

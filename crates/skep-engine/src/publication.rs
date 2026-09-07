@@ -159,7 +159,11 @@ fn owner_account_of(namespace: &M3State, doc: &Address) -> Address {
 /// field exists under that name (lane 2.1's), and what its own `Serialize`
 /// wrote its own `Deserialize` admits — and a change to either lands here,
 /// at load, loudly.
-fn publication_map(namespace: &M3State) -> im::OrdMap<Address, bool> {
+///
+/// Crate-visible for the world dump's PUBLICATION section (lane 3.4 §3),
+/// which renders the AUTHORITATIVE slice this seed reads — the same read, so
+/// the section and the seed cannot disagree about what M3 holds.
+pub(crate) fn publication_map(namespace: &M3State) -> im::OrdMap<Address, bool> {
     let tree = to_tree(namespace);
     let SerdeTree::Map(fields) = &tree else {
         panic!("M3State serializes as a struct — a map of its fields");

@@ -148,6 +148,14 @@ How a masked read answers:
   the lineage reads (`in_claims`, `out_claims`) are exempt — registry
   data, served to every class.
 
+The two publication reads take the consult too (v7.6, PUB round 2 lane
+3.4): `doc_metadata`'s `doc` and `edition_claims`'s `target` are each a
+document argument — unreadable is `withheld`, unregistered is
+`doc_not_registered` — and `edition_claims` additionally filters its
+result set at your class, dropping every claim whose HOME (the edition)
+you may not read, so a draft edition's claim is invisible to a stranger
+and listed for its owner (PUB-6.13).
+
 The same predicate answers `/op-at` (against the HEAD's sets, §Reading
 history) and the source gate of `publish` (§The publish shot and
 head-float).
@@ -182,9 +190,11 @@ a `withheld` that confirms a draft-homed link exists (§Links (writes)).
 
 **The serving bound** (PUB-8.43): the wire serves the subtree clause,
 the read-surface sweep above, the routed write refusals
-(`published_target` and its two siblings) and the write side's source
-consult — that interval is CLOSED. Not yet served: the audit-view lookup
-(PUB-8.46).
+(`published_target` and its two siblings), the write side's source
+consult, and — since v7.6 — the audit-view edition-claim lookup
+(`edition_claims`, PUB-8.46) and the doc-metadata read (`doc_metadata`,
+PUB-8.12) the client's own admission test needs. That interval is now
+CLOSED.
 
 ### Cross-origin access — a scope decision
 
@@ -192,8 +202,15 @@ Every response — every status, every endpoint, rejections and transport
 errors included — carries `Access-Control-Allow-Origin: *` and
 `Access-Control-Expose-Headers: Skepd-Session` (the death signal below
 is not a CORS-safelisted response header; without the exposure a page on
-a configured non-loopback origin could never read it). `OPTIONS` on any
-known path — the session endpoints included — answers the preflight:
+a configured non-loopback origin could never read it). The four
+CLASS-VARYING routes carry two more (v7.6, PUB round 2 lane 3.4):
+`Cache-Control: no-store` and `Vary: Skepd-Session` ride every answer of
+`POST /op`, `POST /op-at`, `GET /changes` and `GET /dump`, because each
+is a function of the presented token's class and so may be neither
+stored nor served to another requester. `GET /health` is class-invariant
+and carries neither; `GET /events` carries its own `Cache-Control:
+no-cache` (§The commit stream). `OPTIONS` on any known path — the
+session endpoints included — answers the preflight:
 
 ```
 OPTIONS /op
@@ -491,7 +508,12 @@ of the positioned reads. The byte-identity promises this document makes
 — `/op-at` (same `at`, same frame), `GET /dump?at` (same `at`),
 `GET /changes` (same `since`, same `limit`) — hold across repeats and
 across daemon restarts **while the position, or the history behind the
-fence, remains within retained history**. The reclaim floor advances
+fence, remains within retained history**. `GET /dump` conditions on one
+term more (v7.6, PUB-8.26): its bytes are a function of the world AND the
+reader's class — the head's publication state, its grant state, and the
+presented token's principal — so two dumps are byte-equal when those
+agree, and a guest's dump differs from an owner's of the same world by
+design. The reclaim floor advances
 between repeats; a position that has aged out answers
 `410 history_reclaimed`, never different bytes. That conditioning is the
 wire's own base; rounds that widen this surface state any further
@@ -812,6 +834,36 @@ in that document (a preview; nothing is written).
 <!-- wire: response claims -->
 ```json
 {"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.1.0.2.3","home":"1.0.1.0.1","new":"1.0.1.0.1.0.2.2","old":"1.0.1.0.1.0.2.1"}],"resp":"claims"}
+```
+
+**`doc_metadata`** — doc_metadata (§Namespace): the publication state a
+client's own admission tests need. `doc` is the trunk document the
+argument projects to (a version member answers its document's state);
+`published` its publication bit; `owner` its owner account (always
+present for a registered document); `birth` its birth version `D.1` and
+`birth_extent` that version's arranged content count, both present
+together once the document has a chain member and both `null` before it.
+
+<!-- wire: response doc_metadata -->
+```json
+{"as_of":9,"birth":"1.0.1.0.1.1","birth_extent":"5","doc":"1.0.1.0.1","owner":"1.0.1","published":true,"resp":"doc_metadata"}
+```
+
+<!-- wire: response doc_metadata_unborn -->
+```json
+{"as_of":9,"birth":null,"birth_extent":null,"doc":"1.0.1.0.2","owner":"1.0.1","published":false,"resp":"doc_metadata"}
+```
+
+**`edition_claims`** — edition_claims (§Link discovery reads): the
+audit-view edition-claim lookup over `target`. Each row is one admitted,
+unsuperseded claim of the edition class — `claim` the link's address,
+`home` the edition it is homed in, `to` the endset it denotes, `active`
+false when the home has retracted it (the audit view lists it either
+way). Only rows whose home you may read are returned.
+
+<!-- wire: response edition_claims -->
+```json
+{"as_of":9,"claims":[{"active":true,"claim":"1.0.1.0.5.0.2.1","home":"1.0.1.0.5","to":[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]}],"resp":"edition_claims"}
 ```
 
 **`key_set`** — key_set: an account's credential table (§Identity
@@ -1297,6 +1349,20 @@ at session open — to resolve your own account. The argument is named
 {"op":"principal_prefix","principal":2}
 ```
 
+**`doc_metadata`** — the publication metadata a client needs to run
+PUB-3.19's admission test itself (v7.6, PUB round 2 lane 3.4): whether
+`doc` is published, its owner account, and its birth version with that
+version's base extent — a client images one edition's content over the
+birth version to decide admission, and reads nothing else here. `doc` is
+a document argument (unreadable → `withheld`; unregistered →
+`doc_not_registered`); a version member answers its DOCUMENT's state.
+→ `doc_metadata`.
+
+<!-- wire: request doc_metadata -->
+```json
+{"doc":"1.0.1.0.1","op":"doc_metadata"}
+```
+
 ### Identity reads
 
 **`key_set`** — the credential table of `account`: who can sign for it,
@@ -1761,6 +1827,23 @@ positions at `p` in `d` orphan? Nothing is written. → `orphans`.
 {"op":"out_claims","view":"audit","x":"1.0.1.0.1.0.2.2"}
 ```
 
+**`edition_claims`** — the audit-view edition-claim lookup (v7.6, PUB
+round 2 lane 3.4; PUB-8.46): every admitted, unsuperseded claim of the
+edition class (`ty` under `1.1.0.1.0.1.0.3.14`, its descriptive subtypes
+included) whose `to` slot denotes `target` — the document or a version
+of it — WHETHER OR NOT RETRACTED, each with its home (the edition) and
+its `active` flag. `target` is a document argument (unreadable →
+`withheld`); rows are then filtered to those whose home you may read
+(§The read predicate), so a draft edition's claim is invisible to a
+stranger. Retraction is by the home's `nullify` of the claim; supersession
+is by `assert_sup` in the managed class, which drops the superseded claim
+from this answer. → `edition_claims`.
+
+<!-- wire: request edition_claims -->
+```json
+{"op":"edition_claims","target":"1.0.1.0.1"}
+```
+
 ## Reading history
 
 Every response names where it sits in the one committed log — `at` on a
@@ -1865,10 +1948,16 @@ this surface extends retention.
 
 **`GET /dump?at=<position>`** (only in `observe` builds) — the
 deterministic world dump (§The other endpoints) of the state at that
-position. Two calls with equal `at` are byte-equal; `at` = the current
-head is byte-equal to plain `GET /dump`. Position errors are `/op-at`'s,
-the reconstruction bound included (`503 history_busy`); a malformed query
-is `400 {"error": "malformed_at", "detail": …}`.
+position, AT THE PRESENTED TOKEN'S CLASS. Two worlds ride it (v7.6,
+PUB-6.48, as on `/op-at`): the STATE dumped is the position's — its
+content, arrangements, links, and its as-of-N publication slice — and
+the PREDICATE it is filtered through is the HEAD's, so a grant committed
+after `at` opens a draft's sections at `/dump?at=N` exactly as it
+satisfies a read there. Two calls with equal `at` at one class are
+byte-equal; `at` = the current head is byte-equal to plain `GET /dump`
+at that class. Position errors are `/op-at`'s, the reconstruction bound
+included (`503 history_busy`); a malformed query is `400 {"error":
+"malformed_at", "detail": …}`.
 
 Routed, not yet in the protocol: an I-ADDRESSED value read as of a
 position — the home's mint frontier at N plus the values under it, a
@@ -2085,23 +2174,33 @@ shape).
 
 **`GET /dump`** (only in builds with the `observe` feature; absent
 otherwise, so a plain build answers 404) → `200 text/plain`: the engine's
-deterministic world dump — format **`skep-world-dump v4`**, the banner
-the code emits. (The v2→v3 renumber rode the ghost-tumbler genesis
-rework of 2026-08-30, not the auth delta; its design-side record lands
-as an AUTH RES entry — citation pending, deliberately not invented
-here. v3→v4 is the publication round's, 2026-09-05: the hints section
-gained `publication.drafts` — the exception set, every draft document
-mapped to its owner account, address-sorted — and the banner moved with
-the section set, PUB-8.29/PUB-8.30.) Byte-comparable across processes
-for run reconstruction: two dumps of equal worlds are byte-equal. As
-built the dump carries NO dedicated identity section: the identity
-table is DERIVED state — a
-pure function of the credential deposits, which are ordinary links
-already in the dump's links slice — so byte-equal dumps imply equal
-identity tables, and `key_set` (not the dump) is the identity read
-surface. `GET /dump?at=N` serves a historical position (§Reading
-history). The route is token-accepting (the death signal rides it); the
-dump itself is principal-free.
+deterministic world dump — format **`skep-world-dump v5`**, the banner
+the code emits — AT THE PRESENTED TOKEN'S CLASS (v7.6, PUB round 2 lane
+3.4). (The v2→v3 renumber rode the ghost-tumbler genesis rework of
+2026-08-30, not the auth delta; its design-side record lands as an AUTH
+RES entry — citation pending, deliberately not invented here. v3→v4 is
+the publication round's, 2026-09-05: the hints section gained
+`publication.drafts`, PUB-8.29/PUB-8.30. v4→v5 is lane 3.4's,
+2026-09-06: the root gained a `publication` SECTION — the authoritative
+draft slice, address-sorted, the state the hint is a derived index over
+— and a `grants` SECTION — the grant fold's operative set, each grant by
+its link address with its home, issuer, content-prefix and grantee.)
+The dump is now PER-CLASS: the GUEST (an absent, unparseable, unknown or
+dead token) sees the published world alone — its `publication` slice
+renders empty, and no draft's content lines, arrangement, link or hint
+appears; a session principal additionally sees every draft its class
+reads (its own subtree, and those a grant opens to it). The identity
+section (M3) and the `grants` section are kept whole for every class.
+Byte-comparable across processes AND across equal classes for run
+reconstruction: two dumps of equal worlds at one class are byte-equal.
+As built the dump carries NO dedicated identity section: the identity
+table is DERIVED state — a pure function of the credential deposits,
+which are ordinary links already in the dump's links slice — so
+byte-equal dumps imply equal identity tables, and `key_set` (not the
+dump) is the identity read surface. `GET /dump?at=N` serves a historical
+position at the head's class (§Reading history). The route is
+token-accepting (the death signal rides it), and the dump is filtered at
+the presented token's class.
 
 ## A first board, end to end
 
@@ -2162,6 +2261,42 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.6 (the two publication reads and the per-class dump — PUB round 2, lane
+3.4, built 2026-09-06; documented as built):
+
+* Two new reads (41 ops, 26 reads, 15 writes unchanged). `doc_metadata`
+  (§Namespace) → `doc_metadata`: the publication state a client's own
+  PUB-3.19 admission test needs — the trunk document, its `published`
+  bit, its `owner` account (carried, always present for a registered
+  document), and its birth version `D.1` with that version's
+  `birth_extent` (both present once a chain member exists, both `null`
+  before), and nothing else (PUB-8.12). `edition_claims` (§Link
+  discovery reads) → `edition_claims`: the audit-view lookup over the
+  edition class `1.1.0.1.0.1.0.3.14` (descriptive subtypes included) of
+  every admitted, unsuperseded claim whose `to` denotes `target`,
+  retracted or not, each with its `home` (the edition) and `active` flag
+  (PUB-8.46). Both take the read predicate on their document argument
+  (unreadable → `withheld`, unregistered → `doc_not_registered`);
+  `edition_claims` also filters rows to homes you may read (PUB-6.13), so
+  a draft edition's claim is invisible to a stranger. The serving bound
+  (PUB-8.43) is now CLOSED — PUB-8.46 was its last owed item.
+* THE DUMP IS PER-CLASS and moves to `skep-world-dump v5` (§The other
+  endpoints): the root gained a `publication` SECTION (the authoritative
+  draft slice, address-sorted) and a `grants` SECTION (the grant fold's
+  operative set), and `GET /dump` filters at the presented token's class
+  — the GUEST sees the published world alone, a principal its own drafts
+  too, the identity and grant sections kept whole (PUB round 2 lane 3.4
+  §4). `GET /dump?at=N` filters the position's state at the HEAD's class,
+  the two-world shape `/op-at` already has (PUB-6.48). Determinism now
+  conditions on the reader's class as well as the position (PUB-8.26,
+  §Determinism). v7's "the dump itself is principal-free" is superseded.
+* CACHE HEADERS on the four class-varying routes (§Cross-origin access):
+  `Cache-Control: no-store` and `Vary: Skepd-Session` ride `POST /op`,
+  `POST /op-at`, `GET /changes` and `GET /dump` — each answer is a
+  function of the presented token's class. `GET /health` is
+  class-invariant and carries neither; `GET /events` keeps its own
+  `Cache-Control: no-cache`.
 
 v7.5 (the write side's consult — PUB round 2, lane 3.3c, built 2026-09-06;
 documented as built):

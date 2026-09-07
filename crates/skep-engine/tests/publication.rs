@@ -352,7 +352,7 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     let engine = mem_engine();
     let docs = mint_docs(&engine);
     let text = engine.world_dump().into_string();
-    assert!(text.starts_with("skep-world-dump v4\n"), "unexpected banner: {text:.32}");
+    assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
 
     let mut pairs: Vec<(String, String)> = docs
         .drafts
@@ -364,4 +364,12 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     let expected = format!("\"publication.drafts\": {{{}}}", entries.join(", "));
     assert!(text.contains(&expected), "expected {expected} in the dump:\n{text}");
     engine.check_hints().expect("the set's fold equals its seed");
+
+    // v5 (lane 3.4 §3): the AUTHORITATIVE publication section lists the same
+    // drafts, in address order, as a sequence of their own — the state the
+    // hint above is the derived index over.
+    let mut drafts: Vec<String> = docs.drafts.iter().map(|d| format!("{:?}", d.to_string())).collect();
+    drafts.sort();
+    let section = format!("\"publication\": [{}]", drafts.join(", "));
+    assert!(text.contains(&section), "expected {section} in the dump:\n{text}");
 }

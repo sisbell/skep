@@ -892,14 +892,23 @@ impl Daemon {
             ("POST", "/session/close") => {
                 self.token_route(req, |r| self.post_session_close(r, req))
             }
-            ("POST", "/op") => self.token_route(req, |r| self.post_op(r, req)),
-            ("POST", "/op-at") => self.token_route(req, |r| self.op_at_reply(r, &req.body)),
+            // The four CLASS-VARYING routes (wire v7.6, lane 3.4 §5): each
+            // answer is a function of the presented token's class, so each
+            // wears [`class_varying`] — `Cache-Control: no-store` and
+            // `Vary: Skepd-Session` — on every reply it can give, transport
+            // refusals included.
+            ("POST", "/op") => class_varying(self.token_route(req, |r| self.post_op(r, req))),
+            ("POST", "/op-at") => {
+                class_varying(self.token_route(req, |r| self.op_at_reply(r, &req.body)))
+            }
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => {
-                self.token_route(req, |_| self.get_changes(req.query.as_deref()))
+                class_varying(self.token_route(req, |_| self.get_changes(req.query.as_deref())))
             }
             #[cfg(feature = "observe")]
-            ("GET", "/dump") => self.token_route(req, |_| self.get_dump(req.query.as_deref())),
+            ("GET", "/dump") => {
+                class_varying(self.token_route(req, |r| self.get_dump(r, req.query.as_deref())))
+            }
             #[cfg(feature = "client")]
             ("GET", "/") => {
                 Reply::bodied(200, "text/html; charset=utf-8", BOARD_HTML.as_bytes().to_vec())
@@ -1421,10 +1430,7 @@ impl Daemon {
                     // The ruling-fixed body, exactly: {"error": "write_at_history"}.
                     return refuse(TransportError::WriteAtHistory, None);
                 }
-                let principal = match &resolved.actor {
-                    Actor::Principal(binding) => Some(binding.principal),
-                    Actor::Guest(_) => None,
-                };
+                let principal = resolved.principal();
                 // ONE head snapshot per request (PUB-6.39, PUB-6.48).
                 let head = self.engine.kernel().snapshot();
                 for arg in frame.op.doc_arguments() {
@@ -1519,23 +1525,52 @@ impl Daemon {
     }
 
     /// `GET /dump` — the engine's deterministic `WorldDump` of the committed
-    /// world; `GET /dump?at=N` the dump of the world as of position `N`
-    /// (bounded replay — same determinism, two equal `N`s are byte-equal and
-    /// `N` = head equals the plain dump). Exists only in `observe` builds.
+    /// world AT THE REQUEST'S CLASS (PUB round 2, lane 3.4 §4): the
+    /// harness-only walk (`Engine::world_dump`) post-filtered by the read
+    /// predicate for the presented session's principal — an absent or dead
+    /// token is the GUEST, whose publication slice renders EMPTY and whose
+    /// dump holds no draft's content, arrangement or link. ONE head snapshot
+    /// per request: the world dumped and the predicate it is filtered at
+    /// are that snapshot's (PUB-6.39). `GET /dump?at=N` is the dump of the
+    /// world as of position `N` (bounded replay) at the HEAD's class — the
+    /// N-world's state through the head's exception set and grant set
+    /// (PUB-6.48), as `/op-at` reads it. Determinism holds per class
+    /// (PUB-8.26): two equal `N`s at one class are byte-equal, and `N` =
+    /// head equals the plain dump at that class. Exists only in `observe`
+    /// builds.
     #[cfg(feature = "observe")]
-    fn get_dump(&self, query: Option<&str>) -> Reply {
+    fn get_dump(&self, resolved: &Resolved, query: Option<&str>) -> Reply {
         let at = match dump_at_param(query) {
             Ok(x) => x,
             Err(detail) => return refuse(TransportError::MalformedAt, Some(&detail)),
         };
+        let principal = resolved.principal();
         let dump = match at {
-            None => self.engine.world_dump(),
-            Some(at) => match self.history.dump_at(&self.engine, at) {
-                Ok(d) => d,
-                Err(e) => return refuse_unavailable(e),
-            },
+            None => self.engine.world_dump_visible_to(principal),
+            Some(at) => {
+                // The head predicate, closed over ONE head snapshot for this
+                // request — the two-world shape `history.rs` states.
+                let head = self.engine.kernel().snapshot();
+                let readable =
+                    |doc: &skep_address::Address| head.world().readable(principal, doc);
+                match self.history.dump_at(&self.engine, at, &readable) {
+                    Ok(d) => d,
+                    Err(e) => return refuse_unavailable(e),
+                }
+            }
         };
         Reply::bodied(200, "text/plain; charset=utf-8", dump.into_string().into_bytes())
+    }
+
+    /// The committed world's dump at `principal`'s class — what `GET /dump`
+    /// answers a session bound to `principal` (`None` = the guest), through
+    /// the same engine call, so a suite holding the daemon can state the H4
+    /// oracle: the wire body equals this post-filter of the harness-only
+    /// walk byte for byte. Unbudgeted, like [`Daemon::world_at`]: an
+    /// embedder calling this holds the daemon itself.
+    #[cfg(feature = "observe")]
+    pub fn dump_visible_to(&self, principal: Option<PrincipalId>) -> skep_engine::dump::WorldDump {
+        self.engine.world_dump_visible_to(principal)
     }
 }
 
@@ -1546,11 +1581,50 @@ struct Resolved {
     closed: bool,
 }
 
+impl Resolved {
+    /// The principal the request's reads run at — the bound principal, or
+    /// `None` for the guest (an absent, unparseable, unknown or dead token).
+    fn principal(&self) -> Option<PrincipalId> {
+        match &self.actor {
+            Actor::Principal(binding) => Some(binding.principal),
+            Actor::Guest(_) => None,
+        }
+    }
+}
+
 /// Attach the death signal (AUTH-6.7) when owed — once, however many
 /// resolution sites observed the death on this request.
 fn with_signal(mut reply: Reply, closed: bool) -> Reply {
     if closed && !reply.headers.iter().any(|(k, _)| *k == SESSION_HEADER) {
         reply.headers.push((SESSION_HEADER, "closed"));
+    }
+    reply
+}
+
+/// The cache headers every CLASS-VARYING reply carries (wire v7.6; PUB
+/// round 2, lane 3.4 §5): the answer is a function of the presented token's
+/// class, so it may be neither stored nor served to another requester.
+/// `Cache-Control: no-store` forbids any cache from keeping it;
+/// `Vary: Skepd-Session` names the request header the answer turns on, so a
+/// cache that keeps one anyway keys it by the token. Applied at the
+/// [`Daemon::reply`] arms of the four routes — `/op`, `/op-at`, `/changes`,
+/// `/dump` — rather than at [`op_answer`] (which `/changes` and `/dump` do
+/// not use, and which no transport refusal passes through) or at
+/// [`Reply::bodied`] (which `/health` and `/` share, and those are
+/// class-invariant). `/events` is a stream with its own `Cache-Control:
+/// no-cache` written at open, and `/health` is class-invariant by
+/// construction (PUB-6.50), so neither wears these.
+const CLASS_VARYING_HEADERS: [(&str, &str); 2] =
+    [("Cache-Control", "no-store"), ("Vary", SESSION_HEADER)];
+
+/// Stamp a class-varying route's reply with [`CLASS_VARYING_HEADERS`] —
+/// once, whatever the reply is: a marshaled answer, a credential refusal, a
+/// transport refusal.
+fn class_varying(mut reply: Reply) -> Reply {
+    for (name, value) in CLASS_VARYING_HEADERS {
+        if !reply.headers.iter().any(|(k, _)| *k == name) {
+            reply.headers.push((name, value));
+        }
     }
     reply
 }

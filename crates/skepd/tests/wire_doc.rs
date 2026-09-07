@@ -16,7 +16,8 @@ use skep_arrangement::{Run, VPos};
 use skep_content::Val;
 use skep_discovery::{OrphanReport, SupClaim, Window};
 use skep_febe::{
-    Codec, Disposition, FaultSite, OpKind, ParseError, RejectCode, Rejection, Response,
+    Codec, Disposition, EditionClaim, FaultSite, OpKind, ParseError, RejectCode, Rejection,
+    Response,
 };
 use skep_kernel::Seq;
 use skep_links::{Endset, Invalid, Link};
@@ -63,13 +64,14 @@ fn blocks() -> Vec<(String, String, String)> {
     out
 }
 
-const OP_NAMES: [&str; 39] = [
+const OP_NAMES: [&str; 41] = [
     "create_new_document",
     "delegate",
     "register_node",
     "fork",
     "next_account_prefix",
     "principal_prefix",
+    "doc_metadata",
     "insert",
     "delete",
     "copy",
@@ -103,10 +105,11 @@ const OP_NAMES: [&str; 39] = [
     "delete_orphans",
     "in_claims",
     "out_claims",
+    "edition_claims",
 ];
 
 /// Every request example parses, is canonical (re-marshal equals the doc
-/// value), is tagged with the marker's own op name — and all 39 ops appear.
+/// value), is tagged with the marker's own op name — and all 41 ops appear.
 #[test]
 fn doc_request_examples_are_canonical_and_complete() {
     let codec = JsonCodec;
@@ -266,6 +269,33 @@ fn fixture(name: &str) -> Response {
             }],
             as_of: Seq(9),
         },
+        // A born document with a birth version and its base extent (PUB-8.12).
+        "doc_metadata" => Response::DocMetadata {
+            doc: a(&[1, 0, 1, 0, 1]),
+            published: true,
+            owner: Some(a(&[1, 0, 1])),
+            birth: Some(a(&[1, 0, 1, 0, 1, 1])),
+            birth_extent: Some(n(5)),
+            as_of: Seq(9),
+        },
+        // A private draft with no chain member yet: birth/birth_extent null.
+        "doc_metadata_unborn" => Response::DocMetadata {
+            doc: a(&[1, 0, 1, 0, 2]),
+            published: false,
+            owner: Some(a(&[1, 0, 1])),
+            birth: None,
+            birth_extent: None,
+            as_of: Seq(9),
+        },
+        "edition_claims" => Response::EditionClaims {
+            claims: vec![EditionClaim {
+                claim: a(&[1, 0, 1, 0, 5, 0, 2, 1]),
+                home: a(&[1, 0, 1, 0, 5]),
+                to: Endset::from_spans([sp(&[1, 0, 1, 0, 1], &[0, 0, 0, 0, 1])]),
+                active: true,
+            }],
+            as_of: Seq(9),
+        },
         "rejected" => Response::Rejected(Rejection {
             op: OpKind::Insert,
             code: RejectCode::Unauthenticated,
@@ -291,9 +321,9 @@ fn fixture(name: &str) -> Response {
     }
 }
 
-/// The 19 response shapes every client must decode; each must appear as a
+/// The 21 response shapes every client must decode; each must appear as a
 /// doc marker (variant markers like `follow_invalid` are extra coverage).
-const REQUIRED_SHAPES: [&str; 19] = [
+const REQUIRED_SHAPES: [&str; 21] = [
     "ack",
     "ack_addr",
     "ack_edit",
@@ -312,6 +342,8 @@ const REQUIRED_SHAPES: [&str; 19] = [
     "compare",
     "orphans",
     "claims",
+    "doc_metadata",
+    "edition_claims",
     "rejected",
 ];
 

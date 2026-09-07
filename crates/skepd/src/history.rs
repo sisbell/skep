@@ -100,18 +100,34 @@ impl History {
         Ok((permit, world))
     }
 
-    /// The `WorldDump` of the world as of `at` — the same bounded replay
-    /// [`History::read_at`] answers from, rendered by the engine that
-    /// reconstructed it, exactly as it renders its live dump. `/dump`'s two
-    /// arms therefore each simply ask a collaborator for a dump.
+    /// The `WorldDump` of the world as of `at` at the READER'S CLASS — the
+    /// same bounded replay [`History::read_at`] answers from, rendered by
+    /// the engine that reconstructed it through the per-class post-filter
+    /// (PUB round 2, lane 3.4 §4), exactly as the live `/dump` is. `/dump`'s
+    /// two arms therefore each simply ask a collaborator for a filtered dump.
+    ///
+    /// THE TWO-WORLD SHAPE, as [`History::read_at`] has it (PUB-6.48): the
+    /// STATE dumped is the N-world's — its content, arrangements, links and
+    /// its as-of-N publication slice — and the PREDICATE it is filtered
+    /// through is `readable`, which the route closes over the ONE head
+    /// snapshot it took at admission, so a grant committed after `at` opens
+    /// a draft's sections at `/dump?at=N` exactly as it satisfies a read
+    /// there. Left to the N-world's own sets, a draft minted after `at`
+    /// would be absent from them and dump as published (PUB-7.5's fail-open
+    /// sign).
     ///
     /// The permit is held across the render, which is where this route's
     /// peak sits: the dump is a second whole-world materialization beside
     /// the world it renders.
     #[cfg(feature = "observe")]
-    pub fn dump_at(&self, engine: &Engine, at: Seq) -> Result<WorldDump, Unavailable> {
+    pub fn dump_at(
+        &self,
+        engine: &Engine,
+        at: Seq,
+        readable: &dyn Fn(&Address) -> bool,
+    ) -> Result<WorldDump, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        Ok(engine.dump_of(&world))
+        Ok(engine.dump_of_visible(&world, readable))
     }
 
     /// One already-classified READ frame answered as of `at`: reconstruct
@@ -273,7 +289,9 @@ fn stamp_as_of(resp: &mut Response, at: Seq) {
         | Response::Deletions { as_of, .. }
         | Response::Compare { as_of, .. }
         | Response::Orphans { as_of, .. }
-        | Response::Claims { as_of, .. } => *as_of = at,
+        | Response::Claims { as_of, .. }
+        | Response::DocMetadata { as_of, .. }
+        | Response::EditionClaims { as_of, .. } => *as_of = at,
         Response::Ack { .. }
         | Response::AckAddr { .. }
         | Response::AckEdit { .. }

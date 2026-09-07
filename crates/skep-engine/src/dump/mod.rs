@@ -25,6 +25,16 @@
 //!   a branching `Serialize` impl renders the branch the journal stores. M7's
 //!   `#[serde(skip)]` registry/hints are thereby excluded, exactly as the
 //!   section demands.
+//! * **publication** (v5, PUB round 2, lane 3.4 §3) — M3's AUTHORITATIVE
+//!   publication slice reduced to its DRAFT entries, in address order: the
+//!   state the exception set is a derived index over, rendered apart from
+//!   the hints' copy of it (`hints.publication.drafts`, which STAYS — it is
+//!   the faithfulness check's subject, this section the authority it is
+//!   checked against).
+//! * **grants** (v5) — the grant fold's OPERATIVE set: every admitted,
+//!   unsuperseded grant by its link address, with its home, issuer,
+//!   content-prefix and grantee. Derived from the fold (the engine keeps no
+//!   grant slice), so the faithfulness check covers the fold through it.
 //! * **hints** — M7's recomputable state, read through its public surfaces
 //!   (`match_links`, `type_slice`, `members`, `succs`): the audit and active
 //!   slices, the nullified members of the audit slice, the five shipped
@@ -52,14 +62,38 @@
 //!   itself will occupy. M7's fold inserts every denoted to-root of an `[R]`
 //!   link, so a root that is not itself a link would sit in the hint and
 //!   outside this rendering.
+//!
+//! ## The per-class filter (lane 3.4 §4)
+//!
+//! [`Engine::world_dump`] and [`Engine::dump_of`] stay the HARNESS-ONLY
+//! unfiltered walk. The daemon's `/dump` is that walk POST-FILTERED at the
+//! request's class — [`Engine::dump_of_visible`] over the same threaded
+//! predicate every read answers (PUB-6.39) — and the filter runs over the
+//! dump TREE before a byte is rendered, so the two are one tree rendered
+//! twice and a class's dump is byte-identical to the walk under the total
+//! predicate. What it drops and keeps is [`filter_tree`]'s one statement:
+//! the CONTENT LINES whose element's document is unreadable, the
+//! ARRANGEMENT and LINK-SUBSPACE sections (M5's arrangements and provenance)
+//! keyed by unreadable documents, the LINKS homed in them (the authoritative
+//! map and every hint family, type keys kept), and the PUBLICATION slice
+//! reduced per entry — EMPTY for the guest; the identity section (M3) and
+//! the grant section stay WHOLE. Determinism holds per class (PUB-8.26): the
+//! text is a function of the world and the class, conditioned on the head's
+//! publication state, grant state and the reader's class.
+//!
+//! [`Engine::world_dump`]: crate::Engine::world_dump
+//! [`Engine::dump_of`]: crate::Engine::dump_of
+//! [`Engine::dump_of_visible`]: crate::Engine::dump_of_visible
 
 use std::fmt;
 
-use skep_address::{Address, Tumbler};
+use serde::Deserialize;
+use skep_address::{document_of, validate, Address, Nat, Tumbler};
 use skep_kernel::WorldState;
 use skep_links::{Endset, LinkState, ShippedType, View};
+use skep_namespace::PrincipalId;
 
-use crate::canon::{render, to_tree, SerdeTree};
+use crate::canon::{render, to_tree, SerdeTree, TreeDe};
 use crate::world::World;
 
 /// A deterministic rendering of one world. Byte-equality is the comparison
@@ -106,19 +140,44 @@ impl AsRef<str> for WorldDump {
     }
 }
 
-/// Render one world: the authoritative section, then the hints section over
-/// the shipped classes.
-fn dump(world: &World) -> WorldDump {
-    let root = SerdeTree::Map(vec![
+/// The banner every rendering leads with. v5 (2026-09-06, PUB round 2, lane
+/// 3.4): the root gained the `publication` SECTION (M3's authoritative slice,
+/// drafts in address order) and the `grants` SECTION (the grant fold's
+/// operative set). v4 (2026-09-05) was the hints section gaining
+/// `publication.drafts`, the exception set; v3 the ghost-tumbler format. The
+/// banner's version moves with the section keys.
+const BANNER: &str = "skep-world-dump v5\n";
+
+/// The dump as a TREE, before rendering: the authoritative section, the two
+/// publication-round sections, then the hints section over the shipped
+/// classes. The per-class filter ([`filter_tree`]) runs over this tree, so
+/// the harness-only walk and a class's dump are one tree rendered twice.
+fn dump_tree(world: &World) -> SerdeTree {
+    SerdeTree::Map(vec![
         (key("authoritative"), authoritative_tree(world)),
+        (key("publication"), publication_tree(world)),
+        (key("grants"), grants_tree(world)),
         (key("hints"), hints_tree(world)),
-    ]);
-    // v4 (2026-09-05): the hints section gained `publication.drafts`, the
-    // exception set. The banner's version moves with the section keys.
-    let mut s = String::from("skep-world-dump v4\n");
-    render(&root, &mut s);
+    ])
+}
+
+/// Banner, tree, newline — the one rendering both dumps share.
+fn render_dump(root: &SerdeTree) -> WorldDump {
+    let mut s = String::from(BANNER);
+    render(root, &mut s);
     s.push('\n');
     WorldDump(s)
+}
+
+/// Render one world UNFILTERED — the harness-only walk.
+fn dump(world: &World) -> WorldDump {
+    render_dump(&dump_tree(world))
+}
+
+/// Render one world at a READER'S CLASS: the same tree, post-filtered by the
+/// threaded predicate before a byte is written (lane 3.4 §4).
+fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
+    render_dump(&filter_tree(dump_tree(world), readable))
 }
 
 /// The authoritative section: one entry per store slice, each the slice's own
@@ -310,8 +369,218 @@ fn drafts_tree(world: &World) -> SerdeTree {
     )
 }
 
+// ── the two publication-round sections (v5, lane 3.4 §3) ──
+
+/// The PUBLICATION section: M3's AUTHORITATIVE publication slice reduced to
+/// its DRAFT entries — the documents whose minting record journaled
+/// `published: false` — as dotted addresses in address order. Read off M3's
+/// own serde form exactly as the exception set's seed reads it
+/// (`crate::publication::publication_map`), so the section and the seed
+/// cannot disagree about what M3 holds; the hints' `publication.drafts` is
+/// the FOLD's copy, and [`hints_faithful`] compares that copy against the
+/// seed. A SEQUENCE — `render` sorts maps alone — in the `OrdMap`'s own
+/// address order, which is the order the filter preserves.
+fn publication_tree(world: &World) -> SerdeTree {
+    let map = crate::publication::publication_map(&world.namespace);
+    addr_seq(map.iter().filter(|(_, published)| !**published).map(|(doc, _)| doc))
+}
+
+/// The GRANT section: the grant fold's OPERATIVE set — every admitted,
+/// unsuperseded grant keyed by the grant link's own address, each entry its
+/// `home` (the issuer's doc 1), its `issuer` (ω of the home), the
+/// `content_prefix` it shares and its `grantee` (`none` for the ANY-PRINCIPAL
+/// form, PUB-5.8). DERIVED — the fold's records, the engine keeping no grant
+/// slice — so [`hints_faithful`] covers the grant fold through this section:
+/// a seed that disagreed with the fold moves these bytes. Collected in the
+/// fold's hash order; `render` sorts. Kept WHOLE by the per-class filter: a
+/// grant is a published document's record, and the addresses it names are
+/// not secret (PUB-1.13).
+fn grants_tree(world: &World) -> SerdeTree {
+    SerdeTree::Map(
+        world
+            .grants
+            .records()
+            .map(|(addr, rec)| {
+                let grantee = match &rec.grantee {
+                    Some(g) => SerdeTree::Str(g.to_string()),
+                    None => SerdeTree::Null,
+                };
+                (
+                    SerdeTree::Str(addr.to_string()),
+                    SerdeTree::Map(vec![
+                        (key("content_prefix"), SerdeTree::Str(rec.content_prefix.to_string())),
+                        (key("grantee"), grantee),
+                        (key("home"), SerdeTree::Str(rec.home.to_string())),
+                        (key("issuer"), SerdeTree::Str(rec.issuer.to_string())),
+                    ]),
+                )
+            })
+            .collect(),
+    )
+}
+
+// ── the per-class post-filter (lane 3.4 §4) ──
+
+/// The per-class post-filter over the dump tree — the ONE statement of what a
+/// reader's dump drops and keeps, applied before render so the harness walk
+/// and every class's dump are one tree. `readable` is the threaded predicate
+/// (PUB-6.39); every address is judged at its DOCUMENT (`document_of`, the
+/// address arithmetic the link-address rule uses, PUB-6.6), an address with
+/// no document — an account, a node — judged readable.
+///
+/// * `authoritative.namespace` — KEPT whole: the identity section (PUB-1.13,
+///   an address is not secret).
+/// * `authoritative.content.map` — a CONTENT LINE leaves when its element's
+///   document is unreadable.
+/// * `authoritative.arrangement.{arrangements, provenance}` — the
+///   ARRANGEMENT and LINK-SUBSPACE sections keyed by an unreadable document
+///   leave (M5's per-document arrangement holds both subspaces; provenance
+///   is keyed by the placing document).
+/// * `authoritative.links.links` — a LINK homed in an unreadable document
+///   leaves.
+/// * `publication` — reduced per entry to the readable drafts: EMPTY for the
+///   guest, an owner's own drafts for the owner, a grantee's granted one.
+/// * `grants` — KEPT whole.
+/// * `hints` — every link address (the audit/active/nullified slices, the
+///   shipped classes' slices, the supersession edges and their successors,
+///   the predicate projections) by its home; the shipped classes' `key`
+///   entries are format constants and stay; `publication.drafts` reduced to
+///   the readable drafts, as the section is.
+///
+/// A key that fails to decode is DROPPED (fail-closed): every key here was
+/// rendered from an address a moment earlier, so none does, and a filter
+/// that met one would rather omit a line than judge it readable.
+fn filter_tree(mut root: SerdeTree, readable: &dyn Fn(&Address) -> bool) -> SerdeTree {
+    let home_readable = |a: &Address| document_of(a).is_none_or(|home| readable(&home));
+    let keep_key = |k: &SerdeTree| key_address(k).is_some_and(|a| home_readable(&a));
+    let keep_dotted = |s: &SerdeTree| dotted_address(s).is_some_and(|a| home_readable(&a));
+
+    retain_map(&mut root, &["authoritative", "content", "map"], &keep_key);
+    retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_key);
+    retain_map(&mut root, &["authoritative", "arrangement", "provenance"], &keep_key);
+    retain_map(&mut root, &["authoritative", "links", "links"], &keep_key);
+
+    retain_seq(&mut root, &["publication"], &keep_dotted);
+
+    for family in [
+        "links.audit",
+        "links.active",
+        "links.nullified",
+        "predicates.defs.audit",
+        "predicates.defs.active",
+        "predicates.stable.audit",
+        "predicates.stable.active",
+    ] {
+        retain_seq(&mut root, &["hints", family], &keep_dotted);
+    }
+    for ty in ShippedType::ALL {
+        for view in ["audit", "active"] {
+            retain_seq(&mut root, &["hints", "types", shipped_label(ty), view], &keep_dotted);
+        }
+    }
+    if let Some(SerdeTree::Map(edges)) = at_path(&mut root, &["hints", "supersession"]) {
+        edges.retain_mut(|(old, succs)| {
+            if !keep_dotted(old) {
+                return false;
+            }
+            match succs {
+                SerdeTree::Seq(items) => {
+                    items.retain(|s| keep_dotted(s));
+                    !items.is_empty() // the walk renders no empty successor list
+                }
+                _ => true,
+            }
+        });
+    }
+    retain_map(&mut root, &["hints", "publication.drafts"], &keep_dotted);
+    root
+}
+
+/// The entry at `path` — a chain of string keys through nested maps — if the
+/// tree holds one there.
+fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTree> {
+    let Some((name, rest)) = path.split_first() else {
+        return Some(tree);
+    };
+    let SerdeTree::Map(entries) = tree else {
+        return None;
+    };
+    for (k, v) in entries.iter_mut() {
+        if matches!(k, SerdeTree::Str(s) if s.as_str() == *name) {
+            return at_path(v, rest);
+        }
+    }
+    None
+}
+
+/// Keep the entries of the map at `path` whose KEY `keep` admits.
+fn retain_map(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> bool) {
+    if let Some(SerdeTree::Map(entries)) = at_path(tree, path) {
+        entries.retain(|(k, _)| keep(k));
+    }
+}
+
+/// Keep the items of the sequence at `path` that `keep` admits.
+fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> bool) {
+    if let Some(SerdeTree::Seq(items)) = at_path(tree, path) {
+        items.retain(|item| keep(item));
+    }
+}
+
+/// A tumbler-shaped map key — the authoritative maps' serde form (an
+/// `Address` serializes as its bare tumbler) — as the address it names, back
+/// through the types' own doors (`TreeDe`, then `validate`).
+fn key_address(key: &SerdeTree) -> Option<Address> {
+    let tumbler = Tumbler::deserialize(TreeDe(key)).ok()?;
+    validate(tumbler).ok()
+}
+
+/// A dotted-address string — the hints' and the two sections' form — as the
+/// address it names.
+fn dotted_address(item: &SerdeTree) -> Option<Address> {
+    let SerdeTree::Str(s) = item else {
+        return None;
+    };
+    let comps: Option<Vec<Nat>> = s.split('.').map(|c| c.parse::<Nat>().ok()).collect();
+    validate(Tumbler::new(comps?).ok()?).ok()
+}
+
 impl crate::Engine {
-    /// Dump the currently committed world (one pinned snapshot).
+    /// [`crate::Engine::dump_of`] at a READER'S CLASS (PUB round 2, lane 3.4
+    /// §4): the same tree, post-filtered by `readable` before render — what
+    /// the filter drops and keeps is [`filter_tree`]'s one statement. The
+    /// predicate is the threaded one: a world's own `World::readable` closed
+    /// over a principal for a live dump, or the HEAD's for a historical world
+    /// (`/dump?at=N` — the N-world's state at the head's class, PUB-6.48),
+    /// and the caller closes it over ONE snapshot (PUB-6.39). Under the total
+    /// predicate this is `dump_of` byte for byte (the unit test pins it).
+    ///
+    /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
+    /// decode — a `Tumbler` deserialize off the tree for the authoritative
+    /// maps, a dotted parse for the hints and sections — and one predicate
+    /// call. Nothing is memoized; admission is the caller's to gate.
+    pub fn dump_of_visible(&self, world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
+        dump_visible(world, readable)
+    }
+
+    /// The committed world at `principal`'s class, over ONE snapshot: the
+    /// predicate is that snapshot's own `World::readable`, so the state
+    /// dumped and the class it is filtered at stand on one committed state.
+    /// `None` is the GUEST (PUB-5.5) — published alone, so the publication
+    /// slice renders EMPTY and no draft's content, arrangement or link
+    /// appears.
+    pub fn world_dump_visible_to(&self, principal: Option<PrincipalId>) -> WorldDump {
+        let snap = self.kernel().snapshot();
+        let world = snap.world();
+        dump_visible(world, &|doc: &Address| world.readable(principal, doc))
+    }
+}
+
+impl crate::Engine {
+    /// Dump the currently committed world (one pinned snapshot) —
+    /// UNFILTERED, the HARNESS-ONLY walk (lane 3.4 §4): the crash and
+    /// conformance harnesses' oracle, never a wire answer. The daemon's
+    /// `/dump` is [`crate::Engine::world_dump_visible_to`].
     ///
     /// COST is [`crate::Engine::dump_of`]'s, over a world whose size the
     /// caller does not choose: this renders whatever the store currently
@@ -323,7 +592,9 @@ impl crate::Engine {
     }
 
     /// Dump any world THIS engine produced — a snapshot of its kernel, or a
-    /// world [`crate::Engine::world_at`] reconstructed. The class sections
+    /// world [`crate::Engine::world_at`] reconstructed — UNFILTERED, the
+    /// harness-only walk; [`crate::Engine::dump_of_visible`] is the same
+    /// world at a reader's class. The class sections
     /// are the format's shipped five, so no pairing decision exists: any
     /// world this format wrote renders against the same class list.
     ///
@@ -363,10 +634,13 @@ impl crate::Engine {
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
     /// slices, the nullified members of the audit slice, the shipped classes'
     /// typed slices, the supersession forward edges, the predicate
-    /// projections and the exception set each agree with a rebuild from
+    /// projections, the exception set and — through the v5 grant section —
+    /// the grant fold's operative set each agree with a rebuild from
     /// authoritative state — for the set, that the fold over every
     /// document-minting record and the seed over M3's publication map name
-    /// the same drafts with the same owners (PUB-7.7's two halves). It
+    /// the same drafts with the same owners (PUB-7.7's two halves), and for
+    /// the grants that the fold over every link deposit and the seed over
+    /// the grants class's type slice admit the same records. It
     /// certifies nothing of the three families the dump does not reach, and
     /// each of those drives something a caller can observe — `dedup` drives
     /// `emit`'s incumbent lookup and with it idempotence; `home_frontier`
@@ -526,6 +800,33 @@ mod tests {
         assert_eq!(names, ["format", "namespace", "content", "arrangement", "links"]);
     }
 
+    /// The v5 root: the two publication-round sections sit beside the
+    /// authoritative and hints sections, and the filter's paths into the
+    /// authoritative slices name fields that exist — a slice renaming its
+    /// serde field would otherwise leave the filter silently filtering
+    /// nothing, which is the one failure a fail-closed key rule cannot catch.
+    #[test]
+    fn the_v5_root_and_the_filter_s_paths_exist() {
+        let (_engine, world) = populated_world();
+        let mut tree = dump_tree(&world);
+        for path in [
+            &["authoritative", "namespace"][..],
+            &["authoritative", "content", "map"],
+            &["authoritative", "arrangement", "arrangements"],
+            &["authoritative", "arrangement", "provenance"],
+            &["authoritative", "links", "links"],
+            &["publication"],
+            &["grants"],
+            &["hints", "links.audit"],
+            &["hints", "types", "shipped.supersedes", "audit"],
+            &["hints", "supersession"],
+            &["hints", "predicates.defs.audit"],
+            &["hints", "publication.drafts"],
+        ] {
+            assert!(at_path(&mut tree, path).is_some(), "{path:?} is a place in the v5 tree");
+        }
+    }
+
     /// The term that dominates a dump's cost, pinned where the cost is
     /// claimed: a content byte is a whole serialized ELEMENT, not a byte of a
     /// blob. serde has no byte specialization for `[u8]`, so M4's `Val` walks
@@ -551,6 +852,56 @@ mod tests {
         // would have written.
         let text = render_of(&to_tree(&Val::new(vec![255u8; 4])));
         assert_eq!(text, "[255, 255, 255, 255]");
+    }
+
+    /// Lane 3.4 §4: the per-class filter under the TOTAL predicate is the
+    /// identity — every path it walks names a place in the tree, and it
+    /// touches nothing else — so the harness-only walk and a reader who may
+    /// read everything dump one text. The populated world holds an entry in
+    /// every filtered map and sequence family the filter reaches, which is
+    /// what makes the equality say something about the paths.
+    #[test]
+    fn the_filter_under_the_total_predicate_is_the_identity() {
+        let (_engine, world) = populated_world();
+        assert_eq!(dump_visible(&world, &|_: &Address| true), dump(&world));
+        assert!(dump(&world).as_str().starts_with(BANNER), "one banner for both renderings");
+    }
+
+    /// …and under the GUEST predicate the draft's content, arrangement and
+    /// link leave while the identity section stays whole and the publication
+    /// slice empties: the populated world's one document is a DRAFT, so a
+    /// guest sees its registration and nothing it holds. Asked of the TREE,
+    /// where each section can be named, rather than of the text.
+    #[test]
+    fn the_guest_filter_drops_a_draft_s_sections_and_keeps_identity() {
+        let (_engine, world) = populated_world();
+        let mut full = dump_tree(&world);
+        let mut guest = filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc));
+
+        let len_at = |tree: &mut SerdeTree, path: &[&str]| match at_path(tree, path) {
+            Some(SerdeTree::Map(entries)) => entries.len(),
+            Some(SerdeTree::Seq(items)) => items.len(),
+            other => panic!("{path:?}: expected a map or a sequence, got {other:?}"),
+        };
+        for path in [
+            &["authoritative", "content", "map"][..],
+            &["authoritative", "arrangement", "arrangements"],
+            &["authoritative", "arrangement", "provenance"],
+            &["authoritative", "links", "links"],
+            &["publication"],
+            &["hints", "links.audit"],
+            &["hints", "links.active"],
+            &["hints", "publication.drafts"],
+        ] {
+            assert!(len_at(&mut full, path) > 0, "{path:?}: the fixture must populate it");
+            assert_eq!(len_at(&mut guest, path), 0, "{path:?}: a guest reads nothing of a draft");
+        }
+        // The identity and grant sections are untouched.
+        for path in [&["authoritative", "namespace"][..], &["grants"]] {
+            let a = render_of(at_path(&mut full, path).expect("present"));
+            let b = render_of(at_path(&mut guest, path).expect("present"));
+            assert_eq!(a, b, "{path:?} is kept whole");
+        }
     }
 
     fn divergence(live: &str, rebuilt: &str) -> HintDivergence {

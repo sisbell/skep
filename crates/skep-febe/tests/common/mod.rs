@@ -14,7 +14,9 @@ use skep_address::{validate, Address, Nat, Span, SpanSet, Tumbler};
 use skep_arrangement::{HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
 use skep_discovery::{OrphanReport, SupClaim, Window};
-use skep_febe::{Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores};
+use skep_febe::{
+    EditionClaim, Op, Operation, Rejection, ReqId, Request, Response, SessionId, Stores,
+};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, Seq, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, Invalid, Link, LinkRec, LinkState, LinkWriter, Visibility,
@@ -83,6 +85,12 @@ impl skep_febe::ReadableWorld for World {
     // read is admitted.
     fn readable(&self, _principal: Option<PrincipalId>, _doc: &Address) -> bool {
         true
+    }
+    // The edition-claim class is the engine's composition (its pinned type
+    // address lives there, beside the grant type); this miniature world
+    // carries none, so the audit-view lookup answers the empty class.
+    fn edition_claims(&self, _target: &Address) -> Vec<EditionClaim> {
+        Vec::new()
     }
 }
 impl From<M3Rec> for Record {
@@ -244,7 +252,9 @@ pub fn as_of(r: &Response) -> Seq {
         | Response::Deletions { as_of, .. }
         | Response::Compare { as_of, .. }
         | Response::Orphans { as_of, .. }
-        | Response::Claims { as_of, .. } => *as_of,
+        | Response::Claims { as_of, .. }
+        | Response::DocMetadata { as_of, .. }
+        | Response::EditionClaims { as_of, .. } => *as_of,
         Response::Rejected(rej) => panic!("expected a read answer, got a rejection: {rej}"),
         Response::Ack { .. } | Response::AckAddr { .. } | Response::AckEdit { .. } => {
             panic!("a committed write reports `at`, not `as_of`")
@@ -393,6 +403,25 @@ pub fn claims(r: Response) -> Vec<SupClaim> {
         Response::Claims { claims, .. } => claims,
         Response::Rejected(rej) => panic!("rejected: {rej:?}"),
         _ => panic!("expected Claims"),
+    }
+}
+
+/// The doc-metadata answer as `(doc, published, owner, birth, birth_extent)`.
+pub fn doc_metadata(r: Response) -> (Address, bool, Option<Address>, Option<Address>, Option<Nat>) {
+    match r {
+        Response::DocMetadata { doc, published, owner, birth, birth_extent, .. } => {
+            (doc, published, owner, birth, birth_extent)
+        }
+        Response::Rejected(rej) => panic!("rejected: {rej:?}"),
+        _ => panic!("expected DocMetadata"),
+    }
+}
+
+pub fn edition_claims(r: Response) -> Vec<EditionClaim> {
+    match r {
+        Response::EditionClaims { claims, .. } => claims,
+        Response::Rejected(rej) => panic!("rejected: {rej:?}"),
+        _ => panic!("expected EditionClaims"),
     }
 }
 

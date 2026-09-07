@@ -253,6 +253,8 @@ impl WritePath {
             | Response::Compare { .. }
             | Response::Orphans { .. }
             | Response::Claims { .. }
+            | Response::DocMetadata { .. }
+            | Response::EditionClaims { .. }
             | Response::Rejected(_) => return None,
         };
         // [`AffectedDocs::Minted`] and this arm are one decision in two
@@ -406,7 +408,9 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         | Op::DiscoverableFrom { .. }
         | Op::DeleteOrphans { .. }
         | Op::InClaims { .. }
-        | Op::OutClaims { .. } => None,
+        | Op::OutClaims { .. }
+        | Op::DocMetadata { .. }
+        | Op::EditionClaims { .. } => None,
     };
     debug_assert_eq!(
         answer.is_some(),

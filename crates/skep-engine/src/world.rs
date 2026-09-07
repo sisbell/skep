@@ -285,6 +285,14 @@ impl skep_febe::ReadableWorld for World {
     ) -> bool {
         World::readable(self, principal, doc)
     }
+
+    /// The audit-view edition-claim lookup (PUB-8.46; lane 3.4, §2) —
+    /// [`World::edition_claims`], the engine's composition of M7's audit
+    /// reads over the pinned edition class (`crate::editions`); M10 applies
+    /// the home rule per row, off its own snapshot.
+    fn edition_claims(&self, target: &skep_address::Address) -> Vec<skep_febe::EditionClaim> {
+        World::edition_claims(self, target)
+    }
 }
 
 // The record lifts — the write-side mirror of the accessors: stores return

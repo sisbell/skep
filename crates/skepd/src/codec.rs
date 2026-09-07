@@ -56,8 +56,8 @@ use skep_arrangement::{Base, Run, Shot, ShotRun, VPos, VSpec};
 use skep_content::Val;
 use skep_discovery::{FourSet, SlotSpec, SupClaim, Window};
 use skep_febe::{
-    disposition_of, Codec, Disposition, FaultSite, Op, OpKind, ParseError, RejectCode, Rejection,
-    ReqId, Request, Response, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
+    disposition_of, Codec, Disposition, EditionClaim, FaultSite, Op, OpKind, ParseError,
+    RejectCode, Rejection, ReqId, Request, Response, SlotArg, SuccessorSpec, MAX_REQ_ID_BYTES,
 };
 use skep_identity::KeySet;
 use skep_kernel::Seq;
@@ -474,6 +474,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         "fork" => Op::Fork { published: fields.published()? },
         "next_account_prefix" => Op::NextAccountPrefix { parent: fields.addr("parent")? },
         "principal_prefix" => Op::PrincipalPrefix { id: PrincipalId(fields.u64("principal")?) },
+        "doc_metadata" => Op::DocMetadata { doc: fields.addr("doc")? },
         "insert" => Op::Insert {
             doc: fields.addr("doc")?,
             at: fields.vpos("at")?,
@@ -563,6 +564,7 @@ fn parse_op(name: &str, fields: &mut Fields) -> PResult<Op> {
         },
         "in_claims" => Op::InClaims { y: fields.addr("y")?, view: fields.view("view")? },
         "out_claims" => Op::OutClaims { x: fields.addr("x")?, view: fields.view("view")? },
+        "edition_claims" => Op::EditionClaims { target: fields.addr("target")? },
         other => return Err(PErr(format!("unknown op '{}'", bounded(other)))),
     })
 }
@@ -1168,6 +1170,7 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::PrincipalPrefix { id } => {
             (op_name(OpKind::PrincipalPrefix), vec![("principal", j_u64(id.0))])
         }
+        Op::DocMetadata { doc } => (op_name(OpKind::DocMetadata), vec![("doc", j_addr(doc))]),
         Op::Insert { doc, at, values, deposit } => {
             let mut pairs = vec![("doc", j_addr(doc)), ("at", j_vpos(at)), ("values", j_values(values))];
             // Canonical: the declaration rides only when made — absent IS
@@ -1313,6 +1316,9 @@ fn req_pairs(op: &Op) -> (&'static str, Vec<(&'static str, Value)>) {
         Op::OutClaims { x, view } => {
             (op_name(OpKind::OutClaims), vec![("x", j_addr(x)), ("view", j_view(*view))])
         }
+        Op::EditionClaims { target } => {
+            (op_name(OpKind::EditionClaims), vec![("target", j_addr(target))])
+        }
     }
 }
 
@@ -1384,6 +1390,29 @@ fn j_response(r: &Response) -> Value {
         Response::Claims { claims, as_of } => {
             ("claims", vec![("claims", j_claims(claims)), ("as_of", j_seq(*as_of))])
         }
+        // The doc-metadata answer (wire v7.6, PUB-8.12): the trunk document,
+        // its publication bit, its owner account, and its birth version with
+        // that version's base extent. `owner` is a payload option — null
+        // stands only so the shape never invents an account; a registered
+        // document always carries one — and `birth`/`birth_extent` travel
+        // TOGETHER, both null while the document has no member yet.
+        Response::DocMetadata { doc, published, owner, birth, birth_extent, as_of } => (
+            "doc_metadata",
+            vec![
+                ("doc", j_addr(doc)),
+                ("published", Value::Bool(*published)),
+                ("owner", owner.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("birth", birth.as_ref().map(j_addr).unwrap_or(Value::Null)),
+                ("birth_extent", birth_extent.as_ref().map(j_nat).unwrap_or(Value::Null)),
+                ("as_of", j_seq(*as_of)),
+            ],
+        ),
+        // The audit-view edition-claim lookup (wire v7.6, PUB-8.46): one row
+        // per admitted, unsuperseded claim, retracted or not.
+        Response::EditionClaims { claims, as_of } => (
+            "edition_claims",
+            vec![("claims", j_edition_claims(claims)), ("as_of", j_seq(*as_of))],
+        ),
         Response::Rejected(rej) => return j_rejection(rej),
     };
     pairs.push(("resp", Value::String(name.into())));
@@ -1740,6 +1769,22 @@ fn j_claims(cs: &[SupClaim]) -> Value {
     Value::Array(cs.iter().map(j_claim).collect())
 }
 
+/// One edition-claim row (wire.md §edition_claims): the claim's address,
+/// its home (the edition), its `to` endset as deposited, and whether it is
+/// active — `false` names a retracted claim the audit view still lists.
+fn j_edition_claim(c: &EditionClaim) -> Value {
+    obj(vec![
+        ("claim", j_addr(&c.claim)),
+        ("home", j_addr(&c.home)),
+        ("to", j_endset(&c.to)),
+        ("active", Value::Bool(c.active)),
+    ])
+}
+
+fn j_edition_claims(cs: &[EditionClaim]) -> Value {
+    Value::Array(cs.iter().map(j_edition_claim).collect())
+}
+
 /// One `retrieve_endsets` pair: the 1-based slot and its endset.
 fn j_endset_pair(slot: usize, e: &Endset) -> Value {
     obj(vec![("slot", j_usize(slot)), ("endset", j_endset(e))])
@@ -1795,6 +1840,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::Fork => "fork",
         OpKind::NextAccountPrefix => "next_account_prefix",
         OpKind::PrincipalPrefix => "principal_prefix",
+        OpKind::DocMetadata => "doc_metadata",
         OpKind::Insert => "insert",
         OpKind::Delete => "delete",
         OpKind::Copy => "copy",
@@ -1828,6 +1874,7 @@ pub(crate) fn op_name(k: OpKind) -> &'static str {
         OpKind::DeleteOrphans => "delete_orphans",
         OpKind::InClaims => "in_claims",
         OpKind::OutClaims => "out_claims",
+        OpKind::EditionClaims => "edition_claims",
         OpKind::Unparseable => "unparseable",
     }
 }

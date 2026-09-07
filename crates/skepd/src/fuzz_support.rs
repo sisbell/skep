@@ -42,9 +42,10 @@ pub fn splitmix64(rng: &mut u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// The 19 response shapes every client must decode (wire.md §The response
+/// The 21 response shapes every client must decode (wire.md §The response
 /// envelope + §Rejections); a `/op` answer always carries one of these in
-/// `resp`.
+/// `resp`. `doc_metadata` and `edition_claims` joined at wire v7.6 (PUB
+/// round 2, lane 3.4).
 pub const RESP_SHAPES: &[&str] = &[
     "ack",
     "ack_addr",
@@ -64,6 +65,8 @@ pub const RESP_SHAPES: &[&str] = &[
     "compare",
     "orphans",
     "claims",
+    "doc_metadata",
+    "edition_claims",
     "rejected",
 ];
 

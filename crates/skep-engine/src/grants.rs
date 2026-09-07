@@ -135,6 +135,22 @@ impl World {
     }
 }
 
+/// A COMMONS type address: the ghost document's subspace-3 element `ordinal`
+/// — `1.1.0.1.0.1 · 0 · 3 · ordinal`, the core vocabulary's home
+/// (`commons-map.md`), where the credential types (`3.{1,2,3}`, the AUTH
+/// round's own) already sit. The engine keys on these as VALUES (denotation
+/// equality for the grant fold, prefix for the edition class) — none is a
+/// registered M7 type, so `TypeRegistry` is untouched.
+fn commons_type(ordinal: u32) -> Address {
+    validate(
+        skep_address::Tumbler::new(
+            [1u32, 1, 0, 1, 0, 1, 0, 3, ordinal].into_iter().map(skep_address::Nat::from),
+        )
+        .expect("the commons type components are nonempty"),
+    )
+    .expect("a subspace-3 element of the ghost document is T4-valid by construction")
+}
+
 /// The GRANTS class type address.
 ///
 /// COMMONS DECISION 5 — verify against commons-map.md at the grants round.
@@ -148,27 +164,41 @@ impl World {
 /// registered M7 type, so `TypeRegistry` is untouched.
 pub(crate) fn t_grant() -> Address {
     // 1.1.0.1.0.1 · 0 · 3 · 90 — the ghost document's subspace-3 element 90.
-    validate(
-        skep_address::Tumbler::new(
-            [1u32, 1, 0, 1, 0, 1, 0, 3, 90].into_iter().map(skep_address::Nat::from),
-        )
-        .expect("the GRANTS type components are nonempty"),
-    )
-    .expect("the GRANTS type address 1.1.0.1.0.1.0.3.90 is T4-valid by construction")
+    commons_type(90)
+}
+
+/// The EDITION-CLAIM class type address (R20; PUB round 2, lane 3.4 §2) —
+/// `1.1.0.1.0.1.0.3.14`, pinned here beside [`t_grant`] and read by
+/// `crate::editions`.
+///
+/// OWNER CONFIRM OWED. `commons-seeding.md` seats the core vocabulary in the
+/// ghost document's subspace 3 and its row `3.14 | edition` carries the
+/// descriptive subtypes `.1 abridged .2 expanded .3 translated .4 revised
+/// .5 annotated` beneath it (note 3: "a descriptive edition relation is
+/// `edition.*`"); `commons-map.md` places the core vocabulary at `3.1–3.21`
+/// with `edition` listed. Neither document is in this tree, so the ordinal
+/// is pinned from those readings and marked for the owner to confirm. Class
+/// membership is by PREFIX: a type slot denoting `3.14.k` is a subtype's
+/// member and counts — the lookup names the CLASS, not one address.
+pub(crate) fn t_edition() -> Address {
+    // 1.1.0.1.0.1 · 0 · 3 · 14 — the ghost document's subspace-3 element 14.
+    commons_type(14)
 }
 
 /// One admitted, unsuperseded grant record — enough to answer queries and to
-/// remove it from the query indexes when a later record supersedes it.
+/// remove it from the query indexes when a later record supersedes it. The
+/// fields are crate-visible for the world dump's grant section (lane 3.4
+/// §3), which renders the fold's operative set through [`Grants::records`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct GrantRecord {
+pub(crate) struct GrantRecord {
     /// The grant link's home document (the issuer's doc 1).
-    home: Address,
+    pub(crate) home: Address,
     /// The issuer — ω of `home`, the account whose grant this is.
-    issuer: Address,
+    pub(crate) issuer: Address,
     /// The content-prefix shared (a document or an account address).
-    content_prefix: Address,
+    pub(crate) content_prefix: Address,
     /// The grantee's account, or `None` for the ANY-PRINCIPAL form.
-    grantee: Option<Address>,
+    pub(crate) grantee: Option<Address>,
 }
 
 /// The grant fold: the operative grant set, plus the two query indexes it is
@@ -193,6 +223,14 @@ impl Grants {
     /// the rebuild runs.
     pub(crate) fn new() -> Grants {
         Grants::default()
+    }
+
+    /// The operative set — every admitted, unsuperseded grant with the grant
+    /// link's own address — in the map's hash order (the world dump's grant
+    /// section renders it, and `render` sorts). The fold's one enumeration;
+    /// the predicate's consumers are the point probes above.
+    pub(crate) fn records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
+        self.records.iter()
     }
 
     /// `grant_exists(doc, p)` (PUB-1.32's third clause): does some admitted

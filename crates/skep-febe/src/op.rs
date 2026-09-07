@@ -102,6 +102,14 @@ pub enum Op {
     /// [`Op::CreateNewDocument`] demands. Deliberately an explicit wire id,
     /// not the session principal (§2).
     PrincipalPrefix { id: PrincipalId },
+    /// The doc-metadata read (PUB-8.12; PUB round 2, lane 3.4 §1): a
+    /// document's publication state, its owner account, and its birth
+    /// version with that version's base extent — what a client's own
+    /// PUB-3.19 admission test needs, and nothing else. `doc` is a
+    /// DOC-ARGUMENT (PUB-6.1): unreadable ⟹ `withheld`; unregistered ⟹
+    /// the store's `doc_not_registered` (fail-open at the consult, PUB-6.12).
+    /// A version member answers its DOCUMENT's state (PUB-2.15).
+    DocMetadata { doc: Address },
     // ── arrangement writes (→ M5) ──
     /// INSERT (ASN-0116). `Val` is M4's, carried in the payload verbatim —
     /// M10 names M4's types and calls no M4 function.
@@ -199,6 +207,17 @@ pub enum Op {
     InClaims { y: Address, view: View },
     /// Archival supersession lineage: claims with `new = x`.
     OutClaims { x: Address, view: View },
+    // ── publication reads (→ the world's composition of M7, lane 3.4) ──
+    /// The audit-view edition-claim lookup (PUB-8.46): every ADMITTED,
+    /// UNSUPERSEDED claim of the edition-claim class whose `to` slot denotes
+    /// `target` — the whole document or a version of it — WHETHER OR NOT
+    /// RETRACTED, each with its home (the edition) and its retraction stated.
+    /// `target` is a DOC-ARGUMENT (unreadable ⟹ `withheld`); each row is
+    /// then kept only where the caller can read its HOME (PUB-6.13), so a
+    /// draft edition's claim is invisible to a stranger. The client's
+    /// PUB-3.19 admission test over each home is its own, through
+    /// [`Op::DocMetadata`].
+    EditionClaims { target: Address },
 }
 
 /// EditLink's successor, assembled by M10 from content V-specs (§4).
@@ -245,6 +264,7 @@ pub enum OpKind {
     Fork,
     NextAccountPrefix,
     PrincipalPrefix,
+    DocMetadata,
     Insert,
     Delete,
     Copy,
@@ -278,6 +298,7 @@ pub enum OpKind {
     DeleteOrphans,
     InClaims,
     OutClaims,
+    EditionClaims,
     /// A frame that never parsed into an `Op` — stamped by the TRANSPORT,
     /// never by [`Op::kind`].
     Unparseable,
@@ -306,6 +327,7 @@ impl Op {
         match self {
             Op::NextAccountPrefix { .. }
             | Op::PrincipalPrefix { .. }
+            | Op::DocMetadata { .. }
             | Op::ReadLink { .. }
             | Op::FollowLink { .. }
             | Op::RetrieveV { .. }
@@ -327,7 +349,8 @@ impl Op {
             | Op::DiscoverableFrom { .. }
             | Op::DeleteOrphans { .. }
             | Op::InClaims { .. }
-            | Op::OutClaims { .. } => true,
+            | Op::OutClaims { .. }
+            | Op::EditionClaims { .. } => true,
             Op::CreateNewDocument { .. }
             | Op::Delegate { .. }
             | Op::RegisterNode { .. }
@@ -361,6 +384,7 @@ impl Op {
             Op::Fork { .. } => OpKind::Fork,
             Op::NextAccountPrefix { .. } => OpKind::NextAccountPrefix,
             Op::PrincipalPrefix { .. } => OpKind::PrincipalPrefix,
+            Op::DocMetadata { .. } => OpKind::DocMetadata,
             Op::Insert { .. } => OpKind::Insert,
             Op::Delete { .. } => OpKind::Delete,
             Op::Copy { .. } => OpKind::Copy,
@@ -394,6 +418,7 @@ impl Op {
             Op::DeleteOrphans { .. } => OpKind::DeleteOrphans,
             Op::InClaims { .. } => OpKind::InClaims,
             Op::OutClaims { .. } => OpKind::OutClaims,
+            Op::EditionClaims { .. } => OpKind::EditionClaims,
         }
     }
 
@@ -436,6 +461,13 @@ impl Op {
             | Op::DeleteOrphans { d, .. }
             | Op::Project { d, .. }
             | Op::DiscoverableFrom { d, .. } => vec![d],
+            // The two publication reads (lane 3.4): each names ONE document,
+            // and it is the consulted one — `doc_metadata` answers nothing
+            // about a document the caller cannot read (PUB-8.12), and the
+            // edition lookup's `target` is a named document, not a probe key
+            // (PUB-8.46; the H1 row: unreadable ⟹ withheld).
+            Op::DocMetadata { doc } => vec![doc],
+            Op::EditionClaims { target } => vec![target],
             // No named document to withhold (see above); written out rather
             // than wildcarded so a new read variant is classified here on
             // purpose, never defaulted to "consults nothing".
@@ -547,7 +579,9 @@ impl Op {
             | Op::DiscoverableFrom { .. }
             | Op::DeleteOrphans { .. }
             | Op::InClaims { .. }
-            | Op::OutClaims { .. } => Vec::new(),
+            | Op::OutClaims { .. }
+            | Op::DocMetadata { .. }
+            | Op::EditionClaims { .. } => Vec::new(),
         }
     }
 }
@@ -592,6 +626,7 @@ pub(crate) mod tests {
             (Op::Fork { published: None }, false),
             (Op::NextAccountPrefix { parent: addr(&[1]) }, true),
             (Op::PrincipalPrefix { id: PrincipalId(1) }, true),
+            (Op::DocMetadata { doc: doc() }, true),
             (
                 Op::Insert { doc: doc(), at: vpos(), values: vec![Val::new(vec![1u8])], deposit: false },
                 false,
@@ -647,18 +682,21 @@ pub(crate) mod tests {
             (Op::DeleteOrphans { d: doc(), p: vpos(), width: Nat::from(1u32) }, true),
             (Op::InClaims { y: doc(), view: View::Active }, true),
             (Op::OutClaims { x: doc(), view: View::Active }, true),
+            (Op::EditionClaims { target: doc() }, true),
         ]
     }
 
     /// §1: the read/write partition is exhaustive and two-sided
-    /// (`is_write == !is_read`), with 24 reads and 15 writes (the publish
-    /// shot joining the fourteen of the design, lane 3.2).
+    /// (`is_write == !is_read`), with 26 reads and 15 writes (the publish
+    /// shot joining the fourteen of the design, lane 3.2; the doc-metadata
+    /// read and the edition-claim lookup joining the twenty-four reads,
+    /// lane 3.4).
     #[test]
     fn partition_matches_the_design_grouping() {
         let ops = all_ops();
-        assert_eq!(ops.len(), 39);
+        assert_eq!(ops.len(), 41);
         let reads = ops.iter().filter(|(_, r)| *r).count();
-        assert_eq!(reads, 24);
+        assert_eq!(reads, 26);
         for (op, expect_read) in &ops {
             assert_eq!(op.is_read(), *expect_read);
             assert_eq!(op.is_write(), !*expect_read);
@@ -680,7 +718,7 @@ pub(crate) mod tests {
             assert_ne!(kind, OpKind::Unparseable);
             assert!(seen.insert(kind), "{kind:?} is produced by two variants");
         }
-        assert_eq!(seen.len(), 39);
+        assert_eq!(seen.len(), 41);
     }
 
     /// PUB-6.4: the doc-argument list runs in DECLARATION order across an
@@ -706,6 +744,12 @@ pub(crate) mod tests {
         assert_eq!(op.doc_arguments(), vec![&b, &c, &a]);
         let op = Op::Project { a: a.clone(), slot: 1, d: c.clone() };
         assert_eq!(op.doc_arguments(), vec![&c], "the dual row consults `d`, never the link");
+        // Lane 3.4: the two publication reads each consult their one named
+        // document — the H1 row's "target unreadable ⟹ withheld".
+        let op = Op::DocMetadata { doc: b.clone() };
+        assert_eq!(op.doc_arguments(), vec![&b]);
+        let op = Op::EditionClaims { target: c.clone() };
+        assert_eq!(op.doc_arguments(), vec![&c], "the target is a named document, not a probe key");
         for (op, is_read) in all_ops() {
             let named = !op.doc_arguments().is_empty();
             let expects_consult = is_read

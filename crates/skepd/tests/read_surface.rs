@@ -131,12 +131,13 @@ fn an_any_principal_grant_opens_a_draft_to_every_principal_but_not_the_guest() {
 
 /// The serving bound (PUB-8.43): the read surface serves the predicate over
 /// the wire — the subtree clause, the read-surface sweep (a masked read is a
-/// `withheld` rejection, not a leak), and PUB-8.2's routed write refusals
-/// (`published_target`) are all reachable. The interval is CLOSED for those
-/// three; PUB-8.46's audit-view lookup is its remaining item (stated in
-/// wire.md's changelog).
+/// `withheld` rejection, not a leak), PUB-8.2's routed write refusals
+/// (`published_target`), and — since lane 3.4 — the two publication reads
+/// (`doc_metadata`, `edition_claims`) the client's own PUB-3.19 admission
+/// test needs, both taking the doc-argument consult. The interval is now
+/// CLOSED: PUB-8.46's audit-view lookup was its last owed item.
 #[test]
-fn pub_8_43_serving_bound_is_closed_for_the_three() {
+fn pub_8_43_serving_bound_is_closed() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -164,6 +165,28 @@ fn pub_8_43_serving_bound_is_closed_for_the_three() {
         Some("published_target"),
         "the routed write refusal is present: {v}"
     );
+
+    // The two publication reads (lane 3.4) reach the wire. `doc_metadata` on
+    // the published home answers its state; on a private draft it takes the
+    // SAME doc-argument consult the sweep does — withheld to the guest.
+    let v = op(port, Some(&owner), &format!(r#"{{"op":"doc_metadata","doc":"{CLAIMANT_DOC1}"}}"#));
+    let meta = expect_resp(&v, "doc_metadata");
+    assert_eq!(meta["published"].as_bool(), Some(true), "the home is published: {v}");
+    assert_eq!(meta["owner"].as_str(), Some(CLAIMANT_ACCOUNT), "the owner is carried: {v}");
+    assert_eq!(meta["doc"].as_str(), Some(CLAIMANT_DOC1), "the doc is the trunk: {v}");
+    let v = op(port, None, &format!(r#"{{"op":"doc_metadata","doc":"{draft}"}}"#));
+    assert_withheld(&v, &draft);
+
+    // `edition_claims` reaches the wire too: over the published home it answers
+    // its class (empty here — no claim denotes it), and over a private draft
+    // target it takes the doc-argument consult and withholds from the guest.
+    let v = op(port, Some(&owner), &format!(r#"{{"op":"edition_claims","target":"{CLAIMANT_DOC1}"}}"#));
+    assert!(
+        expect_resp(&v, "edition_claims")["claims"].as_array().expect("claims").is_empty(),
+        "no edition claims the home: {v}"
+    );
+    let v = op(port, None, &format!(r#"{{"op":"edition_claims","target":"{draft}"}}"#));
+    assert_withheld(&v, &draft);
     sd.shutdown();
 }
 

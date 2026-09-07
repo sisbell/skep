@@ -379,12 +379,17 @@ fn the_dump_names_each_section_for_its_store() {
     let engine = Engine::open(mem_cfg()).expect("in-memory open");
     let text = engine.world_dump().into_string();
 
-    assert!(text.starts_with("skep-world-dump v4\n"), "unexpected banner: {text:.32}");
+    assert!(text.starts_with("skep-world-dump v5\n"), "unexpected banner: {text:.32}");
     for section in [r#""namespace""#, r#""content""#, r#""arrangement""#, r#""links""#] {
         assert!(
             text.contains(section),
             "the authoritative section {section} must be named: {text:.200}"
         );
+    }
+    // v5 (lane 3.4): the publication slice and the grant fold's operative
+    // set are sections of their own, beside the hints' copy of the set.
+    for section in [r#""publication": ["#, r#""grants": {"#, r#""publication.drafts": {"#] {
+        assert!(text.contains(section), "the v5 section {section} must be named: {text:.400}");
     }
 }
 

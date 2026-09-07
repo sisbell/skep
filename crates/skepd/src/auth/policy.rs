@@ -189,7 +189,9 @@ pub(crate) fn deposits_credential_link(op: &Op) -> bool {
         | Op::DiscoverableFrom { .. }
         | Op::DeleteOrphans { .. }
         | Op::InClaims { .. }
-        | Op::OutClaims { .. } => false,
+        | Op::OutClaims { .. }
+        | Op::DocMetadata { .. }
+        | Op::EditionClaims { .. } => false,
     }
 }
 

@@ -6,6 +6,13 @@
 //! `head_time` on `/health`. The doc examples in wire.md §The change feed
 //! are asserted against live daemon bytes here (times normalized — the one
 //! nondeterministic field; the bare example is byte-exact).
+//!
+//! Since wire v7.8 (PUB round 2, lane 3.6) the feed is CLASS-GATED: a draft
+//! write is masked from every class that cannot read the draft. The seeded
+//! flow writes into principal 1's PRIVATE second document, so every read
+//! over it here is the OWNER's (principal 1's session), and the guest's
+//! masked page stands beside it as its own cell; the class oracle itself is
+//! `tests/feed_class.rs`.
 
 mod common;
 
@@ -117,12 +124,13 @@ fn acked_at(v: &Value) -> u64 {
     v["at"].as_u64().unwrap_or_else(|| panic!("no committed at in {v}"))
 }
 
-fn changes_raw(port: u16, query: &str) -> (u16, Vec<u8>) {
-    http(port, "GET", &format!("/changes?{query}"), None, b"")
+/// `GET /changes?{query}` as `token` (`None` = the guest).
+fn changes_raw(port: u16, token: Option<&str>, query: &str) -> (u16, Vec<u8>) {
+    http(port, "GET", &format!("/changes?{query}"), token, b"")
 }
 
-fn changes_ok(port: u16, query: &str) -> Value {
-    let (st, body) = changes_raw(port, query);
+fn changes_ok(port: u16, token: Option<&str>, query: &str) -> Value {
+    let (st, body) = changes_raw(port, token, query);
     assert_eq!(st, 200, "/changes?{query}: {}", String::from_utf8_lossy(&body));
     json(&body)
 }
@@ -201,7 +209,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     // …and the feed answers the empty page, not a refusal: this is every
     // client's first poll, and a 410 here would break it before the world
     // has anything in it to be wrong about.
-    let (st, body) = changes_raw(port, "since=0");
+    let (st, body) = changes_raw(port, None, "since=0");
     assert_eq!(st, 200, "a fresh world's feed: {}", String::from_utf8_lossy(&body));
     let v = json(&body);
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
@@ -210,6 +218,9 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     common::claim_board(port);
     let doc = seed_flow(port);
     let s1 = open_session(port, 1);
+    // The owner's view of its own feed — the seeded document is principal
+    // 1's private draft, so its entries are the owner's to see.
+    let owner = Some(s1.as_str());
 
     // Reads and rejected writes are not in the feed: issue both, then
     // assert the feed holds exactly the five committed writes. The read is
@@ -236,7 +247,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     // which re-pins the examples onto the post-ceremony positions and the
     // wire-v7 `key` field; the structural pins below are this round's.)
     let b = CEREMONY_HEAD;
-    let (st, body) = changes_raw(port, &format!("since={b}"));
+    let (st, body) = changes_raw(port, owner, &format!("since={b}"));
     assert_eq!(st, 200);
     let v = json(&body);
     assert_eq!(entry_ats(&v), SEEDED_ATS.to_vec());
@@ -260,30 +271,72 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(v["last"].as_u64(), Some(b + 12));
     assert_eq!(v["more"], Value::Bool(false));
 
-    // Determinism: the same question answers byte-identically.
-    let (_, again) = changes_raw(port, &format!("since={b}"));
+    // Determinism: the same question answers byte-identically — per class.
+    let (_, again) = changes_raw(port, owner, &format!("since={b}"));
     assert_eq!(body, again, "same (since, limit) on the same journal must be byte-equal");
 
-    // ── paging ──
-    let v = changes_ok(port, &format!("since={b}&limit=2"));
+    // ── the GUEST's page over the same range (wire v7.8, PUB-6.44/6.45):
+    //    the delegate (no doc) and the born-published home mint are shown;
+    //    the private second document's mint, insert and make_link are
+    //    MASKED — omitted, never present with nulled fields — and `last`
+    //    is the last VISIBLE position. ──
+    let (st, guest_body) = changes_raw(port, None, &format!("since={b}"));
+    assert_eq!(st, 200);
+    let g = json(&guest_body);
+    assert_eq!(entry_ats(&g), vec![b + 2, b + 3], "the guest sees the two published-world writes");
+    let guest_entries = g["changes"].as_array().expect("changes");
+    assert_eq!(guest_entries[0]["docs"], serde_json::json!([]), "delegate names no doc");
+    assert_eq!(guest_entries[1]["docs"], serde_json::json!(["1.0.2.0.1"]), "the home, published");
+    assert_eq!((g["last"].as_u64(), g["more"].as_bool()), (Some(b + 3), Some(false)));
+    let (_, guest_again) = changes_raw(port, None, &format!("since={b}"));
+    assert_eq!(guest_body, guest_again, "the guest's page is byte-equal across repeats");
+    // The wire.md 'changes feed_guest' example, modulo `time` (illustrative there).
+    let mut doc_guest: Value =
+        serde_json::from_str(&doc_changes_block("feed_guest")).expect("doc json");
+    let mut live_guest = g.clone();
+    for page in [&mut doc_guest, &mut live_guest] {
+        for e in page["changes"].as_array_mut().expect("changes") {
+            e.as_object_mut().expect("entry").remove("time");
+        }
+    }
+    assert_eq!(live_guest, doc_guest, "wire.md 'changes feed_guest' drifted from the daemon");
+    // Paging over the guest's VISIBLE stream (PUB-6.44): a page of one is
+    // never short of its limit before the head, `more` counts visible
+    // entries alone, and `last` is a visible position or the fence.
+    let v = changes_ok(port, None, &format!("since={b}&limit=1"));
+    assert_eq!(entry_ats(&v), vec![b + 2]);
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 2), Some(true)));
+    let v = changes_ok(port, None, &format!("since={}&limit=1", b + 2));
+    assert_eq!(entry_ats(&v), vec![b + 3]);
+    assert_eq!(
+        (v["last"].as_u64(), v["more"].as_bool()),
+        (Some(b + 3), Some(false)),
+        "the masked run past the home mint is not `more`"
+    );
+    let v = changes_ok(port, None, &format!("since={}", b + 3));
+    assert_eq!(entry_ats(&v), Vec::<u64>::new(), "the whole tail is masked for the guest");
+    assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(false)));
+
+    // ── paging (the owner's) ──
+    let v = changes_ok(port, owner, &format!("since={b}&limit=2"));
     assert_eq!(entry_ats(&v), vec![b + 2, b + 3]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
-    let v = changes_ok(port, &format!("since={}&limit=2", b + 3));
+    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 3));
     assert_eq!(entry_ats(&v), vec![b + 4, b + 9]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 9), Some(true)));
-    let v = changes_ok(port, &format!("since={}&limit=2", b + 9));
+    let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 9));
     assert_eq!(entry_ats(&v), vec![b + 12]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
 
     // `since` is a fence, not a position: an interior number pages cleanly.
-    let v = changes_ok(port, &format!("since={}", b + 5));
+    let v = changes_ok(port, owner, &format!("since={}", b + 5));
     assert_eq!(entry_ats(&v), vec![b + 9, b + 12]);
 
     // since ≥ head: empty, `last` echoes `since`.
-    let v = changes_ok(port, &format!("since={}", b + 12));
+    let v = changes_ok(port, owner, &format!("since={}", b + 12));
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 12), Some(false)));
-    let v = changes_ok(port, "since=999");
+    let v = changes_ok(port, owner, "since=999");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     assert_eq!(v["last"].as_u64(), Some(999));
 
@@ -301,6 +354,11 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
         "since=0&limit=4097",
         "since=0&since=1",
         "since=0&frobnicate=1",
+        "since=0&under=",
+        "since=0&under=1..2",
+        "since=0&under=abc",
+        "since=0&drafts=yes",
+        "since=0&drafts=true&drafts=false",
     ] {
         let path = if bad.is_empty() { "/changes".to_string() } else { format!("/changes?{bad}") };
         let (st, body) = http(port, "GET", &path, None, b"");
@@ -317,7 +375,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let at5 = acked_at(&first);
     let second = op(port, Some(&s1), &frame);
     assert_eq!(acked_at(&second), at5, "the retry re-acks the original commit");
-    let v = changes_ok(port, "since=0");
+    let v = changes_ok(port, owner, "since=0");
     let mut with_retry = all_ats();
     with_retry.push(at5);
     assert_eq!(entry_ats(&v), with_retry, "one entry per commit, retries excluded");
@@ -335,10 +393,11 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
     let sd = spawn(dir.path());
     let port = sd.port();
     seed_flow(port);
+    let s1 = open_session(port, 1);
     let total = all_ats().len(); // the ceremony's five commits + the seeded five
 
     for limit in [1usize, 2, 4095, 4096] {
-        let (st, body) = changes_raw(port, &format!("since=0&limit={limit}"));
+        let (st, body) = changes_raw(port, Some(&s1), &format!("since=0&limit={limit}"));
         assert_eq!(st, 200, "limit={limit} is in range: {}", String::from_utf8_lossy(&body));
         assert_eq!(
             entry_ats(&json(&body)).len(),
@@ -347,7 +406,7 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
         );
     }
     for limit in ["0", "4097", "18446744073709551616"] {
-        let (st, body) = changes_raw(port, &format!("since=0&limit={limit}"));
+        let (st, body) = changes_raw(port, Some(&s1), &format!("since=0&limit={limit}"));
         assert_eq!(st, 400, "limit={limit} is out of range: refused, never clamped");
         assert_eq!(json(&body)["error"].as_str(), Some("malformed_changes"), "limit={limit}");
     }
@@ -364,12 +423,13 @@ fn head(port: u16) -> u64 {
 
 /// One write, its ack, and exactly the one feed entry it produced — the
 /// page is taken from the head as it stood before the write, so nothing
-/// earlier can be mistaken for this write's entry.
+/// earlier can be mistaken for this write's entry. Read as the WRITER
+/// (`token`), whose own drafts the entry may name.
 fn feed_entry(port: u16, token: &str, what: &str, frame: &str) -> (Value, Value) {
     let before = head(port);
     let ack = op(port, Some(token), frame);
     assert!(ack["at"].is_u64(), "{what} must commit: {ack}");
-    let page = changes_ok(port, &format!("since={before}"));
+    let page = changes_ok(port, Some(token), &format!("since={before}"));
     let entries = page["changes"].as_array().expect("changes");
     assert_eq!(entries.len(), 1, "{what}: one write, one entry: {page}");
     (ack, entries[0].clone())
@@ -598,6 +658,13 @@ fn the_affected_docs_convention_holds_for_every_write_kind() {
     sd.shutdown();
 }
 
+/// The seeded feed as its OWNER, principal 1 — a fresh session per daemon
+/// life (tokens are uptime-scoped; the class is the principal's).
+fn owner_changes(port: u16, query: &str) -> (u16, Vec<u8>) {
+    let s1 = open_session(port, 1);
+    changes_raw(port, Some(&s1), query)
+}
+
 #[test]
 fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -608,7 +675,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let sd = spawn(dir.path());
         let port = sd.port();
         seed_flow(port);
-        let (st, body) = changes_raw(port, "since=0");
+        let (st, body) = owner_changes(port, "since=0");
         assert_eq!(st, 200);
         before = body;
         sd.shutdown();
@@ -618,7 +685,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     {
         let sd = spawn(dir.path());
         let port = sd.port();
-        let (st, body) = changes_raw(port, "since=0");
+        let (st, body) = owner_changes(port, "since=0");
         assert_eq!(st, 200);
         assert_eq!(body, before, "/changes drifted across a clean restart");
         sd.shutdown();
@@ -638,7 +705,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         drop(f);
         let sd = spawn(dir.path());
         let port = sd.port();
-        let (st, body) = changes_raw(port, "since=0");
+        let (st, body) = owner_changes(port, "since=0");
         assert_eq!(st, 200);
         assert_eq!(body, before, "a torn sidecar tail must not change the feed");
         let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
@@ -658,7 +725,8 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
 
         let sd = spawn(dir.path());
         let port = sd.port();
-        let v = changes_ok(port, "since=0");
+        let s1 = open_session(port, 1);
+        let v = changes_ok(port, Some(&s1), "since=0");
         assert_eq!(entry_ats(&v), all_ats());
         let entries = v["changes"].as_array().expect("changes");
         let (tail, kept) = entries.split_last().expect("ten entries");
@@ -671,6 +739,16 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
             kept,
             &old["changes"].as_array().expect("changes")[..kept.len()],
             "surviving records keep their metadata verbatim"
+        );
+        // The bare position CLASSIFIES FROM THE JOURNAL (PUB-6.45): it was
+        // a make_link into principal 1's private draft, so the guest's page
+        // omits it exactly as it omitted the recorded entry — a lost
+        // sidecar never unmasks a draft write.
+        let g = changes_ok(port, None, "since=0");
+        assert_eq!(
+            entry_ats(&g),
+            [CEREMONY_ATS.as_slice(), &SEEDED_ATS[..2]].concat(),
+            "the guest sees the ceremony and the two published-world writes, bare tail masked"
         );
         // The head's record is bare, so head_time honestly answers null.
         let (st, body) = get(port, "/health");
@@ -702,7 +780,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
         let sd = spawn(dir.path());
         let port = sd.port();
         seed_flow(port);
-        let (st, body) = changes_raw(port, "since=0");
+        let (st, body) = owner_changes(port, "since=0");
         assert_eq!(st, 200);
         before = body;
         sd.shutdown();
@@ -719,7 +797,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
 
     let sd = spawn(dir.path());
     let port = sd.port();
-    let (st, body) = changes_raw(port, "since=0");
+    let (st, body) = owner_changes(port, "since=0");
     assert_eq!(
         st,
         200,
@@ -745,7 +823,7 @@ fn a_fence_above_the_head_is_not_this_journals_and_is_discarded() {
     sd.shutdown();
 
     let sd = spawn(dir.path());
-    let (st, body) = changes_raw(sd.port(), "since=0");
+    let (st, body) = owner_changes(sd.port(), "since=0");
     assert_eq!(st, 200, "and the second restart is clean too: {}", text(&body));
     assert_eq!(body, before);
     sd.shutdown();
@@ -840,7 +918,10 @@ fn pre_feature_positions_answer_bare_entries() {
     // commits after the bare region. Reads are untouched pre-claim.
     let sd = spawn_unclaimed(dir.path());
     let port = sd.port();
-    let (st, body) = changes_raw(port, "since=0");
+    // Read as the GUEST: every bare position here classifies PUBLISHED from
+    // the journal (a delegate, the born-published home's mint, a deposit
+    // into it), so the guest's page is the whole pre-feature history.
+    let (st, body) = changes_raw(port, None, "since=0");
     assert_eq!(st, 200);
     // Compared MODULO the wire-v7 `key` field (null on every bare entry),
     // which lands in wire.md with lane 3.2's doc delta.
@@ -856,10 +937,10 @@ fn pre_feature_positions_answer_bare_entries() {
     assert!(health["head_time"].is_null());
     assert_eq!(health["log_position"].as_u64(), Some(8));
     // Paging over bare entries behaves like any other page.
-    let v = changes_ok(port, "since=3&limit=1");
+    let v = changes_ok(port, None, "since=3&limit=1");
     assert_eq!(entry_ats(&v), vec![8]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(8), Some(false)));
-    let v = changes_ok(port, "since=8");
+    let v = changes_ok(port, None, "since=8");
     assert_eq!(entry_ats(&v), Vec::<u64>::new());
     sd.shutdown();
 }
@@ -891,10 +972,10 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         let sd = spawn(dir.path());
         let port = sd.port();
         let doc = seed_flow(port);
-        let v = changes_ok(port, "since=0");
+        let s1 = open_session(port, 1);
+        let v = changes_ok(port, Some(&s1), "since=0");
         assert_eq!(entry_ats(&v), all_ats(), "the feed starts with every position");
         assert!(v["changes"][0]["op"].is_string(), "and with real metadata");
-        let s1 = open_session(port, 1);
         let bulk = "z".repeat(8192);
         for _ in 0..6 {
             // Prepends, so every ordinal is in bounds whatever the doc holds.
@@ -910,7 +991,7 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         let (st, body) = get(port, "/health");
         assert_eq!(st, 200);
         let head = json(&body)["log_position"].as_u64().expect("log_position");
-        let ats = entry_ats(&changes_ok(port, "since=0"));
+        let ats = entry_ats(&changes_ok(port, Some(&s1), "since=0"));
         assert_eq!(ats.last(), Some(&head), "the feed covers every position through the head");
         sd.shutdown();
         (ats, head)
@@ -953,16 +1034,22 @@ fn the_sidecar_compacts_to_the_journals_retention() {
         "a reclaimed position's entry does not survive compaction: {contents}"
     );
 
-    let (st, body) = changes_raw(port, "since=0");
+    let s1 = open_session(port, 1);
+    let (st, body) = changes_raw(port, Some(&s1), "since=0");
     assert_eq!(st, 410, "below the fence is the reclaimed discipline: {}", text(&body));
     let v = json(&body);
     assert_eq!(v["error"].as_str(), Some("history_reclaimed"));
     let floor = v["floor"].as_u64().expect("the refusal names the oldest surviving position");
     assert!(floor > early[0], "the fence advanced past the oldest recorded position");
+    // The fence is class-invariant — positions are (PUB-6.52): the guest
+    // meets the same refusal with the same floor.
+    let (st, guest) = changes_raw(port, None, "since=0");
+    assert_eq!(st, 410);
+    assert_eq!(json(&guest)["floor"].as_u64(), Some(floor), "one floor for every class");
 
     // At and above the fence the feed answers normally and still reaches
     // the head — compaction dropped what was unreachable and nothing else.
-    let v = changes_ok(port, &format!("since={}", floor - 1));
+    let v = changes_ok(port, Some(&s1), &format!("since={}", floor - 1));
     let ats = entry_ats(&v);
     assert!(ats.contains(&floor), "the floor itself is served: {ats:?}");
     assert_eq!(ats.last(), Some(&head), "and the feed still runs to the head");

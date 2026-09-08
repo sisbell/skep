@@ -7,7 +7,11 @@
 //! element rather than conventions each caller remembers. `commits.log` is
 //! appended in position order with monotone times, which is the premise
 //! `sidecar.rs` states its invariants on; and every position a `GET /events`
-//! subscriber is told about is one `GET /changes` already carries.
+//! subscriber is told about is one `GET /changes` already carries — at the
+//! classes that may see it: the record is CLASSIFIED against the
+//! post-commit head as it is made (`feed/mod.rs`), which is why this card
+//! holds the engine's store factory and takes a snapshot behind each
+//! execute.
 //!
 //! That second guarantee is an induction with both halves held here.
 //! [`WritePath::open`] is the BASE CASE: the stream is seeded from the head
@@ -29,13 +33,13 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
-use skep_address::Address;
-use skep_engine::Engine;
-use skep_febe::{Op, OpKind, Response};
+use skep_address::{document_of, Address};
+use skep_engine::{Engine, EngineStores};
+use skep_febe::{Op, OpKind, Response, Stores};
 use skep_kernel::Seq;
 
 use crate::codec::op_name;
-use crate::sidecar::{ChangesAnswer, Sidecar};
+use crate::feed::{ChangesAnswer, Feed, FeedClass, Query};
 
 /// The commit stream's wait bound: a subscriber that has heard nothing for
 /// this long is answered [`StreamStep::Keepalive`], which `server.rs` frames
@@ -58,22 +62,23 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// snapshot came from.
 pub(crate) struct SerialGuard<'a>(#[allow(dead_code)] parking_lot::MutexGuard<'a, ()>);
 
-/// The write path: the serialization point, the commit-metadata sidecar
+/// The write path: the serialization point, the change feed's sidecars
 /// behind it, and the commit stream in front of it.
 ///
-/// The delegating methods below are one-line calls into the sidecar or the
+/// The delegating methods below are one-line calls into the feed or the
 /// stream, deliberately: what this card buys over holding the two side by
-/// side is EXCLUSIVE ACCESS. [`Sidecar::record`] and
+/// side is EXCLUSIVE ACCESS. [`Feed::record`] and
 /// `CommitStream::announce` are reachable only from
 /// [`WritePath::commit_under`], which is what makes the ordering above a
 /// property of this type rather than a rule each handler remembers —
-/// `Sidecar::record`'s caller contract is discharged by there being nowhere
-/// else to fail it. Reaching the two through here is what that costs.
+/// `CommitsLog::record`'s caller contract is discharged by there being
+/// nowhere else to fail it. Reaching the two through here is what that
+/// costs.
 ///
 /// What that does NOT buy is the guard's SPAN. [`WritePath::serial_lock`]
 /// hands the lock out, so that the snapshot a caller's gates read was taken
 /// under the same guard is that method's contract with its callers, not
-/// this type's — the same shape as `Sidecar::record`'s, one layer up.
+/// this type's — the same shape as `CommitsLog::record`'s, one layer up.
 pub(crate) struct WritePath {
     /// The serialization point. M2's applier serializes the commits
     /// themselves anyway, so this only moves that point up — and buys the
@@ -83,29 +88,36 @@ pub(crate) struct WritePath {
     /// can lose more of the un-fsynced tail — either way the reopen walk
     /// re-covers the gap as bare entries.
     serial: Mutex<()>,
-    /// The commit-metadata sidecar behind `GET /changes` and `/health`'s
-    /// `head_time` (wire v6) — the daemon's testimony about its own writes.
-    sidecar: Sidecar,
+    /// The change feed behind `GET /changes` and `/health`'s `head_time`
+    /// (wire v6; class-gated since v7.8) — `commits.log`, the daemon's
+    /// testimony about its own writes, and its four derived sidecars.
+    feed: Feed,
     /// The commit stream behind `GET /events` (wire v4).
     commit_stream: CommitStream,
+    /// The engine's store factory — the kernel behind it is where the
+    /// POST-COMMIT snapshot each record is classified against comes from
+    /// (`Feed::record` takes the head as it stands after the execute, under
+    /// the serialization guard, so it is this commit's own state).
+    stores: EngineStores,
 }
 
 impl WritePath {
-    /// Replay the commit-metadata sidecar in `data_dir` and open the commit
-    /// stream at the journal's committed head — in that order, which is the
-    /// base case of this card's guarantee (see the module doc). Fallible
-    /// only in the sidecar — the lock and the stream are memory — so the
-    /// caller's error type need name only that.
+    /// Open the change feed in `data_dir` — `commits.log` replayed and its
+    /// derived sidecars checked — and open the commit stream at the
+    /// journal's committed head — in that order, which is the base case of
+    /// this card's guarantee (see the module doc). Fallible only in the
+    /// feed — the lock and the stream are memory — so the caller's error
+    /// type need name only that.
     pub fn open(data_dir: &Path, engine: &Engine) -> io::Result<WritePath> {
-        let sidecar = Sidecar::open(data_dir, engine)?;
-        // Seeded AFTER the sidecar, from the same head, and before any febe
+        let feed = Feed::open(data_dir, engine)?;
+        // Seeded AFTER the feed, from the same head, and before any febe
         // exists to commit between the two: the stream's first announced
         // position is therefore one `/changes` already carries. That is the
         // BASE CASE of this card's guarantee, and it is why the two are
         // sequenced statements — the order is then a fact of the code
         // rather than of the order two fields happen to be listed in.
         let commit_stream = CommitStream::at(engine.kernel().current_seq());
-        Ok(WritePath { serial: Mutex::new(()), sidecar, commit_stream })
+        Ok(WritePath { serial: Mutex::new(()), feed, commit_stream, stores: engine.stores() })
     }
 
     /// Take the write-serialization lock ALONE — for the auth write
@@ -167,21 +179,22 @@ impl WritePath {
         resp
     }
 
-    /// The data behind `GET /changes?since=N&limit=K`.
-    pub fn changes(&self, since: u64, limit: usize) -> ChangesAnswer {
-        self.sidecar.changes(since, limit)
+    /// The data behind `GET /changes` at the requester's class — the key
+    /// set the route resolved off its one head snapshot, and the query.
+    pub fn changes(&self, class: &FeedClass<'_>, q: &Query) -> ChangesAnswer {
+        self.feed.page(class, q)
     }
 
     /// The HEAD position's recorded wall-clock time (`/health`'s
     /// `head_time`), or `None` when that position's record is bare.
     ///
-    /// The sidecar answers for the head by answering for its last recorded
+    /// The feed answers for the head by answering for its last recorded
     /// position, which is the same position because
     /// [`WritePath::commit_under`] records and announces inside the guard
     /// the caller holds across both. That premise is kept HERE;
-    /// `Sidecar::head_time` states what relying on it costs.
+    /// `CommitsLog::head_time` states what relying on it costs.
     pub fn head_time(&self) -> Option<u64> {
-        self.sidecar.head_time()
+        self.feed.head_time()
     }
 
     /// What one subscriber does next — see [`CommitStream::next`], where the
@@ -211,8 +224,8 @@ impl WritePath {
         self.commit_stream.head()
     }
 
-    /// Record one write's answer in the sidecar. What this layer decides,
-    /// over [`Sidecar::record`]'s own job of appending a line, is WHETHER
+    /// Record one write's answer in the feed. What this layer decides,
+    /// over [`Feed::record`]'s own job of appending the lines, is WHETHER
     /// there is anything to record: an ack carries the committed position,
     /// while a rejection committed nothing. Runs under the serialization
     /// lock. EXHAUSTIVE with no `_` arm, like the other `Response` walks in
@@ -225,13 +238,19 @@ impl WritePath {
     /// rather than the narrower "the position whose record this call made".
     /// Three paths reach it: a new commit, whose record this call makes; a
     /// position already recorded this uptime (an idempotency replay), which
-    /// the sidecar declines and which was announced when it was first
+    /// the feed declines and which was announced when it was first
     /// committed; and one at or below the open-time head (`emit`'s
-    /// incumbent ack), which the sidecar also declines, which the reopen
+    /// incumbent ack), which the feed also declines, which the reopen
     /// walk has already covered, and which the monotone stream ignores
     /// because it sits below the seed. A failed append is the fourth: the
     /// line is lost but the in-memory entry is not, so `/changes` answers
     /// that position this uptime and answers it bare after a restart.
+    ///
+    /// The record is classified against the head AS IT STANDS after the
+    /// execute — this commit's own post-state, since the serialization
+    /// guard admits no other commit between the two — so a minted document
+    /// is in the exception set the classification reads (PUB-7.7's
+    /// one-snapshot clause, read from the feed's side).
     fn record(&self, meta: WriteMeta, resp: &Response) -> Option<Seq> {
         let WriteMeta { kind, docs, key } = meta;
         let (at, minted) = match resp {
@@ -273,7 +292,8 @@ impl WritePath {
                 minted.map(|a| vec![a.tumbler().to_string()]).unwrap_or_default()
             }
         };
-        self.sidecar.record(at.0, op_name(kind), docs, key);
+        let post = self.stores.kernel().snapshot();
+        self.feed.record(at.0, op_name(kind), docs, key, post.world());
         Some(at)
     }
 }
@@ -286,7 +306,7 @@ impl WritePath {
 /// frame carries, so [`FrameMeta::attributed`] is the only way to reach a
 /// value [`WritePath::commit_under`] accepts. A placeholder key would be a
 /// wrong answer that looks right — `"bare"` is what a genuine bare-session
-/// write records, and the sidecar never re-derives an entry it holds.
+/// write records, and the feed never re-derives an entry it holds.
 #[derive(Debug)]
 pub(crate) struct FrameMeta {
     pub kind: OpKind,
@@ -317,9 +337,10 @@ pub(crate) struct WriteMeta {
     pub key: String,
 }
 
-/// A write's affected document(s) for the sidecar (wire.md §The change
-/// feed): the write's target doc; a link write names its home (`edit_link`
-/// both its homes, the successor's `d_s` first); the MINTED document for
+/// A write's affected document(s) for the feed (wire.md §The change feed):
+/// the write's target doc; a link write names its home (`edit_link` both
+/// its homes, the successor's `d_s` first; `nullify` its home AND the
+/// target link's home, as a set — PUB-6.46); the MINTED document for
 /// create/fork/version (known only from the ack); delegate/register_node
 /// touch no document.
 #[derive(Debug)]
@@ -349,12 +370,12 @@ pub(crate) enum AffectedDocs {
 /// to reach a release build: a write classified here as a read runs outside
 /// [`WritePath::commit_under`]'s lock, unrecorded and unannounced —
 /// `/changes` misses that position for the rest of the uptime, `/events`
-/// never announces it, and [`crate::sidecar::Sidecar::head_time`]'s premise
-/// that every commit is recorded fails, so `/health` reports an older
-/// position's time AS the head's, the one thing that method's contract says
-/// it does not do. A read classified here as a write is refused from
+/// never announces it, and [`crate::sidecar::CommitsLog::head_time`]'s
+/// premise that every commit is recorded fails, so `/health` reports an
+/// older position's time AS the head's, the one thing that method's contract
+/// says it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
-/// The two tables agree at 15 writes of 39.
+/// The two tables agree at 15 writes of 41.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs| Some(FrameMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
@@ -373,7 +394,23 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
         Op::Publish { .. } => meta(OpKind::Publish, AffectedDocs::Minted),
         Op::MakeLink { home, .. } => meta(OpKind::MakeLink, one(home)),
         Op::Emit { home, .. } => meta(OpKind::Emit, one(home)),
-        Op::Nullify { home, .. } => meta(OpKind::Nullify, one(home)),
+        Op::Nullify { home, target } => {
+            // The record's home AND the target link's home (PUB-6.46): a
+            // retraction lands at its target, so a draft-homed record
+            // against a public link shows to a guest as the target's entry.
+            // A SET, each document once — a same-home retraction reduces to
+            // one name identically, and the entry alone distinguishes
+            // nothing. `document_of` is address arithmetic (PUB-6.38); a
+            // target with no document is not a link a committed nullify
+            // could have named, and contributes nothing.
+            let mut docs = vec![home.tumbler().to_string()];
+            if let Some(t) = document_of(target) {
+                if &t != home {
+                    docs.push(t.tumbler().to_string());
+                }
+            }
+            meta(OpKind::Nullify, AffectedDocs::Named(docs))
+        }
         Op::AssertSup { home, .. } => meta(OpKind::AssertSup, one(home)),
         Op::EditLink { d_s, d_a, .. } => {
             // The successor's home leads (wire.md: "both its homes,

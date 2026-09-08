@@ -29,11 +29,12 @@
 //! policy), an every-1024-commits checkpoint cadence, and two retained
 //! checkpoints — genesis on a fresh store, recovery on an existing one, both
 //! inside `Engine::open`. The only files this crate writes itself are the
-//! commit-metadata sidecar `commits.log` and, transiently while that file
-//! is compacted, `commits.log.compact` — both opened here through
-//! `WritePath::open` and owned by `sidecar.rs`; nothing here writes any
-//! file of the WORLD's, which is why two daemons replaying one journal
-//! still converge byte-identically.
+//! change feed's: the commit-metadata sidecar `commits.log`, its four
+//! derived sidecars (`feed-*.log`), and, transiently while any is
+//! compacted, its `.compact` twin — all opened here through
+//! `WritePath::open` and owned by `sidecar.rs` and `feed/`; nothing here
+//! writes any file of the WORLD's, which is why two daemons replaying one
+//! journal still converge byte-identically.
 //!
 //! **Identity is the AUTH session layer** (`auth/`): `GET /challenge` and
 //! `POST /session` mint a session by one of two arms — a BARE bind (v1's
@@ -93,14 +94,20 @@
 //! pool — the accepting worker gives the socket to a dedicated thread and
 //! returns to `accept`.
 //!
-//! **The change feed (wire v6)**: `GET /changes?since=N` answers the
-//! committed positions in `(N, head]`, oldest first, each with its op kind,
-//! affected document(s), and commit wall-clock time — so clients refresh
-//! what they display instead of re-walking the world on every SSE tick.
-//! `sidecar.rs` owns `commits.log`: its crash honesty, its retention, and
-//! what a position whose record was lost answers; `write_path.rs` owns the
-//! ordering that makes the sidecar's invariants true. What this file adds
-//! is the query's parse, the marshal, and `/health`'s `head_time`.
+//! **The change feed (wire v6; class-gated since v7.8)**: `GET
+//! /changes?since=N` answers the committed positions in `(N, head]` the
+//! presented token's class may see, oldest first, each with its op kind,
+//! affected document(s) reduced to the readable ones, and commit
+//! wall-clock time — so clients refresh what they display instead of
+//! re-walking the world on every SSE tick. `sidecar.rs` owns
+//! `commits.log`: its crash honesty, its retention, and what a position
+//! whose record was lost answers; `feed/` owns the mask, the four derived
+//! sidecars, the supplement merge and the two narrowings (`under=`,
+//! `drafts=true`); `write_path.rs` owns the ordering that makes the
+//! sidecar's invariants true. What this file adds is the query's parse,
+//! the requester's visible stream KEY SET — resolved once per request off
+//! ONE head snapshot and threaded down (PUB-6.40) — the marshal, and
+//! `/health`'s `head_time`.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
@@ -122,6 +129,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
+use skep_address::{parent, Address};
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
     Codec, Disposition, FaultSite, Operation, OpKind, RejectCode, Rejection, Request, Response,
@@ -129,7 +137,7 @@ use skep_febe::{
 };
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
-use skep_namespace::PrincipalId;
+use skep_namespace::{HasM3, PrincipalId};
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
@@ -147,8 +155,9 @@ use crate::codec::{
     check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
     JsonCodec, CREDENTIAL_REFUSED,
 };
+use crate::feed::classify::parse_prefix;
+use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, ReconstructPermit, Unavailable};
-use crate::sidecar::ChangesAnswer;
 use crate::write_path::{
     op_is_read, write_meta, FrameMeta, SerialGuard, StreamStep, WritePath,
 };
@@ -158,7 +167,7 @@ pub use crate::auth::session::Peer;
 /// Auto-checkpoint cadence: every N commits (M2 evaluates on-commit; no
 /// timer thread exists anywhere in this daemon). Together with
 /// [`RETAINED_CHECKPOINTS`] this sets the sidecar's reconstruction ceiling
-/// at open (see `Sidecar::open`): raising either lengthens startup on a
+/// at open (see `CommitsLog::open`): raising either lengthens startup on a
 /// data dir whose commit metadata is missing.
 const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 
@@ -316,9 +325,10 @@ pub enum DaemonError {
     /// The engine could not genesis/recover (corrupt journal, bad
     /// checkpoint).
     Engine(EngineError),
-    /// `commits.log` (the commit-metadata sidecar) could not be opened,
-    /// replayed, or extended. A torn tail is NOT an error (it truncates);
-    /// this is the data dir refusing I/O the kernel just performed.
+    /// `commits.log` (the commit-metadata sidecar) or one of the change
+    /// feed's four derived sidecars could not be opened, replayed, or
+    /// extended. A torn tail is NOT an error (it truncates); this is the
+    /// data dir refusing I/O the kernel just performed.
     Sidecar(std::io::Error),
 }
 
@@ -326,7 +336,7 @@ impl std::fmt::Display for DaemonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DaemonError::Engine(e) => write!(f, "{e}"),
-            DaemonError::Sidecar(e) => write!(f, "commits.log sidecar: {e}"),
+            DaemonError::Sidecar(e) => write!(f, "change-feed sidecar: {e}"),
         }
     }
 }
@@ -757,11 +767,13 @@ impl Daemon {
     /// a data dir refusing I/O the kernel just performed):
     /// surface it and exit, never retry.
     ///
-    /// TWO steps here cost more than O(1) in the data dir. The sidecar
-    /// replay is one: where commit metadata is missing it reconstructs the
-    /// uncovered positions from the journal, one whole-world replay each,
-    /// up to the retained window (`CHECKPOINT_EVERY_COMMITS` ×
-    /// `RETAINED_CHECKPOINTS`). `Sidecar::open` states that bound. The
+    /// TWO steps here cost more than O(1) in the data dir. The feed's open
+    /// is one: where commit metadata is missing it reconstructs the
+    /// uncovered positions from the journal, one whole-world replay (plus
+    /// one world diff, for the position's class) each, up to the retained
+    /// window (`CHECKPOINT_EVERY_COMMITS` × `RETAINED_CHECKPOINTS`).
+    /// `CommitsLog::open` states that bound; `Feed::open` the derived
+    /// sidecars' own, O(their files) plus O(any missing tail). The
     /// identity fold is the other: [`Daemon::open_with`] rebuilds it from
     /// the recovered world, which reads every link in it —
     /// [`crate::auth::fold::canonical_identity`] states that bound.
@@ -903,7 +915,7 @@ impl Daemon {
             }
             ("GET", "/health") => self.get_health(),
             ("GET", "/changes") => {
-                class_varying(self.token_route(req, |_| self.get_changes(req.query.as_deref())))
+                class_varying(self.token_route(req, |r| self.get_changes(r, req.query.as_deref())))
             }
             #[cfg(feature = "observe")]
             ("GET", "/dump") => {
@@ -1461,7 +1473,7 @@ impl Daemon {
         // the position the sidecar last recorded, beside a `log_position`
         // one commit newer. Taking the write lock here would serialize a
         // liveness probe behind writes, which is the worse trade;
-        // `Sidecar::head_time` states what each field is true of.
+        // `CommitsLog::head_time` states what each field is true of.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         // The auth object (AUTH-6.13): claimant, local_trust, and the TWO
@@ -1497,26 +1509,39 @@ impl Daemon {
         )
     }
 
-    /// `GET /changes?since=N[&limit=K]` (wire v6) — the delta read: the
-    /// committed positions in `(N, head]`, oldest first, from the sidecar.
-    /// Pure parse/marshal over [`Sidecar::changes`]; determinism is the
-    /// map's (same journal + sidecar ⇒ byte-equal pages, across restarts).
-    fn get_changes(&self, query: Option<&str>) -> Reply {
-        let (since, limit) = match changes_params(query) {
-            Ok(x) => x,
+    /// `GET /changes?since=N[&limit=K][&under=P][&drafts=true]` (wire v6;
+    /// class-gated since v7.8) — the delta read: the committed positions in
+    /// `(N, head]` the presented token's class may see, oldest first, from
+    /// the feed. What this route adds over the feed's own paging is the
+    /// requester's VISIBLE STREAM KEY SET (PUB-6.40): resolved ONCE, off
+    /// ONE head snapshot — the read predicate at the requester's class, the
+    /// requester's own and ancestor accounts (the subtree clause), its
+    /// grant-selected issuers with their covered prefixes, and the live
+    /// any-principal set (the universal term, principals alone) — and
+    /// threaded down; the feed module resolves nothing itself. An absent
+    /// or dead token is the GUEST (PUB-8.13). Determinism is PER CLASS
+    /// (PUB-8.26): same `(since, limit, under, drafts)`, same journal,
+    /// same head publication and grant state, same class ⇒ byte-equal
+    /// pages, across repeats and restarts.
+    fn get_changes(&self, resolved: &Resolved, query: Option<&str>) -> Reply {
+        let q = match changes_params(query) {
+            Ok(q) => q,
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
-        match self.writes.changes(since, limit) {
+        // ONE head snapshot per request (PUB-6.39, PUB-6.40): the predicate
+        // every entry is masked by and the key set the candidates come from
+        // stand on the same committed state.
+        let head = self.engine.kernel().snapshot();
+        let world = head.world();
+        let principal = resolved.principal();
+        let readable = |doc: &Address| world.readable(principal, doc);
+        let class = feed_class(world, principal, &readable);
+        match self.writes.changes(&class, &q) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
                 obj(vec![
-                    (
-                        "changes",
-                        Value::Array(
-                            entries.into_iter().map(|(at, meta)| meta.into_entry(at)).collect(),
-                        ),
-                    ),
+                    ("changes", Value::Array(entries)),
                     ("last", Value::Number(last.into())),
                     ("more", Value::Bool(more)),
                 ]),
@@ -1692,8 +1717,9 @@ fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
 }
 
 /// The `/changes` query: `since=<position>` (required) plus optional
-/// `limit=<1..=4096>`.
-fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
+/// `limit=<1..=4096>`, `under=<address-or-prefix>` (wire v7.8, PUB-7.31)
+/// and `drafts=true|false` (the drafts-only narrowing, PUB-7.35).
+fn changes_params(query: Option<&str>) -> Result<Query, String> {
     let q = match query {
         None | Some("") => {
             return Err("the required parameter is since=<position>".into());
@@ -1702,6 +1728,8 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
     };
     let mut since: Option<u64> = None;
     let mut limit: Option<usize> = None;
+    let mut under: Option<skep_address::Tumbler> = None;
+    let mut drafts: Option<bool> = None;
     for (k, v) in query_pairs(q)? {
         match k {
             "since" => {
@@ -1724,11 +1752,75 @@ fn changes_params(query: Option<&str>) -> Result<(u64, usize), String> {
                 }
                 limit = Some(n);
             }
+            "under" => {
+                if under.is_some() {
+                    return Err("duplicate parameter 'under'".into());
+                }
+                // The frame codec's depth and magnitude caps, applied before
+                // any component is converted — the same reason the codec
+                // applies them there: a hostile digit run must never be
+                // converted, and the conversion is the expensive half.
+                if v.split('.').count() > crate::codec::MAX_TUMBLER_COMPONENTS
+                    || v.split('.').any(|c| c.len() > crate::codec::MAX_NAT_DIGITS)
+                {
+                    return Err("under: the tumbler exceeds the wire's depth or digit cap".into());
+                }
+                under = Some(parse_prefix(v).ok_or_else(|| {
+                    format!("under: '{v}' is not a dotted-decimal address or prefix")
+                })?);
+            }
+            "drafts" => {
+                if drafts.is_some() {
+                    return Err("duplicate parameter 'drafts'".into());
+                }
+                drafts = Some(match v {
+                    "true" => true,
+                    "false" => false,
+                    other => return Err(format!("drafts: '{other}' is not true or false")),
+                });
+            }
             other => return Err(format!("unknown parameter '{other}'")),
         }
     }
     let since = since.ok_or_else(|| String::from("the required parameter is since=<position>"))?;
-    Ok((since, limit.unwrap_or(CHANGES_LIMIT_DEFAULT)))
+    Ok(Query {
+        since,
+        limit: limit.unwrap_or(CHANGES_LIMIT_DEFAULT),
+        under,
+        drafts_only: drafts.unwrap_or(false),
+    })
+}
+
+/// The requester's VISIBLE STREAM KEY SET (PUB-6.40; PUB-7.24, PUB-7.25,
+/// PUB-7.22), resolved once off the head snapshot `world` is and handed to
+/// the feed, which resolves nothing itself:
+///
+/// * `subtree` — the requester's own account and every ancestor account
+///   (the subtree clause reads upward; each is a draft-stream key). Empty
+///   for the guest, and for a node-tier principal, who owns no account.
+/// * `issuers` — the grant-selected issuer streams, each with the union of
+///   the content prefixes that issuer granted this account
+///   (`World::issuers_for`, principal-exact).
+/// * `universal` — the live any-principal set (`World::universal_grants`),
+///   for a bound principal alone: grants reach principals, never the guest
+///   (PUB-5.109), so a guest merges no universal term.
+fn feed_class<'a>(
+    world: &'a World,
+    principal: Option<PrincipalId>,
+    readable: &'a dyn Fn(&Address) -> bool,
+) -> FeedClass<'a> {
+    let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
+    let mut subtree = Vec::new();
+    let mut cur = account.clone();
+    while let Some(a) = cur {
+        if world.m3().is_registered_account(&a) {
+            subtree.push(a.clone());
+        }
+        cur = parent(&a);
+    }
+    let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
+    let universal = if principal.is_some() { world.universal_grants() } else { Vec::new() };
+    FeedClass { readable, subtree, issuers, universal }
 }
 
 // ── the history surface (wire v3) ────────────────────────────────────────
@@ -2847,21 +2939,33 @@ mod tests {
     /// answer in all of them.
     #[test]
     fn the_changes_query_defaults_to_the_documented_page_size() {
+        let plain = |q: &str| {
+            let p = changes_params(Some(q)).unwrap_or_else(|e| panic!("{q}: {e}"));
+            (p.since, p.limit, p.under.map(|t| t.to_string()), p.drafts_only)
+        };
         assert_eq!(
-            changes_params(Some("since=0")).expect("since alone is enough"),
-            (0, 256),
-            "an absent limit is the documented default"
+            plain("since=0"),
+            (0, 256, None, false),
+            "an absent limit is the documented default; no narrowing by default"
         );
-        assert_eq!(changes_params(Some("since=7&limit=10")).expect("both"), (7, 10));
+        assert_eq!(plain("since=7&limit=10"), (7, 10, None, false));
         assert_eq!(
-            changes_params(Some("limit=10&since=7")).expect("order-free"),
-            (7, 10),
+            plain("limit=10&since=7"),
+            (7, 10, None, false),
             "parameters are a set, not a sequence"
         );
+        assert_eq!(plain("since=0&limit=4096").1, 4096, "the maximum is in range");
+        // The two narrowings (wire v7.8): a tumbler prefix, and the flag.
         assert_eq!(
-            changes_params(Some("since=0&limit=4096")).expect("the maximum is in range").1,
-            4096
+            plain("since=3&under=1.0.2"),
+            (3, 256, Some("1.0.2".into()), false),
+            "under= names an address or prefix"
         );
+        assert_eq!(
+            plain("since=3&drafts=true&under=1.0.2.0.4"),
+            (3, 256, Some("1.0.2.0.4".into()), true)
+        );
+        assert_eq!(plain("since=3&drafts=false").3, false, "drafts=false is the plain feed");
         for bad in [
             None,
             Some(""),
@@ -2872,6 +2976,13 @@ mod tests {
             Some("since=0&since=1"),
             Some("since=0&nope=1"),
             Some("since"),
+            Some("since=0&under="),
+            Some("since=0&under=1..2"),
+            Some("since=0&under=1.x"),
+            Some("since=0&under=1&under=2"),
+            Some("since=0&drafts=yes"),
+            Some("since=0&drafts=1"),
+            Some("since=0&drafts=true&drafts=true"),
         ] {
             assert!(changes_params(bad).is_err(), "{bad:?} must be refused");
         }

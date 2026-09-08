@@ -151,7 +151,7 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// visibly unbounded in kind while removing the per-comparison multiplier —
 /// a component that would take 10^4000 commits to reach cannot be one a
 /// caller needs to name.
-const MAX_NAT_DIGITS: usize = 4096;
+pub(crate) const MAX_NAT_DIGITS: usize = 4096;
 
 /// The most components one tumbler may carry on the wire. The same budget
 /// as [`MAX_NAT_DIGITS`] on the other axis: a tumbler's components are
@@ -162,7 +162,7 @@ const MAX_NAT_DIGITS: usize = 4096;
 /// element address is under forty components. 256 leaves that room over
 /// several times without admitting a tumbler whose depth is the request's
 /// only real content.
-const MAX_TUMBLER_COMPONENTS: usize = 256;
+pub(crate) const MAX_TUMBLER_COMPONENTS: usize = 256;
 
 // The most bytes one frame's idempotency `id` may carry is
 // [`MAX_REQ_ID_BYTES`], imported above. This daemon never interprets the id;

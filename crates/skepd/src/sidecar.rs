@@ -1,13 +1,20 @@
 //! The commit-metadata sidecar (wire v6): `commits.log` in the data dir —
 //! one JSON line per committed write `(position, op kind, affected docs,
-//! unix millis)`, appended by the write path at ack time and replayed on
-//! reopen. This is daemon-owned TRANSPORT METADATA, never substrate state
-//! (wire.md §The change feed) — exempt from the
+//! unix millis, key testimony)`, appended by the write path at ack time and
+//! replayed on reopen. This is daemon-owned TRANSPORT METADATA, never
+//! substrate state (wire.md §The change feed) — exempt from the
 //! no-second-persistence-layer rule for the same reason as the kernel's
 //! journal-lock file: it persists nothing about the WORLD, since two
 //! daemons replaying one journal still converge on byte-identical worlds.
 //! The sidecar is the daemon's testimony about its own service, and it
 //! feeds `GET /changes` and `/health`'s `head_time`.
+//!
+//! This file is the feed's AUTHORITY file: what a position's entry SAYS —
+//! its op, its docs, its time, its key — is recorded here and nowhere else.
+//! The feed's four DERIVED sidecars (`feed/derived.rs`: the per-document
+//! position index, the offset array, the masked-position bitmap and the
+//! per-owner draft streams; PUB-7.19) are projections of this file and the
+//! journal, rebuilt from them on loss; `feed/mod.rs` composes the five.
 //!
 //! Crash honesty is the contract:
 //!
@@ -27,18 +34,32 @@
 //!   own journal reader stays closed. Reconstructed positions are appended
 //!   to the file, so the walk runs once per uncovered region, not once per
 //!   open.
+//! * A bare position CLASSIFIES FROM THE JOURNAL (PUB-6.45: "a lost sidecar
+//!   never unmasks a draft write"): the walk holds the world at each
+//!   boundary and the one below it, and the diff of the two — the drafts
+//!   minted, the links deposited (their homes, and a retraction's targets'
+//!   homes), the drafts whose arrangement moved (`feed::classify::derived_docs`)
+//!   — is the set of documents the feed's mask classifies the position by.
+//!   The wire entry still answers `docs: null` (lost testimony is never
+//!   invented); what the journal supplies is the CLASS, so a draft write
+//!   whose record was lost is omitted from a guest's page exactly as a
+//!   recorded one is. A boundary whose predecessor world the journal can no
+//!   longer answer (the oldest boundary above a reclaimed region) is
+//!   UNCLASSIFIABLE and is served to every class: it discloses its position
+//!   alone, which `/events` and `head_time` already disclose board-wide
+//!   (PUB-6.52's accepted residue), and nothing of what it wrote.
 //!
 //! The file — and the entries replayed from it — are bounded by the
 //! journal's own retention, not by the world's age. Positions the journal has
 //! reclaimed are unanswerable across the whole history surface, so at open
 //! the sidecar drops its entries below that floor and rewrites itself
-//! around them (see [`Sidecar::open`]). Without that the feed's memory
+//! around them (see [`CommitsLog::open`]). Without that the feed's memory
 //! would be the only structure in the daemon that grows with total commits
 //! ever made rather than with commits still reachable, and it is fully
 //! resident.
 //!
 //! The sidecar is written under the write path's serialization lock — held
-//! by `write_path.rs`, which takes that lock and calls [`Sidecar::record`]
+//! by `write_path.rs`, which takes that lock and calls the feed's `record`
 //! in one operation — so file order is position order and recorded times
 //! are monotone non-decreasing in position (wall-clock reads are
 //! additionally clamped against the last recorded time). Appends are
@@ -51,16 +72,17 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
 use serde_json::Value;
-use skep_engine::{Engine, HistoryError};
+use skep_address::Address;
+use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::Seq;
 
 use crate::codec::{obj, to_bytes};
+use crate::feed::classify::derived_docs;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
-const SIDECAR_FILE: &str = "commits.log";
+pub(crate) const SIDECAR_FILE: &str = "commits.log";
 
 /// One committed position's metadata — and this file's crash-honesty rule
 /// as a type. A position is either one the daemon OBSERVED committing,
@@ -71,7 +93,9 @@ const SIDECAR_FILE: &str = "commits.log";
 #[derive(Clone, Debug)]
 pub(crate) enum CommitMeta {
     /// Reconstructed, not witnessed: served as explicit `null`s, never as
-    /// an invented value.
+    /// an invented value. Its CLASS — which documents the journal shows it
+    /// touched — lives in the feed's classification map, not here: this
+    /// file records testimony, and the journal's answer is not testimony.
     Bare,
     /// Witnessed at ack time by the daemon's own write path. `key` is the
     /// AUTH testimony (AUTH-4.48): the fingerprint hex of the enrolled key
@@ -83,21 +107,25 @@ pub(crate) enum CommitMeta {
 }
 
 impl CommitMeta {
-    /// One `GET /changes` entry: the position and all three fields, a bare
+    /// One `GET /changes` entry: the position and all four fields, a bare
     /// position's rendering as explicit `null`s — the crash-honesty rule of
     /// this file, expressed where the rule is stated rather than at the
-    /// handler. Deliberately NOT [`entry_line`]'s convention, which omits
-    /// absent fields: the file is daemon-private and [`parse_line`] reads
-    /// absent and null alike, so the shorter line costs nothing there,
-    /// while a client reading the wire is owed the field it asked about.
-    pub fn into_entry(self, at: u64) -> Value {
+    /// handler. `docs` is the list the FEED renders for a recorded entry —
+    /// the record's own docs REDUCED to the requester's readable ones
+    /// (PUB-6.45) — and is ignored for a bare one, whose docs are the
+    /// reserved null whatever its class. Deliberately NOT [`entry_line`]'s
+    /// convention, which omits absent fields: the file is daemon-private and
+    /// [`parse_line`] reads absent and null alike, so the shorter line costs
+    /// nothing there, while a client reading the wire is owed the field it
+    /// asked about.
+    pub fn entry(&self, at: u64, docs: Vec<String>) -> Value {
         let (docs, op, time, key) = match self {
             CommitMeta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
-            CommitMeta::Recorded { op, docs, time, key } => (
+            CommitMeta::Recorded { op, time, key, .. } => (
                 Value::Array(docs.into_iter().map(Value::String).collect()),
-                Value::String(op),
-                Value::Number(time.into()),
-                key.map(Value::String).unwrap_or(Value::Null),
+                Value::String(op.clone()),
+                Value::Number((*time).into()),
+                key.clone().map(Value::String).unwrap_or(Value::Null),
             ),
         };
         obj(vec![
@@ -122,32 +150,31 @@ impl CommitMeta {
 #[derive(Debug)]
 enum Record {
     Entry(u64, CommitMeta),
-    /// The smallest `since` this feed can honor — see [`Inner::min_since`].
+    /// The smallest `since` this feed can honor — see [`CommitsLog::min_since`].
     MinSince(u64),
 }
 
-/// The answer `GET /changes` marshals.
+/// One bare position the reconstruction walk covered this open, with the
+/// journal's classification of it: the documents the commit touched as the
+/// world diff shows them (`Some`, possibly empty), or `None` where the
+/// world below the boundary could not be answered — unclassifiable, served
+/// to every class (the module doc's residue).
 #[derive(Debug)]
-pub(crate) enum ChangesAnswer {
-    /// `since` reaches below what the feed can enumerate; `floor` is the
-    /// oldest position that still has an entry, when one exists — the
-    /// wire's sense of the word (wire.md §Reading history: the oldest
-    /// position still answerable), which is NOT [`Inner::min_since`].
-    Reclaimed { floor: Option<u64> },
-    /// The entries in `(since, head]`, oldest first, capped at `limit`;
-    /// `last` is the final entry's position (or `since` echoed when the
-    /// page is empty) and `more` says whether entries remain past it.
-    Page { entries: Vec<(u64, CommitMeta)>, last: u64, more: bool },
+pub(crate) struct Walked {
+    pub at: u64,
+    pub docs: Option<Vec<Address>>,
 }
 
-pub(crate) struct Sidecar {
-    inner: Mutex<Inner>,
-}
-
-struct Inner {
+/// The replayed `commits.log`: the file handle, every enumerable entry above
+/// the fence, and the bookkeeping the feed's derived structures key on.
+pub(crate) struct CommitsLog {
     file: File,
     /// Every enumerable position above `min_since`, in order.
-    entries: BTreeMap<u64, CommitMeta>,
+    pub entries: BTreeMap<u64, CommitMeta>,
+    /// Each entry's line's byte offset in the file — the offset array's
+    /// in-memory twin (PUB-7.19), learned from the replay itself and
+    /// advanced by every append; a rewrite recomputes it whole.
+    pub offsets: BTreeMap<u64, u64>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or
     /// unreadable journal) and `/changes` answers 410. Deliberately not
@@ -158,33 +185,43 @@ struct Inner {
     /// a fact about this journal and is discarded at open, exactly as an
     /// entry above it is — the coverage clause above means something only
     /// under that.
-    min_since: u64,
+    pub min_since: u64,
     /// The journal head at open — the fence between replayed history and
     /// this uptime's commits. An ack carrying a position at or below it
     /// (an idempotency-cache replay, `emit`'s incumbent ack) is never a
     /// new commit and is never re-recorded.
-    open_head: u64,
+    pub open_head: u64,
+    /// Whether this open REWROTE the file — compaction to the journal's
+    /// retention, or the purge of a foreign fence — so every offset moved
+    /// and the derived offset array must be rewritten with it.
+    pub rewritten: bool,
     /// Monotone clamp for recorded wall-clock times.
     last_time: u64,
+    /// The file's length — the offset the next appended line lands at.
+    len: u64,
 }
 
-impl Sidecar {
+impl CommitsLog {
     /// Replay (truncating a torn tail), drop everything the file says about
     /// a journal other than this one — entries beyond the head AND a fence
     /// above it — reconstruct any uncovered `(last recorded, head]` region
-    /// as bare positions, and persist what the reconstruction learned.
+    /// as bare positions, classifying each from the journal, and persist
+    /// what the reconstruction learned. Returns the replayed log and the
+    /// walk's classified positions for the feed's derived structures.
     ///
     /// COST, and the only step of daemon startup that is not O(1) in the
     /// data dir: reconstruction spends one whole-world `Engine::world_at`
     /// per uncovered boundary — a checkpoint deserialize plus a journal
-    /// fold each — so a dir with NO coverage (a sidecar deleted, arrived
-    /// corrupt, or written before this feature) pays that for every
-    /// boundary the journal still holds, before `open` returns. The region
-    /// is bounded below by journal reclamation, so the ceiling is the
-    /// retained window, which `server.rs` chooses as
+    /// fold each — plus one world diff per boundary for its classification
+    /// (`derived_docs` states that cost), so a dir with NO coverage (a
+    /// sidecar deleted, arrived corrupt, or written before this feature)
+    /// pays that for every boundary the journal still holds, before `open`
+    /// returns. The region is bounded below by journal reclamation, so the
+    /// ceiling is the retained window, which `server.rs` chooses as
     /// `CHECKPOINT_EVERY_COMMITS × RETAINED_CHECKPOINTS` commits. The
-    /// walk's findings are appended here, so a covered region is walked
-    /// once ever rather than once per open.
+    /// walk's findings are appended here (and its classifications to the
+    /// feed's position index), so a covered region is walked once ever
+    /// rather than once per open.
     ///
     /// COMPACTION runs at the other end, and is what bounds the file and
     /// the resident entries: positions the journal has reclaimed are refused by
@@ -202,7 +239,7 @@ impl Sidecar {
     /// original, so a crash mid-compaction leaves the whole old file or
     /// the whole new one — never a half of either.
     ///
-    /// DISPOSITION, deliberately the opposite of [`Sidecar::record`]'s:
+    /// DISPOSITION, deliberately the opposite of [`CommitsLog::record`]'s:
     /// every I/O failure here is fatal and reaches the caller as
     /// `DaemonError::Sidecar`, including the walk's append, whose loss
     /// would cost only a repeated walk on a later open. At ack time the ack
@@ -210,7 +247,7 @@ impl Sidecar {
     /// is owed yet, and a data dir that cannot take a write the kernel just
     /// performed is an operator condition worth reporting rather than
     /// limping past.
-    pub fn open(dir: &Path, engine: &Engine) -> io::Result<Sidecar> {
+    pub fn open(dir: &Path, engine: &Engine) -> io::Result<(CommitsLog, Vec<Walked>)> {
         let path = dir.join(SIDECAR_FILE);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut bytes = Vec::new();
@@ -222,12 +259,15 @@ impl Sidecar {
             // positions by the walk below.
             file.set_len(valid_end as u64)?;
         }
+        let mut len = valid_end as u64;
         let mut entries = BTreeMap::new();
+        let mut offsets = BTreeMap::new();
         let mut min_since = 0u64;
-        for rec in records {
+        for (offset, rec) in records {
             match rec {
                 Record::Entry(at, meta) => {
                     entries.insert(at, meta);
+                    offsets.insert(at, offset as u64);
                 }
                 Record::MinSince(s) => min_since = min_since.max(s),
             }
@@ -236,7 +276,10 @@ impl Sidecar {
         // Entries beyond this journal's head describe a different journal
         // (an operator swapped files under the sidecar); never serve them.
         if head < u64::MAX {
-            let _ = entries.split_off(&(head + 1));
+            let dropped = entries.split_off(&(head + 1));
+            for at in dropped.keys() {
+                offsets.remove(at);
+            }
         }
         // A fence above the head describes that other journal too, and is
         // the half the entry clamp above does not reach. Left standing it
@@ -252,18 +295,25 @@ impl Sidecar {
             min_since = 0;
         }
         let low = entries.keys().next_back().copied().unwrap_or(0).max(min_since);
+        let mut walked = Vec::new();
         if head > low {
             // The walk's own fence, qualified because the accumulator it
             // folds into holds the plain name.
-            let (bare, walk_min_since) = reconstruct(engine, low, head);
-            for &at in &bare {
-                entries.insert(at, CommitMeta::Bare);
-                file.write_all(&entry_line(at, &CommitMeta::Bare))?;
+            let (found, walk_min_since) = reconstruct(engine, low, head);
+            for w in &found {
+                entries.insert(w.at, CommitMeta::Bare);
+                offsets.insert(w.at, len);
+                let line = entry_line(w.at, &CommitMeta::Bare);
+                file.write_all(&line)?;
+                len += line.len() as u64;
             }
-            if let Some(walked) = walk_min_since {
-                min_since = min_since.max(walked);
-                file.write_all(&min_since_line(walked))?;
+            if let Some(walked_min) = walk_min_since {
+                min_since = min_since.max(walked_min);
+                let line = min_since_line(walked_min);
+                file.write_all(&line)?;
+                len += line.len() as u64;
             }
+            walked = found;
         }
         // Compaction: everything the journal has reclaimed leaves the feed
         // with it. The probe answers the oldest position still answerable,
@@ -280,48 +330,64 @@ impl Sidecar {
         // The rewrite is unconditional under a discarded fence, so a journal
         // that later grows past that number cannot resurrect it from the
         // file.
+        let mut rewritten = false;
         if stale_fence || entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
             entries = entries.split_off(&min_since.saturating_add(1));
-            file = rewrite(dir, &entries, min_since)?;
+            let (f, o, l) = rewrite(dir, &entries, min_since)?;
+            file = f;
+            offsets = o;
+            len = l;
+            rewritten = true;
+            walked.retain(|w| w.at > min_since);
         }
         let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
-        Ok(Sidecar {
-            inner: Mutex::new(Inner { file, entries, min_since, open_head: head, last_time }),
-        })
+        Ok((
+            CommitsLog { file, entries, offsets, min_since, open_head: head, rewritten, last_time, len },
+            walked,
+        ))
     }
 
-    /// Record one committed write at ack time. Idempotent against replayed
-    /// acks: a position at or below the open-time head, or one already
-    /// recorded this uptime, is an ack for an OLD commit (idempotency-cache
-    /// hit, `emit` incumbent) — re-recording it would invent a time.
+    /// Record one committed write at ack time; `Some(offset)` — the byte
+    /// offset the line landed at — when this call recorded a NEW position,
+    /// `None` when it declined. Idempotent against replayed acks: a position
+    /// at or below the open-time head, or one already recorded this uptime,
+    /// is an ack for an OLD commit (idempotency-cache hit, `emit`
+    /// incumbent) — re-recording it would invent a time.
     ///
     /// CALLER CONTRACT — call only while holding the daemon's
     /// write-serialization lock, between a commit and its ack. That is what
     /// makes this file's two invariants true: file order is position order,
     /// and recorded times are monotone non-decreasing in position. The lock
-    /// inside guards `Inner` and nothing more, so calls arriving out of
-    /// position order would append out of order and stamp a later position
-    /// with an earlier time — both silent, both permanent, and both
-    /// load-bearing for [`Sidecar::changes`] and [`Sidecar::head_time`].
-    /// Nothing here can check it, which is why `write_path.rs` holds the
-    /// lock and this call in ONE operation and is the only caller: the
-    /// obligation is discharged by there being nowhere else to fail it.
+    /// the feed holds around this guards its own state and nothing more, so
+    /// calls arriving out of position order would append out of order and
+    /// stamp a later position with an earlier time — both silent, both
+    /// permanent, and both load-bearing for the feed's paging and
+    /// [`CommitsLog::head_time`]. Nothing here can check it, which is why
+    /// `write_path.rs` holds the lock and this call in ONE operation and is
+    /// the only caller: the obligation is discharged by there being nowhere
+    /// else to fail it.
     ///
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
     /// this file's own obligation rather than the caller's.
-    pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>, key: String) {
-        let mut inner = self.inner.lock();
-        if at <= inner.open_head || inner.entries.contains_key(&at) {
-            return;
+    pub fn record(
+        &mut self,
+        at: u64,
+        op: &'static str,
+        docs: Vec<String>,
+        key: String,
+    ) -> Option<u64> {
+        if at <= self.open_head || self.entries.contains_key(&at) {
+            return None;
         }
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let time = now.max(inner.last_time);
-        inner.last_time = time;
+        let time = now.max(self.last_time);
+        self.last_time = time;
         let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
+        let offset = self.len;
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
         // Reported without `eprintln!`, which PANICS when the stderr write
@@ -329,36 +395,19 @@ impl Sidecar {
         // the op this arm exists to keep succeeding, answering
         // `internal_panic` for a write that committed and losing the caller
         // its position. Both failures are swallowed for the one reason.
-        if let Err(e) = inner.file.write_all(&entry_line(at, &meta)) {
-            let _ = writeln!(
-                std::io::stderr(),
-                "skepd: commits.log append failed at position {at}: {e}"
-            );
-        }
-        inner.entries.insert(at, meta);
-    }
-
-    /// The data behind `GET /changes?since=N&limit=K`.
-    pub fn changes(&self, since: u64, limit: usize) -> ChangesAnswer {
-        let inner = self.inner.lock();
-        if since < inner.min_since {
-            // The wire's `floor`: the oldest position still answerable,
-            // which is the first entry ABOVE the smallest admissible since.
-            let floor =
-                inner.entries.range(inner.min_since.saturating_add(1)..).next().map(|(k, _)| *k);
-            return ChangesAnswer::Reclaimed { floor };
-        }
-        let entries: Vec<(u64, CommitMeta)> = match since.checked_add(1) {
-            Some(start) => {
-                inner.entries.range(start..).take(limit).map(|(k, v)| (*k, v.clone())).collect()
+        let line = entry_line(at, &meta);
+        match self.file.write_all(&line) {
+            Ok(()) => self.len += line.len() as u64,
+            Err(e) => {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "skepd: commits.log append failed at position {at}: {e}"
+                );
             }
-            None => Vec::new(),
-        };
-        let (last, more) = match entries.last() {
-            Some(&(k, _)) => (k, inner.entries.range(k.saturating_add(1)..).next().is_some()),
-            None => (since, false),
-        };
-        ChangesAnswer::Page { entries, last, more }
+        }
+        self.entries.insert(at, meta);
+        self.offsets.insert(at, offset);
+        Some(offset)
     }
 
     /// The HEAD POSITION's recorded wall-clock time — `None` when the head's
@@ -374,8 +423,8 @@ impl Sidecar {
     /// head's because every commit is recorded: `WritePath::commit_under`
     /// records and announces inside the guard its caller holds across both,
     /// and `/op` is the only live write path. That premise is this file's
-    /// RELIANCE, not its check — a `Sidecar` never learns the live head —
-    /// and two states break it.
+    /// RELIANCE, not its check — a `CommitsLog` never learns the live head
+    /// — and two states break it.
     ///
     /// Transiently: any in-flight write. `/health` reads this and the log
     /// position independently and under no lock, so its pair may straddle
@@ -387,7 +436,7 @@ impl Sidecar {
     /// unrecorded until the reopen walk covers it as a bare entry, after
     /// which this honestly answers `None`.
     pub fn head_time(&self) -> Option<u64> {
-        self.inner.lock().entries.values().next_back().and_then(CommitMeta::time)
+        self.entries.values().next_back().and_then(CommitMeta::time)
     }
 }
 
@@ -410,7 +459,8 @@ fn retention_floor(engine: &Engine) -> Option<u64> {
 }
 
 /// Rewrite `commits.log` as the surviving entries behind one `min_since`
-/// record, and hand back the reopened append handle.
+/// record, and hand back the reopened append handle, the offsets every
+/// surviving entry now sits at, and the new length.
 ///
 /// Written to a temp file and renamed over the original, which is what
 /// makes compaction crash-honest in the same sense the rest of this file
@@ -425,12 +475,18 @@ fn retention_floor(engine: &Engine) -> Option<u64> {
 /// per data dir. It is not cleaned up: a crash or an I/O failure between
 /// the create and the rename leaves it until the next compaction truncates
 /// it, which is the price of the rename being the only atomic step.
-fn rewrite(dir: &Path, entries: &BTreeMap<u64, CommitMeta>, min_since: u64) -> io::Result<File> {
+fn rewrite(
+    dir: &Path,
+    entries: &BTreeMap<u64, CommitMeta>,
+    min_since: u64,
+) -> io::Result<(File, BTreeMap<u64, u64>, u64)> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut out = Vec::new();
+    let mut offsets = BTreeMap::new();
     out.extend_from_slice(&min_since_line(min_since));
     for (at, meta) in entries {
+        offsets.insert(*at, out.len() as u64);
         out.extend_from_slice(&entry_line(*at, meta));
     }
     let mut f = File::create(&tmp)?;
@@ -438,16 +494,26 @@ fn rewrite(dir: &Path, entries: &BTreeMap<u64, CommitMeta>, min_since: u64) -> i
     f.sync_all()?;
     drop(f);
     std::fs::rename(&tmp, &path)?;
-    OpenOptions::new().create(true).read(true).append(true).open(&path)
+    let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
+    Ok((file, offsets, out.len() as u64))
 }
 
 /// Enumerate the committed boundaries in `(low, head]`, newest first, via
-/// the engine's public bounded replay: `head` is a boundary by definition;
+/// the engine's public bounded replay — `head` is a boundary by definition;
 /// an `Ok` probe of `b - 1` proves another; `NotABoundary` jumps to
-/// `nearest`. Returns the boundaries (ascending) and, when the journal
-/// stopped answering (reclaimed / corrupt / I/O), the smallest `since` the
-/// feed can honor from there on — [`Inner::min_since`]'s number, not the
-/// wire's `floor`.
+/// `nearest` — and CLASSIFY each from the journal on the way down: the walk
+/// holds the world at the boundary it stands on and, once the boundary
+/// below is found, diffs the two (`derived_docs`) for the documents that
+/// commit touched. Returns the boundaries (ascending, each with its
+/// classification) and, when the journal stopped answering (reclaimed /
+/// corrupt / I/O), the smallest `since` the feed can honor from there on —
+/// [`CommitsLog::min_since`]'s number, not the wire's `floor`.
+///
+/// The head's world is the live root (no replay); every other world is one
+/// `world_at`. The lowest boundary's predecessor is `low` itself where `low`
+/// is a boundary — genesis, or the last recorded position — and where it is
+/// a fence (a previous walk's stopping point) its world refuses and the
+/// boundary above it is unclassifiable (`docs: None`).
 ///
 /// The descent holds its OWN termination: every step strictly decreases
 /// `boundary`, checked here rather than inherited from M2's reading of
@@ -456,19 +522,31 @@ fn rewrite(dir: &Path, entries: &BTreeMap<u64, CommitMeta>, min_since: u64) -> i
 /// open — which is the honest outcome, since this runs inside
 /// `Daemon::open`, before the listener is bound, where a loop that did not
 /// terminate would be a daemon that never starts.
-fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) {
-    let mut boundaries = vec![head];
+fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64>) {
+    // The world AT `boundary`: the head's is the installed root.
+    let mut upper: World = engine.kernel().snapshot().world().clone();
     let mut boundary = head;
+    let mut out: Vec<Walked> = Vec::new();
     let mut min_since = None;
-    // The descent's own guard: `probe` exists only when there is a position
-    // below `boundary` and it is still above `low`, so the step down cannot
-    // leave `u64` — a premise this loop holds rather than one it inherits
-    // from a caller's range check.
-    while let Some(probe) = boundary.checked_sub(1).filter(|p| *p > low) {
+    let classify = |below: Option<&World>, upper: &World| below.map(|b| derived_docs(b, upper));
+    loop {
+        // The descent's own guard: `probe` exists only when there is a
+        // position below `boundary` and it is still above `low`, so the step
+        // down cannot leave `u64` — a premise this loop holds rather than
+        // one it inherits from a caller's range check.
+        let Some(probe) = boundary.checked_sub(1).filter(|p| *p > low) else {
+            // Nothing between `low` and `boundary`: the boundary below is
+            // `low` where `low` is one (genesis, or a recorded position);
+            // a fence's world refuses and the position stays unclassified.
+            let below = engine.world_at(Seq(low)).ok();
+            out.push(Walked { at: boundary, docs: classify(below.as_ref(), &upper) });
+            break;
+        };
         match engine.world_at(Seq(probe)) {
-            Ok(_) => {
+            Ok(w) => {
+                out.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
                 boundary = probe;
-                boundaries.push(boundary);
+                upper = w;
             }
             Err(HistoryError::NotABoundary { nearest }) => {
                 // M2's `nearest` is the boundary BELOW the probe, which is
@@ -477,32 +555,53 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<u64>, Option<u64>) 
                 // would loop here forever, inside `Daemon::open` and so
                 // before the listener is bound — a daemon that never starts,
                 // with no port to ask and no line to read.
-                if nearest.0 <= low || nearest.0 >= boundary {
+                let nearest = nearest.0;
+                if nearest >= boundary {
+                    out.push(Walked { at: boundary, docs: None });
                     break;
                 }
-                boundary = nearest.0;
-                boundaries.push(boundary);
+                match engine.world_at(Seq(nearest)) {
+                    Ok(w) => {
+                        out.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
+                        if nearest <= low {
+                            break;
+                        }
+                        boundary = nearest;
+                        upper = w;
+                    }
+                    Err(_) => {
+                        // The boundary M2 named cannot be answered: the feed
+                        // reaches down to `boundary` and no further.
+                        out.push(Walked { at: boundary, docs: None });
+                        if nearest > low {
+                            min_since = Some(nearest);
+                        }
+                        break;
+                    }
+                }
             }
             Err(_) => {
+                out.push(Walked { at: boundary, docs: None });
                 min_since = Some(probe);
                 break;
             }
         }
     }
-    boundaries.reverse();
-    (boundaries, min_since)
+    out.reverse();
+    (out, min_since)
 }
 
 /// Parse whole newline-terminated records; trust ends at the first line
-/// that is torn (no `\n`) or does not parse. Returns the records and the
-/// byte offset after the last whole one.
-fn parse_records(bytes: &[u8]) -> (Vec<Record>, usize) {
+/// that is torn (no `\n`) or does not parse. Returns each record with the
+/// byte offset its line starts at, and the byte offset after the last whole
+/// one.
+fn parse_records(bytes: &[u8]) -> (Vec<(usize, Record)>, usize) {
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < bytes.len() {
         let Some(nl) = bytes[pos..].iter().position(|&b| b == b'\n') else { break };
         match parse_line(&bytes[pos..pos + nl]) {
-            Some(rec) => out.push(rec),
+            Some(rec) => out.push((pos, rec)),
             None => break,
         }
         pos += nl + 1;
@@ -590,7 +689,7 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
 /// One newline-terminated file line — the codec's serializer, so a line is
 /// the same bytes whatever backs serde_json's map and the "cannot fail"
 /// argument is the one written there rather than a second copy of it.
-fn line_bytes(v: Value) -> Vec<u8> {
+pub(crate) fn line_bytes(v: Value) -> Vec<u8> {
     let mut b = to_bytes(v);
     b.push(b'\n');
     b
@@ -602,7 +701,7 @@ mod tests {
 
     /// A line's bytes are fixed, key order included — the determinism
     /// `/changes` inherits — and every line round-trips through the reader
-    /// that will replay it.
+    /// that will replay it, each at the offset the replay reports.
     #[test]
     fn lines_are_key_sorted_and_replay_as_written() {
         let meta = CommitMeta::Recorded {
@@ -632,6 +731,7 @@ mod tests {
 
         let mut file: Vec<u8> = Vec::new();
         file.extend_from_slice(&entry_line(8, &meta));
+        let second_offset = file.len();
         file.extend_from_slice(&entry_line(9, &pre_feature));
         file.extend_from_slice(&entry_line(3, &CommitMeta::Bare));
         file.extend_from_slice(&min_since_line(2048));
@@ -639,25 +739,25 @@ mod tests {
         assert_eq!(valid_end, file.len(), "every whole line is trusted");
         assert_eq!(records.len(), 4);
         match &records[0] {
-            Record::Entry(at, CommitMeta::Recorded { op, docs, time, key }) => {
+            (0, Record::Entry(at, CommitMeta::Recorded { op, docs, time, key })) => {
                 assert_eq!((*at, op.as_str(), *time), (8, "insert", 1_700_000_000_000));
                 assert_eq!(docs.as_slice(), ["1.0.1.0.1".to_string()]);
                 assert_eq!(key.as_deref(), Some("bare"), "testimony replays as written");
             }
-            other => panic!("first line is a recorded entry: {other:?}"),
+            other => panic!("first line is a recorded entry at offset 0: {other:?}"),
         }
         assert!(
-            matches!(&records[1], Record::Entry(9, CommitMeta::Recorded { key: None, .. })),
-            "a pre-feature line replays with no testimony: {:?}",
+            matches!(&records[1], (o, Record::Entry(9, CommitMeta::Recorded { key: None, .. })) if *o == second_offset),
+            "a pre-feature line replays with no testimony, at its own offset: {:?}",
             records[1]
         );
         assert!(
-            matches!(records[2], Record::Entry(3, CommitMeta::Bare)),
+            matches!(records[2], (_, Record::Entry(3, CommitMeta::Bare))),
             "third line is a bare entry: {:?}",
             records[2]
         );
         assert!(
-            matches!(records[3], Record::MinSince(2048)),
+            matches!(records[3], (_, Record::MinSince(2048))),
             "fourth line names the smallest admissible since: {:?}",
             records[3]
         );
@@ -674,12 +774,12 @@ mod tests {
         let (records, valid_end) = parse_records(&file);
         assert_eq!(valid_end, file.len(), "the `floor` spelling does not end trust");
         assert!(
-            matches!(records[0], Record::MinSince(2048)),
+            matches!(records[0], (_, Record::MinSince(2048))),
             "a `floor` line is a min-since record: {:?}",
             records[0]
         );
         assert!(
-            matches!(records[1], Record::Entry(2049, _)),
+            matches!(records[1], (_, Record::Entry(2049, _))),
             "the line behind it still replays: {:?}",
             records[1]
         );
@@ -700,7 +800,7 @@ mod tests {
         assert_eq!(valid_end, entry_line(1, &CommitMeta::Bare).len(), "and truncation cuts there");
         // A `null`-valued field is absence, not a half record.
         let (records, _) = parse_records(b"{\"at\":4,\"docs\":null,\"op\":null,\"time\":null}\n");
-        assert!(matches!(records.as_slice(), [Record::Entry(4, CommitMeta::Bare)]));
+        assert!(matches!(records.as_slice(), [(_, Record::Entry(4, CommitMeta::Bare))]));
     }
 
     /// The wire entry names every field, a bare position's as explicit
@@ -708,7 +808,8 @@ mod tests {
     /// could not tell from a field this daemon does not know about. The
     /// file line omits what the wire nulls; both are deliberate. `key`'s
     /// null is AUTH-1.52's reserved lost-metadata meaning: a pre-feature
-    /// record reads it exactly as a bare position does.
+    /// record reads it exactly as a bare position does. The docs rendered
+    /// are the REDUCED list the feed hands in — here the whole record's.
     #[test]
     fn wire_entries_null_what_the_file_line_omits() {
         let meta = CommitMeta::Recorded {
@@ -718,7 +819,7 @@ mod tests {
             key: Some("bare".into()),
         };
         assert_eq!(
-            serde_json::to_string(&meta.into_entry(8)).expect("json"),
+            serde_json::to_string(&meta.entry(8, vec!["1.0.1.0.1".into()])).expect("json"),
             r#"{"at":8,"docs":["1.0.1.0.1"],"key":"bare","op":"insert","time":1700000000000}"#
         );
         let pre_feature = CommitMeta::Recorded {
@@ -728,12 +829,14 @@ mod tests {
             key: None,
         };
         assert_eq!(
-            serde_json::to_string(&pre_feature.into_entry(8)).expect("json"),
+            serde_json::to_string(&pre_feature.entry(8, vec!["1.0.1.0.1".into()])).expect("json"),
             r#"{"at":8,"docs":["1.0.1.0.1"],"key":null,"op":"insert","time":1700000000000}"#
         );
         assert_eq!(
-            serde_json::to_string(&CommitMeta::Bare.into_entry(3)).expect("json"),
-            r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#
+            serde_json::to_string(&CommitMeta::Bare.entry(3, vec!["1.0.1.0.1".into()]))
+                .expect("json"),
+            r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#,
+            "a bare entry's docs are the reserved null whatever the feed hands in"
         );
     }
 }

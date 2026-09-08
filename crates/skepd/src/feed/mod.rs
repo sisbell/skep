@@ -1,0 +1,728 @@
+//! The change feed's PUBLICATION HALF (PUB round 2, lane 3.6): `commits.log`
+//! composed with its four derived sidecars, the per-class mask, the
+//! supplement merge, the universal term, and the two narrowings. The wire
+//! surface is `GET /changes` (wire.md §The change feed); what this module
+//! owes it is ONE answer — the FEED-CLASS ORACLE (PUB-6.59): for any class,
+//! every page equals the position walk over `(since, head]` with
+//! `readable()` applied per entry and `docs` reduced, masked entries
+//! omitted, `limit`/`last`/`more` over the visible stream (PUB-6.44). Every
+//! structure below is a way of finding the candidates for that walk at a
+//! cost the spec pins (PUB-7.19–7.35); none of them decides the answer,
+//! which is the read predicate's per entry (PUB-7.20).
+//!
+//! # The mask (PUB-6.44–6.46)
+//!
+//! An entry classifies over its `docs` — the target for arrangement writes,
+//! the HOME for link writes, the MINTED document for mints, and for
+//! `nullify` the record's home AND the target link's home as a set — never
+//! over sources read. It is MASKED iff `docs` is non-empty and none is
+//! readable to the requester; otherwise it is shown with `docs` REDUCED to
+//! the readable ones. `[]`-docs entries (`delegate`, `register_node`) are
+//! never masked. A masked entry is OMITTED — never present with nulled
+//! fields, which is the reserved rendering of lost testimony. A BARE entry
+//! classifies from the journal (`classify::derived_docs`, computed at the
+//! open that reconstructs it): its class is the journal's, its rendering
+//! stays the nulls.
+//!
+//! # The structures (PUB-7.19–7.21)
+//!
+//! `commits.log` (`sidecar.rs`) is the authority for what an entry says.
+//! Beside it, four derived sidecars (`derived.rs`), each appended at commit
+//! and held resident as its twin:
+//!
+//! * the per-document POSITION INDEX (`index`: document → positions, keyed
+//!   by tumbler, so an account's documents and any content-prefix are one
+//!   contiguous key range) — the `under=` narrowing's and the universal
+//!   term's source, with the per-position classification map (`docs`) as
+//!   its inverse;
+//! * the position → OFFSET array (`CommitsLog::offsets`) — position-keyed
+//!   access into `commits.log`; this build's reader is resident, so the
+//!   twin is the entries map itself and the file is what a non-resident
+//!   reader would seek by;
+//! * the MASKED-POSITION BITMAP (`masked`: positions whose docs are
+//!   non-empty and all drafts at commit) and its complement, the
+//!   MATERIALIZED PUBLISHED STREAM (`published`), which a guest page walks
+//!   in O(page) — a skip accelerator, never the authority;
+//! * the PER-OWNER-ACCOUNT DRAFT-POSITION STREAMS (`streams`: owner →
+//!   positions naming one of that owner's drafts — every fully-masked
+//!   position plus the straddles).
+//!
+//! # The supplement (PUB-7.22–7.28)
+//!
+//! A principal's page is the K-way merge, deduplicated by position, of: the
+//! published walk; its OWN account's and its ANCESTOR accounts' streams (the
+//! subtree clause reads upward); its grant-selected ISSUER streams, each
+//! under a per-entry containment test against the union of that issuer's
+//! covered prefixes for this principal (an account-depth grant is the
+//! stream whole); and the UNIVERSAL term, derived at serve — the position
+//! index's lists under each live any-principal prefix, enumerated once per
+//! request off the same head snapshot as the rest of the key set. The key
+//! set is `server.rs`'s to resolve, off ONE head snapshot per request
+//! (PUB-6.40), and arrives here as [`FeedClass`]; this module resolves
+//! nothing itself. Guests never merge the universal term (PUB-5.109).
+//!
+//! # The narrowings (PUB-7.31–7.35)
+//!
+//! `under=<address-or-prefix>` serves off the position index with
+//! DOC-GRANULAR SKIPPING — an unreadable document's whole list is skipped on
+//! one test — under the MERGE-OR-WALK rule: merge the lists under the
+//! prefix iff the prefix holds no more documents than the range holds
+//! positions, else walk the visible stream testing the prefix per entry.
+//! `drafts=true` keeps the entries whose reduced docs name a draft — served
+//! off the streams and the universal term alone (no published walk), empty
+//! for a guest by construction.
+
+pub(crate) mod classify;
+mod derived;
+
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::io::{self, Write};
+use std::path::Path;
+
+use parking_lot::Mutex;
+use serde_json::Value;
+use skep_address::{is_prefix, Address, Tumbler};
+use skep_engine::{Engine, World};
+use skep_kernel::Seq;
+
+use self::classify::{classify, derived_docs, parse_dotted, Doc};
+use self::derived::{DerivedFile, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, STREAMS_FILE};
+use crate::sidecar::{CommitMeta, CommitsLog};
+
+/// The requester's VISIBLE STREAM KEY SET, resolved by the route off ONE
+/// head snapshot (PUB-6.40) and threaded down: the read predicate at the
+/// requester's class, the stream keys its class opens, and the universal
+/// term's live set. The feed evaluates it and resolves nothing of its own.
+pub(crate) struct FeedClass<'a> {
+    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20).
+    pub readable: &'a dyn Fn(&Address) -> bool,
+    /// The requester's own account and its ancestor accounts (the subtree
+    /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
+    /// for a node-tier principal.
+    pub subtree: Vec<Address>,
+    /// The grant-selected issuers, each with the union of the content
+    /// prefixes it granted this principal (`World::issuers_for`, PUB-7.25).
+    pub issuers: Vec<(Address, Vec<Address>)>,
+    /// The live ANY-PRINCIPAL set (`World::universal_grants`, PUB-7.22),
+    /// empty for the guest (grants reach principals alone, PUB-5.109).
+    pub universal: Vec<(Address, Vec<Address>)>,
+}
+
+/// One `/changes` question.
+#[derive(Clone, Debug)]
+pub(crate) struct Query {
+    /// The fence: positions strictly above it.
+    pub since: u64,
+    /// The page cap, over the VISIBLE stream.
+    pub limit: usize,
+    /// `under=`: only entries whose reduced docs name a document under this
+    /// tumbler (PUB-7.31).
+    pub under: Option<Tumbler>,
+    /// `drafts=true`: only entries whose reduced docs name a draft
+    /// (PUB-7.35).
+    pub drafts_only: bool,
+}
+
+/// The answer `GET /changes` marshals.
+#[derive(Debug)]
+pub(crate) enum ChangesAnswer {
+    /// `since` reaches below what the feed can enumerate; `floor` is the
+    /// oldest position that still has an entry, when one exists — the
+    /// wire's sense of the word (wire.md §Reading history: the oldest
+    /// position still answerable), which is NOT `CommitsLog::min_since`.
+    /// Class-invariant, like every position (PUB-6.52's residue).
+    Reclaimed { floor: Option<u64> },
+    /// The visible entries in `(since, head]`, oldest first, rendered,
+    /// capped at `limit`; `last` is the final entry's position (or `since`
+    /// echoed when the page is empty) and `more` says whether a visible
+    /// entry remains past it (PUB-6.44).
+    Page { entries: Vec<Value>, last: u64, more: bool },
+}
+
+/// The feed: `commits.log` and the four derived twins, under one lock.
+pub(crate) struct Feed {
+    inner: Mutex<Inner>,
+}
+
+struct Inner {
+    log: CommitsLog,
+    /// Position → its classified docs (positions with docs only) — the
+    /// index's inverse, and what the mask reads per entry.
+    docs: BTreeMap<u64, Vec<Doc>>,
+    /// The position index: document (by tumbler, so a prefix is a range) →
+    /// the address as named, and its positions ascending.
+    index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
+    /// The bitmap: positions masked at commit (docs non-empty, all drafts).
+    masked: BTreeSet<u64>,
+    /// The materialized published stream: every entry not in `masked`.
+    published: BTreeSet<u64>,
+    /// Owner account → the positions naming one of its drafts, ascending.
+    streams: BTreeMap<Address, Vec<u64>>,
+    files: Files,
+}
+
+struct Files {
+    index: DerivedFile,
+    offsets: DerivedFile,
+    masked: DerivedFile,
+    streams: DerivedFile,
+}
+
+impl Feed {
+    /// Open the feed over `dir`: replay `commits.log` (reconstructing and
+    /// classifying its uncovered tail from the journal), replay the four
+    /// derived sidecars, re-derive each one's missing tail — a recorded
+    /// position's contribution from its own record, a bare position's from
+    /// the journal — and fence each at the head. Runs AFTER M2's
+    /// load-and-replay and BEFORE the first page (PUB-6.40): every
+    /// classification here reads the recovered head's exception set, and
+    /// the grant fold it stands beside is seeded by the same load.
+    ///
+    /// COST: the `commits.log` replay and walk (`CommitsLog::open` states
+    /// them), plus O(each derived file) to replay it and O(its missing
+    /// tail) to close it — a whole-file loss is one O(journal) rebuild, a
+    /// bare position outside the index's coverage one targeted pair of
+    /// world reconstructions. Never a rewrite per restart: a file is
+    /// rewritten only when the log compacted under it, when it carries
+    /// another journal's lines, or (the offset array) when its offsets no
+    /// longer match the log's.
+    pub fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
+        let (log, walked) = CommitsLog::open(dir, engine)?;
+        let head = log.open_head;
+        let snap = engine.kernel().snapshot();
+        let world = snap.world();
+
+        let (mut f_index, index_lines) = DerivedFile::open(dir, INDEX_FILE, head)?;
+        let (mut f_offsets, offset_lines) = DerivedFile::open(dir, OFFSETS_FILE, head)?;
+        let (mut f_masked, masked_lines) = DerivedFile::open(dir, MASKED_FILE, head)?;
+        let (mut f_streams, stream_lines) = DerivedFile::open(dir, STREAMS_FILE, head)?;
+
+        // ── the classification map: the index file's lines for positions
+        //    the log holds, then this open's walk, then the index's tail ──
+        let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
+        for (at, m) in &index_lines {
+            if !log.entries.contains_key(at) {
+                continue;
+            }
+            let addrs: Vec<Address> =
+                strings_of(m.get("docs")).into_iter().filter_map(|s| parse_dotted(&s)).collect();
+            if !addrs.is_empty() {
+                docs.insert(*at, classify(world, addrs));
+            }
+        }
+        let walked_at: BTreeSet<u64> = walked.iter().map(|w| w.at).collect();
+        for w in &walked {
+            if let Some(addrs) = &w.docs {
+                if !addrs.is_empty() && !docs.contains_key(&w.at) {
+                    docs.insert(w.at, classify(world, addrs.clone()));
+                }
+            }
+        }
+        let index_cov = f_index.coverage();
+        let index_tail: Vec<u64> =
+            log.entries.range(index_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+        for &at in &index_tail {
+            if !docs.contains_key(&at) {
+                let addrs: Vec<Address> = match log.entries.get(&at) {
+                    Some(CommitMeta::Recorded { docs: strings, .. }) => {
+                        strings.iter().filter_map(|s| parse_dotted(s)).collect()
+                    }
+                    // Walked this open: classified above, or empty/unclassifiable.
+                    Some(CommitMeta::Bare) if walked_at.contains(&at) => Vec::new(),
+                    // A bare position the index lost: the journal answers.
+                    Some(CommitMeta::Bare) => classify_bare(engine, &log, at).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                if !addrs.is_empty() {
+                    docs.insert(at, classify(world, addrs));
+                }
+            }
+            if let Some(ds) = docs.get(&at) {
+                f_index.append(at, vec![("docs", doc_strings(ds))])?;
+            }
+        }
+        f_index.fence(head)?;
+
+        // ── the position index twin, from the classification map ──
+        let mut index: BTreeMap<Tumbler, (Address, Vec<u64>)> = BTreeMap::new();
+        for (at, ds) in &docs {
+            for d in ds {
+                let list = index
+                    .entry(d.addr.tumbler().clone())
+                    .or_insert_with(|| (d.addr.clone(), Vec::new()));
+                if list.1.last() != Some(at) {
+                    list.1.push(*at);
+                }
+            }
+        }
+
+        // ── the bitmap, and its complement ──
+        let mut masked: BTreeSet<u64> = masked_lines
+            .iter()
+            .map(|(at, _)| *at)
+            .filter(|at| log.entries.contains_key(at))
+            .collect();
+        let masked_cov = f_masked.coverage();
+        let masked_tail: Vec<u64> =
+            log.entries.range(masked_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+        for at in masked_tail {
+            if is_masked(docs.get(&at)) {
+                masked.insert(at);
+                f_masked.append(at, vec![])?;
+            }
+        }
+        f_masked.fence(head)?;
+        let published: BTreeSet<u64> =
+            log.entries.keys().copied().filter(|at| !masked.contains(at)).collect();
+
+        // ── the per-owner draft streams ──
+        let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
+        for (at, m) in &stream_lines {
+            if !log.entries.contains_key(at) {
+                continue;
+            }
+            for owner in strings_of(m.get("owners")).into_iter().filter_map(|s| parse_dotted(&s)) {
+                let s = streams.entry(owner).or_default();
+                if s.last() != Some(at) {
+                    s.push(*at);
+                }
+            }
+        }
+        let streams_cov = f_streams.coverage();
+        let streams_tail: Vec<u64> =
+            log.entries.range(streams_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+        for at in streams_tail {
+            let owners = owners_of(docs.get(&at));
+            if !owners.is_empty() {
+                for o in &owners {
+                    streams.entry(o.clone()).or_default().push(at);
+                }
+                f_streams.append(at, vec![("owners", addr_strings(owners.iter()))])?;
+            }
+        }
+        f_streams.fence(head)?;
+
+        // ── the offset array, checked against the log's own replay ──
+        let offsets_agree = !log.rewritten
+            && offset_lines.iter().all(|(at, m)| {
+                m.get("offset").and_then(Value::as_u64) == log.offsets.get(at).copied()
+            });
+        if offsets_agree {
+            let offsets_cov = f_offsets.coverage();
+            let tail: Vec<(u64, u64)> = log
+                .offsets
+                .range(offsets_cov.saturating_add(1)..)
+                .map(|(k, v)| (*k, *v))
+                .collect();
+            for (at, offset) in tail {
+                f_offsets.append(at, vec![("offset", Value::Number(offset.into()))])?;
+            }
+            f_offsets.fence(head)?;
+        } else {
+            f_offsets.rewrite(
+                log.offsets
+                    .iter()
+                    .map(|(at, o)| {
+                        derived::record_line(
+                            *at,
+                            [("offset".to_string(), Value::Number((*o).into()))],
+                        )
+                    })
+                    .collect(),
+                head,
+            )?;
+        }
+
+        // ── compaction: the log dropped what the journal reclaimed, so the
+        //    derived files drop it too, rewritten from the twins ──
+        if log.rewritten {
+            f_index.rewrite(
+                docs.iter()
+                    .map(|(at, ds)| derived::record_line(*at, [("docs".to_string(), doc_strings(ds))]))
+                    .collect(),
+                head,
+            )?;
+            f_masked.rewrite(
+                masked.iter().map(|at| derived::record_line(*at, std::iter::empty())).collect(),
+                head,
+            )?;
+            f_streams.rewrite(
+                docs.iter()
+                    .filter_map(|(at, ds)| {
+                        let owners = owners_of(Some(ds));
+                        (!owners.is_empty()).then(|| {
+                            derived::record_line(
+                                *at,
+                                [("owners".to_string(), addr_strings(owners.iter()))],
+                            )
+                        })
+                    })
+                    .collect(),
+                head,
+            )?;
+        }
+
+        Ok(Feed {
+            inner: Mutex::new(Inner {
+                log,
+                docs,
+                index,
+                masked,
+                published,
+                streams,
+                files: Files {
+                    index: f_index,
+                    offsets: f_offsets,
+                    masked: f_masked,
+                    streams: f_streams,
+                },
+            }),
+        })
+    }
+
+    /// Record one committed write at ack time (`CommitsLog::record`'s
+    /// contract: under the write-serialization lock, between a commit and
+    /// its ack) and classify it against `world` — the POST-COMMIT head, so
+    /// the minted document's registration and bit are in it — into the four
+    /// derived structures: the offset array, the index (docs non-empty), the
+    /// bitmap or the published stream, and each named draft's owner stream.
+    /// Declined exactly when the log declines (an old commit's re-ack).
+    ///
+    /// The derived appends are testimony too: a failed one is reported and
+    /// the resident twin stays right, so this uptime answers correctly and
+    /// the next open's tail check re-derives what the file missed.
+    pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>, key: String, world: &World) {
+        let mut inner = self.inner.lock();
+        let Some(offset) = inner.log.record(at, op, docs.clone(), key) else {
+            return;
+        };
+        let addrs: Vec<Address> = docs.iter().filter_map(|s| parse_dotted(s)).collect();
+        let classified = classify(world, addrs);
+        inner.index_position(at, offset, classified);
+    }
+
+    /// The data behind `GET /changes` at `class`.
+    pub fn page(&self, class: &FeedClass<'_>, q: &Query) -> ChangesAnswer {
+        let inner = self.inner.lock();
+        if q.since < inner.log.min_since {
+            // The wire's `floor`: the oldest position still answerable,
+            // which is the first entry ABOVE the smallest admissible since.
+            let floor = inner
+                .log
+                .entries
+                .range(inner.log.min_since.saturating_add(1)..)
+                .next()
+                .map(|(k, _)| *k);
+            return ChangesAnswer::Reclaimed { floor };
+        }
+        let Some(start) = q.since.checked_add(1) else {
+            return ChangesAnswer::Page { entries: Vec::new(), last: q.since, more: false };
+        };
+        let merge = Merge::new(inner.sources(class, q, start));
+        let mut entries = Vec::new();
+        let mut last = q.since;
+        let mut more = false;
+        for at in merge {
+            let Some((meta, reduced)) = inner.visible(class, q, at) else { continue };
+            if entries.len() == q.limit {
+                more = true;
+                break;
+            }
+            entries.push(meta.entry(at, reduced.iter().map(|d| d.addr.to_string()).collect()));
+            last = at;
+        }
+        ChangesAnswer::Page { entries, last, more }
+    }
+
+    /// The HEAD position's recorded wall-clock time — `CommitsLog::head_time`.
+    pub fn head_time(&self) -> Option<u64> {
+        self.inner.lock().log.head_time()
+    }
+}
+
+impl Inner {
+    /// Fold one classified position into the four twins and append its
+    /// lines — the ONE path both `record` and a rebuild would take, so the
+    /// files and the twins cannot disagree about what a position contributes.
+    fn index_position(&mut self, at: u64, offset: u64, docs: Vec<Doc>) {
+        report(
+            self.files.offsets.append(at, vec![("offset", Value::Number(offset.into()))]),
+            OFFSETS_FILE,
+            at,
+        );
+        if !docs.is_empty() {
+            for d in &docs {
+                let list = self
+                    .index
+                    .entry(d.addr.tumbler().clone())
+                    .or_insert_with(|| (d.addr.clone(), Vec::new()));
+                if list.1.last() != Some(&at) {
+                    list.1.push(at);
+                }
+            }
+            report(self.files.index.append(at, vec![("docs", doc_strings(&docs))]), INDEX_FILE, at);
+        }
+        if is_masked(Some(&docs)) {
+            self.masked.insert(at);
+            report(self.files.masked.append(at, vec![]), MASKED_FILE, at);
+        } else {
+            self.published.insert(at);
+        }
+        let owners = owners_of(Some(&docs));
+        if !owners.is_empty() {
+            for o in &owners {
+                self.streams.entry(o.clone()).or_default().push(at);
+            }
+            report(
+                self.files.streams.append(at, vec![("owners", addr_strings(owners.iter()))]),
+                STREAMS_FILE,
+                at,
+            );
+        }
+        if !docs.is_empty() {
+            self.docs.insert(at, docs);
+        }
+    }
+
+    /// THE MASK, per entry (PUB-7.20; PUB-6.44–6.45), plus the narrowings'
+    /// per-entry predicates: the entry's meta and its docs REDUCED to the
+    /// requester's readable ones, or `None` when the entry is omitted.
+    fn visible(&self, class: &FeedClass<'_>, q: &Query, at: u64) -> Option<(&CommitMeta, Vec<&Doc>)> {
+        let meta = self.log.entries.get(&at)?;
+        let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
+        let reduced: Vec<&Doc> = docs.iter().filter(|d| (class.readable)(&d.addr)).collect();
+        if !docs.is_empty() && reduced.is_empty() {
+            return None; // masked
+        }
+        if let Some(under) = &q.under {
+            if !reduced.iter().any(|d| is_prefix(under, d.addr.tumbler())) {
+                return None;
+            }
+        }
+        if q.drafts_only && !reduced.iter().any(|d| d.is_draft()) {
+            return None;
+        }
+        Some((meta, reduced))
+    }
+
+    /// The candidate sources for `class` and `q`, each an ascending iterator
+    /// of positions at or above `start` — what the merge unions. Complete
+    /// by construction: every visible position is in one of them (a
+    /// `[]`-docs or published-touching entry in the published walk; a
+    /// draft entry in its owner's stream, which the subtree clause, the
+    /// grant clause or the universal term selects); exact by the mask.
+    fn sources<'s>(
+        &'s self,
+        class: &'s FeedClass<'_>,
+        q: &'s Query,
+        start: u64,
+    ) -> Vec<Box<dyn Iterator<Item = u64> + 's>> {
+        let mut v: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();
+        if let Some(under) = &q.under {
+            if self.merge_beats_walk(under, start) {
+                // MERGE (PUB-7.32, PUB-7.33): the index lists under the
+                // prefix, an unreadable document's whole list skipped on ONE
+                // test — the doc-granular skip.
+                for (_, (doc, positions)) in
+                    self.index.range(under.clone()..).take_while(|(k, _)| is_prefix(under, k))
+                {
+                    if !(class.readable)(doc) {
+                        continue;
+                    }
+                    v.push(Box::new(from(positions, start)));
+                }
+                return v;
+            }
+            // WALK: the visible stream below, the prefix tested per entry
+            // by `visible`.
+        }
+        if !q.drafts_only {
+            v.push(Box::new(self.published.range(start..).copied()));
+        }
+        for key in &class.subtree {
+            if let Some(s) = self.streams.get(key) {
+                v.push(Box::new(from(s, start)));
+            }
+        }
+        for (issuer, prefixes) in &class.issuers {
+            let Some(s) = self.streams.get(issuer) else { continue };
+            // A grant at the issuer's account depth or wider IS the stream
+            // (PUB-7.25); narrower prefixes take the per-entry containment
+            // test against their union.
+            if prefixes.iter().any(|p| is_prefix(p.tumbler(), issuer.tumbler())) {
+                v.push(Box::new(from(s, start)));
+            } else {
+                v.push(Box::new(
+                    from(s, start).filter(move |at| self.names_under(*at, issuer, prefixes)),
+                ));
+            }
+        }
+        for (prefix, _issuers) in &class.universal {
+            // The universal term (PUB-7.22): the live any-principal prefix's
+            // own index lists — the mask's grant clause admits exactly the
+            // entries the issuing owner covers.
+            for (_, (_, positions)) in self
+                .index
+                .range(prefix.tumbler().clone()..)
+                .take_while(|(k, _)| is_prefix(prefix.tumbler(), k))
+            {
+                v.push(Box::new(from(positions, start)));
+            }
+        }
+        v
+    }
+
+    /// Does the entry at `at` name a draft of `issuer` under one of
+    /// `prefixes` — the per-entry containment test of a narrower grant.
+    fn names_under(&self, at: u64, issuer: &Address, prefixes: &[Address]) -> bool {
+        self.docs.get(&at).is_some_and(|ds| {
+            ds.iter().any(|d| {
+                d.owner.as_ref() == Some(issuer)
+                    && prefixes.iter().any(|p| is_prefix(p.tumbler(), d.addr.tumbler()))
+            })
+        })
+    }
+
+    /// The MERGE-OR-WALK rule (PUB-7.33): merge iff the prefix holds no more
+    /// documents than the range holds positions. Both counts advance
+    /// together and stop at the first to run out, so the rule costs
+    /// O(min(documents, positions)) and needs no rank structure.
+    fn merge_beats_walk(&self, under: &Tumbler, start: u64) -> bool {
+        let mut docs = self.index.range(under.clone()..).take_while(|(k, _)| is_prefix(under, k));
+        let mut positions = self.log.entries.range(start..);
+        loop {
+            match (docs.next(), positions.next()) {
+                (Some(_), Some(_)) => {}
+                (None, _) => return true,
+                (Some(_), None) => return false,
+            }
+        }
+    }
+}
+
+/// A position list from its first member at or above `start`.
+fn from(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
+    let i = positions.partition_point(|&p| p < start);
+    positions[i..].iter().copied()
+}
+
+/// The bitmap's test: docs non-empty and every one a draft.
+fn is_masked(docs: Option<&Vec<Doc>>) -> bool {
+    docs.is_some_and(|ds| !ds.is_empty() && ds.iter().all(Doc::is_draft))
+}
+
+/// The owner accounts of an entry's drafts — the streams the position
+/// enters.
+fn owners_of(docs: Option<&Vec<Doc>>) -> BTreeSet<Address> {
+    docs.map(|ds| ds.iter().filter_map(|d| d.owner.clone()).collect()).unwrap_or_default()
+}
+
+fn doc_strings(docs: &[Doc]) -> Value {
+    Value::Array(docs.iter().map(|d| Value::String(d.addr.to_string())).collect())
+}
+
+fn addr_strings<'a>(addrs: impl Iterator<Item = &'a Address>) -> Value {
+    Value::Array(addrs.map(|a| Value::String(a.to_string())).collect())
+}
+
+/// The strings of a JSON array field, or none.
+fn strings_of(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// A bare position the index lost: the journal's classification, from the
+/// world at the boundary below it (the previous entry, or genesis) and its
+/// own — `None` where either cannot be answered (reclaimed), the module's
+/// unclassifiable residue.
+fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Address>> {
+    let prev = log.entries.range(..at).next_back().map(|(k, _)| *k).unwrap_or(0);
+    let below = engine.world_at(Seq(prev)).ok()?;
+    let above = engine.world_at(Seq(at)).ok()?;
+    Some(derived_docs(&below, &above))
+}
+
+/// A derived append that failed: reported, never a failed op — the twin is
+/// right for this uptime and the next open's tail check re-derives the
+/// line. `writeln!` to stderr rather than `eprintln!`, for `sidecar.rs`'s
+/// reason (a lost log pipe must not panic a committed write's ack).
+fn report(r: io::Result<()>, file: &str, at: u64) {
+    if let Err(e) = r {
+        let _ = writeln!(std::io::stderr(), "skepd: {file} append failed at position {at}: {e}");
+    }
+}
+
+/// The K-way merge of ascending position sources, deduplicated by
+/// position across the whole merge (PUB-7.26): a min-heap over each
+/// source's head, so a page costs O(log K) per candidate.
+struct Merge<'a> {
+    sources: Vec<Box<dyn Iterator<Item = u64> + 'a>>,
+    heap: BinaryHeap<Reverse<(u64, usize)>>,
+}
+
+impl<'a> Merge<'a> {
+    fn new(mut sources: Vec<Box<dyn Iterator<Item = u64> + 'a>>) -> Merge<'a> {
+        let mut heap = BinaryHeap::new();
+        for (i, s) in sources.iter_mut().enumerate() {
+            if let Some(v) = s.next() {
+                heap.push(Reverse((v, i)));
+            }
+        }
+        Merge { sources, heap }
+    }
+}
+
+impl Iterator for Merge<'_> {
+    type Item = u64;
+
+    /// The next position, each emitted exactly once.
+    fn next(&mut self) -> Option<u64> {
+        let Reverse((at, i)) = self.heap.pop()?;
+        if let Some(v) = self.sources[i].next() {
+            self.heap.push(Reverse((v, i)));
+        }
+        while let Some(Reverse((v, j))) = self.heap.peek().copied() {
+            if v != at {
+                break;
+            }
+            self.heap.pop();
+            if let Some(n) = self.sources[j].next() {
+                self.heap.push(Reverse((n, j)));
+            }
+        }
+        Some(at)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The merge unions its sources in order and emits each position once.
+    #[test]
+    fn the_merge_dedups_by_position_across_every_source() {
+        let a = [1u64, 4, 9];
+        let b = [4u64, 5, 9, 12];
+        let c: [u64; 0] = [];
+        let sources: Vec<Box<dyn Iterator<Item = u64> + '_>> = vec![
+            Box::new(a.iter().copied()),
+            Box::new(b.iter().copied()),
+            Box::new(c.iter().copied()),
+            Box::new(a.iter().copied()),
+        ];
+        let out: Vec<u64> = Merge::new(sources).collect();
+        assert_eq!(out, vec![1, 4, 5, 9, 12]);
+    }
+
+    /// `from` starts at the first member at or above the fence.
+    #[test]
+    fn a_list_starts_at_the_fence() {
+        let s = [3u64, 7, 8, 20];
+        assert_eq!(from(&s, 8).collect::<Vec<_>>(), vec![8, 20]);
+        assert_eq!(from(&s, 9).collect::<Vec<_>>(), vec![20]);
+        assert_eq!(from(&s, 21).count(), 0);
+        assert_eq!(from(&s, 0).count(), 4);
+    }
+}

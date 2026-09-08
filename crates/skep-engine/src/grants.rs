@@ -134,6 +134,38 @@ impl World {
             Caller::System => world.readable_guest(doc),
         }
     }
+
+    /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
+    /// content-prefix currently covered by an admitted, unsuperseded
+    /// ANY-PRINCIPAL grant, with the issuers that granted it — in prefix
+    /// (tumbler) order, each issuer list in address order. An INDEX SHAPE,
+    /// never per-session state: the fold's universal index rendered as owned
+    /// values, enumerated once per request off one head snapshot by the feed's
+    /// universal term (a K-way merge of these prefixes' own position-index
+    /// lists, K = this list's length). Revocation is immediate here — a
+    /// superseding record removes its grant from the index at the commit that
+    /// carries it — so a derivation off this read never serves withdrawn
+    /// material (PUB-7.23). Reads the fold's query index, adds no fold state,
+    /// and is `readable`'s own universal probe turned inside out: a document
+    /// is universally granted iff one of its ancestor prefixes is listed here
+    /// with its ω owner among the issuers.
+    pub fn universal_grants(&self) -> Vec<(Address, Vec<Address>)> {
+        self.grants.universal()
+    }
+
+    /// THE GRANTEE-INDEXED READ (PUB-7.28; lane 3.6 §3): for `grantee` — a
+    /// principal's account address — its ISSUERS, each with the UNION of the
+    /// content-prefixes that issuer has granted it, in issuer order, each
+    /// prefix list in address order. The discovery term a feed poll re-pays:
+    /// grants SELECT issuer streams (PUB-7.25), so a holder of N grants from M
+    /// issuers merges M streams, each under one containment test against the
+    /// union this read hands back. Reads the fold's principal-exact index —
+    /// `grantee` alone, never its subtree (PUB-5.5) — and adds no fold state.
+    /// The ANY-PRINCIPAL grants are NOT here; they are
+    /// [`World::universal_grants`], the tier's own read.
+    pub fn issuers_for(&self, grantee: &Address) -> Vec<(Address, Vec<Address>)> {
+        self.grants.issuers_for(grantee)
+    }
 }
 
 // The GRANTS class type address the fold keys on — `crate::types::t_grant`
@@ -221,6 +253,38 @@ impl Grants {
             anc = parent(&a);
         }
         false
+    }
+
+    /// The ANY-PRINCIPAL index as owned values: `(content prefix, issuers)`
+    /// in the `OrdMap`'s key order — tumbler order — each issuer set in
+    /// address order. [`World::universal_grants`] is the public face.
+    pub(crate) fn universal(&self) -> Vec<(Address, Vec<Address>)> {
+        self.universal
+            .iter()
+            .map(|(prefix, issuers)| (prefix.clone(), issuers.iter().cloned().collect()))
+            .collect()
+    }
+
+    /// The principal-exact index for one grantee, INVERTED: `by_grantee` keys
+    /// prefix → issuers (the shape `grant_exists`'s O(depth) probe wants);
+    /// the feed wants issuer → the union of that issuer's prefixes (the shape
+    /// its per-issuer stream test wants). Both orders are the `OrdMap`s' —
+    /// deterministic. [`World::issuers_for`] is the public face.
+    pub(crate) fn issuers_for(&self, grantee: &Address) -> Vec<(Address, Vec<Address>)> {
+        let mut by_issuer: OrdMap<Address, OrdSet<Address>> = OrdMap::new();
+        if let Some(prefixes) = self.by_grantee.get(grantee) {
+            for (prefix, issuers) in prefixes.iter() {
+                for issuer in issuers.iter() {
+                    let mut covered = by_issuer.get(issuer).cloned().unwrap_or_default();
+                    covered.insert(prefix.clone());
+                    by_issuer.insert(issuer.clone(), covered);
+                }
+            }
+        }
+        by_issuer
+            .iter()
+            .map(|(issuer, covered)| (issuer.clone(), covered.iter().cloned().collect()))
+            .collect()
     }
 
     /// Add an admitted grant to the query indexes.

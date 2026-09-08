@@ -26,7 +26,9 @@
 //!   wire v7 — the `auth` object the board's mode derives from),
 //!   `GET /events` (the server-sent commit stream, wire v4),
 //!   `GET /changes` (the pull delta feed of committed writes, wire v6, fed
-//!   by the daemon's own commit-metadata sidecar `commits.log`), `GET /`
+//!   by the daemon's own commit-metadata sidecar `commits.log` and — wire
+//!   v7.8 — masked at the presented token's class off the feed module's
+//!   four derived sidecars), `GET /`
 //!   (the embedded authoring client, `client` feature, default OFF — the
 //!   client acts, so serving it is opted into; see the feature's note in
 //!   `Cargo.toml`), the CORS preflight on every known path, and (behind
@@ -43,17 +45,22 @@
 //! Durability lives in M2 and is *configured* here (`Durability::Fsync`,
 //! every-1024-commits checkpoints, two retained): genesis on a fresh data
 //! dir, recovery on an existing one. The only files this crate writes
-//! itself are `commits.log` — the wire-v6 commit-metadata sidecar — and,
-//! transiently while that file is compacted, `commits.log.compact`.
-//! Neither persists anything about the WORLD (two daemons replaying one
-//! journal still converge byte-identically): the sidecar is the daemon's
-//! own testimony about when and for whom it committed, the same standing
-//! as the kernel's lock file.
+//! itself are the change feed's: `commits.log` — the wire-v6
+//! commit-metadata sidecar — its four derived sidecars (`feed-index.log`,
+//! `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; wire v7.8,
+//! PUB-7.19), and, transiently while any of them is compacted, its
+//! `.compact` twin. None persists anything about the WORLD (two daemons
+//! replaying one journal still converge byte-identically): the sidecar is
+//! the daemon's own testimony about when and for whom it committed, the
+//! same standing as the kernel's lock file, and the four beside it are
+//! projections of that testimony and the journal, rebuilt from them on
+//! loss.
 
 #![forbid(unsafe_code)]
 
 mod auth;
 mod codec;
+mod feed;
 mod history;
 mod server;
 mod sidecar;

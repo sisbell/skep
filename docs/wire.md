@@ -31,7 +31,7 @@ acknowledged only after it is durable on disk.
 | `POST /op-at`    | One **read** frame answered as of a committed position (§Reading history). |
 | `GET /health`    | Liveness, current log position, and the head commit's time. |
 | `GET /events`    | Server-sent stream of committed positions (§The commit stream). |
-| `GET /changes`   | The pull delta feed of committed writes (§The change feed). |
+| `GET /changes`   | The pull delta feed of committed writes, masked at the presented token's class (§The change feed). |
 | `GET /`          | The embedded authoring client, one HTML file (only in `client` builds — the feature is default-off). |
 | `GET /dump`      | Deterministic world dump; `?at=N` for a committed position (only in `observe` builds). |
 
@@ -147,6 +147,11 @@ How a masked read answers:
 * The namespace reads (`next_account_prefix`, `principal_prefix`) and
   the lineage reads (`in_claims`, `out_claims`) are exempt — registry
   data, served to every class.
+* **The change feed is masked per entry** (v7.8, §The change feed): an
+  entry every one of whose `docs` you may not read is OMITTED from your
+  page, and a shown entry's `docs` are REDUCED to the ones you may read;
+  `limit`, `last` and `more` are computed over what you see. `/events` is
+  untouched — positions are class-invariant.
 
 The two publication reads take the consult too (v7.6, PUB round 2 lane
 3.4): `doc_metadata`'s `doc` and `edition_claims`'s `target` are each a
@@ -483,7 +488,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 400    | `beyond_head`               | the position exceeds the committed head (carries `head`) |
 | 400    | `not_a_position`            | the number is not a committed position (carries `nearest`) |
 | 400    | `malformed_at`              | the `/dump` query isn't `at=<position>` |
-| 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit` |
+| 400    | `malformed_changes`         | the `/changes` query isn't `since=<position>` with an optional in-range `limit`, an optional dotted-decimal `under`, and an optional `drafts=true|false` |
 | 400    | `malformed_http`            | the request is not the HTTP subset skepd speaks (bad head, chunked body, a body cut short) |
 | 404    | `no_such_endpoint`          | unknown path (including `/dump` on a build without `observe` and `/` on a build without `client`) |
 | 405    | `method_not_allowed`        | known path, wrong method                |
@@ -513,7 +518,12 @@ term more (v7.6, PUB-8.26): its bytes are a function of the world AND the
 reader's class — the head's publication state, its grant state, and the
 presented token's principal — so two dumps are byte-equal when those
 agree, and a guest's dump differs from an owner's of the same world by
-design. The reclaim floor advances
+design. `GET /changes` takes the same term (v7.8, PUB-8.26): a page is a
+function of the journal, the sidecar, AND the reader's class — the head's
+publication state (which only grows), its grant state, and the presented
+token's principal — so two pages at one class agree byte for byte, across
+repeats, restarts and daemons over one journal, and a guest's page
+differs from an owner's of the same feed by design. The reclaim floor advances
 between repeats; a position that has aged out answers
 `410 history_reclaimed`, never different bytes. That conditioning is the
 wire's own base; rounds that widen this surface state any further
@@ -2107,15 +2117,19 @@ Each entry:
 * `op` — the snake_case op kind of the write, or `null` (below).
 * `docs` — the document(s) whose state that commit touched, or `null`:
   the write's target doc for `insert`/`delete`/`copy`/`rearrange`; a link
-  write names its **home** (`edit_link` both its homes, successor's first);
-  the **minted** document for `create_new_document`/`fork`/`version`,
+  write names its **home** (`edit_link` both its homes, successor's first;
+  `nullify` — v7.8, PUB-6.46 — its home AND the target link's home, a
+  SET with each document named once, so a same-home retraction carries
+  one name); the **minted** document for
+  `create_new_document`/`fork`/`version`,
   and the minted MEMBER for `publish` (v7.3 — `1.0.1.0.1.2`, whose
   trunk is the document it advances); `delegate` and `register_node`
   touch no document and carry `[]`. A declared deposit into a
   published chain names the address the `insert` was written to,
   though the arrangement it lands in is the chain's head member (§The
   publish shot and head-float) — a client refreshing the head re-reads
-  the bare address, which floats.
+  the bare address, which floats. Since v7.8 the list you see is
+  REDUCED to the documents you may read (below).
 * `key` (v7) — the write's AUTH testimony: the 64-hex fingerprint of the
   enrolled key whose signed session committed it; `"bare"` for a
   bare-session write; `null` ONLY for lost metadata (a bare entry, or a
@@ -2130,6 +2144,44 @@ Only writes appear: reads are not in the journal and never enter the feed.
 Rejected operations committed nothing and never appear. An idempotent
 retry re-acknowledges the original commit — one entry per commit, ever.
 
+**The feed is class-gated** (v7.8, PUB round 2 lane 3.6; PUB-6.44–6.47).
+The route accepts `Skepd-Session` like every read (an absent or dead token
+is the GUEST), and every entry is classified over its `docs` — the target
+for arrangement writes, the HOME for link writes, the MINTED document for
+mints — never over sources read, against the read predicate (§The read
+predicate) at the presented token's class, off the one head snapshot the
+page is answered from:
+
+* an entry whose `docs` is non-empty and none of them readable to you is
+  MASKED — OMITTED from the page, never present with nulled fields (null
+  is reserved for lost metadata, below); otherwise it is shown with
+  `docs` REDUCED to the ones you may read, in the record's own order;
+* `[]`-docs entries (`delegate`, `register_node`) are never masked;
+* `limit`, `last` and `more` are computed over the VISIBLE stream: a
+  page is never short of `limit` before the head, paging cannot stall on
+  a masked run, and `last` is a visible position or your `since` echoed;
+* a bare entry (lost testimony) classifies FROM THE JOURNAL — the daemon
+  reconstructs the documents the commit touched (the drafts it minted,
+  the homes of the links it deposited, the drafts whose arrangement it
+  moved) and masks it exactly as it would the record — so a lost sidecar
+  never unmasks a draft write; its fields still read `null`;
+* the two STRADDLE renderings, accepted residues (PUB-6.47): a
+  draft-homed `nullify` of a public link in `T` is a `[D, T]` entry a
+  guest sees as `{"op":"nullify","docs":["T"]}` — never omitted, and
+  indistinguishable from a same-home retraction, which reduces to `[T]`
+  identically; an `edit_link` with `d_s` public and `d_a` a draft
+  reduces to `[P]` under `op: "edit_link"`. From either a guest learns
+  that a draft-homed record EXISTS — its type, its target or public
+  `new`, its commit position — never its home, `old`, or a byte.
+
+A principal's page is its SUPPLEMENT merged over the published stream:
+its own account's draft writes, its ancestor accounts' (the subtree
+clause reads upward), those of the drafts a grant to it names, and — for
+every bound principal, never the guest — the drafts under a live
+ANY-PRINCIPAL grant, derived at serve from the grant fold, so a
+revocation leaves the next page with no restart. Each position appears
+once.
+
 **Timestamps are transport metadata, never substrate state.** They are the
 daemon's testimony about when *it* committed each transaction — two
 daemons replaying one journal still converge on byte-identical worlds,
@@ -2141,8 +2193,31 @@ refused, not clamped) caps the page. The response carries `last` — the
 final entry's position, or your `since` echoed when the page is empty —
 and `more`; pass `last` as the next request's `since` to page. `since` is
 a fence, not necessarily a position: any number works, and `since ≥ head`
-answers the empty page. Determinism: the same `(since, limit)` against the
-same journal answers byte-identically, across repeats and restarts.
+answers the empty page. Determinism is PER CLASS (§Determinism, PUB-8.26):
+the same `(since, limit, under, drafts)` against the same journal, at the
+same head publication and grant state and the same class, answers
+byte-identically, across repeats and restarts.
+
+**Narrowings** (v7.8, PUB-7.31, PUB-7.35). `under=<address-or-prefix>` —
+a dotted-decimal tumbler, an account prefix or a document — narrows the
+feed to the entries whose REDUCED `docs` name a document at or under it,
+masked exactly as the plain feed is: for a draft you cannot read the
+page is empty, `last` your fence. `drafts=true` narrows to the entries
+whose reduced `docs` name a DRAFT you may read — your supplement alone,
+empty for a guest by construction, the live universally-granted history
+included and the revoked never. The two compose. Their consumers are the
+client's own rules, stated once here: RESUME-BY-READ (PUB-8.32) —
+`/changes?under=<own prefix>` from your last known position BEFORE any
+re-mint, a minting op having no cross-restart memo; and the widening
+triggers (PUB-7.36–7.38) — a grant naming you (or ANY-PRINCIPAL)
+committed after your `since`, or a change of your own class (sign-in,
+principal switch, session death), is your trigger to fetch
+`drafts=true` per range the wider class adds (`under=` your own and
+ancestor account prefixes, and each grant's prefix), from your own
+last-held position per range and from the floor only where the range is
+new to you, deduplicating by position with the wider rendering winning
+(a straddle held as `[T]` re-arrives as `[D, T]`). Fetched entries are
+history — place them by position, never surface them as new activity.
 
 The examples below are produced by this flow on a fresh board, asserted
 against live daemon bytes (the `time` values are illustrative — the one
@@ -2155,7 +2230,8 @@ sessions (CLAIMED-PERMISSIVE, so every `key` reads `"bare"`):
 private — document at 16 (the account's doc 1 is born published, where
 bare writes are gated by design, so the flow's content goes to a draft
 document), a two-byte `insert` at 21, `make_link` at 24. The feed past
-the ceremony, `GET /changes?since=12`:
+the ceremony, `GET /changes?since=12`, read AS PRINCIPAL 1 — the
+owner of the private document, whose class sees every one of these:
 
 <!-- wire: changes feed -->
 ```json
@@ -2169,12 +2245,23 @@ The first page of the same feed, `GET /changes?since=12&limit=2`:
 {"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":15,"more":true}
 ```
 
+The same feed read as the GUEST (no token): the private document's
+mint, insert and link are masked — omitted, with `last` the last visible
+position and `more` false, since nothing visible remains:
+
+<!-- wire: changes feed_guest -->
+```json
+{"changes":[{"at":14,"docs":[],"key":"bare","op":"delegate","time":1786838400000},{"at":15,"docs":["1.0.2.0.1"],"key":"bare","op":"create_new_document","time":1786838400012}],"last":15,"more":false}
+```
+
 **Bare entries.** A position whose metadata the daemon never observed — a
 data dir written before this feature existed, or a record lost to a crash
 — still appears, reconstructed from the journal itself, with every
-metadata field `null`. A pre-feature data dir holding three writes (a
+metadata field `null` (and masked at your class from what the journal
+shows it touched). A pre-feature data dir holding three writes (a
 delegate at 2, a mint at 3, an insert at 8 — written by the engine
-directly, before any daemon), byte-exact:
+directly, before any daemon; all in the published world, so every class
+sees them), byte-exact:
 
 <!-- wire: changes bare -->
 ```json
@@ -2193,9 +2280,27 @@ later round's delta.
 plus what the journal can still reconstruct. When `since` reaches below
 that — reclaimed or unreadable journal regions — the answer is the same
 discipline as `/op-at`: `410 {"error": "history_reclaimed", "floor": F?}`,
-`F` the oldest position that still has an entry. A malformed query
-(missing `since`, a non-integer, an out-of-range `limit`, an unknown
-parameter) is `400 {"error": "malformed_changes", "detail": …}`.
+`F` the oldest position that still has an entry, the same for every class
+(positions are class-invariant). A malformed query
+(missing `since`, a non-integer, an out-of-range `limit`, an `under` that
+is not a dotted-decimal tumbler, a `drafts` that is neither `true` nor
+`false`, a repeated or unknown parameter) is `400 {"error":
+"malformed_changes", "detail": …}`.
+
+**The feed's files.** Beside `commits.log` the daemon keeps four derived
+sidecars in the data dir — `feed-index.log` (document → positions),
+`feed-offsets.log` (position → byte offset into `commits.log`),
+`feed-masked.log` (the positions masked at commit) and `feed-streams.log`
+(position → the owner accounts whose drafts it names) — appended at
+commit outside the journal transaction, tail-checked against the head at
+open and rebuilt from `commits.log` and the journal on loss. They persist
+nothing about the world and decide nothing about what you may see: an
+entry's class is the read predicate's, re-applied per rendered entry.
+
+**Residues, named** (PUB-6.52): `/events` and `/health`'s `head_time`
+move on masked commits too — board-wide draft-write cardinality and
+timing, never which document — positions being durable coordinates that
+are never renumbered per class; and the two straddle renderings above.
 
 ## The other endpoints
 
@@ -2320,6 +2425,40 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.8 (the feeds — PUB round 2, lane 3.6, built 2026-09-08; documented as
+built):
+
+* `GET /changes` IS CLASS-GATED (§The change feed; PUB-6.44–6.47): the
+  route reads the presented token like every other read (absent or dead
+  = the guest), and every entry is classified over its `docs` against
+  the read predicate — masked entries OMITTED (never nulled), shown
+  entries' `docs` REDUCED to the readable ones, `limit`/`last`/`more`
+  over the visible stream. `[]`-docs entries are never masked; a bare
+  entry classifies from the journal. A principal's page is its
+  supplement merged over the published stream — own and ancestor
+  accounts' drafts, grant-named drafts, and the live any-principal
+  drafts derived at serve (a revocation leaves the next page, no
+  restart) — each position once (PUB-7.22–7.28).
+* `nullify`'s `docs` names the TARGET link's home beside the record's
+  home, as a set (PUB-6.46): a draft-homed retraction of a public link
+  shows to a guest as `[T]`, never omitted. The two straddle renderings
+  are the named residues (PUB-6.47).
+* Two `/changes` parameters (PUB-7.31, PUB-7.35): `under=<dotted-decimal
+  address or prefix>` narrows to entries whose reduced `docs` name a
+  document under it; `drafts=true` narrows to entries naming a draft the
+  reader may read — the supplement alone, empty for a guest. Their
+  client-side consumers (resume-by-read, the widening triggers) are
+  stated once at the section.
+* `/changes`'s determinism is PER CLASS (§Determinism; PUB-8.26): the
+  head's publication and grant state and the presented token's class
+  join the base conditioning. `/events` is untouched — the position
+  alone, class-invariant, never renumbered or filtered (PUB-8.14) — and
+  its movement on masked commits is the named residue (PUB-6.52).
+* Four derived sidecars beside `commits.log` (`feed-index.log`,
+  `feed-offsets.log`, `feed-masked.log`, `feed-streams.log`; PUB-7.19),
+  appended at commit, tail-checked at open, rebuilt on loss; none
+  persists anything about the world.
 
 v7.7 (the `nullify` class's remaining cells — PUB round 2, lane 3.5, built
 2026-09-06; documented as built):

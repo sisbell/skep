@@ -325,3 +325,57 @@ fn the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing() {
         "an empty fold grants nothing (PUB-7.68)"
     );
 }
+
+/// The fold's two enumerations for the feed (lane 3.6 §3; PUB-7.22,
+/// PUB-7.28): the LIVE ANY-PRINCIPAL set and a grantee's issuers with the
+/// union of covered prefixes — both read off the fold's own indexes, both
+/// agreeing with the predicate they are the inside-out of, and both moving
+/// with a superseding record at once (revocation is immediate, PUB-7.23).
+#[test]
+fn the_two_feed_enumerations_read_the_fold_s_live_state() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let (draft_two, _) = engine
+        .namespace()
+        .create_new_document(PrincipalId(1), &b.acct_a, None)
+        .expect("A's second draft");
+
+    // Empty fold: nothing enumerates.
+    let w = world(&engine);
+    assert!(w.universal_grants().is_empty(), "no universal grant yet");
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "B holds no grant yet");
+
+    // Two grants to B from A — the draft and the whole account — and one
+    // ANY-PRINCIPAL grant of the second draft.
+    grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    grant(&engine, &b.home_a, &b.acct_a, vec![b.acct_b.clone()]);
+    let g_any = grant(&engine, &b.home_a, &draft_two, vec![]);
+
+    let w = world(&engine);
+    assert_eq!(
+        w.issuers_for(&b.acct_b),
+        vec![(b.acct_a.clone(), vec![b.acct_a.clone(), b.draft_a.clone()])],
+        "B's one issuer is A, with the UNION of A's prefixes to B in address order"
+    );
+    assert!(
+        w.issuers_for(&b.acct_a).is_empty(),
+        "the grantee side is principal-exact: A itself holds no grant"
+    );
+    assert_eq!(
+        w.universal_grants(),
+        vec![(draft_two.clone(), vec![b.acct_a.clone()])],
+        "the live any-principal set lists the second draft under its issuer"
+    );
+    // The enumerations are the predicate turned inside out.
+    assert!(w.readable(Some(b.b), &b.draft_a));
+    assert!(w.readable(Some(PrincipalId(9)), &draft_two), "any principal reads draft two");
+    assert!(!w.readable(None, &draft_two), "the guest never does");
+
+    // A superseding record leaves the enumeration at the commit that carries
+    // it — no restart, no lag.
+    grant(&engine, &b.home_a, &g_any, vec![]);
+    let w = world(&engine);
+    assert!(w.universal_grants().is_empty(), "the revoked universal grant is gone at once");
+    assert!(!w.readable(Some(PrincipalId(9)), &draft_two), "and the predicate agrees");
+    assert_eq!(w.issuers_for(&b.acct_b).len(), 1, "B's grants are untouched by it");
+}

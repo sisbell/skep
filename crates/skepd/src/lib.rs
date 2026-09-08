@@ -99,10 +99,12 @@ pub use skep_engine::{EngineError, HistoryError, World};
 /// types above are.
 pub use skep_kernel::Seq;
 
-/// The reconstruction permit the daemon's test hook hands out — public only
-/// because that hook's return type must be nameable; not a stable API.
+/// The permit the daemon's two test hooks hand out — one slot of the
+/// reconstruction pool or of the class-scan pool (wire v7.9), the same guard
+/// type for both. Public only because those hooks' return type must be
+/// nameable; not a stable API.
 #[doc(hidden)]
-pub use history::ReconstructPermit;
+pub use history::Permit;
 
 /// The auto-traits this crate promises without saying so. A caller running
 /// the server on a thread it owns depends on `Skepd: Send`, and no signature
@@ -123,7 +125,7 @@ const _: fn() = || {
     assert_send_sync::<Body>();
     assert_send_sync::<HttpRequest>();
     assert_send_sync::<Routed>();
-    assert_send_sync::<ReconstructPermit<'static>>();
+    assert_send_sync::<Permit<'static>>();
     // The AUTH round's arrivals. `AuthOptions` is the value a caller builds
     // and hands to `Daemon::open_with`, plausibly across a thread boundary;
     // the other three ride in and out of that surface.

@@ -97,6 +97,10 @@ pub const TRANSPORT_ERRORS: &[&str] = &[
     "method_not_allowed",
     "history_reclaimed",
     "history_busy",
+    // The class-scan bound (wire v7.9, PUB-8.36): a class-scan-shaped FTT
+    // query on `/op` that finds every scan permit taken — 503, retry-class,
+    // the body naming the `op`.
+    "scan_busy",
     "internal_panic",
     "history_io",
     "history_corrupt",

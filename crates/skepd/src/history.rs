@@ -18,6 +18,15 @@
 //! [`Unavailable`] says why an answer cannot be given without knowing what
 //! an HTTP status is; `server.rs` owns the one mapping onto the wire's
 //! transport errors.
+//!
+//! The budget's mechanism — [`Permits`], a counting try-acquire whose
+//! [`Permit`] guard returns its slot on drop — is the ONE permit mechanism
+//! this daemon has, and it is shared: the reconstruction pool here and the
+//! class-scan pool `server.rs` keeps for `/op`'s class-scan-shaped FTT
+//! queries (wire v7.9, PUB-8.36; PUB round 2, lane 3.7) are two instances
+//! of it, disjoint by construction — a permit is a slot of the pool that
+//! minted it and nothing else. The reconstruction pool's count and
+//! behaviour are untouched by the second instance.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -67,12 +76,12 @@ pub(crate) enum Unavailable {
 /// asked of it.
 #[derive(Debug)]
 pub(crate) struct History {
-    permits: ReconstructPermits,
+    permits: Permits,
 }
 
 impl History {
     pub fn new() -> History {
-        History { permits: ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
+        History { permits: Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS) }
     }
 
     /// One reconstruction and the permit that licenses it. The guard is
@@ -92,7 +101,7 @@ impl History {
         &self,
         engine: &Engine,
         at: Seq,
-    ) -> Result<(ReconstructPermit<'_>, World), Unavailable> {
+    ) -> Result<(Permit<'_>, World), Unavailable> {
         let Some(permit) = self.permits.try_acquire() else {
             return Err(Unavailable::Busy);
         };
@@ -167,46 +176,51 @@ impl History {
     /// all [`MAX_CONCURRENT_RECONSTRUCTIONS`] are taken. Real
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
-    pub fn try_hold_permit(&self) -> Option<ReconstructPermit<'_>> {
+    pub fn try_hold_permit(&self) -> Option<Permit<'_>> {
         self.permits.try_acquire()
     }
 }
 
-/// The bound behind [`MAX_CONCURRENT_RECONSTRUCTIONS`]: a counting
-/// try-acquire with no queue and no blocking — plain atomics, no new
-/// dependency. The guard returns its permit on drop, early returns and
-/// panics included.
+/// A pool of permits: a counting try-acquire with no queue and no blocking
+/// — plain atomics, no new dependency. The guard returns its permit on
+/// drop, early returns and panics included.
+///
+/// The bound behind [`MAX_CONCURRENT_RECONSTRUCTIONS`], and — as a second,
+/// separate instance — behind `server.rs`'s `MAX_CONCURRENT_CLASS_SCANS`
+/// (wire v7.9): one mechanism, two pools. A permit belongs to the pool it
+/// came from, so the two bounds cannot spend each other's slots.
 #[derive(Debug)]
-struct ReconstructPermits {
+pub(crate) struct Permits {
     available: AtomicUsize,
 }
 
-/// One held permit; dropping it releases the slot. Named rather than
-/// hidden behind an opaque `impl Drop`, so a caller can store it, borrow
-/// it, and read what it is — the standing every guard in `std` has. Public
-/// only to be the return type of the daemon's test hook, and
-/// `#[doc(hidden)]` for the same reason.
+/// One held permit; dropping it releases the slot in the pool that issued
+/// it. Named rather than hidden behind an opaque `impl Drop`, so a caller
+/// can store it, borrow it, and read what it is — the standing every guard
+/// in `std` has. Public only to be the return type of the daemon's two test
+/// hooks, and `#[doc(hidden)]` for the same reason.
 #[doc(hidden)]
 #[derive(Debug)]
-pub struct ReconstructPermit<'a> {
-    permits: &'a ReconstructPermits,
+pub struct Permit<'a> {
+    permits: &'a Permits,
 }
 
-impl ReconstructPermits {
-    fn new(n: usize) -> ReconstructPermits {
-        ReconstructPermits { available: AtomicUsize::new(n) }
+impl Permits {
+    /// A pool of `n` permits.
+    pub(crate) fn new(n: usize) -> Permits {
+        Permits { available: AtomicUsize::new(n) }
     }
 
     /// One permit, or `None` right now — never blocks.
-    fn try_acquire(&self) -> Option<ReconstructPermit<'_>> {
+    pub(crate) fn try_acquire(&self) -> Option<Permit<'_>> {
         self.available
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
             .ok()
-            .map(|_| ReconstructPermit { permits: self })
+            .map(|_| Permit { permits: self })
     }
 }
 
-impl Drop for ReconstructPermit<'_> {
+impl Drop for Permit<'_> {
     fn drop(&mut self) {
         self.permits.available.fetch_add(1, Ordering::Release);
     }
@@ -309,7 +323,7 @@ mod tests {
     /// succeed, the next fails, and a drop returns exactly one slot.
     #[test]
     fn reconstruct_permits_account_exactly() {
-        let permits = ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
+        let permits = Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let first = permits.try_acquire().expect("permit 1 of 2");
         let second = permits.try_acquire().expect("permit 2 of 2");
         assert!(
@@ -331,7 +345,7 @@ mod tests {
     /// hold, so any overshoot fails loudly regardless of scheduling.
     #[test]
     fn reconstruct_permits_bound_concurrent_holders() {
-        let permits = ReconstructPermits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
+        let permits = Permits::new(MAX_CONCURRENT_RECONSTRUCTIONS);
         let holding = AtomicUsize::new(0);
         let granted = AtomicUsize::new(0);
         thread::scope(|s| {

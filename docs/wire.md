@@ -495,6 +495,7 @@ Non-200 statuses are transport-level failures with a body of the shape
 | 413    | `payload_too_large`         | the declared `Content-Length` exceeds the 8 MiB request-body cap |
 | 410    | `history_reclaimed`         | the position (`/op-at`) or the `since` fence (`/changes`) predates retained history (carries `floor` when known) |
 | 503    | `history_busy`              | all historical-reconstruction permits (`/op-at`, `/dump?at`) are in use; retry shortly |
+| 503    | `scan_busy`                 | all class-scan permits are in use — a `find_links_ftt`/`count_ftt`/`window_ftt` on `/op` whose four-set constrains `ty` alone (§Link discovery reads); carries `op`; retry shortly |
 | 500    | `internal_panic`            | a handler bug; the daemon stays up      |
 | 500    | `history_io` / `history_corrupt` | reading the journal for a historical position failed / found at-rest corruption |
 | 500    | `no_journal`                | the daemon runs without a journal (in-memory mode); history is unavailable |
@@ -1815,6 +1816,43 @@ at those positions). → `runs`.
 {"op":"find_links_ftt","q":{"from":[{"start":"1.0.1.0.1.0.1.1","width":"0.0.0.0.0.0.0.5"}],"home":"any","to":"any","ty":"empty"}}
 ```
 
+**The class-scan bound** (v7.9, PUB round 2 lane 3.7; PUB-8.36, PUB-8.37).
+A query whose four-set constrains `ty` and NO other slot — `home`, `from`
+and `to` all `"any"` — enumerates a whole type class: the design's
+directory shape, `{ty: T_grant, home/from/to: any}` (PUB-6.54) and its
+siblings (PUB-6.55, PUB-6.56), where the daemon pays a per-candidate home
+test over every link of the class and the home-granular skip cannot reach
+it. Such a request is a CLASS SCAN, and it is a SHAPE, not a type list:
+any class queried that way is one, and the all-`"any"` query — the whole
+store — is one too, being that shape's superset. `/op` admits at most
+**`MAX_CONCURRENT_CLASS_SCANS` = 2** class scans at once, across
+`find_links_ftt`, `count_ftt` and `window_ftt` alike, across every type
+class, and across every session and the guest — one pool for the board,
+no per-principal quota. A class scan that finds every permit taken is
+refused at once with
+
+```json
+{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"find_links_ftt"}
+```
+
+at `503` — a retry-class refusal, never a queue, its `op` naming the
+refused frame — and costs the parse alone; an admitted scan holds its
+permit for the WHOLE answer and returns it on every exit, an answer the
+read predicate filtered to empty or a rejection included. This is a
+CONCURRENCY bound and NOT a rate statement (PUB-8.37): a refused scan may
+be reissued at once, and an admitted scan's answer is byte-for-byte what
+the same frame answers unbounded — the bound admits or refuses a request
+and never alters an answer, and the stores are not told a query is
+bounded. The pool is DISJOINT from the reconstruction pool (§Reading
+history): a scan spends no reconstruction permit and a reconstruction
+spends no scan permit, so history panes and mirror bootstraps are never
+starved by directory scans, nor the reverse. A query constraining any
+second slot is not a class scan and takes no permit — the narrowest-slot
+pins bound it — and `/op-at` takes no scan permit: a historical scan is
+bounded by the reconstruction permit its whole answer already holds. The
+count is a daemon constant this document names; raising it is a
+configuration question for a later round, not a change to this contract.
+
 Routed, not yet in the protocol: a POSITION FENCE on this query —
 answer only records committed past a caller-supplied position, so a
 polling consumer fetches only what is new to it — is reserved as a
@@ -1826,7 +1864,9 @@ fence field exists today (an unknown field is a parse failure, as
 everywhere).
 
 **`count_v`** / **`count_ftt`** — the census forms of the two queries.
-→ `count`.
+→ `count`. `count_ftt` takes the class-scan bound above exactly as
+`find_links_ftt` does: a `ty`-only (or all-`"any"`) four-set is a class
+scan.
 
 <!-- wire: request count_v -->
 ```json
@@ -1839,7 +1879,10 @@ everywhere).
 ```
 
 **`window_v`** / **`window_ftt`** — the windowed forms: up to `n`
-addresses past cursor `cur`. → `page`.
+addresses past cursor `cur`. → `page`. `window_ftt` takes the class-scan
+bound above too — the cursor narrows the page, never the population, so
+a `ty`-only (or all-`"any"`) four-set is a class scan whatever `cur` and
+`n` say.
 
 <!-- wire: request window_v -->
 ```json
@@ -2001,8 +2044,13 @@ loop. Reconstruction is bounded: at most **2** run concurrently, and a
 call that finds every slot taken is refused at once with
 `503 {"error": "history_busy"}` — a retry-class refusal, never a queue —
 so historical reads cannot pin the whole worker pool. Live reads (`/op`,
-plain `GET /dump`) are never gated. Retention is exactly what the journal
-already provides: the daemon
+plain `GET /dump`) never take a reconstruction permit; the one bound on
+`/op` is the class-scan pool (v7.9, §Link discovery reads), a SEPARATE
+pool of the same shape — a scan spends no reconstruction permit and a
+reconstruction spends no scan permit, so neither surface can starve the
+other, and a historical class scan (`/op-at` over a `ty`-only four-set)
+is bounded by the reconstruction permit alone. Retention is exactly what
+the journal already provides: the daemon
 retains recent checkpoints and reclaims journal segments below the oldest
 retained one, so a sufficiently old position can stop being derivable.
 Asking for one:
@@ -2425,6 +2473,31 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.9 (the class-scan bound — PUB round 2, lane 3.7, built 2026-09-08;
+documented as built; additive):
+
+* `/op` bounds CLASS-SCAN-shaped FTT queries (§Link discovery reads;
+  PUB-8.36, PUB-8.37 — the bound the design routes to the wire, taken by
+  the owner 2026-09-08): a `find_links_ftt`, `count_ftt` or `window_ftt`
+  whose four-set constrains `ty` and no other slot — `home`, `from`, `to`
+  all `"any"`; the all-`"any"` query included — takes one of
+  `MAX_CONCURRENT_CLASS_SCANS` = 2 permits for its whole answer or is
+  refused at once with the new retry-class `503 scan_busy`, its body
+  naming the refused `op` beside the detail. A CONCURRENCY bound, no
+  rate statement; ONE global pool for every class, every session and the
+  guest, no per-principal quota; DISJOINT from the reconstruction pool
+  (PUB-7.11's shape, a second instance of the same mechanism); an
+  admitted scan's answer is byte-for-byte the unbounded one — the bound
+  admits or refuses a request and never alters an answer, and the stores
+  are not told a query is bounded. A query constraining a second slot
+  takes no permit; `/op-at` takes no scan permit, its reconstruction
+  permit already bounding a historical scan. The shape is stated once,
+  at `find_links_ftt`, and `count_ftt`/`window_ftt` cite it.
+* `scan_busy` joins the status table beside `history_busy` (§HTTP status
+  codes) and the fuzz oracle's transport-error list; §Reading history's
+  "live reads are never gated" is restated as "never take a
+  reconstruction permit", the class-scan pool being `/op`'s one bound.
 
 v7.8 (the feeds — PUB round 2, lane 3.6, built 2026-09-08; documented as
 built):

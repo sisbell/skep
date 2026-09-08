@@ -72,6 +72,22 @@
 //! by what the browser lets it read back, which is why a narrower ACAO
 //! was weighed and declined.
 //!
+//! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37 — PUB round 2,
+//! lane 3.7)**: `/op` admits at most [`MAX_CONCURRENT_CLASS_SCANS`]
+//! CLASS-SCAN-shaped reads at once — an FTT query (`find_links_ftt`,
+//! `count_ftt`, `window_ftt`) whose four-set constrains `ty` and no other
+//! slot, the population "the whole type class" (PUB-6.54's directory shape
+//! and its siblings). [`is_class_scan`] is the one statement of that shape;
+//! [`Daemon::admit_scan`] takes the permit after the parse and the session
+//! read and before M10 is asked, so a refused request costs the parse alone
+//! and an admitted one holds its slot for the WHOLE answer. The pool is a
+//! second instance of history's [`crate::history::Permits`], disjoint from
+//! the reconstruction pool — a scan spends no reconstruction permit and a
+//! reconstruction spends no scan permit. The bound admits or refuses a
+//! REQUEST (`503 scan_busy`, retry-class, the body naming the op) and never
+//! alters an answer: M7 and M8 are not told a query is bounded. A
+//! concurrency bound, never a rate statement.
+//!
 //! **Writes go through one card** (`write_path.rs`): `POST /op` — the
 //! daemon's only live write path — hands each write to
 //! `WritePath::commit_under`, which commits it, records its change-feed
@@ -130,10 +146,11 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde_json::Value;
 use skep_address::{parent, Address};
+use skep_discovery::SlotSpec;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
-    Codec, Disposition, FaultSite, Operation, OpKind, RejectCode, Rejection, Request, Response,
-    SessionId,
+    Codec, Disposition, FaultSite, Op, Operation, OpKind, RejectCode, Rejection, Request,
+    Response, SessionId,
 };
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
@@ -157,7 +174,7 @@ use crate::codec::{
 };
 use crate::feed::classify::parse_prefix;
 use crate::feed::{ChangesAnswer, FeedClass, Query};
-use crate::history::{History, ReconstructPermit, Unavailable};
+use crate::history::{History, Permit, Permits, Unavailable};
 use crate::write_path::{
     op_is_read, write_meta, FrameMeta, SerialGuard, StreamStep, WritePath,
 };
@@ -176,6 +193,25 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 /// factor of the sidecar's reconstruction ceiling — see
 /// [`CHECKPOINT_EVERY_COMMITS`].
 const RETAINED_CHECKPOINTS: usize = 2;
+
+/// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
+/// PUB-8.37): FTT queries whose four-set constrains `ty` alone —
+/// [`is_class_scan`] — each of which enumerates a whole type class and pays
+/// a per-candidate home test over every link in it (PUB-6.56: the
+/// home-granular skip does not reach a query whose constrained slot is not
+/// the home), repeatable at will from any unauthenticated peer. The
+/// reconstruction pool's own number (`MAX_CONCURRENT_RECONSTRUCTIONS`), for
+/// the same reason it is that pool's: two keep directories serviceable
+/// without letting a stranger's scans occupy the worker pool. The wire names
+/// it as a constant the daemon may raise later — a configuration question,
+/// not this bound's.
+///
+/// ONE pool for the board: global across the three FTT forms, across every
+/// type class, and across every session and the guest (a stranger is the
+/// case). DISJOINT from the reconstruction pool — a second instance of
+/// [`Permits`], never a share of the first — so history panes and mirror
+/// bootstraps are never starved by directory scans, nor the reverse.
+pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -580,6 +616,8 @@ enum TransportError {
     NoJournal,
     HistoryIo,
     HistoryCorrupt,
+    // The class-scan bound (wire v7.9).
+    ScanBusy,
     // The HTTP layer.
     MalformedHttp,
     PayloadTooLarge,
@@ -602,6 +640,7 @@ impl TransportError {
             TransportError::NotAPosition => "not_a_position",
             TransportError::HistoryReclaimed => "history_reclaimed",
             TransportError::HistoryBusy => "history_busy",
+            TransportError::ScanBusy => "scan_busy",
             TransportError::NoJournal => "no_journal",
             TransportError::HistoryIo => "history_io",
             TransportError::HistoryCorrupt => "history_corrupt",
@@ -636,7 +675,8 @@ impl TransportError {
             | TransportError::HistoryIo
             | TransportError::HistoryCorrupt
             | TransportError::InternalPanic => 500,
-            TransportError::HistoryBusy => 503,
+            // The two retry-class refusals: a pool is momentarily full.
+            TransportError::HistoryBusy | TransportError::ScanBusy => 503,
         }
     }
 }
@@ -742,6 +782,13 @@ pub struct Daemon {
     /// per-call uncached, so without that budget any local caller could pin
     /// every worker on reconstruction.
     history: History,
+    /// The class-scan pool (wire v7.9; PUB-8.36): [`MAX_CONCURRENT_CLASS_SCANS`]
+    /// permits for `/op`'s class-scan-shaped FTT reads — a second instance of
+    /// the permit mechanism `history` holds, and so disjoint from it. Lives
+    /// in the serving path and nowhere lower (doctrine D9: the meter is an
+    /// attribute of a gate, never of the substrate): M8 and M7 are asked or
+    /// not asked, and never told.
+    scans: Permits,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -826,6 +873,7 @@ impl Daemon {
             guest,
             writes,
             history: History::new(),
+            scans: Permits::new(MAX_CONCURRENT_CLASS_SCANS),
         })
     }
 
@@ -1122,10 +1170,47 @@ impl Daemon {
                 op_answer(key_set_reply(snap.seq(), set))
             }
             Ok(DaemonOp::Febe(frame)) => match write_meta(&frame.op) {
-                // Reads execute directly and take no lock (AUTH-3.36).
-                None => self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *frame)),
+                // Reads execute directly and take no lock (AUTH-3.36) — under
+                // a class-scan permit where the frame is class-scan-shaped
+                // (wire v7.9; lane 3.7 §2), taken here: after the parse and
+                // the session read, before M10 is asked. The guard lives to
+                // the end of this arm, so the permit spans the whole answer —
+                // M10's own doc-argument consult and the store call inside
+                // `execute`, and the marshal — and returns on every exit.
+                None => {
+                    let _scan = match self.admit_scan(&frame.op) {
+                        Ok(permit) => permit,
+                        Err(busy) => return busy,
+                    };
+                    self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *frame))
+                }
                 Some(meta) => self.write_sequence(resolved, meta, *frame, req),
             },
+        }
+    }
+
+    /// THE CLASS-SCAN ADMISSION (wire v7.9; PUB-8.36, PUB-8.37; lane 3.7
+    /// §2): a class-scan-shaped read ([`is_class_scan`]) takes one of the
+    /// [`MAX_CONCURRENT_CLASS_SCANS`] permits for the WHOLE answer, or is
+    /// refused `503 scan_busy` at once — a retry-class refusal, never a
+    /// queue; any other read is admitted with no permit (`Ok(None)`).
+    ///
+    /// Taken BEFORE the read consult and the store call, both of which run
+    /// inside M10's `execute`: a refused request has cost the parse and the
+    /// session read alone, and an admitted one that M10 then withholds or
+    /// rejects — never reaching M7 — still returns its permit by the guard.
+    /// The pool is global: the guest and the claimant draw on it alike, and
+    /// which class is scanned is not consulted. Whether the request is a
+    /// class scan is the one thing decided here; what it answers stays the
+    /// stores' — an admitted scan's answer is byte-for-byte the unbounded
+    /// one.
+    fn admit_scan(&self, op: &Op) -> Result<Option<Permit<'_>>, Reply> {
+        if !is_class_scan(op) {
+            return Ok(None);
+        }
+        match self.scans.try_acquire() {
+            Some(permit) => Ok(Some(permit)),
+            None => Err(refuse_scan_busy(op.kind())),
         }
     }
 
@@ -1381,8 +1466,22 @@ impl Daemon {
     /// reconstructions finish in milliseconds, so the integration tests pin
     /// the counter through this instead of racing the engine.
     #[doc(hidden)]
-    pub fn try_hold_reconstruction_permit(&self) -> Option<ReconstructPermit<'_>> {
+    pub fn try_hold_reconstruction_permit(&self) -> Option<Permit<'_>> {
         self.history.try_hold_permit()
+    }
+
+    /// TEST HOOK (the same standing as
+    /// [`Daemon::try_hold_reconstruction_permit`]: `#[doc(hidden)]`, not a
+    /// stable API): hold one CLASS-SCAN permit exactly as an in-flight class
+    /// scan does, or `None` when all [`MAX_CONCURRENT_CLASS_SCANS`] are
+    /// taken. A real class scan over a test-sized world finishes in
+    /// microseconds, so the integration tests pin the counter through this
+    /// instead of racing the store. A permit from here is a slot of the scan
+    /// pool alone: holding every one leaves `/op-at` and `/dump?at`
+    /// untouched, which is the disjointness the wire promises.
+    #[doc(hidden)]
+    pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
+        self.scans.try_acquire()
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -1662,6 +1761,53 @@ fn class_varying(mut reply: Reply) -> Reply {
 /// the transport channel.
 fn op_answer(bytes: Vec<u8>) -> Reply {
     Reply::bodied(200, "application/json", bytes)
+}
+
+/// THE SHAPE TEST (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36; lane 3.7 §1) —
+/// the one statement of what counts as a CLASS SCAN, cited from the wire's
+/// `find_links_ftt` entry: an FTT form (`find_links_ftt`, `count_ftt`,
+/// `window_ftt`) whose four-set `q` constrains `ty` and NO OTHER slot —
+/// `home`, `from` and `to` all `"any"`. That is the population "the whole
+/// type class": PUB-6.54's `{ty: T_grant, home/from/to: any}` and its
+/// siblings, where M8 hands M7 the type constraint alone and pays the
+/// per-candidate home test over every link of the class.
+///
+/// A SHAPE, not a type list: any class queried that way is bounded, grant or
+/// otherwise, so a class a later round adds is bounded with no edit here.
+/// The all-`"any"` query — the whole store — IS a class scan (the shape's
+/// superset). A query constraining any second slot is NOT one and takes no
+/// permit: the narrowest-slot pins bound it (PUB-7.45). Nothing else about
+/// the query is read — not the class, not the cursor, and not whether M8
+/// would answer it off its own slots (a `ty` of `"empty"` annihilates
+/// before M7 is asked; it is class-scan-shaped all the same, and its permit
+/// is back in the pool a moment later). Every other op answers `false`.
+pub(crate) fn is_class_scan(op: &Op) -> bool {
+    let q = match op {
+        Op::FindLinksFtt { q } | Op::CountFtt { q } | Op::WindowFtt { q, .. } => q,
+        _ => return false,
+    };
+    matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any))
+}
+
+/// The `503 scan_busy` refusal (wire v7.9): every class-scan permit is in
+/// use. Retry-class — the query may be perfectly good and the pool
+/// momentarily full — and the body names the `op` it refused, so a client
+/// pipelining reads can pair the refusal with the request it answers, in the
+/// diagnostic-field shape `beyond_head`'s `head` and `history_reclaimed`'s
+/// `floor` already take. A TRANSPORT refusal like `history_busy` and not an
+/// operation response: no `Op` ran, so there is no `resp` and no `code` —
+/// the envelope is `{"error": …}`, never `{"resp": "rejected"}`.
+fn refuse_scan_busy(kind: OpKind) -> Reply {
+    refuse_with(
+        TransportError::ScanBusy,
+        vec![
+            (
+                "detail",
+                Value::String("all class-scan permits are in use; retry shortly".into()),
+            ),
+            ("op", Value::String(crate::codec::op_name(kind).into())),
+        ],
+    )
 }
 
 /// One daemon-originated credential refusal as its 200-enveloped rejection
@@ -2882,6 +3028,7 @@ mod tests {
             (TransportError::HistoryCorrupt, "history_corrupt", 500),
             (TransportError::NoJournal, "no_journal", 500),
             (TransportError::HistoryBusy, "history_busy", 503),
+            (TransportError::ScanBusy, "scan_busy", 503),
         ];
         table.extend(observe_rows());
         for &(err, name, status) in &table {
@@ -2912,6 +3059,79 @@ mod tests {
             table.len() + 1,
             crate::fuzz_support::TRANSPORT_ERRORS.len(),
             "the two hand transcriptions of wire.md's error column disagree in length"
+        );
+    }
+
+    /// THE SHAPE TEST, off the wire's own spelling (wire v7.9, §Link
+    /// discovery reads): the FTT forms whose `home`, `from` and `to` are all
+    /// `"any"` are class scans — `ty` constrained, `ty` `"any"` (the whole
+    /// store) and `ty` `"empty"` alike — and nothing else is: a second
+    /// constrained slot, whatever it holds, and every other op, the
+    /// region-keyed `find_links_v` included. Parsed through the codec rather
+    /// than built by hand, so the test reads the frames a client sends.
+    #[test]
+    fn a_class_scan_is_an_ftt_form_constraining_ty_alone() {
+        let parse = |frame: &str| {
+            JsonCodec.parse(frame.as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail)).op
+        };
+        let ty = r#"[{"start":"1.1.0.1.0.1.0.3.90","width":"0.0.0.0.0.0.0.0.1"}]"#;
+        let home = r#"[{"start":"1.0.1.0.1","width":"0.0.0.0.1"}]"#;
+        let q = |home: &str, from: &str, to: &str, ty: &str| {
+            format!(r#"{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}"#)
+        };
+        let class_scans = [
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
+            format!(
+                r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"any\"", ty)
+            ),
+            // The whole store is the class scan's superset.
+            format!(
+                r#"{{"op":"find_links_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"any\"", "\"any\"")
+            ),
+            // A shape, not a cost: M8 annihilates this one before M7 is
+            // asked, and it is class-scan-shaped all the same.
+            format!(
+                r#"{{"op":"count_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"any\"", "\"empty\"")
+            ),
+        ];
+        for frame in &class_scans {
+            assert!(is_class_scan(&parse(frame)), "class-scan-shaped: {frame}");
+        }
+        let not_class_scans = [
+            // A second constrained slot — the narrowest-slot pins bound it.
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", ty)),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", ty, "\"any\"", ty)),
+            format!(
+                r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
+                q("\"any\"", "\"any\"", "\"empty\"", ty)
+            ),
+            // Every other op, the region-keyed discovery reads included.
+            r#"{"d":"1.0.1.0.1","op":"find_links_v","region":[{"start":"1.1","width":"0.1"}]}"#
+                .to_string(),
+            r#"{"d":"1.0.1.0.1","op":"count_v","region":[{"start":"1.1","width":"0.1"}]}"#
+                .to_string(),
+            r#"{"op":"read_link","a":"1.0.1.0.1.0.2.1"}"#.to_string(),
+            r#"{"op":"next_account_prefix","parent":"1"}"#.to_string(),
+        ];
+        for frame in &not_class_scans {
+            assert!(!is_class_scan(&parse(frame)), "not class-scan-shaped: {frame}");
+        }
+    }
+
+    /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,
+    /// no `code`) at 503, naming the op it refused beside the detail — the
+    /// bytes wire.md shows.
+    #[test]
+    fn scan_busy_names_the_op_in_a_transport_refusal() {
+        let r = refuse_scan_busy(OpKind::CountFtt);
+        assert_eq!(r.status, 503);
+        assert_eq!(
+            String::from_utf8(r.bytes().to_vec()).expect("json"),
+            r#"{"detail":"all class-scan permits are in use; retry shortly","error":"scan_busy","op":"count_ftt"}"#
         );
     }
 

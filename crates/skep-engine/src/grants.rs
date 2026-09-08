@@ -58,18 +58,20 @@ impl World {
     /// published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
     /// principal)` — one function, three clauses, short-circuiting.
     ///
-    /// `principal` is `None` for the GUEST (PUB-5.5): a guest sees a document
-    /// iff it is published, so [`World::readable_guest`] is `readable(None,
-    /// ·)`. Every clause projects a version member to its document first
-    /// (`trunk_of`, M5, PUB-2.15): `1.0.1.0.1.2` reads exactly as
-    /// `1.0.1.0.1`.
+    /// `principal` is `None` for the GUEST (PUB-1.31 with no principal: the
+    /// subtree clause has no account to hold, and the grant clause — the
+    /// ANY-PRINCIPAL form included, PUB-5.8, PUB-5.9 — reaches principals
+    /// alone, PUB-5.109): a guest sees a document iff it is published, so
+    /// [`World::readable_guest`] is `readable(None, ·)`. Every clause
+    /// projects a version member to its document first (`trunk_of`, M5,
+    /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
     ///
-    /// * PUBLISHED (PUB-5.5) — an exception-set MISS on the projected
-    ///   document. Fail-open (PUB-7.5): an UNREGISTERED address is absent from
-    ///   the set and so answers readable here, which is why every doc-argument
-    ///   consult defers an unregistered document to its store's own
-    ///   `*NotRegistered` (a withheld answer is only ever a REGISTERED private
-    ///   document — PUB-6.12).
+    /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
+    ///   projected document. Fail-open (PUB-7.5): an UNREGISTERED address is
+    ///   absent from the set and so answers readable here, which is why every
+    ///   doc-argument consult defers an unregistered document to its store's
+    ///   own `*NotRegistered` (a withheld answer is only ever a REGISTERED
+    ///   private document — PUB-6.12).
     /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
     ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
     ///   exception set's MINT-TIME owner (never a nearest-account walk). A
@@ -107,9 +109,10 @@ impl World {
         self.grants.grant_exists(&owner, pa.as_ref(), &trunk)
     }
 
-    /// The GUEST predicate (PUB-5.5): `readable(None, ·)` — published alone.
-    /// M9's fires read at this class (§5), and every unauthenticated read
-    /// answers through it.
+    /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
+    /// to it, the ANY-PRINCIPAL form included — PUB-5.8, PUB-5.9, PUB-5.109):
+    /// `readable(None, ·)` — published alone. M9's fires read at this class
+    /// (§5), and every unauthenticated read answers through it.
     pub fn readable_guest(&self, doc: &Address) -> bool {
         self.readable(None, doc)
     }

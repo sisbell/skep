@@ -144,9 +144,13 @@ How a masked read answers:
 * **A delivery masks per run**: a published arrangement that windows a
   draft you may not read delivers the `withheld` item at that run's own
   position (§Value encodings); extents are never shrunk.
-* The namespace reads (`next_account_prefix`, `principal_prefix`) and
-  the lineage reads (`in_claims`, `out_claims`) are exempt — registry
-  data, served to every class.
+* The namespace reads (`next_account_prefix`, `principal_prefix`) are
+  exempt — registry data, served to every class. The lineage reads
+  (`in_claims`, `out_claims`) are NOT: each takes the result-set filter
+  at the claim's HOME (PUB-6.13) — a claim homed in a document you may
+  not read is absent from the answer; `y`/`x` is a filter value, never
+  a consulted address, and a shown claim's `old`/`new` are the addresses
+  it names, as recorded.
 * **The change feed is masked per entry** (v7.8, §The change feed): an
   entry every one of whose `docs` you may not read is OMITTED from your
   page, and a shown entry's `docs` are REDUCED to the ones you may read;
@@ -989,22 +993,42 @@ source gate, and since v7.4 every READ's document-argument consult
 (§The read predicate); the one code of this family whose disposition is
 reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
-`base_extent_too_large`.
+`base_extent_too_large`; and two more of M5's — `not_link_address`
+(`seat`'s `link` argument names a full element position rather than a
+link address; M5 §8) and `too_many_runs` (a placement past M5's
+`MAX_PLACED_RUNS` = 65536 runs — permanent; the publish table below
+carries it too).
 
 Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class`, `non_address_denoting_type`, `bad_target`,
-`self_supersession`, `ill_formed_successor`, `dc_violation`.
+`self_supersession`, `ill_formed_successor`, `dc_violation`,
+`slot_too_large` (a slot past M7's per-slot span budget
+`MAX_SLOT_SPANS` = 4096 spans, in either form — `make_link`'s three
+slots, `emit`'s `to`, and `edit_link`'s successor slots, the last naming
+the slot in `site.slot`; permanent — no retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
-`depth_incompatible`, `range_not_present`, `malformed_span`.
+`depth_incompatible`, `range_not_present`, `malformed_span`, and M6's
+three budgets — `too_many_blocks` (a `compare` operand resolves to more
+than `MAX_COMPARE_OPERAND_BLOCKS` = 4096 blocks; refused before the join
+runs), `too_many_pairs` (the report would exceed `MAX_COMPARE_PAIRS` =
+65536 correspondences), `too_much_coverage` (the find family's request
+materializes more than `MAX_FIND_COVERAGE_SPANS` = 4096 coverage
+spans); all permanent — no retry shrinks the request.
 
-Link-discovery reads: `not_a_link`, `bad_region`.
+Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large`
+(the arrangement I-runs a request would materialize — the region's
+image on the region family, `d`'s whole arrangement on `project` and
+`discoverable_from` — exceed M8's `MAX_IMAGE_RUNS` = 4096),
+`endsets_too_large` (a `retrieve_endsets` answer would carry more than
+M8's `MAX_ENDSET_SPANS` = 65536 spans — the one budget priced on what
+the store hands back rather than on what the request names).
 
-Routed, not yet in the protocol: the links family as built in M7's
-third round also rejects an over-large slot (`SlotTooLarge`, its
-MAX_SLOT_SPANS bound) and refuses through the supersession-class fence.
-Neither has a wire code — the list above deliberately carries none;
-codes are to be assigned when that links family ships on the wire.
+The supersession-class fence — M7's `[K_sup]` sole-writer rule, a
+`make_link` or `emit` whose resolved type lands in the supersession
+class, which writes only through `assert_sup`/`edit_link` — has no code
+of its own and rides `dc_violation`, the claim-schema code `edit_link`'s
+DC guard names.
 
 ### The version-chain refusals
 
@@ -1136,18 +1160,21 @@ origin refuses `withheld` — disposition reorder (a later grant is the
 one event that fills it), `site.addr` the origin's DOCUMENT, no
 `detail` and no other site field, whether or not the run's addresses
 exist. The document's own I-space needs no consult, and a run the base
-already arranges is carried without one. Today the consult is the
-publication read: a published origin is readable to everyone, a
-private one to its owner; a sharing grant is a later lane's, and it
-widens what the daemon consults without changing this shape.
+already arranges is carried without one. The consult is the read
+predicate (§The read predicate, v7.4): an origin is readable when
+published, or in the reader's subtree, or granted to the reader — a
+sharing grant widens what the consult admits without changing this
+shape.
 
-The shot's refusals, in the order they answer (PUB-6.36, PUB-6.37) —
-every one commits nothing:
+The shot's refusals, in the order they answer — the table is in ANSWER
+order, the store's door putting the destination's registration ahead of
+its ownership (PUB-6.37) and PUB-6.36's slots following — every one
+commits nothing:
 
 | code | disposition | `site` | when |
 | --- | --- | --- | --- |
-| `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (slot 1) |
-| `doc_not_registered` | reorder | — | `doc` is not registered |
+| `doc_not_registered` | reorder | — | `doc` is not registered — answered ahead of ownership, so an unregistered address never discloses an ownership verdict |
+| `not_owner` | permanent | `addr` = `doc` | the session principal does not own `doc` (PUB-6.36's slot 1, judged once `doc` is registered) |
 | `source_not_registered` | reorder | — | `base`, `draft`, or a run's `origin` is not registered (in that order) |
 | `bad_run` | permanent | — | a run's `origin` is not the document that minted its `i_start`, or `i_start` is not a content element |
 | `private_source_versionless` | permanent | — | `doc` is PRIVATE — a private document has no chain (PUB-2.9's flag-`true` face) |
@@ -1249,25 +1276,26 @@ resolves AFTER every token below.
    * `nullify_not_retraction` — the target is CREDENTIAL-typed: retraction
      never edits the key table (PUB-6.10; the token reaches the owner of
      the home the record is filed in).
-   * `nullify_not_revocation` — v7.7 (PUB-6.30; **token OWNER CONFIRM
-     OWED**): the target is GRANT-typed (`1.1.0.1.0.1.0.3.90`, §The read
-     predicate). The grant fold reads the audit view, so retraction is
+   * `nullify_not_revocation` — v7.7 (PUB-6.30; token confirmed by the
+     owner 2026-09-07): the target is GRANT-typed (`1.1.0.1.0.1.0.3.90`,
+     §The read predicate). The grant fold reads the audit view, so retraction is
      never a second revocation path — a share is withdrawn by REVOKING it
      (a superseding grant record naming the grant's address). The token
      reaches the owner of BOTH the record's home and the target.
-   * `nullify_audit_view` — v7.7 (PUB-6.64; **token OWNER CONFIRM OWED**):
-     the target is of a class whose honored state is read under the
-     AUDIT view, so a landed retraction would drop the record from the
-     active-view reads that serve it (`find_links_*`, `count_*`,
+   * `nullify_audit_view` — v7.7 (PUB-6.64; token confirmed by the owner
+     2026-09-07): the target is of a class whose honored state is read
+     under the AUDIT view, so a landed retraction would drop the record
+     from the active-view reads that serve it (`find_links_*`, `count_*`,
      `window_*`) while the record still counted: the succession pair —
      `successor-of` `1.1.0.1.0.1.0.3.59` and the delegator endorsement
      (`endorse`, `1.1.0.1.0.1.0.3.42`); the consumption marker
-     (`1.1.0.1.0.1.0.3.91`, provisional) and the journal designation
-     (`1.1.0.1.0.1.0.3.22`, provisional); the rail record
-     (`1.1.0.1.0.1.0.3.60`, provisional); and the steward's classification
-     link (`1.1.0.1.0.1.0.3.61`, provisional) where the LINK's OWN HOME is
-     published — draft-homed, it is an ordinary link and its owner's
-     retraction lands. ONE code for the class list; a client splits the
+     (`1.1.0.1.0.1.0.3.91`) and the journal designation
+     (`1.1.0.1.0.1.0.3.22`); the rail record (`1.1.0.1.0.1.0.3.60`); and
+     the steward's classification link (`1.1.0.1.0.1.0.3.61`) where the
+     LINK's OWN HOME is published — draft-homed, it is an ordinary link
+     and its owner's retraction lands (the four addresses, provisional at
+     v7.7, confirmed by the owner 2026-09-07). ONE code for the class
+     list; a client splits the
      face by the target's type, which the owner can read. The classes are
      the members' list, never the boundary: the next audit-view class
      joins the list and inherits the code. The R20 edition claim
@@ -1669,7 +1697,11 @@ other address.
 **`emit`** — gated typed-relation emission: a managed tuple of type `ty`
 (the type key as an endset, usually unit subtree spans of type addresses)
 from `from` to the `to` addresses, homed in `home`. Idempotent within a
-type class: re-emitting an existing tuple acks the incumbent address.
+type class AT THE CALLER'S VISIBILITY CLASS (PUB-6.25, PUB-6.26):
+re-emitting an existing tuple acks the EARLIEST incumbent the caller's
+class can read — an incumbent homed in a document the caller may not
+read is invisible to the gate, so the re-emit mints afresh, and
+value-identical tuples may coexist across the visibility boundary.
 → `ack_addr`. The example retires `1.0.1.0.2` under the shipped Retired
 class at its reserved ghost tumbler `1.1.0.1.0.1.0.1.3` (§Reserved type
 addresses in the changelog): Unary, so `to` is empty.
@@ -2250,7 +2282,14 @@ byte-identically, across repeats and restarts.
 a dotted-decimal tumbler, an account prefix or a document — narrows the
 feed to the entries whose REDUCED `docs` name a document at or under it,
 masked exactly as the plain feed is: for a draft you cannot read the
-page is empty, `last` your fence. `drafts=true` narrows to the entries
+page is empty, `last` your fence. One residue of lost testimony
+(PUB-7.21): a bare entry re-derived from the journal for an arrangement
+write or a mint into a PUBLISHED document names no document — the
+journal enumerates the drafts and link homes a commit touched, never a
+published document an arrangement write or a mint touched — and so is
+absent from the plain `under=` narrowing: silent incompleteness, never a
+wrong answer; the drafts-only form and the plain feed stay complete.
+`drafts=true` narrows to the entries
 whose reduced `docs` name a DRAFT you may read — your supplement alone,
 empty for a guest by construction, the live universally-granted history
 included and the revoked never. The two compose. Their consumers are the
@@ -2473,6 +2512,37 @@ values), which is exactly why the retrieve's width is `"0.5"` and the
 delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
+
+v7.1 through v7.9 are ONE additive delta over v7.0 — PUB round 2, lanes
+2.1 (the publication bit on the record and in the slice), 2.2 (the
+exception set: one publication definition), 2.3 (the flag on the wire),
+3.1 (the version-chain refusals), 3.2 (the publish shot and head-float),
+3.3 (the read-surface sweep), 3.3b (the value-keyed gates at the writer's
+class), 3.3c (the write side's consult), 3.4 (the two publication reads
+and the per-class dump), 3.5 (the `nullify` class's remaining cells),
+3.6 (the feeds) and 3.7 (the class-scan bound) — and the standing
+promise holds at every entry: the v5 shape never mutates. Each delta
+ADDS — an optional field (`published`, `deposit`), an op with its
+response shape (`publish`; `doc_metadata`, `edition_claims`), a query
+parameter (`under`, `drafts`), a code (each entry's `rejected` codes and
+`credential_refused` tokens; `503 scan_busy`), a delivery item kind
+(`withheld`, pinned per run at v6.1 ahead of its code), two response
+headers, or a dump section (`publication.drafts` at v4; the
+`publication` and `grants` sections at v5 — the banner moving with the
+section set, the dump's own rule) — and none removes or re-types one:
+every field, op, parameter, code, header and section a v7.0 answer
+carried is present, of the same type, in the v7.9 answer, so a v5, v6
+or v7.0 client reads every v7.9 answer it could read before. What the
+round changed beside the shape is the read predicate's and is stated
+where it lands: which documents a class SEES in an answer of unchanged
+shape (v7.4, v7.6, v7.8 — a guest's read, dump or feed page carries
+less than an owner's, by design), and the writes now refused where they
+were once admitted — by the publish class (v7.1, v7.7), the store's
+version-chain refusals (v7.2) and the write door's source consult
+(v7.5) — each an existing shape's added code. The tokens and type
+addresses v7.7 marks OWNER CONFIRM OWED — `nullify_not_revocation`,
+`nullify_audit_view`, the four audit-view addresses and the grants class
+— were confirmed by the owner 2026-09-07 (§Credential refusals).
 
 v7.9 (the class-scan bound — PUB round 2, lane 3.7, built 2026-09-08;
 documented as built; additive):

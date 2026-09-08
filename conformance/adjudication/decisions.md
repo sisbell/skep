@@ -413,7 +413,9 @@ here); 166 pass. Twenty rulings and one addendum.**
     `pub-2.9-private-versionless` and the seventeen inexpressible are
     unchanged (a version of a private draft is refused whatever the
     grant); `report_is_deterministic` and the ratchet are green with NO
-    new allowlist entry. Skep bugs found: none — the withheld answers were
-    the predicate working. Recorded, not ruled: the setup grant is the
+    new allowlist entry. RAN AND CLOSED at lane 3.3's close (skep
+    91124d0): the 297 verdicts byte-identical, gate-full 1,081 green, the
+    ratchet green, no new allowlist entry. Skep bugs found: none — the
+    withheld answers were the predicate working. Recorded, not ruled: the setup grant is the
     corpus's assumption made explicit, not a skep behavior; a golden that
     ever reads as the GUEST would meet the predicate unaided.

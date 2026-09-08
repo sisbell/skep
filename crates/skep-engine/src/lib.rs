@@ -85,4 +85,8 @@ pub use world::{Record, World};
 // The foreign types the engine's own signatures name, re-exported so a binary
 // can drive `Engine::open`/`coordinator()` without spelling every store crate.
 pub use skep_kernel::{HistoryError, KernelConfig, OpenError};
+// Named by no engine signature: re-exported so the engine's own integration
+// tests (`tests/genesis.rs`, `tests/recovery_dump.rs`) pin the format's five
+// reserved ghost tumblers against the assembled registry through this crate
+// alone; no daemon code names it.
 pub use skep_links::ReservedAddrs;

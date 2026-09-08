@@ -274,7 +274,7 @@ pub fn count_v_on<W: DiscoveryWorld>(
 }
 
 /// [`count_v_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
-/// §3; PUB-6.15): the count is of the links surviving the home consult, by
+/// §3; PUB-6.19): the count is of the links surviving the home consult, by
 /// ENUMERATION — the same set [`findlinks_v_on_where`] returns, counted rather
 /// than collected, so the two cannot disagree.
 pub fn count_v_on_where<W: DiscoveryWorld>(

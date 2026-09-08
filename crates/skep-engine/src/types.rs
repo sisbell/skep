@@ -11,8 +11,9 @@
 //! owner ruling D3, 2026-09-05) — the class addresses a `nullify` is refused
 //! at (PUB-6.30's grant, PUB-6.64's audit-view members), pinned here beside
 //! the two the engine reads so ONE ledger names them all. Every pin below
-//! cites its commons row; the ones the ledger marks PROVISIONAL are marked
-//! OWNER CONFIRM OWED and are confirmed at seeding, never silently renumbered.
+//! cites its commons row and its confirmation (the owner, 2026-09-07); a pin
+//! is never silently renumbered — a change is a confirmed row there and a
+//! dated line here.
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
@@ -29,10 +30,10 @@ fn commons_type(ordinal: u32) -> Address {
 ///
 /// COMMONS DECISION 5 — commons-map.md: "GRANTS/commerce | grant, price,
 /// receipt-citation | 3.90–3.99 (decision 5)": the first address of the
-/// Commerce range. OWNER CONFIRM OWED since lane 3.3 (the ledger bounds the
-/// range and leaves the exact address to seeding). The grant fold keys on it
-/// by denotation equality; the write path recognizes it (and its subtypes by
-/// prefix) as PUB-6.30's grant-typed class.
+/// Commerce range. CONFIRMED by the owner 2026-09-07 (owed since lane 3.3:
+/// the ledger bounds the range and left the exact address to seeding). The
+/// grant fold keys on it by denotation equality; the write path recognizes
+/// it (and its subtypes by prefix) as PUB-6.30's grant-typed class.
 pub fn t_grant() -> Address {
     commons_type(90)
 }
@@ -40,11 +41,12 @@ pub fn t_grant() -> Address {
 /// The EDITION-CLAIM class type address (R20) — `1.1.0.1.0.1.0.3.14`,
 /// read by the audit-view lookup (`crate::editions`).
 ///
-/// OWNER CONFIRM OWED. commons-seeding.md's row `3.14 | edition` carries the
-/// descriptive subtypes `.1 abridged .2 expanded .3 translated .4 revised .5
-/// annotated` beneath it (note 3: "a descriptive edition relation is
-/// `edition.*`"); commons-map.md places the core vocabulary at `3.1–3.21`
-/// with `edition` listed. Class membership is by PREFIX: a type slot denoting
+/// CONFIRMED by the owner 2026-09-07. commons-seeding.md's row `3.14 |
+/// edition` carries the descriptive subtypes `.1 abridged .2 expanded .3
+/// translated .4 revised .5 annotated` beneath it (note 3: "a descriptive
+/// edition relation is `edition.*`"); commons-map.md places the core
+/// vocabulary at `3.1–3.21` with `edition` listed. Class membership is by
+/// PREFIX: a type slot denoting
 /// `3.14.k` is a subtype's member and counts — the lookup names the CLASS,
 /// not one address. NOT a write-path refusal class: the claim is read under
 /// the ACTIVE view (PUB-6.32), so its owner's `nullify` is admitted.
@@ -74,10 +76,10 @@ pub fn t_delegator_endorsement() -> Address {
     commons_type(42)
 }
 
-/// The CONSUMPTION MARKER type — `1.1.0.1.0.1.0.3.91`, PROVISIONAL
-/// (PUB-4.12, PUB-4.17; PUB-6.64's member).
+/// The CONSUMPTION MARKER type — `1.1.0.1.0.1.0.3.91`, CONFIRMED by the
+/// owner 2026-09-07 (PUB-4.12, PUB-4.17; PUB-6.64's member).
 ///
-/// OWNER CONFIRM OWED. commons-map.md's PUB consumption row: "3.90–3.99
+/// commons-map.md's PUB consumption row: "3.90–3.99
 /// beside the GRANTS/commerce claim — the pair's other half … exact address
 /// at seeding" — ONE number (the marker's two values `offer_accepted` /
 /// `offer_declined` are client-interpreted VALUES in the FROM slot, LM 4/53,
@@ -86,10 +88,10 @@ pub fn t_consumption_marker() -> Address {
     commons_type(91)
 }
 
-/// The JOURNAL DESIGNATION type — `1.1.0.1.0.1.0.3.22`, PROVISIONAL
-/// (PUB-4.3, PUB-4.12; PUB-6.64's member).
+/// The JOURNAL DESIGNATION type — `1.1.0.1.0.1.0.3.22`, CONFIRMED by the
+/// owner 2026-09-07 (PUB-4.3, PUB-4.12; PUB-6.64's member).
 ///
-/// OWNER CONFIRM OWED. commons-map.md's PUB journal self-designation row:
+/// commons-map.md's PUB journal self-designation row:
 /// "3.22–3.29 structural extension (designation is structure — what a
 /// document IS — not commerce; the placement lean). ONE number, exact
 /// address at seeding; the reserve is 8 wide and decisions 0/6 may also land
@@ -98,23 +100,24 @@ pub fn t_journal_designation() -> Address {
     commons_type(22)
 }
 
-/// The RAIL RECORD type — `1.1.0.1.0.1.0.3.60`, PROVISIONAL (PUB-5.76;
-/// PUB-6.64's member, inheriting on PUB-6.30's ground).
+/// The RAIL RECORD type — `1.1.0.1.0.1.0.3.60`, CONFIRMED by the owner
+/// 2026-09-07 (PUB-5.76; PUB-6.64's member, inheriting on PUB-6.30's
+/// ground).
 ///
-/// OWNER CONFIRM OWED. commons-map.md's PUB rail record row (owner
-/// 2026-09-06): "3.60 (agentic tier) — PROVISIONAL, exact at seeding;
-/// hire-side governance of an agent".
+/// commons-map.md's PUB rail record row (owner 2026-09-06): "3.60 (agentic
+/// tier) — PROVISIONAL, exact at seeding; hire-side governance of an
+/// agent".
 pub fn t_rail_record() -> Address {
     commons_type(60)
 }
 
-/// The steward's CLASSIFICATION link type — `1.1.0.1.0.1.0.3.61`,
-/// PROVISIONAL (PUB-5.43; PUB-6.64's member where the link's own home is
-/// published, RES-207).
+/// The steward's CLASSIFICATION link type — `1.1.0.1.0.1.0.3.61`, CONFIRMED
+/// by the owner 2026-09-07 (PUB-5.43; PUB-6.64's member where the link's
+/// own home is published, RES-207).
 ///
-/// OWNER CONFIRM OWED. commons-map.md's PUB steward classification link row
-/// (owner 2026-09-06): "3.61 (agentic tier) — PROVISIONAL, exact at seeding;
-/// the review/resolution layer the tier is reserved for".
+/// commons-map.md's PUB steward classification link row (owner 2026-09-06):
+/// "3.61 (agentic tier) — PROVISIONAL, exact at seeding; the
+/// review/resolution layer the tier is reserved for".
 pub fn t_steward_classification() -> Address {
     commons_type(61)
 }

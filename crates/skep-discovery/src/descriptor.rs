@@ -88,7 +88,7 @@ pub fn count_ftt_on<W: DiscoveryWorld>(s: &Snapshot<W>, q: &FourSet) -> usize {
 }
 
 /// [`count_ftt_on`] answering the FILTERED cardinality (PUB round 2, lane 3.3,
-/// §3; PUB-6.15): the count is of the satisfying links surviving the home
+/// §3; PUB-6.19): the count is of the satisfying links surviving the home
 /// consult, by ENUMERATION — the same set [`findlinks_ftt_on_where`] returns.
 pub fn count_ftt_on_where<W: DiscoveryWorld>(
     s: &Snapshot<W>,

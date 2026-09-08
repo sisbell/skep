@@ -68,9 +68,13 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Inert {
     /// The home document is not published (AUTH-2.66 item 3; I7,
-    /// AUTH-2.102). In v1 the origin wires `is_published` constant `true`
-    /// (AUTH-2.117), so this arm fires only under a ctx deriving real
-    /// publication (a mirror's, AUTH-2.123).
+    /// AUTH-2.102). The origin answers `is_published` off the EXCEPTION SET
+    /// — the engine's membership index over the publication bit each
+    /// document is born with (PUB-1.9, PUB-7.5) — so a credential deposited
+    /// in a DRAFT-homed document fires this arm, ahead of the home pin and
+    /// of the payload parse. v1 wired the fact constant `true` (AUTH-2.117),
+    /// under which only a ctx deriving real publication reached it (a
+    /// mirror's, AUTH-2.123).
     Unpublished,
     /// The deposit cannot be read as its kind's shape, on any of three
     /// counts: the home is UNOWNED, so there is no H at all (AUTH-2.66

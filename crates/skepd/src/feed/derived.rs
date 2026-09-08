@@ -80,15 +80,15 @@ pub(crate) struct DerivedFile {
     coverage: u64,
 }
 
+/// The records a derived file replays: `(position, the line's object)`,
+/// in file order.
+pub(crate) type Records = Vec<(u64, Map<String, Value>)>;
+
 impl DerivedFile {
     /// Replay `name` in `dir`: truncate a torn tail, drop what describes
     /// another journal (rewriting the file without it), and hand back the
     /// records at or below `head` with the file's coverage.
-    pub fn open(
-        dir: &Path,
-        name: &'static str,
-        head: u64,
-    ) -> io::Result<(DerivedFile, Vec<(u64, Map<String, Value>)>)> {
+    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(DerivedFile, Records)> {
         let path = dir.join(name);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut bytes = Vec::new();

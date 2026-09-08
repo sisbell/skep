@@ -223,7 +223,7 @@ impl Feed {
         let index_tail: Vec<u64> =
             log.entries.range(index_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
         for &at in &index_tail {
-            if !docs.contains_key(&at) {
+            if let std::collections::btree_map::Entry::Vacant(slot) = docs.entry(at) {
                 let addrs: Vec<Address> = match log.entries.get(&at) {
                     Some(CommitMeta::Recorded { docs: strings, .. }) => {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
@@ -235,7 +235,7 @@ impl Feed {
                     None => Vec::new(),
                 };
                 if !addrs.is_empty() {
-                    docs.insert(at, classify(world, addrs));
+                    slot.insert(classify(world, addrs));
                 }
             }
             if let Some(ds) = docs.get(&at) {

@@ -23,7 +23,7 @@ use crate::check::{Checker, Ctx, TypedTerm};
 use crate::codec;
 use crate::dynamics::{classify_term, Dynamics};
 use crate::error::TypeError;
-use crate::eval::{eval_term, DefSource, EvalCtx};
+use crate::eval::{eval_term, DefSource, EvalCtx, GuestLinks};
 use crate::rule::RuleId;
 use crate::value::{Env, Signature, Sort, Value};
 
@@ -171,6 +171,23 @@ where
         self.catalog.reserved(t)
     }
 
+    /// One verdict's read context over the world `w` of a pinned snapshot:
+    /// the catalog, M3, and M7 THROUGH THE GUEST-CLASS VIEW (`GuestLinks`,
+    /// PUB round 2, lane 4.1 — every tuple homed where the injected `guest`
+    /// predicate answers `false` is dropped from every read). The ONE
+    /// construction site in the crate: `eval`/`decide`, the rule engine's
+    /// domain enumeration, trigger evaluation and scope test, the fire's own
+    /// re-check, and `evaluate_def`'s denotation all build their context
+    /// here, so no evaluator ever reads the link store class-free.
+    pub(crate) fn eval_ctx<'a>(&'a self, w: &'a W, defs: Option<&'a dyn DefSource>) -> EvalCtx<'a, W> {
+        EvalCtx {
+            catalog: &self.catalog,
+            links: GuestLinks::new(w, w.links(), &*self.guest),
+            m3: w.m3(),
+            defs,
+        }
+    }
+
     // ──────────────────── A. The predicate language ────────────────────
 
     /// Type-check `body` under the ordered parameter context `params` (Γ_D —
@@ -226,14 +243,16 @@ where
     /// codomain); ref-bearing terms evaluate only through `evaluate_def`,
     /// keeping this denotation content-free. INFALLIBLE on a ref-free
     /// `TypedTerm`; reads ONLY M7 + M3, all off `snap` (PC4 / ASN-0134
-    /// clause 6). The verdict is "as of `snap.seq()`" (M2 V1 retrospective).
+    /// clause 6) — M7 through the GUEST-CLASS view (lane 4.1, PUB-6.28): a
+    /// tuple homed in a document the injected `guest` predicate refuses is
+    /// invisible to the verdict, exactly as it is to a fire's gates. The
+    /// verdict is "as of `snap.seq()`" (M2 V1 retrospective).
     pub fn eval(&self, t: &TypedTerm, env: &Env, view: View, snap: &Snapshot<W>) -> Value {
         assert!(
             t.is_ref_free(),
             "eval precondition violated: ref-bearing TypedTerm — route through evaluate_def"
         );
-        let w = snap.world();
-        let cx = EvalCtx { catalog: &self.catalog, links: w.links(), m3: w.m3(), defs: None };
+        let cx = self.eval_ctx(snap.world(), None);
         eval_term(&cx, env, view, t.evaluable.as_ref())
     }
 

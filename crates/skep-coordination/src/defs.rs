@@ -20,7 +20,7 @@ use crate::codec;
 use crate::coordinator::{Coordinator, DefEntry, DefStatus};
 use crate::dynamics::{analyze_term, view_independent};
 use crate::error::{CertifyError, DefineError, EvalError, RegisterError, RetractError};
-use crate::eval::{eval_term, EvalCtx};
+use crate::eval::eval_term;
 use crate::value::{value_sort, Env, Signature, Sort, Value};
 
 /// `s_C` = 1 — the content-subspace numeral (ASN-0047 convention; the
@@ -150,7 +150,11 @@ where
     /// parse/WT (a PR-DISC breach) is `UndisciplinedDef`. `args` bind
     /// positionally to Γ_D (= `signature(start).params`). Pure pin to `snap`;
     /// the denotation is DAG-recursive (`eval`'s walk + the one `Ref` arm),
-    /// never a materialized flat term (Conflicts §5).
+    /// never a materialized flat term (Conflicts §5). The denotation reads
+    /// M7 through the GUEST-CLASS view (lane 4.1) — the same view an `Inline`
+    /// trigger reads — while the ever-registration probe below stays
+    /// class-free: a def's REGISTRATION is not a trigger read, and a def
+    /// registered into a draft home evaluates as it did.
     pub fn evaluate_def(
         &self,
         start: &Address,
@@ -188,8 +192,7 @@ where
             }
             env = env.bind(v.clone(), arg.clone());
         }
-        let w = snap.world();
-        let cx = EvalCtx { catalog: &self.catalog, links: w.links(), m3: w.m3(), defs: Some(self) };
+        let cx = self.eval_ctx(snap.world(), Some(self));
         Ok(eval_term(&cx, &env, view, entry.expanded.as_ref()))
     }
 

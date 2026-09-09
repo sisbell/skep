@@ -20,7 +20,7 @@ use crate::check::{Checker, Ctx, TypedDom, TypedTerm};
 use crate::coordinator::{CheckedRule, CheckedTrigger, Coordinator, DefStatus};
 use crate::dynamics::{analyze_dom, analyze_term, Footprint};
 use crate::error::{FireError, RuleError};
-use crate::eval::{enum_dom, eval_term, truthy, Elem, EvalCtx};
+use crate::eval::{enum_dom, eval_term, truthy, Elem};
 use crate::rule::{
     Enabled, FireAction, FireOutcome, Rule, RuleCertification, RuleId, ScopeBody, StepOutcome,
     TriggerRef,
@@ -191,23 +191,30 @@ where
 
     /// `[D_ρ]_snap` — the stored `TypedDom` evaluated off the snapshot at the
     /// RULE's declared view (a `default`-view rule never fires on UV-hidden
-    /// arguments); finite by QD-fin.
+    /// arguments); finite by QD-fin. Enumerated THROUGH THE GUEST-CLASS VIEW
+    /// (lane 4.1, PUB-6.28): a tuple homed in a private draft seeds no
+    /// domain — a rule whose only matching tuples are draft-homed has an
+    /// EMPTY visible domain and reports as a rule with no matching tuple
+    /// does today (`next_enabled` → `None`, `step` → `Quiescent`).
     fn enum_rule_dom(&self, rule: &CheckedRule, snap: &Snapshot<W>) -> Vec<Elem> {
-        let w = snap.world();
-        let cx = EvalCtx { catalog: &self.catalog, links: w.links(), m3: w.m3(), defs: None };
+        let cx = self.eval_ctx(snap.world(), None);
         enum_dom(&cx, &Env::empty(), rule.view, rule.dom.dom.as_ref())
     }
 
-    /// `T_ρ(x, snap)` at the rule's view. SNAPSHOT-FRESHNESS PRECONDITION for
-    /// `Def` triggers (§Public interface C): a caller snapshot predating the
-    /// trigger def's registration commit makes `evaluate_def` err inside a
-    /// bool-returning method — a precondition violation, panics like
-    /// `decide`. (`fire` pins its own fresh snapshot and is exempt.)
+    /// `T_ρ(x, snap)` at the rule's view, read THROUGH THE GUEST-CLASS VIEW
+    /// (lane 4.1, PUB-6.28) — an `Inline` trigger through `eval_ctx`, a `Def`
+    /// trigger through `evaluate_def`'s own context, the same view — so a
+    /// draft-homed tuple satisfies no trigger's pattern and a fire's verdict
+    /// never turns on a document rule 4 hides. SNAPSHOT-FRESHNESS
+    /// PRECONDITION for `Def` triggers (§Public interface C): a caller
+    /// snapshot predating the trigger def's registration commit makes
+    /// `evaluate_def` err inside a bool-returning method — a precondition
+    /// violation, panics like `decide`. (`fire` pins its own fresh snapshot
+    /// and is exempt.)
     fn trigger_true(&self, rule: &CheckedRule, elem: &Elem, snap: &Snapshot<W>) -> bool {
         match &rule.trigger {
             CheckedTrigger::Inline { param, term } => {
-                let w = snap.world();
-                let cx = EvalCtx { catalog: &self.catalog, links: w.links(), m3: w.m3(), defs: None };
+                let cx = self.eval_ctx(snap.world(), None);
                 let env = Env::empty().bind(param.clone(), elem.value());
                 truthy(eval_term(&cx, &env, rule.view, term.evaluable.as_ref()))
             }
@@ -258,8 +265,7 @@ where
              one-Addr-parameter Bool TypedTerm"
         );
         let scope_param = scope.params()[0].0.clone();
-        let w = snap.world();
-        let cx = EvalCtx { catalog: &self.catalog, links: w.links(), m3: w.m3(), defs: None };
+        let cx = self.eval_ctx(snap.world(), None);
         // OPEN DECISION: the design leaves the scope predicate's evaluation
         // view unstated (the canonical scopes are state-free address tests);
         // Active — the current structural state — is taken as the
@@ -326,6 +332,17 @@ where
     /// reports `Fired` — discriminated by the fire-snapshot residence of the
     /// returned effect (an incumbent already existed in `snap`). Only `Fired`
     /// advances the divergence count.
+    ///
+    /// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): the domain re-check and
+    /// the trigger read M7 through the guest-class view off this fire's own
+    /// snapshot — the same view `next_enabled`/`step` peeked through — so an
+    /// argument whose only witnessing tuple is draft-homed is OUT of the
+    /// visible domain and answers `NoOp` (the removed discharge), never
+    /// `DraftBoundary`: the trigger never reaches the action. Answer order,
+    /// as built: `NoOp` (out of the visible domain, or trigger false) →
+    /// `Err(DraftBoundary(doc))` (the action's home or the argument's
+    /// document unreadable at guest class) → `Err(HomeNotRegistered)` →
+    /// `Err(Emit | Nullify)`.
     pub fn fire(&self, e: &Enabled) -> Result<FireOutcome, FireError> {
         let rule = self
             .rules

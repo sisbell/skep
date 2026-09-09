@@ -853,6 +853,111 @@ fn a_fire_stops_at_the_draft_boundary_before_any_deposit() {
     assert!(k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()));
 }
 
+/// THE LOOK AT GUEST CLASS (lane 4.1, PUB-6.28): under a guest predicate that
+/// refuses doc2, a tuple homed in doc2 is invisible to every read the
+/// evaluator makes — it seeds no domain, satisfies no trigger, and moves no
+/// PL verdict — while the same tuple homed in doc1 does all three. The view
+/// stays orthogonal to the class: an `AuditSlice` domain keeps a retracted
+/// tuple of the readable doc1. (Under the suite's all-true guest, `coord`'s,
+/// the filter is the identity — every other test here stands as written.)
+#[test]
+fn the_trigger_s_look_is_filtered_at_guest_class() {
+    let refuse_doc2 = || -> Box<dyn Fn(&World, &skep_address::Address) -> bool + Send + Sync> {
+        Box::new(|_: &World, d: &skep_address::Address| *d != doc2())
+    };
+
+    // (1) The only pred_stable tuple on ca1 is homed in doc2: no verdict, no
+    // domain, no fire — and a hand-aimed fire is a NoOp (out of the visible
+    // domain), never a DraftBoundary: the home doc1 and the member's own
+    // document doc1 are both readable, so before lane 4.1 this rule DEPOSITED.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    links(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc2");
+    assert!(
+        k.snapshot().world().links().is_k(&pred_stable_ty(), ca(1).tumbler()),
+        "M7's class-free read holds the tuple — it is the evaluator's look that must not"
+    );
+    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(!decide_now(&k, &c, View::Audit, is_k_t(&pred_stable_ty(), lit_addr(&ca(1)))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::MembersDom(conc(&pred_stable_ty()))), lit_nat(0))));
+    assert!(decide_now(&k, &c, View::Active, nat_eq(count(Dom::LinkDom), lit_nat(0))));
+    let id = c
+        .register_rule(Rule {
+            domain: Dom::MembersDom(conc(&pred_stable_ty())),
+            trigger: always_addr(&c),
+            view: View::Audit,
+            action: marker_action(),
+        })
+        .expect("register");
+    let s = k.snapshot();
+    assert!(c.quiescent(&s));
+    assert!(c.next_enabled(&s).is_none());
+    assert!(matches!(c.step(&s), StepOutcome::Quiescent));
+    assert!(matches!(
+        c.fire(&Enabled { rule: id, arg: Value::Addr(ca(1)) }).expect("out of domain is a NoOp"),
+        FireOutcome::NoOp
+    ));
+    assert!(!k.snapshot().world().links().is_k(&marker_ty(), ca(1).tumbler()), "nothing deposited");
+    assert_eq!(c.fire_count(id, &ca(1)), 0);
+
+    // (2) The trigger side: the member's tuple is in doc1 (visible); the
+    // marker that would falsify ¬is_K(marker, x) is in doc2 — invisible to
+    // the look, as to the writer's dedup — so the rule fires, minting fresh
+    // in doc1 beside the draft's marker, and then quiesces on its own.
+    let k = kernel();
+    let mut c = coord_with_guest(&k, refuse_doc2());
+    links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
+    let (draft_marker, _) =
+        links(&k).emit(Caller::System, &doc2(), &marker_ty(), &ca(1), &[]).expect("marker in doc2");
+    let trig = TriggerRef::Inline(
+        c.type_check_trigger(vec![(v(1), Sort::Addr)], not(is_k_t(&marker_ty(), var(1))))
+            .expect("trigger"),
+    );
+    c.register_rule(Rule {
+        domain: Dom::MembersDom(conc(&pred_stable_ty())),
+        trigger: trig,
+        view: View::Audit,
+        action: marker_action(),
+    })
+    .expect("register");
+    match c.step(&k.snapshot()) {
+        StepOutcome::Fired { arg, effect, .. } => {
+            assert_eq!(arg, ca(1));
+            assert_ne!(effect, draft_marker, "the draft's marker neither falsified nor absorbed the fire");
+            assert_eq!(skep_address::document_of(&effect), Some(doc1()));
+        }
+        other => panic!("expected Fired, got {other:?}"),
+    }
+    assert!(
+        matches!(c.step(&k.snapshot()), StepOutcome::Quiescent),
+        "the public marker now falsifies the trigger"
+    );
+
+    // (3) The view is orthogonal to the class: a retracted tuple of doc1
+    // stays in L_K (audit), doc2's never enters.
+    let k = kernel();
+    let c = coord_with_guest(&k, refuse_doc2());
+    let (t1, _) =
+        links(&k).emit(Caller::System, &doc1(), &pred_stable_ty(), &ca(1), &[]).expect("rel in doc1");
+    links(&k).nullify(Caller::System, &doc1(), &t1).expect("retract it");
+    links(&k).emit(Caller::System, &doc2(), &pred_stable_ty(), &ca(2), &[]).expect("rel in doc2");
+    let in_audit = |a: &skep_address::Address| {
+        decide_now(
+            &k,
+            &c,
+            View::Audit,
+            exists(
+                1,
+                Dom::AuditSlice(conc(&pred_stable_ty())),
+                addr_eq(Term::Atom(Atom::TupAddr(v(1))), lit_addr(a)),
+            ),
+        )
+    };
+    assert!(in_audit(&t1), "retracted, but homed in the readable doc1: in the audit slice");
+    assert!(decide_now(&k, &c, View::Audit, nat_eq(count(Dom::AuditSlice(conc(&pred_stable_ty()))), lit_nat(1))));
+    assert!(!decide_now(&k, &c, View::Active, is_k_t(&pred_stable_ty(), lit_addr(&ca(2)))));
+}
+
 /// A Nullify rule is always Uncertified (fails the Marker leg), fires as one
 /// atomic retraction on a tuple domain, and — on the documented-contract
 /// misuse (an Addr-over-M_K domain) — surfaces `BadTarget` as a `Failed`

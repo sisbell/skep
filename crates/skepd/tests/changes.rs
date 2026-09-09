@@ -816,6 +816,104 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 }
 
+/// A RECORDED position naming a document this daemon cannot read answers as
+/// a BARE one — op, docs, time and key all null — and its op, its time and
+/// the FINGERPRINT of the key whose session committed it are not disclosed.
+///
+/// `commits.log` is a trust boundary: an operator's edit, or a build whose
+/// address rendering differs, and its `docs` array replays as arbitrary
+/// strings. Left recorded, a list none of whose names read classifies the
+/// position EMPTY — and an empty class is a `[]`-docs entry, which is never
+/// masked, so the write is served to EVERY class carrying that testimony.
+/// Demoted, it discloses its position alone, the residue a position the
+/// journal cannot classify already carries.
+///
+/// The rewritten line keeps its `op`, `time` and `key` intact: what the
+/// daemon refuses is a HALF-RECORDED position, exactly as `parse_line`
+/// already refuses a line carrying some of those three and not the others.
+#[test]
+fn a_position_naming_an_unreadable_document_answers_bare() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sidecar_path = dir.path().join("commits.log");
+    {
+        let sd = spawn(dir.path());
+        seed_flow(sd.port());
+        sd.shutdown();
+    }
+
+    // Make the LAST document-naming record's docs unreadable — the seeded
+    // `make_link` into principal 1's PRIVATE draft, so the mask is what the
+    // demotion is protecting. `1.0` is a dotted decimal that is not an
+    // address (T4 refuses a trailing zero), so the LINE still parses as a
+    // record and only its names do not.
+    let contents = std::fs::read_to_string(&sidecar_path).expect("read commits.log");
+    let mut lines: Vec<String> = Vec::new();
+    let mut doctored: Option<u64> = None;
+    for line in contents.lines().rev() {
+        let mut v: Value = serde_json::from_str(line).expect("a sidecar line is JSON");
+        let names = v.get("docs").and_then(Value::as_array).map_or(0, Vec::len);
+        if doctored.is_none() && names > 0 {
+            doctored = Some(v["at"].as_u64().expect("a record carries its position"));
+            v["docs"] = serde_json::json!(["1.0"]);
+        }
+        lines.push(serde_json::to_string(&v).expect("json"));
+    }
+    lines.reverse();
+    let at = doctored.expect("the seeded feed holds a record naming a document");
+    assert_eq!(at, SEEDED_ATS[4], "the doctored position is the make_link into the draft");
+    std::fs::write(&sidecar_path, format!("{}\n", lines.join("\n"))).expect("rewrite");
+
+    let bare_to_owner_masked_from_guest = |port: u16, what: &str| {
+        let s1 = open_session(port, 1);
+        let v = changes_ok(port, Some(&s1), "since=0");
+        assert_eq!(entry_ats(&v), all_ats(), "{what}: the owner still sees the position");
+        let entry = v["changes"]
+            .as_array()
+            .expect("changes")
+            .iter()
+            .find(|e| e["at"].as_u64() == Some(at))
+            .expect("the doctored position")
+            .clone();
+        assert!(
+            entry["op"].is_null()
+                && entry["docs"].is_null()
+                && entry["time"].is_null()
+                && entry["key"].is_null(),
+            "{what}: a position whose names this daemon cannot read stands behind \
+             none of its testimony — not its op, not its time, and not the \
+             fingerprint of the key whose session committed it: {entry}"
+        );
+        let g = changes_ok(port, None, "since=0");
+        assert!(
+            !entry_ats(&g).contains(&at),
+            "{what}: and a draft write is not unmasked by testimony this daemon \
+             cannot read: {:?}",
+            entry_ats(&g)
+        );
+    };
+
+    // The derived index still holds that position's GOOD names, and the
+    // demotion is driven by the authority file regardless — so the entry
+    // renders bare while its class, and with it the mask, is untouched.
+    {
+        let sd = spawn(dir.path());
+        bare_to_owner_masked_from_guest(sd.port(), "with the derived index intact");
+        sd.shutdown();
+    }
+
+    // And with the index gone, so no derived file rescues the class: the
+    // position classifies from the JOURNAL (the bare path, PUB-6.45) and
+    // still discloses none of its testimony. This is the leg where the
+    // defect lives — a class none of whose names read is EMPTY, and an
+    // empty class is a `[]`-docs entry, which is never masked.
+    std::fs::remove_file(dir.path().join("feed-index.log")).expect("drop the derived index");
+    {
+        let sd = spawn(dir.path());
+        bare_to_owner_masked_from_guest(sd.port(), "with the derived index gone");
+        sd.shutdown();
+    }
+}
+
 /// A `min_since` fence describing a journal other than this one — an
 /// operator restoring a data dir, or copying one whose journal was later
 /// replaced by a shorter one, which is the case the entry clamp beside it

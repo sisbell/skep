@@ -150,12 +150,12 @@ fn assert_scan_busy(st: u16, v: &Value, op: &str) {
 
 /// §1 SHAPE and §2 BOUND together, observed from the wire: with both scan
 /// permits held, a frame is refused `scan_busy` iff it is class-scan-shaped
-/// — `ty`-only `find_links_ftt`, the all-`any` query, and `ty`-only
-/// `count_ftt`/`window_ftt` are; `ty`+`home` and `find_links_v` are not and
-/// serve as if nothing were held. Every probe serves with the pool free,
-/// before and after.
+/// — `ty`-only `find_links_ftt`, the all-`any` query, `home`-only, and
+/// `ty`-only `count_ftt`/`window_ftt` are; `ty`+`home` and `find_links_v`
+/// are not and serve as if nothing were held. Every probe serves with the
+/// pool free, before and after.
 #[test]
-fn only_a_ty_only_ftt_query_takes_a_scan_permit() {
+fn only_a_ty_or_home_only_ftt_query_takes_a_scan_permit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -168,6 +168,11 @@ fn only_a_ty_only_ftt_query_takes_a_scan_permit() {
         ("find_links_ftt", find_links_ftt(ANY, ANY, ANY, &grant_class), true),
         ("find_links_ftt", find_links_ftt(&doc1, ANY, ANY, &grant_class), false),
         ("find_links_ftt", find_links_ftt(ANY, ANY, ANY, ANY), true),
+        // A four-set constraining `home` ALONE: `home` is not a link slot, so
+        // M7 is handed no constraint and takes the whole active slice — the
+        // all-`any` candidate set, plus a residence test per link. The
+        // costlier of two spellings of one population, so it is bounded too.
+        ("find_links_ftt", find_links_ftt(&doc1, ANY, ANY, ANY), true),
         ("count_ftt", count_ftt(&grant_class), true),
         ("window_ftt", window_ftt(&grant_class), true),
         ("find_links_v", find_links_v(CLAIMANT_DOC1), false),
@@ -242,8 +247,10 @@ fn a_third_class_scan_is_refused_and_the_two_pools_are_disjoint() {
         );
     }
 
-    // A second constrained slot takes no permit: the narrowed query answers
-    // the same rows while the pool is full.
+    // A second LINK slot constrained takes no permit: the narrowed query
+    // answers the same rows while the pool is full. What narrows it is the
+    // `ty` constraint, which M7 IS handed, so its candidate set is one class
+    // rather than the store — the narrowest-slot pins bound it, not this.
     let (st, v) = post(port, None, &narrowed);
     assert_eq!(st, 200, "{v}");
     assert_eq!(addrs_of(&v), expect, "ty+home is bounded by the narrowest-slot pins, not here");

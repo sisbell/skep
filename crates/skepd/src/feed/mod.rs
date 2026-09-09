@@ -96,6 +96,28 @@ use self::derived::{
 use crate::sidecar::{CommitMeta, CommitsLog};
 use crate::write_path::SerialGuard;
 
+/// The most granted prefixes [`Inner::names_under`] scans per candidate
+/// before [`Inner::sources`] stands the filter aside and lets the mask
+/// decide.
+///
+/// The filter is a CANDIDATE optimization and never the answer — every
+/// position it drops is one the mask drops too — so standing it aside moves
+/// no page, which is what makes a cap here answer-preserving rather than a
+/// narrowing.
+///
+/// The budget is the cost of the probe this filter PRECEDES. `World::readable`
+/// answers the grant clause by testing a document's O(depth) ancestor prefixes
+/// against a prefix-keyed set; this filter walks the issuer's whole granted
+/// union linearly, per candidate. Past the depth bound the linear walk costs
+/// more per candidate than the indexed probe that follows it, so the filter
+/// stops being an optimization and becomes a tax — and the union is a quantity
+/// the ISSUER writes, one prefix per grant, uncapped by the fold, so a holder
+/// of thousands of narrow grants would otherwise buy an O(union) scan per
+/// candidate on every page, under the lock [`crate::write_path::WritePath`]
+/// takes to record a commit. The number is M3's `MAX_PRINCIPAL_COMPONENTS`,
+/// which is that depth bound.
+const MAX_FILTERED_PREFIXES: usize = 64;
+
 /// The requester's VISIBLE STREAM KEY SET, resolved by the route off ONE
 /// head snapshot (PUB-6.40) and threaded down: the read predicate at the
 /// requester's class, the stream keys its class opens, and the universal
@@ -245,7 +267,8 @@ impl Feed {
     /// another journal's lines, or (the offset array) when its offsets no
     /// longer match the log's.
     pub fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
-        let (log, walked) = CommitsLog::open(dir, engine)?;
+        let (mut log, walked) = CommitsLog::open(dir, engine)?;
+        demote_unreadable(&mut log);
         let head = log.open_head;
         let snap = engine.kernel().snapshot();
         let world = snap.world();
@@ -259,13 +282,30 @@ impl Feed {
         //    the log holds, then this open's walk, then the index's tail ──
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
         for (at, m) in &index_entries {
-            if !log.entries.contains_key(at) {
-                continue;
-            }
-            let addrs: Vec<Address> = strings_of(m.get(INDEX_DOCS))
-                .into_iter()
-                .filter_map(|s| parse_dotted(&s))
-                .collect();
+            let Some(meta) = log.entries.get(at) else { continue };
+            let strings = strings_of(m.get(INDEX_DOCS));
+            let addrs: Vec<Address> = strings.iter().filter_map(|s| parse_dotted(s)).collect();
+            let addrs = if addrs.len() == strings.len() {
+                addrs
+            } else {
+                // A DERIVED record this daemon cannot read. Never trusted
+                // OVER the authority file — that is the derived layer's
+                // whole standing — so a recorded position answers from its
+                // own testimony instead, which `demote_unreadable` has
+                // already checked; a bare one has none, and stays
+                // unclassified, which is the residue it already carries.
+                // Accepting the SHORT list would mask the position by a
+                // smaller set than the write touched, and accepting an
+                // empty one would make it a `[]`-docs entry, which is never
+                // masked.
+                report_unreadable(INDEX_FILE, *at, strings.len() - addrs.len());
+                match meta {
+                    CommitMeta::Recorded { docs: authority, .. } => {
+                        authority.iter().filter_map(|s| parse_dotted(s)).collect()
+                    }
+                    CommitMeta::Bare => Vec::new(),
+                }
+            };
             if !addrs.is_empty() {
                 docs.insert(*at, classify(world, addrs));
             }
@@ -284,6 +324,9 @@ impl Feed {
         for &at in &index_tail {
             if let std::collections::btree_map::Entry::Vacant(slot) = docs.entry(at) {
                 let addrs: Vec<Address> = match log.entries.get(&at) {
+                    // Every name reads: `demote_unreadable` demoted the
+                    // recorded positions whose did not, so this parse drops
+                    // nothing.
                     Some(CommitMeta::Recorded { docs: strings, .. }) => {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
@@ -336,6 +379,13 @@ impl Feed {
             log.entries.keys().copied().filter(|at| !masked.contains(at)).collect();
 
         // ── the per-owner draft streams ──
+        //
+        // An owner name this daemon cannot read is DROPPED here, and that is
+        // the safe direction: the position leaves that owner's stream, so
+        // their supplement is short by it and nothing is unmasked. The index
+        // above cannot be lossy in the same way — a dropped DOCUMENT shortens
+        // the class the mask is computed over — which is why that read
+        // refuses a half-record and this one does not.
         let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
         for (at, m) in &stream_entries {
             if !log.entries.contains_key(at) {
@@ -639,8 +689,11 @@ impl Inner {
             let Some(s) = self.streams.get(issuer) else { continue };
             // A grant at the issuer's account depth or wider IS the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment
-            // test against their union.
-            if prefixes.iter().any(|p| is_prefix(p.tumbler(), issuer.tumbler())) {
+            // test against their union — while that union is small enough
+            // for the test to be worth making ([`MAX_FILTERED_PREFIXES`]).
+            if prefixes.len() > MAX_FILTERED_PREFIXES
+                || prefixes.iter().any(|p| is_prefix(p.tumbler(), issuer.tumbler()))
+            {
                 v.push(Box::new(from(s, start)));
             } else {
                 v.push(Box::new(
@@ -668,6 +721,11 @@ impl Inner {
 
     /// Does the entry at `at` name a draft of `issuer` under one of
     /// `prefixes` — the per-entry containment test of a narrower grant.
+    ///
+    /// A CANDIDATE filter and never the answer: every position it drops is
+    /// one [`Inner::visible`]'s mask drops too, through the fold's own
+    /// indexed probe, so [`Inner::sources`] may stand it aside past
+    /// [`MAX_FILTERED_PREFIXES`] and the page does not move.
     fn names_under(&self, at: u64, issuer: &Address, prefixes: &[Address]) -> bool {
         self.docs.get(&at).is_some_and(|ds| {
             ds.iter().any(|d| {
@@ -745,6 +803,67 @@ fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Addre
     let below = engine.world_at(Seq(prev)).ok()?;
     let above = engine.world_at(Seq(at)).ok()?;
     Some(derived_docs(&below, &above))
+}
+
+/// Demote every RECORDED position whose document names this daemon cannot
+/// read to a BARE one, in memory, before anything classifies or renders it.
+///
+/// A half-readable name list is a HALF-RECORDED position, and [`CommitMeta`]
+/// has no meaning for one: its two states are the whole vocabulary, and
+/// `parse_line` already ends trust at a line carrying some of `op`/`docs`/
+/// `time` and not the others. This applies that discipline one level down —
+/// testimony this daemon cannot read is testimony it does not stand behind.
+///
+/// What the demotion buys is the DISCLOSURE, and only that. A name list none
+/// of whose names read classifies the position EMPTY, and an empty class is
+/// a `[]`-docs entry, which [`Inner::visible`] never masks — so left
+/// recorded, a write into an unnameable document is served to every class
+/// carrying its op, its wall-clock time, and the FINGERPRINT of the key
+/// whose session committed it. Demoted, it discloses its position alone,
+/// which is the residue [`CommitsLog`] already accepts for a position the
+/// journal cannot classify (PUB-6.52), and its wire entry is the reserved
+/// all-nulls rendering. A partly-readable list is the same species one step
+/// less visible: the mask would be computed over fewer documents than the
+/// write touched.
+///
+/// Runs on EVERY open, over EVERY retained position, which is what makes it
+/// stable: the demotion is driven by `commits.log`, which is re-read each
+/// open, rather than by a derived file whose coverage fence would carry the
+/// position past this check on the second open.
+///
+/// IN MEMORY ONLY. `commits.log` is the sole surviving record of those
+/// commits, so an unreadable name is never rewritten away over what may be
+/// one build's rendering.
+///
+/// UNREACHABLE as built — the names are rendered from validated `Address`es
+/// by [`Feed::record`], so the round trip holds — and the obligation keeping
+/// it so is held by nobody: the write path renders, [`CommitsLog`] stores,
+/// this read parses.
+fn demote_unreadable(log: &mut CommitsLog) {
+    let half_recorded: Vec<(u64, usize)> = log
+        .entries
+        .iter()
+        .filter_map(|(at, meta)| match meta {
+            CommitMeta::Recorded { docs, .. } => {
+                let dropped = docs.iter().filter(|s| parse_dotted(s).is_none()).count();
+                (dropped > 0).then_some((*at, dropped))
+            }
+            CommitMeta::Bare => None,
+        })
+        .collect();
+    for (at, dropped) in half_recorded {
+        report_unreadable(crate::sidecar::SIDECAR_FILE, at, dropped);
+        log.entries.insert(at, CommitMeta::Bare);
+    }
+}
+
+/// One line naming documents this daemon cannot read. `writeln!` to stderr
+/// rather than `eprintln!`, for [`report`]'s reason.
+fn report_unreadable(file: &str, at: u64, dropped: usize) {
+    let _ = writeln!(
+        std::io::stderr(),
+        "skepd: {file} position {at} names {dropped} document(s) this daemon cannot read"
+    );
 }
 
 /// A derived append that failed: reported, never a failed op — the twin is

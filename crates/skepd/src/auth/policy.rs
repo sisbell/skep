@@ -872,10 +872,23 @@ pub(crate) fn claim_residue_refusal(
 /// The number of accounts minted under `node`, read off the frontier exactly
 /// as `next_account_prefix` publishes it (PUB-6.52): the next delegable
 /// prefix under a node is `node·0·(n+1)`, so its ordinal less one is `n`.
-/// `None` where the node anchors no account chain — not a registered node.
+/// `None` where the node anchors no account chain — not a registered node,
+/// or a frontier whose ordinal is not the positive number that arithmetic
+/// needs.
+///
+/// The ordinal is ≥ 1 twice over: `next_account_prefix` publishes
+/// `node·0·(n+1)`, and T4 refuses a trailing zero on every `Address`, which
+/// is what `ordinal` reads. CHECKED rather than trusted, because `Nat` is a
+/// `BigUint` and its subtraction PANICS on underflow — and this runs under
+/// `credential_lock.write()` AND the write-serialization lock, so a zero
+/// here would be a 500 on the claim path where a refusal is available.
+/// Fail-CLOSED, joining the two unreachable shapes
+/// [`claim_residue_refusal`] already refuses: a claim whose count cannot be
+/// read is refused.
 fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
     let next = world.m3().next_account_prefix(node)?;
-    Some(ordinal(next.tumbler()).clone() - Nat::from(1u32))
+    let ord = ordinal(next.tumbler());
+    (ord > &Nat::from(0u32)).then(|| ord.clone() - Nat::from(1u32))
 }
 
 // ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────

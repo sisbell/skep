@@ -71,6 +71,7 @@ struct Board {
     // addresses
     a_acct: String,
     a_doc1: String,
+    c_acct: String,
     d1: String,
     d2: String,
     d3: String,
@@ -382,6 +383,7 @@ fn build(port: u16) -> Board {
         c,
         a_acct,
         a_doc1,
+        c_acct,
         d1,
         d2,
         d3,
@@ -660,6 +662,25 @@ fn every_page_of_every_class_is_the_oracle_s_walk() {
     }
     let (page, ..) = actual(port, Some(&board.a), &query(board.since0, 256, Narrowing { under: None, drafts: false }));
     assert!(d2_writes.iter().all(|at| ats(&page).contains(at)), "the owner still sees its own draft's writes");
+    check_oracle(&board, &fences(&board), &[2, 256], &narrowings(&board));
+
+    // ── 5. A grant at the ISSUER'S ACCOUNT DEPTH (PUB-7.25): the branch
+    //    that merges the issuer's draft stream WHOLE, with no per-entry
+    //    containment filter, so the MASK alone decides which of its
+    //    positions the page carries. It is also the branch a granted union
+    //    too large to walk per candidate takes, where the filter stands
+    //    aside for the same reason — so the oracle over it is what says
+    //    that standing aside moves no page. C, whose universal term was
+    //    just revoked, now reads every draft of A's account by name. ──
+    let a_acct = board.a_acct.clone();
+    let c_acct = board.c_acct.clone();
+    grant(&mut board.log, port, &a_signed, &a_doc1, &a_acct, Some(&c_acct));
+    let (page, ..) = actual(port, Some(&board.c), &query(board.since0, 256, Narrowing { under: None, drafts: false }));
+    assert!(
+        d2_writes.iter().all(|at| ats(&page).contains(at)),
+        "an account-depth grant reaches every draft under it, the revoked D2 included: {:?}",
+        ats(&page)
+    );
     check_oracle(&board, &fences(&board), &[2, 256], &narrowings(&board));
 
     sd.shutdown();

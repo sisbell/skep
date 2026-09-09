@@ -77,7 +77,9 @@
 //! CLASS-SCAN-shaped reads at once — an FTT query (`find_links_ftt`,
 //! `count_ftt`, `window_ftt`) whose four-set constrains `ty` and no other
 //! slot, the population "the whole type class" (PUB-6.54's directory shape
-//! and its siblings). [`is_class_scan`] is the one statement of that shape;
+//! and its siblings), or constrains `home` alone, which hands M7 no
+//! constraint at all and so takes that same whole-store candidate set with a
+//! residence test on top. [`is_class_scan`] is the one statement of that shape;
 //! [`Daemon::admit_scan`] takes the permit after the parse and the session
 //! read and before M10 is asked, so a refused request costs the parse alone
 //! and an admitted one holds its slot for the WHOLE answer. The pool is a
@@ -194,11 +196,12 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 const RETAINED_CHECKPOINTS: usize = 2;
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
-/// PUB-8.37): FTT queries whose four-set constrains `ty` alone —
-/// [`is_class_scan`] — each of which enumerates a whole type class and pays
-/// a per-candidate home test over every link in it (PUB-6.56: the
-/// home-granular skip does not reach a query whose constrained slot is not
-/// the home), repeatable at will from any unauthenticated peer. The
+/// PUB-8.37): FTT queries whose four-set constrains `ty` alone, or `home`
+/// alone — [`is_class_scan`] — each of which enumerates a whole type class,
+/// or the whole active slice, and pays a per-candidate home test over every
+/// link in it (PUB-6.56: the home-granular skip does not reach a query whose
+/// constrained slot is not the home), repeatable at will from any
+/// unauthenticated peer. The
 /// reconstruction pool's own number (`MAX_CONCURRENT_RECONSTRUCTIONS`), for
 /// the same reason it is that pool's: two keep directories serviceable
 /// without letting a stranger's scans occupy the worker pool. The wire names
@@ -1775,18 +1778,37 @@ fn op_answer(bytes: Vec<u8>) -> Reply {
 /// A SHAPE, not a type list: any class queried that way is bounded, grant or
 /// otherwise, so a class a later round adds is bounded with no edit here.
 /// The all-`"any"` query — the whole store — IS a class scan (the shape's
-/// superset). A query constraining any second slot is NOT one and takes no
-/// permit: the narrowest-slot pins bound it (PUB-7.45). Nothing else about
-/// the query is read — not the class, not the cursor, and not whether M8
-/// would answer it off its own slots (a `ty` of `"empty"` annihilates
-/// before M7 is asked; it is class-scan-shaped all the same, and its permit
-/// is back in the pool a moment later). Every other op answers `false`.
+/// superset). A query constraining a second LINK slot (`from` or `to`) is
+/// NOT one and takes no permit: the narrowest-slot pins bound it (PUB-7.45).
+/// Nothing else about the query is read — not the class, not the cursor, and
+/// not whether M8 would answer it off its own slots (a `ty` of `"empty"`
+/// annihilates before M7 is asked; it is class-scan-shaped all the same, and
+/// its permit is back in the pool a moment later). Every other op answers
+/// `false`.
+///
+/// `home` IS NOT ONE OF THOSE SLOTS, and a four-set constraining it alone is
+/// the same population under a second spelling: M8's `link_constraints`
+/// hands M7 `from`/`to`/`ty` and never the home, so a home-only descriptor
+/// hands M7 NO constraint, takes the whole active slice as its candidate set
+/// exactly as the all-`"any"` query does, and pays a residence test per link
+/// on top of it. M8 states the outcome itself — "a home-only query degrades
+/// to a full active scan, accepted" — so the home-spelled query costs
+/// strictly more than the wildcard one the shape above already bounds, and
+/// is bounded here beside it.
 pub(crate) fn is_class_scan(op: &Op) -> bool {
     let q = match op {
         Op::FindLinksFtt { q } | Op::CountFtt { q } | Op::WindowFtt { q, .. } => q,
         _ => return false,
     };
-    matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any))
+    // The wire's shape (v7.9): `ty` constrained and no other slot.
+    let ty_only =
+        matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
+    // The same whole-store population, reached by constraining the one slot
+    // that is not a link slot. Subsumes the all-`"any"` query, so the union
+    // is exactly "at most one slot constrained, and it is `ty` or `home`".
+    let home_only =
+        matches!((&q.from, &q.to, &q.ty), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
+    ty_only || home_only
 }
 
 /// The `503 scan_busy` refusal (wire v7.9): every class-scan permit is in
@@ -3033,12 +3055,14 @@ mod tests {
     /// THE SHAPE TEST, off the wire's own spelling (wire v7.9, §Link
     /// discovery reads): the FTT forms whose `home`, `from` and `to` are all
     /// `"any"` are class scans — `ty` constrained, `ty` `"any"` (the whole
-    /// store) and `ty` `"empty"` alike — and nothing else is: a second
-    /// constrained slot, whatever it holds, and every other op, the
-    /// region-keyed `find_links_v` included. Parsed through the codec rather
-    /// than built by hand, so the test reads the frames a client sends.
+    /// store) and `ty` `"empty"` alike — and so is the one whose `from`, `to`
+    /// and `ty` are all `"any"`, which hands M7 no constraint and takes the
+    /// same whole-store candidate set. Nothing else is: a second LINK slot
+    /// constrained, whatever it holds, and every other op, the region-keyed
+    /// `find_links_v` included. Parsed through the codec rather than built by
+    /// hand, so the test reads the frames a client sends.
     #[test]
-    fn a_class_scan_is_an_ftt_form_constraining_ty_alone() {
+    fn a_class_scan_is_an_ftt_form_constraining_ty_or_home_alone() {
         let parse = |frame: &str| {
             JsonCodec.parse(frame.as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail)).op
         };
@@ -3065,12 +3089,19 @@ mod tests {
                 r#"{{"op":"count_ftt","q":{}}}"#,
                 q("\"any\"", "\"any\"", "\"any\"", "\"empty\"")
             ),
+            // HOME ALONE — the costlier spelling of the whole store: `home`
+            // is not a link slot, so M7 is handed no constraint and takes the
+            // whole active slice, then pays a residence test per link.
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", "\"any\"")),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", "\"any\"")),
         ];
         for frame in &class_scans {
             assert!(is_class_scan(&parse(frame)), "class-scan-shaped: {frame}");
         }
         let not_class_scans = [
-            // A second constrained slot — the narrowest-slot pins bound it.
+            // A second LINK slot constrained — the narrowest-slot pins bound
+            // it: the `ty` constraint makes the candidate set one class
+            // rather than the store.
             format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", ty)),
             format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", ty, "\"any\"", ty)),
             format!(

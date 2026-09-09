@@ -79,6 +79,7 @@ use skep_kernel::Seq;
 
 use crate::codec::{obj, to_bytes};
 use crate::feed::classify::derived_docs;
+use crate::write_path::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
 /// journal/checkpoint files, which this crate never touches).
@@ -355,23 +356,26 @@ impl CommitsLog {
     /// incumbent) — re-recording it would invent a time.
     ///
     /// CALLER CONTRACT — call only while holding the daemon's
-    /// write-serialization lock, between a commit and its ack. That is what
-    /// makes this file's two invariants true: file order is position order,
-    /// and recorded times are monotone non-decreasing in position. The lock
-    /// the feed holds around this guards its own state and nothing more, so
+    /// write-serialization guard, between a commit and its ack; the guard
+    /// argument is that contract's cheap half. That is what makes this
+    /// file's two invariants true: file order is position order, and
+    /// recorded times are monotone non-decreasing in position. The lock the
+    /// feed holds around this guards its own state and nothing more, so
     /// calls arriving out of position order would append out of order and
     /// stamp a later position with an earlier time — both silent, both
     /// permanent, and both load-bearing for the feed's paging and
-    /// [`CommitsLog::head_time`]. Nothing here can check it, which is why
-    /// `write_path.rs` holds the lock and this call in ONE operation and is
-    /// the only caller: the obligation is discharged by there being nowhere
-    /// else to fail it.
+    /// [`CommitsLog::head_time`]. The guard proves the lock is held and
+    /// proves nothing about the position order the caller supplies, which
+    /// stays [`crate::write_path::WritePath::commit_under`]'s: it runs the
+    /// execute and this record under one guard, so the position recorded is
+    /// the one that write just committed.
     ///
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
     /// this file's own obligation rather than the caller's.
     pub fn record(
         &mut self,
+        _serial: &SerialGuard<'_>,
         at: u64,
         op: &'static str,
         docs: Vec<String>,

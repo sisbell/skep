@@ -127,12 +127,11 @@ impl DerivedFile {
         self.coverage
     }
 
-    /// Append one record for `at` with the file's own fields. The `at` key
-    /// is added here, so a record cannot omit it.
+    /// Append one record for `at` with the file's own fields, in the shape
+    /// [`record_object`] fixes — so an appended line and the rewritten line
+    /// that reproduces it are one spelling rather than two that must agree.
     pub fn append(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
-        let mut pairs = fields;
-        pairs.push(("at", Value::Number(at.into())));
-        self.file.write_all(&line_bytes(obj(pairs)))?;
+        self.file.write_all(&line_bytes(record_object(at, fields)))?;
         self.coverage = self.coverage.max(at);
         Ok(())
     }
@@ -171,9 +170,21 @@ impl DerivedFile {
     }
 }
 
-/// A record object for `at` from its fields — the shape [`DerivedFile::append`]
-/// writes, for a rewrite to reproduce.
-pub(crate) fn record_line(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+/// One record object for `at` from its fields — THE shape a derived line
+/// takes, in both directions: [`DerivedFile::append`] writes it and a
+/// rewrite reproduces it, so each file's field name is spelled once and a
+/// compacted file's lines are byte-identical to appended ones. The `at` key
+/// is added here, so a record cannot omit it.
+pub(crate) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Value {
+    let mut pairs = fields;
+    pairs.push(("at", Value::Number(at.into())));
+    obj(pairs)
+}
+
+/// One REPLAYED line, re-sorted — [`DerivedFile::open`]'s purge alone,
+/// whose keys are owned because they came off disk. Every other caller
+/// holds `&'static str` keys and goes through [`record_object`].
+fn record_line(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
     // Sorted by key — the codec's own device for `&'static str` keys, done
     // here for owned ones — so a rewritten line is byte-identical to an
     // appended one whatever backs serde_json's map.
@@ -263,6 +274,13 @@ mod tests {
         assert_eq!(f.coverage(), 9, "a foreign fence does not raise coverage");
         let purged = std::fs::read_to_string(&path).expect("read");
         assert!(!purged.contains("99"), "the foreign lines are gone: {purged}");
-        assert!(purged.ends_with("{\"covered\":9}\n"), "and the rewrite fences at the coverage: {purged}");
+        // Byte-identical to the file the APPENDS wrote: the rewrite fences at
+        // the coverage, and a rewritten record line reproduces the appended
+        // one exactly. That equality is the whole coupling between the two
+        // directions — [`record_object`] makes it structural for every
+        // rewrite holding its own field names, and this purge is the one
+        // rewrite that cannot (its keys came off disk), so the two spellings
+        // are held together here or nowhere.
+        assert_eq!(purged, contents, "a rewritten line is the appended line");
     }
 }

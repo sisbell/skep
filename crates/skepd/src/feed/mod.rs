@@ -82,13 +82,15 @@ use std::path::Path;
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_address::{is_prefix, Address, Tumbler};
+use skep_address::{is_prefix, parent, Address, Tumbler};
 use skep_engine::{Engine, World};
 use skep_kernel::Seq;
+use skep_namespace::{HasM3, PrincipalId};
 
 use self::classify::{classify, derived_docs, parse_dotted, Doc};
 use self::derived::{DerivedFile, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, STREAMS_FILE};
 use crate::sidecar::{CommitMeta, CommitsLog};
+use crate::write_path::SerialGuard;
 
 /// The requester's VISIBLE STREAM KEY SET, resolved by the route off ONE
 /// head snapshot (PUB-6.40) and threaded down: the read predicate at the
@@ -107,6 +109,32 @@ pub(crate) struct FeedClass<'a> {
     /// The live ANY-PRINCIPAL set (`World::universal_grants`, PUB-7.22),
     /// empty for the guest (grants reach principals alone, PUB-5.109).
     pub universal: Vec<(Address, Vec<Address>)>,
+}
+
+impl<'a> FeedClass<'a> {
+    /// The key set one `(world, principal)` pair opens, resolved off ONE
+    /// head snapshot (PUB-6.40): the route pins the snapshot and hands the
+    /// world in, and every field's own rule is stated on the field above —
+    /// which is why the resolution lives here rather than at the route,
+    /// where it would restate them.
+    pub fn of(
+        world: &'a World,
+        principal: Option<PrincipalId>,
+        readable: &'a dyn Fn(&Address) -> bool,
+    ) -> FeedClass<'a> {
+        let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
+        let mut subtree = Vec::new();
+        let mut cur = account.clone();
+        while let Some(a) = cur {
+            if world.m3().is_registered_account(&a) {
+                subtree.push(a.clone());
+            }
+            cur = parent(&a);
+        }
+        let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
+        let universal = if principal.is_some() { world.universal_grants() } else { Vec::new() };
+        FeedClass { readable, subtree, issuers, universal }
+    }
 }
 
 /// One `/changes` question.
@@ -324,9 +352,9 @@ impl Feed {
                 log.offsets
                     .iter()
                     .map(|(at, o)| {
-                        derived::record_line(
+                        derived::record_object(
                             *at,
-                            [("offset".to_string(), Value::Number((*o).into()))],
+                            vec![("offset", Value::Number((*o).into()))],
                         )
                     })
                     .collect(),
@@ -339,12 +367,12 @@ impl Feed {
         if log.rewritten {
             f_index.rewrite(
                 docs.iter()
-                    .map(|(at, ds)| derived::record_line(*at, [("docs".to_string(), doc_strings(ds))]))
+                    .map(|(at, ds)| derived::record_object(*at, vec![("docs", doc_strings(ds))]))
                     .collect(),
                 head,
             )?;
             f_masked.rewrite(
-                masked.iter().map(|at| derived::record_line(*at, std::iter::empty())).collect(),
+                masked.iter().map(|at| derived::record_object(*at, Vec::new())).collect(),
                 head,
             )?;
             f_streams.rewrite(
@@ -352,9 +380,9 @@ impl Feed {
                     .filter_map(|(at, ds)| {
                         let owners = owners_of(Some(ds));
                         (!owners.is_empty()).then(|| {
-                            derived::record_line(
+                            derived::record_object(
                                 *at,
-                                [("owners".to_string(), addr_strings(owners.iter()))],
+                                vec![("owners", addr_strings(owners.iter()))],
                             )
                         })
                     })
@@ -381,9 +409,10 @@ impl Feed {
         })
     }
 
-    /// Record one committed write at ack time (`CommitsLog::record`'s
-    /// contract: under the write-serialization lock, between a commit and
-    /// its ack) and classify it against `world` — the POST-COMMIT head, so
+    /// Record one committed write at ack time — under the write-serialization
+    /// guard, between a commit and its ack, which is [`CommitsLog::record`]'s
+    /// contract and this method's; the guard argument is that contract's
+    /// cheap half — and classify it against `world` — the POST-COMMIT head, so
     /// the minted document's registration and bit are in it — into the four
     /// derived structures: the offset array, the index (docs non-empty), the
     /// bitmap or the published stream, and each named draft's owner stream.
@@ -392,14 +421,28 @@ impl Feed {
     /// The derived appends are testimony too: a failed one is reported and
     /// the resident twin stays right, so this uptime answers correctly and
     /// the next open's tail check re-derives what the file missed.
-    pub fn record(&self, at: u64, op: &'static str, docs: Vec<String>, key: String, world: &World) {
+    ///
+    /// `docs` arrives as ADDRESSES and is rendered once, here, for the
+    /// authority file alone: the classification reads them as addresses, so
+    /// text handed down from the write path would be parsed straight back —
+    /// and a parse that could not read a name would have nowhere to report
+    /// it, leaving the position classified short and, where every name
+    /// dropped, served to every class as a `[]`-docs entry.
+    pub fn record(
+        &self,
+        serial: &SerialGuard<'_>,
+        at: u64,
+        op: &'static str,
+        docs: Vec<Address>,
+        key: String,
+        world: &World,
+    ) {
         let mut inner = self.inner.lock();
-        let Some(offset) = inner.log.record(at, op, docs.clone(), key) else {
+        let rendered: Vec<String> = docs.iter().map(|a| a.tumbler().to_string()).collect();
+        let Some(offset) = inner.log.record(serial, at, op, rendered, key) else {
             return;
         };
-        let addrs: Vec<Address> = docs.iter().filter_map(|s| parse_dotted(s)).collect();
-        let classified = classify(world, addrs);
-        inner.index_position(at, offset, classified);
+        inner.index_position(at, offset, classify(world, docs));
     }
 
     /// The data behind `GET /changes` at `class`.
@@ -443,8 +486,18 @@ impl Feed {
 
 impl Inner {
     /// Fold one classified position into the four twins and append its
-    /// lines — the ONE path both `record` and a rebuild would take, so the
-    /// files and the twins cannot disagree about what a position contributes.
+    /// lines — the ONE path at RECORD time, so a live commit cannot leave a
+    /// twin and its file disagreeing about what a position contributed.
+    ///
+    /// It is NOT the only path that contribution takes, and a fifth derived
+    /// structure owes all three: this fold; [`Feed::open`]'s
+    /// replay-then-derive, where the file is the authority for a position at
+    /// or below its coverage and the classification for one above it; and the
+    /// compaction rewrite that renders the twin back to lines. A structure
+    /// wired here alone is empty from every open until the next commit, with
+    /// its file's fence reporting it covered — which is a short candidate set
+    /// claiming completeness, not the silent incompleteness the coverage
+    /// check closes.
     fn index_position(&mut self, at: u64, offset: u64, docs: Vec<Doc>) {
         report(
             self.files.offsets.append(at, vec![("offset", Value::Number(offset.into()))]),

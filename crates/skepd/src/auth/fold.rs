@@ -24,7 +24,7 @@ use skep_identity::{FoldCtx, IdentityState, KeySet, LinkDeposit, Owner, Values, 
 use skep_links::{HasLinks, View};
 use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
-use super::policy::identity_types;
+use super::policy::{identity_types, published_unprojected};
 use super::LockWrite;
 use crate::World;
 
@@ -34,9 +34,10 @@ use crate::World;
 /// `value_at` from M4's permascroll (I-bytes are immutable, so a head read
 /// equals the deposit-commit read for every honored deposit), ω and
 /// account-hood from M3, and publication from the engine's exception set —
-/// `World::published`, the daemon's ONE publication definition (owner ruling
-/// D1, 2026-09-05; PUB-7.5), which is M3's per-document bit indexed for a
-/// membership miss.
+/// the daemon's ONE publication SET (owner ruling D1, 2026-09-05; PUB-7.5),
+/// which is M3's per-document bit indexed for a membership miss. The two
+/// readings OF that set — this one and the publish gate's — differ by
+/// PUB-2.15's projection alone, which `is_published` states below.
 pub(crate) struct WorldCtx<'a>(pub &'a World);
 
 impl Values for WorldCtx<'_> {
@@ -62,12 +63,24 @@ impl FoldCtx for WorldCtx<'_> {
     }
 
     /// AUTH-2.34, answered as owner ruling D1 states it: `doc ∉
-    /// exception_set` and nothing else — `World::published`, the engine's
-    /// derived membership index over M3's publication bit (PUB-7.5). The
-    /// RES-26 publish gate reads the same function (`super::policy`), so the
-    /// daemon has ONE publication definition; on a reconstruction the same
+    /// exception_set` and nothing else — the engine's derived membership
+    /// index over M3's publication bit (PUB-7.5), read through
+    /// [`super::policy::published_unprojected`]; on a reconstruction the same
     /// call answers off the reconstructed world's own set (PUB-7.12), which
     /// `Engine::world_at` seeds before it replays.
+    ///
+    /// The RES-26 publish gate's read (`super::policy`'s `published`) is
+    /// this membership lookup AFTER PUB-2.15's projection of a version member
+    /// to its DOCUMENT, so the two share the lookup and differ by exactly
+    /// that step. Where a credential home is a version member — the home pin
+    /// fires later, in the per-kind arm, so this read sees one — the fold
+    /// answers the MEMBER's own bit and the gate would answer its document's:
+    /// on PUB-2.7's private-member cell (a member minted `Some(false)` under
+    /// a published document, admitted until the routed write-path item lands,
+    /// PUB-8.2) this answers `unpublished` where the projection would fall
+    /// through to the home pin's `not_doc_one`. Both refuse, permanently, so
+    /// the divergence is a token and not an admission; whether the fold
+    /// should take the projection too is the spec's (see the build report).
     ///
     /// The document's BIRTH state, constant over every record's life: no
     /// publish op exists and a link deposit moves no document's bit (PUB-1.9),
@@ -83,7 +96,7 @@ impl FoldCtx for WorldCtx<'_> {
     /// answers `MalformedShape` at item 2, ahead of this read (PUB-6.37's
     /// registration-first discipline, in the fold's own order).
     fn is_published(&self, doc: &Address) -> bool {
-        self.0.published(doc)
+        published_unprojected(self.0, doc)
     }
 }
 

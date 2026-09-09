@@ -145,7 +145,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_address::{parent, Address};
+use skep_address::Address;
 use skep_discovery::SlotSpec;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
@@ -154,7 +154,7 @@ use skep_febe::{
 };
 use skep_identity::IdentityState;
 use skep_kernel::{BurnedSeqPolicy, CheckpointPolicy, Durability, KernelConfig, Seq, Snapshot};
-use skep_namespace::{HasM3, PrincipalId};
+use skep_namespace::PrincipalId;
 
 use crate::auth::fold::{canonical_identity, key_set_of};
 use crate::auth::policy::{
@@ -1634,7 +1634,7 @@ impl Daemon {
         let world = head.world();
         let principal = resolved.principal();
         let readable = |doc: &Address| world.readable(principal, doc);
-        let class = feed_class(world, principal, &readable);
+        let class = FeedClass::of(world, principal, &readable);
         match self.writes.changes(&class, &q) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
@@ -1935,38 +1935,6 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
         under,
         drafts_only: drafts.unwrap_or(false),
     })
-}
-
-/// The requester's VISIBLE STREAM KEY SET (PUB-6.40; PUB-7.24, PUB-7.25,
-/// PUB-7.22), resolved once off the head snapshot `world` is and handed to
-/// the feed, which resolves nothing itself:
-///
-/// * `subtree` — the requester's own account and every ancestor account
-///   (the subtree clause reads upward; each is a draft-stream key). Empty
-///   for the guest, and for a node-tier principal, who owns no account.
-/// * `issuers` — the grant-selected issuer streams, each with the union of
-///   the content prefixes that issuer granted this account
-///   (`World::issuers_for`, principal-exact).
-/// * `universal` — the live any-principal set (`World::universal_grants`),
-///   for a bound principal alone: grants reach principals, never the guest
-///   (PUB-5.109), so a guest merges no universal term.
-fn feed_class<'a>(
-    world: &'a World,
-    principal: Option<PrincipalId>,
-    readable: &'a dyn Fn(&Address) -> bool,
-) -> FeedClass<'a> {
-    let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
-    let mut subtree = Vec::new();
-    let mut cur = account.clone();
-    while let Some(a) = cur {
-        if world.m3().is_registered_account(&a) {
-            subtree.push(a.clone());
-        }
-        cur = parent(&a);
-    }
-    let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
-    let universal = if principal.is_some() { world.universal_grants() } else { Vec::new() };
-    FeedClass { readable, subtree, issuers, universal }
 }
 
 // ── the history surface (wire v3) ────────────────────────────────────────

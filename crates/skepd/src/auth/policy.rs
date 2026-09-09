@@ -567,15 +567,27 @@ pub(crate) fn first_mint_private_refusal(
 /// session wrote into them — stays closed, and no interim `prefix_contains`
 /// patch ships. The retired `is_published_v1` (a document is published iff
 /// it IS its account's doc 1) answered off address arithmetic what the set
-/// now answers off M3's bit, and the AUTH fold's `is_published` reads the
-/// same set, so the two reads can no longer disagree.
+/// now answers off M3's bit.
+///
+/// The AUTH fold reads [`published_unprojected`] — the same membership
+/// lookup WITHOUT this projection, which is the one step the two differ by;
+/// the fold's own card states the cell where that is observable.
 ///
 /// CONTRACT — `doc` is a REGISTERED document (PUB-6.37): a membership miss
 /// is also what an unregistered address answers, so every caller below tests
 /// registration first and an unregistered argument takes the registration
 /// refusal, never `signed_session_required`.
 fn published(world: &World, doc: &Address) -> bool {
-    world.published(&trunk_of(doc))
+    published_unprojected(world, &trunk_of(doc))
+}
+
+/// The engine's publication read on ONE address, unprojected: `a ∉
+/// exception_set` and nothing else (PUB-7.5) — the AUTH fold's read
+/// (AUTH-2.34), reached through [`super::fold::WorldCtx`]'s `is_published`.
+/// [`published`] is this after PUB-2.15's version-member projection, so the
+/// two share their membership lookup and differ by exactly that step.
+pub(super) fn published_unprojected(world: &World, a: &Address) -> bool {
+    world.published(a)
 }
 
 /// The plain path's one producer for the two board-state gates, dispatched
@@ -863,7 +875,16 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
 /// node with no frontier): a claim whose count cannot be read is refused,
 /// which is the spec's direction ("admitted ONLY where … and refused
 /// otherwise").
-pub(crate) fn claim_residue_refusal(world: &World, account: &Address) -> Option<CredentialRefusal> {
+///
+/// `world` MUST be the snapshot taken under the write guard for this
+/// request — the frontier is read AT the claim, off the snapshot that guard
+/// pinned — and the guard argument is that contract's cheap half, as it is
+/// on every other producer in this family.
+pub(crate) fn claim_residue_refusal(
+    _lock: &LockWrite<'_>,
+    world: &World,
+    account: &Address,
+) -> Option<CredentialRefusal> {
     let Some(node) = parent(account) else {
         return Some(CredentialRefusal::ClaimResidue);
     };
@@ -998,7 +1019,7 @@ impl DepositSpans {
 /// `world` and `identity` MUST be the pair taken under the write guard for
 /// this request; the guard argument is that contract's cheap half.
 pub(crate) fn precheck(
-    _lock: &LockWrite<'_>,
+    lock: &LockWrite<'_>,
     world: &World,
     identity: &IdentityState,
     dep: &DepositSpans,
@@ -1095,7 +1116,7 @@ pub(crate) fn precheck(
         match &effect {
             Effect::Genesis { .. } => {}
             Effect::Claim { account } => {
-                if let Some(r) = claim_residue_refusal(world, account) {
+                if let Some(r) = claim_residue_refusal(lock, world, account) {
                     return Err(r);
                 }
             }

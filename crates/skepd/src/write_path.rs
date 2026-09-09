@@ -168,12 +168,12 @@ impl WritePath {
     /// signed write.
     pub fn commit_under(
         &self,
-        _serial: &SerialGuard<'_>,
+        serial: &SerialGuard<'_>,
         meta: WriteMeta,
         execute: impl FnOnce() -> Response,
     ) -> Response {
         let resp = execute();
-        if let Some(at) = self.record(meta, &resp) {
+        if let Some(at) = self.record(serial, meta, &resp) {
             self.commit_stream.announce(at);
         }
         resp
@@ -250,8 +250,16 @@ impl WritePath {
     /// execute — this commit's own post-state, since the serialization
     /// guard admits no other commit between the two — so a minted document
     /// is in the exception set the classification reads (PUB-7.7's
-    /// one-snapshot clause, read from the feed's side).
-    fn record(&self, meta: WriteMeta, resp: &Response) -> Option<Seq> {
+    /// one-snapshot clause, read from the feed's side). That guard is
+    /// forwarded rather than dropped: the feed's own record and the
+    /// authority file's below it are the same obligation, and each names it
+    /// in its arguments.
+    fn record(
+        &self,
+        serial: &SerialGuard<'_>,
+        meta: WriteMeta,
+        resp: &Response,
+    ) -> Option<Seq> {
         let WriteMeta { kind, docs, key } = meta;
         let (at, minted) = match resp {
             Response::Ack { at } => (*at, None),
@@ -288,12 +296,10 @@ impl WritePath {
         // with a meaning of its own.
         let docs = match docs {
             AffectedDocs::Named(v) => v,
-            AffectedDocs::Minted => {
-                minted.map(|a| vec![a.tumbler().to_string()]).unwrap_or_default()
-            }
+            AffectedDocs::Minted => minted.cloned().map(|a| vec![a]).unwrap_or_default(),
         };
         let post = self.stores.kernel().snapshot();
-        self.feed.record(at.0, op_name(kind), docs, key, post.world());
+        self.feed.record(serial, at.0, op_name(kind), docs, key, post.world());
         Some(at)
     }
 }
@@ -345,10 +351,12 @@ pub(crate) struct WriteMeta {
 /// touch no document.
 #[derive(Debug)]
 pub(crate) enum AffectedDocs {
-    /// The documents the frame itself names, already in the sidecar's
-    /// dotted-decimal form — the only form anything downstream wants, so
-    /// no address is cloned here to be rendered and dropped a moment later.
-    Named(Vec<String>),
+    /// The documents the frame itself names. Held as ADDRESSES, which is
+    /// what the feed's classification wants — it reads each one against the
+    /// head's exception set — so the rendering belongs at the sidecar's own
+    /// door and not here: text handed down would be parsed straight back,
+    /// and the parse would have nowhere to report a name it could not read.
+    Named(Vec<Address>),
     /// The document the write mints, known only from its ack.
     ///
     /// An op classified `Minted` must answer `AckAddr`, the one ack whose
@@ -378,7 +386,7 @@ pub(crate) enum AffectedDocs {
 /// The two tables agree at 15 writes of 41.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs| Some(FrameMeta { kind, docs });
-    let one = |a: &Address| AffectedDocs::Named(vec![a.tumbler().to_string()]);
+    let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);
     let answer = match op {
         Op::CreateNewDocument { .. } => meta(OpKind::CreateNewDocument, AffectedDocs::Minted),
         Op::Delegate { .. } => meta(OpKind::Delegate, AffectedDocs::Named(Vec::new())),
@@ -403,10 +411,10 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
             // nothing. `document_of` is address arithmetic (PUB-6.38); a
             // target with no document is not a link a committed nullify
             // could have named, and contributes nothing.
-            let mut docs = vec![home.tumbler().to_string()];
+            let mut docs = vec![home.clone()];
             if let Some(t) = document_of(target) {
                 if &t != home {
-                    docs.push(t.tumbler().to_string());
+                    docs.push(t);
                 }
             }
             meta(OpKind::Nullify, AffectedDocs::Named(docs))
@@ -416,9 +424,9 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
             // The successor's home leads (wire.md: "both its homes,
             // successor's first"), and the claim's home is appended only
             // when it differs — one home named twice is one document.
-            let mut docs = vec![d_s.tumbler().to_string()];
+            let mut docs = vec![d_s.clone()];
             if d_a != d_s {
-                docs.push(d_a.tumbler().to_string());
+                docs.push(d_a.clone());
             }
             meta(OpKind::EditLink, AffectedDocs::Named(docs))
         }

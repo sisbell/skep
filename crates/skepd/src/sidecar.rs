@@ -78,7 +78,7 @@ use skep_engine::{Engine, HistoryError, World};
 use skep_kernel::Seq;
 
 use crate::codec::{obj, to_bytes};
-use crate::feed::classify::derived_docs;
+use crate::feed::classify::{derived_docs, parse_dotted};
 use crate::write_path::SerialGuard;
 
 /// The sidecar's file name inside the data dir (beside the kernel's own
@@ -173,7 +173,11 @@ pub(crate) struct Walked {
 /// the fence, and the bookkeeping the feed's derived structures key on.
 pub(crate) struct CommitsLog {
     file: File,
-    /// Every enumerable position above `min_since`, in order.
+    /// Every enumerable position above `min_since`, in order — and every one
+    /// of them this file stands behind: `Recorded` means testimony whose
+    /// document names this daemon has READ, [`demote_unreadable`] having
+    /// demoted the rest at open. So a consumer that renders a `Recorded`
+    /// entry, or classifies by its names, needs no second check of its own.
     pub entries: BTreeMap<u64, CommitMeta>,
     /// Each entry's line's byte offset in the file — the offset array's
     /// in-memory twin (PUB-7.19), learned from the replay itself and
@@ -355,6 +359,10 @@ impl CommitsLog {
             rewritten = true;
             walked.retain(|w| w.at > min_since);
         }
+        // The entries are final here, and this is where they become ones this
+        // file stands behind: a line whose document names cannot be read is
+        // testimony this daemon cannot repeat, and it answers BARE.
+        demote_unreadable(&mut entries);
         let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
         Ok((
             CommitsLog { file, entries, offsets, min_since, open_head: head, rewritten, last_time, len },
@@ -456,6 +464,18 @@ impl CommitsLog {
     pub fn head_time(&self) -> Option<u64> {
         self.entries.values().next_back().and_then(CommitMeta::time)
     }
+
+    /// The oldest position still ANSWERABLE — the wire's `floor` (wire.md
+    /// §Reading history), which is the first entry ABOVE
+    /// [`CommitsLog::min_since`] and not that number itself. The two are one
+    /// apart by definition, keeping them apart is this file's job (both
+    /// fields' docs refuse each other's meaning), and so is the step between
+    /// them: a caller rendering `floor` asks rather than deriving it from
+    /// two of this type's fields. `None` where nothing above the fence
+    /// survives.
+    pub fn floor(&self) -> Option<u64> {
+        self.entries.range(self.min_since.saturating_add(1)..).next().map(|(k, _)| *k)
+    }
 }
 
 /// The oldest position the journal can still answer, or `None` when it can
@@ -514,6 +534,56 @@ fn rewrite(
     std::fs::rename(&tmp, &path)?;
     let file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
     Ok((file, offsets, out.len() as u64))
+}
+
+/// Demote every RECORDED position whose document names this daemon cannot
+/// read to a BARE one, before any of them leaves this file.
+///
+/// A half-readable name list is a HALF-RECORDED position, and [`CommitMeta`]
+/// has no meaning for one: its two states are the whole vocabulary, and
+/// [`parse_line`] already ends trust at a line carrying some of
+/// `op`/`docs`/`time` and not the others. This is that discipline one level
+/// down — testimony this daemon cannot read is testimony it does not stand
+/// behind — and it belongs here for the same reason it is STABLE: it is
+/// driven by this file, which is re-read whole at every open, rather than by
+/// a derived file whose coverage fence would carry the position past the
+/// check on the second open.
+///
+/// What the demotion buys is the DISCLOSURE, and only that. A name list none
+/// of whose names read classifies the position EMPTY, and an empty class is
+/// a `[]`-docs entry, which the feed's mask never masks — so left recorded, a
+/// write into an unnameable document is served to every class carrying its
+/// op, its wall-clock time, and the FINGERPRINT of the key whose session
+/// committed it. Demoted, it discloses its position alone, which is the
+/// residue this file already accepts for a position the journal cannot
+/// classify (PUB-6.52), and its wire entry is the reserved all-nulls
+/// rendering. A partly-readable list is the same species one step less
+/// visible: the mask would be computed over fewer documents than the write
+/// touched.
+///
+/// IN MEMORY ONLY. This file is the sole surviving record of those commits,
+/// so an unreadable name is never rewritten away over what may be one
+/// build's rendering.
+///
+/// UNREACHABLE as built — the names are rendered from validated `Address`es
+/// by [`crate::feed::Feed::record`] and read back by [`parse_dotted`], which
+/// is that rendering's inverse — and the obligation keeping it so is held by
+/// nobody: the write path renders, this file stores, the feed's open parses.
+fn demote_unreadable(entries: &mut BTreeMap<u64, CommitMeta>) {
+    let half_recorded: Vec<(u64, usize)> = entries
+        .iter()
+        .filter_map(|(at, meta)| match meta {
+            CommitMeta::Recorded { docs, .. } => {
+                let dropped = docs.iter().filter(|s| parse_dotted(s).is_none()).count();
+                (dropped > 0).then_some((*at, dropped))
+            }
+            CommitMeta::Bare => None,
+        })
+        .collect();
+    for (at, dropped) in half_recorded {
+        report_unreadable(SIDECAR_FILE, at, dropped);
+        entries.insert(at, CommitMeta::Bare);
+    }
 }
 
 /// Enumerate the committed boundaries in `(low, head]`, newest first, via
@@ -702,6 +772,19 @@ fn entry_line(at: u64, meta: &CommitMeta) -> Vec<u8> {
 /// operator reading this file beside a `410` body would otherwise conflate.
 fn min_since_line(min_since: u64) -> Vec<u8> {
     line_bytes(obj(vec![("min_since", Value::Number(min_since.into()))]))
+}
+
+/// One line naming documents this daemon cannot read — the notice both
+/// halves of the feed's name-reading share: this file's own
+/// [`demote_unreadable`] and the derived index's read of the same names.
+/// `writeln!` to stderr rather than `eprintln!`, for [`CommitsLog::record`]'s
+/// reason: `eprintln!` PANICS when the stderr write fails, and a lost log
+/// pipe must not fail an open or a committed write's ack.
+pub(crate) fn report_unreadable(file: &str, at: u64, dropped: usize) {
+    let _ = writeln!(
+        std::io::stderr(),
+        "skepd: {file} position {at} names {dropped} document(s) this daemon cannot read"
+    );
 }
 
 /// One newline-terminated file line — the codec's serializer, so a line is

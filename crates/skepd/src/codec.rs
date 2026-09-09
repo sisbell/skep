@@ -151,7 +151,11 @@ const MAX_INSERT_VALUES: usize = 1 << 18;
 /// visibly unbounded in kind while removing the per-comparison multiplier —
 /// a component that would take 10^4000 commits to reach cannot be one a
 /// caller needs to name.
-pub(crate) const MAX_NAT_DIGITS: usize = 4096;
+///
+/// PRIVATE, and that is the point: it is spent at [`wire_tumbler`] and
+/// nowhere else, so a route that admits a tumbler goes through that door
+/// rather than reassembling this budget beside another module's grammar.
+const MAX_NAT_DIGITS: usize = 4096;
 
 /// The most components one tumbler may carry on the wire. The same budget
 /// as [`MAX_NAT_DIGITS`] on the other axis: a tumbler's components are
@@ -161,8 +165,9 @@ pub(crate) const MAX_NAT_DIGITS: usize = 4096;
 /// identifier and an ordinal — four fields at most — so a deep-node
 /// element address is under forty components. 256 leaves that room over
 /// several times without admitting a tumbler whose depth is the request's
-/// only real content.
-pub(crate) const MAX_TUMBLER_COMPONENTS: usize = 256;
+/// only real content. Private for [`MAX_NAT_DIGITS`]'s reason, and spent at
+/// the same door.
+const MAX_TUMBLER_COMPONENTS: usize = 256;
 
 // The most bytes one frame's idempotency `id` may carry is
 // [`MAX_REQ_ID_BYTES`], imported above. This daemon never interprets the id;
@@ -829,19 +834,31 @@ fn p_nat_str(s: &str) -> PResult<Nat> {
     Nat::from_str(s).map_err(|e| PErr(format!("'{}': {e}", bounded(s))))
 }
 
-/// A dotted-decimal tumbler, depth-capped at [`MAX_TUMBLER_COMPONENTS`]
-/// before any component is converted.
-fn p_tum(v: &Value) -> PResult<Tumbler> {
-    let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
+/// A dotted-decimal tumbler off the wire, under both of this codec's tumbler
+/// caps — THE bounded parse, and what makes [`MAX_NAT_DIGITS`]'s "this is
+/// that place" true of every wire tumbler rather than of frames alone. A
+/// route that takes one from a query string meets the door a frame's tumbler
+/// meets, instead of reassembling it from this module's two constants and
+/// another module's uncapped grammar. Both caps are applied BEFORE the
+/// component they bound is converted (see [`p_nat_str`]). `Err` carries the
+/// detail text; a caller wraps it in its own field name.
+pub(crate) fn wire_tumbler(s: &str) -> Result<Tumbler, String> {
     let depth = s.split('.').count();
     if depth > MAX_TUMBLER_COMPONENTS {
-        return Err(PErr(format!(
+        return Err(format!(
             "tumbler has {depth} components, past the \
              {MAX_TUMBLER_COMPONENTS}-component wire cap"
-        )));
+        ));
     }
-    let comps = s.split('.').map(p_nat_str).collect::<PResult<Vec<Nat>>>()?;
-    Tumbler::new(comps).map_err(|e| PErr(format!("'{}': {e}", bounded(s))))
+    let comps = s.split('.').map(p_nat_str).collect::<PResult<Vec<Nat>>>().map_err(|e| e.0)?;
+    Tumbler::new(comps).map_err(|e| format!("'{}': {e}", bounded(s)))
+}
+
+/// [`wire_tumbler`] over a JSON string — the frame side's face of the one
+/// bounded parse.
+fn p_tum(v: &Value) -> PResult<Tumbler> {
+    let s = v.as_str().ok_or_else(|| PErr("expected a dotted-decimal string".into()))?;
+    wire_tumbler(s).map_err(PErr)
 }
 
 fn p_addr(v: &Value) -> PResult<Address> {

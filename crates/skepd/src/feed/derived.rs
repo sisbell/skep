@@ -32,8 +32,9 @@
 //!   never a wrong answer: an entry the index does not list is one no
 //!   narrowing can reach and the published walk still serves; a masked
 //!   position the bitmap does not hold is walked and MASKED AT RENDER
-//!   (PUB-7.20 — the bitmap is a skip accelerator, never the authority);
-//!   a stream a position is missing from is a supplement short by it.
+//!   (PUB-7.20 — for a position it does not hold, the bitmap is a skip
+//!   accelerator and never the authority); a stream a position is missing
+//!   from is a supplement short by it.
 //! * appends are flushed to the OS, not fsynced (the trade `commits.log`
 //!   makes: testimony never doubles a write's fsync); a rewrite goes to
 //!   `<file>.compact` and is renamed over the original — whole old file or

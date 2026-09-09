@@ -43,7 +43,10 @@
 //! * the MASKED-POSITION BITMAP (`masked`: positions whose docs are
 //!   non-empty and all drafts at commit) and its complement, the
 //!   MATERIALIZED PUBLISHED STREAM (`published`), which a guest page walks
-//!   in O(page) — a skip accelerator, never the authority;
+//!   in O(page). For a position the bitmap does NOT hold it is a skip
+//!   accelerator and never the authority: the position is walked and the
+//!   mask decides. For one it holds, it decides candidacy — the field's own
+//!   card states that direction and the invariant it rests on;
 //! * the PER-OWNER-ACCOUNT DRAFT-POSITION STREAMS (`streams`: owner →
 //!   positions naming one of that owner's drafts — every fully-masked
 //!   position plus the straddles).
@@ -98,7 +101,7 @@ use self::derived::{
     DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
-use crate::sidecar::{CommitMeta, CommitsLog};
+use crate::sidecar::{report_unreadable, CommitMeta, CommitsLog};
 use crate::write_path::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -215,9 +218,10 @@ pub(crate) struct Query {
 #[derive(Debug)]
 pub(crate) enum ChangesAnswer {
     /// `since` reaches below what the feed can enumerate; `floor` is the
-    /// oldest position that still has an entry, when one exists — the
     /// wire's sense of the word (wire.md §Reading history: the oldest
-    /// position still answerable), which is NOT `CommitsLog::min_since`.
+    /// position still answerable), which is NOT `CommitsLog::min_since` —
+    /// the distinction, and the step between the two numbers, are
+    /// [`CommitsLog::floor`]'s, which is what this field is filled from.
     /// Class-invariant, like every position (PUB-6.52's residue).
     Reclaimed { floor: Option<u64> },
     /// The visible entries in `(since, head]`, oldest first, rendered,
@@ -241,6 +245,28 @@ struct Inner {
     /// the address as named, and its positions ascending.
     index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
+    ///
+    /// INVARIANT its use rests on: every member has a non-empty entry in
+    /// [`Inner::docs`]. [`Inner::index_position`] establishes it, one
+    /// classification deciding both. The REPLAY does not: this set is seeded
+    /// from `feed-masked.log` and `docs` from `feed-index.log`,
+    /// independently.
+    ///
+    /// Where the two disagree this set DECIDES the GUEST's page, because
+    /// [`Inner::published`] is exactly its complement and a guest has no
+    /// other source: a member the classification has nothing for is excluded
+    /// from the published walk and absent from the index (which `docs`
+    /// builds), so a guest never sees it — where [`Inner::visible`], reading
+    /// it as a `[]`-docs entry, would show it to every class. A PRINCIPAL
+    /// may still reach it, since the streams are seeded from
+    /// `feed-streams.log` rather than from `docs`.
+    ///
+    /// No live commit produces that disagreement, and the two shapes that
+    /// could are edge: a `commits.log` line demoted for unreadable names,
+    /// whose entry is then BARE and discloses its position alone either way,
+    /// and an edited file. NOT filtered against `docs` at open on purpose —
+    /// the filter is a change to which entries a class sees, taken off a
+    /// file this daemon did not write.
     masked: BTreeSet<u64>,
     /// The materialized published stream: every entry not in `masked`.
     published: BTreeSet<u64>,
@@ -281,8 +307,7 @@ impl Feed {
     /// another journal's lines, or (the offset array) when its offsets no
     /// longer match the log's.
     pub fn open(dir: &Path, engine: &Engine) -> io::Result<Feed> {
-        let (mut log, walked) = CommitsLog::open(dir, engine)?;
-        demote_unreadable(&mut log);
+        let (log, walked) = CommitsLog::open(dir, engine)?;
         let head = log.open_head;
         let snap = engine.kernel().snapshot();
         let world = snap.world();
@@ -305,13 +330,13 @@ impl Feed {
                 // A DERIVED record this daemon cannot read. Never trusted
                 // OVER the authority file — that is the derived layer's
                 // whole standing — so a recorded position answers from its
-                // own testimony instead, which `demote_unreadable` has
-                // already checked; a bare one has none, and stays
-                // unclassified, which is the residue it already carries.
-                // Accepting the SHORT list would mask the position by a
-                // smaller set than the write touched, and accepting an
-                // empty one would make it a `[]`-docs entry, which is never
-                // masked.
+                // own testimony instead, which `CommitsLog` stands behind
+                // (its entries are checked at its own open); a bare one has
+                // none, and stays unclassified, which is the residue it
+                // already carries. Accepting the SHORT list would mask the
+                // position by a smaller set than the write touched, and
+                // accepting an empty one would make it a `[]`-docs entry,
+                // which is never masked.
                 report_unreadable(INDEX_FILE, *at, strings.len() - addrs.len());
                 match meta {
                     CommitMeta::Recorded { docs: authority, .. } => {
@@ -338,9 +363,8 @@ impl Feed {
         for &at in &index_tail {
             if let std::collections::btree_map::Entry::Vacant(slot) = docs.entry(at) {
                 let addrs: Vec<Address> = match log.entries.get(&at) {
-                    // Every name reads: `demote_unreadable` demoted the
-                    // recorded positions whose did not, so this parse drops
-                    // nothing.
+                    // Every name reads: `CommitsLog` demoted the recorded
+                    // positions whose did not, so this parse drops nothing.
                     Some(CommitMeta::Recorded { docs: strings, .. }) => {
                         strings.iter().filter_map(|s| parse_dotted(s)).collect()
                     }
@@ -560,15 +584,7 @@ impl Feed {
     pub fn page(&self, class: &FeedClass<'_>, q: &Query) -> ChangesAnswer {
         let inner = self.inner.lock();
         if q.since < inner.log.min_since {
-            // The wire's `floor`: the oldest position still answerable,
-            // which is the first entry ABOVE the smallest admissible since.
-            let floor = inner
-                .log
-                .entries
-                .range(inner.log.min_since.saturating_add(1)..)
-                .next()
-                .map(|(k, _)| *k);
-            return ChangesAnswer::Reclaimed { floor };
+            return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
         }
         let Some(start) = q.since.checked_add(1) else {
             return ChangesAnswer::Page { entries: Vec::new(), last: q.since, more: false };
@@ -862,67 +878,6 @@ fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Addre
     let below = engine.world_at(Seq(prev)).ok()?;
     let above = engine.world_at(Seq(at)).ok()?;
     Some(derived_docs(&below, &above))
-}
-
-/// Demote every RECORDED position whose document names this daemon cannot
-/// read to a BARE one, in memory, before anything classifies or renders it.
-///
-/// A half-readable name list is a HALF-RECORDED position, and [`CommitMeta`]
-/// has no meaning for one: its two states are the whole vocabulary, and
-/// `parse_line` already ends trust at a line carrying some of `op`/`docs`/
-/// `time` and not the others. This applies that discipline one level down —
-/// testimony this daemon cannot read is testimony it does not stand behind.
-///
-/// What the demotion buys is the DISCLOSURE, and only that. A name list none
-/// of whose names read classifies the position EMPTY, and an empty class is
-/// a `[]`-docs entry, which [`Inner::visible`] never masks — so left
-/// recorded, a write into an unnameable document is served to every class
-/// carrying its op, its wall-clock time, and the FINGERPRINT of the key
-/// whose session committed it. Demoted, it discloses its position alone,
-/// which is the residue [`CommitsLog`] already accepts for a position the
-/// journal cannot classify (PUB-6.52), and its wire entry is the reserved
-/// all-nulls rendering. A partly-readable list is the same species one step
-/// less visible: the mask would be computed over fewer documents than the
-/// write touched.
-///
-/// Runs on EVERY open, over EVERY retained position, which is what makes it
-/// stable: the demotion is driven by `commits.log`, which is re-read each
-/// open, rather than by a derived file whose coverage fence would carry the
-/// position past this check on the second open.
-///
-/// IN MEMORY ONLY. `commits.log` is the sole surviving record of those
-/// commits, so an unreadable name is never rewritten away over what may be
-/// one build's rendering.
-///
-/// UNREACHABLE as built — the names are rendered from validated `Address`es
-/// by [`Feed::record`], so the round trip holds — and the obligation keeping
-/// it so is held by nobody: the write path renders, [`CommitsLog`] stores,
-/// this read parses.
-fn demote_unreadable(log: &mut CommitsLog) {
-    let half_recorded: Vec<(u64, usize)> = log
-        .entries
-        .iter()
-        .filter_map(|(at, meta)| match meta {
-            CommitMeta::Recorded { docs, .. } => {
-                let dropped = docs.iter().filter(|s| parse_dotted(s).is_none()).count();
-                (dropped > 0).then_some((*at, dropped))
-            }
-            CommitMeta::Bare => None,
-        })
-        .collect();
-    for (at, dropped) in half_recorded {
-        report_unreadable(crate::sidecar::SIDECAR_FILE, at, dropped);
-        log.entries.insert(at, CommitMeta::Bare);
-    }
-}
-
-/// One line naming documents this daemon cannot read. `writeln!` to stderr
-/// rather than `eprintln!`, for [`report_append_failure`]'s reason.
-fn report_unreadable(file: &str, at: u64, dropped: usize) {
-    let _ = writeln!(
-        std::io::stderr(),
-        "skepd: {file} position {at} names {dropped} document(s) this daemon cannot read"
-    );
 }
 
 /// A derived append that failed: reported, never a failed op — the twin is

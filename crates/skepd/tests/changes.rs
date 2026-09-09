@@ -412,17 +412,21 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
 }
 
 /// The `under` tumbler's two wire caps and the `since` fence's top, both
-/// ends each. `changes_params` restates the codec's own depth and digit
-/// caps by hand — `feed::classify::parse_prefix` applies neither, unlike the
-/// codec's `p_tum` — so this route's check is the only thing between a
-/// query string and an unbounded `Tumbler`, one the `under=` merge branch
-/// clones per range call. The AT-CAP rows are the load-bearing half: a `>`
-/// quietly become `>=` refuses a prefix the substrate can legitimately
+/// ends each. A query string's tumbler goes through the codec's own bounded
+/// parse, the door a frame's tumbler meets, and that door is the only thing
+/// between this route and an unbounded `Tumbler` — one the `under=` merge
+/// branch clones per range call. The AT-CAP rows are the load-bearing half:
+/// a `>` quietly become `>=` refuses a prefix the substrate can legitimately
 /// name, and the refusal list beside them only ever tested the grammar.
+///
+/// It is also the one wire assertion that the query and the frame share that
+/// door: nothing else here would notice the route growing a second grammar
+/// or a second budget of its own.
 #[test]
 fn the_changes_query_meets_its_tumbler_caps_and_its_fence_at_both_ends() {
-    /// `codec::MAX_TUMBLER_COMPONENTS`, restated: the constant is
-    /// crate-private, so moving it must be a visible decision here.
+    /// `codec::MAX_TUMBLER_COMPONENTS`, restated: the constant is private
+    /// to the module that spends it, so moving it must be a visible
+    /// decision here.
     const UNDER_COMPONENT_CAP: usize = 256;
     /// `codec::MAX_NAT_DIGITS`, restated for the same reason.
     const UNDER_DIGIT_CAP: usize = 4096;

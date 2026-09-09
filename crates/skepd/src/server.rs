@@ -79,16 +79,17 @@
 //! slot, the population "the whole type class" (PUB-6.54's directory shape
 //! and its siblings), or constrains `home` alone, which hands M7 no
 //! constraint at all and so takes that same whole-store candidate set with a
-//! residence test on top. [`is_class_scan`] is the one statement of that shape;
-//! [`Daemon::admit_scan`] takes the permit after the parse and the session
-//! read and before M10 is asked, so a refused request costs the parse alone
-//! and an admitted one holds its slot for the WHOLE answer. The pool is a
-//! second instance of history's [`crate::history::Permits`], disjoint from
-//! the reconstruction pool — a scan spends no reconstruction permit and a
-//! reconstruction spends no scan permit. The bound admits or refuses a
-//! REQUEST (`503 scan_busy`, retry-class, the body naming the op) and never
-//! alters an answer: M7 and M8 are not told a query is bounded. A
-//! concurrency bound, never a rate statement.
+//! residence test on top. [`ClassScans`] is the whole bound on one card —
+//! the shape test, the pool, and the admission that takes the permit after
+//! the parse and the session read and before M10 is asked, so a refused
+//! request costs the parse alone and an admitted one holds its slot for the
+//! WHOLE answer. The pool is a second instance of history's
+//! [`crate::history::Permits`], disjoint from the reconstruction pool — a
+//! scan spends no reconstruction permit and a reconstruction spends no scan
+//! permit. The bound admits or refuses a REQUEST (`503 scan_busy`,
+//! retry-class, the body naming the op) and never alters an answer: M7 and
+//! M8 are not told a query is bounded. A concurrency bound, never a rate
+//! statement.
 //!
 //! **Writes go through one card** (`write_path.rs`): `POST /op` — the
 //! daemon's only live write path — hands each write to
@@ -173,7 +174,6 @@ use crate::codec::{
     check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
     JsonCodec, CREDENTIAL_REFUSED,
 };
-use crate::feed::classify::parse_prefix;
 use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, Permit, Permits, Unavailable};
 use crate::write_path::{
@@ -214,6 +214,107 @@ const RETAINED_CHECKPOINTS: usize = 2;
 /// [`Permits`], never a share of the first — so history panes and mirror
 /// bootstraps are never starved by directory scans, nor the reverse.
 pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
+
+/// The class-scan bound, whole (wire v7.9; PUB-8.36, PUB-8.37): what counts
+/// as a class scan ([`is_class_scan`]), how many run at once
+/// ([`MAX_CONCURRENT_CLASS_SCANS`]), and the permit that spans one answer.
+/// ONE card, as [`crate::history::History`] is for the reconstruction
+/// budget, so the shape test and the pool it gates cannot drift apart and a
+/// later meter has a whole thing to copy rather than five pieces on
+/// [`Daemon`].
+///
+/// A second instance of that module's permit mechanism, and disjoint from
+/// its pool BY THE BORROW rather than by convention: a [`Permit`] names the
+/// pool that issued it, so no signature here can spend a reconstruction
+/// slot.
+pub(crate) struct ClassScans(Permits);
+
+/// Every class-scan permit is in use. Says nothing about HTTP, as
+/// [`crate::history::Unavailable`] does not: the mapping onto the wire is
+/// [`refuse_scan_busy`]'s, beside the transport channel's other refusal
+/// constructors, and the wire name it maps to is
+/// [`TransportError::ScanBusy`] — the same condition one layer out, which is
+/// why the two share a word and why the type keeps them apart.
+pub(crate) struct ScanBusy;
+
+impl ClassScans {
+    fn new() -> ClassScans {
+        ClassScans(Permits::new(MAX_CONCURRENT_CLASS_SCANS))
+    }
+
+    /// THE CLASS-SCAN ADMISSION (lane 3.7 §2): a class-scan-shaped read
+    /// ([`is_class_scan`]) takes one of the [`MAX_CONCURRENT_CLASS_SCANS`]
+    /// permits for the WHOLE answer, or is refused at once — a retry-class
+    /// refusal, never a queue; any other read is admitted with no permit
+    /// (`Ok(None)`).
+    ///
+    /// Taken BEFORE the read consult and the store call, both of which run
+    /// inside M10's `execute`: a refused request has cost the parse and the
+    /// session read alone, and an admitted one that M10 then withholds or
+    /// rejects — never reaching M7 — still returns its permit by the guard.
+    /// The pool is global: the guest and the claimant draw on it alike, and
+    /// which class is scanned is not consulted. Whether the request is a
+    /// class scan is the one thing decided here; what it answers stays the
+    /// stores' — an admitted scan's answer is byte-for-byte the unbounded
+    /// one.
+    fn admit(&self, op: &Op) -> Result<Option<Permit<'_>>, ScanBusy> {
+        if !is_class_scan(op) {
+            return Ok(None);
+        }
+        self.0.try_acquire().map(Some).ok_or(ScanBusy)
+    }
+
+    /// TEST HOOK, reached through [`Daemon::try_hold_scan_permit`]: hold one
+    /// permit exactly as an in-flight scan does.
+    fn try_hold(&self) -> Option<Permit<'_>> {
+        self.0.try_acquire()
+    }
+}
+
+/// THE SHAPE TEST (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36; lane 3.7 §1) —
+/// the one statement of what counts as a CLASS SCAN, cited from the wire's
+/// `find_links_ftt` entry: an FTT form (`find_links_ftt`, `count_ftt`,
+/// `window_ftt`) whose four-set `q` constrains `ty` and NO OTHER slot —
+/// `home`, `from` and `to` all `"any"`. That is the population "the whole
+/// type class": PUB-6.54's `{ty: T_grant, home/from/to: any}` and its
+/// siblings, where M8 hands M7 the type constraint alone and pays the
+/// per-candidate home test over every link of the class.
+///
+/// A SHAPE, not a type list: any class queried that way is bounded, grant or
+/// otherwise, so a class a later round adds is bounded with no edit here.
+/// The all-`"any"` query — the whole store — IS a class scan (the shape's
+/// superset). A query constraining a second LINK slot (`from` or `to`) is
+/// NOT one and takes no permit: the narrowest-slot pins bound it (PUB-7.45).
+/// Nothing else about the query is read — not the class, not the cursor, and
+/// not whether M8 would answer it off its own slots (a `ty` of `"empty"`
+/// annihilates before M7 is asked; it is class-scan-shaped all the same, and
+/// its permit is back in the pool a moment later). Every other op answers
+/// `false`.
+///
+/// `home` IS NOT ONE OF THOSE SLOTS, and a four-set constraining it alone is
+/// the same population under a second spelling: M8's `link_constraints`
+/// hands M7 `from`/`to`/`ty` and never the home, so a home-only descriptor
+/// hands M7 NO constraint, takes the whole active slice as its candidate set
+/// exactly as the all-`"any"` query does, and pays a residence test per link
+/// on top of it. M8 states the outcome itself — "a home-only query degrades
+/// to a full active scan, accepted" — so the home-spelled query costs
+/// strictly more than the wildcard one the shape above already bounds, and
+/// is bounded here beside it.
+fn is_class_scan(op: &Op) -> bool {
+    let q = match op {
+        Op::FindLinksFtt { q } | Op::CountFtt { q } | Op::WindowFtt { q, .. } => q,
+        _ => return false,
+    };
+    // The wire's shape (v7.9): `ty` constrained and no other slot.
+    let ty_only =
+        matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
+    // The same whole-store population, reached by constraining the one slot
+    // that is not a link slot. Subsumes the all-`"any"` query, so the union
+    // is exactly "at most one slot constrained, and it is `ty` or `home`".
+    let home_only =
+        matches!((&q.from, &q.to, &q.ty), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
+    ty_only || home_only
+}
 
 /// Socket read deadline for one request's head+body: a stalled local
 /// client releases its worker instead of pinning it.
@@ -784,13 +885,13 @@ pub struct Daemon {
     /// per-call uncached, so without that budget any local caller could pin
     /// every worker on reconstruction.
     history: History,
-    /// The class-scan pool (wire v7.9; PUB-8.36): [`MAX_CONCURRENT_CLASS_SCANS`]
-    /// permits for `/op`'s class-scan-shaped FTT reads — a second instance of
-    /// the permit mechanism `history` holds, and so disjoint from it. Lives
-    /// in the serving path and nowhere lower (doctrine D9: the meter is an
-    /// attribute of a gate, never of the substrate): M8 and M7 are asked or
-    /// not asked, and never told.
-    scans: Permits,
+    /// The class-scan bound behind `/op`'s class-scan-shaped FTT reads (wire
+    /// v7.9; PUB-8.36), holding its own shape test and its own pool — a
+    /// second instance of the permit mechanism `history` holds, and so
+    /// disjoint from it. Lives in the serving path and nowhere lower
+    /// (doctrine D9: the meter is an attribute of a gate, never of the
+    /// substrate): M8 and M7 are asked or not asked, and never told.
+    scans: ClassScans,
 }
 
 /// Deliberately opaque: reporting the log position would take the kernel's
@@ -875,7 +976,7 @@ impl Daemon {
             guest,
             writes,
             history: History::new(),
-            scans: Permits::new(MAX_CONCURRENT_CLASS_SCANS),
+            scans: ClassScans::new(),
         })
     }
 
@@ -1180,39 +1281,14 @@ impl Daemon {
                 // M10's own doc-argument consult and the store call inside
                 // `execute`, and the marshal — and returns on every exit.
                 None => {
-                    let _scan = match self.admit_scan(&frame.op) {
+                    let _scan = match self.scans.admit(&frame.op) {
                         Ok(permit) => permit,
-                        Err(busy) => return busy,
+                        Err(ScanBusy) => return refuse_scan_busy(frame.op.kind()),
                     };
                     self.op_reply(&self.febe.execute(self.actor_sid(&resolved.actor), *frame))
                 }
                 Some(meta) => self.write_sequence(resolved, meta, *frame, req),
             },
-        }
-    }
-
-    /// THE CLASS-SCAN ADMISSION (wire v7.9; PUB-8.36, PUB-8.37; lane 3.7
-    /// §2): a class-scan-shaped read ([`is_class_scan`]) takes one of the
-    /// [`MAX_CONCURRENT_CLASS_SCANS`] permits for the WHOLE answer, or is
-    /// refused `503 scan_busy` at once — a retry-class refusal, never a
-    /// queue; any other read is admitted with no permit (`Ok(None)`).
-    ///
-    /// Taken BEFORE the read consult and the store call, both of which run
-    /// inside M10's `execute`: a refused request has cost the parse and the
-    /// session read alone, and an admitted one that M10 then withholds or
-    /// rejects — never reaching M7 — still returns its permit by the guard.
-    /// The pool is global: the guest and the claimant draw on it alike, and
-    /// which class is scanned is not consulted. Whether the request is a
-    /// class scan is the one thing decided here; what it answers stays the
-    /// stores' — an admitted scan's answer is byte-for-byte the unbounded
-    /// one.
-    fn admit_scan(&self, op: &Op) -> Result<Option<Permit<'_>>, Reply> {
-        if !is_class_scan(op) {
-            return Ok(None);
-        }
-        match self.scans.try_acquire() {
-            Some(permit) => Ok(Some(permit)),
-            None => Err(refuse_scan_busy(op.kind())),
         }
     }
 
@@ -1483,7 +1559,7 @@ impl Daemon {
     /// untouched, which is the disjointness the wire promises.
     #[doc(hidden)]
     pub fn try_hold_scan_permit(&self) -> Option<Permit<'_>> {
-        self.scans.try_acquire()
+        self.scans.try_hold()
     }
 
     /// `POST /op-at` — answer one READ frame as of a committed position:
@@ -1766,51 +1842,6 @@ fn op_answer(bytes: Vec<u8>) -> Reply {
     Reply::bodied(200, "application/json", bytes)
 }
 
-/// THE SHAPE TEST (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36; lane 3.7 §1) —
-/// the one statement of what counts as a CLASS SCAN, cited from the wire's
-/// `find_links_ftt` entry: an FTT form (`find_links_ftt`, `count_ftt`,
-/// `window_ftt`) whose four-set `q` constrains `ty` and NO OTHER slot —
-/// `home`, `from` and `to` all `"any"`. That is the population "the whole
-/// type class": PUB-6.54's `{ty: T_grant, home/from/to: any}` and its
-/// siblings, where M8 hands M7 the type constraint alone and pays the
-/// per-candidate home test over every link of the class.
-///
-/// A SHAPE, not a type list: any class queried that way is bounded, grant or
-/// otherwise, so a class a later round adds is bounded with no edit here.
-/// The all-`"any"` query — the whole store — IS a class scan (the shape's
-/// superset). A query constraining a second LINK slot (`from` or `to`) is
-/// NOT one and takes no permit: the narrowest-slot pins bound it (PUB-7.45).
-/// Nothing else about the query is read — not the class, not the cursor, and
-/// not whether M8 would answer it off its own slots (a `ty` of `"empty"`
-/// annihilates before M7 is asked; it is class-scan-shaped all the same, and
-/// its permit is back in the pool a moment later). Every other op answers
-/// `false`.
-///
-/// `home` IS NOT ONE OF THOSE SLOTS, and a four-set constraining it alone is
-/// the same population under a second spelling: M8's `link_constraints`
-/// hands M7 `from`/`to`/`ty` and never the home, so a home-only descriptor
-/// hands M7 NO constraint, takes the whole active slice as its candidate set
-/// exactly as the all-`"any"` query does, and pays a residence test per link
-/// on top of it. M8 states the outcome itself — "a home-only query degrades
-/// to a full active scan, accepted" — so the home-spelled query costs
-/// strictly more than the wildcard one the shape above already bounds, and
-/// is bounded here beside it.
-pub(crate) fn is_class_scan(op: &Op) -> bool {
-    let q = match op {
-        Op::FindLinksFtt { q } | Op::CountFtt { q } | Op::WindowFtt { q, .. } => q,
-        _ => return false,
-    };
-    // The wire's shape (v7.9): `ty` constrained and no other slot.
-    let ty_only =
-        matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
-    // The same whole-store population, reached by constraining the one slot
-    // that is not a link slot. Subsumes the all-`"any"` query, so the union
-    // is exactly "at most one slot constrained, and it is `ty` or `home`".
-    let home_only =
-        matches!((&q.from, &q.to, &q.ty), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
-    ty_only || home_only
-}
-
 /// The `503 scan_busy` refusal (wire v7.9): every class-scan permit is in
 /// use. Retry-class — the query may be perfectly good and the pool
 /// momentarily full — and the body names the `op` it refused, so a client
@@ -1924,18 +1955,12 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
                 if under.is_some() {
                     return Err("duplicate parameter 'under'".into());
                 }
-                // The frame codec's depth and magnitude caps, applied before
-                // any component is converted — the same reason the codec
-                // applies them there: a hostile digit run must never be
-                // converted, and the conversion is the expensive half.
-                if v.split('.').count() > crate::codec::MAX_TUMBLER_COMPONENTS
-                    || v.split('.').any(|c| c.len() > crate::codec::MAX_NAT_DIGITS)
-                {
-                    return Err("under: the tumbler exceeds the wire's depth or digit cap".into());
-                }
-                under = Some(parse_prefix(v).ok_or_else(|| {
-                    format!("under: '{v}' is not a dotted-decimal address or prefix")
-                })?);
+                // The codec's own door, so a query string's tumbler and a
+                // frame's meet ONE grammar under ONE budget rather than two
+                // that agree today: the depth and digit caps and the
+                // dotted-decimal grammar are all `wire_tumbler`'s, applied
+                // before any component is converted.
+                under = Some(crate::codec::wire_tumbler(v).map_err(|e| format!("under: {e}"))?);
             }
             "drafts" => {
                 if drafts.is_some() {

@@ -57,12 +57,14 @@ pub(crate) fn classify(world: &World, addrs: Vec<Address>) -> Vec<Doc> {
         .collect()
 }
 
-/// A dotted-decimal PREFIX — any nonempty component sequence, T4-valid or
-/// not — as the tumbler `under=` names (an account prefix `1.0.2` and a
-/// document `1.0.2.0.3` are both addresses; a bare carrier prefix is
-/// admitted too, containment being a tumbler question). The dotted-decimal
-/// grammar itself, which [`parse_dotted`] refines.
-pub(crate) fn parse_prefix(s: &str) -> Option<Tumbler> {
+/// The dotted-decimal grammar itself: any nonempty component sequence,
+/// T4-valid or not, which [`parse_dotted`] refines by M1's validation.
+///
+/// UNCAPPED, and so not a wire door: the depth and magnitude budgets a
+/// client's tumbler meets are [`crate::codec::wire_tumbler`]'s, which is
+/// what a frame and a query string both pass through. This grammar reads a
+/// FILE.
+fn parse_prefix(s: &str) -> Option<Tumbler> {
     let comps = s
         .split('.')
         .map(|c| {
@@ -82,6 +84,9 @@ pub(crate) fn parse_prefix(s: &str) -> Option<Tumbler> {
 /// copy of the grammar. `None` for anything that is not one — a line this
 /// daemon never wrote; the record keeps the string, the feed's
 /// classification drops it.
+///
+/// Uncapped, deliberately: the wire's depth and digit budgets bound what a
+/// CLIENT may send, and a name that reached this file is already past them.
 pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
     validate(parse_prefix(s)?).ok()
 }

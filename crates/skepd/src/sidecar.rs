@@ -314,8 +314,8 @@ impl CommitsLog {
         if head > low {
             // The walk's own fence, qualified because the accumulator it
             // folds into holds the plain name.
-            let (found, walk_min_since) = reconstruct(engine, low, head);
-            for w in &found {
+            let (boundaries, walk_min_since) = reconstruct(engine, low, head);
+            for w in &boundaries {
                 entries.insert(w.at, CommitMeta::Bare);
                 offsets.insert(w.at, len);
                 let line = entry_line(w.at, &CommitMeta::Bare);
@@ -328,7 +328,7 @@ impl CommitsLog {
                 file.write_all(&line)?;
                 len += line.len() as u64;
             }
-            walked = found;
+            walked = boundaries;
         }
         // Compaction: everything the journal has reclaimed leaves the feed
         // with it. The probe answers the oldest position still answerable,
@@ -544,7 +544,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
     // The world AT `boundary`: the head's is the installed root.
     let mut upper: World = engine.kernel().snapshot().world().clone();
     let mut boundary = head;
-    let mut out: Vec<Walked> = Vec::new();
+    let mut boundaries: Vec<Walked> = Vec::new();
     let mut min_since = None;
     let classify = |below: Option<&World>, upper: &World| below.map(|b| derived_docs(b, upper));
     loop {
@@ -557,12 +557,12 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
             // `low` where `low` is one (genesis, or a recorded position);
             // a fence's world refuses and the position stays unclassified.
             let below = engine.world_at(Seq(low)).ok();
-            out.push(Walked { at: boundary, docs: classify(below.as_ref(), &upper) });
+            boundaries.push(Walked { at: boundary, docs: classify(below.as_ref(), &upper) });
             break;
         };
         match engine.world_at(Seq(probe)) {
             Ok(w) => {
-                out.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
+                boundaries.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
                 boundary = probe;
                 upper = w;
             }
@@ -575,12 +575,12 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                 // with no port to ask and no line to read.
                 let nearest = nearest.0;
                 if nearest >= boundary {
-                    out.push(Walked { at: boundary, docs: None });
+                    boundaries.push(Walked { at: boundary, docs: None });
                     break;
                 }
                 match engine.world_at(Seq(nearest)) {
                     Ok(w) => {
-                        out.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
+                        boundaries.push(Walked { at: boundary, docs: classify(Some(&w), &upper) });
                         if nearest <= low {
                             break;
                         }
@@ -590,7 +590,7 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                     Err(_) => {
                         // The boundary M2 named cannot be answered: the feed
                         // reaches down to `boundary` and no further.
-                        out.push(Walked { at: boundary, docs: None });
+                        boundaries.push(Walked { at: boundary, docs: None });
                         if nearest > low {
                             min_since = Some(nearest);
                         }
@@ -599,14 +599,14 @@ fn reconstruct(engine: &Engine, low: u64, head: u64) -> (Vec<Walked>, Option<u64
                 }
             }
             Err(_) => {
-                out.push(Walked { at: boundary, docs: None });
+                boundaries.push(Walked { at: boundary, docs: None });
                 min_since = Some(probe);
                 break;
             }
         }
     }
-    out.reverse();
-    (out, min_since)
+    boundaries.reverse();
+    (boundaries, min_since)
 }
 
 /// Parse whole newline-terminated records; trust ends at the first line

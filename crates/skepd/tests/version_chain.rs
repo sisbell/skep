@@ -37,7 +37,7 @@ fn head(port: u16) -> u64 {
 /// and neither `detail` nor `site` — the face keys on the code alone (and,
 /// for PUB-2.9, on the flag the client itself sent), so nothing rides
 /// beside it (PUB-8.3).
-fn refused(v: &Value, code: &str) {
+fn assert_refused(v: &Value, code: &str) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some(code), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "a permanent class: {v}");
@@ -47,7 +47,7 @@ fn refused(v: &Value, code: &str) {
 
 /// Assert the daemon's own publish-class gate answered — slot 4, ahead of
 /// the store's refusal at slot 5.
-fn gated(v: &Value) {
+fn assert_gated(v: &Value) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("credential_refused"), "{v}");
     assert_eq!(rej["detail"].as_str(), Some("signed_session_required"), "{v}");
@@ -121,21 +121,21 @@ fn in_place_edits_refuse_a_published_target_and_commit_nothing() {
     let before = head(port);
     // An undeclared insert at the head's fresh position IS an in-place edit
     // (PUB-9.13); so is one at an arranged position.
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "e", false)), "published_target");
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 1, "e", false)), "published_target");
-    refused(&op(port, Some(&signed), &delete(CLAIMANT_DOC1, 1, 1)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "e", false)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 1, "e", false)), "published_target");
+    assert_refused(&op(port, Some(&signed), &delete(CLAIMANT_DOC1, 1, 1)), "published_target");
     // `copy` INTO the published document — its sources are never read.
-    refused(&op(port, Some(&signed), &copy(CLAIMANT_DOC1, 2, &src, 1, 2)), "published_target");
+    assert_refused(&op(port, Some(&signed), &copy(CLAIMANT_DOC1, 2, &src, 1, 2)), "published_target");
     // Ahead of the op's own shape checks: doc 1 holds ONE content element,
     // so these cuts would answer `out_of_bounds` on a draft — the
     // publication refusal is what answers here (PUB-6.36 slot 5 before the
     // shape checks).
-    refused(&op(port, Some(&signed), &rearrange(CLAIMANT_DOC1, [1, 2, 3])), "published_target");
+    assert_refused(&op(port, Some(&signed), &rearrange(CLAIMANT_DOC1, [1, 2, 3])), "published_target");
     assert_eq!(head(port), before, "a refused edit commits nothing");
 
     // The daemon's publish-class gate stands AHEAD (slot 4): a bare session
     // is refused there and never reaches the store's code.
-    gated(&op(port, Some(&bare), &delete(CLAIMANT_DOC1, 1, 1)));
+    assert_gated(&op(port, Some(&bare), &delete(CLAIMANT_DOC1, 1, 1)));
     assert_eq!(head(port), before);
 
     // A draft: the same four edits, as today, from the owner's bare session.
@@ -173,10 +173,10 @@ fn a_version_member_target_is_judged_as_its_document() {
     let m = acked_addr(&op(port, Some(&signed), &version(CLAIMANT_DOC1, "")));
     assert_eq!(m, format!("{CLAIMANT_DOC1}.1"), "the owner's version is a member of the chain");
     let before = head(port);
-    refused(&op(port, Some(&signed), &delete(&m, 1, 1)), "published_target");
-    refused(&op(port, Some(&signed), &insert(&m, 2, "e", false)), "published_target");
-    refused(&op(port, Some(&signed), &rearrange(&m, [1, 2, 3])), "published_target");
-    refused(&op(port, Some(&signed), &copy(&m, 2, CLAIMANT_DOC1, 1, 1)), "published_target");
+    assert_refused(&op(port, Some(&signed), &delete(&m, 1, 1)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(&m, 2, "e", false)), "published_target");
+    assert_refused(&op(port, Some(&signed), &rearrange(&m, [1, 2, 3])), "published_target");
+    assert_refused(&op(port, Some(&signed), &copy(&m, 2, CLAIMANT_DOC1, 1, 1)), "published_target");
     assert_eq!(head(port), before);
     // The member's own fresh position: the snapshot holds doc 1's one
     // element, so ordinal 2 is fresh there, and the declared deposit lands.
@@ -184,7 +184,7 @@ fn a_version_member_target_is_judged_as_its_document() {
 
     let mm = acked_addr(&op(port, Some(&signed), &version(&m, "")));
     assert_eq!(mm, format!("{m}.1"));
-    refused(&op(port, Some(&signed), &delete(&mm, 1, 1)), "published_target");
+    assert_refused(&op(port, Some(&signed), &delete(&mm, 1, 1)), "published_target");
     sd.shutdown();
 }
 
@@ -203,12 +203,12 @@ fn version_of_the_owners_published_source_admits_no_private_member() {
 
     let before = head(port);
     let private = r#","published":false"#;
-    refused(&op(port, Some(&signed), &version(CLAIMANT_DOC1, private)), "private_version_of_published");
-    refused(&op(port, Some(&bare), &version(CLAIMANT_DOC1, private)), "private_version_of_published");
+    assert_refused(&op(port, Some(&signed), &version(CLAIMANT_DOC1, private)), "private_version_of_published");
+    assert_refused(&op(port, Some(&bare), &version(CLAIMANT_DOC1, private)), "private_version_of_published");
     assert_eq!(head(port), before, "a refused version mints nothing");
     // A bare FLAGLESS version resolves published, and the daemon's gate
     // takes it first (slot 4).
-    gated(&op(port, Some(&bare), &version(CLAIMANT_DOC1, "")));
+    assert_gated(&op(port, Some(&bare), &version(CLAIMANT_DOC1, "")));
     assert_eq!(head(port), before);
 
     let m1 = acked_addr(&op(port, Some(&signed), &version(CLAIMANT_DOC1, "")));
@@ -217,7 +217,7 @@ fn version_of_the_owners_published_source_admits_no_private_member() {
     assert_eq!(m2, format!("{CLAIMANT_DOC1}.2"));
     // Every version address names a published state (PUB-2.10): the member
     // is a published source whose private arm refuses the same way.
-    refused(&op(port, Some(&signed), &version(&m1, private)), "private_version_of_published");
+    assert_refused(&op(port, Some(&signed), &version(&m1, private)), "private_version_of_published");
     sd.shutdown();
 }
 
@@ -239,13 +239,13 @@ fn version_of_the_owners_private_source_refuses_whatever_the_flag() {
 
     let before = head(port);
     for flag in ["", r#","published":false"#, r#","published":true"#] {
-        refused(&op(port, Some(&signed), &version(&d, flag)), "private_source_versionless");
-        refused(&op(port, Some(&signed), &version(&f, flag)), "private_source_versionless");
+        assert_refused(&op(port, Some(&signed), &version(&d, flag)), "private_source_versionless");
+        assert_refused(&op(port, Some(&signed), &version(&f, flag)), "private_source_versionless");
     }
     for flag in ["", r#","published":false"#] {
-        refused(&op(port, Some(&bare), &version(&d, flag)), "private_source_versionless");
+        assert_refused(&op(port, Some(&bare), &version(&d, flag)), "private_source_versionless");
     }
-    gated(&op(port, Some(&bare), &version(&d, r#","published":true"#)));
+    assert_gated(&op(port, Some(&bare), &version(&d, r#","published":true"#)));
     assert_eq!(head(port), before, "a refused version mints nothing");
 
     // The draft is still the owner's to edit in place.
@@ -286,7 +286,7 @@ fn the_cross_owner_branch_is_refused_by_neither_rule() {
     // The claimant's own explicit-`false` version of the same source is the
     // owner's arm, and refuses.
     let signed = open_signed_session(port, CLAIMANT_PRINCIPAL, &device_key());
-    refused(&op(port, Some(&signed), &version(CLAIMANT_DOC1, r#","published":false"#)), "private_version_of_published");
+    assert_refused(&op(port, Some(&signed), &version(CLAIMANT_DOC1, r#","published":false"#)), "private_version_of_published");
     sd.shutdown();
 }
 
@@ -306,8 +306,8 @@ fn the_declared_deposit_is_the_one_door_into_a_published_head() {
     let bare = open_session(port, CLAIMANT_PRINCIPAL);
 
     // Doc 1 holds the ceremony's one atom at ordinal 1; ordinal 2 is fresh.
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "u", false)), "published_target");
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 1, "d", true)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "u", false)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 1, "d", true)), "published_target");
     // A declared write into the LINK subspace is no deposit either — the
     // refusal answers ahead of the shape check (`not_content_subspace`).
     let v = op(
@@ -317,10 +317,10 @@ fn the_declared_deposit_is_the_one_door_into_a_published_head() {
             r#"{{"op":"insert","doc":"{CLAIMANT_DOC1}","at":{{"subspace":"2","ordinal":"1"}},"values":["l"],"deposit":true}}"#
         ),
     );
-    refused(&v, "published_target");
+    assert_refused(&v, "published_target");
     // The daemon's gate stands ahead of the door: a bare declared deposit
     // is the publish class's input and refuses there.
-    gated(&op(port, Some(&bare), &insert(CLAIMANT_DOC1, 2, "b", true)));
+    assert_gated(&op(port, Some(&bare), &insert(CLAIMANT_DOC1, 2, "b", true)));
 
     let atom = acked_addr(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "r", true)));
     assert_eq!(atom, format!("{CLAIMANT_DOC1}.0.1.2"), "the record lands at the head's fresh position");
@@ -400,18 +400,18 @@ fn fork_resolves_its_flag_as_create_does() {
 
     let f_absent = acked_addr(&op(port, Some(&bare), r#"{"op":"fork"}"#));
     let f_false = acked_addr(&op(port, Some(&bare), r#"{"op":"fork","published":false}"#));
-    gated(&op(port, Some(&bare), r#"{"op":"fork","published":true}"#));
+    assert_gated(&op(port, Some(&bare), r#"{"op":"fork","published":true}"#));
     let f_true = acked_addr(&op(port, Some(&signed), r#"{"op":"fork","published":true}"#));
 
     // Drafts: edited in place by their owner's bare session, versionless.
     for f in [&f_absent, &f_false] {
         expect_resp(&op(port, Some(&bare), &insert(f, 1, "d", false)), "ack_addr");
-        refused(&op(port, Some(&signed), &version(f, "")), "private_source_versionless");
+        assert_refused(&op(port, Some(&signed), &version(f, "")), "private_source_versionless");
     }
     // Published: gated from the bare session, refused in place from the
     // signed one, open to the declared deposit, and versionable.
-    gated(&op(port, Some(&bare), &insert(&f_true, 1, "p", false)));
-    refused(&op(port, Some(&signed), &insert(&f_true, 1, "p", false)), "published_target");
+    assert_gated(&op(port, Some(&bare), &insert(&f_true, 1, "p", false)));
+    assert_refused(&op(port, Some(&signed), &insert(&f_true, 1, "p", false)), "published_target");
     expect_resp(&op(port, Some(&signed), &insert(&f_true, 1, "p", true)), "ack_addr");
     let m = acked_addr(&op(port, Some(&signed), &version(&f_true, "")));
     assert_eq!(m, format!("{f_true}.1"));

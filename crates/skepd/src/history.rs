@@ -161,12 +161,12 @@ impl History {
         &self,
         engine: &Engine,
         at: Seq,
-        req: Request,
+        frame: Request,
         principal: Option<PrincipalId>,
         head: &Snapshot<World>,
     ) -> Result<Response, Unavailable> {
         let (_permit, world) = self.reconstruct(engine, at)?;
-        let mut resp = execute_read_on(world, req, principal, head.world().clone());
+        let mut resp = execute_read_on(world, frame, principal, head.world().clone());
         stamp_as_of(&mut resp, at);
         Ok(resp)
     }
@@ -261,7 +261,7 @@ impl Drop for Permit<'_> {
 /// one allocation against a whole-world replay; `head` is one root clone.
 fn execute_read_on(
     world: World,
-    req: Request,
+    frame: Request,
     principal: Option<PrincipalId>,
     head: World,
 ) -> Response {
@@ -278,7 +278,7 @@ fn execute_read_on(
         Some(p) => febe.open_session(p),
         None => open_guest_session(&febe),
     };
-    febe.execute(session, req)
+    febe.execute(session, frame)
 }
 
 /// Stamp the requested position as `as_of`: the throwaway kernel is rooted

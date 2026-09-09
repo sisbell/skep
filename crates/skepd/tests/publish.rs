@@ -48,7 +48,7 @@ fn one_entry(port: u16, before: u64, what: &str) -> Value {
 }
 
 /// Assert a PERMANENT store refusal carrying neither `detail` nor `site`.
-fn refused(v: &Value, code: &str) {
+fn assert_refused(v: &Value, code: &str) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some(code), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("permanent"), "a permanent class: {v}");
@@ -59,7 +59,7 @@ fn refused(v: &Value, code: &str) {
 /// Assert the source gate's refusal (PUB-8.4, PUB-8.5): `withheld`,
 /// `reorder`, the origin's DOCUMENT in `site.addr` and nothing else — no
 /// `detail`, ever, and no other site field.
-fn withheld(v: &Value, origin: &str) {
+fn assert_withheld(v: &Value, origin: &str) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("withheld"), "{v}");
     assert_eq!(rej["disposition"].as_str(), Some("reorder"), "a later grant may fill it: {v}");
@@ -70,7 +70,7 @@ fn withheld(v: &Value, origin: &str) {
 }
 
 /// Assert `not_owner` naming `doc` — slot 1, ahead of every other answer.
-fn not_owner(v: &Value, doc: &str) {
+fn assert_not_owner(v: &Value, doc: &str) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("not_owner"), "{v}");
     assert_eq!(rej["site"]["addr"].as_str(), Some(doc), "{v}");
@@ -78,7 +78,7 @@ fn not_owner(v: &Value, doc: &str) {
 
 /// Assert the daemon's own publish-class gate answered — slot 4, ahead of
 /// the store.
-fn gated(v: &Value) {
+fn assert_gated(v: &Value) {
     let rej = expect_resp(v, "rejected");
     assert_eq!(rej["code"].as_str(), Some("credential_refused"), "{v}");
     assert_eq!(rej["detail"].as_str(), Some("signed_session_required"), "{v}");
@@ -297,7 +297,7 @@ fn the_shot_appends_the_next_member_in_one_commit_and_the_bare_address_floats() 
     );
     // The publish class's input, from a bare session: gated (slot 4).
     let before = head(port);
-    gated(&op(port, Some(&bare), &shot));
+    assert_gated(&op(port, Some(&bare), &shot));
     assert_eq!(head(port), before);
 
     let member = acked_addr(&op(port, Some(&signed), &shot));
@@ -378,9 +378,9 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     // an undeclared append, a declared write at an ARRANGED position of the
     // head, a delete of the member.
     let before = head(port);
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 3, "q", false)), "published_target");
-    refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "q", true)), "published_target");
-    refused(&op(port, Some(&signed), &delete(&m1, 1, 1)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 3, "q", false)), "published_target");
+    assert_refused(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "q", true)), "published_target");
+    assert_refused(&op(port, Some(&signed), &delete(&m1, 1, 1)), "published_target");
     assert_eq!(head(port), before);
 
     // Shot B, staged off m1 BEFORE the deposit (extent 1): the composite
@@ -435,20 +435,20 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
     // origin is not the document that minted it.
     let d = draft_with(port, &bare, "abc");
     let before = head(port);
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((CLAIMANT_DOC1, 1)), None, &[])),
         "base_superseded",
     );
-    refused(&op(port, Some(&signed), &publish(CLAIMANT_DOC1, None, None, &[])), "base_superseded");
-    refused(
+    assert_refused(&op(port, Some(&signed), &publish(CLAIMANT_DOC1, None, None, &[])), "base_superseded");
+    assert_refused(
         &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((&m2, 9)), None, &[])),
         "base_extent_too_large",
     );
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((&d, 1)), None, &[])),
         "base_not_in_chain",
     );
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(CLAIMANT_DOC1, Some((&m2, 3)), None, &[run(&d, ATOM, 1)])),
         "bad_run",
     );
@@ -592,7 +592,7 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
 
     let before = head(port);
     // (1) A run onto the stranger's draft: withheld, naming the draft.
-    withheld(
+    assert_withheld(
         &op(
             port,
             Some(&signed),
@@ -607,7 +607,7 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     );
     // (2) A DANGLING run onto it: still withheld — existence is never asked
     //     about what the caller may not read.
-    withheld(
+    assert_withheld(
         &op(
             port,
             Some(&signed),
@@ -622,7 +622,7 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     );
     // (3) The stranger shooting doc 1, with a run onto the claimant's own
     //     draft it may not read: ownership answers first (slot 1).
-    not_owner(
+    assert_not_owner(
         &op(
             port,
             Some(&stranger),
@@ -632,9 +632,9 @@ fn the_source_gate_answers_behind_ownership_and_ahead_of_existence() {
     );
     // (4) The stranger's shot on its OWN home from a bare session: the
     //     publish class's gate (slot 4), ahead of the store.
-    gated(&op(port, Some(&stranger), &publish(&s_home, None, None, &[])));
+    assert_gated(&op(port, Some(&stranger), &publish(&s_home, None, None, &[])));
     // (5) A dangling run onto a READABLE origin: existence, behind the gate.
-    refused(
+    assert_refused(
         &op(
             port,
             Some(&signed),
@@ -699,17 +699,17 @@ fn a_shot_on_a_private_document_is_refused_with_one_code() {
     let d_text = format!("{d}.0.1.1");
 
     let before = head(port);
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(&d, None, None, &[run(&d, &d_text, 3)])),
         "private_source_versionless",
     );
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(&d, Some((&d, 3)), Some(&d), &[run(&d, &d_text, 3)])),
         "private_source_versionless",
     );
     // The shot is the publish class's input whatever the document's state:
     // from the bare session the daemon's gate answers first (slot 4).
-    gated(&op(port, Some(&bare), &publish(&d, None, None, &[run(&d, &d_text, 3)])));
+    assert_gated(&op(port, Some(&bare), &publish(&d, None, None, &[run(&d, &d_text, 3)])));
     // Registration ahead of everything.
     let ghost = format!("{CLAIMANT_ACCOUNT}.0.9");
     let v = op(port, Some(&signed), &publish(&ghost, None, None, &[]));
@@ -751,7 +751,7 @@ fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
     let member = format!("{e}.1");
 
     let before = head(port);
-    refused(
+    assert_refused(
         &op(
             port,
             Some(&signed),
@@ -785,7 +785,7 @@ fn the_birth_version_is_one_commit_and_a_refused_shot_leaves_no_residue() {
     // superseded.
     assert_eq!(content_extent(port, &e), 3);
     assert_eq!(text(port, &e, 1, 3), "abc");
-    refused(
+    assert_refused(
         &op(port, Some(&signed), &publish(&e, None, Some(&d), &[run(&d, &d_text, 3)])),
         "base_superseded",
     );

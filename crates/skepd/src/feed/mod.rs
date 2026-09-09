@@ -582,7 +582,7 @@ impl Inner {
     /// claiming completeness, not the silent incompleteness the coverage
     /// check closes.
     fn index_position(&mut self, at: u64, offset: u64, docs: Vec<Doc>) {
-        report(
+        report_append_failure(
             self.files.offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.into()))]),
             OFFSETS_FILE,
             at,
@@ -597,7 +597,7 @@ impl Inner {
                     list.1.push(at);
                 }
             }
-            report(
+            report_append_failure(
                 self.files.index.append(at, vec![(INDEX_DOCS, doc_strings(&docs))]),
                 INDEX_FILE,
                 at,
@@ -605,7 +605,7 @@ impl Inner {
         }
         if masked_at_commit(&docs) {
             self.masked.insert(at);
-            report(self.files.masked.append(at, vec![]), MASKED_FILE, at);
+            report_append_failure(self.files.masked.append(at, vec![]), MASKED_FILE, at);
         } else {
             self.published.insert(at);
         }
@@ -614,7 +614,7 @@ impl Inner {
             for o in &owners {
                 self.streams.entry(o.clone()).or_default().push(at);
             }
-            report(
+            report_append_failure(
                 self.files.streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]),
                 STREAMS_FILE,
                 at,
@@ -658,7 +658,7 @@ impl Inner {
         q: &'s Query,
         start: u64,
     ) -> Vec<Box<dyn Iterator<Item = u64> + 's>> {
-        let mut v: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();
+        let mut sources: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();
         if let Some(under) = &q.under {
             if self.merge_beats_walk(under, start) {
                 // MERGE (PUB-7.32, PUB-7.33): the index lists under the
@@ -670,23 +670,23 @@ impl Inner {
                     if !class.readable(doc) {
                         continue;
                     }
-                    v.push(Box::new(from(positions, start)));
+                    sources.push(Box::new(at_or_above(positions, start)));
                 }
-                return v;
+                return sources;
             }
             // WALK: the visible stream below, the prefix tested per entry
             // by `visible`.
         }
         if !q.drafts_only {
-            v.push(Box::new(self.published.range(start..).copied()));
+            sources.push(Box::new(self.published.range(start..).copied()));
         }
         for key in &class.subtree {
             if let Some(s) = self.streams.get(key) {
-                v.push(Box::new(from(s, start)));
+                sources.push(Box::new(at_or_above(s, start)));
             }
         }
         for (issuer, prefixes) in &class.issuers {
-            let Some(s) = self.streams.get(issuer) else { continue };
+            let Some(stream) = self.streams.get(issuer) else { continue };
             // A grant at the issuer's account depth or wider IS the stream
             // (PUB-7.25); narrower prefixes take the per-entry containment
             // test against their union — while that union is small enough
@@ -694,10 +694,11 @@ impl Inner {
             if prefixes.len() > MAX_FILTERED_PREFIXES
                 || prefixes.iter().any(|p| is_prefix(p.tumbler(), issuer.tumbler()))
             {
-                v.push(Box::new(from(s, start)));
+                sources.push(Box::new(at_or_above(stream, start)));
             } else {
-                v.push(Box::new(
-                    from(s, start).filter(move |at| self.names_under(*at, issuer, prefixes)),
+                sources.push(Box::new(
+                    at_or_above(stream, start)
+                        .filter(move |at| self.names_under(*at, issuer, prefixes)),
                 ));
             }
         }
@@ -713,10 +714,10 @@ impl Inner {
                 .range(prefix.tumbler().clone()..)
                 .take_while(|(k, _)| is_prefix(prefix.tumbler(), k))
             {
-                v.push(Box::new(from(positions, start)));
+                sources.push(Box::new(at_or_above(positions, start)));
             }
         }
-        v
+        sources
     }
 
     /// Does the entry at `at` name a draft of `issuer` under one of
@@ -752,8 +753,15 @@ impl Inner {
     }
 }
 
-/// A position list from its first member at or above `start`.
-fn from(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
+/// A position list from its first member at or above `start` — THE fence,
+/// applied to every slice-backed source. [`Inner::sources`]' contract that
+/// each source is "ascending and at or above `start`" is discharged by this
+/// call and by `published.range(start..)`, and by nothing else:
+/// [`Inner::visible`] tests the mask and the two narrowings and does NOT
+/// re-test the fence, so a source that skipped this would serve positions
+/// at or below `since` — a client re-reading its own history on every poll,
+/// with `last` going backwards.
+fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()
 }
@@ -858,7 +866,7 @@ fn demote_unreadable(log: &mut CommitsLog) {
 }
 
 /// One line naming documents this daemon cannot read. `writeln!` to stderr
-/// rather than `eprintln!`, for [`report`]'s reason.
+/// rather than `eprintln!`, for [`report_append_failure`]'s reason.
 fn report_unreadable(file: &str, at: u64, dropped: usize) {
     let _ = writeln!(
         std::io::stderr(),
@@ -868,9 +876,10 @@ fn report_unreadable(file: &str, at: u64, dropped: usize) {
 
 /// A derived append that failed: reported, never a failed op — the twin is
 /// right for this uptime and the next open's tail check re-derives the
-/// line. `writeln!` to stderr rather than `eprintln!`, for `sidecar.rs`'s
+/// line. An `Ok` writes nothing, so a busy board's stderr carries the
+/// failures alone. `writeln!` rather than `eprintln!`, for `sidecar.rs`'s
 /// reason (a lost log pipe must not panic a committed write's ack).
-fn report(r: io::Result<()>, file: &str, at: u64) {
+fn report_append_failure(r: io::Result<()>, file: &str, at: u64) {
     if let Err(e) = r {
         let _ = writeln!(std::io::stderr(), "skepd: {file} append failed at position {at}: {e}");
     }
@@ -887,9 +896,9 @@ struct Merge<'a> {
 impl<'a> Merge<'a> {
     fn new(mut sources: Vec<Box<dyn Iterator<Item = u64> + 'a>>) -> Merge<'a> {
         let mut heap = BinaryHeap::new();
-        for (i, s) in sources.iter_mut().enumerate() {
-            if let Some(v) = s.next() {
-                heap.push(Reverse((v, i)));
+        for (i, source) in sources.iter_mut().enumerate() {
+            if let Some(next_at) = source.next() {
+                heap.push(Reverse((next_at, i)));
             }
         }
         Merge { sources, heap }
@@ -902,16 +911,19 @@ impl Iterator for Merge<'_> {
     /// The next position, each emitted exactly once.
     fn next(&mut self) -> Option<u64> {
         let Reverse((at, i)) = self.heap.pop()?;
-        if let Some(v) = self.sources[i].next() {
-            self.heap.push(Reverse((v, i)));
+        if let Some(next_at) = self.sources[i].next() {
+            self.heap.push(Reverse((next_at, i)));
         }
-        while let Some(Reverse((v, j))) = self.heap.peek().copied() {
-            if v != at {
+        // Every other source standing at the same position: dropped here, so
+        // a position the merge emits is emitted once however many sources
+        // carry it.
+        while let Some(Reverse((dup_at, j))) = self.heap.peek().copied() {
+            if dup_at != at {
                 break;
             }
             self.heap.pop();
-            if let Some(n) = self.sources[j].next() {
-                self.heap.push(Reverse((n, j)));
+            if let Some(next_at) = self.sources[j].next() {
+                self.heap.push(Reverse((next_at, j)));
             }
         }
         Some(at)
@@ -938,13 +950,15 @@ mod tests {
         assert_eq!(out, vec![1, 4, 5, 9, 12]);
     }
 
-    /// `from` starts at the first member at or above the fence.
+    /// A list starts at its first member at or above the fence — the fence
+    /// every slice-backed source is narrowed by, and the reason a page never
+    /// carries a position at or below `since`.
     #[test]
     fn a_list_starts_at_the_fence() {
         let s = [3u64, 7, 8, 20];
-        assert_eq!(from(&s, 8).collect::<Vec<_>>(), vec![8, 20]);
-        assert_eq!(from(&s, 9).collect::<Vec<_>>(), vec![20]);
-        assert_eq!(from(&s, 21).count(), 0);
-        assert_eq!(from(&s, 0).count(), 4);
+        assert_eq!(at_or_above(&s, 8).collect::<Vec<_>>(), vec![8, 20]);
+        assert_eq!(at_or_above(&s, 9).collect::<Vec<_>>(), vec![20]);
+        assert_eq!(at_or_above(&s, 21).count(), 0);
+        assert_eq!(at_or_above(&s, 0).count(), 4);
     }
 }

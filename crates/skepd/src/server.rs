@@ -169,6 +169,7 @@ use crate::auth::session::{
 };
 use crate::auth::{
     bare_origins, signed_origins, startup_warnings, AuthOptions, AuthState, OsEntropy,
+    PortAlreadyBound,
 };
 use crate::codec::{
     check_keys, daemon_rejected, key_set_reply, obj, to_bytes, DaemonOp, DaemonRejection,
@@ -605,7 +606,17 @@ impl Reply {
 /// the accept path spawns a subscriber thread that owns the socket
 /// (`serve_events`), and the type makes reaching it through the plain reply
 /// path unrepresentable.
+///
+/// `#[non_exhaustive]`, because this is one variant per answer the reply
+/// path CANNOT express, which is a category rather than a singleton: a
+/// [`Body`] holds its bytes wholly in memory, and [`MAX_REQUEST_BODY`]
+/// already names a media round that revisits the body cap per route, so a
+/// streaming answer is the natural second member. What it costs a
+/// downstream caller is a `_` arm, and the honest answer there is the one
+/// a socket-free caller already gives [`Routed::EventStream`]: refuse the
+/// route.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Routed {
     Reply(Reply),
     /// `GET /events` — the server-sent commit stream (wire v4).
@@ -651,6 +662,14 @@ pub enum Routed {
 /// body admitted past it buys roughly twenty times its size in transient
 /// heap — for a frame the codec is then about to refuse. [`read_request`]
 /// enforces it on the declared `Content-Length`, before a byte is read.
+///
+/// `Clone`, because this is the value a caller BUILDS, and the precondition
+/// above is why it builds one per probe rather than mutating a template:
+/// every field is a fact about ONE request. A caller varying one across a
+/// table would otherwise spell all seven per row. Deliberately no
+/// `Default`, for the same reason — an empty method and path are not a
+/// request — and no `PartialEq`, nothing here comparing two requests.
+#[derive(Clone)]
 pub struct HttpRequest {
     /// The method token, uppercase ASCII (`GET`, `POST`, `OPTIONS`).
     pub method: String,
@@ -981,10 +1000,11 @@ impl Daemon {
     /// Bind the auth surface to the served port — the origin sets and the
     /// `/health.auth` lists derive from it. [`serve`] calls this with the
     /// bound port; a socket-free embedder that wants origin behavior calls
-    /// it itself. The two are exclusive: `Err(port)` says a port is already
-    /// bound, and the number every live session's origin set was
-    /// established against is the one already there, not the one refused.
-    pub fn bind_auth_port(&self, port: u16) -> Result<(), u16> {
+    /// it itself. The two are exclusive: a [`PortAlreadyBound`] says a port
+    /// is already bound, and the number it carries is the one already
+    /// there — the number every live session's origin set was established
+    /// against — not the one refused.
+    pub fn bind_auth_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
         self.auth.cfg.bind_port(port)
     }
 

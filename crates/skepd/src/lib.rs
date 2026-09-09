@@ -75,7 +75,7 @@ mod write_path;
 #[doc(hidden)]
 pub mod fuzz_support;
 
-pub use auth::{AuthOptions, NotCanonical, Origin};
+pub use auth::{AuthOptions, NotCanonical, Origin, PortAlreadyBound};
 pub use codec::JsonCodec;
 pub use server::{
     body_cap, serve, Body, Daemon, DaemonError, HttpRequest, Peer, Reply, Routed, Skepd,
@@ -142,9 +142,10 @@ const _: fn() = || {
     assert_send_sync::<Permit<'static>>();
     // The AUTH round's arrivals. `AuthOptions` is the value a caller builds
     // and hands to `Daemon::open_with`, plausibly across a thread boundary;
-    // the other three ride in and out of that surface.
+    // the rest ride in and out of that surface.
     assert_send_sync::<AuthOptions>();
     assert_send_sync::<Origin>();
     assert_send_sync::<NotCanonical>();
+    assert_send_sync::<PortAlreadyBound>();
     assert_send_sync::<Peer>();
 };

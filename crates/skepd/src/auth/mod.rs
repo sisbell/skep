@@ -94,16 +94,16 @@ impl AuthConfig {
         }
     }
 
-    /// `Err` carries the port ALREADY BOUND — the number every live
-    /// session's origin set was established against, which is what a caller
-    /// disagreeing about it needs to be told. The value is set ONCE, so a
-    /// second bind would otherwise be a silent no-op. [`crate::serve`] and a
-    /// socket-free embedder are the two callers, and they are exclusive by
-    /// design.
-    pub fn bind_port(&self, port: u16) -> Result<(), u16> {
-        self.port
-            .set(port)
-            .map_err(|_| self.port().expect("set once, so a refusal means one is bound"))
+    /// [`PortAlreadyBound`] carries the port ALREADY BOUND — the number
+    /// every live session's origin set was established against, which is
+    /// what a caller disagreeing about it needs to be told. The value is set
+    /// ONCE, so a second bind would otherwise be a silent no-op.
+    /// [`crate::serve`] and a socket-free embedder are the two callers, and
+    /// they are exclusive by design.
+    pub fn bind_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
+        self.port.set(port).map_err(|_| {
+            PortAlreadyBound(self.port().expect("set once, so a refusal means one is bound"))
+        })
     }
 
     /// The bound port, or `None` while no listener exists. An `Option`
@@ -419,6 +419,34 @@ impl fmt::Display for NotCanonical {
 
 impl std::error::Error for NotCanonical {}
 
+/// [`crate::Daemon::bind_auth_port`] refused: a port is ALREADY BOUND.
+/// Carries that port — the number every live session's origin set was
+/// established against, which is what a caller disagreeing about it needs
+/// to be told — and not the number it offered, which it already has.
+///
+/// A named error rather than a bare `u16`, for [`NotCanonical`]'s reason:
+/// this is an ecosystem door, and only a type carrying `Display` and
+/// `std::error::Error` composes with `?` in a caller's own error type. A
+/// caller cannot add either impl to an integer, and an `Err(8642)` says
+/// nothing about which of the two ports it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PortAlreadyBound(u16);
+
+impl PortAlreadyBound {
+    /// The port already bound.
+    pub fn port(self) -> u16 {
+        self.0
+    }
+}
+
+impl fmt::Display for PortAlreadyBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "the auth port is already bound to {}", self.0)
+    }
+}
+
+impl std::error::Error for PortAlreadyBound {}
+
 /// The ecosystem door. [`Origin::parse`] stays: its `Option` is the
 /// predicate form this module uses internally (`Origin::parse(h)
 /// .is_some_and(…)`), and `FromStr` is what a generic caller — including
@@ -579,7 +607,11 @@ mod tests {
     fn a_second_bind_is_refused_and_names_the_bound_port() {
         let cfg = cfg_with(8642, true, &[]);
         assert_eq!(cfg.port(), Some(8642));
-        assert_eq!(cfg.bind_port(9999), Err(8642), "the bound port, not the refused one");
+        assert_eq!(
+            cfg.bind_port(9999),
+            Err(PortAlreadyBound(8642)),
+            "the bound port, not the refused one"
+        );
         assert_eq!(cfg.port(), Some(8642), "and the binding did not move");
     }
 

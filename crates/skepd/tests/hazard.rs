@@ -163,7 +163,10 @@ fn route_raw(
     };
     match d.route(&req) {
         Routed::Reply(r) => r,
-        Routed::EventStream => unreachable!("no test route resolves to the event stream"),
+        // `Routed` is `#[non_exhaustive]`, so this arm covers the event
+        // stream and every later variant the reply path cannot express. No
+        // route this helper drives resolves to one.
+        other => unreachable!("no test route resolves to {other:?}"),
     }
 }
 

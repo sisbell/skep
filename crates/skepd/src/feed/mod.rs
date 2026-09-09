@@ -101,7 +101,7 @@ use self::derived::{
     DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
-use crate::sidecar::{report_malformed_names, CommitMeta, CommitsLog};
+use crate::sidecar::{report_malformed_names, CommitMeta, CommitsLog, LineOffset};
 use crate::write_path::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -155,13 +155,20 @@ pub(crate) struct FeedClass<'a> {
     /// principal)` — the issuer being the draft-stream key this clause
     /// opens.
     issuers: Vec<(Address, Vec<Address>)>,
-    /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22),
-    /// each `(covered prefix, the accounts that issued it)` — the TRANSPOSE
-    /// of [`FeedClass::issuers`]' pair, of which this module reads the
-    /// prefix alone, as a key range over the position index rather than as a
-    /// stream key. Empty for the guest (grants reach principals alone,
-    /// PUB-5.109).
-    universal_prefixes: Vec<(Address, Vec<Address>)>,
+    /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22)
+    /// — a key range over the position index, never a stream key. Empty for
+    /// the guest (grants reach principals alone, PUB-5.109).
+    ///
+    /// The PREFIX alone, where the engine's pair carries the issuing
+    /// accounts beside it: this term needs no issuer, because the mask's own
+    /// grant clause admits exactly the entries the issuing owner covers, so
+    /// [`Inner::visible`] decides every candidate the prefix's index lists
+    /// put forward. Dropping the half nothing reads also parts this field's
+    /// type from [`FeedClass::issuers`]', which is the same pair TRANSPOSED
+    /// — issuer first, prefixes second — so a loop reading one as the other
+    /// stops compiling instead of looking a content prefix up in a map keyed
+    /// by owner account and silently serving no universal term at all.
+    universal_prefixes: Vec<Address>,
 }
 
 impl<'a> FeedClass<'a> {
@@ -181,8 +188,12 @@ impl<'a> FeedClass<'a> {
             cur = parent(&a);
         }
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
-        let universal_prefixes =
-            if principal.is_some() { world.universal_grants() } else { Vec::new() };
+        // The issuing accounts the engine hands back beside each prefix are
+        // dropped at this seam, for the reason the field states.
+        let universal_prefixes = match principal {
+            Some(_) => world.universal_grants().into_iter().map(|(prefix, _)| prefix).collect(),
+            None => Vec::new(),
+        };
         FeedClass { world, principal, subtree, issuers, universal_prefixes }
     }
 
@@ -322,9 +333,14 @@ impl Feed {
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
         for (at, m) in &index_entries {
             let Some(meta) = log.entries.get(at) else { continue };
-            let strings = strings_of(m.get(INDEX_DOCS));
-            let addrs: Vec<Address> = strings.iter().filter_map(|s| parse_dotted(s)).collect();
-            let addrs = if addrs.len() == strings.len() {
+            // Counted against what the file CLAIMED, not against what could
+            // be read out of it: an element that is not a string is one
+            // malformed name like any other, and dropping it ahead of this
+            // count is what would let a short list pass the test below.
+            let named = elements_of(m.get(INDEX_DOCS));
+            let addrs: Vec<Address> =
+                named.iter().filter_map(Value::as_str).filter_map(parse_dotted).collect();
+            let addrs = if addrs.len() == named.len() {
                 addrs
             } else {
                 // A DERIVED record this daemon cannot parse. Never trusted
@@ -337,7 +353,7 @@ impl Feed {
                 // position by a smaller set than the write touched, and
                 // accepting an empty one would make it a `[]`-docs entry,
                 // which is never masked.
-                report_malformed_names(INDEX_FILE, *at, strings.len() - addrs.len());
+                report_malformed_names(INDEX_FILE, *at, named.len() - addrs.len());
                 match meta {
                     CommitMeta::Recorded { docs: authority, .. } => {
                         authority.iter().filter_map(|s| parse_dotted(s)).collect()
@@ -429,8 +445,10 @@ impl Feed {
             if !log.entries.contains_key(at) {
                 continue;
             }
-            for owner in
-                strings_of(m.get(STREAMS_OWNERS)).into_iter().filter_map(|s| parse_dotted(&s))
+            for owner in elements_of(m.get(STREAMS_OWNERS))
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(parse_dotted)
             {
                 let s = streams.entry(owner).or_default();
                 if s.last() != Some(at) {
@@ -474,17 +492,18 @@ impl Feed {
         // the compaction block that follows.
         let offsets_agree = !log.rewritten
             && offset_entries.iter().all(|(at, m)| {
-                m.get(OFFSETS_OFFSET).and_then(Value::as_u64) == log.offsets.get(at).copied()
+                m.get(OFFSETS_OFFSET).and_then(Value::as_u64)
+                    == log.offsets.get(at).map(|o| o.0)
             });
         if offsets_agree {
             let offsets_cov = f_offsets.coverage();
-            let tail: Vec<(u64, u64)> = log
+            let tail: Vec<(u64, LineOffset)> = log
                 .offsets
                 .range(offsets_cov.saturating_add(1)..)
                 .map(|(k, v)| (*k, *v))
                 .collect();
             for (at, offset) in tail {
-                f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.into()))])?;
+                f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])?;
             }
             f_offsets.fence(head)?;
         } else {
@@ -494,7 +513,7 @@ impl Feed {
                     .map(|(at, o)| {
                         derived::record_object(
                             *at,
-                            vec![(OFFSETS_OFFSET, Value::Number((*o).into()))],
+                            vec![(OFFSETS_OFFSET, Value::Number(o.0.into()))],
                         )
                     })
                     .collect(),
@@ -632,9 +651,11 @@ impl Inner {
     /// its file's fence reporting it covered — which is a short candidate set
     /// claiming completeness, not the silent incompleteness the coverage
     /// check closes.
-    fn index_position(&mut self, at: u64, offset: u64, docs: Vec<Doc>) {
+    fn index_position(&mut self, at: u64, offset: LineOffset, docs: Vec<Doc>) {
         report_append_failure(
-            self.files.offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.into()))]),
+            self.files
+                .offsets
+                .append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))]),
             OFFSETS_FILE,
             at,
         );
@@ -762,10 +783,9 @@ impl Inner {
                 ));
             }
         }
-        // The pair here is the TRANSPOSE of the issuers loop's above: a
-        // covered PREFIX first, its issuers second. It keys the position
-        // index, never `streams`, which is keyed by owner account.
-        for (prefix, _issuers) in &class.universal_prefixes {
+        // A covered PREFIX, not an issuer account: this keys the position
+        // index, never `streams`, which the loop above keys by owner.
+        for prefix in &class.universal_prefixes {
             // The universal term (PUB-7.22): the live any-principal prefix's
             // own index lists — the mask's grant clause admits exactly the
             // entries the issuing owner covers.
@@ -896,11 +916,22 @@ fn addr_strings<'a>(addrs: impl Iterator<Item = &'a Address>) -> Value {
     Value::Array(addrs.map(|a| Value::String(a.to_string())).collect())
 }
 
-/// The strings of a JSON array field, or none.
-fn strings_of(v: Option<&Value>) -> Vec<String> {
-    v.and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
-        .unwrap_or_default()
+/// One derived record's array field, as its RAW elements — so a caller
+/// counting what it could read counts against what the FILE CLAIMED.
+/// Handing back strings loses two things at once: a name every caller
+/// parses and discards, and an element that is not a string at all, dropped
+/// ahead of the "did every name parse?" test [`Feed::open`]'s docs read
+/// makes of the count.
+///
+/// An element this daemon cannot turn into an address — a non-string, or a
+/// string [`parse_dotted`] refuses — is one malformed name, and each of the
+/// two reads states for itself what dropping one costs it.
+///
+/// An absent field and one that is not an array both answer the empty
+/// slice, which is the residue [`Inner::masked`]'s own card already accepts
+/// for a file this daemon did not write.
+fn elements_of(v: Option<&Value>) -> &[Value] {
+    v.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// A bare position the index lost: the journal's classification, from the

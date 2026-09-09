@@ -150,6 +150,21 @@ impl CommitMeta {
     }
 }
 
+/// One line's byte offset in `commits.log`.
+///
+/// A newtype because it travels beside a committed POSITION of the same
+/// width — out of [`CommitsLog::record`], through
+/// [`crate::feed::Feed::record`], into the feed's own indexing — and the two
+/// mean opposite things. Transposed, the position index, the bitmap and the
+/// owner streams key on a byte offset while `feed-offsets.log` records a
+/// position: the first half is loud, since the change feed's pages compare
+/// byte for byte, and the second is SILENT, since nothing in this build
+/// seeks by an offset ([`CommitsLog::offsets`] says so). The device
+/// [`crate::write_path::SerialGuard`] already is, applied to data rather
+/// than to a guard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct LineOffset(pub u64);
+
 /// One replayed file record.
 #[derive(Debug)]
 enum Record {
@@ -194,7 +209,11 @@ pub(crate) struct CommitsLog {
     /// head clamp, the reconstruction walk, a rewrite, and
     /// [`CommitsLog::record`]. A reader looking for the lookup will not
     /// find one.
-    pub offsets: BTreeMap<u64, u64>,
+    ///
+    /// Position → [`LineOffset`], which is what keeps the two apart: they
+    /// are the same width and mean opposite things, and the map's own key
+    /// and value are the pair a transposition swaps.
+    pub offsets: BTreeMap<u64, LineOffset>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or
     /// unreadable journal) and `/changes` answers 410. Deliberately not
@@ -287,7 +306,7 @@ impl CommitsLog {
             match rec {
                 Record::Entry(at, meta) => {
                     entries.insert(at, meta);
-                    offsets.insert(at, offset as u64);
+                    offsets.insert(at, LineOffset(offset as u64));
                 }
                 Record::MinSince(s) => min_since = min_since.max(s),
             }
@@ -322,7 +341,7 @@ impl CommitsLog {
             let (boundaries, walk_min_since) = reconstruct(engine, low, head);
             for w in &boundaries {
                 entries.insert(w.at, CommitMeta::Bare);
-                offsets.insert(w.at, len);
+                offsets.insert(w.at, LineOffset(len));
                 let line = entry_line(w.at, &CommitMeta::Bare);
                 file.write_all(&line)?;
                 len += line.len() as u64;
@@ -371,12 +390,12 @@ impl CommitsLog {
         ))
     }
 
-    /// Record one committed write at ack time; `Some(offset)` — the byte
-    /// offset the line landed at — when this call recorded a NEW position,
-    /// `None` when it declined. Idempotent against replayed acks: a position
-    /// at or below the open-time head, or one already recorded this uptime,
-    /// is an ack for an OLD commit (idempotency-memo hit, `emit`
-    /// incumbent) — re-recording it would invent a time.
+    /// Record one committed write at ack time; `Some` — the [`LineOffset`]
+    /// the line landed at — when this call recorded a NEW position, `None`
+    /// when it declined. Idempotent against replayed acks: a position at or
+    /// below the open-time head, or one already recorded this uptime, is an
+    /// ack for an OLD commit (idempotency-memo hit, `emit` incumbent) —
+    /// re-recording it would invent a time.
     ///
     /// CALLER CONTRACT — call only while holding the daemon's
     /// write-serialization guard, between a commit and its ack; the guard
@@ -403,7 +422,7 @@ impl CommitsLog {
         op: &'static str,
         docs: Vec<String>,
         key: String,
-    ) -> Option<u64> {
+    ) -> Option<LineOffset> {
         if at <= self.open_head || self.entries.contains_key(&at) {
             return None;
         }
@@ -414,7 +433,7 @@ impl CommitsLog {
         let time = now.max(self.last_time);
         self.last_time = time;
         let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
-        let offset = self.len;
+        let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
         // ack is owed regardless; a lost append answers bare after restart.
         // Reported without `eprintln!`, which PANICS when the stderr write
@@ -518,14 +537,14 @@ fn rewrite(
     dir: &Path,
     entries: &BTreeMap<u64, CommitMeta>,
     min_since: u64,
-) -> io::Result<(File, BTreeMap<u64, u64>, u64)> {
+) -> io::Result<(File, BTreeMap<u64, LineOffset>, u64)> {
     let path = dir.join(SIDECAR_FILE);
     let tmp = dir.join(format!("{SIDECAR_FILE}.compact"));
     let mut out = Vec::new();
     let mut offsets = BTreeMap::new();
     out.extend_from_slice(&min_since_line(min_since));
     for (at, meta) in entries {
-        offsets.insert(*at, out.len() as u64);
+        offsets.insert(*at, LineOffset(out.len() as u64));
         out.extend_from_slice(&entry_line(*at, meta));
     }
     let mut f = File::create(&tmp)?;

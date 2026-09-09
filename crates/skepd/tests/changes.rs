@@ -918,6 +918,78 @@ fn a_position_carrying_a_malformed_document_name_answers_bare() {
     }
 }
 
+/// A DERIVED index record whose `docs` array holds an element that is not a
+/// string at all does not unmask the draft write it names.
+///
+/// The one loss a `docs` read must count against what the file CLAIMED and
+/// not against what could be read out of it. An array of `[42]` claims one
+/// name and yields none, so a read that drops the non-string BEFORE its
+/// "did every name parse?" test sees zero against zero, agrees, and
+/// classifies the position EMPTY — and an empty class is a `[]`-docs entry,
+/// which is never masked, so the write reaches every class including the
+/// guest. The same read one element longer is the same species one step
+/// less visible: a list of `["<doc>", 42]` classifies by a SMALLER set than
+/// the write touched, so an entry is masked against fewer documents than it
+/// named.
+///
+/// `feed-masked.log` is deleted so the bitmap must be re-derived from that
+/// classification, which is what makes the loss reach the wire: held over
+/// from a previous open the bitmap decides the guest's page on its own
+/// (`Inner::masked`'s card states that direction), and a short class would
+/// sit behind it undisclosed until the next whole-file loss.
+#[test]
+fn a_derived_index_record_naming_a_non_string_does_not_unmask() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let index_path = dir.path().join("feed-index.log");
+    {
+        let sd = spawn(dir.path());
+        seed_flow(sd.port());
+        sd.shutdown();
+    }
+
+    // The seeded `make_link` into principal 1's PRIVATE draft — the one
+    // position whose masking is what this read is protecting.
+    let at = SEEDED_ATS[4];
+    let contents = std::fs::read_to_string(&index_path).expect("read feed-index.log");
+    let doctored: Vec<String> = contents
+        .lines()
+        .map(|line| {
+            let mut v: Value = serde_json::from_str(line).expect("a derived line is JSON");
+            if v.get("at").and_then(Value::as_u64) == Some(at) {
+                assert!(
+                    v.get("docs").and_then(Value::as_array).is_some_and(|d| !d.is_empty()),
+                    "the doctored position must name a document: {v}"
+                );
+                v["docs"] = serde_json::json!([42]);
+            }
+            serde_json::to_string(&v).expect("json")
+        })
+        .collect();
+    assert!(
+        doctored.iter().any(|l| l.contains("42")),
+        "the index must hold a record for the make_link into the draft"
+    );
+    std::fs::write(&index_path, format!("{}\n", doctored.join("\n"))).expect("rewrite");
+    std::fs::remove_file(dir.path().join("feed-masked.log")).expect("drop the bitmap");
+
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let g = changes_ok(port, None, "since=0");
+    assert!(
+        !entry_ats(&g).contains(&at),
+        "a draft write is not unmasked by a derived record this daemon cannot read: {:?}",
+        entry_ats(&g)
+    );
+    let s1 = open_session(port, 1);
+    let v = changes_ok(port, Some(&s1), "since=0");
+    assert_eq!(
+        entry_ats(&v),
+        all_ats(),
+        "and the owner's page is whole: the class fell back to the authority file's names"
+    );
+    sd.shutdown();
+}
+
 /// A `min_since` fence describing a journal other than this one — an
 /// operator restoring a data dir, or copying one whose journal was later
 /// replaced by a shorter one, which is the case the entry clamp beside it

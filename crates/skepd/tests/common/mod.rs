@@ -309,7 +309,9 @@ pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
     let port = reserved.local_addr().expect("reserved local addr").port();
     let origin =
         Origin::parse(&format!("http://127.0.0.1:{port}")).expect("a canonical loopback origin");
-    let opts = AuthOptions { local_trust, configured: vec![origin] };
+    let mut opts = AuthOptions::default();
+    opts.local_trust = local_trust;
+    opts.configured = vec![origin];
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
     // The reservation held through the slow open; only the rebind gap races.
     drop(reserved);

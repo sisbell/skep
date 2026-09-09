@@ -1688,8 +1688,12 @@ impl Daemon {
     /// oracle: the wire body equals this post-filter of the harness-only
     /// walk byte for byte. Unbudgeted, like [`Daemon::world_at`]: an
     /// embedder calling this holds the daemon itself.
+    ///
+    /// The answer's type is re-exported as [`crate::WorldDump`], for the
+    /// reason the engine types beside it are: naming it must not oblige a
+    /// caller to depend on the engine.
     #[cfg(feature = "observe")]
-    pub fn dump_visible_to(&self, principal: Option<PrincipalId>) -> skep_engine::dump::WorldDump {
+    pub fn dump_visible_to(&self, principal: Option<PrincipalId>) -> crate::WorldDump {
         self.engine.world_dump_visible_to(principal)
     }
 }

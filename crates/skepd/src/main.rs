@@ -180,8 +180,13 @@ fn main() {
     // Genesis-or-recover; every EngineError is an operator condition
     // (corrupt journal, bad checkpoint) — report and stop.
     // `--origin` names the CONFIGURED set — the flag's own vocabulary and
-    // the field's meet here, at the one line that carries them across.
-    let opts = AuthOptions { local_trust: args.local_trust, configured: args.origins.clone() };
+    // the field's meet here, at the two lines that carry them across. Built
+    // from the defaults and then set, which is what `AuthOptions` being
+    // `#[non_exhaustive]` asks: a knob this binary grows no flag for arrives
+    // at its own default rather than at whatever a literal here omitted.
+    let mut opts = AuthOptions::default();
+    opts.local_trust = args.local_trust;
+    opts.configured = args.origins.clone();
     let daemon = match Daemon::open_with(&args.data_dir, opts) {
         Ok(d) => d,
         Err(e) => {

@@ -57,28 +57,11 @@ pub(crate) fn classify(world: &World, addrs: Vec<Address>) -> Vec<Doc> {
         .collect()
 }
 
-/// A dotted-decimal address as `commits.log` records it (the wire's own
-/// rendering, `Tumbler`'s `Display`), back to an `Address`. `None` for
-/// anything that is not one — a line this daemon never wrote; the record
-/// keeps the string, the feed's classification drops it.
-pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
-    let comps = s
-        .split('.')
-        .map(|c| {
-            if c.is_empty() || !c.bytes().all(|b| b.is_ascii_digit()) {
-                None
-            } else {
-                Nat::from_str(c).ok()
-            }
-        })
-        .collect::<Option<Vec<Nat>>>()?;
-    validate(Tumbler::new(comps).ok()?).ok()
-}
-
 /// A dotted-decimal PREFIX — any nonempty component sequence, T4-valid or
 /// not — as the tumbler `under=` names (an account prefix `1.0.2` and a
 /// document `1.0.2.0.3` are both addresses; a bare carrier prefix is
-/// admitted too, containment being a tumbler question).
+/// admitted too, containment being a tumbler question). The dotted-decimal
+/// grammar itself, which [`parse_dotted`] refines.
 pub(crate) fn parse_prefix(s: &str) -> Option<Tumbler> {
     let comps = s
         .split('.')
@@ -91,6 +74,16 @@ pub(crate) fn parse_prefix(s: &str) -> Option<Tumbler> {
         })
         .collect::<Option<Vec<Nat>>>()?;
     Tumbler::new(comps).ok()
+}
+
+/// A dotted-decimal address as `commits.log` records it (the wire's own
+/// rendering, `Tumbler`'s `Display`), back to an `Address` — [`parse_prefix`]
+/// plus M1's T4 validation, so the refinement is one call and not a second
+/// copy of the grammar. `None` for anything that is not one — a line this
+/// daemon never wrote; the record keeps the string, the feed's
+/// classification drops it.
+pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
+    validate(parse_prefix(s)?).ok()
 }
 
 /// THE JOURNAL'S CLASSIFICATION of one commit (PUB-6.45): the documents the

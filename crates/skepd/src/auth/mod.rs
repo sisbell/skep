@@ -39,7 +39,17 @@ pub(crate) const MAX_LIVE_NONCES: usize = 4096;
 /// the local-trust flag (Phase A default ON — a hosted image must set it
 /// AFFIRMATIVELY false, AUTH-4.57 (i)) and the configured origins
 /// (AUTH-4.7: configure what the board is actually reachable at).
+///
+/// `#[non_exhaustive]`, paired with the [`Default`] below: a caller starts
+/// from the defaults and sets what it means to change, so a knob added
+/// later arrives at its default rather than breaking every construction.
+/// The OPPOSITE call from [`crate::HttpRequest`], deliberately — a field
+/// there is a fact about the request that a caller must supply, and one
+/// added silently would be answered from a default the caller never chose;
+/// here every field is an operator's option and abstention is the safe
+/// state, which is the whole shape of `local_trust`'s own ruling.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AuthOptions {
     /// Bare binds honored on loopback after the claim (CLAIMED-PERMISSIVE)
     /// when true; ENFORCING when false. Pre-claim the flag is not consulted

@@ -101,29 +101,34 @@ use crate::write_path::SerialGuard;
 /// requester's class, the stream keys its class opens, and the universal
 /// term's live set. The feed evaluates it and resolves nothing of its own.
 pub(crate) struct FeedClass<'a> {
-    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20). Built by
-    /// [`FeedClass::of`] from the same `(world, principal)` the keys below
-    /// are derived from, so a class whose mask and whose stream keys belong
-    /// to different principals is not constructible: the keys would open a
-    /// principal's drafts while the mask refused all of them, which fails
-    /// into an emptier page with nothing to report it.
-    pub readable: Box<dyn Fn(&Address) -> bool + 'a>,
+    /// The HEAD world every field below stands on: the one snapshot the
+    /// route pinned for this request.
+    world: &'a World,
+    /// The requester this class is of — `None` is the guest.
+    ///
+    /// It and `world` are the whole input: [`FeedClass::of`] derives the
+    /// three key sets below from the pair and [`FeedClass::readable`]
+    /// answers the mask off the same pair, so a class whose mask and whose
+    /// stream keys belong to different principals is not constructible —
+    /// the keys would open a principal's drafts while the mask refused all
+    /// of them, which fails into an emptier page with nothing to report it.
+    principal: Option<PrincipalId>,
     /// The requester's own account and its ancestor accounts (the subtree
     /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
-    pub subtree: Vec<Address>,
+    subtree: Vec<Address>,
     /// The grant-selected issuers (`World::issuers_for`, PUB-7.25), each
     /// `(issuer account, the union of the content prefixes it granted this
     /// principal)` — the issuer being the draft-stream key this clause
     /// opens.
-    pub issuers: Vec<(Address, Vec<Address>)>,
+    issuers: Vec<(Address, Vec<Address>)>,
     /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22),
     /// each `(covered prefix, the accounts that issued it)` — the TRANSPOSE
     /// of [`FeedClass::issuers`]' pair, of which this module reads the
     /// prefix alone, as a key range over the position index rather than as a
     /// stream key. Empty for the guest (grants reach principals alone,
     /// PUB-5.109).
-    pub universal_prefixes: Vec<(Address, Vec<Address>)>,
+    universal_prefixes: Vec<(Address, Vec<Address>)>,
 }
 
 impl<'a> FeedClass<'a> {
@@ -131,11 +136,8 @@ impl<'a> FeedClass<'a> {
     /// head snapshot (PUB-6.40): the route pins the snapshot and hands the
     /// world in, and every field's own rule is stated on the field above —
     /// which is why the resolution lives here rather than at the route,
-    /// where it would restate them. The MASK is derived here beside the keys
-    /// and not supplied, so the route cannot hand a mask for one principal
-    /// alongside keys for another.
+    /// where it would restate them.
     pub fn of(world: &'a World, principal: Option<PrincipalId>) -> FeedClass<'a> {
-        let readable = Box::new(move |doc: &Address| world.readable(principal, doc));
         let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
         let mut subtree = Vec::new();
         let mut cur = account.clone();
@@ -148,7 +150,19 @@ impl<'a> FeedClass<'a> {
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
         let universal_prefixes =
             if principal.is_some() { world.universal_grants() } else { Vec::new() };
-        FeedClass { readable, subtree, issuers, universal_prefixes }
+        FeedClass { world, principal, subtree, issuers, universal_prefixes }
+    }
+
+    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20), which
+    /// [`Inner::visible`] applies per entry and [`Inner::sources`] applies
+    /// per document in the merge arm's skip.
+    ///
+    /// A method over the stored `(world, principal)` rather than a closure
+    /// the route hands in: the answer is a pure function of that pair, so
+    /// it costs no box and no indirect call per candidate, and there is no
+    /// separately supplied mask to disagree with the keys.
+    fn readable(&self, doc: &Address) -> bool {
+        self.world.readable(self.principal, doc)
     }
 }
 
@@ -312,7 +326,7 @@ impl Feed {
         let masked_tail: Vec<u64> =
             log.entries.range(masked_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
         for at in masked_tail {
-            if masked_at_commit(docs.get(&at)) {
+            if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
                 f_masked.append(at, vec![])?;
             }
@@ -340,7 +354,7 @@ impl Feed {
         let streams_tail: Vec<u64> =
             log.entries.range(streams_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
         for at in streams_tail {
-            let owners = owners_of(docs.get(&at));
+            let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
                 for o in &owners {
                     streams.entry(o.clone()).or_default().push(at);
@@ -397,7 +411,7 @@ impl Feed {
             f_streams.rewrite(
                 docs.iter()
                     .filter_map(|(at, ds)| {
-                        let owners = owners_of(Some(ds));
+                        let owners = owners_of(ds);
                         (!owners.is_empty()).then(|| {
                             derived::record_object(
                                 *at,
@@ -539,13 +553,13 @@ impl Inner {
                 at,
             );
         }
-        if masked_at_commit(Some(&docs)) {
+        if masked_at_commit(&docs) {
             self.masked.insert(at);
             report(self.files.masked.append(at, vec![]), MASKED_FILE, at);
         } else {
             self.published.insert(at);
         }
-        let owners = owners_of(Some(&docs));
+        let owners = owners_of(&docs);
         if !owners.is_empty() {
             for o in &owners {
                 self.streams.entry(o.clone()).or_default().push(at);
@@ -567,7 +581,7 @@ impl Inner {
     fn visible(&self, class: &FeedClass<'_>, q: &Query, at: u64) -> Option<(&CommitMeta, Vec<&Doc>)> {
         let meta = self.log.entries.get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
-        let reduced: Vec<&Doc> = docs.iter().filter(|d| (class.readable)(&d.addr)).collect();
+        let reduced: Vec<&Doc> = docs.iter().filter(|d| class.readable(&d.addr)).collect();
         if !docs.is_empty() && reduced.is_empty() {
             return None; // masked at this class
         }
@@ -603,7 +617,7 @@ impl Inner {
                 for (_, (doc, positions)) in
                     self.index.range(under.clone()..).take_while(|(k, _)| is_prefix(under, k))
                 {
-                    if !(class.readable)(doc) {
+                    if !class.readable(doc) {
                         continue;
                     }
                     v.push(Box::new(from(positions, start)));
@@ -697,14 +711,14 @@ fn from(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
 /// stream a guest page walks in O(page). THE mask, the per-class verdict
 /// wire.md gives the bare word to, is [`Inner::visible`]'s, computed per
 /// entry against the requester's own predicate (PUB-7.20).
-fn masked_at_commit(docs: Option<&Vec<Doc>>) -> bool {
-    docs.is_some_and(|ds| !ds.is_empty() && ds.iter().all(Doc::is_draft))
+fn masked_at_commit(docs: &[Doc]) -> bool {
+    !docs.is_empty() && docs.iter().all(Doc::is_draft)
 }
 
 /// The owner accounts of an entry's drafts — the streams the position
 /// enters.
-fn owners_of(docs: Option<&Vec<Doc>>) -> BTreeSet<Address> {
-    docs.map(|ds| ds.iter().filter_map(|d| d.draft_owner.clone()).collect()).unwrap_or_default()
+fn owners_of(docs: &[Doc]) -> BTreeSet<Address> {
+    docs.iter().filter_map(|d| d.draft_owner.clone()).collect()
 }
 
 fn doc_strings(docs: &[Doc]) -> Value {

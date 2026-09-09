@@ -91,8 +91,21 @@ pub use server::{
 ///
 /// M10's operation vocabulary is deliberately NOT re-exported: `Request`,
 /// `Response`, `Op` and the `Codec` trait belong to `skep-febe`, which any
-/// client author already depends on to build an operation at all.
+/// client author already depends on to build an operation at all. The one
+/// foreign type left on this crate's public surface rides that same door:
+/// `PrincipalId`, which [`Daemon::dump_visible_to`] takes, is
+/// `skep-namespace`'s and reaches a client through `skep-febe`'s own
+/// re-export of it.
 pub use skep_engine::{EngineError, HistoryError, World};
+
+/// The dump [`Daemon::dump_visible_to`] answers with, re-exported for the
+/// reason the three above are and only where that method exists. Without
+/// it the method's return type is nameable only by depending on
+/// `skep-engine` — the dependency this crate holds alone — and only where
+/// feature unification happens to have turned that crate's `dump` feature
+/// on, which is what this crate's `observe` does.
+#[cfg(feature = "observe")]
+pub use skep_engine::dump::WorldDump;
 
 /// A committed log position — what [`Daemon::log_position`] answers and what
 /// [`Daemon::world_at`] takes, re-exported for the same reason the engine
@@ -111,10 +124,11 @@ pub use history::Permit;
 /// states it — so a private field that is not `Send` would revoke it with no
 /// public name changing. This is where that fails to compile instead.
 ///
-/// Every type this crate DEFINES and exports is listed. The four it
-/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`] — are
-/// not: those promises are upstream's to keep, and `Daemon: Send + Sync`
-/// already pins the ones this crate transitively rests on.
+/// Every type this crate DEFINES and exports is listed. The ones it
+/// re-exports — [`World`], [`Seq`], [`EngineError`], [`HistoryError`], and
+/// (under `observe`) the world dump — are not: those promises are
+/// upstream's to keep, and `Daemon: Send + Sync` already pins the ones this
+/// crate transitively rests on.
 const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Skepd>();

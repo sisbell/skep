@@ -578,8 +578,12 @@ fn a_genesis_record_meets_its_key_cap_at_both_ends() {
 /// AT the cap, every key is decoded wherever the undecodable one sits —
 /// the load-bearing half, since a shorter bound would miss a trailing bad
 /// key and SEAT it, which is the permanent harm slot (4) exists to
-/// prevent. Past the cap, the count refuses first and the trailing key is
-/// never reached, which is the one answer this bound moves: `undecodable`
+/// prevent. ONE PAST the cap, the trailing key is still reached, because
+/// the scan's bound is one key wider than the cap and not equal to it —
+/// which is what makes the boundary the scan's rather than slot (5)'s, and
+/// what a comment naming the cap in its place gets wrong by one key. PAST
+/// the scan, the count refuses first and the trailing key is never
+/// reached, which is the one answer this bound moves: `undecodable_key`
 /// becomes `too_many_enrolled`, both true, both permanent, both refusals.
 #[test]
 fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
@@ -639,12 +643,25 @@ fn the_undecodable_key_scan_stops_one_key_past_the_cap() {
     );
     assert_eq!(enrolled_count(), 0, "and it seeded nothing");
 
-    // PAST the cap: the count refuses before the trailing key is reached.
-    let v = genesis_with_bad_tail(2, GENESIS_KEY_CAP + 3);
+    // ONE PAST the cap, which is exactly where the scan stops: 17 keys, the
+    // bad one 17th. Slot (5) would refuse this record on its count, and
+    // slot (4) runs first and still reaches that key — so the boundary
+    // belongs to the SCAN and not to the cap, and the answer here is
+    // `undecodable_key` rather than `too_many_enrolled`.
+    let v = genesis_with_bad_tail(2, GENESIS_KEY_CAP);
+    assert_eq!(
+        rejected_detail(&v),
+        "credential_refused:undecodable_key",
+        "the scan reaches one key past the cap, so slot (4) answers at that position"
+    );
+    assert_eq!(enrolled_count(), 0);
+
+    // PAST the scan: the count refuses before the trailing key is reached.
+    let v = genesis_with_bad_tail(3, GENESIS_KEY_CAP + 3);
     assert_eq!(
         rejected_detail(&v),
         "credential_refused:too_many_enrolled",
-        "past the cap the count answers, so the decode never runs the tail"
+        "past the scan the count answers, so the decode never runs the tail"
     );
     assert_eq!(enrolled_count(), 0);
 

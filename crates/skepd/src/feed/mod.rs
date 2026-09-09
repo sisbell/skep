@@ -69,9 +69,14 @@
 //! one test — under the MERGE-OR-WALK rule: merge the lists under the
 //! prefix iff the prefix holds no more documents than the range holds
 //! positions, else walk the visible stream testing the prefix per entry.
-//! `drafts=true` keeps the entries whose reduced docs name a draft — served
-//! off the streams and the universal term alone (no published walk), empty
-//! for a guest by construction.
+//! `drafts=true` keeps the entries whose reduced docs name a draft. On its
+//! own it is served off the streams and the universal term alone — no
+//! published walk, so a guest's page is empty by construction. Beside an
+//! `under=` the merge rule takes, the candidates are that prefix's index
+//! lists instead, published documents included, and the flag is applied by
+//! the mask's own per-entry test rather than by the source set — the same
+//! answer by a second route, since an entry naming no readable draft is
+//! dropped either way.
 
 pub(crate) mod classify;
 mod derived;
@@ -100,10 +105,13 @@ use crate::write_path::SerialGuard;
 /// before [`Inner::sources`] stands the filter aside and lets the mask
 /// decide.
 ///
-/// The filter is a CANDIDATE optimization and never the answer — every
-/// position it drops is one the mask drops too — so standing it aside moves
-/// no page, which is what makes a cap here answer-preserving rather than a
-/// narrowing.
+/// The filter is a CANDIDATE optimization and never the answer: it only
+/// REMOVES candidates from one source, the merge deduplicates, and
+/// [`Inner::visible`] decides every candidate that survives — so standing it
+/// aside can only widen a candidate set the mask then judges, and the page
+/// does not move. That is what makes a cap here answer-preserving rather
+/// than a narrowing, and it is weaker than "it drops only what the mask
+/// drops", which [`Inner::names_under`] records as false.
 ///
 /// The budget is the cost of the probe this filter PRECEDES. `World::readable`
 /// answers the grant clause by testing a document's O(depth) ancestor prefixes
@@ -237,6 +245,12 @@ struct Inner {
     /// The materialized published stream: every entry not in `masked`.
     published: BTreeSet<u64>,
     /// Owner account → the positions naming one of its drafts, ascending.
+    /// The ONE position collection not ordered by its container: `index`
+    /// takes its order from `docs`, a `BTreeMap`, and `masked` and
+    /// `published` are `BTreeSet`s, while this is built by pushing — in file
+    /// order at replay, in position order at the record. [`Feed::open`]
+    /// sorts the replayed half, which is what establishes the invariant
+    /// [`at_or_above`]'s `partition_point` reads.
     streams: BTreeMap<Address, Vec<u64>>,
     files: Files,
 }
@@ -399,6 +413,20 @@ impl Feed {
                     s.push(*at);
                 }
             }
+        }
+        // The replay above pushed in FILE order, which establishes nothing:
+        // this map's lists are ASCENDING by invariant, which is what makes
+        // [`at_or_above`]'s `partition_point` meaningful and what the
+        // consecutive-repeat dedup above rests on. `index` takes its order
+        // from `docs`, a `BTreeMap`, and `masked` and `published` are
+        // `BTreeSet`s, so this is the one collection built from a file's own
+        // sequence and this is where its gate is closed rather than
+        // inherited. The tail below appends strictly above every replayed
+        // entry (coverage is at least every replayed position), in ascending
+        // order, so it preserves what this establishes.
+        for positions in streams.values_mut() {
+            positions.sort_unstable();
+            positions.dedup();
         }
         let streams_cov = f_streams.coverage();
         let streams_tail: Vec<u64> =
@@ -647,11 +675,22 @@ impl Inner {
     }
 
     /// The candidate sources for `class` and `q`, each an ascending iterator
-    /// of positions at or above `start` — what the merge unions. Complete
-    /// by construction: every visible position is in one of them (a
-    /// `[]`-docs or published-touching entry in the published walk; a
-    /// draft entry in its owner's stream, which the subtree clause, the
-    /// grant clause or the universal term selects); exact by the mask.
+    /// of positions at or above `start` — what the merge unions. Exact by
+    /// the mask, and complete by construction in each of the two branches
+    /// this function has, which are complete for different reasons.
+    ///
+    /// The WALK branch's five source kinds cover every visible position: a
+    /// `[]`-docs or published-touching entry is in the published walk; a
+    /// draft entry is in its owner's stream, which the subtree clause, the
+    /// grant clause or the universal term selects.
+    ///
+    /// The MERGE branch returns before any of them, from the index alone,
+    /// and is complete for its own narrower question: a position visible
+    /// under `under=` has a reduced doc under that prefix, that doc is
+    /// readable (reduction is by the mask) and so survives the skip, and its
+    /// index list carries the position — so the position is in that list's
+    /// source. Nothing else is asked of the branch, because `under=` is the
+    /// only query it serves.
     fn sources<'s>(
         &'s self,
         class: &'s FeedClass<'_>,
@@ -723,10 +762,16 @@ impl Inner {
     /// Does the entry at `at` name a draft of `issuer` under one of
     /// `prefixes` — the per-entry containment test of a narrower grant.
     ///
-    /// A CANDIDATE filter and never the answer: every position it drops is
-    /// one [`Inner::visible`]'s mask drops too, through the fold's own
-    /// indexed probe, so [`Inner::sources`] may stand it aside past
-    /// [`MAX_FILTERED_PREFIXES`] and the page does not move.
+    /// A CANDIDATE filter and never the answer, and the reason it may be
+    /// stood aside past [`MAX_FILTERED_PREFIXES`] is weaker than "it drops
+    /// only what the mask drops", which is false: an entry naming a
+    /// published document beside a draft of this issuer outside the granted
+    /// prefixes is dropped here and kept by the mask, and reaches the page
+    /// through the published walk. What holds is that this filter only ever
+    /// REMOVES candidates from ONE source, [`Merge`] unions and deduplicates
+    /// the sources, and [`Inner::visible`] is the authority on every
+    /// candidate that survives — so standing it aside can only widen a
+    /// candidate set the mask then decides, and no page moves.
     fn names_under(&self, at: u64, issuer: &Address, prefixes: &[Address]) -> bool {
         self.docs.get(&at).is_some_and(|ds| {
             ds.iter().any(|d| {
@@ -754,13 +799,19 @@ impl Inner {
 }
 
 /// A position list from its first member at or above `start` — THE fence,
-/// applied to every slice-backed source. [`Inner::sources`]' contract that
-/// each source is "ascending and at or above `start`" is discharged by this
-/// call and by `published.range(start..)`, and by nothing else:
-/// [`Inner::visible`] tests the mask and the two narrowings and does NOT
-/// re-test the fence, so a source that skipped this would serve positions
-/// at or below `since` — a client re-reading its own history on every poll,
-/// with `last` going backwards.
+/// applied to every slice-backed source. [`Inner::sources`]' contract has
+/// two clauses and this call discharges one of them: the AT-OR-ABOVE half,
+/// which it and `published.range(start..)` discharge and nothing else does,
+/// since [`Inner::visible`] tests the mask and the two narrowings and does
+/// NOT re-test the fence — a source that skipped this would serve positions
+/// at or below `since`, which is a client re-reading its own history on
+/// every poll, with `last` going backwards.
+///
+/// The ASCENDING half is the collections': `index` and `published` are
+/// ordered by their containers, and `streams` is ordered at each of its two
+/// construction paths ([`Inner::streams`]). `partition_point` is meaningless
+/// on an unsorted slice, so this returns an arbitrary suffix rather than a
+/// fence for a list that lost it.
 fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()

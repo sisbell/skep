@@ -1027,11 +1027,13 @@ pub(crate) fn precheck(
     // states, applied to the one slot whose input this module cannot cap.
     //
     // CONSEQUENCE: a record that is BOTH over-cap and carries an
-    // undecodable key past [`MAX_ENROLLED_KEYS`] answers
-    // `too_many_enrolled` where the slot order alone would say
-    // `undecodable_key`. It is refused either way, permanently, in the same
-    // vocabulary and by the same function; what changes is which of two
-    // true things it is told.
+    // undecodable key past [`MAX_DECODED_KEYS`] answers `too_many_enrolled`
+    // where the slot order alone would say `undecodable_key`. The boundary
+    // is the SCAN's and not slot (5)'s: the scan reaches one key past the
+    // cap slot (5) applies, so an undecodable key AT that one-past position
+    // is still seen and still answers `undecodable_key`. It is refused
+    // either way, permanently, in the same vocabulary and by the same
+    // function; what changes is which of two true things it is told.
     let keys_decodable = |keys: &[skep_identity::Enrolled]| {
         keys.iter().take(MAX_DECODED_KEYS).all(|e| super::verifying_key(&e.key).is_some())
     };

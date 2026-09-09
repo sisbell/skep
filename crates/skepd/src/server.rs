@@ -2117,6 +2117,16 @@ impl std::fmt::Debug for Skepd {
 /// establishes it by refusing a zero count where the flag is read, which is
 /// also what makes its startup line's worker count honest.
 ///
+/// SECOND PRECONDITION: `daemon`'s auth port is UNBOUND. `serve` binds it,
+/// and a daemon already carrying one has two callers disagreeing about the
+/// number every live session's origin set derives from, so the second stops
+/// loudly rather than serving under a set nobody chose. The one caller this
+/// excludes is a socket-free embedder that called
+/// [`Daemon::bind_auth_port`] itself, which is what that method means by
+/// calling the two "exclusive by design". Like the count above, a caller's
+/// bug rather than an outcome, so it is a panic and not one of the
+/// `io::Error`s below.
+///
 /// Failure is the socket's or the OS's: binding the address, reading back
 /// the port it bound, or a refused worker thread — all three `io::Error`,
 /// which is what lets a caller dispatch on `ErrorKind` — `AddrInUse` to try

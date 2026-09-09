@@ -231,8 +231,20 @@ impl Drop for Permit<'_> {
 /// it, one `execute`. All the read semantics stay M10's and the stores' —
 /// the daemon only assembles. The session is the reader's own principal, or
 /// the retired guest (the guest pattern) when the request presented none:
-/// the read predicate resolves off it, and even a misclassified write would
-/// meet M10's own `Unauthenticated` wall rather than a store.
+/// the read predicate resolves off it.
+///
+/// PRECONDITION: `frame.op` is a READ, and it is the ROUTE that establishes
+/// it — `crate::server::Daemon::op_at_reply` refuses a write frame `400
+/// write_at_history` before this is reached. Since the reader became the
+/// presented principal rather than the guest, that refusal is the only thing
+/// between a misclassified write and this throwaway store: under a live
+/// session a write frame would EXECUTE here, against a kernel that is
+/// dropped when this returns, and answer the caller an acknowledgment for a
+/// write that did not happen, carrying a position that names nothing
+/// ([`stamp_as_of`] leaves acks alone). The route's own guard restates M10's
+/// read/write partition, which `crate::write_path::write_meta` records as
+/// agreeing at 15 writes of 41 and warns can drift — so the assert below is
+/// what makes this premise loud for the reader auditing exactly that drift.
 ///
 /// THE TWO-WORLD SHAPE (PUB-6.48, PUB-6.61): the CONTENT answered is the
 /// N-world's, the PREDICATE it is answered through is the HEAD's. The
@@ -265,6 +277,7 @@ fn execute_read_on(
     principal: Option<PrincipalId>,
     head: World,
 ) -> Response {
+    debug_assert!(frame.op.is_read(), "the history surface runs read frames alone");
     let cfg = KernelConfig {
         durability: Durability::InMemory,
         checkpoint: CheckpointPolicy::Manual,

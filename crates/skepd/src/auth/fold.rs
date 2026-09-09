@@ -82,13 +82,17 @@ impl FoldCtx for WorldCtx<'_> {
     /// the divergence is a token and not an admission; whether the fold
     /// should take the projection too is the spec's (see the build report).
     ///
-    /// The document's BIRTH state, constant over every record's life: no
-    /// publish op exists and a link deposit moves no document's bit (PUB-1.9),
-    /// so the pre-commit gate and the post-commit fold read one answer. The
-    /// cell this moved (D1, `conformance/adjudication/decisions.md`): a
-    /// credential deposited in a DRAFT-homed document now answers
-    /// `unpublished` — AUTH-2.66 item 3 — where the constant-true v1 wiring
-    /// let it fall through to the home pin's `not_doc_one`.
+    /// The document's BIRTH state, constant over every record's life: the
+    /// bit is stamped at the mint that allocates the address and no op moves
+    /// it afterwards — the wire's `publish` MINTS the chain's next member,
+    /// published-born (PUB-2.5), rather than flipping any existing
+    /// document's — and a link deposit allocates no document at all
+    /// (PUB-1.9), so the pre-commit gate and the post-commit fold read one
+    /// answer. The cell this moved (D1,
+    /// `conformance/adjudication/decisions.md`): a credential deposited in a
+    /// DRAFT-homed document now answers `unpublished` — AUTH-2.66 item 3 —
+    /// where the constant-true v1 wiring let it fall through to the home
+    /// pin's `not_doc_one`.
     ///
     /// The fold hands this the home `document_of` derived — a document
     /// address, a version member's own where the home is a version — and

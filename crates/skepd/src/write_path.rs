@@ -291,12 +291,26 @@ impl WritePath {
         // link addresses, not a minted document — so neither binds `minted`
         // above. A `Minted` op answering either would render `docs: []`,
         // indistinguishable on the wire from `delegate`'s legitimate empty
-        // list, on the field wire.md tells clients to dispatch on. The
-        // fallback below is therefore what keeps this walk total, not a case
-        // with a meaning of its own.
+        // list, on the field wire.md tells clients to dispatch on. So the
+        // arm below asserts the premise rather than defaulting quietly past
+        // it, and its fallback is what keeps the walk total in release, not
+        // a case with a meaning of its own.
         let docs = match docs {
             AffectedDocs::Named(v) => v,
-            AffectedDocs::Minted => minted.cloned().map(|a| vec![a]).unwrap_or_default(),
+            AffectedDocs::Minted => {
+                // The obligation [`AffectedDocs::Minted`] states, made loud.
+                // In release the fallback keeps this walk total and produces
+                // a `docs: []` entry, which `crate::feed`'s mask NEVER masks:
+                // the op, the wall-clock time and the fingerprint of the
+                // signing key of a draft mint, served to every class,
+                // permanently, since nothing re-derives an entry the sidecar
+                // already holds.
+                debug_assert!(
+                    minted.is_some(),
+                    "a Minted op must answer AckAddr, the ack carrying the document it minted"
+                );
+                minted.cloned().map(|a| vec![a]).unwrap_or_default()
+            }
         };
         let post = self.stores.kernel().snapshot();
         self.feed.record(serial, at.0, op_name(kind), docs, key, post.world());

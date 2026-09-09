@@ -848,6 +848,55 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
     }
 }
 
+/// The per-owner draft streams are ASCENDING however their file is
+/// ordered. `feed-streams.log` is the one derived file whose replay builds
+/// a position LIST by pushing, in the order the lines happen to sit, where
+/// the index takes its order from a `BTreeMap` and the bitmap from a
+/// `BTreeSet` — so the ordering the feed's fence rests on is the one thing
+/// that file cannot itself establish. `at_or_above` is a `partition_point`,
+/// which answers an arbitrary index on an unsorted slice: the positions a
+/// supplement then yields are not the ones at or above `since`, so a page
+/// can carry a position at or below the fence its client just sent.
+///
+/// The scramble is a REORDER and not a corruption — every line is intact,
+/// so nothing is torn, nothing is foreign, and the coverage fence is a
+/// maximum and does not move. A file this daemon wrote is in position
+/// order; that is a fact about the writer, and this is what says the
+/// reader does not depend on it.
+#[test]
+fn the_draft_streams_replay_ascending_whatever_order_their_file_holds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (since0, prefixes, before) = {
+        let sd = spawn(dir.path());
+        let port = sd.port();
+        let board = build(port);
+        let prefixes = vec![board.a_acct.clone(), board.d1.clone(), board.a1_acct.clone()];
+        let ps: Vec<&str> = prefixes.iter().map(String::as_str).collect();
+        let before = pages_per_class(port, board.since0, &ps);
+        sd.shutdown();
+        (board.since0, prefixes, before)
+    };
+    let ps: Vec<&str> = prefixes.iter().map(String::as_str).collect();
+
+    let path = dir.path().join("feed-streams.log");
+    let text = std::fs::read_to_string(&path).expect("read the streams file");
+    let mut lines: Vec<&str> = text.lines().collect();
+    assert!(lines.len() > 2, "the fixture must give this file several entries: {lines:?}");
+    lines.reverse();
+    std::fs::write(&path, format!("{}\n", lines.join("\n"))).expect("scramble the line order");
+
+    let sd = spawn(dir.path());
+    let after = pages_per_class(sd.port(), since0, &ps);
+    for ((label, want), (_, got)) in before.iter().zip(after.iter()) {
+        assert_eq!(
+            String::from_utf8_lossy(got),
+            String::from_utf8_lossy(want),
+            "{label}: a reordered feed-streams.log moved a page"
+        );
+    }
+    sd.shutdown();
+}
+
 /// §7 item 8 (PUB-8.14, PUB-6.58's /events row): the position stream is
 /// identical across classes on a board with masked commits — a guest and
 /// the draft's owner are told the same position for a draft write.

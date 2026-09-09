@@ -180,19 +180,24 @@ fn doc_changes_block(name: &str) -> String {
     body.trim_end().to_string()
 }
 
-/// The page with each entry's wire-v7 `key` field removed — the one field
-/// wire.md's frozen examples predate; lane 3.2's doc delta restores the
-/// byte comparison.
-fn strip_keys(v: &Value) -> Value {
-    let mut v = v.clone();
-    if let Some(entries) = v.get_mut("changes").and_then(Value::as_array_mut) {
-        for e in entries {
-            if let Some(m) = e.as_object_mut() {
-                m.remove("key");
-            }
+/// One live page against its wire.md example, `time` normalized away — the
+/// one field a live daemon cannot reproduce, and wire.md's own stated
+/// exception ("the `time` values are illustrative"). EVERY other field is
+/// compared, `key` included: the testimony is what distinguishes a
+/// bare-session write from a signed one and lost metadata from both.
+fn matches_doc(live: &Value, name: &str) {
+    let strip_time = |v: &Value| -> Value {
+        let mut v = v.clone();
+        for e in v["changes"].as_array_mut().expect("changes") {
+            e.as_object_mut().expect("entry").remove("time");
         }
-    }
-    v
+        v
+    };
+    assert_eq!(
+        strip_time(live),
+        strip_time(&serde_json::from_str(&doc_changes_block(name)).expect("doc json")),
+        "wire.md 'changes {name}' drifted from the daemon"
+    );
 }
 
 #[test]
@@ -243,9 +248,6 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!(expect_resp(&v, "rejected")["code"].as_str(), Some("unauthenticated"));
 
     // ── the full seeded feed: ops, docs, ordering, testimony ──
-    // (The wire.md 'feed'/'feed_page' byte comparisons ride to lane 3.2,
-    // which re-pins the examples onto the post-ceremony positions and the
-    // wire-v7 `key` field; the structural pins below are this round's.)
     let b = CEREMONY_HEAD;
     let (st, body) = changes_raw(port, owner, &format!("since={b}"));
     assert_eq!(st, 200);
@@ -270,6 +272,9 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert!(times.windows(2).all(|w| w[0] <= w[1]), "times monotone in position: {times:?}");
     assert_eq!(v["last"].as_u64(), Some(b + 12));
     assert_eq!(v["more"], Value::Bool(false));
+    // …and the whole page against wire.md's own 'feed' example, which is the
+    // first thing a client author reads.
+    matches_doc(&v, "feed");
 
     // Determinism: the same question answers byte-identically — per class.
     let (_, again) = changes_raw(port, owner, &format!("since={b}"));
@@ -290,16 +295,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     assert_eq!((g["last"].as_u64(), g["more"].as_bool()), (Some(b + 3), Some(false)));
     let (_, guest_again) = changes_raw(port, None, &format!("since={b}"));
     assert_eq!(guest_body, guest_again, "the guest's page is byte-equal across repeats");
-    // The wire.md 'changes feed_guest' example, modulo `time` (illustrative there).
-    let mut doc_guest: Value =
-        serde_json::from_str(&doc_changes_block("feed_guest")).expect("doc json");
-    let mut live_guest = g.clone();
-    for page in [&mut doc_guest, &mut live_guest] {
-        for e in page["changes"].as_array_mut().expect("changes") {
-            e.as_object_mut().expect("entry").remove("time");
-        }
-    }
-    assert_eq!(live_guest, doc_guest, "wire.md 'changes feed_guest' drifted from the daemon");
+    matches_doc(&g, "feed_guest");
     // Paging over the guest's VISIBLE stream (PUB-6.44): a page of one is
     // never short of its limit before the head, `more` counts visible
     // entries alone, and `last` is a visible position or the fence.
@@ -321,6 +317,7 @@ fn change_feed_lists_writes_pages_and_matches_the_doc() {
     let v = changes_ok(port, owner, &format!("since={b}&limit=2"));
     assert_eq!(entry_ats(&v), vec![b + 2, b + 3]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 3), Some(true)));
+    matches_doc(&v, "feed_page");
     let v = changes_ok(port, owner, &format!("since={}&limit=2", b + 3));
     assert_eq!(entry_ats(&v), vec![b + 4, b + 9]);
     assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(b + 9), Some(true)));
@@ -410,6 +407,62 @@ fn the_changes_limit_range_is_exactly_one_through_the_maximum() {
         assert_eq!(st, 400, "limit={limit} is out of range: refused, never clamped");
         assert_eq!(json(&body)["error"].as_str(), Some("malformed_changes"), "limit={limit}");
     }
+
+    sd.shutdown();
+}
+
+/// The `under` tumbler's two wire caps and the `since` fence's top, both
+/// ends each. `changes_params` restates the codec's own depth and digit
+/// caps by hand — `feed::classify::parse_prefix` applies neither, unlike the
+/// codec's `p_tum` — so this route's check is the only thing between a
+/// query string and an unbounded `Tumbler`, one the `under=` merge branch
+/// clones per range call. The AT-CAP rows are the load-bearing half: a `>`
+/// quietly become `>=` refuses a prefix the substrate can legitimately
+/// name, and the refusal list beside them only ever tested the grammar.
+#[test]
+fn the_changes_query_meets_its_tumbler_caps_and_its_fence_at_both_ends() {
+    /// `codec::MAX_TUMBLER_COMPONENTS`, restated: the constant is
+    /// crate-private, so moving it must be a visible decision here.
+    const UNDER_COMPONENT_CAP: usize = 256;
+    /// `codec::MAX_NAT_DIGITS`, restated for the same reason.
+    const UNDER_DIGIT_CAP: usize = 4096;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    seed_flow(port);
+
+    // An admitted prefix at either cap names no document this board holds —
+    // every one is `1.0.N.0.M` — so the page is empty and `last` echoes the
+    // fence. What is asserted is the ADMISSION: the query reached the feed.
+    let admitted = |under: String, what: &str| {
+        let v = changes_ok(port, None, &format!("since=0&under={under}"));
+        assert_eq!(entry_ats(&v), Vec::<u64>::new(), "{what}: names no document of this board");
+        assert_eq!((v["last"].as_u64(), v["more"].as_bool()), (Some(0), Some(false)), "{what}");
+    };
+    let refused = |under: String, what: &str| {
+        let (st, body) = changes_raw(port, None, &format!("since=0&under={under}"));
+        assert_eq!(st, 400, "{what}: {}", text(&body));
+        assert_eq!(json(&body)["error"].as_str(), Some("malformed_changes"), "{what}");
+    };
+
+    admitted(vec!["1"; UNDER_COMPONENT_CAP].join("."), "a tumbler at the depth cap");
+    refused(vec!["1"; UNDER_COMPONENT_CAP + 1].join("."), "one component past the depth cap");
+    admitted(format!("1.{}", "9".repeat(UNDER_DIGIT_CAP)), "a component at the digit cap");
+    refused(format!("1.{}", "9".repeat(UNDER_DIGIT_CAP + 1)), "one digit past the digit cap");
+
+    // The fence's top: `since` is a fence and not a position, so any number
+    // works — and `u64::MAX` is the one value for which the feed cannot form
+    // `since + 1`. Unguarded it panics in a debug build and, in release,
+    // wraps to the start of the feed and serves the whole history to a
+    // caller who asked for nothing past the top.
+    let v = changes_ok(port, None, &format!("since={}", u64::MAX));
+    assert_eq!(entry_ats(&v), Vec::<u64>::new(), "the top of the range is above every position");
+    assert_eq!(
+        (v["last"].as_u64(), v["more"].as_bool()),
+        (Some(u64::MAX), Some(false)),
+        "…and the fence is echoed, never wrapped to the start of the feed"
+    );
 
     sd.shutdown();
 }
@@ -731,8 +784,13 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
         let entries = v["changes"].as_array().expect("changes");
         let (tail, kept) = entries.split_last().expect("ten entries");
         assert!(
-            tail["op"].is_null() && tail["docs"].is_null() && tail["time"].is_null(),
-            "a lost record answers bare nulls: {tail}"
+            tail["op"].is_null()
+                && tail["docs"].is_null()
+                && tail["time"].is_null()
+                && tail["key"].is_null(),
+            "a lost record answers null in EVERY metadata field, `key` included: the \
+             null is RESERVED for lost testimony, and `\"bare\"` is a positive claim \
+             that this write was unsigned — one nobody made about it: {tail}"
         );
         let old: Value = serde_json::from_slice(&before).expect("json");
         assert_eq!(
@@ -923,11 +981,12 @@ fn pre_feature_positions_answer_bare_entries() {
     // into it), so the guest's page is the whole pre-feature history.
     let (st, body) = changes_raw(port, None, "since=0");
     assert_eq!(st, 200);
-    // Compared MODULO the wire-v7 `key` field (null on every bare entry),
-    // which lands in wire.md with lane 3.2's doc delta.
+    // BYTE-EXACT, which wire.md claims of this example alone: a bare
+    // position has no recorded time, so there is no field to normalize and
+    // nothing is excluded from the comparison.
     assert_eq!(
-        strip_keys(&json(&body)),
-        strip_keys(&serde_json::from_str(&doc_changes_block("bare")).expect("doc json")),
+        json(&body),
+        serde_json::from_str::<Value>(&doc_changes_block("bare")).expect("doc json"),
         "wire.md 'changes bare' example drifted from the daemon"
     );
     // Pre-feature commits have no recorded time: head_time is null.

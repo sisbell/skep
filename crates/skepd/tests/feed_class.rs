@@ -812,7 +812,15 @@ fn the_sidecars_recover_and_two_daemons_agree_per_class() {
             assert_eq!(positions(&got), positions(&want), "{label}: the visible positions, bare");
             assert_eq!((got["last"].as_u64(), got["more"].as_bool()), (want["last"].as_u64(), want["more"].as_bool()), "{label}: last/more");
             for e in got["changes"].as_array().expect("changes") {
-                assert!(e["op"].is_null() && e["docs"].is_null() && e["time"].is_null(), "{label}: a bare entry answers nulls: {e}");
+                assert!(
+                    e["op"].is_null()
+                        && e["docs"].is_null()
+                        && e["time"].is_null()
+                        && e["key"].is_null(),
+                    "{label}: a bare entry answers null in EVERY metadata field, `key` \
+                     included — the null is reserved for LOST testimony, where \
+                     `\"bare\"` would claim this write was unsigned: {e}"
+                );
             }
         }
         sd.shutdown();

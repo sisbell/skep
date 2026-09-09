@@ -40,6 +40,13 @@ fn changes_since(port: u16, since: u64) -> Vec<Value> {
     json(&body)["changes"].as_array().expect("changes").clone()
 }
 
+/// The one feed entry a write produced, off the head as it stood before it.
+fn one_entry(port: u16, before: u64, what: &str) -> Value {
+    let entries = changes_since(port, before);
+    assert_eq!(entries.len(), 1, "{what}: one write, one entry: {entries:?}");
+    entries[0].clone()
+}
+
 /// Assert a PERMANENT store refusal carrying neither `detail` nor `site`.
 fn refused(v: &Value, code: &str) {
     let rej = expect_resp(v, "rejected");
@@ -348,13 +355,25 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
 
     // A deposit into the BARE address while a draft is staged off m1: it
     // lands in the head m1 (PUB-2.66), minted under doc 1's own chain.
+    let before_deposit = head(port);
     let z = acked_addr(&op(port, Some(&signed), &insert(CLAIMANT_DOC1, 2, "z", true)));
     assert_eq!(z, "1.0.1.0.1.0.1.2", "minted under the document's own content chain");
     assert_eq!(content_extent(port, &m1), 2, "the head's arrangement grew");
     assert_eq!(text(port, &m1, 2, 1), "z");
     assert_eq!(content_extent(port, CLAIMANT_DOC1), 2, "and the bare address floats to it");
-    // The feed names the address written to; the arrangement that changed
-    // is the head's.
+    // wire.md §The change feed: a declared deposit "names the address the
+    // `insert` was written to, though the arrangement it lands in is the
+    // chain's head member". Here the two DIFFER — written to the bare
+    // address, landed in m1 — so naming what CHANGED is a distinguishable
+    // answer, and the one a client watching its own address never sees.
+    let entry = one_entry(port, before_deposit, "the deposit at the bare address");
+    assert_eq!(entry["op"].as_str(), Some("insert"));
+    assert_eq!(
+        entry["docs"],
+        serde_json::json!([CLAIMANT_DOC1]),
+        "the address written to, not the head member it landed in"
+    );
+
     // The in-place refusal stands on every address of the chain (PUB-2.11):
     // an undeclared append, a declared write at an ARRANGED position of the
     // head, a delete of the member.
@@ -396,12 +415,18 @@ fn a_daughter_lands_under_its_base_and_a_deposit_lands_in_the_head_member() {
 
     // A deposit named by the PINNED member m1 lands in the head m2: m1 never
     // grows (PUB-2.66); the atom's identity is minted under m1's own chain.
+    let before_pinned = head(port);
     let y = acked_addr(&op(port, Some(&signed), &insert(&m1, 3, "y", true)));
     assert_eq!(y, format!("{m1}.0.1.1"));
     assert_eq!(content_extent(port, &m1), 2, "a pinned member's arrangement never grows");
     assert_eq!(content_extent(port, &m2), 3, "the head's did");
     assert_eq!(text(port, &m2, 3, 1), "y");
     assert_eq!(content_extent(port, CLAIMANT_DOC1), 3);
+    // The other direction, and the cell that fixes the rule as "the address
+    // NAMED": this deposit named the PINNED member m1 and grew m2, so an
+    // entry naming the head would name an address the frame never carried.
+    let entry = one_entry(port, before_pinned, "the deposit at the pinned member");
+    assert_eq!(entry["docs"], serde_json::json!([m1]), "the pinned address, not the head m2");
 
     // The base's shape, each a permanent refusal and a clean no-op: once a
     // member exists the memberless base and the birth shape are superseded

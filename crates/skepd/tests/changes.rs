@@ -820,13 +820,13 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
     }
 }
 
-/// A RECORDED position naming a document this daemon cannot read answers as
-/// a BARE one — op, docs, time and key all null — and its op, its time and
-/// the FINGERPRINT of the key whose session committed it are not disclosed.
+/// A RECORDED position carrying a MALFORMED document name answers as a BARE
+/// one — op, docs, time and key all null — and its op, its time and the
+/// FINGERPRINT of the key whose session committed it are not disclosed.
 ///
 /// `commits.log` is a trust boundary: an operator's edit, or a build whose
 /// address rendering differs, and its `docs` array replays as arbitrary
-/// strings. Left recorded, a list none of whose names read classifies the
+/// strings. Left recorded, a list none of whose names parse classifies the
 /// position EMPTY — and an empty class is a `[]`-docs entry, which is never
 /// masked, so the write is served to EVERY class carrying that testimony.
 /// Demoted, it discloses its position alone, the residue a position the
@@ -836,7 +836,7 @@ fn sidecar_survives_restart_truncates_torn_tail_and_bares_lost_records() {
 /// daemon refuses is a HALF-RECORDED position, exactly as `parse_line`
 /// already refuses a line carrying some of those three and not the others.
 #[test]
-fn a_position_naming_an_unreadable_document_answers_bare() {
+fn a_position_carrying_a_malformed_document_name_answers_bare() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sidecar_path = dir.path().join("commits.log");
     {
@@ -845,7 +845,7 @@ fn a_position_naming_an_unreadable_document_answers_bare() {
         sd.shutdown();
     }
 
-    // Make the LAST document-naming record's docs unreadable — the seeded
+    // Make the LAST document-naming record's docs MALFORMED — the seeded
     // `make_link` into principal 1's PRIVATE draft, so the mask is what the
     // demotion is protecting. `1.0` is a dotted decimal that is not an
     // address (T4 refuses a trailing zero), so the LINE still parses as a
@@ -883,7 +883,7 @@ fn a_position_naming_an_unreadable_document_answers_bare() {
                 && entry["docs"].is_null()
                 && entry["time"].is_null()
                 && entry["key"].is_null(),
-            "{what}: a position whose names this daemon cannot read stands behind \
+            "{what}: a position whose names this daemon cannot parse stands behind \
              none of its testimony — not its op, not its time, and not the \
              fingerprint of the key whose session committed it: {entry}"
         );
@@ -891,7 +891,7 @@ fn a_position_naming_an_unreadable_document_answers_bare() {
         assert!(
             !entry_ats(&g).contains(&at),
             "{what}: and a draft write is not unmasked by testimony this daemon \
-             cannot read: {:?}",
+             cannot parse: {:?}",
             entry_ats(&g)
         );
     };
@@ -908,7 +908,7 @@ fn a_position_naming_an_unreadable_document_answers_bare() {
     // And with the index gone, so no derived file rescues the class: the
     // position classifies from the JOURNAL (the bare path, PUB-6.45) and
     // still discloses none of its testimony. This is the leg where the
-    // defect lives — a class none of whose names read is EMPTY, and an
+    // defect lives — a class none of whose names parse is EMPTY, and an
     // empty class is a `[]`-docs entry, which is never masked.
     std::fs::remove_file(dir.path().join("feed-index.log")).expect("drop the derived index");
     {

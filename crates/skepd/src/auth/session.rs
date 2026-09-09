@@ -12,7 +12,7 @@ use skep_febe::SessionId;
 use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
-use super::{bare_origins, signed_origins, AuthConfig, Origin};
+use super::{bare_origins, signed_origins, AuthConfig, Mode, Origin};
 use crate::codec::{check_keys, hex_nibble, hex_string};
 use crate::World;
 use skep_address::Address;
@@ -272,9 +272,9 @@ pub(crate) enum GuestReason {
 
 // ── bare_bind_allowed & resolve (AUTH-4.26–4.31) ─────────────────────────
 
-/// The bare-bind predicate's three-valued answer; the MODE conjunct is
-/// tested FIRST (AUTH-4.27) — mode is the monotone conjunct, so a cell
-/// where both conjunct classes fail answers `ModeRefused`.
+/// The bare-bind predicate's three-valued answer; the board's MODE is
+/// tested FIRST (AUTH-4.27), so a cell where both the mode and the request
+/// would refuse answers `ModeRefused`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BareBind {
     Allowed,
@@ -284,17 +284,16 @@ pub(crate) enum BareBind {
 
 /// AUTH-4.26 — the ONE home of the bare-bind rule: loopback peer, origin
 /// header ok (absent ⇒ ok; present ⇒ parses AND in the BARE set; `null`
-/// parses to nothing ⇒ refused), and not ENFORCING (`!claimed ||
-/// local_trust` — bare binds are honored in UNCLAIMED and
-/// CLAIMED-PERMISSIVE, never in ENFORCING).
+/// parses to nothing ⇒ refused), and the board's [`Mode`] not ENFORCING —
+/// bare binds are honored in UNCLAIMED and CLAIMED-PERMISSIVE, never in
+/// ENFORCING.
 pub(crate) fn bare_bind_allowed(
     cfg: &AuthConfig,
     peer: Peer,
     origin_hdr: Option<&str>,
     claimed: bool,
 ) -> BareBind {
-    let enforcing = claimed && !cfg.local_trust;
-    if enforcing {
+    if Mode::of(cfg, claimed) == Mode::Enforcing {
         return BareBind::ModeRefused;
     }
     if !peer.is_loopback() {
@@ -574,7 +573,7 @@ mod tests {
         assert!(!ch.burn(&n3, PrincipalId(7), now + Duration::from_secs(1)), "single use");
     }
 
-    /// AUTH-4.26 — the bare-bind cells, the MODE conjunct first: a loopback
+    /// AUTH-4.26 — the bare-bind cells, the board's MODE first: a loopback
     /// peer at an admitted origin is refused in ENFORCING, and a
     /// non-loopback peer or an unadmitted origin is refused for THIS
     /// REQUEST, which is not death.
@@ -607,20 +606,25 @@ mod tests {
                 );
             }
         }
-        // ENFORCING answers the MODE refusal FIRST, so a cell where both
-        // conjunct classes would fail still answers `ModeRefused`.
-        let enforcing = cfg_at(8642, false);
+        // The claimed board with the flag off is ENFORCING, which answers
+        // the MODE refusal FIRST — so a cell where both the mode and the
+        // request would refuse still answers `ModeRefused`. The same config
+        // reads UNCLAIMED before the claim, which is the last cell.
+        let enforcing_cfg = cfg_at(8642, false);
+        assert_eq!(Mode::of(&enforcing_cfg, true), Mode::Enforcing);
+        assert_eq!(Mode::of(&enforcing_cfg, false), Mode::Unclaimed, "the flag is not consulted");
+        assert_eq!(Mode::of(&cfg, true), Mode::ClaimedPermissive, "claimed with the flag on");
         assert_eq!(
-            bare_bind_allowed(&enforcing, Peer::Loopback, Some(&dialed), true),
+            bare_bind_allowed(&enforcing_cfg, Peer::Loopback, Some(&dialed), true),
             BareBind::ModeRefused,
-            "the mode conjunct is monotone and is tested first"
+            "the mode is tested first"
         );
         assert_eq!(
-            bare_bind_allowed(&enforcing, Peer::Remote, Some("null"), true),
+            bare_bind_allowed(&enforcing_cfg, Peer::Remote, Some("null"), true),
             BareBind::ModeRefused
         );
         assert_eq!(
-            bare_bind_allowed(&enforcing, Peer::Loopback, None, false),
+            bare_bind_allowed(&enforcing_cfg, Peer::Loopback, None, false),
             BareBind::Allowed,
             "pre-claim the flag is not consulted"
         );

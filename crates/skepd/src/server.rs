@@ -124,9 +124,9 @@
 //! sidecars, the supplement merge and the two narrowings (`under=`,
 //! `drafts=true`); `write_path.rs` owns the ordering that makes the
 //! sidecar's invariants true. What this file adds is the query's parse,
-//! the requester's visible stream KEY SET — resolved once per request off
-//! ONE head snapshot and threaded down (PUB-6.40) — the marshal, and
-//! `/health`'s `head_time`.
+//! the requester's FEED CLASS — resolved once per request off ONE head
+//! snapshot and threaded down (PUB-6.40) — the marshal, and `/health`'s
+//! `head_time`.
 //!
 //! **The served client (wire v6, `client` feature, default OFF)**: `GET /`
 //! answers the embedded authoring client (`skep/clients/board.html`,
@@ -1695,8 +1695,8 @@ impl Daemon {
     /// class-gated since v7.8) — the delta read: the committed positions in
     /// `(N, head]` the presented token's class may see, oldest first, from
     /// the feed. What this route adds over the feed's own paging is the
-    /// requester's VISIBLE STREAM KEY SET (PUB-6.40): resolved ONCE, off
-    /// ONE head snapshot — the read predicate at the requester's class, the
+    /// requester's FEED CLASS (PUB-6.40): resolved ONCE, off ONE head
+    /// snapshot — the read predicate at the requester's class, the
     /// requester's own and ancestor accounts (the subtree clause), its
     /// grant-selected issuers with their covered prefixes, and the live
     /// any-principal set (the universal term, principals alone) — and
@@ -1711,7 +1711,7 @@ impl Daemon {
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
         // ONE head snapshot per request (PUB-6.39, PUB-6.40): the predicate
-        // every entry is masked by and the key set the candidates come from
+        // every entry is masked by and the class the candidates come from
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
         let class = FeedClass::of(head.world(), resolved.principal());
@@ -1921,16 +1921,17 @@ fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
 /// A field that may appear at most ONCE — the never-silent rule applied to
 /// repeats, shared by the request head's headers and by every query this
 /// daemon reads, so a duplicate is a named refusal rather than a last-wins
-/// nobody chose. `noun` is the wire's word for the kind of field, which is
-/// all the header reader and the query parsers differ by.
+/// nobody chose. `field_kind` is the wire's word for the kind of field —
+/// `"header"` or `"parameter"` — which is all the header reader and the
+/// query parsers differ by.
 ///
 /// One home because the alternative is one literal name per field, kept in
 /// step with the slot it guards by inspection alone: a `since.is_some()`
 /// left standing in the `limit` arm accepts a repeated `limit` and refuses a
 /// `limit` that follows a `since`, and the shape compiles either way.
-fn at_most_once<T>(slot: &Option<T>, noun: &str, name: &str) -> Result<(), String> {
+fn at_most_once<T>(slot: &Option<T>, field_kind: &str, name: &str) -> Result<(), String> {
     match slot {
-        Some(_) => Err(format!("duplicate {noun} '{name}'")),
+        Some(_) => Err(format!("duplicate {field_kind} '{name}'")),
         None => Ok(()),
     }
 }

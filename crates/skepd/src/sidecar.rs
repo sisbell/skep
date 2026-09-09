@@ -175,9 +175,10 @@ pub(crate) struct CommitsLog {
     file: File,
     /// Every enumerable position above `min_since`, in order — and every one
     /// of them this file stands behind: `Recorded` means testimony whose
-    /// document names this daemon has READ, [`demote_unreadable`] having
-    /// demoted the rest at open. So a consumer that renders a `Recorded`
-    /// entry, or classifies by its names, needs no second check of its own.
+    /// document names this daemon has PARSED, [`demote_malformed_names`]
+    /// having demoted the rest at open. So a consumer that renders a
+    /// `Recorded` entry, or classifies by its names, needs no second check of
+    /// its own.
     pub entries: BTreeMap<u64, CommitMeta>,
     /// Each entry's line's byte offset in the file — the offset array's
     /// in-memory twin (PUB-7.19), learned from the replay itself and
@@ -207,7 +208,7 @@ pub(crate) struct CommitsLog {
     pub min_since: u64,
     /// The journal head at open — the fence between replayed history and
     /// this uptime's commits. An ack carrying a position at or below it
-    /// (an idempotency-cache replay, `emit`'s incumbent ack) is never a
+    /// (an idempotency-memo replay, `emit`'s incumbent ack) is never a
     /// new commit and is never re-recorded.
     pub open_head: u64,
     /// Whether this open REWROTE the file — compaction to the journal's
@@ -360,9 +361,9 @@ impl CommitsLog {
             walked.retain(|w| w.at > min_since);
         }
         // The entries are final here, and this is where they become ones this
-        // file stands behind: a line whose document names cannot be read is
+        // file stands behind: a line whose document names are malformed is
         // testimony this daemon cannot repeat, and it answers BARE.
-        demote_unreadable(&mut entries);
+        demote_malformed_names(&mut entries);
         let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
         Ok((
             CommitsLog { file, entries, offsets, min_since, open_head: head, rewritten, last_time, len },
@@ -374,7 +375,7 @@ impl CommitsLog {
     /// offset the line landed at — when this call recorded a NEW position,
     /// `None` when it declined. Idempotent against replayed acks: a position
     /// at or below the open-time head, or one already recorded this uptime,
-    /// is an ack for an OLD commit (idempotency-cache hit, `emit`
+    /// is an ack for an OLD commit (idempotency-memo hit, `emit`
     /// incumbent) — re-recording it would invent a time.
     ///
     /// CALLER CONTRACT — call only while holding the daemon's
@@ -536,40 +537,41 @@ fn rewrite(
     Ok((file, offsets, out.len() as u64))
 }
 
-/// Demote every RECORDED position whose document names this daemon cannot
-/// read to a BARE one, before any of them leaves this file.
+/// Demote every RECORDED position whose document names are MALFORMED — not
+/// dotted-decimal addresses this daemon can parse — to a BARE one, before any
+/// of them leaves this file.
 ///
-/// A half-readable name list is a HALF-RECORDED position, and [`CommitMeta`]
+/// A half-parsing name list is a HALF-RECORDED position, and [`CommitMeta`]
 /// has no meaning for one: its two states are the whole vocabulary, and
 /// [`parse_line`] already ends trust at a line carrying some of
 /// `op`/`docs`/`time` and not the others. This is that discipline one level
-/// down — testimony this daemon cannot read is testimony it does not stand
+/// down — testimony this daemon cannot parse is testimony it does not stand
 /// behind — and it belongs here for the same reason it is STABLE: it is
 /// driven by this file, which is re-read whole at every open, rather than by
 /// a derived file whose coverage fence would carry the position past the
 /// check on the second open.
 ///
 /// What the demotion buys is the DISCLOSURE, and only that. A name list none
-/// of whose names read classifies the position EMPTY, and an empty class is
+/// of whose names parse classifies the position EMPTY, and an empty class is
 /// a `[]`-docs entry, which the feed's mask never masks — so left recorded, a
-/// write into an unnameable document is served to every class carrying its
-/// op, its wall-clock time, and the FINGERPRINT of the key whose session
-/// committed it. Demoted, it discloses its position alone, which is the
-/// residue this file already accepts for a position the journal cannot
-/// classify (PUB-6.52), and its wire entry is the reserved all-nulls
-/// rendering. A partly-readable list is the same species one step less
-/// visible: the mask would be computed over fewer documents than the write
-/// touched.
+/// write into a document whose name this build cannot parse is served to
+/// every class carrying its op, its wall-clock time, and the FINGERPRINT of
+/// the key whose session committed it. Demoted, it discloses its position
+/// alone, which is the residue this file already accepts for a position the
+/// journal cannot classify (PUB-6.52), and its wire entry is the reserved
+/// all-nulls rendering. A partly-parsing list is the same species one step
+/// less visible: the mask would be computed over fewer documents than the
+/// write touched.
 ///
 /// IN MEMORY ONLY. This file is the sole surviving record of those commits,
-/// so an unreadable name is never rewritten away over what may be one
-/// build's rendering.
+/// so a malformed name is never rewritten away over what may be one build's
+/// rendering.
 ///
 /// UNREACHABLE as built — the names are rendered from validated `Address`es
 /// by [`crate::feed::Feed::record`] and read back by [`parse_dotted`], which
 /// is that rendering's inverse — and the obligation keeping it so is held by
 /// nobody: the write path renders, this file stores, the feed's open parses.
-fn demote_unreadable(entries: &mut BTreeMap<u64, CommitMeta>) {
+fn demote_malformed_names(entries: &mut BTreeMap<u64, CommitMeta>) {
     let half_recorded: Vec<(u64, usize)> = entries
         .iter()
         .filter_map(|(at, meta)| match meta {
@@ -581,7 +583,7 @@ fn demote_unreadable(entries: &mut BTreeMap<u64, CommitMeta>) {
         })
         .collect();
     for (at, dropped) in half_recorded {
-        report_unreadable(SIDECAR_FILE, at, dropped);
+        report_malformed_names(SIDECAR_FILE, at, dropped);
         entries.insert(at, CommitMeta::Bare);
     }
 }
@@ -774,16 +776,17 @@ fn min_since_line(min_since: u64) -> Vec<u8> {
     line_bytes(obj(vec![("min_since", Value::Number(min_since.into()))]))
 }
 
-/// One line naming documents this daemon cannot read — the notice both
-/// halves of the feed's name-reading share: this file's own
-/// [`demote_unreadable`] and the derived index's read of the same names.
-/// `writeln!` to stderr rather than `eprintln!`, for [`CommitsLog::record`]'s
-/// reason: `eprintln!` PANICS when the stderr write fails, and a lost log
-/// pipe must not fail an open or a committed write's ack.
-pub(crate) fn report_unreadable(file: &str, at: u64, dropped: usize) {
+/// One line carrying document names this daemon cannot parse — the notice
+/// both halves of the feed's name-parsing share: this file's own
+/// [`demote_malformed_names`] and the derived index's read of the same
+/// names. `writeln!` to stderr rather than `eprintln!`, for
+/// [`CommitsLog::record`]'s reason: `eprintln!` PANICS when the stderr write
+/// fails, and a lost log pipe must not fail an open or a committed write's
+/// ack.
+pub(crate) fn report_malformed_names(file: &str, at: u64, dropped: usize) {
     let _ = writeln!(
         std::io::stderr(),
-        "skepd: {file} position {at} names {dropped} document(s) this daemon cannot read"
+        "skepd: {file} position {at} carries {dropped} malformed document name(s)"
     );
 }
 

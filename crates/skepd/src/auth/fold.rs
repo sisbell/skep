@@ -311,7 +311,7 @@ impl CredMemo {
     }
 
     /// A closed session takes its memo entries with it — the same
-    /// obligation M10's own `close_session` discharges for its cache.
+    /// obligation M10's own `close_session` discharges for its own memo.
     ///
     /// The ONE memo method that runs outside the credential write lock,
     /// and by necessity: it is reached from

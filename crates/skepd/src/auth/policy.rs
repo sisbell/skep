@@ -534,7 +534,7 @@ pub(crate) fn first_mint_private_refusal(
     }
 }
 
-// ── board_state_refusal — the two mode-complementary gates (AUTH-3.78) ───
+// ── board_state_refusal — the two CLAIM-complementary gates (AUTH-3.78) ──
 
 /// The publish gate's publication read — the engine's ONE definition (owner
 /// ruling D1, 2026-09-05): `published(trunk_of(doc))`, a membership miss on
@@ -894,7 +894,7 @@ fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
 // ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
 
 /// The plain path's ordered producers: the MINT class — the first-mint
-/// publication door then MINT-FIRST — then the mode-complementary board-state
+/// publication door then MINT-FIRST — then the CLAIM-complementary board-state
 /// pair, then the NULLIFY class. The ORDER is the pin, so it lives here with
 /// the producers rather than at the call site — the same treatment
 /// [`precheck`] gives the credential path's eight slots.
@@ -1083,7 +1083,7 @@ pub(crate) fn precheck(
             return Err(CredentialRefusal::AnchorSessionRequired);
         }
     }
-    // (7)/(8) — the mode-disjoint board-state slots.
+    // (7)/(8) — the claim-disjoint board-state slots.
     let claimed = identity.claimant().is_some();
     if claimed {
         // (7) — arm-blind: Genesis is NOT exempt here; a bare genesis

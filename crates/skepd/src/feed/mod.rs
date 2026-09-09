@@ -60,8 +60,8 @@
 //! covered prefixes for this principal (an account-depth grant is the
 //! stream whole); and the UNIVERSAL term, derived at serve — the position
 //! index's lists under each live any-principal prefix, enumerated once per
-//! request off the same head snapshot as the rest of the key set. The key
-//! set is `server.rs`'s to resolve, off ONE head snapshot per request
+//! request off the same head snapshot as the rest of the class. The CLASS
+//! is `server.rs`'s to resolve, off ONE head snapshot per request
 //! (PUB-6.40), and arrives here as [`FeedClass`]; this module resolves
 //! nothing itself. Guests never merge the universal term (PUB-5.109).
 //!
@@ -101,7 +101,7 @@ use self::derived::{
     DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
     STREAMS_OWNERS,
 };
-use crate::sidecar::{report_unreadable, CommitMeta, CommitsLog};
+use crate::sidecar::{report_malformed_names, CommitMeta, CommitsLog};
 use crate::write_path::SerialGuard;
 
 /// The most granted prefixes [`Inner::names_under`] scans per candidate
@@ -129,10 +129,10 @@ use crate::write_path::SerialGuard;
 /// which is that depth bound.
 const MAX_FILTERED_PREFIXES: usize = 64;
 
-/// The requester's VISIBLE STREAM KEY SET, resolved by the route off ONE
-/// head snapshot (PUB-6.40) and threaded down: the read predicate at the
-/// requester's class, the stream keys its class opens, and the universal
-/// term's live set. The feed evaluates it and resolves nothing of its own.
+/// The requester's FEED CLASS, resolved by the route off ONE head snapshot
+/// (PUB-6.40) and threaded down: the read predicate at the requester's
+/// class, the stream keys its class opens, and the universal term's live
+/// set. The feed evaluates it and resolves nothing of its own.
 pub(crate) struct FeedClass<'a> {
     /// The HEAD world every field below stands on: the one snapshot the
     /// route pinned for this request.
@@ -140,7 +140,7 @@ pub(crate) struct FeedClass<'a> {
     /// The requester this class is of — `None` is the guest.
     ///
     /// It and `world` are the whole input: [`FeedClass::of`] derives the
-    /// three key sets below from the pair and [`FeedClass::readable`]
+    /// three stream-key lists below from the pair and [`FeedClass::readable`]
     /// answers the mask off the same pair, so a class whose mask and whose
     /// stream keys belong to different principals is not constructible —
     /// the keys would open a principal's drafts while the mask refused all
@@ -262,7 +262,7 @@ struct Inner {
     /// `feed-streams.log` rather than from `docs`.
     ///
     /// No live commit produces that disagreement, and the two shapes that
-    /// could are edge: a `commits.log` line demoted for unreadable names,
+    /// could are edge: a `commits.log` line demoted for malformed names,
     /// whose entry is then BARE and discloses its position alone either way,
     /// and an edited file. NOT filtered against `docs` at open on purpose —
     /// the filter is a change to which entries a class sees, taken off a
@@ -327,7 +327,7 @@ impl Feed {
             let addrs = if addrs.len() == strings.len() {
                 addrs
             } else {
-                // A DERIVED record this daemon cannot read. Never trusted
+                // A DERIVED record this daemon cannot parse. Never trusted
                 // OVER the authority file — that is the derived layer's
                 // whole standing — so a recorded position answers from its
                 // own testimony instead, which `CommitsLog` stands behind
@@ -337,7 +337,7 @@ impl Feed {
                 // position by a smaller set than the write touched, and
                 // accepting an empty one would make it a `[]`-docs entry,
                 // which is never masked.
-                report_unreadable(INDEX_FILE, *at, strings.len() - addrs.len());
+                report_malformed_names(INDEX_FILE, *at, strings.len() - addrs.len());
                 match meta {
                     CommitMeta::Recorded { docs: authority, .. } => {
                         authority.iter().filter_map(|s| parse_dotted(s)).collect()
@@ -418,7 +418,7 @@ impl Feed {
 
         // ── the per-owner draft streams ──
         //
-        // An owner name this daemon cannot read is DROPPED here, and that is
+        // An owner name this daemon cannot parse is DROPPED here, and that is
         // the safe direction: the position leaves that owner's stream, so
         // their supplement is short by it and nothing is unmasked. The index
         // above cannot be lossy in the same way — a dropped DOCUMENT shortens

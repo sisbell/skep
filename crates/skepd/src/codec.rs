@@ -452,7 +452,7 @@ fn parse_value(v: Value) -> PResult<Request> {
     let mut fields = Fields(m);
     let name = fields.string("op")?;
     // The id is capped where it is minted, and before it is copied: M10
-    // retains it for the life of a cached write, so its LENGTH is the second
+    // retains it for the life of a memoized write, so its LENGTH is the second
     // factor in a retention bill nothing downstream bounds (see
     // [`MAX_REQ_ID_BYTES`]).
     let id = fields.req_id()?;
@@ -865,8 +865,8 @@ fn p_addr(v: &Value) -> PResult<Address> {
     validate(p_tum(v)?).map_err(|e| PErr(format!("not a T4-valid address: {e}")))
 }
 
-/// Guard a sub-object's key set; unknown keys fail like unknown envelope
-/// fields do.
+/// Guard which KEYS a sub-object may carry; unknown keys fail like unknown
+/// envelope fields do.
 fn p_obj<'a>(v: &'a Value, allowed: &[&str]) -> PResult<&'a Map<String, Value>> {
     let m = v.as_object().ok_or_else(|| PErr("expected a JSON object".into()))?;
     check_keys(m, allowed).map_err(PErr)?;
@@ -2099,7 +2099,7 @@ mod tests {
     }
 
     /// Both ends of the id cap. The id is the one frame field this daemon
-    /// never interprets and M10 nonetheless RETAINS — the idempotency cache
+    /// never interprets and M10 nonetheless RETAINS — the idempotency memo
     /// is keyed by it — so its length is the second factor in a retention
     /// bill nothing downstream bounds. The at-cap case is load-bearing: a
     /// `>` that became a `>=` would refuse a key a client legitimately sent.

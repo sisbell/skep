@@ -52,8 +52,8 @@ pub(crate) const MAX_LIVE_NONCES: usize = 4096;
 #[non_exhaustive]
 pub struct AuthOptions {
     /// Bare binds honored on loopback after the claim (CLAIMED-PERMISSIVE)
-    /// when true; ENFORCING when false. Pre-claim the flag is not consulted
-    /// (AUTH-4.26's mode conjunct short-circuits on `!claimed`).
+    /// when true; ENFORCING when false. Pre-claim the flag is not consulted:
+    /// the board is UNCLAIMED whatever it says ([`Mode::of`], AUTH-4.26).
     pub local_trust: bool,
     /// The CONFIGURED origin set — the signed arm's whole set once claimed;
     /// unioned with the loopback defaults on the bare arm.
@@ -112,6 +112,42 @@ impl AuthConfig {
     /// case out for itself.
     pub fn port(&self) -> Option<u16> {
         self.port.get().copied()
+    }
+}
+
+/// The board's MODE (wire.md §Identity: "the board is always in exactly one
+/// of three MODES, derived from two facts `GET /health` publishes"). The ONE
+/// place the corpus's three names are said in the code rather than
+/// re-derived as a conjunction of `claimed` and `local_trust`.
+///
+/// UNCLAIMED admits only the claim ceremony's own write shapes and honors
+/// bare loopback binds; CLAIMED-PERMISSIVE honors them still (the default's
+/// disclosed cost, which [`Warning::ClaimedWithLocalTrust`] names);
+/// ENFORCING refuses every bare session, so only signed sessions write.
+///
+/// Derived and never stored: the claim lives in the identity fold and the
+/// flag in [`AuthConfig`], so a mode value is always a reading of the pair
+/// as of one snapshot. The wire publishes the PAIR and deliberately no
+/// `mode` field (AUTH-6.13), which is why this type is the daemon's and not
+/// the wire's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    Unclaimed,
+    ClaimedPermissive,
+    Enforcing,
+}
+
+impl Mode {
+    /// The mode this config is in at a snapshot whose claim is `claimed` —
+    /// the pair, read once, so a caller states the mode it means rather than
+    /// the conjunction that computes it.
+    pub fn of(cfg: &AuthConfig, claimed: bool) -> Mode {
+        match (claimed, cfg.local_trust) {
+            // Pre-claim the flag is not consulted (AUTH-4.26).
+            (false, _) => Mode::Unclaimed,
+            (true, true) => Mode::ClaimedPermissive,
+            (true, false) => Mode::Enforcing,
+        }
     }
 }
 
@@ -481,7 +517,7 @@ impl fmt::Display for Warning {
 /// membership over config, one arm per offending origin.
 pub(crate) fn startup_warnings(cfg: &AuthConfig, claimed: bool) -> Vec<Warning> {
     let mut out = Vec::new();
-    if claimed && cfg.local_trust {
+    if Mode::of(cfg, claimed) == Mode::ClaimedPermissive {
         out.push(Warning::ClaimedWithLocalTrust);
     }
     if claimed && cfg.configured.is_empty() {

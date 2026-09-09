@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::Value;
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skepd::{serve, AuthOptions, Daemon, Origin, Skepd};
+use skepd::{serve, AuthOptions, Daemon, Origin, Skepd, DEFAULT_WORKERS};
 
 /// The credential type addresses this build allocates (AUTH-7.1 horn B):
 /// subspace 3 of the ghost document, ordinals enroll·retire·claim.
@@ -315,7 +315,7 @@ pub fn spawn_configured(dir: &Path, local_trust: bool) -> Skepd {
     let daemon = Daemon::open_with(dir, opts).expect("daemon open (genesis or recover)");
     // The reservation held through the slow open; only the rebind gap races.
     drop(reserved);
-    serve(daemon, port, 4).expect("bind the reserved port")
+    serve(daemon, port, DEFAULT_WORKERS).expect("bind the reserved port")
 }
 
 /// Spawn a daemon and CLAIM its board: under the pre-claim admission gate
@@ -331,7 +331,7 @@ pub fn spawn(dir: &Path) -> Skepd {
 /// Spawn without claiming — the AUTH suites drive the window itself.
 pub fn spawn_unclaimed(dir: &Path) -> Skepd {
     let daemon = Daemon::open(dir).expect("daemon open (genesis or recover)");
-    serve(daemon, 0, 4).expect("bind an ephemeral port")
+    serve(daemon, 0, DEFAULT_WORKERS).expect("bind an ephemeral port")
 }
 
 /// Client-side socket timeout: a daemon that wedges must fail the exchange

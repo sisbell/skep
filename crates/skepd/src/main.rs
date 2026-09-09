@@ -5,10 +5,12 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-use skepd::{serve, AuthOptions, Daemon, Origin};
+// `DEFAULT_WORKERS` is the LIBRARY's, not this binary's: it is the third
+// term of a relation whose other two are the daemon's permit pools, and the
+// library holds the assertion that keeps the three in step.
+use skepd::{serve, AuthOptions, Daemon, Origin, DEFAULT_WORKERS};
 
 const DEFAULT_PORT: u16 = 8642;
-const DEFAULT_WORKERS: usize = 4;
 
 /// One environment setting: the variable's name and what its value must be,
 /// paired so the two cannot be handed over in the wrong order — the same

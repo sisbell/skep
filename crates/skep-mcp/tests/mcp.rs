@@ -17,7 +17,7 @@ use std::time::Duration;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use skep_identity::{encode_enroll, framed, Enrollment, PublicKey, SESSION_TAG};
-use skepd::{serve, Daemon, Skepd};
+use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free) ────────────────────────
 
@@ -254,7 +254,7 @@ fn provision_principal_1(port: u16) -> String {
 
 fn spawn_daemon(dir: &Path, port: u16) -> Skepd {
     let daemon = Daemon::open(dir).expect("daemon open (genesis or recover)");
-    serve(daemon, port, 4).expect("bind")
+    serve(daemon, port, DEFAULT_WORKERS).expect("bind")
 }
 
 // ── the adapter under test ───────────────────────────────────────────────

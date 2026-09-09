@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use skepd::fuzz_support::{mutate, splitmix64};
-use skepd::{serve, Daemon, Skepd};
+use skepd::{serve, Daemon, Skepd, DEFAULT_WORKERS};
 
 // ── a self-owned temp dir (kept dependency-free, mirroring mcp.rs) ──────────
 
@@ -59,7 +59,7 @@ impl Drop for TempDir {
 
 fn spawn_daemon(dir: &Path) -> Skepd {
     let daemon = Daemon::open(dir).expect("daemon open");
-    serve(daemon, 0, 4).expect("bind ephemeral port")
+    serve(daemon, 0, DEFAULT_WORKERS).expect("bind ephemeral port")
 }
 
 // ── the adapter under test, storm-driven ────────────────────────────────────

@@ -35,6 +35,13 @@
 //!   (PUB-7.20 — for a position it does not hold, the bitmap is a skip
 //!   accelerator and never the authority); a stream a position is missing
 //!   from is a supplement short by it.
+//! * a GAP is what coverage cannot describe, so no file is left holding one:
+//!   the first failed append STOPS its file for the uptime
+//!   ([`DerivedFile`]'s `stopped`), so the on-disk claim stays below the
+//!   position that was lost and the next open re-derives from there. Without
+//!   it a later successful append raises coverage past the gap, and the
+//!   position reads as one that contributed nothing — which for
+//!   `feed-index.log` is a `[]`-docs entry, and those are never masked.
 //! * appends are flushed to the OS, not fsynced (the trade `commits.log`
 //!   makes: testimony never doubles a write's fsync); a rewrite goes to
 //!   `<file>.compact` and is renamed over the original — whole old file or
@@ -97,6 +104,20 @@ pub(crate) struct DerivedFile {
     dir: PathBuf,
     name: &'static str,
     coverage: u64,
+    /// Set by the first FAILED [`DerivedFile::append`] of this uptime, after
+    /// which this file takes no further line and no fence.
+    ///
+    /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
+    /// cannot close: a position at or below coverage with no record reads as
+    /// "contributed nothing", which for `feed-index.log` is a `[]`-docs entry
+    /// and so is never masked. A failed append leaves coverage where it
+    /// stands, and the NEXT successful one would raise it past the gap — so
+    /// the file stops instead, its on-disk coverage stays below the failure,
+    /// and the next open's tail derivation re-covers the failure and every
+    /// position after it from `commits.log`. The resident twin is updated
+    /// ahead of every append, so this uptime still answers correctly; what
+    /// stops is the testimony, which is what the next open reads.
+    stopped: bool,
 }
 
 /// The ENTRIES a derived file replays — its position-carrying records,
@@ -130,7 +151,8 @@ impl DerivedFile {
                 Record::Fence(_) | Record::Entry(..) => foreign = true,
             }
         }
-        let mut this = DerivedFile { file, dir: dir.to_path_buf(), name, coverage };
+        let mut this =
+            DerivedFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
             let kept = entries
@@ -152,16 +174,27 @@ impl DerivedFile {
     /// Append one record for `at` with the file's own fields, in the shape
     /// [`record_object`] fixes — so an appended line and the rewritten line
     /// that reproduces it are one spelling rather than two that must agree.
+    ///
+    /// A file [`DerivedFile::stopped`] closed takes nothing and answers `Ok`:
+    /// the failure was reported once, at the append that raised it, and this
+    /// file's on-disk coverage must not rise past the gap it left.
     pub fn append(&mut self, at: u64, fields: Vec<(&'static str, Value)>) -> io::Result<()> {
-        self.file.write_all(&line_bytes(record_object(at, fields)))?;
+        if self.stopped {
+            return Ok(());
+        }
+        if let Err(e) = self.file.write_all(&line_bytes(record_object(at, fields))) {
+            self.stopped = true;
+            return Err(e);
+        }
         self.coverage = self.coverage.max(at);
         Ok(())
     }
 
     /// Append the coverage fence `{"covered":N}` — a no-op when the file
-    /// already covers `covered`.
+    /// already covers `covered`, and a no-op on a stopped file, whose
+    /// coverage claim must stay below the position it lost.
     pub fn fence(&mut self, covered: u64) -> io::Result<()> {
-        if covered <= self.coverage {
+        if self.stopped || covered <= self.coverage {
             return Ok(());
         }
         self.file.write_all(&fence_line(covered))?;
@@ -255,6 +288,19 @@ fn parse_line(line: &[u8]) -> Option<Record> {
 }
 
 #[cfg(test)]
+impl DerivedFile {
+    /// A [`DerivedFile`] whose appends FAIL — a READ-ONLY handle on the file
+    /// in `dir` — which is the one condition the stop rule is about and the
+    /// one no portable test can produce from [`DerivedFile::open`]'s handle.
+    fn over_unwritable(dir: &Path, name: &'static str, coverage: u64) -> DerivedFile {
+        let path = dir.join(name);
+        File::create(&path).expect("create the file to be opened read-only");
+        let file = File::open(&path).expect("a read-only handle");
+        DerivedFile { file, dir: dir.to_path_buf(), name, coverage, stopped: false }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -312,5 +358,45 @@ mod tests {
         // rewrite that cannot (its keys came off disk), so the two spellings
         // are held together here or nowhere.
         assert_eq!(purged, contents, "a rewritten line is the appended line");
+    }
+
+    /// A file whose append FAILS takes nothing further, so its on-disk
+    /// coverage cannot rise past the position it lost.
+    ///
+    /// Coverage is `max(fence, highest record)` and a position at or below it
+    /// with no record means "contributed nothing". Left running, the NEXT
+    /// successful append raises the claim over the gap, and the next open's
+    /// tail derivation starts above it and never revisits it — which for
+    /// `feed-index.log` classifies the position EMPTY, and an empty class is
+    /// a `[]`-docs entry the mask never masks: a draft write served to every
+    /// requester, carrying its op, its wall-clock time and the fingerprint of
+    /// the key that signed it, permanently.
+    #[test]
+    fn a_failed_append_stops_its_file_so_coverage_never_covers_the_gap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut f = DerivedFile::over_unwritable(dir.path(), INDEX_FILE, 9);
+
+        assert!(f.append(10, vec![]).is_err(), "a read-only handle refuses the line");
+        assert_eq!(f.coverage(), 9, "and the refused position does not raise the claim");
+
+        // The position AFTER the gap: accepted as an outcome, written
+        // nowhere, and — the whole point — not counted as covered.
+        f.append(11, vec![(INDEX_DOCS, Value::Array(vec![]))])
+            .expect("a stopped file reports its failure once, at the append that raised it");
+        assert_eq!(f.coverage(), 9, "a stopped file's coverage stays where the gap left it");
+        f.fence(20).expect("a fence on a stopped file is a no-op");
+        assert_eq!(f.coverage(), 9, "…and does not close the check over the gap either");
+        assert_eq!(
+            std::fs::read(dir.path().join(INDEX_FILE)).expect("read"),
+            Vec::<u8>::new(),
+            "nothing reached the file after the failure"
+        );
+
+        // What the next open therefore sees: coverage 9, so its tail
+        // derivation re-covers 10 and everything above it.
+        drop(f);
+        let (reopened, entries) = DerivedFile::open(dir.path(), INDEX_FILE, 20).expect("reopen");
+        assert!(entries.is_empty());
+        assert_eq!(reopened.coverage(), 0, "an empty file claims nothing");
     }
 }

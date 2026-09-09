@@ -945,11 +945,14 @@ fn classify_bare(engine: &Engine, log: &CommitsLog, at: u64) -> Option<Vec<Addre
     Some(derived_docs(&below, &above))
 }
 
-/// A derived append that failed: reported, never a failed op — the twin is
-/// right for this uptime and the next open's tail check re-derives the
-/// line. An `Ok` writes nothing, so a busy board's stderr carries the
-/// failures alone. `writeln!` rather than `eprintln!`, for `sidecar.rs`'s
-/// reason (a lost log pipe must not panic a committed write's ack).
+/// A derived append that failed: reported, never a failed op — the resident
+/// twin is right for this uptime, the file stops taking lines
+/// ([`DerivedFile`]'s own `stopped` states why), and the next open's tail
+/// derivation re-covers this position and every one after it. So ONE notice
+/// per file per uptime: the appends behind a stopped file answer `Ok` and
+/// write nothing, and a busy board's stderr carries the first failure alone.
+/// `writeln!` rather than `eprintln!`, for `sidecar.rs`'s reason (a lost log
+/// pipe must not panic a committed write's ack).
 fn report_append_failure(r: io::Result<()>, file: &str, at: u64) {
     if let Err(e) = r {
         let _ = writeln!(std::io::stderr(), "skepd: {file} append failed at position {at}: {e}");

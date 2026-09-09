@@ -74,16 +74,14 @@
 //!
 //! **The class-scan bound (wire v7.9; PUB-8.36, PUB-8.37 — PUB round 2,
 //! lane 3.7)**: `/op` admits at most [`MAX_CONCURRENT_CLASS_SCANS`]
-//! CLASS-SCAN-shaped reads at once — an FTT query (`find_links_ftt`,
-//! `count_ftt`, `window_ftt`) whose four-set constrains `ty` and no other
-//! slot, the population "the whole type class" (PUB-6.54's directory shape
-//! and its siblings), or constrains `home` alone, which hands M7 no
-//! constraint at all and so takes that same whole-store candidate set with a
-//! residence test on top. [`ClassScans`] is the whole bound on one card —
-//! the shape test, the pool, and the admission that takes the permit after
-//! the parse and the session read and before M10 is asked, so a refused
-//! request costs the parse alone and an admitted one holds its slot for the
-//! WHOLE answer. The pool is a second instance of history's
+//! CLASS-SCAN-shaped reads at once — the reads that walk the LINK STORE END
+//! TO END, which as M7 is built is every link-discovery read there is
+//! ([`is_class_scan`] enumerates them and states why the shape of a query
+//! does not narrow one). [`ClassScans`] is the whole bound on one card — the
+//! op test, the pool, and the admission that takes the permit after the
+//! parse and the session read and before M10 is asked, so a refused request
+//! costs the parse alone and an admitted one holds its slot for the WHOLE
+//! answer. The pool is a second instance of history's
 //! [`crate::history::Permits`], disjoint from the reconstruction pool — a
 //! scan spends no reconstruction permit and a reconstruction spends no scan
 //! permit. The bound admits or refuses a REQUEST (`503 scan_busy`,
@@ -148,7 +146,6 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_discovery::SlotSpec;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
     Codec, Disposition, FaultSite, Op, Operation, OpKind, RejectCode, Rejection, Request,
@@ -195,24 +192,59 @@ const CHECKPOINT_EVERY_COMMITS: u64 = 1024;
 const RETAINED_CHECKPOINTS: usize = 2;
 
 /// Concurrent CLASS SCANS admitted at `/op` at once (wire v7.9; PUB-8.36,
-/// PUB-8.37): FTT queries whose four-set constrains `ty` alone, or `home`
-/// alone — [`is_class_scan`] — each of which enumerates a whole type class,
-/// or the whole active slice, and pays a per-candidate home test over every
-/// link in it (PUB-6.56: the home-granular skip does not reach a query whose
-/// constrained slot is not the home), repeatable at will from any
-/// unauthenticated peer. The
-/// reconstruction pool's own number (`MAX_CONCURRENT_RECONSTRUCTIONS`), for
-/// the same reason it is that pool's: two keep directories serviceable
-/// without letting a stranger's scans occupy the worker pool. The wire names
-/// it as a constant the daemon may raise later — a configuration question,
-/// not this bound's.
+/// PUB-8.37): the link-discovery reads [`is_class_scan`] enumerates, each of
+/// which walks the LINK STORE END TO END — M7's `stab` is "a brute scan of
+/// `links`" and `match_links` drives its first constraint through it — and
+/// pays a span comparison per link whose count the REQUEST sizes, repeatable
+/// at will from any unauthenticated peer.
 ///
-/// ONE pool for the board: global across the three FTT forms, across every
+/// The reconstruction pool's own number
+/// ([`crate::history::MAX_CONCURRENT_RECONSTRUCTIONS`]), for the same reason
+/// it is that pool's: two keep directories serviceable without letting a
+/// stranger's scans occupy the worker pool. The wire names it as a constant
+/// the daemon may raise later — a configuration question, not this bound's,
+/// and one the OWNER owes a number for now that the bound covers the region
+/// family a board's own reading pane calls on every scroll.
+///
+/// ONE pool for the board: global across every bounded form, across every
 /// type class, and across every session and the guest (a stranger is the
 /// case). DISJOINT from the reconstruction pool — a second instance of
 /// [`Permits`], never a share of the first — so history panes and mirror
 /// bootstraps are never starved by directory scans, nor the reverse.
+///
+/// The SUM of this and the reconstruction pool must leave a worker free:
+/// [`DEFAULT_WORKERS`] carries that relation and the assertion that holds it.
 pub(crate) const MAX_CONCURRENT_CLASS_SCANS: usize = 2;
+
+/// The request worker count `skepd` serves with when the operator names
+/// none — held HERE rather than in the binary because it is the THIRD TERM
+/// of a budget the other two are meaningless without.
+///
+/// The two permit pools bound the two expensive read surfaces, and each
+/// card argues its own number against the work that surface commands.
+/// Neither prices the SUM, and the sum is what decides whether the bounds
+/// do the thing they exist for: a caller holding every permit of both pools
+/// is inside both bounds, and if that exhausts the workers the daemon
+/// answers nothing — `/health` and `/session` included — with every
+/// structure inside it healthy. The relation is therefore
+/// `reconstructions + class scans < workers`, and the assertion below is
+/// what keeps it from being arithmetic a reader has to do across two files.
+///
+/// Four pooled slots plus two free is the smallest split that keeps the
+/// liveness probe, the handshake and the write path answerable while both
+/// pools are saturated. Two free suffice because an ordinary request
+/// completes in milliseconds, where a pooled one is a whole-store scan or a
+/// whole-world replay.
+///
+/// An embedder calling [`serve`] with its own count owes the same relation;
+/// nothing here can check theirs, and `serve`'s own card says so.
+pub const DEFAULT_WORKERS: usize = 6;
+
+const _: () = assert!(
+    crate::history::MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS < DEFAULT_WORKERS,
+    "the two permit pools must leave a worker free at the shipped default: a caller \
+     inside both bounds would otherwise occupy every worker"
+);
 
 /// The class-scan bound, whole (wire v7.9; PUB-8.36, PUB-8.37): what counts
 /// as a class scan ([`is_class_scan`]), how many run at once
@@ -270,49 +302,68 @@ impl ClassScans {
     }
 }
 
-/// THE SHAPE TEST (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36; lane 3.7 §1) —
-/// the one statement of what counts as a CLASS SCAN, cited from the wire's
-/// `find_links_ftt` entry: an FTT form (`find_links_ftt`, `count_ftt`,
-/// `window_ftt`) whose four-set `q` constrains `ty` and NO OTHER slot —
-/// `home`, `from` and `to` all `"any"`. That is the population "the whole
-/// type class": PUB-6.54's `{ty: T_grant, home/from/to: any}` and its
-/// siblings, where M8 hands M7 the type constraint alone and pays the
-/// per-candidate home test over every link of the class.
+/// THE CLASS-SCAN TEST (wire v7.9; PUB-6.54, PUB-6.56, PUB-8.36; lane 3.7
+/// §1) — the one statement of what the pool bounds. As M7 is BUILT that is
+/// the OP and never the shape of the query: `LinkState::stab` is "a brute
+/// scan of `links` reading each endset's spans — trivially correct, O(n)",
+/// and `LinkState::match_links` drives its FIRST constraint through it and
+/// narrows the survivors with the rest. So there is no index for a narrow
+/// slot to be pinned against, and every read that reaches either primitive
+/// walks the whole store however its slots are spelled.
 ///
-/// A SHAPE, not a type list: any class queried that way is bounded, grant or
-/// otherwise, so a class a later round adds is bounded with no edit here.
-/// The all-`"any"` query — the whole store — IS a class scan (the shape's
-/// superset). A query constraining a second LINK slot (`from` or `to`) is
-/// NOT one and takes no permit: the narrowest-slot pins bound it (PUB-7.45).
-/// Nothing else about the query is read — not the class, not the cursor, and
-/// not whether M8 would answer it off its own slots (a `ty` of `"empty"`
-/// annihilates before M7 is asked; it is class-scan-shaped all the same, and
-/// its permit is back in the pool a moment later). Every other op answers
-/// `false`.
+/// THE POPULATION, by cost, each citing what it reaches:
 ///
-/// `home` IS NOT ONE OF THOSE SLOTS, and a four-set constraining it alone is
-/// the same population under a second spelling: M8's `link_constraints`
-/// hands M7 `from`/`to`/`ty` and never the home, so a home-only descriptor
-/// hands M7 NO constraint, takes the whole active slice as its candidate set
-/// exactly as the all-`"any"` query does, and pays a residence test per link
-/// on top of it. M8 states the outcome itself — "a home-only query degrades
-/// to a full active scan, accepted" — so the home-spelled query costs
-/// strictly more than the wildcard one the shape above already bounds, and
-/// is bounded here beside it.
+/// * the FTT family (`find_links_ftt`, `count_ftt`, `window_ftt`) — ONE
+///   scan, at `|query spans| × |slot spans|` per link, with the span count
+///   and each span's start tumbler the REQUEST's. The all-`"any"` query is
+///   `match_links`' unconstrained branch, `scan(view, |_| true)`, one
+///   residence lookup per link and NO span comparison, so it is the
+///   CHEAPEST member: a query constraining a second slot is that scan plus
+///   work, never less;
+/// * the region family (`find_links_v`, `count_v`, `window_v`,
+///   `retrieve_endsets`) — THREE scans, M8's `stab_runs_by_slot` stabbing
+///   `from`, `to` and `ty` separately, each at up to
+///   [`skep_discovery::MAX_IMAGE_RUNS`] query spans per link. That constant
+///   caps the image and assigns what it cannot reach — "`#runs(d)` and
+///   `|links|` are the WORLD's … they stay with request rate and
+///   concurrency, which are M10's" — to this seat;
+/// * `delete_orphans` — SIX, two `stab_runs` over the deleted and the
+///   retained runs, and the dearest read on the surface: it takes no owner
+///   gate by design, so every asker reaches it on any registered document;
+/// * `in_claims`, `out_claims`, `edition_claims` — ONE each, a `match_links`
+///   at a single-span query, behind a residence or registration gate. The
+///   query span count is not the request's, but the STORE walk is the same
+///   walk, and it is strictly dearer per link than the all-`"any"` query
+///   above.
+///
+/// NOTHING ELSE IS BOUNDED, and each absence is a fact about the read rather
+/// than a judgement: `image`, `project` and `discoverable_from` reach M5 or
+/// one `readlink`; `read_link` and `follow_link` are lookups; the M6 family
+/// (`retrieve_v`, `compare`, `show_deletions`, `find_docs_containing`,
+/// `show_origin`) and the M3 reads touch no link store at all.
+///
+/// NOT exhaustive over `Op` (41 variants against 11), so a new READ that
+/// walks the link store must be added by hand — `write_meta`'s table, which
+/// the compiler does force, reaches writes alone. Nothing about a query is
+/// read here: not the class, not the cursor, not the slots, and not whether
+/// M8 would answer it off its own descriptor (a `ty` of `"empty"`
+/// annihilates before M7 is asked; it is bounded all the same, and its
+/// permit is back in the pool a moment later).
 fn is_class_scan(op: &Op) -> bool {
-    let q = match op {
-        Op::FindLinksFtt { q } | Op::CountFtt { q } | Op::WindowFtt { q, .. } => q,
-        _ => return false,
-    };
-    // The wire's shape (v7.9): `ty` constrained and no other slot.
-    let ty_only =
-        matches!((&q.home, &q.from, &q.to), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
-    // The same whole-store population, reached by constraining the one slot
-    // that is not a link slot. Subsumes the all-`"any"` query, so the union
-    // is exactly "at most one slot constrained, and it is `ty` or `home`".
-    let home_only =
-        matches!((&q.from, &q.to, &q.ty), (SlotSpec::Any, SlotSpec::Any, SlotSpec::Any));
-    ty_only || home_only
+    matches!(
+        op,
+        Op::FindLinksFtt { .. }
+            | Op::CountFtt { .. }
+            | Op::WindowFtt { .. }
+            | Op::FindLinksV { .. }
+            | Op::CountV { .. }
+            | Op::WindowV { .. }
+            | Op::RetrieveEndsets { .. }
+            | Op::DeleteOrphans { .. }
+            | Op::InClaims { .. }
+            | Op::OutClaims { .. }
+            | Op::EditionClaims { .. }
+    )
 }
 
 /// Socket read deadline for one request's head+body: a stalled local
@@ -1004,6 +1055,12 @@ impl Daemon {
     /// is already bound, and the number it carries is the one already
     /// there — the number every live session's origin set was established
     /// against — not the one refused.
+    ///
+    /// PRECONDITION: `port != 0`, which PANICS rather than being refused —
+    /// a caller's bug and not an outcome, so it is not one of the errors
+    /// above. Zero is not a port this daemon can serve on, and it is the one
+    /// value from which the loopback defaults derive origins this daemon's
+    /// own parser rejects and no `Origin` header can match.
     pub fn bind_auth_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
         self.auth.cfg.bind_port(port)
     }
@@ -2173,6 +2230,15 @@ impl std::fmt::Debug for Skepd {
 /// establishes it by refusing a zero count where the flag is read, which is
 /// also what makes its startup line's worker count honest.
 ///
+/// OBLIGATION the count carries and this function cannot check: leave a
+/// worker free of the two permit pools —
+/// `MAX_CONCURRENT_RECONSTRUCTIONS + MAX_CONCURRENT_CLASS_SCANS < workers`.
+/// A caller holding every permit of both is INSIDE both bounds, so at or
+/// below the sum they occupy the whole pool and the daemon answers nothing,
+/// `/health` and `/session` included. [`DEFAULT_WORKERS`] satisfies it and
+/// carries the assertion that holds it; an embedder naming its own count
+/// owes it, and a smaller one is what the two bounds exist to prevent.
+///
 /// SECOND PRECONDITION: `daemon`'s auth port is UNBOUND. `serve` binds it,
 /// and a daemon already carrying one has two callers disagreeing about the
 /// number every live session's origin set derives from, so the second stops
@@ -3112,17 +3178,23 @@ mod tests {
         );
     }
 
-    /// THE SHAPE TEST, off the wire's own spelling (wire v7.9, §Link
-    /// discovery reads): the FTT forms whose `home`, `from` and `to` are all
-    /// `"any"` are class scans — `ty` constrained, `ty` `"any"` (the whole
-    /// store) and `ty` `"empty"` alike — and so is the one whose `from`, `to`
-    /// and `ty` are all `"any"`, which hands M7 no constraint and takes the
-    /// same whole-store candidate set. Nothing else is: a second LINK slot
-    /// constrained, whatever it holds, and every other op, the region-keyed
-    /// `find_links_v` included. Parsed through the codec rather than built by
-    /// hand, so the test reads the frames a client sends.
+    /// THE CLASS-SCAN TEST, over the OP and not over the query's slots: as
+    /// M7 is built every link-discovery read walks the store end to end, so
+    /// the eleven bounded ops are bounded whatever their slots hold — a
+    /// second constrained slot, an annihilating `"empty"`, a narrow region —
+    /// and the reads that walk no link store are bounded by nothing.
+    ///
+    /// Every row is PARSED through the codec rather than built by hand, so
+    /// the test reads the frames a client sends. The two lists are disjoint
+    /// and their union is checked against the bounded arm's own count, so an
+    /// op moved between the arms without moving here fails the last
+    /// assertion rather than passing in silence.
     #[test]
-    fn a_class_scan_is_an_ftt_form_constraining_ty_or_home_alone() {
+    fn every_link_store_walking_read_is_bounded_whatever_its_slots_hold() {
+        /// The bounded arm's size, restated — moving the arm is a visible
+        /// decision here, the discipline this crate gives its wire caps.
+        const BOUNDED_OPS: usize = 11;
+
         let parse = |frame: &str| {
             JsonCodec.parse(frame.as_bytes()).unwrap_or_else(|e| panic!("{frame}: {:?}", e.detail)).op
         };
@@ -3131,54 +3203,72 @@ mod tests {
         let q = |home: &str, from: &str, to: &str, ty: &str| {
             format!(r#"{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}"#)
         };
-        let class_scans = [
+        let region = r#"[{"start":"1.1","width":"0.1"}]"#;
+        let bounded = [
+            // The FTT family, at every slot spelling: the wire's directory
+            // shape, the whole store, the annihilated `"empty"`, home-only,
+            // and — the cell the slot-keyed predecessor exempted — a SECOND
+            // slot constrained, which is that same scan plus a comparison
+            // per link and so costs strictly more.
             format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
-            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", "\"any\"", "\"any\"", ty)),
-            format!(
-                r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
-                q("\"any\"", "\"any\"", "\"any\"", ty)
-            ),
-            // The whole store is the class scan's superset.
             format!(
                 r#"{{"op":"find_links_ftt","q":{}}}"#,
                 q("\"any\"", "\"any\"", "\"any\"", "\"any\"")
             ),
-            // A shape, not a cost: M8 annihilates this one before M7 is
-            // asked, and it is class-scan-shaped all the same.
+            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", ty)),
+            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", ty, "\"any\"", ty)),
             format!(
                 r#"{{"op":"count_ftt","q":{}}}"#,
                 q("\"any\"", "\"any\"", "\"any\"", "\"empty\"")
             ),
-            // HOME ALONE — the costlier spelling of the whole store: `home`
-            // is not a link slot, so M7 is handed no constraint and takes the
-            // whole active slice, then pays a residence test per link.
-            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", "\"any\"")),
             format!(r#"{{"op":"count_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", "\"any\"")),
-        ];
-        for frame in &class_scans {
-            assert!(is_class_scan(&parse(frame)), "class-scan-shaped: {frame}");
-        }
-        let not_class_scans = [
-            // A second LINK slot constrained — the narrowest-slot pins bound
-            // it: the `ty` constraint makes the candidate set one class
-            // rather than the store.
-            format!(r#"{{"op":"find_links_ftt","q":{}}}"#, q(home, "\"any\"", "\"any\"", ty)),
-            format!(r#"{{"op":"count_ftt","q":{}}}"#, q("\"any\"", ty, "\"any\"", ty)),
             format!(
                 r#"{{"cur":null,"n":16,"op":"window_ftt","q":{}}}"#,
                 q("\"any\"", "\"any\"", "\"empty\"", ty)
             ),
-            // Every other op, the region-keyed discovery reads included.
-            r#"{"d":"1.0.1.0.1","op":"find_links_v","region":[{"start":"1.1","width":"0.1"}]}"#
+            // The region family: THREE scans apiece, one per v1 link slot.
+            format!(r#"{{"d":"1.0.1.0.1","op":"find_links_v","region":{region}}}"#),
+            format!(r#"{{"d":"1.0.1.0.1","op":"count_v","region":{region}}}"#),
+            format!(
+                r#"{{"cur":null,"d":"1.0.1.0.1","n":16,"op":"window_v","region":{region}}}"#
+            ),
+            format!(r#"{{"d":"1.0.1.0.1","op":"retrieve_endsets","region":{region}}}"#),
+            // Six scans, and no owner gate: the dearest read on the surface.
+            r#"{"d":"1.0.1.0.1","op":"delete_orphans","p":{"subspace":"1","ordinal":"1"},"width":"1"}"#
                 .to_string(),
-            r#"{"d":"1.0.1.0.1","op":"count_v","region":[{"start":"1.1","width":"0.1"}]}"#
-                .to_string(),
+            // One scan apiece, at a single-span query.
+            r#"{"op":"in_claims","y":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
+            r#"{"op":"out_claims","x":"1.0.1.0.1.0.2.1","view":"default"}"#.to_string(),
+            r#"{"op":"edition_claims","target":"1.0.1.0.1"}"#.to_string(),
+        ];
+        let unbounded = [
+            // M5's resolve and one `readlink`: no store walk.
+            format!(r#"{{"d":"1.0.1.0.1","op":"image","region":{region}}}"#),
+            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"project","slot":1}"#.to_string(),
+            r#"{"a":"1.0.1.0.1.0.2.1","d":"1.0.1.0.1","op":"discoverable_from"}"#.to_string(),
             r#"{"op":"read_link","a":"1.0.1.0.1.0.2.1"}"#.to_string(),
+            r#"{"op":"follow_link","a":"1.0.1.0.1.0.2.1","slot":1}"#.to_string(),
+            // The M6 and M3 reads touch no link store at all.
+            r#"{"op":"retrieve_v","specs":[{"doc":"1.0.1.0.1","span":{"start":"1.1","width":"0.1"}}]}"#
+                .to_string(),
+            r#"{"op":"show_deletions","d_a":"1.0.1.0.1","d_b":"1.0.1.0.2"}"#.to_string(),
+            r#"{"op":"doc_metadata","doc":"1.0.1.0.1"}"#.to_string(),
             r#"{"op":"next_account_prefix","parent":"1"}"#.to_string(),
         ];
-        for frame in &not_class_scans {
-            assert!(!is_class_scan(&parse(frame)), "not class-scan-shaped: {frame}");
+        let mut names: std::collections::BTreeSet<&'static str> = std::collections::BTreeSet::new();
+        for frame in &bounded {
+            let op = parse(frame);
+            assert!(is_class_scan(&op), "walks the link store, so it is bounded: {frame}");
+            names.insert(crate::codec::op_name(op.kind()));
         }
+        for frame in &unbounded {
+            assert!(!is_class_scan(&parse(frame)), "walks no link store: {frame}");
+        }
+        assert_eq!(
+            names.len(),
+            BOUNDED_OPS,
+            "every bounded op is visited, and only those: {names:?}"
+        );
     }
 
     /// The `scan_busy` refusal's exact body: a transport refusal (no `resp`,

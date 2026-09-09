@@ -100,7 +100,21 @@ impl AuthConfig {
     /// ONCE, so a second bind would otherwise be a silent no-op.
     /// [`crate::serve`] and a socket-free embedder are the two callers, and
     /// they are exclusive by design.
+    ///
+    /// PRECONDITION: `port != 0`, and it stops here loudly rather than being
+    /// admitted — the posture [`crate::serve`] takes on a zero worker count,
+    /// for the same reason: it is a caller's bug and not an outcome.
+    /// [`AuthConfig::port`] states that zero is not a port this daemon can
+    /// serve on, and zero is the one value that makes [`Origin::from_parts`]
+    /// build text [`Origin::parse`] refuses — `http://127.0.0.1:0` fails the
+    /// leading-zero clause. Admitted, it fires that constructor's debug
+    /// assert on every request that reads a derived origin, and in release
+    /// publishes a `/health` origin set whose members this daemon's own
+    /// parser rejects and no `Origin` header can match. `serve` cannot reach
+    /// it (the OS never assigns port 0 to a bound listener), so the one
+    /// caller is the socket-free embedder.
     pub fn bind_port(&self, port: u16) -> Result<(), PortAlreadyBound> {
+        assert!(port != 0, "port 0 is not a port this daemon can serve on");
         self.port.set(port).map_err(|_| {
             PortAlreadyBound(self.port().expect("set once, so a refusal means one is bound"))
         })
@@ -613,6 +627,26 @@ mod tests {
             "the bound port, not the refused one"
         );
         assert_eq!(cfg.port(), Some(8642), "and the binding did not move");
+    }
+
+    /// Port 0 is the one value from which [`loopback_defaults`] derives
+    /// origins [`Origin::parse`] refuses: `http://127.0.0.1:0` fails the
+    /// leading-zero clause, so admitting the bind fires
+    /// [`Origin::from_parts`]'s debug assert on every request that reads a
+    /// derived origin, and in release publishes a `/health` set whose
+    /// members no `Origin` header can match. The bind refuses it instead —
+    /// a caller's bug, stopped loudly, as a zero worker count is at
+    /// [`crate::serve`].
+    #[test]
+    #[should_panic(expected = "port 0 is not a port")]
+    fn port_zero_is_a_callers_bug() {
+        // The premise, first: this is what the defaults would derive from it.
+        assert!(
+            Origin::parse("http://127.0.0.1:0").is_none(),
+            "the front door refuses the text a zero-port default would carry"
+        );
+        let cfg = AuthConfig::new(AuthOptions::default());
+        let _ = cfg.bind_port(0);
     }
 
     /// An unbound config has no port, so its bare set is `configured`

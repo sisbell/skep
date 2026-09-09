@@ -1,10 +1,11 @@
 //! THE CLASS-SCAN BOUND over the wire (PUB round 2, lane 3.7; PUB-8.36,
-//! PUB-8.37): `/op` admits at most two CLASS-SCAN-shaped FTT queries at once
-//! — a `find_links_ftt`, `count_ftt` or `window_ftt` whose four-set
-//! constrains `ty` and no other slot — and refuses the surplus at once with
-//! `503 scan_busy`, the body naming the op. A concurrency bound, never a
-//! rate statement; one global pool for every class, session and the guest;
-//! disjoint from the reconstruction pool; never a change to an answer.
+//! PUB-8.37): `/op` admits at most two LINK-STORE-WALKING reads at once —
+//! the FTT family, the region family, `delete_orphans` and the three claims
+//! reads, which as M7 is built each scan the whole store however their slots
+//! are spelled — and refuses the surplus at once with `503 scan_busy`, the
+//! body naming the op. A concurrency bound, never a rate statement; one
+//! global pool for every class, session and the guest; disjoint from the
+//! reconstruction pool; never a change to an answer.
 //!
 //! In `history.rs`'s permit-test form (`op_at_reconstruction_is_permit_bounded`):
 //! a real class scan over a test-sized world finishes in microseconds, so
@@ -94,7 +95,14 @@ fn find_links_ftt(home: &str, from: &str, to: &str, ty: &str) -> String {
 
 /// The `ty`-only census form.
 fn count_ftt(ty: &str) -> String {
-    format!(r#"{{"op":"count_ftt","q":{{"from":"any","home":"any","to":"any","ty":{ty}}}}}"#)
+    count_ftt_slots(ANY, ANY, ANY, ty)
+}
+
+/// A `count_ftt` frame over the four slots as given — the census twin of
+/// [`find_links_ftt`], so the home-only and second-slot spellings can be
+/// probed on the counting form too.
+fn count_ftt_slots(home: &str, from: &str, to: &str, ty: &str) -> String {
+    format!(r#"{{"op":"count_ftt","q":{{"from":{from},"home":{home},"to":{to},"ty":{ty}}}}}"#)
 }
 
 /// The `ty`-only windowed form, from the start.
@@ -104,10 +112,47 @@ fn window_ftt(ty: &str) -> String {
     )
 }
 
-/// The region-keyed discovery read over content ordinal 1 of `doc` — never
-/// a class scan.
+/// The region-keyed discovery read over content ordinal 1 of `doc` — THREE
+/// whole-store scans, one per v1 link slot, so it is bounded too.
 fn find_links_v(doc: &str) -> String {
     format!(r#"{{"d":"{doc}","op":"find_links_v","region":[{{"start":"1.1","width":"0.1"}}]}}"#)
+}
+
+/// The region-keyed census over content ordinal 1 of `doc`.
+fn count_v(doc: &str) -> String {
+    format!(r#"{{"d":"{doc}","op":"count_v","region":[{{"start":"1.1","width":"0.1"}}]}}"#)
+}
+
+/// The region-keyed endset read over content ordinal 1 of `doc`.
+fn retrieve_endsets(doc: &str) -> String {
+    format!(
+        r#"{{"d":"{doc}","op":"retrieve_endsets","region":[{{"start":"1.1","width":"0.1"}}]}}"#
+    )
+}
+
+/// The orphan PREVIEW of deleting `doc`'s first content position — six
+/// whole-store scans, and no owner gate (M8 answers alike for every asker).
+fn delete_orphans(doc: &str) -> String {
+    format!(
+        r#"{{"d":"{doc}","op":"delete_orphans","p":{{"subspace":"1","ordinal":"1"}},"width":"1"}}"#
+    )
+}
+
+/// The supersession claims naming `link` as their `old` endpoint.
+fn in_claims(link: &str) -> String {
+    format!(r#"{{"op":"in_claims","view":"default","y":"{link}"}}"#)
+}
+
+/// The supersession claims naming `link` as their `new` endpoint.
+fn out_claims(link: &str) -> String {
+    format!(r#"{{"op":"out_claims","view":"default","x":"{link}"}}"#)
+}
+
+/// The pointwise V→I image over `doc` — M5's `resolve` alone, so it walks no
+/// link store and takes no permit. The near neighbour of [`find_links_v`],
+/// and the row that keeps the bound from reading as "every discovery read".
+fn image(doc: &str) -> String {
+    format!(r#"{{"d":"{doc}","op":"image","region":[{{"start":"1.1","width":"0.1"}}]}}"#)
 }
 
 /// PUB-6.54's directory: the grants class, no other slot constrained.
@@ -148,34 +193,55 @@ fn assert_scan_busy(st: u16, v: &Value, op: &str) {
     assert!(v.get("code").is_none(), "no Op ran, so there is no rejection code: {v}");
 }
 
-/// §1 SHAPE and §2 BOUND together, observed from the wire: with both scan
-/// permits held, a frame is refused `scan_busy` iff it is class-scan-shaped
-/// — `ty`-only `find_links_ftt`, the all-`any` query, `home`-only, and
-/// `ty`-only `count_ftt`/`window_ftt` are; `ty`+`home` and `find_links_v`
-/// are not and serve as if nothing were held. Every probe serves with the
-/// pool free, before and after.
+/// §1 the OP TEST and §2 BOUND together, observed from the wire: with both
+/// permits held, a frame is refused `scan_busy` iff its op walks the link
+/// store. Every FTT spelling is — `ty`-only, all-`any`, `home`-only, and a
+/// SECOND slot constrained, which the slot-keyed predecessor exempted though
+/// it is that same scan plus a comparison per link — and so is the region
+/// family, `delete_orphans` and the claims pair. `image`, the pointwise
+/// near-neighbour of `find_links_v`, and `read_link` are not, and serve as if
+/// nothing were held. Every probe serves with the pool free, before and after.
 #[test]
-fn only_a_ty_or_home_only_ftt_query_takes_a_scan_permit() {
+fn every_link_store_walking_read_takes_a_scan_permit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
-    let _board = seed(port);
+    let board = seed(port);
     let grant_class = unit_span(T_GRANT);
     let doc1 = unit_span(CLAIMANT_DOC1);
 
-    // (op name, frame, class-scan-shaped?)
+    // (op name, frame, walks the link store?)
     let probes: Vec<(&str, String, bool)> = vec![
         ("find_links_ftt", find_links_ftt(ANY, ANY, ANY, &grant_class), true),
-        ("find_links_ftt", find_links_ftt(&doc1, ANY, ANY, &grant_class), false),
+        // A SECOND slot constrained: `ty` narrows the candidate set to one
+        // class only if something indexes it, and nothing does — M7's `stab`
+        // is a brute scan of `links` — so this is the row above plus a span
+        // comparison per link, and strictly dearer.
+        ("find_links_ftt", find_links_ftt(&doc1, ANY, ANY, &grant_class), true),
         ("find_links_ftt", find_links_ftt(ANY, ANY, ANY, ANY), true),
         // A four-set constraining `home` ALONE: `home` is not a link slot, so
         // M7 is handed no constraint and takes the whole active slice — the
-        // all-`any` candidate set, plus a residence test per link. The
-        // costlier of two spellings of one population, so it is bounded too.
+        // all-`any` candidate set, plus a residence test per link.
         ("find_links_ftt", find_links_ftt(&doc1, ANY, ANY, ANY), true),
         ("count_ftt", count_ftt(&grant_class), true),
+        ("count_ftt", count_ftt_slots(ANY, &doc1, ANY, &grant_class), true),
         ("window_ftt", window_ftt(&grant_class), true),
-        ("find_links_v", find_links_v(CLAIMANT_DOC1), false),
+        // The region family: THREE scans apiece (`stab_runs_by_slot` stabs
+        // `from`, `to` and `ty` separately), at up to `MAX_IMAGE_RUNS` query
+        // spans per link.
+        ("find_links_v", find_links_v(CLAIMANT_DOC1), true),
+        ("count_v", count_v(CLAIMANT_DOC1), true),
+        ("retrieve_endsets", retrieve_endsets(CLAIMANT_DOC1), true),
+        // Six scans, and no owner gate: every asker reaches it.
+        ("delete_orphans", delete_orphans(CLAIMANT_DOC1), true),
+        // One scan apiece, at a single-span query, behind a residence gate.
+        ("in_claims", in_claims(&board.grant), true),
+        ("out_claims", out_claims(&board.grant), true),
+        // …and the reads that walk no link store, which is what keeps the
+        // bound from reading as "every discovery read": M5's resolve, and a
+        // lookup.
+        ("image", image(CLAIMANT_DOC1), false),
+        ("read_link", format!(r#"{{"a":"{}","op":"read_link"}}"#, board.grant), false),
     ];
     let serves = |what: &str| {
         for (name, frame, _) in &probes {
@@ -197,7 +263,7 @@ fn only_a_ty_or_home_only_ftt_query_takes_a_scan_permit() {
         if *class_scan {
             assert_scan_busy(st, &v, name);
         } else {
-            assert_eq!(st, 200, "{name} is not class-scan-shaped and takes no permit: {v}");
+            assert_eq!(st, 200, "{name} walks no link store and takes no permit: {v}");
             assert_ne!(v["resp"].as_str(), Some("rejected"), "{name}: {v}");
         }
     }
@@ -208,12 +274,12 @@ fn only_a_ty_or_home_only_ftt_query_takes_a_scan_permit() {
     sd.shutdown();
 }
 
-/// §2 BOUND: two permits held → a third `ty`-only scan answers `503
-/// scan_busy` with the op named — N+1 at once, none queuing; a `ty`+`home`
-/// query still answers; `/op-at` still answers (disjoint pools); and,
-/// conversely, every reconstruction permit held → a live class scan still
-/// answers while `/op-at` is the one refused. A wire call returns its
-/// permit: the slot is reusable afterwards.
+/// §2 BOUND: two permits held → a third scan answers `503 scan_busy` with
+/// the op named — N+1 at once, none queuing; a `ty`+`home` query is refused
+/// too, being the same scan plus a comparison per link; `/op-at` still
+/// answers (disjoint pools); and, conversely, every reconstruction permit
+/// held → a live scan still answers while `/op-at` is the one refused. A
+/// wire call returns its permit: the slot is reusable afterwards.
 #[test]
 fn a_third_class_scan_is_refused_and_the_two_pools_are_disjoint() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -247,13 +313,13 @@ fn a_third_class_scan_is_refused_and_the_two_pools_are_disjoint() {
         );
     }
 
-    // A second LINK slot constrained takes no permit: the narrowed query
-    // answers the same rows while the pool is full. What narrows it is the
-    // `ty` constraint, which M7 IS handed, so its candidate set is one class
-    // rather than the store — the narrowest-slot pins bound it, not this.
+    // A second slot constrained is refused TOO, and this is the cell the
+    // slot-keyed predecessor exempted: `home` beside `ty` is the `ty` scan
+    // plus a residence test per survivor, so it costs strictly more and used
+    // to take no permit at all. Nothing narrows it, M7 owning no index for a
+    // slot to be pinned against.
     let (st, v) = post(port, None, &narrowed);
-    assert_eq!(st, 200, "{v}");
-    assert_eq!(addrs_of(&v), expect, "ty+home is bounded by the narrowest-slot pins, not here");
+    assert_scan_busy(st, &v, "find_links_ftt");
 
     // DISJOINT: with every scan permit held, `/op-at` — a reconstruction —
     // still answers the same frame, and so does `/dump?at`.

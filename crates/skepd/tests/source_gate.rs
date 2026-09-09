@@ -593,13 +593,15 @@ fn a_hired_principal_s_signed_session_deposits_a_grant_and_a_stranger_reads() {
 /// refusals (slot 5 — here `published_target`, PUB-2.11) AHEAD of the
 /// per-source consult (slot 6); as built, the consult is PRE-DISPATCH at
 /// M10's door (PUB-6.38) and `published_target` is the STORE's, inside its
-/// transaction (owner ruling D2b), so the door answers `withheld` first. The
-/// store's own answer is pinned beside it over a READABLE source, so the two
-/// halves of the cell are both visible. The versionless sibling never meets
+/// transaction (owner ruling D2b), so the DOOR pre-evaluates the in-place
+/// refusal for `copy` and answers `published_target` ahead of the consult
+/// (PUB-6.36 slot 5 before slot 6; lane 4.2). The store's own answer is
+/// pinned beside it over a READABLE source, so the two halves of the cell
+/// are both visible. The versionless sibling never meets
 /// the consult: `private_source_versionless` fires only on a source the
 /// caller OWNS and so reads.
 #[test]
-fn a_copy_from_an_unreadable_source_into_a_published_destination_is_withheld_at_the_door() {
+fn a_copy_from_an_unreadable_source_into_a_published_destination_answers_published_target_first() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
     let port = sd.port();
@@ -615,8 +617,12 @@ fn a_copy_from_an_unreadable_source_into_a_published_destination_is_withheld_at_
         code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(a.draft.as_str(), 1, 1)]))),
         "published_target"
     );
-    // An unreadable source: the door's consult, ahead of the store.
-    assert_withheld(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(src.as_str(), 1, 1)])), &src);
+    // An unreadable source: slot 5 still speaks first — the door answers
+    // the model's refusal before it would consult the source (PUB-6.36).
+    assert_eq!(
+        code(&op(port, Some(&a_signed), &copy_frame(&a.doc1, 1, &[(src.as_str(), 1, 1)]))),
+        "published_target"
+    );
 
     sd.shutdown();
 }

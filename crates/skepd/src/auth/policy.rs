@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-use skep_address::{document_of, validate, Address, Nat, Span, Tumbler};
+use skep_address::{document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::trunk_of;
 use skep_engine::types::{
     t_consumption_marker, t_delegator_endorsement, t_grant, t_journal_designation, t_rail_record,
@@ -284,6 +284,15 @@ pub(crate) enum CredentialRefusal {
     SignedSessionRequired,
     /// Slot (8), and the plain path's pre-claim admission gate (RES-27).
     ClaimFirst,
+    /// Slot (8)'s CLAIM arm — the claim's own admission (PUB-6.63, RES-24;
+    /// PUB round 2, lane 4.2): the claim is refused where the top-level
+    /// account space holds any principal above the genesis floor but the one
+    /// this ceremony's own `delegate` minted. Token `claim_residue` — OWNER
+    /// CONFIRM OWED (the code is the wire's to name beside `claim_first`;
+    /// proposed in the pre-claim tokens' convention). The face is PUB-6.63's
+    /// verbatim: "this board carries pre-claim residue — re-genesis before
+    /// claiming."
+    ClaimResidue,
 }
 
 impl CredentialRefusal {
@@ -309,6 +318,7 @@ impl CredentialRefusal {
             CredentialRefusal::MintHomePublic => "mint_home_public".into(),
             CredentialRefusal::SignedSessionRequired => "signed_session_required".into(),
             CredentialRefusal::ClaimFirst => "claim_first".into(),
+            CredentialRefusal::ClaimResidue => "claim_residue".into(),
         }
     }
 }
@@ -603,6 +613,16 @@ pub(crate) fn board_state_refusal(
 /// * a homed write reads `published(home)` — both through [`published`], the
 ///   engine's exception set with the version-member projection (PUB-2.15).
 ///
+/// * an `edit_link` reads `published(d_s) ∨ published(d_a)` — it DEPOSITS
+///   TWICE, the successor link into `d_s` and the supersession claim into
+///   `d_a` (M7's `editlink`: the claim's home is the caller's own `d_a`,
+///   never the original's document), and PUB-6.43's row is per DEPOSIT —
+///   "each of its two deposits takes the `published(home)` row on ITS OWN
+///   home", the record's own home sufficing because supersession lands no
+///   effect at the original (PUB-6.22). Registration and ω on BOTH homes
+///   stand ahead, mirroring M7's own `home_gate` over the pair (lane 4.2,
+///   F1; register cell I3.c, matrix 2.5).
+///
 /// * a `nullify` reads `published(home) ∨ published(document_of(target))` —
 ///   PUB-6.43's own row for the one op whose effect and record home part
 ///   (lane 3.5; RES-3's owed input).
@@ -709,7 +729,28 @@ fn publish_gate(
         Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
             homed(home)
         }
-        Op::EditLink { d_s, .. } => homed(d_s),
+        // `edit_link` DEPOSITS TWICE (lane 4.2, F1): the successor into
+        // `d_s`, the supersession CLAIM into `d_a` — M7's `editlink` files
+        // the claim in the caller's own `d_a`, so that, not the original's
+        // document, is the claim's home — and PUB-6.43's row is per DEPOSIT,
+        // so the gate fires where EITHER deposit lands in a published home.
+        // Registration and ω stand AHEAD on BOTH homes (PUB-6.37, PUB-6.36
+        // slot 1 — M7's own `home_gate` runs P0 then ω over the pair): a
+        // caller owning either alone, or naming an unregistered home, falls
+        // through to execute's own code and is never told whether the other
+        // home is published. The finding cell: `d_s` a draft, `d_a` the
+        // published doc 1, bare — refused here, nothing deposited.
+        Op::EditLink { d_s, d_a, .. } => {
+            let m3 = world.m3();
+            let owned = |home: &Address| {
+                m3.is_registered_document(home) && m3.is_effective_owner(principal, home)
+            };
+            if !(owned(d_s) && owned(d_a)) {
+                return None;
+            }
+            (published(world, d_s) || published(world, d_a))
+                .then_some(CredentialRefusal::SignedSessionRequired)
+        }
         // PUB-6.43's `nullify` ROW (RES-3; landed with lane 3.5, whose
         // bare-owner cell presupposes it): a retraction LANDS AT ITS TARGET
         // (PUB-6.20), so the gate keys on the target link's home BESIDE the
@@ -777,6 +818,73 @@ fn pre_claim_gate(world: &World, op: &Op, principal: PrincipalId) -> Option<Cred
     } else {
         Some(CredentialRefusal::ClaimFirst)
     }
+}
+
+// ── claim_residue_refusal — the claim's own admission (PUB-6.63; RES-24) ──
+
+/// PUB-6.63 (PUB-6.35 clause (b); PUB round 2, lane 4.2 — F2): THE CLAIM
+/// REFUSES OVER RESIDUE. The claim — the ceremony's step 5 — is admitted
+/// ONLY where the TOP-LEVEL account space holds EXACTLY ONE principal minted
+/// by `delegate` ABOVE THE GENESIS FLOOR — the one this ceremony's own
+/// `delegate` minted — and is refused `claim_residue` otherwise, from every
+/// hand, bare and signed alike: unrefused, a second hand's keyed partial
+/// (register cell I10.b) or the operator's own abandoned partial beside its
+/// lost-state retry (I11.d) survives the claim as a keyed top-level
+/// principal no act removes (PUB-1.44, PUB-1.45), inside every ANY-PRINCIPAL
+/// grant the board ever issues. The cure is the one PUB-6.63 pins, verbatim
+/// in the face: "this board carries pre-claim residue — re-genesis before
+/// claiming."
+///
+/// THE INPUT is the daemon's own top-level frontier, read AT the claim off
+/// the snapshot the write guard pinned — the same fact `next_account_prefix`
+/// answers principal-free (PUB-6.52), so a door can face the residue ahead
+/// of the ceremony's step 1 from the same read. CARDINALITY, never
+/// provenance (provenance is AUTH's: the latch, AUTH-3.82/3.83, is what makes
+/// the one counted principal claimable by its minter alone). "Top-level" is
+/// the claimant's own tier — the node its account was delegated under
+/// (`parent`, the same M1 step the fold's delegator test takes; a claim
+/// reaching this producer has already passed `claimant_not_top_level`).
+///
+/// THE FLOOR is what the daemon's own genesis writes seeded, computed from
+/// [`World::genesis`] and never hard-coded: every account genesis mints under
+/// that node stands BELOW the count. Genesis seeds none today, so the floor
+/// is zero and the two frontiers coincide — counted from the live frontier
+/// alone, a board whose genesis seeded a top-level account would refuse
+/// every honest claim and its named cure would re-seed it (PUB-6.63's own
+/// cycle warning).
+///
+/// Placed at the claim's own admission in the pre-claim path — slot (8)'s
+/// CLAIM arm in [`precheck`], behind the fold's verdict (an `already_claimed`
+/// or `claimant_keyless` claim never reaches this) and ahead of the claim's
+/// `make_link` ever reaching the store — so a refused claim commits nothing
+/// and the board stays unclaimed. The honest single-principal ceremony is
+/// exactly the admitted case: one top-level principal above the floor.
+/// Fail-CLOSED on the two unreachable shapes (an account with no parent, a
+/// node with no frontier): a claim whose count cannot be read is refused,
+/// which is the spec's direction ("admitted ONLY where … and refused
+/// otherwise").
+pub(crate) fn claim_residue_refusal(world: &World, account: &Address) -> Option<CredentialRefusal> {
+    let Some(node) = parent(account) else {
+        return Some(CredentialRefusal::ClaimResidue);
+    };
+    let Some(count) = accounts_under(world, &node) else {
+        return Some(CredentialRefusal::ClaimResidue);
+    };
+    let floor = accounts_under(&World::genesis(), &node).unwrap_or_else(|| Nat::from(0u32));
+    if count == floor + Nat::from(1u32) {
+        None
+    } else {
+        Some(CredentialRefusal::ClaimResidue)
+    }
+}
+
+/// The number of accounts minted under `node`, read off the frontier exactly
+/// as `next_account_prefix` publishes it (PUB-6.52): the next delegable
+/// prefix under a node is `node·0·(n+1)`, so its ordinal less one is `n`.
+/// `None` where the node anchors no account chain — not a registered node.
+fn accounts_under(world: &World, node: &Address) -> Option<Nat> {
+    let next = world.m3().next_account_prefix(node)?;
+    Some(ordinal(next.tumbler()).clone() - Nat::from(1u32))
 }
 
 // ── plain_refusal — the plain path's ordered producers (AUTH-3.35) ───────
@@ -977,10 +1085,22 @@ pub(crate) fn precheck(
         if signer.is_none() {
             return Err(CredentialRefusal::SignedSessionRequired);
         }
-    } else if !matches!(effect, Effect::Genesis { .. } | Effect::Claim { .. }) {
+    } else {
         // (8) — the pre-claim admission gate's deposit cell, evaluated on
-        // the slot-(3) preview: only the ceremony's own deposits pass.
-        return Err(CredentialRefusal::ClaimFirst);
+        // the slot-(3) preview: only the ceremony's own deposits pass — and
+        // the claim passes only where its OWN admission admits it
+        // (PUB-6.63's residue test, [`claim_residue_refusal`]): behind the
+        // fold's verdict, ahead of the store, so a refused claim commits
+        // nothing and the board stays unclaimed.
+        match &effect {
+            Effect::Genesis { .. } => {}
+            Effect::Claim { account } => {
+                if let Some(r) = claim_residue_refusal(world, account) {
+                    return Err(r);
+                }
+            }
+            _ => return Err(CredentialRefusal::ClaimFirst),
+        }
     }
     Ok(())
 }

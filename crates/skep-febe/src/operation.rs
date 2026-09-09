@@ -258,15 +258,31 @@ where
     /// `source_not_registered` — a withheld answer is only ever a REGISTERED
     /// private document.
     ///
-    /// WHAT THIS ORDER CANNOT REACH, stated rather than hidden: the model's
-    /// refusals of slot 5 (`published_target` and its two siblings) are
-    /// evaluated INSIDE the store transaction (owner ruling D2b), so on the
-    /// one cell where both apply — a source the caller may not read, copied
-    /// into a PUBLISHED destination the caller owns — this door answers
-    /// `withheld` where PUB-6.36 would have slot 5 speak first. The
-    /// versionless sibling never meets it: `private_source_versionless`
-    /// fires only on a source the caller OWNS, which the subtree clause makes
-    /// readable, so no source is both unreadable and versionless.
+    /// SLOT 5 AHEAD OF SLOT 6, and how this door reaches it (PUB round 2,
+    /// lane 4.2, F3; PUB-6.36, PUB-2.11, PUB-6.38): the model's refusals are
+    /// evaluated INSIDE the store transaction (owner ruling D2b), which once
+    /// left one cell the door could not order — a source the caller may not
+    /// read, copied into a PUBLISHED destination the caller owns — answered
+    /// `withheld` where PUB-6.36 has slot 5 speak first. The door now
+    /// PRE-EVALUATES the in-place advance refusal itself, between the
+    /// deferral and the consult, for the in-place ARRANGEMENT-edit class
+    /// PUB-2.11 governs among the consulted ops — `copy`, the one write here
+    /// whose destination is an existing document's arrangement (the link
+    /// writes are outside the rule, PUB-2.12; `version` is a mint, and
+    /// `insert`/`delete`/`rearrange` read no source and take no consult) —
+    /// through the same projection the store's own check reads (M3's bit on
+    /// `trunk_of(doc)`, PUB-2.15, on a destination the deferral has just
+    /// found registered, PUB-6.37), and answers `published_target`
+    /// byte-identically to the store's (same code, disposition, no site, no
+    /// detail). So a session refused the write is never told whether it may
+    /// read the source (PUB-6.43's ground), the store's own refusal is
+    /// simply unreached on that cell, and every other cell answers as before:
+    /// where the destination is a draft the check is silent, and where the
+    /// store would have refused `published_target` it still does, one layer
+    /// earlier and in the same bytes. The versionless sibling never meets the
+    /// consult: `private_source_versionless` fires only on a source the
+    /// caller OWNS, which the subtree clause makes readable, so no source is
+    /// both unreadable and versionless. M5's own refusal stands untouched.
     ///
     /// The two verdicts this consult can speak are the read side's own,
     /// wire-identical to what the store would say of the same address in a
@@ -293,6 +309,17 @@ where
         let caller = wc.caller();
         if !destinations.iter().all(|d| m3.is_registered_document(d) && caller.is_owner(m3, d)) {
             return Ok(());
+        }
+        // Slot 5 ahead of slot 6 (lane 4.2, F3): the model's in-place advance
+        // refusal on a `copy`'s destination — PUB-2.11, read as the store
+        // reads it (M3's bit on the document `doc` projects to, PUB-2.15;
+        // registered, by the deferral above) and answered in the store's own
+        // bytes — BEFORE any source is consulted, so the one cell where both
+        // apply answers `published_target`, never `withheld`.
+        if let Op::Copy { doc, .. } = op {
+            if m3.published(&trunk_of(doc)) {
+                return Err(rejection(kind, RejectCode::PublishedTarget));
+            }
         }
         let principal = Some(wc.principal);
         let readable = |a: &Address| self.readable(world, principal, a);

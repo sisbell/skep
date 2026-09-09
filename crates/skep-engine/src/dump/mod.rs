@@ -75,16 +75,20 @@
 //! the CONTENT LINES whose element's document is unreadable, the
 //! ARRANGEMENT and LINK-SUBSPACE sections (M5's arrangements and provenance)
 //! keyed by unreadable documents, the LINKS homed in them (the authoritative
-//! map and every hint family, type keys kept), and the PUBLICATION slice
-//! reduced per entry — EMPTY for the guest; the identity section (M3) and
-//! the grant section stay WHOLE. Determinism holds per class (PUB-8.26): the
-//! text is a function of the world and the class, conditioned on the head's
-//! publication state, grant state and the reader's class.
+//! map and every hint family, type keys kept), the SUPERSESSION EDGES no
+//! claim homed in a readable document asserts (a claim is a link and its
+//! home governs — PUB-6.13, PUB-6.22, PUB-6.27; lane 4.2), and the
+//! PUBLICATION slice reduced per entry — EMPTY for the guest; the identity
+//! section (M3) and the grant section stay WHOLE. Determinism holds per
+//! class (PUB-8.26): the text is a function of the world and the class,
+//! conditioned on the head's publication state, grant state and the
+//! reader's class.
 //!
 //! [`Engine::world_dump`]: crate::Engine::world_dump
 //! [`Engine::dump_of`]: crate::Engine::dump_of
 //! [`Engine::dump_of_visible`]: crate::Engine::dump_of_visible
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::Deserialize;
@@ -175,9 +179,10 @@ fn dump(world: &World) -> WorldDump {
 }
 
 /// Render one world at a READER'S CLASS: the same tree, post-filtered by the
-/// threaded predicate before a byte is written (lane 3.4 §4).
+/// threaded predicate before a byte is written (lane 3.4 §4), the
+/// supersession edges keyed by the claims asserting them (lane 4.2).
 fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
-    render_dump(&filter_tree(dump_tree(world), readable))
+    render_dump(&filter_tree(dump_tree(world), readable, &world.links))
 }
 
 /// The authoritative section: one entry per store slice, each the slice's own
@@ -445,15 +450,37 @@ fn grants_tree(world: &World) -> SerdeTree {
 ///   shipped classes' slices, the supersession edges and their successors,
 ///   the predicate projections) by its home; the shipped classes' `key`
 ///   entries are format constants and stay; `publication.drafts` reduced to
-///   the readable drafts, as the section is.
+///   the readable drafts, as the section is. A SUPERSESSION EDGE takes a
+///   third test beside its two endpoints' homes (lane 4.2, F4; PUB-6.13,
+///   PUB-6.22, PUB-6.27): the edge stays only where some operative CLAIM
+///   asserting it — the `[K_sup]` link the walk derived the edge from — is
+///   homed in a document the class reads. A claim is a link and its home
+///   governs, exactly as `in_claims`/`out_claims` filter lineage by the
+///   CLAIM's home: a draft-homed `assert_sup` over two public links is
+///   invisible to a guest there and leaves the guest's dump here. The hint's
+///   rendered shape is unchanged — the edge record still carries no claim
+///   address — so the claims are read at filter time off `links`, the
+///   render's own source, through [`sup_edge_claims`].
 ///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
 /// that met one would rather omit a line than judge it readable.
-fn filter_tree(mut root: SerdeTree, readable: &dyn Fn(&Address) -> bool) -> SerdeTree {
+fn filter_tree(
+    mut root: SerdeTree,
+    readable: &dyn Fn(&Address) -> bool,
+    links: &LinkState,
+) -> SerdeTree {
     let home_readable = |a: &Address| document_of(a).is_none_or(|home| readable(&home));
     let keep_key = |k: &SerdeTree| key_address(k).is_some_and(|a| home_readable(&a));
     let keep_dotted = |s: &SerdeTree| dotted_address(s).is_some_and(|a| home_readable(&a));
+    // The operative claims by the edge they assert, read once for the whole
+    // tree; an edge some readably-homed claim asserts is a readable edge.
+    let claims = sup_edge_claims(links);
+    let edge_claimed_readably = |old: &Address, new: &Address| {
+        claims
+            .get(&(old.tumbler().clone(), new.tumbler().clone()))
+            .is_some_and(|asserting| asserting.iter().any(|claim| home_readable(claim)))
+    };
 
     retain_map(&mut root, &["authoritative", "content", "map"], &keep_key);
     retain_map(&mut root, &["authoritative", "arrangement", "arrangements"], &keep_key);
@@ -480,12 +507,21 @@ fn filter_tree(mut root: SerdeTree, readable: &dyn Fn(&Address) -> bool) -> Serd
     }
     if let Some(SerdeTree::Map(edges)) = at_path(&mut root, &["hints", "supersession"]) {
         edges.retain_mut(|(old, succs)| {
-            if !keep_dotted(old) {
+            // The OLD endpoint's home (fail-closed on a key that does not
+            // decode, as everywhere here).
+            let Some(old) = dotted_address(old).filter(|a| home_readable(a)) else {
                 return false;
-            }
+            };
             match succs {
                 SerdeTree::Seq(items) => {
-                    items.retain(|s| keep_dotted(s));
+                    // Each successor by ITS home, and then by the CLAIM's:
+                    // the edge `old → new` stays only where a claim asserting
+                    // it is homed readably (PUB-6.22).
+                    items.retain(|s| {
+                        dotted_address(s).is_some_and(|new| {
+                            home_readable(&new) && edge_claimed_readably(&old, &new)
+                        })
+                    });
                     !items.is_empty() // the walk renders no empty successor list
                 }
                 _ => true,
@@ -494,6 +530,43 @@ fn filter_tree(mut root: SerdeTree, readable: &dyn Fn(&Address) -> bool) -> Serd
     }
     retain_map(&mut root, &["hints", "publication.drafts"], &keep_dotted);
     root
+}
+
+/// The OPERATIVE supersession claims, keyed by the edge each asserts —
+/// `(old, new)` as denoted tumblers — for the per-class filter over the
+/// dump's `hints.supersession` section. Derived the way M7's own `sup_fwd`
+/// hint is folded and the walk reads it (`succs`: one edge per DISTINCT
+/// denoted `old` × `new` of every `[K_sup]`-classed tuple, filtered to claims
+/// not nullified), so an edge the render carries always has at least one
+/// claim here, and the identity of the filter under the total predicate
+/// holds. Read through M7's public surface alone — the class's `type_slice`
+/// under the audit view, `is_nullified` and `readlink` per claim — at filter
+/// time: the dump is a whole-world render and this is one more whole-class
+/// walk; the hint's stored shape is not widened. A claim's home is
+/// `document_of(claim)`, the same address arithmetic every other hint entry
+/// is judged by.
+fn sup_edge_claims(links: &LinkState) -> BTreeMap<(Tumbler, Tumbler), Vec<Address>> {
+    let sup = links.reserved_type(ShippedType::Supersedes);
+    let mut by_edge: BTreeMap<(Tumbler, Tumbler), Vec<Address>> = BTreeMap::new();
+    for claim in links.type_slice(sup, View::Audit) {
+        if links.is_nullified(&claim) {
+            continue; // Df-SUCC: a nullified claim asserts no operative edge
+        }
+        let Some(link) = links.readlink(&claim) else {
+            continue; // type-slice keys are resident by construction
+        };
+        let olds: BTreeSet<&Tumbler> = link.from_slot().addrs().collect();
+        let news: BTreeSet<&Tumbler> = link.to_slot().addrs().collect();
+        for old in &olds {
+            for new in &news {
+                by_edge
+                    .entry(((*old).clone(), (*new).clone()))
+                    .or_default()
+                    .push(claim.clone());
+            }
+        }
+    }
+    by_edge
 }
 
 /// The entry at `path` — a chain of string keys through nested maps — if the
@@ -558,7 +631,10 @@ impl crate::Engine {
     /// COST: [`crate::Engine::dump_of`]'s plus, per filtered entry, one key
     /// decode — a `Tumbler` deserialize off the tree for the authoritative
     /// maps, a dotted parse for the hints and sections — and one predicate
-    /// call. Nothing is memoized; admission is the caller's to gate.
+    /// call; plus, since lane 4.2, one walk of the supersession class (a
+    /// `readlink` and an `is_nullified` per claim) to key each rendered edge
+    /// by the claims asserting it, and one predicate call per such claim.
+    /// Nothing is memoized; admission is the caller's to gate.
     pub fn dump_of_visible(&self, world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump {
         dump_visible(world, readable)
     }
@@ -876,7 +952,8 @@ mod tests {
     fn the_guest_filter_drops_a_draft_s_sections_and_keeps_identity() {
         let (_engine, world) = populated_world();
         let mut full = dump_tree(&world);
-        let mut guest = filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc));
+        let mut guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
 
         let len_at = |tree: &mut SerdeTree, path: &[&str]| match at_path(tree, path) {
             Some(SerdeTree::Map(entries)) => entries.len(),
@@ -902,6 +979,97 @@ mod tests {
             let b = render_of(at_path(&mut guest, path).expect("present"));
             assert_eq!(a, b, "{path:?} is kept whole");
         }
+    }
+
+    /// Lane 4.2, F4 (register cell I3.a): a supersession CLAIM is a link and
+    /// its HOME governs what a class sees of it (PUB-6.13, PUB-6.22,
+    /// PUB-6.27) — so an edge in `hints.supersession` asserted only by a
+    /// DRAFT-homed `assert_sup` over two PUBLIC links leaves the guest's dump
+    /// with its claim, while both public endpoints stay, and the owner's dump
+    /// — who reads the claim's home — keeps the edge.
+    #[test]
+    fn a_draft_homed_supersession_claim_over_public_links_leaves_the_guest_s_edges() {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
+        let prefix = engine
+            .kernel()
+            .snapshot()
+            .world()
+            .m3()
+            .next_account_prefix(&addr(&[1]))
+            .expect("the genesis node has a delegable next-form prefix");
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegation of the peeked prefix succeeds");
+        // The account's FIRST flagless mint is its published home (PUB-8.21);
+        // a later flagless mint is a private draft.
+        let (home, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("the home mint");
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("a later mint, private");
+        let caller = Caller::Principal(USER);
+        let class = World::visible_to(caller);
+        // Two public links in the home under ghost types of its own
+        // never-minted subspace 3 (address-form slots, empty endsets).
+        let ghost = |n: u32| {
+            let mut comps: Vec<Nat> = home.tumbler().iter().cloned().collect();
+            comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
+            validate(Tumbler::new(comps).expect("nonempty"))
+                .expect("a subspace-3 element of a document is T4-valid")
+        };
+        let public_link = |n: u32| {
+            engine
+                .linkstore(&class)
+                .makelink(
+                    caller,
+                    &home,
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(Vec::new()),
+                    SlotArg::Addrs(vec![ghost(n)]),
+                )
+                .expect("a public link in the home")
+                .0
+        };
+        let (l1, l2) = (public_link(41), public_link(42));
+        // The claim: homed in the DRAFT, over the two public links.
+        engine
+            .linkstore(&class)
+            .assert_sup(caller, &draft, &l1, &l2)
+            .expect("a draft-homed supersession claim over public links");
+
+        let world = engine.kernel().snapshot().world().clone();
+        assert!(world.readable(None, &home), "the endpoints' home is published");
+        assert!(!world.readable(None, &draft), "the claim's home is a draft");
+        let edges = |tree: &mut SerdeTree| match at_path(tree, &["hints", "supersession"]) {
+            Some(SerdeTree::Map(entries)) => entries.len(),
+            other => panic!("hints.supersession is a map, got {other:?}"),
+        };
+        let mut full = dump_tree(&world);
+        assert_eq!(edges(&mut full), 1, "the fixture asserts exactly one edge");
+        let mut owner = filter_tree(
+            dump_tree(&world),
+            &|doc: &Address| world.readable(Some(USER), doc),
+            &world.links,
+        );
+        assert_eq!(edges(&mut owner), 1, "the owner reads the claim's home, so the edge stays");
+        let mut guest =
+            filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
+        assert_eq!(edges(&mut guest), 0, "no readably-homed claim asserts it: the edge leaves");
+        // …while the two public links themselves stay in the guest's slices.
+        let audit = |tree: &mut SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
+            Some(SerdeTree::Seq(items)) => items.len(),
+            other => panic!("hints.links.audit is a sequence, got {other:?}"),
+        };
+        assert_eq!(audit(&mut guest), 2, "the two public links; the draft-homed claim left");
+        assert_eq!(audit(&mut full), 3, "…where the unfiltered walk carries the claim too");
     }
 
     fn divergence(live: &str, rebuilt: &str) -> HintDivergence {

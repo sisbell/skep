@@ -198,7 +198,6 @@ fn m2_6_the_write_side_order_pair_by_pair() {
 /// not read INTO a published destination the caller owns answers
 /// `published_target`, never `withheld`.
 #[test]
-#[ignore = "FINDING-3: 2.6 slot 5 ahead of slot 6 — a copy from an unreadable source into an owned PUBLISHED destination answers `withheld` (the door's pre-dispatch consult, slot 6) where PUB-6.36 pins the model's `published_target` (slot 5) first; pinned AS BUILT and reported by lane 3.3c (`source_gate.rs`), restated here as the spec's order"]
 fn m2_6_slot_5_the_model_s_refusal_speaks_ahead_of_the_per_source_consult() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());

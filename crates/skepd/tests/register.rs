@@ -449,7 +449,6 @@ fn i3_a_a_bare_op_stream_leaves_the_guest_projection_unchanged_but_for_content_e
 /// guest projection — `in_claims` drops it (PUB-6.22, the claim's home
 /// filters), and the guest's dump is unchanged by it (PUB-6.60, PUB-8.26).
 #[test]
-#[ignore = "FINDING-4: I3.a — a draft-homed assert_sup over two public links surfaces in the guest's /dump as a hints.supersession edge; the engine's per-class filter (dump/mod.rs filter_tree) keeps an edge by its endpoints' homes and never consults the claim's, where PUB-6.22 filters lineage by the CLAIM's home"]
 fn i3_a_a_draft_homed_supersession_claim_over_public_links_stays_out_of_the_guest_projection() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
@@ -529,7 +528,6 @@ fn i3_c_edit_link_takes_the_gate_on_the_successor_s_own_home() {
 /// successor link and the supersession claim — takes the `published(home)`
 /// row on ITS OWN home"; PUB-6.34: nothing public may be written bare).
 #[test]
-#[ignore = "FINDING-1: I3.c / 2.5 — a bare session's edit_link with d_s a draft and d_a the published doc 1 is ADMITTED (ack_edit) and its claim lands in the published home; the publish-class gate reads d_s alone (auth/policy.rs publish_gate: `Op::EditLink { d_s, .. } => homed(d_s)`), where PUB-6.43 reads each deposit's own home"]
 fn i3_c_edit_link_takes_the_gate_on_the_claim_s_own_home() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn(dir.path());
@@ -767,7 +765,6 @@ fn i10_a_the_pre_claim_catalogue_is_refused_claim_first() {
 /// claim is refused, naming the one cure — re-genesis — and the board stays
 /// claimable by nobody.
 #[test]
-#[ignore = "FINDING-2: I10.b — the claim over a second hand's keyed partial is ADMITTED (ack_addr, the board claimed under the operator's keys); PUB-6.63's residue refusal reads no frontier at the claim as built (wire.md §Built and owed: OWED)"]
 fn i10_b_the_claim_refuses_over_a_second_hand_s_residue() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_configured(dir.path(), true);
@@ -882,7 +879,6 @@ fn i10_e_a_three_key_genesis_is_admitted_and_the_honest_claim_lands_at_count_one
 /// residue being its own abandoned partial, at the accepted cost of
 /// re-genesis.
 #[test]
-#[ignore = "FINDING-2: I11.d — the operator's lost-state retry (a second delegate-home-genesis run beside its own abandoned partial) CLAIMS the board (ack_addr); PUB-6.63's residue refusal is unbuilt, the same defect as I10.b"]
 fn i11_d_the_operator_s_lost_state_retry_is_refused_at_the_claim() {
     let dir = tempfile::tempdir().expect("tempdir");
     let sd = spawn_configured(dir.path(), true);

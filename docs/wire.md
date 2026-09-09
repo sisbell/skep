@@ -72,8 +72,9 @@ is deliberately no `mode` field; clients derive it from the pair):
 
 * **UNCLAIMED** — no claimant yet. Bare sessions bind on loopback, and
   the write surface admits only the claim ceremony's own opening shape —
-  everything else refuses `claim_first` (§Credential refusals). Reads
-  are open throughout.
+  everything else refuses `claim_first`, and the claim itself refuses
+  `claim_residue` over a second top-level principal (§Credential
+  refusals). Reads are open throughout.
 * **CLAIMED-PERMISSIVE** — claimed, `--local-trust` on (the default). A
   bare session still binds on loopback: any local party may write as any
   principal. That is the default's disclosed cost, and the daemon warns
@@ -183,14 +184,18 @@ whose origin is a draft it cannot read, and the minted document holds
 those I-positions withheld to it exactly as the source does. ADDRESS-FORM
 slots are ungated — an address is not secret and needs no read to write.
 `fork` reads no source and takes no gate. The consult stands BEHIND the
-destination's `not_owner`, MINT-FIRST and the publish-class gate
-(§Credential refusals), and ahead of the store's read of the source;
+destination's `not_owner`, MINT-FIRST, the publish-class gate
+(§Credential refusals) and — since v7.10 — the model's in-place refusal
+(PUB-6.36 slot 5 ahead of slot 6): a `copy` from a source you may not
+read INTO a published destination you own answers `published_target`,
+the door pre-evaluating the destination's publication state, in the
+store's own bytes, before it consults the source — a session refused the
+write is never told whether it may read the source (v7.5's "one cell the
+door cannot order" is retired; the store's refusal stands unchanged
+behind it). The consult stands ahead of the store's read of the source;
 registration stands ahead of it too — an unregistered source answers the
-store's own `source_not_registered`, never `withheld`. One cell the door
-cannot order as the design pins it (PUB-6.36, the model's refusals ahead
-of the consult): a `copy` from a source you may not read INTO a published
-destination you own answers `withheld` at the door, ahead of the store's
-`published_target`. The link-address rule reaches the write side too:
+store's own `source_not_registered`, never `withheld`. The link-address
+rule reaches the write side too:
 `edit_link`'s `original` and `assert_sup`'s `old`/`new` homed in a
 document you may not read answer the op's own `original_not_resident` /
 `endpoint_not_resident` — exactly as for a never-deposited address, never
@@ -428,7 +433,15 @@ board claimed — first claim wins, permanently. Only a top-level
 (bootstrap-delegated) account with a non-empty key set can claim. The
 ceremony's convention signs the claim with a just-enrolled key, proving
 custody before the flip; the unclaimed window itself admits the deposit
-from a bare session too.
+from a bare session too. THE CLAIM REFUSES OVER RESIDUE (v7.10,
+PUB-6.63): it is admitted only where the top-level account space holds
+exactly one principal above the genesis floor — the one this ceremony's
+own `delegate` minted — and refuses `claim_residue` otherwise
+(§Credential refusals), so a board that a second hand's partial, or a
+crashed ceremony's own retry, has left with two top-level principals is
+claimable by nobody, and its one cure is re-genesis. A client can read
+the same fact ahead of step 1 off `next_account_prefix` under node `1`,
+which answers `1.0.1` on a board with no residue.
 
 **Origins, and the claim-time drop.** Origins are configured at launch
 (`--origin`, repeatable) and published verbatim by `GET /health`
@@ -1041,7 +1054,12 @@ errors out of the arrangement's own transaction, evaluated in the one
 slot after registration and ownership (PUB-6.36 slot 5, PUB-6.37) and
 before the operation's own shape checks — so they answer from every
 session the daemon's gates admit, signed sessions included, and the
-daemon adds no gate of its own for them. A version member is judged as
+daemon adds no gate of its own for them. (One qualification since v7.10:
+the write door pre-evaluates `published_target` on a `copy`'s
+destination ahead of its source consult, in the store's own bytes, so
+the model's refusal speaks ahead of `withheld` — PUB-6.36 slot 5 before
+slot 6, §The read predicate; the store's refusal stands unchanged behind
+it.) A version member is judged as
 the document it projects to (PUB-2.15): `1.0.1.0.1.2` refuses exactly as
 `1.0.1.0.1`. All three are `permanent`, carry no `detail` and no `site`,
 and a refused request commits nothing. The daemon's own publish-class
@@ -1244,7 +1262,10 @@ resolves AFTER every token below.
      resolving published); an `insert`/`delete`/`copy`/`rearrange`
      whose `doc` is a published document the caller owns — a version
      member reading as its document (PUB-2.15, §Arrangement); a link
-     write homed in one (`edit_link` reads `d_s`); and — v7.7,
+     write homed in one (`edit_link` reads BOTH its deposits' homes since
+     v7.10 — the successor's `d_s` and the supersession claim's `d_a` — a
+     bare edit refused where either is published, registration and ω on
+     both standing ahead); and — v7.7,
      PUB-6.43's `nullify` row — a `nullify` whose record `home` OR whose
      `target` link's own home is published (a retraction LANDS at its
      target, so a draft-homed record against a published-homed link is a
@@ -1341,6 +1362,27 @@ type (§The claim ceremony and credentials) — run a stricter order:
   again — claimed: `signed_session_required` for ANY bare-session
   deposit, genesis included; unclaimed: `claim_first` for any deposit
   other than the ceremony's own genesis and claim.
+* Behind the unclaimed arm, the CLAIM's own admission — `claim_residue`
+  (v7.10; PUB-6.63, PUB-6.35 clause (b); the token **OWNER CONFIRM
+  OWED**, proposed beside `claim_first` in the pre-claim tokens'
+  convention): the claim deposit is admitted only where the top-level
+  account space — the accounts delegated under the claimant's node —
+  holds EXACTLY ONE principal above the genesis floor, the one this
+  ceremony's own `delegate` minted, and is refused otherwise from every
+  hand, bare and signed alike, the cure verbatim: "this board carries
+  pre-claim residue — re-genesis before claiming." The residue is another
+  hand's keyed partial (steps 1–4 by a stranger at an exposed port) or
+  the operator's own abandoned partial beside its lost-state retry; the
+  input is the same frontier `next_account_prefix` answers under the node
+  (`1.0.1` on a board with no residue) — cardinality and never provenance
+  (the latch, not the id's secrecy, is what makes the one counted
+  principal claimable by its minter alone); the floor is what the
+  daemon's own genesis seeded — no top-level account today, computed from
+  the genesis rather than assumed. A refused claim commits nothing and
+  the board stays unclaimed, claimable by nobody until re-genesis. The
+  fold's own verdicts stand ahead of it: an `already_claimed`,
+  `claimant_keyless` or `claimant_not_top_level` claim never reaches this
+  token.
 
 ## Operations
 
@@ -2441,7 +2483,11 @@ The dump is now PER-CLASS: the GUEST (an absent, unparseable, unknown or
 dead token) sees the published world alone — its `publication` slice
 renders empty, and no draft's content lines, arrangement, link or hint
 appears; a session principal additionally sees every draft its class
-reads (its own subtree, and those a grant opens to it). The identity
+reads (its own subtree, and those a grant opens to it). A supersession
+edge in `hints.supersession` is kept only where a CLAIM asserting it is
+homed in a document the class reads (v7.10; PUB-6.13, PUB-6.22): a
+draft-homed `assert_sup` over two public links leaves the guest's dump
+entirely, as it leaves `in_claims`. The identity
 section (M3) and the `grants` section are kept whole for every class.
 Byte-comparable across processes AND across equal classes for run
 reconstruction: two dumps of equal worlds at one class are byte-equal.
@@ -2514,14 +2560,15 @@ delivery is `[{"content": "hello"}]`.
 
 ## Changelog of wire decisions
 
-v7.1 through v7.9 are ONE additive delta over v7.0 — PUB round 2, lanes
+v7.1 through v7.10 are ONE additive delta over v7.0 — PUB round 2, lanes
 2.1 (the publication bit on the record and in the slice), 2.2 (the
 exception set: one publication definition), 2.3 (the flag on the wire),
 3.1 (the version-chain refusals), 3.2 (the publish shot and head-float),
 3.3 (the read-surface sweep), 3.3b (the value-keyed gates at the writer's
 class), 3.3c (the write side's consult), 3.4 (the two publication reads
 and the per-class dump), 3.5 (the `nullify` class's remaining cells),
-3.6 (the feeds) and 3.7 (the class-scan bound) — and the standing
+3.6 (the feeds), 3.7 (the class-scan bound) and 4.2 (the register's four
+findings fixed to the spec) — and the standing
 promise holds at every entry: the v5 shape never mutates. Each delta
 ADDS — an optional field (`published`, `deposit`), an op with its
 response shape (`publish`; `doc_metadata`, `edition_claims`), a query
@@ -2532,8 +2579,8 @@ headers, or a dump section (`publication.drafts` at v4; the
 `publication` and `grants` sections at v5 — the banner moving with the
 section set, the dump's own rule) — and none removes or re-types one:
 every field, op, parameter, code, header and section a v7.0 answer
-carried is present, of the same type, in the v7.9 answer, so a v5, v6
-or v7.0 client reads every v7.9 answer it could read before. What the
+carried is present, of the same type, in the v7.10 answer, so a v5, v6
+or v7.0 client reads every v7.10 answer it could read before. What the
 round changed beside the shape is the read predicate's and is stated
 where it lands: which documents a class SEES in an answer of unchanged
 shape (v7.4, v7.6, v7.8 — a guest's read, dump or feed page carries
@@ -2544,6 +2591,56 @@ version-chain refusals (v7.2) and the write door's source consult
 addresses v7.7 marks OWNER CONFIRM OWED — `nullify_not_revocation`,
 `nullify_audit_view`, the four audit-view addresses and the grants class
 — were confirmed by the owner 2026-09-07 (§Credential refusals).
+
+v7.10 (the register's four findings fixed to the spec — PUB round 2, lane
+4.2, built 2026-09-08; documented as built; additive — one new
+`credential_refused` token, two writes refused where they were once
+admitted, one refusal answered ahead of another, one dump section
+narrowed per class; no shape changes, the dump banner stays `v5`):
+
+* The publish-class gate reads BOTH of `edit_link`'s deposits
+  (§Credential refusals; PUB-6.43; register cell I3.c, matrix 2.5): the
+  successor lands in `d_s` and the supersession claim in `d_a`, and a
+  bare session's edit is `signed_session_required` where EITHER home is
+  published — v7.1's "`edit_link` reads `d_s`" admitted a bare edit
+  whose claim landed in the published doc 1, its claim deposited there.
+  Registration and ω stand ahead on both homes, as M7's own home gate
+  has them; a caller owning either alone answers `not_owner`.
+* New `credential_refused` token `claim_residue` (permanent; **OWNER
+  CONFIRM OWED** — proposed beside `claim_first` in the pre-claim
+  tokens' convention; §Credential refusals, §The claim ceremony): THE
+  CLAIM REFUSES OVER RESIDUE (PUB-6.63, PUB-6.35 clause (b); register
+  cells I10.b, I11.d). The claim deposit is admitted only where the
+  top-level account space — the accounts delegated under the claimant's
+  node — holds exactly one principal above the genesis floor, the one
+  this ceremony's own `delegate` minted; a second top-level principal
+  (another hand's keyed partial, or the operator's own abandoned partial
+  beside its lost-state retry) refuses the claim from every hand, the
+  board stays unclaimed, and its one cure is re-genesis — the face
+  verbatim: "this board carries pre-claim residue — re-genesis before
+  claiming." The input is the frontier `next_account_prefix` answers
+  under the node, cardinality and never provenance, against the floor
+  the daemon's own genesis seeded (none today; computed from the
+  genesis, never assumed). The honest single-principal ceremony is
+  unchanged. PUB part 06's informative "Built and owed" table marks this
+  refusal OWED against wire v7; it is built here.
+* The write door speaks the model's in-place refusal AHEAD of its source
+  consult (§The read predicate, §The version-chain refusals; PUB-6.36
+  slot 5 before slot 6, PUB-2.11; matrix cell 2.6): a `copy` from a
+  source you may not read INTO a published destination you own now
+  answers `published_target` — pre-evaluated at the door, byte-identical
+  to the store's own refusal, before any source is consulted — where
+  v7.5 answered `withheld`. v7.5's "one cell the door cannot order" is
+  retired; every other cell is unchanged and the store's refusal itself
+  is untouched (`copy` is the one consulted op PUB-2.11 governs — the
+  link writes are outside the rule, PUB-2.12, and `version` is a mint).
+* `/dump` drops a supersession EDGE no readably-homed claim asserts
+  (§The other endpoints; PUB-6.13, PUB-6.22, PUB-6.27; register cell
+  I3.a): a draft-homed `assert_sup` over two public links no longer
+  surfaces in a guest's `hints.supersession` — the claim is a link and
+  its home governs, as `in_claims`/`out_claims` already had it. The
+  unfiltered walk is unchanged, so a dump at a class that reads every
+  claim's home is byte-identical to v7.9's.
 
 v7.9 (the class-scan bound — PUB round 2, lane 3.7, built 2026-09-08;
 documented as built; additive):

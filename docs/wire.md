@@ -994,8 +994,8 @@ source gate, and since v7.4 every READ's document-argument consult
 reorder, carrying `site.addr` (the document) and never a `detail` —
 `bad_run`, `base_not_in_chain`, `base_superseded`,
 `base_extent_too_large`; and two more of M5's — `not_link_address`
-(`seat`'s `link` argument names a full element position rather than a
-link address; M5 §8) and `too_many_runs` (a placement past M5's
+(the seat op's link argument names a full element position rather
+than a link address; M5 §8) and `too_many_runs` (a placement past M5's
 `MAX_PLACED_RUNS` = 65536 runs — permanent; the publish table below
 carries it too).
 
@@ -1003,13 +1003,14 @@ Links: `ill_formed_spec`, `empty_type_resolution`, `shape_violation`,
 `retraction_class`, `non_address_denoting_type`, `bad_target`,
 `self_supersession`, `ill_formed_successor`, `dc_violation`,
 `slot_too_large` (a slot past M7's per-slot span budget
-`MAX_SLOT_SPANS` = 4096 spans, in either form — `make_link`'s three
-slots, `emit`'s `to`, and `edit_link`'s successor slots, the last naming
-the slot in `site.slot`; permanent — no retry shrinks a slot).
+`MAX_SLOT_SPANS` = 4096 spans, in either form — the three slots of a
+make-link, the to-slot of an emit, and the successor slots of an
+edit-link, the last naming the slot in `site.slot`; permanent — no
+retry shrinks a slot).
 
 Content/provenance reads: `no_such_subspace`, `empty_subspace`,
 `depth_incompatible`, `range_not_present`, `malformed_span`, and M6's
-three budgets — `too_many_blocks` (a `compare` operand resolves to more
+three budgets — `too_many_blocks` (a compare operand resolves to more
 than `MAX_COMPARE_OPERAND_BLOCKS` = 4096 blocks; refused before the join
 runs), `too_many_pairs` (the report would exceed `MAX_COMPARE_PAIRS` =
 65536 correspondences), `too_much_coverage` (the find family's request
@@ -1018,17 +1019,17 @@ spans); all permanent — no retry shrinks the request.
 
 Link-discovery reads: `not_a_link`, `bad_region`, `image_too_large`
 (the arrangement I-runs a request would materialize — the region's
-image on the region family, `d`'s whole arrangement on `project` and
-`discoverable_from` — exceed M8's `MAX_IMAGE_RUNS` = 4096),
-`endsets_too_large` (a `retrieve_endsets` answer would carry more than
+image on the region family, the document's whole arrangement on the
+project and discoverable-from reads — exceed M8's `MAX_IMAGE_RUNS` =
+4096), `endsets_too_large` (a retrieve-endsets answer would carry more than
 M8's `MAX_ENDSET_SPANS` = 65536 spans — the one budget priced on what
 the store hands back rather than on what the request names).
 
 The supersession-class fence — M7's `[K_sup]` sole-writer rule, a
-`make_link` or `emit` whose resolved type lands in the supersession
-class, which writes only through `assert_sup`/`edit_link` — has no code
-of its own and rides `dc_violation`, the claim-schema code `edit_link`'s
-DC guard names.
+make-link or emit whose resolved type lands in the supersession
+class, which is written only by the two supersession ops (assert-sup
+and edit-link, §Links) — has no code of its own and rides
+`dc_violation`, the claim-schema code the edit-link DC guard names.
 
 ### The version-chain refusals
 

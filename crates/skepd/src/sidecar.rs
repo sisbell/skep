@@ -111,19 +111,22 @@ impl CommitMeta {
     /// One `GET /changes` entry: the position and all four fields, a bare
     /// position's rendering as explicit `null`s — the crash-honesty rule of
     /// this file, expressed where the rule is stated rather than at the
-    /// handler. `docs` is the list the FEED renders for a recorded entry —
-    /// the record's own docs REDUCED to the requester's readable ones
-    /// (PUB-6.45) — and is ignored for a bare one, whose docs are the
-    /// reserved null whatever its class. Deliberately NOT [`entry_line`]'s
-    /// convention, which omits absent fields: the file is daemon-private and
+    /// handler. `reduced` is the record's own docs REDUCED to the requester's
+    /// readable ones (PUB-6.45), which is what a recorded entry renders —
+    /// never `Recorded.docs`, which is the WHOLE list and which rendering
+    /// here would hand a requester the home of a draft-homed record they may
+    /// not read (PUB-6.47 licenses their learning it exists, never its home).
+    /// It is ignored for a bare position, whose docs are the reserved null
+    /// whatever its class. Deliberately NOT [`entry_line`]'s convention,
+    /// which omits absent fields: the file is daemon-private and
     /// [`parse_line`] reads absent and null alike, so the shorter line costs
     /// nothing there, while a client reading the wire is owed the field it
     /// asked about.
-    pub fn entry(&self, at: u64, docs: Vec<String>) -> Value {
+    pub fn entry(&self, at: u64, reduced: Vec<String>) -> Value {
         let (docs, op, time, key) = match self {
             CommitMeta::Bare => (Value::Null, Value::Null, Value::Null, Value::Null),
             CommitMeta::Recorded { op, time, key, .. } => (
-                Value::Array(docs.into_iter().map(Value::String).collect()),
+                Value::Array(reduced.into_iter().map(Value::String).collect()),
                 Value::String(op.clone()),
                 Value::Number((*time).into()),
                 key.clone().map(Value::String).unwrap_or(Value::Null),
@@ -852,6 +855,22 @@ mod tests {
                 .expect("json"),
             r#"{"at":3,"docs":null,"key":null,"op":null,"time":null}"#,
             "a bare entry's docs are the reserved null whatever the feed hands in"
+        );
+        // What renders is the REDUCED list, never `Recorded.docs`: a
+        // two-document record shown to a requester who may read one of them
+        // carries that one. The rows above cannot see the difference — their
+        // two lists are equal — so it is pinned here, on the field wire.md
+        // tells clients to dispatch on.
+        let straddle = CommitMeta::Recorded {
+            op: "nullify".into(),
+            docs: vec!["1.0.1.0.1".into(), "1.0.2.0.1".into()],
+            time: 1_700_000_000_000,
+            key: Some("bare".into()),
+        };
+        assert_eq!(
+            serde_json::to_string(&straddle.entry(9, vec!["1.0.2.0.1".into()])).expect("json"),
+            r#"{"at":9,"docs":["1.0.2.0.1"],"key":"bare","op":"nullify","time":1700000000000}"#,
+            "the record's own second document is not rendered to a class that cannot read it"
         );
     }
 }

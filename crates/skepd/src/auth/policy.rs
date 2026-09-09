@@ -114,7 +114,7 @@ pub(crate) fn identity_types() -> &'static TypeAddrs {
 /// the grant `3.90`, `successor-of` `3.59`, `endorse` `3.42`, the consumption
 /// marker `3.91`, the journal designation `3.22`, the rail record `3.60`, the
 /// steward's classification link `3.61` — each cited to its commons row
-/// there, the provisional ones marked OWNER CONFIRM OWED. Adding a member of
+/// there and to the owner's confirmation of 2026-09-07. Adding a member of
 /// PUB-6.64's class is one `AuditClass` arm and one address in this list;
 /// the refusal that reads them takes no edit. The list order is the
 /// recognition order and every address is pairwise prefix-free
@@ -252,10 +252,10 @@ pub(crate) enum CredentialRefusal {
     NullifyNotRetraction,
     /// The NULLIFY class's GRANT-TYPED cell (PUB-6.30): retraction is never a
     /// second revocation path — a share is withdrawn by revoking it, and the
-    /// grant fold reads the audit view (PUB-6.31). Token `nullify_not_revocation`
-    /// — OWNER CONFIRM OWED (the code is the wire's to name; proposed in the
-    /// family's convention beside `nullify_not_retraction`, naming the ground
-    /// the rule states).
+    /// grant fold reads the audit view (PUB-6.31). Token
+    /// `nullify_not_revocation` — the wire's, CONFIRMED by the owner
+    /// 2026-09-07 (wire.md §Credential refusals; the v7.10 changelog entry
+    /// records the confirmation).
     NullifyNotRevocation,
     /// The NULLIFY class's AUDIT-VIEW cell (PUB-6.64): a target of a class
     /// whose honored state the spec reads under the AUDIT view — the
@@ -263,9 +263,8 @@ pub(crate) enum CredentialRefusal {
     /// rail record, the steward's classification link in a published home —
     /// ONE code for the class list; the client splits the face by the
     /// target's type, which the owner can read. Token `nullify_audit_view` —
-    /// OWNER CONFIRM OWED (proposed as the token that names the ground: the
-    /// honored state is read under the audit view, so a retraction clears
-    /// nothing).
+    /// the wire's, CONFIRMED by the owner 2026-09-07 (wire.md §Credential
+    /// refusals; the v7.10 changelog entry records the confirmation).
     NullifyAuditView,
     /// Slot (6).
     AnchorSessionRequired,
@@ -277,8 +276,8 @@ pub(crate) enum CredentialRefusal {
     MintHomeFirst,
     /// The FIRST-MINT publication door (PUB-8.20, owner ruling D2c): an
     /// explicit `published: false` on an account's first `create_new_document`.
-    /// Proposed token `mint_home_public` (owner to confirm, as R1 confirmed
-    /// `mint_home_first`).
+    /// Token `mint_home_public` — the wire's, tabled beside `mint_home_first`
+    /// (wire.md §Credential refusals) and carrying no confirmation debt.
     MintHomePublic,
     /// Slot (7), and the plain path's publish gate (RES-26).
     SignedSessionRequired,

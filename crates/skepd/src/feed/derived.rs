@@ -79,13 +79,15 @@ pub(crate) const STREAMS_FILE: &str = "feed-streams.log";
 /// Its records' one field: the owner accounts, dotted-decimal.
 pub(crate) const STREAMS_OWNERS: &str = "owners";
 
-/// One replayed line.
-enum Line {
+/// One replayed line, parsed — `sidecar.rs`'s vocabulary, which this file
+/// shares its whole discipline with: a LINE is the bytes on disk, a RECORD
+/// is the parsed value, and an ENTRY is a record carrying a position.
+enum Record {
     /// `{"covered":N}` — every position ≤ N is processed.
     Fence(u64),
-    /// A record for position `at`, with its whole object (the feed reads the
+    /// One position's own record, with its whole object (the feed reads the
     /// per-file fields off it).
-    Record(u64, Map<String, Value>),
+    Entry(u64, Map<String, Value>),
 }
 
 /// One derived sidecar: its append handle and its coverage.
@@ -96,46 +98,49 @@ pub(crate) struct DerivedFile {
     coverage: u64,
 }
 
-/// The records a derived file replays: `(position, the line's object)`,
-/// in file order.
-pub(crate) type Records = Vec<(u64, Map<String, Value>)>;
+/// The ENTRIES a derived file replays — its position-carrying records,
+/// `(position, the record's object)`, in file order. A fence carries no
+/// position and so is not one of these; it is folded into the coverage.
+pub(crate) type Entries = Vec<(u64, Map<String, Value>)>;
 
 impl DerivedFile {
     /// Replay `name` in `dir`: truncate a torn tail, drop what describes
     /// another journal (rewriting the file without it), and hand back the
-    /// records at or below `head` with the file's coverage.
-    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(DerivedFile, Records)> {
+    /// entries at or below `head` with the file's coverage.
+    pub fn open(dir: &Path, name: &'static str, head: u64) -> io::Result<(DerivedFile, Entries)> {
         let path = dir.join(name);
         let mut file = OpenOptions::new().create(true).read(true).append(true).open(&path)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
-        let (lines, valid_end) = parse_lines(&bytes);
+        let (records, valid_end) = parse_records(&bytes);
         if valid_end < bytes.len() {
             file.set_len(valid_end as u64)?;
         }
         let mut coverage = 0u64;
-        let mut records = Vec::new();
+        let mut entries = Vec::new();
         let mut foreign = false;
-        for line in lines {
-            match line {
-                Line::Fence(n) if n <= head => coverage = coverage.max(n),
-                Line::Record(at, m) if at <= head => {
+        for record in records {
+            match record {
+                Record::Fence(n) if n <= head => coverage = coverage.max(n),
+                Record::Entry(at, m) if at <= head => {
                     coverage = coverage.max(at);
-                    records.push((at, m));
+                    entries.push((at, m));
                 }
-                Line::Fence(_) | Line::Record(..) => foreign = true,
+                Record::Fence(_) | Record::Entry(..) => foreign = true,
             }
         }
         let mut this = DerivedFile { file, dir: dir.to_path_buf(), name, coverage };
         if foreign {
             // Purge what is not this journal's, once, so it cannot come back.
-            let lines = records
+            let kept = entries
                 .iter()
-                .map(|(at, m)| record_line(*at, m.iter().map(|(k, v)| (k.clone(), v.clone()))))
+                .map(|(at, m)| {
+                    replayed_record_object(*at, m.iter().map(|(k, v)| (k.clone(), v.clone())))
+                })
                 .collect();
-            this.rewrite(lines, coverage)?;
+            this.rewrite(kept, coverage)?;
         }
-        Ok((this, records))
+        Ok((this, entries))
     }
 
     /// Every position at or below this is processed into the file.
@@ -163,16 +168,17 @@ impl DerivedFile {
         Ok(())
     }
 
-    /// Rewrite the whole file as `lines` behind a fence at `covered`, through
-    /// a temp file renamed over the original (compaction, and the purge of a
-    /// foreign fence). `lines` are whole record objects already carrying
-    /// their `at`.
-    pub fn rewrite(&mut self, lines: Vec<Value>, covered: u64) -> io::Result<()> {
+    /// Rewrite the whole file as `records` behind a fence at `covered`,
+    /// through a temp file renamed over the original (compaction, and the
+    /// purge of a foreign fence). `records` are whole record objects already
+    /// carrying their `at`; [`crate::sidecar::line_bytes`] is what makes each
+    /// a line.
+    pub fn rewrite(&mut self, records: Vec<Value>, covered: u64) -> io::Result<()> {
         let path = self.dir.join(self.name);
         let tmp = self.dir.join(format!("{}.compact", self.name));
         let mut out = Vec::new();
-        for line in lines {
-            out.extend_from_slice(&line_bytes(line));
+        for record in records {
+            out.extend_from_slice(&line_bytes(record));
         }
         out.extend_from_slice(&fence_line(covered));
         let mut f = File::create(&tmp)?;
@@ -197,10 +203,11 @@ pub(crate) fn record_object(at: u64, fields: Vec<(&'static str, Value)>) -> Valu
     obj(pairs)
 }
 
-/// One REPLAYED line, re-sorted — [`DerivedFile::open`]'s purge alone,
-/// whose keys are owned because they came off disk. Every other caller
-/// holds `&'static str` keys and goes through [`record_object`].
-fn record_line(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
+/// The record object of one REPLAYED record, re-sorted —
+/// [`DerivedFile::open`]'s purge alone, whose keys are owned because they
+/// came off disk. Every other caller holds `&'static str` keys and goes
+/// through [`record_object`], of which this is the owned-key twin.
+fn replayed_record_object(at: u64, fields: impl IntoIterator<Item = (String, Value)>) -> Value {
     // Sorted by key — the codec's own device for `&'static str` keys, done
     // here for owned ones — so a rewritten line is byte-identical to an
     // appended one whatever backs serde_json's map.
@@ -217,16 +224,16 @@ fn fence_line(covered: u64) -> Vec<u8> {
     line_bytes(obj(vec![("covered", Value::Number(covered.into()))]))
 }
 
-/// Whole newline-terminated lines; trust ends at the first that is torn or
-/// does not parse. Returns the lines and the byte offset after the last
-/// whole one.
-fn parse_lines(bytes: &[u8]) -> (Vec<Line>, usize) {
+/// The records of every whole newline-terminated line; trust ends at the
+/// first line that is torn or does not parse. Returns those records and the
+/// byte offset after the last whole line.
+fn parse_records(bytes: &[u8]) -> (Vec<Record>, usize) {
     let mut out = Vec::new();
     let mut pos = 0;
     while pos < bytes.len() {
         let Some(nl) = bytes[pos..].iter().position(|&b| b == b'\n') else { break };
         match parse_line(&bytes[pos..pos + nl]) {
-            Some(line) => out.push(line),
+            Some(record) => out.push(record),
             None => break,
         }
         pos += nl + 1;
@@ -234,15 +241,16 @@ fn parse_lines(bytes: &[u8]) -> (Vec<Line>, usize) {
     (out, pos)
 }
 
-/// One line: a fence, or a record with a position. Anything else is torn.
-fn parse_line(line: &[u8]) -> Option<Line> {
+/// One line's record: a fence, or an entry with a position. Anything else is
+/// torn.
+fn parse_line(line: &[u8]) -> Option<Record> {
     let v: Value = serde_json::from_slice(line).ok()?;
     let Value::Object(m) = v else { return None };
     if let Some(c) = m.get("covered") {
-        return Some(Line::Fence(c.as_u64()?));
+        return Some(Record::Fence(c.as_u64()?));
     }
     let at = m.get("at")?.as_u64()?;
-    Some(Line::Record(at, m))
+    Some(Record::Entry(at, m))
 }
 
 #[cfg(test)]

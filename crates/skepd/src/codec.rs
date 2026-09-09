@@ -1955,13 +1955,14 @@ fn code_name(c: RejectCode) -> &'static str {
         RejectCode::AlreadySeated => "already_seated",
         RejectCode::NotContentSubspace => "not_content_subspace",
         // The version-chain model's three write-path refusals (PUB-8.2's
-        // routed item; owner ruling D2b) — proposed tokens, the owner to
-        // confirm as `mint_home_public` was.
+        // routed item; owner ruling D2b) — the wire's own tokens, tabled with
+        // their dispositions and faces in §The version-chain refusals.
         RejectCode::PublishedTarget => "published_target",
         RejectCode::PrivateVersionOfPublished => "private_version_of_published",
         RejectCode::PrivateSourceVersionless => "private_source_versionless",
         // The publish shot's codes (lane 3.2): `withheld` is PUB-8.4's pinned
-        // token; the four beside it are proposed, the owner to confirm.
+        // token, and the four beside it are the wire's own, tabled with their
+        // dispositions in §The publish shot and head-float.
         RejectCode::Withheld => "withheld",
         RejectCode::BadRun => "bad_run",
         RejectCode::BaseNotInChain => "base_not_in_chain",

@@ -27,14 +27,19 @@ use skep_links::{HasLinks, ShippedType, View};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Doc {
     pub addr: Address,
-    pub owner: Option<Address>,
+    /// The DRAFT's owner account, or `None` for a published document —
+    /// which has an owner this feed never needs. ω is total on a registered
+    /// document, so the name says which of the two facts this field is:
+    /// asked bare, "the owner" of a published document is an account, and
+    /// this answers nothing about it.
+    pub draft_owner: Option<Address>,
 }
 
 impl Doc {
     /// Whether this document is a draft — the feed's stream-keying and
     /// bitmap test, never its mask (the mask is `readable`'s).
     pub fn is_draft(&self) -> bool {
-        self.owner.is_some()
+        self.draft_owner.is_some()
     }
 }
 
@@ -46,8 +51,8 @@ pub(crate) fn classify(world: &World, addrs: Vec<Address>) -> Vec<Doc> {
     addrs
         .into_iter()
         .map(|addr| {
-            let owner = world.owner_account(&trunk_of(&addr)).cloned();
-            Doc { addr, owner }
+            let draft_owner = world.owner_account(&trunk_of(&addr)).cloned();
+            Doc { addr, draft_owner }
         })
         .collect()
 }

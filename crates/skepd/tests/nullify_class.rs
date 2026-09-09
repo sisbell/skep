@@ -21,7 +21,7 @@ use common::*;
 use serde_json::Value;
 
 /// The GRANTS class is `common::T_GRANT` (3.90). The audit-view members, as
-/// pinned in `skep_engine::types` (the PROVISIONAL ones marked there).
+/// pinned in `skep_engine::types` (each confirmed by the owner 2026-09-07).
 const T_SUCCESSOR_OF: &str = "1.1.0.1.0.1.0.3.59";
 const T_ENDORSE: &str = "1.1.0.1.0.1.0.3.42";
 const T_MARKER: &str = "1.1.0.1.0.1.0.3.91";

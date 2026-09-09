@@ -112,12 +112,18 @@ pub(crate) struct FeedClass<'a> {
     /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
     pub subtree: Vec<Address>,
-    /// The grant-selected issuers, each with the union of the content
-    /// prefixes it granted this principal (`World::issuers_for`, PUB-7.25).
+    /// The grant-selected issuers (`World::issuers_for`, PUB-7.25), each
+    /// `(issuer account, the union of the content prefixes it granted this
+    /// principal)` — the issuer being the draft-stream key this clause
+    /// opens.
     pub issuers: Vec<(Address, Vec<Address>)>,
-    /// The live ANY-PRINCIPAL set (`World::universal_grants`, PUB-7.22),
-    /// empty for the guest (grants reach principals alone, PUB-5.109).
-    pub universal: Vec<(Address, Vec<Address>)>,
+    /// The live ANY-PRINCIPAL prefixes (`World::universal_grants`, PUB-7.22),
+    /// each `(covered prefix, the accounts that issued it)` — the TRANSPOSE
+    /// of [`FeedClass::issuers`]' pair, of which this module reads the
+    /// prefix alone, as a key range over the position index rather than as a
+    /// stream key. Empty for the guest (grants reach principals alone,
+    /// PUB-5.109).
+    pub universal_prefixes: Vec<(Address, Vec<Address>)>,
 }
 
 impl<'a> FeedClass<'a> {
@@ -140,8 +146,9 @@ impl<'a> FeedClass<'a> {
             cur = parent(&a);
         }
         let issuers = account.as_ref().map(|pa| world.issuers_for(pa)).unwrap_or_default();
-        let universal = if principal.is_some() { world.universal_grants() } else { Vec::new() };
-        FeedClass { readable, subtree, issuers, universal }
+        let universal_prefixes =
+            if principal.is_some() { world.universal_grants() } else { Vec::new() };
+        FeedClass { readable, subtree, issuers, universal_prefixes }
     }
 }
 
@@ -229,15 +236,15 @@ impl Feed {
         let snap = engine.kernel().snapshot();
         let world = snap.world();
 
-        let (mut f_index, index_lines) = DerivedFile::open(dir, INDEX_FILE, head)?;
-        let (mut f_offsets, offset_lines) = DerivedFile::open(dir, OFFSETS_FILE, head)?;
-        let (mut f_masked, masked_lines) = DerivedFile::open(dir, MASKED_FILE, head)?;
-        let (mut f_streams, stream_lines) = DerivedFile::open(dir, STREAMS_FILE, head)?;
+        let (mut f_index, index_entries) = DerivedFile::open(dir, INDEX_FILE, head)?;
+        let (mut f_offsets, offset_entries) = DerivedFile::open(dir, OFFSETS_FILE, head)?;
+        let (mut f_masked, masked_entries) = DerivedFile::open(dir, MASKED_FILE, head)?;
+        let (mut f_streams, stream_entries) = DerivedFile::open(dir, STREAMS_FILE, head)?;
 
-        // ── the classification map: the index file's lines for positions
+        // ── the classification map: the index file's entries for positions
         //    the log holds, then this open's walk, then the index's tail ──
         let mut docs: BTreeMap<u64, Vec<Doc>> = BTreeMap::new();
-        for (at, m) in &index_lines {
+        for (at, m) in &index_entries {
             if !log.entries.contains_key(at) {
                 continue;
             }
@@ -296,7 +303,7 @@ impl Feed {
         }
 
         // ── the bitmap, and its complement ──
-        let mut masked: BTreeSet<u64> = masked_lines
+        let mut masked: BTreeSet<u64> = masked_entries
             .iter()
             .map(|(at, _)| *at)
             .filter(|at| log.entries.contains_key(at))
@@ -305,7 +312,7 @@ impl Feed {
         let masked_tail: Vec<u64> =
             log.entries.range(masked_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
         for at in masked_tail {
-            if is_masked(docs.get(&at)) {
+            if masked_at_commit(docs.get(&at)) {
                 masked.insert(at);
                 f_masked.append(at, vec![])?;
             }
@@ -316,7 +323,7 @@ impl Feed {
 
         // ── the per-owner draft streams ──
         let mut streams: BTreeMap<Address, Vec<u64>> = BTreeMap::new();
-        for (at, m) in &stream_lines {
+        for (at, m) in &stream_entries {
             if !log.entries.contains_key(at) {
                 continue;
             }
@@ -345,7 +352,7 @@ impl Feed {
 
         // ── the offset array, checked against the log's own replay ──
         let offsets_agree = !log.rewritten
-            && offset_lines.iter().all(|(at, m)| {
+            && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64) == log.offsets.get(at).copied()
             });
         if offsets_agree {
@@ -532,7 +539,7 @@ impl Inner {
                 at,
             );
         }
-        if is_masked(Some(&docs)) {
+        if masked_at_commit(Some(&docs)) {
             self.masked.insert(at);
             report(self.files.masked.append(at, vec![]), MASKED_FILE, at);
         } else {
@@ -562,7 +569,7 @@ impl Inner {
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
         let reduced: Vec<&Doc> = docs.iter().filter(|d| (class.readable)(&d.addr)).collect();
         if !docs.is_empty() && reduced.is_empty() {
-            return None; // masked
+            return None; // masked at this class
         }
         if let Some(under) = &q.under {
             if !reduced.iter().any(|d| is_prefix(under, d.addr.tumbler())) {
@@ -627,7 +634,10 @@ impl Inner {
                 ));
             }
         }
-        for (prefix, _issuers) in &class.universal {
+        // The pair here is the TRANSPOSE of the issuers loop's above: a
+        // covered PREFIX first, its issuers second. It keys the position
+        // index, never `streams`, which is keyed by owner account.
+        for (prefix, _issuers) in &class.universal_prefixes {
             // The universal term (PUB-7.22): the live any-principal prefix's
             // own index lists — the mask's grant clause admits exactly the
             // entries the issuing owner covers.
@@ -647,7 +657,7 @@ impl Inner {
     fn names_under(&self, at: u64, issuer: &Address, prefixes: &[Address]) -> bool {
         self.docs.get(&at).is_some_and(|ds| {
             ds.iter().any(|d| {
-                d.owner.as_ref() == Some(issuer)
+                d.draft_owner.as_ref() == Some(issuer)
                     && prefixes.iter().any(|p| is_prefix(p.tumbler(), d.addr.tumbler()))
             })
         })
@@ -676,15 +686,25 @@ fn from(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     positions[i..].iter().copied()
 }
 
-/// The bitmap's test: docs non-empty and every one a draft.
-fn is_masked(docs: Option<&Vec<Doc>>) -> bool {
+/// The bitmap's test: docs non-empty and every one a draft. The fact is
+/// class-independent and fixed at mint, so the name says what it IS and
+/// not when it is evaluated — [`Feed::open`] calls it for the derived
+/// tail, long after the commit.
+///
+/// It is exactly the mask at the GUEST's class — a guest reads published
+/// documents alone, so "every named document is a draft" is "none readable
+/// to a guest" — which is why the bitmap's complement is the published
+/// stream a guest page walks in O(page). THE mask, the per-class verdict
+/// wire.md gives the bare word to, is [`Inner::visible`]'s, computed per
+/// entry against the requester's own predicate (PUB-7.20).
+fn masked_at_commit(docs: Option<&Vec<Doc>>) -> bool {
     docs.is_some_and(|ds| !ds.is_empty() && ds.iter().all(Doc::is_draft))
 }
 
 /// The owner accounts of an entry's drafts — the streams the position
 /// enters.
 fn owners_of(docs: Option<&Vec<Doc>>) -> BTreeSet<Address> {
-    docs.map(|ds| ds.iter().filter_map(|d| d.owner.clone()).collect()).unwrap_or_default()
+    docs.map(|ds| ds.iter().filter_map(|d| d.draft_owner.clone()).collect()).unwrap_or_default()
 }
 
 fn doc_strings(docs: &[Doc]) -> Value {

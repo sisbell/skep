@@ -176,7 +176,7 @@ pub(crate) fn canonical_identity(world: &World) -> IdentityState {
     let mut state = IdentityState::genesis();
     loop {
         let mut honored_this_pass = false;
-        let mut still = Vec::with_capacity(pending.len());
+        let mut still_pending = Vec::with_capacity(pending.len());
         for cand in pending {
             let (next, verdict) = state.step(types, &ctx, &cand.deposit());
             match verdict {
@@ -186,10 +186,10 @@ pub(crate) fn canonical_identity(world: &World) -> IdentityState {
                 }
                 // Inert now may honor after a later deposit lands (a
                 // holder act ahead of its delegator-homed genesis).
-                _ => still.push(cand),
+                _ => still_pending.push(cand),
             }
         }
-        pending = still;
+        pending = still_pending;
         if !honored_this_pass || pending.is_empty() {
             return state;
         }

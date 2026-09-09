@@ -302,8 +302,8 @@ impl CommitsLog {
         let mut entries = BTreeMap::new();
         let mut offsets = BTreeMap::new();
         let mut min_since = 0u64;
-        for (offset, rec) in records {
-            match rec {
+        for (offset, record) in records {
+            match record {
                 Record::Entry(at, meta) => {
                     entries.insert(at, meta);
                     offsets.insert(at, LineOffset(offset as u64));
@@ -363,8 +363,8 @@ impl CommitsLog {
         // the feed's memory that does not depend on the journal, and
         // discarding it over a floor nobody can locate would lose the only
         // record of those commits that still exists.
-        if let Some(f) = retention_floor(engine) {
-            min_since = min_since.max(f.saturating_sub(1));
+        if let Some(floor) = retention_floor(engine) {
+            min_since = min_since.max(floor.saturating_sub(1));
         }
         // The rewrite is unconditional under a discarded fence, so a journal
         // that later grows past that number cannot resurrect it from the
@@ -372,10 +372,7 @@ impl CommitsLog {
         let mut rewritten = false;
         if stale_fence || entries.keys().next().is_some_and(|&oldest| oldest <= min_since) {
             entries = entries.split_off(&min_since.saturating_add(1));
-            let (f, o, l) = rewrite(dir, &entries, min_since)?;
-            file = f;
-            offsets = o;
-            len = l;
+            (file, offsets, len) = rewrite(dir, &entries, min_since)?;
             rewritten = true;
             walked.retain(|w| w.at > min_since);
         }

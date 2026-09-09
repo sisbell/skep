@@ -692,7 +692,7 @@ mod tests {
     /// cell included: bound at 80, configured `http://127.0.0.1` is silent
     /// and `http://127.0.0.1:8080` warns, naming the origin.
     #[test]
-    fn warning_arms_fire_exactly() {
+    fn each_warning_arm_fires_only_on_its_own_cell() {
         assert!(startup_warnings(&cfg_with(8642, false, &["https://b.example"]), true).is_empty());
         assert_eq!(
             startup_warnings(&cfg_with(8642, true, &["https://b.example"]), true),

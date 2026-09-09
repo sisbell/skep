@@ -495,11 +495,11 @@ pub fn body_cap(path: &str) -> usize {
 }
 
 /// `/changes` page size when `limit` is absent.
-const CHANGES_LIMIT_DEFAULT: usize = 256;
+const DEFAULT_CHANGES_LIMIT: usize = 256;
 
 /// `/changes` page-size ceiling; a larger request is refused, not clamped
 /// (the never-silent posture applied to paging).
-const CHANGES_LIMIT_MAX: usize = 4096;
+const MAX_CHANGES_LIMIT: usize = 4096;
 
 /// The embedded authoring client (wire v6): one file, compiled in so the
 /// binary is self-contained.
@@ -1783,8 +1783,8 @@ impl Daemon {
     /// same head publication and grant state, same class ⇒ byte-equal
     /// pages, across repeats and restarts.
     fn get_changes(&self, resolved: &Resolved, query: Option<&str>) -> Reply {
-        let q = match changes_params(query) {
-            Ok(q) => q,
+        let query = match changes_params(query) {
+            Ok(query) => query,
             Err(detail) => return refuse(TransportError::MalformedChanges, Some(&detail)),
         };
         // ONE head snapshot per request (PUB-6.39, PUB-6.40): the predicate
@@ -1792,7 +1792,7 @@ impl Daemon {
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
         let class = FeedClass::of(head.world(), resolved.principal());
-        match self.writes.changes(&class, &q) {
+        match self.writes.changes(&class, &query) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(
                 200,
@@ -1962,12 +1962,12 @@ fn credential_refused(kind: OpKind, r: &CredentialRefusal) -> Reply {
 
 /// The `/challenge` query: exactly `principal=<non-negative integer>`.
 fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
-    let q = match query {
+    let query = match query {
         None | Some("") => return Err("the required parameter is principal=<id>".into()),
-        Some(q) => q,
+        Some(query) => query,
     };
     let mut principal: Option<u64> = None;
-    for (k, v) in query_pairs(q)? {
+    for (k, v) in query_pairs(query)? {
         match k {
             "principal" => {
                 at_most_once(&principal, "parameter", "principal")?;
@@ -1989,8 +1989,9 @@ fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
 /// one discipline covers them all and each parser adds only its own
 /// vocabulary: an unknown or repeated parameter is a named refusal, which
 /// is the wire's never-silent posture applied to queries.
-fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
-    q.split('&')
+fn query_pairs(query: &str) -> Result<Vec<(&str, &str)>, String> {
+    query
+        .split('&')
         .map(|pair| pair.split_once('=').ok_or_else(|| format!("malformed parameter '{pair}'")))
         .collect()
 }
@@ -2003,11 +2004,11 @@ fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
 /// query parsers differ by.
 ///
 /// One home because the alternative is one literal name per field, kept in
-/// step with the slot it guards by inspection alone: a `since.is_some()`
+/// step with the field it guards by inspection alone: a `since.is_some()`
 /// left standing in the `limit` arm accepts a repeated `limit` and refuses a
 /// `limit` that follows a `since`, and the shape compiles either way.
-fn at_most_once<T>(slot: &Option<T>, field_kind: &str, name: &str) -> Result<(), String> {
-    match slot {
+fn at_most_once<T>(seen: &Option<T>, field_kind: &str, name: &str) -> Result<(), String> {
+    match seen {
         Some(_) => Err(format!("duplicate {field_kind} '{name}'")),
         None => Ok(()),
     }
@@ -2017,17 +2018,17 @@ fn at_most_once<T>(slot: &Option<T>, field_kind: &str, name: &str) -> Result<(),
 /// `limit=<1..=4096>`, `under=<address-or-prefix>` (wire v7.8, PUB-7.31)
 /// and `drafts=true|false` (the drafts-only narrowing, PUB-7.35).
 fn changes_params(query: Option<&str>) -> Result<Query, String> {
-    let q = match query {
+    let query = match query {
         None | Some("") => {
             return Err("the required parameter is since=<position>".into());
         }
-        Some(q) => q,
+        Some(query) => query,
     };
     let mut since: Option<u64> = None;
     let mut limit: Option<usize> = None;
     let mut under: Option<skep_address::Tumbler> = None;
     let mut drafts: Option<bool> = None;
-    for (k, v) in query_pairs(q)? {
+    for (k, v) in query_pairs(query)? {
         match k {
             "since" => {
                 at_most_once(&since, "parameter", "since")?;
@@ -2040,8 +2041,8 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
                 let n: usize = v
                     .parse()
                     .map_err(|_| format!("limit: '{v}' is not a count"))?;
-                if n == 0 || n > CHANGES_LIMIT_MAX {
-                    return Err(format!("limit: must be 1..={CHANGES_LIMIT_MAX}"));
+                if n == 0 || n > MAX_CHANGES_LIMIT {
+                    return Err(format!("limit: must be 1..={MAX_CHANGES_LIMIT}"));
                 }
                 limit = Some(n);
             }
@@ -2068,7 +2069,7 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
     let since = since.ok_or_else(|| String::from("the required parameter is since=<position>"))?;
     Ok(Query {
         since,
-        limit: limit.unwrap_or(CHANGES_LIMIT_DEFAULT),
+        limit: limit.unwrap_or(DEFAULT_CHANGES_LIMIT),
         under,
         drafts_only: drafts.unwrap_or(false),
     })
@@ -2102,12 +2103,12 @@ fn op_at_envelope(body: &[u8]) -> Result<(Seq, Value), String> {
 /// The `/dump` query: nothing, or exactly `at=<decimal position>`.
 #[cfg(feature = "observe")]
 fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
-    let q = match query {
+    let query = match query {
         None | Some("") => return Ok(None),
-        Some(q) => q,
+        Some(query) => query,
     };
     let mut at: Option<Seq> = None;
-    for (k, v) in query_pairs(q)? {
+    for (k, v) in query_pairs(query)? {
         match k {
             "at" => {
                 at_most_once(&at, "parameter", "at")?;
@@ -2225,7 +2226,7 @@ impl std::fmt::Debug for Skepd {
 /// PRECONDITION: `workers >= 1`. A count of zero asks for a server that
 /// serves nothing, which is a caller's bug rather than an outcome, so it
 /// stops here loudly instead of being repaired into a one-worker server —
-/// the same posture `CHANGES_LIMIT_MAX` takes on the wire, where an
+/// the same posture `MAX_CHANGES_LIMIT` takes on the wire, where an
 /// out-of-range page size is refused and never clamped. `main.rs`
 /// establishes it by refusing a zero count where the flag is read, which is
 /// also what makes its startup line's worker count honest.

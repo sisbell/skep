@@ -181,8 +181,8 @@ impl WritePath {
 
     /// The data behind `GET /changes` at the requester's class — the key
     /// set the route resolved off its one head snapshot, and the query.
-    pub fn changes(&self, class: &FeedClass<'_>, q: &Query) -> ChangesAnswer {
-        self.feed.page(class, q)
+    pub fn changes(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
+        self.feed.page(class, query)
     }
 
     /// The HEAD position's recorded wall-clock time (`/health`'s

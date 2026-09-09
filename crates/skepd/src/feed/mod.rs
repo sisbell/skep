@@ -258,7 +258,7 @@ struct Inner {
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
     ///
     /// INVARIANT its use rests on: every member has a non-empty entry in
-    /// [`Inner::docs`]. [`Inner::index_position`] establishes it, one
+    /// [`Inner::docs`]. [`Inner::fold_position`] establishes it, one
     /// classification deciding both. The REPLAY does not: this set is seeded
     /// from `feed-masked.log` and `docs` from `feed-index.log`,
     /// independently.
@@ -373,11 +373,11 @@ impl Feed {
                 }
             }
         }
-        let index_cov = f_index.coverage();
+        let index_coverage = f_index.coverage();
         let index_tail: Vec<u64> =
-            log.entries.range(index_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(index_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
         for &at in &index_tail {
-            if let std::collections::btree_map::Entry::Vacant(slot) = docs.entry(at) {
+            if let std::collections::btree_map::Entry::Vacant(vacant) = docs.entry(at) {
                 let addrs: Vec<Address> = match log.entries.get(&at) {
                     // Every name reads: `CommitsLog` demoted the recorded
                     // positions whose did not, so this parse drops nothing.
@@ -391,7 +391,7 @@ impl Feed {
                     None => Vec::new(),
                 };
                 if !addrs.is_empty() {
-                    slot.insert(classify(world, addrs));
+                    vacant.insert(classify(world, addrs));
                 }
             }
             if let Some(ds) = docs.get(&at) {
@@ -419,9 +419,9 @@ impl Feed {
             .map(|(at, _)| *at)
             .filter(|at| log.entries.contains_key(at))
             .collect();
-        let masked_cov = f_masked.coverage();
+        let masked_coverage = f_masked.coverage();
         let masked_tail: Vec<u64> =
-            log.entries.range(masked_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(masked_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
         for at in masked_tail {
             if masked_at_commit(docs.get(&at).map(Vec::as_slice).unwrap_or(&[])) {
                 masked.insert(at);
@@ -470,14 +470,14 @@ impl Feed {
             positions.sort_unstable();
             positions.dedup();
         }
-        let streams_cov = f_streams.coverage();
+        let streams_coverage = f_streams.coverage();
         let streams_tail: Vec<u64> =
-            log.entries.range(streams_cov.saturating_add(1)..).map(|(k, _)| *k).collect();
+            log.entries.range(streams_coverage.saturating_add(1)..).map(|(k, _)| *k).collect();
         for at in streams_tail {
             let owners = owners_of(docs.get(&at).map(Vec::as_slice).unwrap_or(&[]));
             if !owners.is_empty() {
-                for o in &owners {
-                    streams.entry(o.clone()).or_default().push(at);
+                for owner in &owners {
+                    streams.entry(owner.clone()).or_default().push(at);
                 }
                 f_streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))])?;
             }
@@ -496,13 +496,13 @@ impl Feed {
                     == log.offsets.get(at).map(|o| o.0)
             });
         if offsets_agree {
-            let offsets_cov = f_offsets.coverage();
-            let tail: Vec<(u64, LineOffset)> = log
+            let offsets_coverage = f_offsets.coverage();
+            let offsets_tail: Vec<(u64, LineOffset)> = log
                 .offsets
-                .range(offsets_cov.saturating_add(1)..)
+                .range(offsets_coverage.saturating_add(1)..)
                 .map(|(k, v)| (*k, *v))
                 .collect();
-            for (at, offset) in tail {
+            for (at, offset) in offsets_tail {
                 f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.0.into()))])?;
             }
             f_offsets.fence(head)?;
@@ -603,25 +603,25 @@ impl Feed {
         let Some(offset) = inner.log.record(serial, at, op, rendered, key) else {
             return;
         };
-        inner.index_position(at, offset, classify(world, docs));
+        inner.fold_position(at, offset, classify(world, docs));
     }
 
     /// The data behind `GET /changes` at `class`.
-    pub fn page(&self, class: &FeedClass<'_>, q: &Query) -> ChangesAnswer {
+    pub fn page(&self, class: &FeedClass<'_>, query: &Query) -> ChangesAnswer {
         let inner = self.inner.lock();
-        if q.since < inner.log.min_since {
+        if query.since < inner.log.min_since {
             return ChangesAnswer::Reclaimed { floor: inner.log.floor() };
         }
-        let Some(start) = q.since.checked_add(1) else {
-            return ChangesAnswer::Page { entries: Vec::new(), last: q.since, more: false };
+        let Some(start) = query.since.checked_add(1) else {
+            return ChangesAnswer::Page { entries: Vec::new(), last: query.since, more: false };
         };
-        let merge = Merge::new(inner.sources(class, q, start));
+        let merge = Merge::new(inner.sources(class, query, start));
         let mut entries = Vec::new();
-        let mut last = q.since;
+        let mut last = query.since;
         let mut more = false;
         for at in merge {
-            let Some((meta, reduced)) = inner.visible(class, q, at) else { continue };
-            if entries.len() == q.limit {
+            let Some((meta, reduced)) = inner.visible(class, query, at) else { continue };
+            if entries.len() == query.limit {
                 more = true;
                 break;
             }
@@ -651,7 +651,7 @@ impl Inner {
     /// its file's fence reporting it covered — which is a short candidate set
     /// claiming completeness, not the silent incompleteness the coverage
     /// check closes.
-    fn index_position(&mut self, at: u64, offset: LineOffset, docs: Vec<Doc>) {
+    fn fold_position(&mut self, at: u64, offset: LineOffset, docs: Vec<Doc>) {
         report_append_failure(
             self.files
                 .offsets
@@ -683,8 +683,8 @@ impl Inner {
         }
         let owners = owners_of(&docs);
         if !owners.is_empty() {
-            for o in &owners {
-                self.streams.entry(o.clone()).or_default().push(at);
+            for owner in &owners {
+                self.streams.entry(owner.clone()).or_default().push(at);
             }
             report_append_failure(
                 self.files.streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]),
@@ -700,25 +700,30 @@ impl Inner {
     /// THE MASK, per entry (PUB-7.20; PUB-6.44–6.45), plus the narrowings'
     /// per-entry predicates: the entry's meta and its docs REDUCED to the
     /// requester's readable ones, or `None` when the entry is omitted.
-    fn visible(&self, class: &FeedClass<'_>, q: &Query, at: u64) -> Option<(&CommitMeta, Vec<&Doc>)> {
+    fn visible(
+        &self,
+        class: &FeedClass<'_>,
+        query: &Query,
+        at: u64,
+    ) -> Option<(&CommitMeta, Vec<&Doc>)> {
         let meta = self.log.entries.get(&at)?;
         let docs: &[Doc] = self.docs.get(&at).map(Vec::as_slice).unwrap_or(&[]);
         let reduced: Vec<&Doc> = docs.iter().filter(|d| class.readable(&d.addr)).collect();
         if !docs.is_empty() && reduced.is_empty() {
             return None; // masked at this class
         }
-        if let Some(under) = &q.under {
+        if let Some(under) = &query.under {
             if !reduced.iter().any(|d| is_prefix(under, d.addr.tumbler())) {
                 return None;
             }
         }
-        if q.drafts_only && !reduced.iter().any(|d| d.is_draft()) {
+        if query.drafts_only && !reduced.iter().any(|d| d.is_draft()) {
             return None;
         }
         Some((meta, reduced))
     }
 
-    /// The candidate sources for `class` and `q`, each an ascending iterator
+    /// The candidate sources for `class` and `query`, each an ascending iterator
     /// of positions at or above `start` — what the merge unions. Exact by
     /// the mask, and complete by construction in each of the two branches
     /// this function has, which are complete for different reasons.
@@ -738,11 +743,11 @@ impl Inner {
     fn sources<'s>(
         &'s self,
         class: &'s FeedClass<'_>,
-        q: &'s Query,
+        query: &'s Query,
         start: u64,
     ) -> Vec<Box<dyn Iterator<Item = u64> + 's>> {
         let mut sources: Vec<Box<dyn Iterator<Item = u64> + 's>> = Vec::new();
-        if let Some(under) = &q.under {
+        if let Some(under) = &query.under {
             if self.merge_beats_walk(under, start) {
                 // MERGE (PUB-7.32, PUB-7.33): the index lists under the
                 // prefix, an unreadable document's whole list skipped on ONE
@@ -758,12 +763,12 @@ impl Inner {
             // WALK: the visible stream below, the prefix tested per entry
             // by `visible`.
         }
-        if !q.drafts_only {
+        if !query.drafts_only {
             sources.push(Box::new(self.published.range(start..).copied()));
         }
-        for key in &class.subtree {
-            if let Some(s) = self.streams.get(key) {
-                sources.push(Box::new(at_or_above(s, start)));
+        for account in &class.subtree {
+            if let Some(stream) = self.streams.get(account) {
+                sources.push(Box::new(at_or_above(stream, start)));
             }
         }
         for (issuer, prefixes) in &class.issuers {

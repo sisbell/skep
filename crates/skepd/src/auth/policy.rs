@@ -652,7 +652,7 @@ fn publish_gate(
     // execute's own code and is never told whether it is published.
     let m3 = world.m3();
     let owned = |a: &Address| m3.is_registered_document(a) && m3.is_effective_owner(principal, a);
-    let homed = |home: &Address| -> Option<CredentialRefusal> {
+    let homed_refusal = |home: &Address| -> Option<CredentialRefusal> {
         (owned(home) && published(world, home))
             .then_some(CredentialRefusal::SignedSessionRequired)
     };
@@ -715,9 +715,9 @@ fn publish_gate(
         Op::Insert { doc, .. }
         | Op::Delete { doc, .. }
         | Op::Copy { doc, .. }
-        | Op::Rearrange { doc, .. } => homed(doc),
+        | Op::Rearrange { doc, .. } => homed_refusal(doc),
         Op::MakeLink { home, .. } | Op::Emit { home, .. } | Op::AssertSup { home, .. } => {
-            homed(home)
+            homed_refusal(home)
         }
         // `edit_link` DEPOSITS TWICE (lane 4.2, F1): the successor into
         // `d_s`, the supersession CLAIM into `d_a` — M7's `editlink` files
@@ -1067,7 +1067,7 @@ pub(crate) fn precheck(
     // that account established; a bare session never satisfies it; the
     // record is refused WHOLE. Genesis is exempt (the seeding hand records
     // the initial set, flags included).
-    let anchor_act = match &effect {
+    let anchor_subject = match &effect {
         Effect::Retire { account, removed } => {
             let set = identity.key_set(account);
             removed.iter().any(|fp| set.is_anchor(fp)).then_some(account)
@@ -1077,7 +1077,7 @@ pub(crate) fn precheck(
         }
         _ => None,
     };
-    if let Some(account) = anchor_act {
+    if let Some(account) = anchor_subject {
         let set = identity.key_set(account);
         if !signer.is_some_and(|fp| set.is_anchor(fp)) {
             return Err(CredentialRefusal::AnchorSessionRequired);

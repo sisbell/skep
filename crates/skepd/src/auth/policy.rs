@@ -419,49 +419,34 @@ pub(crate) fn nullify_refusal(
     let class = write_types().write_class(&spans)?;
     let m3 = world.m3();
     let claimed = identity.claimant().is_some();
-    match class {
-        WriteClass::Credential(_) => {
-            // RES-32's entitlement scope: ω of the home the retraction
-            // record is filed in AND ω of the TARGET — PUB-6.10 names the
-            // target-home OWNER; keyed on the record's home alone, a
-            // stranger filing from a home of its own would be told the
-            // target's class (lane 3.5, aligned with the two arms below).
-            if claimed
-                && !(m3.is_effective_owner(principal, home)
-                    && m3.is_effective_owner(principal, target))
-            {
-                return None;
-            }
-            Some(CredentialRefusal::NullifyNotRetraction)
+    // The class's own token, chosen before entitlement is consulted — the one
+    // arm carrying a second key of its own is the classification link's
+    // (RES-207): the LINK's own home published. A resident link's home is
+    // registered (M7's HomeNotRegistered gate), so `published()`'s
+    // registered-only contract (PUB-6.37) holds on it; draft-homed it is an
+    // ordinary link and this producer answers nothing.
+    let token = match class {
+        WriteClass::Credential(_) => CredentialRefusal::NullifyNotRetraction,
+        WriteClass::Grant => CredentialRefusal::NullifyNotRevocation,
+        WriteClass::AuditView(AuditClass::StewardClassification)
+            if !document_of(target).as_ref().is_some_and(|d| published(world, d)) =>
+        {
+            return None
         }
-        WriteClass::Grant => {
-            if claimed
-                && !(m3.is_effective_owner(principal, home)
-                    && m3.is_effective_owner(principal, target))
-            {
-                return None;
-            }
-            Some(CredentialRefusal::NullifyNotRevocation)
-        }
-        WriteClass::AuditView(audit) => {
-            // The classification link's second key (RES-207): the link's own
-            // home published. A resident link's home is registered (M7's
-            // HomeNotRegistered gate), so `published()`'s registered-only
-            // contract (PUB-6.37) holds on it.
-            if audit == AuditClass::StewardClassification
-                && !document_of(target).as_ref().is_some_and(|d| published(world, d))
-            {
-                return None;
-            }
-            if claimed
-                && !(m3.is_effective_owner(principal, home)
-                    && m3.is_effective_owner(principal, target))
-            {
-                return None;
-            }
-            Some(CredentialRefusal::NullifyAuditView)
-        }
+        WriteClass::AuditView(_) => CredentialRefusal::NullifyAuditView,
+    };
+    // THE ENTITLEMENT, once and last, which is what makes "the token chosen
+    // last" a fact about this function rather than three copies that agree:
+    // ω of the home the record is filed in AND ω of the TARGET (PUB-6.10
+    // names the target-home OWNER). Keyed on the record's home alone, a
+    // stranger filing from a home of its own would be told the target's
+    // class — the occupancy oracle PUB-6.9 forbids.
+    if claimed
+        && !(m3.is_effective_owner(principal, home) && m3.is_effective_owner(principal, target))
+    {
+        return None;
     }
+    Some(token)
 }
 
 // ── mint_home_refusal — the MINT class (AUTH-3.10–3.14) ──────────────────
@@ -662,16 +647,15 @@ fn publish_gate(
     if signer.is_some() {
         return None;
     }
+    // Registration and ω — the pair that stands AHEAD of this gate (PUB-6.37,
+    // PUB-6.36 slot 1), in ONE spelling, so an arm that means to take the
+    // pair cannot take half of it: an address failing either falls through to
+    // execute's own code and is never told whether it is published.
+    let m3 = world.m3();
+    let owned = |a: &Address| m3.is_registered_document(a) && m3.is_effective_owner(principal, a);
     let homed = |home: &Address| -> Option<CredentialRefusal> {
-        let m3 = world.m3();
-        if m3.is_registered_document(home)
-            && published(world, home)
-            && m3.is_effective_owner(principal, home)
-        {
-            Some(CredentialRefusal::SignedSessionRequired)
-        } else {
-            None
-        }
+        (owned(home) && published(world, home))
+            .then_some(CredentialRefusal::SignedSessionRequired)
     };
     match op {
         // An EXPLICIT `published: true` on a mint IS the gate input
@@ -727,12 +711,7 @@ fn publish_gate(
         // `version(d, published:true)` does. Registration and ω stand ahead
         // (PUB-6.37, PUB-6.36 slot 1), as everywhere.
         Op::Publish { doc, .. } => {
-            let m3 = world.m3();
-            if m3.is_registered_document(doc) && m3.is_effective_owner(principal, doc) {
-                Some(CredentialRefusal::SignedSessionRequired)
-            } else {
-                None
-            }
+            owned(doc).then_some(CredentialRefusal::SignedSessionRequired)
         }
         Op::Insert { doc, .. }
         | Op::Delete { doc, .. }
@@ -753,10 +732,6 @@ fn publish_gate(
         // home is published. The finding cell: `d_s` a draft, `d_a` the
         // published doc 1, bare — refused here, nothing deposited.
         Op::EditLink { d_s, d_a, .. } => {
-            let m3 = world.m3();
-            let owned = |home: &Address| {
-                m3.is_registered_document(home) && m3.is_effective_owner(principal, home)
-            };
             if !(owned(d_s) && owned(d_a)) {
                 return None;
             }
@@ -781,11 +756,7 @@ fn publish_gate(
         // owner's `nullify` of an EMPTY address in its published doc 1
         // answers here, never `bad_target`.
         Op::Nullify { home, target } => {
-            let m3 = world.m3();
-            if !m3.is_registered_document(home)
-                || !m3.is_effective_owner(principal, home)
-                || !m3.is_effective_owner(principal, target)
-            {
+            if !(owned(home) && m3.is_effective_owner(principal, target)) {
                 return None;
             }
             let lands_published = published(world, home)

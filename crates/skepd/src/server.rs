@@ -145,7 +145,6 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use skep_address::Address;
 use skep_discovery::SlotSpec;
 use skep_engine::{Engine, EngineError, HistoryError, World};
 use skep_febe::{
@@ -1631,10 +1630,7 @@ impl Daemon {
         // every entry is masked by and the key set the candidates come from
         // stand on the same committed state.
         let head = self.engine.kernel().snapshot();
-        let world = head.world();
-        let principal = resolved.principal();
-        let readable = |doc: &Address| world.readable(principal, doc);
-        let class = FeedClass::of(world, principal, &readable);
+        let class = FeedClass::of(head.world(), resolved.principal());
         match self.writes.changes(&class, &q) {
             ChangesAnswer::Reclaimed { floor } => refuse_reclaimed(floor),
             ChangesAnswer::Page { entries, last, more } => Reply::json(

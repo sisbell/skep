@@ -110,7 +110,14 @@ pub(crate) fn parse_prefix(s: &str) -> Option<Tumbler> {
 /// a recorded `[P]` earns (P is readable by all); the two-document ops
 /// (`nullify`, `edit_link`) name link homes, which witness 2 enumerates in
 /// full. So the mask a bare entry gets from this set equals the mask its
-/// lost record would have given it, for every op the wire carries.
+/// lost record would have given it, for every op the wire carries. The
+/// record whose mask this reproduces is [`crate::write_path::write_meta`]'s,
+/// and the agreement is exactly two inclusions, stated there: every draft
+/// that table names appears here, and this answer names nothing it does not.
+/// Neither is checkable in the process — the two read different inputs — so
+/// a new `Op` the compiler routes through that table reaches this one only
+/// if someone brings it, and an op no witness above catches derives an empty
+/// class, which is never masked.
 ///
 /// COST: one full-link enumeration per world (`match_links` with no
 /// constraint — the whole audit slice), one `readlink` per new link, and,

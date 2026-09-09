@@ -384,6 +384,24 @@ pub(crate) enum AffectedDocs {
 /// says it does not do. A read classified here as a write is refused from
 /// `/op-at` as `write_at_history`, denying a legitimate historical read.
 /// The two tables agree at 15 writes of 41.
+///
+/// SECOND OBLIGATION, and the one no assertion here can reach:
+/// [`crate::feed::classify::derived_docs`] answers this same question — which
+/// documents a commit touched — from the JOURNAL, for a position whose record
+/// was lost, and the two must agree on the MASK. Precisely: every DRAFT this
+/// table names must appear in that one's answer, and that one's answer must
+/// name nothing this table does not. An op whose effect no witness of
+/// `derived_docs` catches derives an EMPTY class, and an empty class is never
+/// masked, so its draft writes are served to every requester from the restart
+/// that reconstructs them. The compiler forces a new `Op` through this table
+/// and through nothing there. The equivalence is about the MASK alone, so the
+/// narrowings inherit whatever difference remains: a bare position whose
+/// derived class is empty is excluded from an `under=` page where its
+/// recorded twin would match. And a check is possible but not worth its cost
+/// here — [`WritePath::commit_under`] would have to hold a pre-commit
+/// snapshot and run `derived_docs` per write, a full link enumeration of two
+/// worlds on the write path even in a debug build — so the pair of inclusions
+/// above is what a test at the wire asserts instead.
 pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     let meta = |kind, docs| Some(FrameMeta { kind, docs });
     let one = |a: &Address| AffectedDocs::Named(vec![a.clone()]);

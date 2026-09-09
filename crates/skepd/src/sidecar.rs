@@ -175,6 +175,17 @@ pub(crate) struct CommitsLog {
     /// Each entry's line's byte offset in the file — the offset array's
     /// in-memory twin (PUB-7.19), learned from the replay itself and
     /// advanced by every append; a rewrite recomputes it whole.
+    ///
+    /// NOTHING IN THIS BUILD SEEKS BY IT. `commits.log`'s reader is the
+    /// resident `entries` map above, so a position is answered from memory
+    /// and no read takes an offset; this map's ONE consumer is
+    /// `feed-offsets.log` (`feed/derived.rs`), whose own consumer is the
+    /// non-resident reader that file exists for. It is kept because that
+    /// file must be right the day one appears, and it costs one `u64` per
+    /// retained commit plus maintenance at five sites: the replay, the
+    /// head clamp, the reconstruction walk, a rewrite, and
+    /// [`CommitsLog::record`]. A reader looking for the lookup will not
+    /// find one.
     pub offsets: BTreeMap<u64, u64>,
     /// The smallest admissible `since`: coverage is complete over
     /// `(min_since, head]`; below it the walk was stopped (reclaimed or

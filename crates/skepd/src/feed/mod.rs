@@ -36,9 +36,10 @@
 //!   term's source, with the per-position classification map (`docs`) as
 //!   its inverse;
 //! * the position → OFFSET array (`CommitsLog::offsets`) — position-keyed
-//!   access into `commits.log`; this build's reader is resident, so the
-//!   twin is the entries map itself and the file is what a non-resident
-//!   reader would seek by;
+//!   access into `commits.log`; this build's reader is resident, so
+//!   `CommitsLog::entries` is what answers a position and this array
+//!   answers nothing. The file is what a non-resident reader would seek
+//!   by, and the array is what keeps that file right;
 //! * the MASKED-POSITION BITMAP (`masked`: positions whose docs are
 //!   non-empty and all drafts at commit) and its complement, the
 //!   MATERIALIZED PUBLISHED STREAM (`published`), which a guest page walks
@@ -88,7 +89,10 @@ use skep_kernel::Seq;
 use skep_namespace::{HasM3, PrincipalId};
 
 use self::classify::{classify, derived_docs, parse_dotted, Doc};
-use self::derived::{DerivedFile, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, STREAMS_FILE};
+use self::derived::{
+    DerivedFile, INDEX_DOCS, INDEX_FILE, MASKED_FILE, OFFSETS_FILE, OFFSETS_OFFSET, STREAMS_FILE,
+    STREAMS_OWNERS,
+};
 use crate::sidecar::{CommitMeta, CommitsLog};
 use crate::write_path::SerialGuard;
 
@@ -97,8 +101,13 @@ use crate::write_path::SerialGuard;
 /// requester's class, the stream keys its class opens, and the universal
 /// term's live set. The feed evaluates it and resolves nothing of its own.
 pub(crate) struct FeedClass<'a> {
-    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20).
-    pub readable: &'a dyn Fn(&Address) -> bool,
+    /// `readable(principal, ·)` at the head — THE mask (PUB-7.20). Built by
+    /// [`FeedClass::of`] from the same `(world, principal)` the keys below
+    /// are derived from, so a class whose mask and whose stream keys belong
+    /// to different principals is not constructible: the keys would open a
+    /// principal's drafts while the mask refused all of them, which fails
+    /// into an emptier page with nothing to report it.
+    pub readable: Box<dyn Fn(&Address) -> bool + 'a>,
     /// The requester's own account and its ancestor accounts (the subtree
     /// clause, PUB-7.24) — each a draft-stream key. Empty for the guest and
     /// for a node-tier principal.
@@ -112,16 +121,15 @@ pub(crate) struct FeedClass<'a> {
 }
 
 impl<'a> FeedClass<'a> {
-    /// The key set one `(world, principal)` pair opens, resolved off ONE
+    /// The whole class one `(world, principal)` pair opens, resolved off ONE
     /// head snapshot (PUB-6.40): the route pins the snapshot and hands the
     /// world in, and every field's own rule is stated on the field above —
     /// which is why the resolution lives here rather than at the route,
-    /// where it would restate them.
-    pub fn of(
-        world: &'a World,
-        principal: Option<PrincipalId>,
-        readable: &'a dyn Fn(&Address) -> bool,
-    ) -> FeedClass<'a> {
+    /// where it would restate them. The MASK is derived here beside the keys
+    /// and not supplied, so the route cannot hand a mask for one principal
+    /// alongside keys for another.
+    pub fn of(world: &'a World, principal: Option<PrincipalId>) -> FeedClass<'a> {
+        let readable = Box::new(move |doc: &Address| world.readable(principal, doc));
         let account = principal.and_then(|p| world.m3().principal_prefix(p).cloned());
         let mut subtree = Vec::new();
         let mut cur = account.clone();
@@ -233,8 +241,10 @@ impl Feed {
             if !log.entries.contains_key(at) {
                 continue;
             }
-            let addrs: Vec<Address> =
-                strings_of(m.get("docs")).into_iter().filter_map(|s| parse_dotted(&s)).collect();
+            let addrs: Vec<Address> = strings_of(m.get(INDEX_DOCS))
+                .into_iter()
+                .filter_map(|s| parse_dotted(&s))
+                .collect();
             if !addrs.is_empty() {
                 docs.insert(*at, classify(world, addrs));
             }
@@ -267,7 +277,7 @@ impl Feed {
                 }
             }
             if let Some(ds) = docs.get(&at) {
-                f_index.append(at, vec![("docs", doc_strings(ds))])?;
+                f_index.append(at, vec![(INDEX_DOCS, doc_strings(ds))])?;
             }
         }
         f_index.fence(head)?;
@@ -310,7 +320,9 @@ impl Feed {
             if !log.entries.contains_key(at) {
                 continue;
             }
-            for owner in strings_of(m.get("owners")).into_iter().filter_map(|s| parse_dotted(&s)) {
+            for owner in
+                strings_of(m.get(STREAMS_OWNERS)).into_iter().filter_map(|s| parse_dotted(&s))
+            {
                 let s = streams.entry(owner).or_default();
                 if s.last() != Some(at) {
                     s.push(*at);
@@ -326,7 +338,7 @@ impl Feed {
                 for o in &owners {
                     streams.entry(o.clone()).or_default().push(at);
                 }
-                f_streams.append(at, vec![("owners", addr_strings(owners.iter()))])?;
+                f_streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))])?;
             }
         }
         f_streams.fence(head)?;
@@ -334,7 +346,7 @@ impl Feed {
         // ── the offset array, checked against the log's own replay ──
         let offsets_agree = !log.rewritten
             && offset_lines.iter().all(|(at, m)| {
-                m.get("offset").and_then(Value::as_u64) == log.offsets.get(at).copied()
+                m.get(OFFSETS_OFFSET).and_then(Value::as_u64) == log.offsets.get(at).copied()
             });
         if offsets_agree {
             let offsets_cov = f_offsets.coverage();
@@ -344,7 +356,7 @@ impl Feed {
                 .map(|(k, v)| (*k, *v))
                 .collect();
             for (at, offset) in tail {
-                f_offsets.append(at, vec![("offset", Value::Number(offset.into()))])?;
+                f_offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.into()))])?;
             }
             f_offsets.fence(head)?;
         } else {
@@ -354,7 +366,7 @@ impl Feed {
                     .map(|(at, o)| {
                         derived::record_object(
                             *at,
-                            vec![("offset", Value::Number((*o).into()))],
+                            vec![(OFFSETS_OFFSET, Value::Number((*o).into()))],
                         )
                     })
                     .collect(),
@@ -367,7 +379,7 @@ impl Feed {
         if log.rewritten {
             f_index.rewrite(
                 docs.iter()
-                    .map(|(at, ds)| derived::record_object(*at, vec![("docs", doc_strings(ds))]))
+                    .map(|(at, ds)| derived::record_object(*at, vec![(INDEX_DOCS, doc_strings(ds))]))
                     .collect(),
                 head,
             )?;
@@ -382,7 +394,7 @@ impl Feed {
                         (!owners.is_empty()).then(|| {
                             derived::record_object(
                                 *at,
-                                vec![("owners", addr_strings(owners.iter()))],
+                                vec![(STREAMS_OWNERS, addr_strings(owners.iter()))],
                             )
                         })
                     })
@@ -500,7 +512,7 @@ impl Inner {
     /// check closes.
     fn index_position(&mut self, at: u64, offset: u64, docs: Vec<Doc>) {
         report(
-            self.files.offsets.append(at, vec![("offset", Value::Number(offset.into()))]),
+            self.files.offsets.append(at, vec![(OFFSETS_OFFSET, Value::Number(offset.into()))]),
             OFFSETS_FILE,
             at,
         );
@@ -514,7 +526,11 @@ impl Inner {
                     list.1.push(at);
                 }
             }
-            report(self.files.index.append(at, vec![("docs", doc_strings(&docs))]), INDEX_FILE, at);
+            report(
+                self.files.index.append(at, vec![(INDEX_DOCS, doc_strings(&docs))]),
+                INDEX_FILE,
+                at,
+            );
         }
         if is_masked(Some(&docs)) {
             self.masked.insert(at);
@@ -528,7 +544,7 @@ impl Inner {
                 self.streams.entry(o.clone()).or_default().push(at);
             }
             report(
-                self.files.streams.append(at, vec![("owners", addr_strings(owners.iter()))]),
+                self.files.streams.append(at, vec![(STREAMS_OWNERS, addr_strings(owners.iter()))]),
                 STREAMS_FILE,
                 at,
             );

@@ -54,14 +54,30 @@ use serde_json::{Map, Value};
 use crate::codec::obj;
 use crate::sidecar::line_bytes;
 
+// Each file below is named BESIDE the field its records carry, because this
+// module owns the LINE and would otherwise own only half of what a line is:
+// [`DerivedFile::append`] takes any name, so a write site that spells a field
+// apart from the read site produces a line that replays with no field. That
+// position then contributes nothing and is served as a `[]`-docs entry, which
+// is never masked — a draft write unmasked to every class — and it still
+// carries an `at`, so it counts toward coverage and the tail derivation never
+// revisits it. It is the one loss the coverage check does not close.
+
 /// The per-document position index's file.
 pub(crate) const INDEX_FILE: &str = "feed-index.log";
+/// Its records' one field: the classified documents, dotted-decimal.
+pub(crate) const INDEX_DOCS: &str = "docs";
 /// The position → offset array's file.
 pub(crate) const OFFSETS_FILE: &str = "feed-offsets.log";
-/// The masked-position bitmap's file.
+/// Its records' one field: the line's byte offset in `commits.log`.
+pub(crate) const OFFSETS_OFFSET: &str = "offset";
+/// The masked-position bitmap's file. Its records carry the position alone,
+/// so it has no field constant — membership IS the record.
 pub(crate) const MASKED_FILE: &str = "feed-masked.log";
 /// The per-owner draft-position streams' file.
 pub(crate) const STREAMS_FILE: &str = "feed-streams.log";
+/// Its records' one field: the owner accounts, dotted-decimal.
+pub(crate) const STREAMS_OWNERS: &str = "owners";
 
 /// One replayed line.
 enum Line {
@@ -235,6 +251,11 @@ mod tests {
 
     /// A file replays to exactly what was appended, torn tails end trust,
     /// and coverage is the fence-or-record maximum.
+    ///
+    /// The field name below is a LITERAL and not one of the per-file
+    /// constants, deliberately: this file's discipline is field-agnostic —
+    /// [`DerivedFile::append`] writes whatever it is given — so the test
+    /// that pins the discipline names a field no file's schema fixes.
     #[test]
     fn records_and_fences_replay_and_coverage_follows_them() {
         let dir = tempfile::tempdir().expect("tempdir");

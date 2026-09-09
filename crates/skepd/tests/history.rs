@@ -15,6 +15,8 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use common::*;
 use serde_json::Value;
 
@@ -303,6 +305,95 @@ fn historical_reads_answer_every_earlier_state() {
     assert_eq!(st, 200);
     let rej = expect_resp(&v, "rejected");
     assert_eq!(rej["op"].as_str(), Some("unparseable"));
+
+    sd.shutdown();
+}
+
+/// `stamp_as_of`'s stamped arm, restated: moving a shape between its two
+/// arms is a visible decision here, the discipline this suite already
+/// applies to the codec's wire caps.
+const STAMPED_SHAPES: usize = 17;
+
+/// wire.md §The response envelope: `as_of` reports the position the answer
+/// is OF. On the history surface `stamp_as_of` is what makes that true —
+/// the throwaway kernel is rooted at the historical world with its own seq
+/// at 0, so M10's live stamping must be overwritten — and it is a
+/// hand-written seventeen-shape table whose doc says "every read shape is
+/// listed".
+///
+/// Deleting a variant from it is a compile error. MOVING one to the
+/// unstamped arm is not, since that arm binds nothing, so
+/// `Response::Count { .. }` is a legal alternative there. The shape then
+/// answers `as_of: 0` at every position, and a client scrubbing history or
+/// correlating a historical read with `/changes` reads the answer as one
+/// of genesis. Three shapes were watched; the other fourteen would move
+/// with nothing red.
+#[test]
+fn every_read_shape_stamps_the_position_it_is_of() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let scenario = seed(port);
+    let owner = Some(scenario.token.as_str());
+    // Neither 0 nor the head, so a stamp that answered the throwaway
+    // kernel's own seq and one that answered the LIVE head both show.
+    let at = scenario.at_link;
+    assert!(at > 0 && at < head_of(port), "the fixture position is interior");
+
+    let (d1, d2, link) = (&scenario.doc1, &scenario.doc2, &scenario.link);
+    let region = r#"[{"start":"1.1","width":"0.1"}]"#;
+    let span = r#"{"start":"1.1","width":"0.1"}"#;
+    let rows: Vec<(&str, String)> = vec![
+        ("delivery", retrieve(d1, 1)),
+        ("span_set", spanset(d1)),
+        ("addrs", find_links(d1)),
+        ("addrs", format!(r#"{{"op":"show_origin","doc":"{d1}","span":{span}}}"#)),
+        ("maybe_addr", r#"{"op":"next_account_prefix","parent":"1"}"#.into()),
+        ("count", format!(r#"{{"op":"count_v","d":"{d1}","region":{region}}}"#)),
+        (
+            "page",
+            format!(r#"{{"op":"window_v","d":"{d1}","region":{region},"cur":null,"n":4}}"#),
+        ),
+        ("endsets", format!(r#"{{"op":"retrieve_endsets","d":"{d1}","region":{region}}}"#)),
+        ("runs", format!(r#"{{"op":"image","d":"{d1}","region":{region}}}"#)),
+        ("bool", format!(r#"{{"op":"discoverable_from","a":"{link}","d":"{d1}"}}"#)),
+        ("link_value", read_link(link)),
+        ("follow", format!(r#"{{"op":"follow_link","a":"{link}","slot":1}}"#)),
+        ("deletions", format!(r#"{{"op":"show_deletions","d_a":"{d1}","d_b":"{d2}"}}"#)),
+        (
+            "compare",
+            format!(
+                r#"{{"op":"compare","rho1":[{{"doc":"{d1}","spans":{region}}}],"rho2":[{{"doc":"{d2}","spans":{region}}}]}}"#
+            ),
+        ),
+        (
+            "orphans",
+            format!(
+                r#"{{"op":"delete_orphans","d":"{d1}","p":{{"subspace":"1","ordinal":"1"}},"width":"1"}}"#
+            ),
+        ),
+        ("claims", format!(r#"{{"op":"in_claims","y":"{link}","view":"default"}}"#)),
+        ("claims", format!(r#"{{"op":"out_claims","x":"{link}","view":"default"}}"#)),
+        ("doc_metadata", format!(r#"{{"op":"doc_metadata","doc":"{d1}"}}"#)),
+        // The one row whose argument is a DOCUMENT rather than the link:
+        // M10 refuses an unregistered target `doc_not_registered`.
+        ("edition_claims", format!(r#"{{"op":"edition_claims","target":"{d2}"}}"#)),
+    ];
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for (shape, frame) in &rows {
+        let v = op_at_ok(port, owner, at, frame);
+        // The SHAPE first: a rejection carries no `as_of` at all, so a row
+        // whose frame does not answer would pass the stamp check vacuously.
+        assert_eq!(v["resp"].as_str(), Some(*shape), "{frame}: {v}");
+        assert_eq!(
+            v["as_of"].as_u64(),
+            Some(at),
+            "{shape} must stamp the position it is OF, not the throwaway kernel's 0: {v}"
+        );
+        seen.insert(*shape);
+    }
+    assert_eq!(seen.len(), STAMPED_SHAPES, "every stamped shape is visited: {seen:?}");
 
     sd.shutdown();
 }

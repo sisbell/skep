@@ -1956,3 +1956,92 @@ fn every_handshake_failure_answers_the_same_401_bytes() {
 
     sd.shutdown();
 }
+
+/// AUTH-4.36's pinned order at the ONE point it is observable: the signed
+/// arm tests the ORIGIN SET before it BURNS, so a body refused for its
+/// origin leaves its nonce spendable. Every other 401 cause sits at or
+/// behind the burn and spends one.
+///
+/// The row list above cannot see this. It gives each cause a nonce of its
+/// own, so a burn moved ahead of the origin check answers every row
+/// identically — and the module values the property elsewhere in the same
+/// file, `Nonce::parse_hex` refusing uppercase precisely so the fault is "a
+/// 400 syntax fault whose nonce SURVIVES, never a burned 401". Inverted,
+/// the board spends a nonce on every attempt from a misconfigured origin,
+/// which is the case `ClaimedWithEmptyConfigured` exists to warn about, and
+/// a client that fetched one nonce and fixed its origin cannot retry.
+#[test]
+fn an_origin_refusal_precedes_the_burn_and_spends_no_nonce() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let p = CLAIMANT_PRINCIPAL;
+    let origin = format!("http://127.0.0.1:{port}");
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={p}"), None, b"");
+    assert_eq!(st, 200);
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+
+    // Refused at step 2, and signed FOR that origin, so nothing else about
+    // the body is wrong and no later step could be what refused it.
+    let bad = "https://evil.example";
+    let sig = sign_session(&device_key(), bad, &nonce, p);
+    let refused = format!(
+        "{{\"principal\":{p},\"nonce\":\"{nonce}\",\"origin\":\"{bad}\",\"sig\":\"{sig}\"}}"
+    );
+    let (st, body) = http(port, "POST", "/session", None, refused.as_bytes());
+    assert_eq!(st, 401, "an origin outside the signed set: {}", String::from_utf8_lossy(&body));
+
+    // The SAME nonce, signed for an admitted origin, still opens a session.
+    let sig = sign_session(&device_key(), &origin, &nonce, p);
+    let retry = format!(
+        "{{\"principal\":{p},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{sig}\"}}"
+    );
+    let (st, body) = http(port, "POST", "/session", None, retry.as_bytes());
+    assert_eq!(
+        st, 200,
+        "the origin refusal never reached the burn: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(json(&body)["session"].is_string());
+
+    sd.shutdown();
+}
+
+/// The four hex case policies are documented as the ONE thing the crate's
+/// hex parsers differ by, and three are pinned: the nonce and the token
+/// REFUSE uppercase (`the_handshake_lifecycle_and_a_400_that_spends_no_nonce`
+/// and the codec's own token round trip), the content forms FOLD it. The
+/// signature folds too — it is decoded and never framed — and nothing
+/// watched it, because every signature in this suite comes from
+/// `sign_session`, which encodes lowercase.
+///
+/// So merging `parse_sig` onto the nonce's strict `parse_lower_hex` — the
+/// obvious cleanup of two near-identical two-characters-per-byte loops in
+/// one file — refuses a signature a client legitimately sent, as `400
+/// malformed_session_request`.
+#[test]
+fn an_uppercase_signature_is_folded_where_an_uppercase_nonce_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sd = spawn(dir.path());
+    let port = sd.port();
+    let p = CLAIMANT_PRINCIPAL;
+    let origin = format!("http://127.0.0.1:{port}");
+    let (st, body) = http(port, "GET", &format!("/challenge?principal={p}"), None, b"");
+    assert_eq!(st, 200);
+    let nonce = json(&body)["nonce"].as_str().expect("nonce").to_string();
+    let sig = sign_session(&device_key(), &origin, &nonce, p);
+    assert_eq!(
+        sig,
+        sig.to_lowercase(),
+        "the fixture's encoder is lowercase: that is why this cell needs writing"
+    );
+    let upper = format!(
+        "{{\"principal\":{p},\"nonce\":\"{nonce}\",\"origin\":\"{origin}\",\"sig\":\"{}\"}}",
+        sig.to_uppercase()
+    );
+    let (st, body) = http(port, "POST", "/session", None, upper.as_bytes());
+    assert_eq!(st, 200, "an uppercase signature decodes: {}", String::from_utf8_lossy(&body));
+    assert!(json(&body)["session"].is_string());
+
+    sd.shutdown();
+}

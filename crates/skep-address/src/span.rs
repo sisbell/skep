@@ -262,9 +262,11 @@ enum OrientedRel {
 ///
 /// Takes [`Endpoints`] rather than spans: every predicate below is an endpoint
 /// comparison, so the two reaches are derived once by the caller instead of
-/// once per question. [`intersect`] and [`merge`] each decide a single
-/// boundary question inline rather than classifying — a deliberate cheap
-/// path, and the reason this is not the only place a boundary is compared.
+/// once per question. This is the one site that *classifies*, not the one site
+/// a boundary is compared: [`merge`] and the coalescing sweep in
+/// [`SpanSet::normalize`] each ask [`separated`] for the single contiguity
+/// question they need, and [`intersection`] decides the stricter boundary —
+/// three cheap paths past the classifier, each through a named predicate.
 fn relate(a: &Endpoints, b: &Endpoints) -> OrientedRel {
     let max_start = max(&a.start, &b.start);
     let min_reach = min(&a.reach, &b.reach);
@@ -288,6 +290,20 @@ fn relate(a: &Endpoints, b: &Endpoints) -> OrientedRel {
     } else {
         OrientedRel::OverlapBFirst
     }
+}
+
+/// True iff the two endpoint pairs share no position and do not touch:
+/// `max start > min reach`. Its negation is S3a/N2 contiguity — overlapping or
+/// adjacent, hence one interval, hence coalescible — and that is asked at both
+/// scales: by [`merge`] for the pairwise join, and by [`SpanSet::normalize`]
+/// for the sweep's coalescing step, so the one rule has one spelling.
+///
+/// `relate` decides the same condition from its own bindings because it needs
+/// the three-way split, and [`intersection`]'s boundary is the STRICTER one:
+/// adjacency shares no position, so a touching pair is empty for the meet and
+/// contiguous for the join.
+pub(crate) fn separated(a: &Endpoints, b: &Endpoints) -> bool {
+    max(&a.start, &b.start) > min(&a.reach, &b.reach)
 }
 
 /// The intersection of two endpoint pairs — `(max start, min reach)` when
@@ -361,8 +377,8 @@ pub fn intersect(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
 /// gate is not).
 pub fn merge(a: &Span, b: &Span) -> Result<Option<Span>, LevelMismatch> {
     let (ea, eb) = gated_endpoints(a, b)?;
-    if max(&ea.start, &eb.start) > min(&ea.reach, &eb.reach) {
-        return Ok(None); // separated
+    if separated(&ea, &eb) {
+        return Ok(None);
     }
     let start = min(&ea.start, &eb.start).clone();
     let reach = max(&ea.reach, &eb.reach);

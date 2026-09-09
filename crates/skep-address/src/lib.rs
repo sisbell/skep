@@ -51,7 +51,16 @@
 //! * the **content↔byte mapping** (M4/M5);
 //! * **ownership resolution** — the `ω` longest-prefix owner over the
 //!   principal registry (M3): M1 gives only the per-address containment
-//!   predicates `ω` is built from.
+//!   predicates `ω` is built from;
+//! * every **dimensional bound** — component magnitude (T0(a) forbids one),
+//!   component count (T0(b)), `#width` against `#start` (T12 bounds only the
+//!   action point), and span-set cardinality: M1 admits every shape the source
+//!   notes admit, so each budget belongs to the layer that takes the bytes.
+//!   Admission is not a limit, whatever the constructors' vocabulary suggests.
+//!   The cost lands after admission rather than at it: a peer-chosen `#width`
+//!   is re-derived by every [`Span::reach`], and the decimal↔binary conversion
+//!   at the wire is superlinear in the digit run. The one dimension M1 does
+//!   contain is [`inc`]'s `k`, through [`checked_inc`]'s gate.
 //!
 //! ## Composition
 //!

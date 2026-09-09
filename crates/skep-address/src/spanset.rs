@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::arithmetic::next_at_length;
 use crate::error::LevelMismatch;
-use crate::span::{intersection, subtree_of, Endpoints, Span};
+use crate::span::{intersection, separated, subtree_of, Endpoints, Span};
 use crate::tumbler::Tumbler;
 
 /// A union-denoting sequence of component spans (`⟦Σ⟧ = ⋃ ⟦σᵢ⟧`).
@@ -145,9 +145,11 @@ impl SpanSet {
     }
 
     /// S8/S9 — the unique canonical form (N1 ∧ N2): sort by start, then one
-    /// linear sweep coalescing every overlapping or adjacent pair
-    /// (`reachᵢ ≥ startᵢ₊₁`); O(n log n), dominated by the sort. Gated on the
-    /// full S8 precondition, [`SpanSet::level_class`]. Pinned edge:
+    /// linear sweep coalescing every pair that is not separated; O(n log n),
+    /// dominated by the sort. N2's coalescing rule IS S3a's join rule, asked
+    /// of the same `separated` predicate [`crate::merge`] asks, so the two
+    /// scales cannot drift on what counts as contiguous. Gated on the full S8
+    /// precondition, [`SpanSet::level_class`]. Pinned edge:
     /// `normalize(⟨⟩) = Ok(⟨⟩)` — S8's n = 0 case, vacuously N1 ∧ N2.
     pub fn normalize(&self) -> Result<SpanSet, LevelMismatch> {
         if self.level_class()?.is_none() {
@@ -159,7 +161,7 @@ impl SpanSet {
         let mut rest = spans.into_iter();
         let mut run = rest.next().expect("nonempty: level_class was Some");
         for following in rest {
-            if following.start <= run.reach {
+            if !separated(&run, &following) {
                 // overlap or adjacency — coalesce (N2)
                 if following.reach > run.reach {
                     run.reach = following.reach;
@@ -218,9 +220,9 @@ impl Default for SpanSet {
 /// Opacity hides the *container*, never the walk's capabilities: the reverse
 /// walk, the exact length and the fused guarantee are forwarded below, so a
 /// consumer sweeping a normalized set from its high end (N1 puts the greatest
-/// start last) need not collect it first. `Clone` is the one capability the
-/// backing withholds — `im`'s vector iterator is not cloneable — so a caller
-/// that needs two independent cursors takes them from the set, which is.
+/// start last) need not collect it first. `Clone` is the one capability that
+/// does not reach the caller — `im`'s vector iterator is not cloneable — so a
+/// caller that needs two independent cursors takes them from the set, which is.
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct Spans<'a>(<&'a im::Vector<Span> as IntoIterator>::IntoIter);
 
@@ -248,8 +250,10 @@ impl ExactSizeIterator for Spans<'_> {
 
 impl std::iter::FusedIterator for Spans<'_> {}
 
-/// The cursor, not the spans: a partly-walked iterator has no faithful
-/// rendering of what is left, and the set it came from is `Debug` already.
+/// The cursor, not the spans: the backing's iterator is neither `Clone` nor
+/// `Debug`, so there is no way to show what is left without consuming it, and
+/// the set it came from is `Debug` already. [`crate::Components`] does render
+/// its remainder, because a slice iterator can be walked without being spent.
 impl fmt::Debug for Spans<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Spans").finish_non_exhaustive()

@@ -15,8 +15,8 @@ mod common;
 use common::*;
 use skep_address::Address;
 use skep_content::Val;
-use skep_engine::{Engine, ReservedAddrs, World};
-use skep_links::{enc, SlotArg};
+use skep_engine::{Engine, World};
+use skep_links::{enc, ReservedAddrs, SlotArg};
 use tempfile::tempdir;
 
 /// The shipped class ordinary emissions land in: `PredDef`, the first Unary

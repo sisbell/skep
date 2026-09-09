@@ -123,14 +123,14 @@ pub(crate) fn write_types() -> &'static WriteTypes {
     static TYPES: LazyLock<WriteTypes> = LazyLock::new(|| {
         WriteTypes::new(
             identity_types().clone(),
-            t_grant(),
+            t_grant().clone(),
             [
-                (AuditClass::SuccessorOf, t_successor_of()),
-                (AuditClass::DelegatorEndorsement, t_delegator_endorsement()),
-                (AuditClass::ConsumptionMarker, t_consumption_marker()),
-                (AuditClass::JournalDesignation, t_journal_designation()),
-                (AuditClass::RailRecord, t_rail_record()),
-                (AuditClass::StewardClassification, t_steward_classification()),
+                (AuditClass::SuccessorOf, t_successor_of().clone()),
+                (AuditClass::DelegatorEndorsement, t_delegator_endorsement().clone()),
+                (AuditClass::ConsumptionMarker, t_consumption_marker().clone()),
+                (AuditClass::JournalDesignation, t_journal_designation().clone()),
+                (AuditClass::RailRecord, t_rail_record().clone()),
+                (AuditClass::StewardClassification, t_steward_classification().clone()),
             ],
         )
     });
@@ -1197,7 +1197,7 @@ mod tests {
             types.write_class(&unit(&addr_of(&T_ENROLL))),
             Some(WriteClass::Credential(CredentialKind::Enroll))
         );
-        assert_eq!(types.write_class(&unit(&t_grant())), Some(WriteClass::Grant));
+        assert_eq!(types.write_class(&unit(t_grant())), Some(WriteClass::Grant));
         for (class, addr) in [
             (AuditClass::SuccessorOf, t_successor_of()),
             (AuditClass::DelegatorEndorsement, t_delegator_endorsement()),
@@ -1207,14 +1207,14 @@ mod tests {
             (AuditClass::StewardClassification, t_steward_classification()),
         ] {
             assert_eq!(
-                types.write_class(&unit(&addr)),
+                types.write_class(&unit(addr)),
                 Some(WriteClass::AuditView(class)),
                 "{} is {class:?}",
                 addr.tumbler()
             );
         }
         // The edition class (3.14) is read under the ACTIVE view: no class.
-        assert_eq!(types.write_class(&unit(&skep_engine::types::t_edition())), None);
+        assert_eq!(types.write_class(&unit(skep_engine::types::t_edition())), None);
         // A content I-span names nothing here either.
         let content = subtree_of(addr_of(&[1, 0, 1, 0, 1, 0, 1, 1]).tumbler());
         assert_eq!(types.write_class(&[content]), None);

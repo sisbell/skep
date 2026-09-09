@@ -1,0 +1,135 @@
+//! THE READ PREDICATE (PUB-1.31, PUB round 2, lane 3.3 §1) — the one
+//! function every read surface in the system answers through, and the
+//! visibility class every write is gated at.
+//!
+//! `readable(doc, principal) = published(doc) ∨ subtree ∨ grant_exists(doc,
+//! principal)`: three clauses over three owners, composed here and nowhere
+//! else. The published clause is the exception set's (`crate::publication`),
+//! the subtree clause is M3's ω answer memoized in that same set, and the
+//! grant clause is the grant fold's (`crate::grants`). No clause is decided
+//! here — this module states their composition, their short-circuit order and
+//! the projection every one of them shares (`trunk_of`: a version member reads
+//! as its document, PUB-2.15).
+//!
+//! Two derived readings sit beside it, because both are the same predicate
+//! closed over a caller rather than a second rule: [`World::readable_guest`]
+//! is `readable(None, ·)`, the class M9's fires and every unauthenticated read
+//! run at; [`World::visible_to`] is the `Caller`-to-class mapping a
+//! `LinkWriter` is built with, which is the engine's to state because M7 takes
+//! a closure and names no principal.
+//!
+//! The `skep_febe::ReadableWorld` impl below is the seam M10's generic front
+//! door reaches all of this through: M10 names no `World`, so it asks the
+//! trait, off its own read snapshot, and applies the home rule (PUB-6.13) per
+//! result row itself. The inherent methods are the real ones.
+
+use skep_address::Address;
+use skep_arrangement::{trunk_of, Caller};
+use skep_namespace::{prefix_contains, PrincipalId};
+
+use crate::world::World;
+
+impl World {
+    /// THE read predicate (PUB-1.31): `readable(doc, principal) =
+    /// published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
+    /// principal)` — one function, three clauses, short-circuiting.
+    ///
+    /// `principal` is `None` for the GUEST (PUB-1.31 with no principal: the
+    /// subtree clause has no account to hold, and the grant clause — the
+    /// ANY-PRINCIPAL form included, PUB-5.8, PUB-5.9 — reaches principals
+    /// alone, PUB-5.109): a guest sees a document iff it is published, so
+    /// [`World::readable_guest`] is `readable(None, ·)`. Every clause
+    /// projects a version member to its document first (`trunk_of`, M5,
+    /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
+    ///
+    /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
+    ///   projected document. Fail-open (PUB-7.5): an UNREGISTERED address is
+    ///   absent from the set and so answers readable here, which is why every
+    ///   doc-argument consult defers an unregistered document to its store's
+    ///   own `*NotRegistered` (a withheld answer is only ever a REGISTERED
+    ///   private document — PUB-6.12).
+    /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
+    ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
+    ///   exception set's MINT-TIME owner (never a nearest-account walk). A
+    ///   node-tier principal (principal 0, seated at a node) has a prefix
+    ///   shorter than any account, so the compare excludes it; org members are
+    ///   SIBLINGS, so neither reads the other's drafts.
+    /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
+    ///   coverage containment ∩ issuer = doc's ω owner.
+    pub fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
+        let trunk = trunk_of(doc);
+        // Published clause — a published document (or member) is readable by
+        // all, and an unregistered one is fail-open here (PUB-7.5).
+        if self.published(&trunk) {
+            return true;
+        }
+        // A REGISTERED private draft from here: the exception set holds its
+        // mint-time owner. `None` cannot arise (published above covers the
+        // unregistered case), but is answered fail-closed.
+        let Some(owner) = self.owner_account(&trunk).cloned() else {
+            return false;
+        };
+        // The guest sees only published documents (no subtree, no grant).
+        let Some(id) = principal else {
+            return false;
+        };
+        let pa = self.namespace.principal_prefix(id).cloned();
+        // Subtree clause — downward only.
+        if let Some(pa) = &pa {
+            if prefix_contains(&owner, pa) {
+                return true;
+            }
+        }
+        // Grant clause — the fold, grantee exact (`None` account ⟹ only the
+        // ANY-PRINCIPAL grants can match, which the fold probes regardless).
+        self.grants.grant_exists(&owner, pa.as_ref(), &trunk)
+    }
+
+    /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
+    /// to it, the ANY-PRINCIPAL form included — PUB-5.8, PUB-5.9, PUB-5.109):
+    /// `readable(None, ·)` — published alone. M9's fires read at this class
+    /// (§5), and every unauthenticated read answers through it.
+    pub fn readable_guest(&self, doc: &Address) -> bool {
+        self.readable(None, doc)
+    }
+
+    /// THE VISIBILITY CLASS A CALLER WRITES AT (PUB round 2, lane 3.3b): the
+    /// predicate a `LinkWriter` is built with when `caller` deposits, so
+    /// M7's value-keyed gates — `emit`'s idempotency, `assert_sup`'s dedup —
+    /// see exactly the incumbents that caller could read (PUB-6.25). A
+    /// principal writes at its own class, [`World::readable`] over
+    /// `Some(principal)`; the System path — M9's fires and def writes, the
+    /// one caller with no session — writes at GUEST class,
+    /// [`World::readable_guest`] (PUB-6.28). This mapping is the engine's to
+    /// state: M7 takes a closure and names no principal, and M10 closes its
+    /// own over the session's principal. Every other caller — the harnesses,
+    /// this crate's tests, and [`crate::Engine::coordinator`] building M9's
+    /// System-class writers — threads it through here.
+    pub fn visible_to(
+        caller: Caller,
+    ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
+        move |world: &World, doc: &Address| match caller {
+            Caller::Principal(p) => world.readable(Some(p), doc),
+            Caller::System => world.readable_guest(doc),
+        }
+    }
+}
+
+/// The read predicate as M10's capability (lane 3.3, §1): M10 is generic over
+/// its world and names no `World`, so it reaches the engine's derived
+/// predicate — published ∨ subtree ∨ grant ([`World::readable`]) — through this
+/// one accessor, off its own read snapshot. The inherent method is the real
+/// one; this is the seam the generic front door calls.
+impl skep_febe::ReadableWorld for World {
+    fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
+        World::readable(self, principal, doc)
+    }
+
+    /// The audit-view edition-claim lookup (PUB-8.46; lane 3.4, §2) —
+    /// [`World::edition_claims`], the engine's composition of M7's audit
+    /// reads over the pinned edition class (`crate::editions`); M10 applies
+    /// the home rule per row, off its own snapshot.
+    fn edition_claims(&self, target: &Address) -> Vec<skep_febe::EditionClaim> {
+        World::edition_claims(self, target)
+    }
+}

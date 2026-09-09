@@ -1,7 +1,8 @@
 //! The GRANT FOLD — the engine's second derived index (PUB round 2, lane 3.3,
 //! §1), beside the exception set (`crate::publication`): a DERIVED index over
 //! the link store that answers `grant_exists(doc, principal)` — the third
-//! clause of the read predicate [`crate::World::readable`] (PUB-1.31).
+//! clause of the read predicate [`crate::World::readable`] (PUB-1.31), which
+//! composes it with the other two in `crate::readable`.
 //!
 //! Like the exception set it takes both halves of the hint discipline
 //! (PUB-7.7): SEEDED by `WorldState::rebuild_derived` at load, FOLDED by
@@ -45,99 +46,14 @@
 
 use im::{HashMap, OrdMap, OrdSet};
 use skep_address::{document_of, parent, validate, Address};
-use skep_arrangement::{trunk_of, Caller};
 use skep_links::{Link, LinkRec, LinkState, View};
-use skep_namespace::{first_document_address, prefix_contains, M3State, PrincipalId};
+use skep_namespace::{first_document_address, M3State};
 
 use crate::publication::Drafts;
 use crate::types::t_grant;
 use crate::world::World;
 
 impl World {
-    /// THE read predicate (PUB-1.31): `readable(doc, principal) =
-    /// published(doc) ∨ principal ∈ owner_subtree(doc) ∨ grant_exists(doc,
-    /// principal)` — one function, three clauses, short-circuiting.
-    ///
-    /// `principal` is `None` for the GUEST (PUB-1.31 with no principal: the
-    /// subtree clause has no account to hold, and the grant clause — the
-    /// ANY-PRINCIPAL form included, PUB-5.8, PUB-5.9 — reaches principals
-    /// alone, PUB-5.109): a guest sees a document iff it is published, so
-    /// [`World::readable_guest`] is `readable(None, ·)`. Every clause
-    /// projects a version member to its document first (`trunk_of`, M5,
-    /// PUB-2.15): `1.0.1.0.1.2` reads exactly as `1.0.1.0.1`.
-    ///
-    /// * PUBLISHED (PUB-1.31's first clause) — an exception-set MISS on the
-    ///   projected document. Fail-open (PUB-7.5): an UNREGISTERED address is
-    ///   absent from the set and so answers readable here, which is why every
-    ///   doc-argument consult defers an unregistered document to its store's
-    ///   own `*NotRegistered` (a withheld answer is only ever a REGISTERED
-    ///   private document — PUB-6.12).
-    /// * SUBTREE (PUB-5.9, PUB-5.13-adjacent) — `owner_account(doc) ⊑
-    ///   account(principal)`, ONE prefix compare DOWNWARD only, off the
-    ///   exception set's MINT-TIME owner (never a nearest-account walk). A
-    ///   node-tier principal (principal 0, seated at a node) has a prefix
-    ///   shorter than any account, so the compare excludes it; org members are
-    ///   SIBLINGS, so neither reads the other's drafts.
-    /// * GRANT (PUB-5.8, PUB-5.19) — the grant fold, grantee PRINCIPAL-EXACT,
-    ///   coverage containment ∩ issuer = doc's ω owner.
-    pub fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
-        let trunk = trunk_of(doc);
-        // Published clause — a published document (or member) is readable by
-        // all, and an unregistered one is fail-open here (PUB-7.5).
-        if self.published(&trunk) {
-            return true;
-        }
-        // A REGISTERED private draft from here: the exception set holds its
-        // mint-time owner. `None` cannot arise (published above covers the
-        // unregistered case), but is answered fail-closed.
-        let Some(owner) = self.owner_account(&trunk).cloned() else {
-            return false;
-        };
-        // The guest sees only published documents (no subtree, no grant).
-        let Some(id) = principal else {
-            return false;
-        };
-        let pa = self.namespace.principal_prefix(id).cloned();
-        // Subtree clause — downward only.
-        if let Some(pa) = &pa {
-            if prefix_contains(&owner, pa) {
-                return true;
-            }
-        }
-        // Grant clause — the fold, grantee exact (`None` account ⟹ only the
-        // ANY-PRINCIPAL grants can match, which the fold probes regardless).
-        self.grants.grant_exists(&owner, pa.as_ref(), &trunk)
-    }
-
-    /// The GUEST predicate (PUB-1.31 with no principal; a grant opens nothing
-    /// to it, the ANY-PRINCIPAL form included — PUB-5.8, PUB-5.9, PUB-5.109):
-    /// `readable(None, ·)` — published alone. M9's fires read at this class
-    /// (§5), and every unauthenticated read answers through it.
-    pub fn readable_guest(&self, doc: &Address) -> bool {
-        self.readable(None, doc)
-    }
-
-    /// THE VISIBILITY CLASS A CALLER WRITES AT (PUB round 2, lane 3.3b): the
-    /// predicate a `LinkWriter` is built with when `caller` deposits, so
-    /// M7's value-keyed gates — `emit`'s idempotency, `assert_sup`'s dedup —
-    /// see exactly the incumbents that caller could read (PUB-6.25). A
-    /// principal writes at its own class, [`World::readable`] over
-    /// `Some(principal)`; the System path — M9's fires and def writes, the
-    /// one caller with no session — writes at GUEST class,
-    /// [`World::readable_guest`] (PUB-6.28). This mapping is the engine's to
-    /// state: M7 takes a closure and names no principal, M10 closes its own
-    /// over the session's principal, and [`crate::Engine::coordinator`]
-    /// hands M9 the guest half of it directly. Engine-direct callers — the
-    /// harnesses and this crate's tests — thread it through here.
-    pub fn visible_to(
-        caller: Caller,
-    ) -> impl Fn(&World, &Address) -> bool + Copy + Send + Sync + 'static {
-        move |world: &World, doc: &Address| match caller {
-            Caller::Principal(p) => world.readable(Some(p), doc),
-            Caller::System => world.readable_guest(doc),
-        }
-    }
-
     /// THE LIVE ANY-PRINCIPAL SET, enumerable (PUB-7.22; lane 3.6 §3): every
     /// content-prefix currently covered by an admitted, unsuperseded
     /// ANY-PRINCIPAL grant, with the issuers that granted it — in prefix
@@ -417,8 +333,7 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// (the whole-map load pass) drive this ONE path, so the seed reproduces the
 /// fold. Only a `t_grant` deposit that ADMITS moves the fold.
 fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value: &Link) -> Grants {
-    let t_grant = t_grant();
-    if !is_grant_typed(value, &t_grant) {
+    if !is_grant_typed(value, t_grant()) {
         return prev.clone();
     }
     let Some(home) = document_of(addr) else {
@@ -469,8 +384,7 @@ pub(crate) fn fold(prev: &Grants, m3: &M3State, drafts: &Drafts, rec: &LinkRec) 
 /// ordinal-ordered = deposit-ordered, so a revocation is always processed
 /// after the grant it names, and the seed reproduces the fold.
 pub(crate) fn seed(m3: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {
-    let t_grant = t_grant();
-    let ty = skep_links::enc([&t_grant]);
+    let ty = skep_links::enc([t_grant()]);
     let mut grants = Grants::new();
     for addr in links.type_slice(&ty, View::Audit) {
         let Some(value) = links.readlink(&addr).cloned() else {

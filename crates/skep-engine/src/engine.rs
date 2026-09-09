@@ -11,7 +11,7 @@ use skep_arrangement::Vstream;
 use skep_coordination::Coordinator;
 use skep_febe::Stores;
 use skep_kernel::{HistoryError, Kernel, KernelConfig, OpenError, Seq};
-use skep_links::{LinkWriter, TypeRegistry, Visibility};
+use skep_links::{Caller, LinkWriter, TypeRegistry, Visibility};
 use skep_namespace::Namespace;
 
 use crate::world::World;
@@ -55,17 +55,16 @@ impl std::error::Error for EngineError {
 }
 
 /// The assembled engine: the recovered kernel over the one concrete
-/// [`World`], and M7's own registry over the compiled format constants — held
-/// so every later consumer (M9's catalog, the world dump) reads the SAME
-/// instance, never a copy that could drift.
+/// [`World`].
 ///
 /// The kernel is held as the [`EngineStores`] factory rather than bare: the
 /// engine's own driver accessors read through it, so which driver constructor
 /// fills which slot is written once, in one type, for both the engine's
-/// callers and M10's transport.
+/// callers and M10's transport. That factory is the whole of what an engine
+/// carries — the type registry [`Engine::registry`] hands out is M7's own
+/// module constant, not state of this handle's.
 pub struct Engine {
     stores: EngineStores,
-    registry: Arc<TypeRegistry>,
 }
 
 /// `skepd` serves a whole worker pool off one shared `Engine`, so `Send +
@@ -103,16 +102,15 @@ impl Engine {
     /// still reaches it, else `OpenError::BadCheckpoint` (PUB-7.9) — never a
     /// decoded world with an empty exception set.
     ///
-    /// The registry the engine keeps is M7's own: `skep_links::registry` is
-    /// that module's compiled format constant, built once per process, so the
-    /// instance every later consumer reads (M9's catalog, the world dump) IS
-    /// the one the store's fold and write gates run against — not a second
-    /// build that would then owe an agreement check, and not a copy read out
-    /// of whichever slice happened to be at hand.
+    /// There is nothing to assemble beyond that recovery. The type registry
+    /// M9 is handed at [`Engine::coordinator`] is `skep_links::registry` —
+    /// M7's own compiled format constant, built once per process — so the
+    /// instance a consumer reads IS the one the store's fold and write gates
+    /// run against, by construction rather than by an agreement anything here
+    /// would have to keep.
     pub fn open(cfg: KernelConfig) -> Result<Engine, EngineError> {
         let kernel = Arc::new(Kernel::open(cfg, World::genesis()).map_err(EngineError::Open)?);
-        let registry = Arc::clone(skep_links::registry());
-        Ok(Engine { stores: EngineStores::new(kernel), registry })
+        Ok(Engine { stores: EngineStores::new(kernel) })
     }
 
     /// The kernel (M2). Snapshots, checkpoints, and `current_seq` are reached
@@ -128,10 +126,13 @@ impl Engine {
         &self.stores.kernel
     }
 
-    /// The ONE registry — M7's own module constant, shared rather than
+    /// The ONE registry — M7's own module constant, reached rather than
     /// rebuilt, and the one M9 projects (M9 builds no second `TypeRegistry`).
+    /// It is a process constant and not this handle's state, so every engine
+    /// answers with the same instance and a world's own slice answers with it
+    /// too; the world dump reads it off the slice for that reason.
     pub fn registry(&self) -> &Arc<TypeRegistry> {
-        &self.registry
+        skep_links::registry()
     }
 
     /// M3's driver (borrows the kernel for the call).
@@ -158,22 +159,23 @@ impl Engine {
     /// shared kernel, the one registry, the two op-handle factories whose
     /// bodies discharge M9's standing assembly obligation (constructing
     /// `Vstream` from `&Kernel<W>`, and `LinkWriter` from `&Kernel<W>` plus
-    /// the visibility class M9 lends it), and the GUEST-class read predicate
-    /// M9's fires run at (PUB round 2, lane 3.3, §5) —
-    /// [`World::readable_guest`], `published(doc)`, so a rule's effect never
-    /// crosses the draft boundary — which M9 also threads into every writer
-    /// it builds (lane 3.3b, PUB-6.28), so a fire's value-keyed gates see
-    /// only guest-readable incumbents. Infallible: M9's catalog is a pure
-    /// projection of the injected registry — with the type set compiled into
-    /// the format there is no twice-passed configuration whose drift a
-    /// validate-once-or-fail step would catch.
+    /// the visibility class M9 lends it), and the read predicate M9's fires
+    /// run at (PUB round 2, lane 3.3, §5). M9 is the System caller — the one
+    /// with no session — so its class is [`World::visible_to`]'s System arm,
+    /// asked for here rather than restated: `published(doc)`, so a rule's
+    /// effect never crosses the draft boundary. M9 threads that same
+    /// predicate into every writer it builds (lane 3.3b, PUB-6.28), so a
+    /// fire's value-keyed gates see only guest-readable incumbents.
+    /// Infallible: M9's catalog is a pure projection of the injected registry
+    /// — with the type set compiled into the format there is no twice-passed
+    /// configuration whose drift a validate-once-or-fail step would catch.
     pub fn coordinator(&self) -> Coordinator<World> {
         Coordinator::new(
             Arc::clone(&self.stores.kernel),
-            Arc::clone(&self.registry),
+            Arc::clone(self.registry()),
             Box::new(mk_vstream),
             Box::new(mk_link_store),
-            Box::new(|w: &World, d: &skep_address::Address| w.readable_guest(d)),
+            Box::new(World::visible_to(Caller::System)),
         )
     }
 

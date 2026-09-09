@@ -14,8 +14,8 @@ use std::sync::Arc;
 use common::*;
 use skep_arrangement::HasM5;
 use skep_content::{HasContent, Val};
-use skep_engine::{ReservedAddrs, World};
-use skep_links::{coverage_class, HasLinks, ShippedType, View};
+use skep_engine::World;
+use skep_links::{coverage_class, HasLinks, ReservedAddrs, ShippedType, View};
 use skep_namespace::{ghost_home_doc, ghost_position, HasM3, BOOTSTRAP_PRINCIPAL, GHOST_POSITIONS};
 
 /// M7's own list of the five — read rather than restated, so a walk here

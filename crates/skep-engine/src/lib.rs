@@ -15,7 +15,8 @@
 //!
 //! **The engine adds no semantics.** Every function here is dispatch,
 //! lifting, construction, or rendering; every guard, policy, and
-//! computation lives in a store. Five obligations are the engine's alone:
+//! computation lives in a store. These obligations are the engine's alone,
+//! one module apiece:
 //!
 //! * **Genesis** ([`World::genesis`], [`Engine::open`]) — the initial world,
 //!   a compiled constant (the reserved type set is format, not
@@ -34,19 +35,22 @@
 //!   definition), seeded at load and folded on every document-minting
 //!   record (PUB-7.7). The daemon's every publication read answers
 //!   `doc ∉ exception_set` and nothing else.
-//! * **The read predicate and the grant fold** ([`World::readable`]; the
-//!   `grants` module) — the one function `readable(doc, principal) =
-//!   published(doc) ∨ subtree ∨ grant_exists` (PUB-1.31, lane 3.3, §1), and
-//!   the second derived index it rests on: a fold over the LINK slice keyed
-//!   grantee × content-prefix, seeded at load and folded on every link
-//!   deposit (PUB-7.7), with NO checkpoint slice. Every read surface — M6's
-//!   deliveries and doc-argument consults, M8's result-set filters, the
+//! * **The read predicate** ([`World::readable`]; the `readable` module) —
+//!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
+//!   grant_exists` (PUB-1.31, lane 3.3, §1), composing the exception set's
+//!   clause, M3's ω memo and the grant fold's probe. Every read surface —
+//!   M6's deliveries and doc-argument consults, M8's result-set filters, the
 //!   publish source gate — answers through this one predicate, threaded down
-//!   as an opaque `Fn(&Address) -> bool` (PUB-6.39). The fold also publishes
-//!   its two feed enumerations ([`World::universal_grants`],
-//!   [`World::issuers_for`]; lane 3.6) — the live ANY-PRINCIPAL set and a
-//!   grantee's issuers with their covered prefixes — the key set the daemon's
-//!   change feed resolves once per request (PUB-7.22, PUB-7.28).
+//!   as an opaque `Fn(&Address) -> bool` (PUB-6.39), and every write is gated
+//!   at the class [`World::visible_to`] maps its caller to (PUB-6.25).
+//! * **The grant fold** (the `grants` module) — the second derived index the
+//!   predicate rests on: a fold over the LINK slice keyed grantee ×
+//!   content-prefix, seeded at load and folded on every link deposit
+//!   (PUB-7.7), with NO checkpoint slice. It also publishes its two feed
+//!   enumerations ([`World::universal_grants`], [`World::issuers_for`]; lane
+//!   3.6) — the live ANY-PRINCIPAL set and a grantee's issuers with their
+//!   covered prefixes — the key set the daemon's change feed resolves once
+//!   per request (PUB-7.22, PUB-7.28).
 //! * **The edition-claim lookup** ([`World::edition_claims`]; the `editions`
 //!   module) — the audit-view `to`-range lookup over the R20 edition-claim
 //!   class (PUB-8.46, lane 3.4, §2), composed from M7's own audit reads over
@@ -73,6 +77,7 @@ mod engine;
 mod genesis;
 mod grants;
 mod publication;
+mod readable;
 pub mod types;
 mod world;
 
@@ -85,8 +90,3 @@ pub use world::{Record, World};
 // The foreign types the engine's own signatures name, re-exported so a binary
 // can drive `Engine::open`/`coordinator()` without spelling every store crate.
 pub use skep_kernel::{HistoryError, KernelConfig, OpenError};
-// Named by no engine signature: re-exported so the engine's own integration
-// tests (`tests/genesis.rs`, `tests/recovery_dump.rs`) pin the format's five
-// reserved ghost tumblers against the assembled registry through this crate
-// alone; no daemon code names it.
-pub use skep_links::ReservedAddrs;

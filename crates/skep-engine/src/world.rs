@@ -19,11 +19,11 @@ use crate::publication::{self, Drafts};
 
 /// The ONE concrete world: every store's authoritative slice, composed
 /// (contract §The engine crate assembles), each field named for the store
-/// whose slice it is. Fields are crate-private — every reader, the stores
-/// included, reaches a slice through its accessor trait (contract hard rule:
-/// "Reach slices through accessor traits, never field access on a concrete
-/// world"); only the assembler's own construction, dispatch, and dump paths
-/// touch the fields.
+/// whose slice it is. Fields are crate-private — every reader OUTSIDE this
+/// crate, the stores included, reaches a slice through its accessor trait
+/// (contract hard rule: "Reach slices through accessor traits, never field
+/// access on a concrete world"); the assembler's own code, which is all of
+/// this crate, reads the fields directly.
 ///
 /// Field ORDER is the compatibility surface, not the field names: M2
 /// checkpoints a world through bincode, which encodes a struct as its fields
@@ -272,28 +272,8 @@ impl HasLinks for World {
     }
 }
 
-/// The read predicate as M10's capability (lane 3.3, §1): M10 is generic over
-/// its world and names no `World`, so it reaches the engine's derived
-/// predicate — published ∨ subtree ∨ grant ([`World::readable`]) — through this
-/// one accessor, off its own read snapshot. The inherent method is the real
-/// one; this is the seam the generic front door calls.
-impl skep_febe::ReadableWorld for World {
-    fn readable(
-        &self,
-        principal: Option<skep_namespace::PrincipalId>,
-        doc: &skep_address::Address,
-    ) -> bool {
-        World::readable(self, principal, doc)
-    }
-
-    /// The audit-view edition-claim lookup (PUB-8.46; lane 3.4, §2) —
-    /// [`World::edition_claims`], the engine's composition of M7's audit
-    /// reads over the pinned edition class (`crate::editions`); M10 applies
-    /// the home rule per row, off its own snapshot.
-    fn edition_claims(&self, target: &skep_address::Address) -> Vec<skep_febe::EditionClaim> {
-        World::edition_claims(self, target)
-    }
-}
+// M10's `ReadableWorld` — the read predicate as a capability — is implemented
+// beside the predicate itself, in `crate::readable`.
 
 // The record lifts — the write-side mirror of the accessors: stores return
 // their OWN record type and the caller lifts with `.into()` (contract hard

@@ -14,10 +14,22 @@
 //! cites its commons row and its confirmation (the owner, 2026-09-07); a pin
 //! is never silently renumbered — a change is a confirmed row there and a
 //! dated line here.
+//!
+//! A pin is HELD, not manufactured per call: each reader below hands back a
+//! borrow of one process-wide value, so the ledger is one instance and not
+//! one construction per consult. That matters where the consults are: the
+//! grant fold reads [`t_grant`] on every folded link record — once per deposit
+//! on the live path and once per link record through a whole replay — and a
+//! rebuilt pin is nine big-integer allocations, a vector and a T4 walk. The
+//! addresses are compiled format constants, so there is nothing per-call for
+//! them to depend on.
+
+use std::sync::LazyLock;
 
 use skep_address::{validate, Address, Nat, Tumbler};
 
 /// A commons type address: the ghost document's subspace-3 element `ordinal`.
+/// Called once per pin, at that pin's first read.
 fn commons_type(ordinal: u32) -> Address {
     validate(
         Tumbler::new([1u32, 1, 0, 1, 0, 1, 0, 3, ordinal].into_iter().map(Nat::from))
@@ -34,8 +46,9 @@ fn commons_type(ordinal: u32) -> Address {
 /// the ledger bounds the range and left the exact address to seeding). The
 /// grant fold keys on it by denotation equality; the write path recognizes
 /// it (and its subtypes by prefix) as PUB-6.30's grant-typed class.
-pub fn t_grant() -> Address {
-    commons_type(90)
+pub fn t_grant() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(90));
+    &ADDR
 }
 
 /// The EDITION-CLAIM class type address (R20) — `1.1.0.1.0.1.0.3.14`,
@@ -50,8 +63,9 @@ pub fn t_grant() -> Address {
 /// `3.14.k` is a subtype's member and counts — the lookup names the CLASS,
 /// not one address. NOT a write-path refusal class: the claim is read under
 /// the ACTIVE view (PUB-6.32), so its owner's `nullify` is admitted.
-pub fn t_edition() -> Address {
-    commons_type(14)
+pub fn t_edition() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(14));
+    &ADDR
 }
 
 /// The succession pair's `successor-of` claim type — `1.1.0.1.0.1.0.3.59`
@@ -61,8 +75,9 @@ pub fn t_edition() -> Address {
 /// supersession CLAIM stays the managed ⟦supersedes⟧ class, not commons)";
 /// commons-seeding.md's reserved-range table lists `3.59` as CLAIMED. Not
 /// provisional.
-pub fn t_successor_of() -> Address {
-    commons_type(59)
+pub fn t_successor_of() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(59));
+    &ADDR
 }
 
 /// The succession pair's delegator ENDORSEMENT type — the `endorse` type,
@@ -72,8 +87,9 @@ pub fn t_successor_of() -> Address {
 /// .2 trust .3 collaboration" (the social range 3.40–3.45); commons-map.md:
 /// "endorse already 3.42". Not provisional. Its subtypes are members by
 /// prefix (L10).
-pub fn t_delegator_endorsement() -> Address {
-    commons_type(42)
+pub fn t_delegator_endorsement() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(42));
+    &ADDR
 }
 
 /// The CONSUMPTION MARKER type — `1.1.0.1.0.1.0.3.91`, CONFIRMED by the
@@ -84,8 +100,9 @@ pub fn t_delegator_endorsement() -> Address {
 /// at seeding" — ONE number (the marker's two values `offer_accepted` /
 /// `offer_declined` are client-interpreted VALUES in the FROM slot, LM 4/53,
 /// never subtypes). Pinned at the range's second address, beside the grant.
-pub fn t_consumption_marker() -> Address {
-    commons_type(91)
+pub fn t_consumption_marker() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(91));
+    &ADDR
 }
 
 /// The JOURNAL DESIGNATION type — `1.1.0.1.0.1.0.3.22`, CONFIRMED by the
@@ -96,8 +113,9 @@ pub fn t_consumption_marker() -> Address {
 /// document IS — not commerce; the placement lean). ONE number, exact
 /// address at seeding; the reserve is 8 wide and decisions 0/6 may also land
 /// here". Pinned at the reserve's first address.
-pub fn t_journal_designation() -> Address {
-    commons_type(22)
+pub fn t_journal_designation() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(22));
+    &ADDR
 }
 
 /// The RAIL RECORD type — `1.1.0.1.0.1.0.3.60`, CONFIRMED by the owner
@@ -107,8 +125,9 @@ pub fn t_journal_designation() -> Address {
 /// commons-map.md's PUB rail record row (owner 2026-09-06): "3.60 (agentic
 /// tier) — PROVISIONAL, exact at seeding; hire-side governance of an
 /// agent".
-pub fn t_rail_record() -> Address {
-    commons_type(60)
+pub fn t_rail_record() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(60));
+    &ADDR
 }
 
 /// The steward's CLASSIFICATION link type — `1.1.0.1.0.1.0.3.61`, CONFIRMED
@@ -118,8 +137,9 @@ pub fn t_rail_record() -> Address {
 /// commons-map.md's PUB steward classification link row (owner 2026-09-06):
 /// "3.61 (agentic tier) — PROVISIONAL, exact at seeding; the
 /// review/resolution layer the tier is reserved for".
-pub fn t_steward_classification() -> Address {
-    commons_type(61)
+pub fn t_steward_classification() -> &'static Address {
+    static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(61));
+    &ADDR
 }
 
 #[cfg(test)]
@@ -171,6 +191,31 @@ mod tests {
             (t_steward_classification(), 61),
         ] {
             assert_eq!(pin.tumbler().to_string(), format!("1.1.0.1.0.1.0.3.{ordinal}"));
+        }
+    }
+
+    /// A pin is ONE value, held: two reads hand back the same address, not
+    /// two equal ones. The ledger's readers are on hot paths — the grant fold
+    /// consults [`t_grant`] per folded link record, live and through replay —
+    /// so a reader that rebuilt its address per call would be paying nine
+    /// big-integer allocations and a T4 walk for a compiled constant.
+    #[test]
+    fn every_pin_is_one_held_value_rather_than_a_construction_per_read() {
+        for (first, again) in [
+            (t_grant(), t_grant()),
+            (t_edition(), t_edition()),
+            (t_successor_of(), t_successor_of()),
+            (t_delegator_endorsement(), t_delegator_endorsement()),
+            (t_consumption_marker(), t_consumption_marker()),
+            (t_journal_designation(), t_journal_designation()),
+            (t_rail_record(), t_rail_record()),
+            (t_steward_classification(), t_steward_classification()),
+        ] {
+            assert!(
+                std::ptr::eq(first, again),
+                "{} is rebuilt per read, not held",
+                first.tumbler()
+            );
         }
     }
 }

@@ -65,7 +65,7 @@ impl World {
             .filter_map(|claim| {
                 // A `match_links` key is resident by construction.
                 let link = links.readlink(&claim)?;
-                if !admitted(link.type_slot(), &class) {
+                if !admitted(link.type_slot(), class) {
                     return None; // overlaps the class range without denoting a member
                 }
                 if !links.succs(supersedes, &claim).is_empty() {

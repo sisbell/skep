@@ -160,7 +160,14 @@ fn a_guest_s_dump_holds_no_draft_content_and_an_empty_slice() {
     assert!(!guest.contains(&secret_line()), "a draft's content line leaves:\n{guest}");
     assert!(!guest.contains(&quoted(&b.link_a)), "a draft's link leaves every hint:\n{guest}");
     assert!(guest.contains(&quoted(&g)), "the published home's grant link stays:\n{guest}");
-    assert!(guest.contains(&quoted(&b.draft_a)), "the identity section still names the draft");
+    // The grant section is kept whole, so the draft the guest cannot open is
+    // still named there, as that grant's `content_prefix` — the one dotted
+    // rendering of it a guest's text carries. (The identity section names it
+    // too, but in the authoritative maps' tumbler form, not this one.)
+    assert!(
+        guest.contains(&quoted(&b.draft_a)),
+        "the whole-kept grant section still names the draft:\n{guest}"
+    );
 
     let stranger = engine.world_dump_visible_to(Some(STRANGER));
     assert_eq!(stranger.as_str(), guest, "a stranger's class is the guest's");

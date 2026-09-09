@@ -62,6 +62,18 @@ const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
 /// snapshot came from.
 pub(crate) struct SerialGuard<'a>(#[allow(dead_code)] parking_lot::MutexGuard<'a, ()>);
 
+#[cfg(test)]
+impl<'a> SerialGuard<'a> {
+    /// A guard over a caller-owned lock — for a unit test that needs the
+    /// ARGUMENT and not the serialization, [`WritePath::serial_lock`]'s own
+    /// lock being unreachable without an `Engine`. `#[cfg(test)]`, so this
+    /// type's production meaning is untouched: the only guard a shipped
+    /// build can construct is still the one over the write path's own lock.
+    pub(crate) fn over(lock: &'a parking_lot::Mutex<()>) -> SerialGuard<'a> {
+        SerialGuard(lock.lock())
+    }
+}
+
 /// The write path: the serialization point, the change feed's sidecars
 /// behind it, and the commit stream in front of it.
 ///

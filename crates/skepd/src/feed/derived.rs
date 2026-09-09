@@ -105,7 +105,17 @@ pub(crate) struct DerivedFile {
     name: &'static str,
     coverage: u64,
     /// Set by the first FAILED [`DerivedFile::append`] of this uptime, after
-    /// which this file takes no further line and no fence.
+    /// which this file takes no further APPEND and no FENCE.
+    ///
+    /// [`DerivedFile::rewrite`] is EXEMPT and needs no guard, on two counts.
+    /// It writes the file WHOLE from the resident twin and fences at the
+    /// coverage it has just made true, so it CLOSES a gap rather than
+    /// claiming over one — which is the opposite of what this flag guards
+    /// against. And it is unreachable past a stop in any case: every
+    /// [`DerivedFile::append`] in [`crate::feed::Feed::open`] is
+    /// `?`-propagated into `DaemonError::Sidecar`, so a failure there
+    /// returns before any rewrite runs, and no rewrite happens at commit
+    /// time at all.
     ///
     /// COVERAGE IS A CLAIM, and a gap beneath it is the one loss the check
     /// cannot close: a position at or below coverage with no record reads as

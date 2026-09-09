@@ -238,6 +238,24 @@ pub(crate) struct CommitsLog {
     last_time: u64,
     /// The file's length — the offset the next appended line lands at.
     len: u64,
+    /// Set by the first FAILED append of this uptime, after which this file
+    /// takes no further line.
+    ///
+    /// THE REOPEN WALK CANNOT REACH AN INTERIOR LOSS. [`CommitsLog::open`]
+    /// walks `(low, head]` where `low` is the HIGHEST surviving entry, so a
+    /// position lost BELOW a later successful append is re-derived by
+    /// nothing: absent from `entries`, hence from every feed source (the
+    /// published stream and the bitmap are built from these keys, the index
+    /// from their classifications, the streams filtered against them), hence
+    /// from every page at every class, permanently, with no error anywhere.
+    /// Stopping the file keeps `low` BELOW the loss, so the walk re-covers
+    /// that position and every one after it as BARE entries — which is what
+    /// [`CommitsLog::record`]'s failure path promises, and what the derived
+    /// layer's own stop rule (`feed/derived.rs`) buys for the same
+    /// condition. The resident `entries` map is written ahead of every
+    /// append, so this uptime answers with full testimony; what stops is
+    /// what the next open reads.
+    stopped: bool,
 }
 
 impl CommitsLog {
@@ -382,7 +400,17 @@ impl CommitsLog {
         demote_malformed_names(&mut entries);
         let last_time = entries.values().filter_map(CommitMeta::time).max().unwrap_or(0);
         Ok((
-            CommitsLog { file, entries, offsets, min_since, open_head: head, rewritten, last_time, len },
+            CommitsLog {
+                file,
+                entries,
+                offsets,
+                min_since,
+                open_head: head,
+                rewritten,
+                last_time,
+                len,
+                stopped: false,
+            },
             walked,
         ))
     }
@@ -412,6 +440,15 @@ impl CommitsLog {
     /// The clamp against `last_time` below covers the other half of the
     /// monotonicity — a wall clock that steps backwards — and that one IS
     /// this file's own obligation rather than the caller's.
+    ///
+    /// The offset returned is the one the line landed at, EXCEPT past a
+    /// failed append: [`CommitsLog::stopped`] freezes `len`, so every later
+    /// offset names a line this file does not hold. Nothing in this build
+    /// seeks by an offset ([`CommitsLog::offsets`]), and the next open
+    /// replays `commits.log` from disk and rebuilds them, so
+    /// `feed-offsets.log` fails its agreement test and is rewritten whole —
+    /// the wrong offsets are latent for the uptime and self-healing after
+    /// it.
     pub fn record(
         &mut self,
         _serial: &SerialGuard<'_>,
@@ -432,20 +469,28 @@ impl CommitsLog {
         let meta = CommitMeta::Recorded { op: op.to_string(), docs, time, key: Some(key) };
         let offset = LineOffset(self.len);
         // Testimony must not fail the op: the write is committed and the
-        // ack is owed regardless; a lost append answers bare after restart.
+        // ack is owed regardless; a lost append answers BARE after restart,
+        // which [`CommitsLog::stopped`] is what makes true — the failure
+        // stops this file, so the next open's walk starts below the gap
+        // instead of above it.
         // Reported without `eprintln!`, which PANICS when the stderr write
         // fails: a daemon whose log pipe has lost its reader would then fail
         // the op this arm exists to keep succeeding, answering
         // `internal_panic` for a write that committed and losing the caller
         // its position. Both failures are swallowed for the one reason.
         let line = entry_line(at, &meta);
-        match self.file.write_all(&line) {
-            Ok(()) => self.len += line.len() as u64,
-            Err(e) => {
-                let _ = writeln!(
-                    std::io::stderr(),
-                    "skepd: commits.log append failed at position {at}: {e}"
-                );
+        if !self.stopped {
+            match self.file.write_all(&line) {
+                Ok(()) => self.len += line.len() as u64,
+                Err(e) => {
+                    self.stopped = true;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "skepd: commits.log append failed at position {at}: {e}; this file \
+                         takes no further line, so the next open re-derives from {at} as \
+                         bare entries"
+                    );
+                }
             }
         }
         self.entries.insert(at, meta);
@@ -816,6 +861,30 @@ pub(crate) fn line_bytes(v: Value) -> Vec<u8> {
 }
 
 #[cfg(test)]
+impl CommitsLog {
+    /// A [`CommitsLog`] whose appends FAIL — a READ-ONLY handle on the file
+    /// in `dir` — which is the one condition the stop rule is about and the
+    /// one no portable test can produce from [`CommitsLog::open`]'s handle.
+    /// The same seam `feed/derived.rs` keeps for the same rule.
+    fn over_unwritable(dir: &Path, open_head: u64) -> CommitsLog {
+        let path = dir.join(SIDECAR_FILE);
+        File::create(&path).expect("create the file to be opened read-only");
+        let file = File::open(&path).expect("a read-only handle");
+        CommitsLog {
+            file,
+            entries: BTreeMap::new(),
+            offsets: BTreeMap::new(),
+            min_since: 0,
+            open_head,
+            rewritten: false,
+            last_time: 0,
+            len: 0,
+            stopped: false,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -974,5 +1043,66 @@ mod tests {
             r#"{"at":9,"docs":["1.0.2.0.1"],"key":"bare","op":"nullify","time":1700000000000}"#,
             "the record's own second document is not rendered to a class that cannot read it"
         );
+    }
+
+    /// A log whose append FAILS takes nothing further, so the next open's
+    /// walk starts BELOW the position it lost.
+    ///
+    /// [`CommitsLog::open`] reconstructs `(low, head]` where `low` is the
+    /// HIGHEST surviving entry, so a position lost beneath a LATER
+    /// SUCCESSFUL append — the condition clearing, a quota raised or a
+    /// device recovered — is re-derived by nothing: absent from `entries`,
+    /// and every feed source is a subset of those keys, so the committed
+    /// write is missing from `/changes` at every class, permanently, with no
+    /// error anywhere. That is strictly worse than the bare entry
+    /// [`CommitsLog::record`]'s failure path promises, which discloses its
+    /// position and nothing else.
+    ///
+    /// The recovery is what the test must construct, and it is why the
+    /// read-only seam alone cannot state this: under it BOTH appends fail
+    /// and the file is empty either way. So the handle is swapped for a
+    /// writable one between the two, which is exactly the condition
+    /// clearing — and the two behaviours then differ in the file's own
+    /// contents.
+    #[test]
+    fn a_failed_append_stops_the_log_so_the_reopen_walk_starts_below_the_gap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(SIDECAR_FILE);
+        let lock = parking_lot::Mutex::new(());
+        let serial = crate::write_path::SerialGuard::over(&lock);
+        let mut log = CommitsLog::over_unwritable(dir.path(), 9);
+
+        // The lost position: recorded in memory, refused by the file.
+        let offset = log.record(&serial, 10, "insert", vec!["1.0.1.0.1".into()], "bare".into());
+        assert!(offset.is_some(), "the position is recorded whatever the file does");
+        assert!(log.entries.contains_key(&10), "and this uptime answers it in full");
+
+        // The condition clears: the very next append COULD succeed.
+        log.file = OpenOptions::new().append(true).open(&path).expect("a writable handle");
+
+        // The position after the gap — the one whose line would raise the
+        // walk's floor over it. Accepted as an outcome, written nowhere.
+        log.record(&serial, 11, "insert", vec!["1.0.1.0.2".into()], "bare".into())
+            .expect("a stopped log still records: the ack is owed either way");
+        assert_eq!(
+            std::fs::read(&path).expect("read"),
+            Vec::<u8>::new(),
+            "nothing reached the file once it stopped — not the lost line, and NOT the \
+             later line that would have claimed the gap was covered"
+        );
+
+        // What a reopen therefore sees, which is the whole point: no entry,
+        // so `low` is `min_since` and the walk re-covers 10 AND 11 as bare
+        // entries. A file claiming 11 alone would put `low` at 11 and leave
+        // 10 reachable by nothing.
+        let (records, _) = parse_records(&std::fs::read(&path).expect("read"));
+        let claimed: Vec<u64> = records
+            .iter()
+            .filter_map(|(_, r)| match r {
+                Record::Entry(at, _) => Some(*at),
+                Record::MinSince(_) => None,
+            })
+            .collect();
+        assert_eq!(claimed, Vec::<u64>::new(), "the file claims no position above the gap");
     }
 }

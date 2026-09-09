@@ -625,10 +625,18 @@ pub(crate) fn board_state_refusal(
 ///
 /// Flagless `create`/`fork` resolve draft (outside), and
 /// `delegate`/`register_node` present no input form here.
-/// Registration and ω stand AHEAD (PUB-6.37, PUB-6.36 slot 1): the gate
-/// evaluates only registered addresses the caller owns, so an unregistered
-/// or foreign argument answers `execute`'s own code, and an empty-account
-/// `fork`/`version` is refused `mint_home_first` before this gate is reached.
+///
+/// Registration and ω stand AHEAD (PUB-6.37, PUB-6.36 slot 1) on every arm
+/// that reads a HOME or a TARGET — the homed writes, `edit_link`'s two
+/// homes, `nullify`'s home and `publish`'s document — so an unregistered or
+/// foreign address there answers `execute`'s own code and is never told
+/// whether it is published. (`nullify`'s TARGET takes ω at the gate and its
+/// document's registration one line later, at the publication read that
+/// needs it.) The three MINTING arms take something else, each stated on the
+/// arm: `create` tests ω of the ACCOUNT, `fork` that the caller HAS one, and
+/// `version` registration of the SOURCE alone. An empty-account
+/// `fork`/`version` is refused `mint_home_first` before this gate is
+/// reached.
 ///
 /// The projection reaches every arm that reads an address: `published(home)`
 /// on a version member answers its DOCUMENT's bit, so a member minted
@@ -647,9 +655,11 @@ fn publish_gate(
         return None;
     }
     // Registration and ω — the pair that stands AHEAD of this gate (PUB-6.37,
-    // PUB-6.36 slot 1), in ONE spelling, so an arm that means to take the
-    // pair cannot take half of it: an address failing either falls through to
-    // execute's own code and is never told whether it is published.
+    // PUB-6.36 slot 1) on every HOME and TARGET arm, in ONE spelling, so an
+    // arm that means to take the pair cannot take half of it: an address
+    // failing either falls through to execute's own code and is never told
+    // whether it is published. The three MINTING arms below take something
+    // else and each says what.
     let m3 = world.m3();
     let owned = |a: &Address| m3.is_registered_document(a) && m3.is_effective_owner(principal, a);
     let homed_refusal = |home: &Address| -> Option<CredentialRefusal> {
@@ -685,6 +695,14 @@ fn publish_gate(
         // draft; ABSENT INHERITS `published(d_src)`. Registration stands
         // ahead (PUB-6.37): an unregistered source answers `execute`'s own
         // `source_not_registered`, not this gate.
+        //
+        // REGISTRATION ALONE, and not the ω beside it that the homed arms
+        // take: versioning a FOREIGN document is a legitimate act, so ω of
+        // the source is not this gate's to demand, and the gate's question
+        // is where the minted member lands, which is `d_src`'s publication
+        // whoever owns it. Nothing is disclosed by answering: a published
+        // document is readable to every class, so `signed_session_required`
+        // here tells a caller what `doc_metadata` already would.
         Op::Version { d_src, published: flag } => {
             if !world.m3().is_registered_document(d_src) {
                 None

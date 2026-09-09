@@ -1312,6 +1312,19 @@ impl Daemon {
     /// a LIVE token's 204 carries no header (the close is the person's own
     /// act); an unknown or already-dead one resolved Guest, so the route
     /// closed it already and its 204 carries `Skepd-Session: closed`.
+    ///
+    /// THE THIRD CASE CLOSES NOTHING, and the uniform answer is the point: a
+    /// LIVE BARE binding whose request
+    /// [`crate::auth::session::bare_bind_allowed`] refuses resolves
+    /// `Guest(GuestReason::RequestRefused)`, which [`Actor`] rules "lives
+    /// untouched", so this arm does not fire, nothing is retired, `closed`
+    /// is false, and the 204 is byte-identical to a successful close. The
+    /// one reachable cell is a foreign `Origin` — the cross-site case the
+    /// bare arm's origin fence exists for, since this daemon binds loopback
+    /// and the signed arm consults neither peer nor origin — and a page that
+    /// may not WRITE as a binding must not retire it, nor learn from the
+    /// answer whether it is live. Every honest client is at an admitted
+    /// origin or sends no `Origin` at all.
     fn post_session_close(&self, resolved: &Resolved, req: &HttpRequest) -> Reply {
         if let Actor::Principal(_) = &resolved.actor {
             if let Some(t) = req.session_token.as_deref().and_then(Token::parse) {
@@ -1727,12 +1740,17 @@ impl Daemon {
         // (a fresh world): transport metadata, never invented, and never an
         // older position's time offered in the head's place.
         //
-        // The two fields are read independently and under no lock, so the
-        // PAIR may straddle one in-flight commit: a `head_time` correct for
-        // the position the sidecar last recorded, beside a `log_position`
-        // one commit newer. Taking the write lock here would serialize a
-        // liveness probe behind writes, which is the worse trade;
-        // `CommitsLog::head_time` states what each field is true of.
+        // THREE independent reads under no lock — this, the identity fold
+        // below, and `log_position` at the end — so this answer may straddle
+        // one in-flight commit at either seam. A `head_time` correct for the
+        // position the sidecar last recorded sits beside a `log_position`
+        // one commit newer; and a client polling for the claim flip can see
+        // the position advance before `claimant` appears, or read the
+        // pre-claim `signed_origins` beside a post-claim position, which
+        // costs it one `session_rejected` and a retry. Every one of them
+        // corrects itself on the next probe. Taking the write lock here
+        // would serialize a liveness probe behind writes, which is the worse
+        // trade; `CommitsLog::head_time` states what each field is true of.
         let head_time =
             self.writes.head_time().map(|t| Value::Number(t.into())).unwrap_or(Value::Null);
         // The auth object (AUTH-6.13): claimant, local_trust, and the TWO

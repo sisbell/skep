@@ -253,7 +253,18 @@ struct Inner {
     /// index's inverse, and what the mask reads per entry.
     docs: BTreeMap<u64, Vec<Doc>>,
     /// The position index: document (by tumbler, so a prefix is a range) →
-    /// the address as named, and its positions ascending.
+    /// the address as named, and its positions ASCENDING, which is what
+    /// makes [`at_or_above`]'s `partition_point` meaningful over a list of
+    /// them and what the consecutive-repeat dedup beside each push rests on.
+    ///
+    /// TWO construction paths establish it, differently. At [`Feed::open`]
+    /// the lists are built by iterating [`Inner::docs`], a `BTreeMap`, so
+    /// the container supplies the order. At [`Inner::fold_position`] they
+    /// are PUSHED, and the order comes from the write path instead:
+    /// positions are recorded under the serialization guard
+    /// ([`crate::write_path::WritePath::commit_under`] runs the execute and
+    /// the record as one operation under it), so each push is strictly above
+    /// every prior one.
     index: BTreeMap<Tumbler, (Address, Vec<u64>)>,
     /// The bitmap: positions masked at commit (docs non-empty, all drafts).
     ///
@@ -282,12 +293,13 @@ struct Inner {
     /// The materialized published stream: every entry not in `masked`.
     published: BTreeSet<u64>,
     /// Owner account → the positions naming one of its drafts, ascending.
-    /// The ONE position collection not ordered by its container: `index`
-    /// takes its order from `docs`, a `BTreeMap`, and `masked` and
-    /// `published` are `BTreeSet`s, while this is built by pushing — in file
-    /// order at replay, in position order at the record. [`Feed::open`]
-    /// sorts the replayed half, which is what establishes the invariant
-    /// [`at_or_above`]'s `partition_point` reads.
+    /// The ONE position collection built from a FILE's own sequence: `masked`
+    /// and `published` are `BTreeSet`s and [`Inner::index`] takes its replay
+    /// order from `docs`, a `BTreeMap`, while this is pushed — in file order
+    /// at replay, in position order at the record ([`Inner::index`]'s second
+    /// path, and the same guard). [`Feed::open`] sorts the replayed half,
+    /// which is what establishes the invariant [`at_or_above`]'s
+    /// `partition_point` reads.
     streams: BTreeMap<Address, Vec<u64>>,
     files: Files,
 }
@@ -882,11 +894,13 @@ impl Inner {
 /// at or below `since`, which is a client re-reading its own history on
 /// every poll, with `last` going backwards.
 ///
-/// The ASCENDING half is the collections': `index` and `published` are
-/// ordered by their containers, and `streams` is ordered at each of its two
-/// construction paths ([`Inner::streams`]). `partition_point` is meaningless
-/// on an unsorted slice, so this returns an arbitrary suffix rather than a
-/// fence for a list that lost it.
+/// The ASCENDING half is the collections', each stated on its own field:
+/// `published` is a `BTreeSet`, and `index` and `streams` are each ordered
+/// at both of their construction paths — by the container at replay (the
+/// index) or by an explicit sort (the streams), and by the write-path
+/// serialization guard's commit order at the record. `partition_point` is
+/// meaningless on an unsorted slice, so this returns an arbitrary suffix
+/// rather than a fence for a list that lost it.
 fn at_or_above(positions: &[u64], start: u64) -> impl Iterator<Item = u64> + '_ {
     let i = positions.partition_point(|&p| p < start);
     positions[i..].iter().copied()

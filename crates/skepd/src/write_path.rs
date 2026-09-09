@@ -23,10 +23,10 @@
 //! two can never come apart in the window between a commit and its record.
 //! Reads never come here and never take the lock.
 //!
-//! The read/write partition is M10's, read here through [`op_is_read`]. A
-//! read is exactly an `Op` the change feed has nothing to record, so
-//! [`write_meta`] answers `None` for precisely those — an equivalence it
-//! asserts against the partition rather than assumes.
+//! The read/write partition is M10's own `Op::is_read`. A read is exactly an
+//! `Op` the change feed has nothing to record, so [`write_meta`] answers
+//! `None` for precisely those — an equivalence it asserts against the
+//! partition rather than assumes.
 
 use std::io;
 use std::path::Path;
@@ -497,13 +497,6 @@ pub(crate) fn write_meta(op: &Op) -> Option<FrameMeta> {
     answer
 }
 
-/// The wire's read/write partition — M10's own [`Op::is_read`], which is
-/// where the split is decided. The history surface needs it before dispatch:
-/// an `Op` admitted to `/op-at` must be one that cannot commit.
-pub(crate) fn op_is_read(op: &Op) -> bool {
-    op.is_read()
-}
-
 // ── the commit stream (wire v4) ──────────────────────────────────────────
 
 /// One head + shutdown flag under a mutex, one condvar. Every committing
@@ -591,10 +584,10 @@ mod tests {
     #[test]
     fn reads_are_exactly_the_ops_with_no_change_feed_entry() {
         let read = Op::Fork { published: None };
-        assert!(!op_is_read(&read), "fork commits");
+        assert!(!read.is_read(), "fork commits");
         assert!(write_meta(&read).is_some());
         let query = Op::PrincipalPrefix { id: PrincipalId(1) };
-        assert!(op_is_read(&query), "principal_prefix reads");
+        assert!(query.is_read(), "principal_prefix reads");
         assert!(write_meta(&query).is_none());
     }
 

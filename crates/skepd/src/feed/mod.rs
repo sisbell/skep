@@ -467,6 +467,11 @@ impl Feed {
         f_streams.fence(head)?;
 
         // ── the offset array, checked against the log's own replay ──
+        //
+        // `!log.rewritten` is this file's half of COMPACTION as well as its
+        // agreement test: a compacted log moved every offset, so the branch
+        // below rewrites — which is why `feed-offsets.log` is absent from
+        // the compaction block that follows.
         let offsets_agree = !log.rewritten
             && offset_entries.iter().all(|(at, m)| {
                 m.get(OFFSETS_OFFSET).and_then(Value::as_u64) == log.offsets.get(at).copied()
@@ -498,7 +503,9 @@ impl Feed {
         }
 
         // ── compaction: the log dropped what the journal reclaimed, so the
-        //    derived files drop it too, rewritten from the twins ──
+        //    derived files drop it too, rewritten from the twins. THREE of
+        //    the four — `feed-offsets.log` took its rewrite above, on the
+        //    same `log.rewritten`. A fifth derived file belongs HERE. ──
         if log.rewritten {
             f_index.rewrite(
                 docs.iter()
@@ -719,9 +726,7 @@ impl Inner {
                 // MERGE (PUB-7.32, PUB-7.33): the index lists under the
                 // prefix, an unreadable document's whole list skipped on ONE
                 // test — the doc-granular skip.
-                for (_, (doc, positions)) in
-                    self.index.range(under.clone()..).take_while(|(k, _)| is_prefix(under, k))
-                {
+                for (doc, positions) in self.under_prefix(under) {
                     if !class.readable(doc) {
                         continue;
                     }
@@ -764,11 +769,7 @@ impl Inner {
             // The universal term (PUB-7.22): the live any-principal prefix's
             // own index lists — the mask's grant clause admits exactly the
             // entries the issuing owner covers.
-            for (_, (_, positions)) in self
-                .index
-                .range(prefix.tumbler().clone()..)
-                .take_while(|(k, _)| is_prefix(prefix.tumbler(), k))
-            {
+            for (_doc, positions) in self.under_prefix(prefix.tumbler()) {
                 sources.push(Box::new(at_or_above(positions, start)));
             }
         }
@@ -797,12 +798,45 @@ impl Inner {
         })
     }
 
+    /// The index lists under `p`: the documents whose key `p` is a prefix of,
+    /// each with its positions. THE one spelling of the fact [`Inner::index`]
+    /// is keyed for — a prefix's documents are one CONTIGUOUS key range under
+    /// M1's ordering, so the enumeration is a `range` from `p` cut at the
+    /// first key `p` does not cover, never a walk of the map.
+    ///
+    /// One home because [`Inner::merge_beats_walk`] prices the set
+    /// [`Inner::sources`]' merge branch then enumerates: the two must range
+    /// over the SAME documents, or the rule chooses its branch by counting
+    /// something else. The branch additionally skips the UNREADABLE ones,
+    /// which is its own doc-granular skip and stays at the call site; the
+    /// cost rule deliberately counts them, and the direction that biases it
+    /// is stated there.
+    fn under_prefix<'a>(
+        &'a self,
+        p: &'a Tumbler,
+    ) -> impl Iterator<Item = (&'a Address, &'a [u64])> + 'a {
+        self.index
+            .range(p..)
+            .take_while(move |(k, _)| is_prefix(p, k))
+            .map(|(_, (doc, positions))| (doc, positions.as_slice()))
+    }
+
     /// The MERGE-OR-WALK rule (PUB-7.33): merge iff the prefix holds no more
     /// documents than the range holds positions. Both counts advance
     /// together and stop at the first to run out, so the rule costs
     /// O(min(documents, positions)) and needs no rank structure.
+    ///
+    /// The documents counted are [`Inner::under_prefix`]'s — the same set
+    /// the merge branch enumerates, which is what makes this a price of
+    /// THAT branch rather than of some other set that happens to be nearby.
+    /// It counts the UNREADABLE ones too, which the branch then skips one
+    /// whole list at a time, so the count is an over-estimate of the merge's
+    /// real work and never an under-estimate. That biases the rule toward
+    /// the WALK — it can decline a merge that would have been marginally
+    /// cheaper over the readable subset — and never toward a merge whose
+    /// sources outnumber what was measured.
     fn merge_beats_walk(&self, under: &Tumbler, start: u64) -> bool {
-        let mut docs = self.index.range(under.clone()..).take_while(|(k, _)| is_prefix(under, k));
+        let mut docs = self.under_prefix(under);
         let mut positions = self.log.entries.range(start..);
         loop {
             match (docs.next(), positions.next()) {

@@ -13,7 +13,7 @@ use skep_identity::{framed, Fingerprint, IdentityState, KeySet, SESSION_TAG};
 use skep_namespace::{PrincipalId, BOOTSTRAP_PRINCIPAL};
 
 use super::{bare_origins, signed_origins, AuthConfig, Origin};
-use crate::codec::{check_keys, hex_string};
+use crate::codec::{check_keys, hex_nibble, hex_string};
 use crate::World;
 use skep_address::Address;
 use skep_namespace::HasM3;
@@ -70,18 +70,13 @@ impl Nonce {
     }
 }
 
-fn hex_nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        _ => None,
-    }
-}
-
 /// Exactly `N` bytes of LOWERCASE hex, or `None` — the admission rule both
 /// wire tokens rest on. Each `parse` admits only what its own emitter
 /// produces, so an uppercase value is refused rather than normalized; what
-/// that costs a caller is per-type and stays stated on each.
+/// that costs a caller is per-type and stays stated on each. The REFUSAL is
+/// this function's own, in the byte it hands [`hex_nibble`]: that table is
+/// lowercase and is the crate's one hex mapping, so case is the only thing
+/// this and the content forms' decode differ by.
 fn parse_lower_hex<const N: usize>(s: &str) -> Option<[u8; N]> {
     if s.len() != N * 2 {
         return None;

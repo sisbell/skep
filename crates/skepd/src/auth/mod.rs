@@ -271,13 +271,18 @@ pub(crate) fn verifying_key(key: &PublicKey) -> Option<VerifyingKey> {
 /// trailing slash, the scheme's default port OMITTED (AUTH-4.2). `parse`
 /// admits ONLY the canonical text, so `parse(s).as_str() == s` for every
 /// admitted `s` and the handshake's already-canonical check IS this parse.
+///
+/// The canonical text is the whole value; `https` and `host` sit beside it
+/// because [`startup_warnings`]'s port-change arm asks for them by name. No
+/// resolved port is kept: an origin's port is IN that text (omitted at the
+/// scheme's default, which is what makes the text canonical), and every
+/// other reader asks only for membership, which the text decides — the
+/// admission rule above makes it determine the rest.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Origin {
     canonical: String,
     https: bool,
     host: String,
-    /// The resolved port — the explicit one, or the scheme's default.
-    port: u16,
 }
 
 impl Origin {
@@ -310,25 +315,20 @@ impl Origin {
             return None;
         }
         let default = if https { 443 } else { 80 };
-        let port = match port_text {
-            None => default,
-            Some(p) => {
-                // The two conditions std does NOT perform: a leading zero
-                // is not canonical, and `u16::from_str` would accept a
-                // leading `+`. Emptiness and the range are its own — an
-                // empty or over-65535 port fails the parse below.
-                if p.starts_with('0') || !p.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-                let n: u16 = p.parse().ok()?;
-                // Canonical form omits the scheme's default port.
-                if n == default {
-                    return None;
-                }
-                n
+        if let Some(p) = port_text {
+            // The two conditions std does NOT perform: a leading zero is
+            // not canonical, and `u16::from_str` would accept a leading
+            // `+`. Emptiness and the range are its own — an empty or
+            // over-65535 port fails the parse here.
+            if p.starts_with('0') || !p.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
             }
-        };
-        Some(Origin { canonical: s.to_string(), https, host: host.to_string(), port })
+            // Canonical form omits the scheme's default port.
+            if p.parse::<u16>().ok()? == default {
+                return None;
+            }
+        }
+        Some(Origin { canonical: s.to_string(), https, host: host.to_string() })
     }
 
     /// Build the canonical origin from parts — the loopback defaults'
@@ -350,7 +350,7 @@ impl Origin {
             Origin::parse(&canonical).is_some(),
             "from_parts built an origin the front door refuses: {canonical}"
         );
-        Origin { canonical, https, host: host.to_string(), port }
+        Origin { canonical, https, host: host.to_string() }
     }
 
     /// The canonical text — what the wire carries and what health publishes.

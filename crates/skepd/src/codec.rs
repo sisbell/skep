@@ -1076,13 +1076,29 @@ fn p_hex(s: &str) -> PResult<Vec<u8>> {
         .collect()
 }
 
-fn hex_digit(c: u8) -> PResult<u8> {
-    match c {
-        b'0'..=b'9' => Ok(c - b'0'),
-        b'a'..=b'f' => Ok(c - b'a' + 10),
-        b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(PErr(format!("invalid hex digit '{}'", c as char))),
+/// The ASCII hex table, LOWERCASE — the decode side of [`hex_string`], and
+/// the ONE mapping this crate holds from a hex byte to a nibble.
+///
+/// CASE IS POLICY and stays with each parser, which is the whole of what
+/// the three differ by: [`hex_digit`] folds it and names the offending
+/// character; [`crate::auth::session`]'s nonce and token parsers REFUSE it,
+/// so an uppercase value is a syntax fault whose nonce survives rather than
+/// a burned credential; its signature parser folds it, the signature being
+/// decoded and never framed. None of them owns the table.
+pub(crate) fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
     }
+}
+
+/// One hex character, case FOLDED — the content forms' policy: `{"hex"}`
+/// and `{"atom_hex"}` are decoded to bytes and never framed, so an
+/// uppercase digit means what a lowercase one means.
+fn hex_digit(c: u8) -> PResult<u8> {
+    hex_nibble(c.to_ascii_lowercase())
+        .ok_or_else(|| PErr(format!("invalid hex digit '{}'", c as char)))
 }
 
 fn p_endset(v: &Value) -> PResult<Endset> {

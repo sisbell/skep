@@ -176,9 +176,7 @@ use crate::codec::{
 };
 use crate::feed::{ChangesAnswer, FeedClass, Query};
 use crate::history::{History, Permit, Permits, Unavailable};
-use crate::write_path::{
-    op_is_read, write_meta, FrameMeta, SerialGuard, StreamStep, WritePath,
-};
+use crate::write_path::{write_meta, FrameMeta, SerialGuard, StreamStep, WritePath};
 
 pub use crate::auth::session::Peer;
 
@@ -1097,8 +1095,7 @@ impl Daemon {
     fn resolve_at_head(&self, req: &HttpRequest) -> Resolved {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
-        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
-        Resolved { actor, closed }
+        self.resolve_actor(req, snap.world(), &identity)
     }
 
     /// One token-accepting route (AUTH-4.43): resolve the actor against the
@@ -1331,12 +1328,17 @@ impl Daemon {
     /// (AUTH-4.28's WHICH-lookup pin). Every Guest then answers
     /// `unauthenticated` by executing under the retired guest session —
     /// M10's own code, with the op kind named.
+    ///
+    /// The answer is a [`Resolved`], whose two fields are the actor this
+    /// request acts as and whether the fourth step above fired — so the
+    /// death signal a response owes is named at this signature rather than
+    /// reassembled from a bare `bool` at each call.
     fn resolve_actor(
         &self,
         req: &HttpRequest,
         world: &World,
         identity: &IdentityState,
-    ) -> (Actor, bool) {
+    ) -> Resolved {
         // A present-but-unparseable token IS no token (AUTH-4.18):
         // `Guest(NoToken)`, nothing to close, no header.
         let token = req.session_token.as_deref().and_then(Token::parse);
@@ -1350,7 +1352,7 @@ impl Daemon {
                 self.close_binding(t);
             }
         }
-        (actor, closed)
+        Resolved { actor, closed }
     }
 
     /// The locked state one write sequence stands on: the world snapshot,
@@ -1377,8 +1379,8 @@ impl Daemon {
     ) -> (Snapshot<World>, IdentityState, Resolved) {
         let snap = self.engine.kernel().snapshot();
         let identity = self.auth.fold.snapshot();
-        let (actor, closed) = self.resolve_actor(req, snap.world(), &identity);
-        (snap, identity, Resolved { actor, closed })
+        let resolved = self.resolve_actor(req, snap.world(), &identity);
+        (snap, identity, resolved)
     }
 
     /// The answer every Guest arm gives: execute under the permanently
@@ -1615,7 +1617,10 @@ impl Daemon {
                 }
             }
             DaemonOp::Febe(frame) => {
-                if !op_is_read(&frame.op) {
+                // The partition is M10's own, asked directly: this daemon
+                // holds no second reading of it, and `write_path`'s
+                // `write_meta` records what a drift on the other side costs.
+                if !frame.op.is_read() {
                     // The ruling-fixed body, exactly: {"error": "write_at_history"}.
                     return refuse(TransportError::WriteAtHistory, None);
                 }
@@ -1888,9 +1893,7 @@ fn challenge_principal(query: Option<&str>) -> Result<u64, String> {
     for (k, v) in query_pairs(q)? {
         match k {
             "principal" => {
-                if principal.is_some() {
-                    return Err("duplicate parameter 'principal'".into());
-                }
+                at_most_once(&principal, "parameter", "principal")?;
                 principal = Some(
                     v.parse()
                         .map_err(|_| format!("principal: '{v}' is not a non-negative integer"))?,
@@ -1915,6 +1918,23 @@ fn query_pairs(q: &str) -> Result<Vec<(&str, &str)>, String> {
         .collect()
 }
 
+/// A field that may appear at most ONCE — the never-silent rule applied to
+/// repeats, shared by the request head's headers and by every query this
+/// daemon reads, so a duplicate is a named refusal rather than a last-wins
+/// nobody chose. `noun` is the wire's word for the kind of field, which is
+/// all the header reader and the query parsers differ by.
+///
+/// One home because the alternative is one literal name per field, kept in
+/// step with the slot it guards by inspection alone: a `since.is_some()`
+/// left standing in the `limit` arm accepts a repeated `limit` and refuses a
+/// `limit` that follows a `since`, and the shape compiles either way.
+fn at_most_once<T>(slot: &Option<T>, noun: &str, name: &str) -> Result<(), String> {
+    match slot {
+        Some(_) => Err(format!("duplicate {noun} '{name}'")),
+        None => Ok(()),
+    }
+}
+
 /// The `/changes` query: `since=<position>` (required) plus optional
 /// `limit=<1..=4096>`, `under=<address-or-prefix>` (wire v7.8, PUB-7.31)
 /// and `drafts=true|false` (the drafts-only narrowing, PUB-7.35).
@@ -1932,17 +1952,13 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
     for (k, v) in query_pairs(q)? {
         match k {
             "since" => {
-                if since.is_some() {
-                    return Err("duplicate parameter 'since'".into());
-                }
+                at_most_once(&since, "parameter", "since")?;
                 since = Some(v.parse().map_err(|_| {
                     format!("since: '{v}' is not a position (a non-negative integer)")
                 })?);
             }
             "limit" => {
-                if limit.is_some() {
-                    return Err("duplicate parameter 'limit'".into());
-                }
+                at_most_once(&limit, "parameter", "limit")?;
                 let n: usize = v
                     .parse()
                     .map_err(|_| format!("limit: '{v}' is not a count"))?;
@@ -1952,9 +1968,7 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
                 limit = Some(n);
             }
             "under" => {
-                if under.is_some() {
-                    return Err("duplicate parameter 'under'".into());
-                }
+                at_most_once(&under, "parameter", "under")?;
                 // The codec's own door, so a query string's tumbler and a
                 // frame's meet ONE grammar under ONE budget rather than two
                 // that agree today: the depth and digit caps and the
@@ -1963,9 +1977,7 @@ fn changes_params(query: Option<&str>) -> Result<Query, String> {
                 under = Some(crate::codec::wire_tumbler(v).map_err(|e| format!("under: {e}"))?);
             }
             "drafts" => {
-                if drafts.is_some() {
-                    return Err("duplicate parameter 'drafts'".into());
-                }
+                at_most_once(&drafts, "parameter", "drafts")?;
                 drafts = Some(match v {
                     "true" => true,
                     "false" => false,
@@ -2020,9 +2032,7 @@ fn dump_at_param(query: Option<&str>) -> Result<Option<Seq>, String> {
     for (k, v) in query_pairs(q)? {
         match k {
             "at" => {
-                if at.is_some() {
-                    return Err("duplicate parameter 'at'".into());
-                }
+                at_most_once(&at, "parameter", "at")?;
                 at = Some(Seq(v.parse().map_err(|_| {
                     format!("at: '{v}' is not a position (a non-negative integer)")
                 })?));
@@ -2591,21 +2601,15 @@ fn read_request(
         return Err("malformed method token".into());
     }
     // The headers this daemon acts on; everything else passes unread, as
-    // HTTP requires. Each of the three is read through `once`, so a repeat
-    // is a named refusal rather than a silent last-wins — two conflicting
-    // `Content-Length`s otherwise pick between a stalled read and a
-    // truncated frame by which line came last, and answer the same
+    // HTTP requires. Each of the four is read through `at_most_once`, so a
+    // repeat is a named refusal rather than a silent last-wins — two
+    // conflicting `Content-Length`s otherwise pick between a stalled read
+    // and a truncated frame by which line came last, and answer the same
     // malformed head with two different diagnoses.
     let mut content_length: Option<usize> = None;
     let mut session_token: Option<String> = None;
     let mut origin: Option<String> = None;
     let mut expects_continue: Option<bool> = None;
-    fn once<T>(slot: &Option<T>, name: &str) -> Result<(), RequestRefusal> {
-        match slot {
-            Some(_) => Err(format!("duplicate header '{name}'").into()),
-            None => Ok(()),
-        }
-    }
     for line in lines {
         if line.is_empty() {
             continue;
@@ -2615,17 +2619,17 @@ fn read_request(
             .ok_or_else(|| format!("malformed header line '{line}'"))?;
         let (name, value) = (name.trim(), value.trim());
         if name.eq_ignore_ascii_case("Content-Length") {
-            once(&content_length, name)?;
+            at_most_once(&content_length, "header", name)?;
             content_length =
                 Some(value.parse().map_err(|_| format!("bad Content-Length '{value}'"))?);
         } else if name.eq_ignore_ascii_case(SESSION_HEADER) {
-            once(&session_token, name)?;
+            at_most_once(&session_token, "header", name)?;
             session_token = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Origin") {
-            once(&origin, name)?;
+            at_most_once(&origin, "header", name)?;
             origin = Some(value.to_string());
         } else if name.eq_ignore_ascii_case("Expect") {
-            once(&expects_continue, name)?;
+            at_most_once(&expects_continue, "header", name)?;
             expects_continue = Some(value.eq_ignore_ascii_case("100-continue"));
         } else if name.eq_ignore_ascii_case("Transfer-Encoding") {
             return Err("chunked request bodies are unsupported; send Content-Length".into());

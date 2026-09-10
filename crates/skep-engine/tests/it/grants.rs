@@ -9,7 +9,8 @@
 use crate::common;
 
 use common::*;
-use skep_arrangement::Caller;
+use skep_address::{validate, Level, Tumbler};
+use skep_arrangement::{trunk_of, Caller};
 use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
 use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
@@ -907,4 +908,72 @@ fn two_grants_sharing_an_index_entry_are_withdrawn_together() {
         "the second grant is still an operative record:\n{text}"
     );
     engine.check_hints().expect("the seed reproduces the fold over a shared index entry");
+}
+
+/// The reach the read predicate's PROJECTION cost term is paid over: the
+/// projection runs AHEAD of every clause, so a caller pays it on an address
+/// nothing can refuse — one M3 never registered, whose component count is the
+/// caller's own choice — and the answer is then the fail-open `true` the
+/// published clause gives an absent address (PUB-7.5).
+///
+/// A DEEP DOCUMENT FIELD is the shape, because that field's length is the
+/// projection's iteration count and each iteration copies the whole address.
+/// Every clause below the projection is bounded by something the store chose:
+/// the exception set is a hash probe, and the grant clause's ancestor walk is
+/// reached only past a set HIT, so it only ever runs over a document M3
+/// registered. The projection is reached by everything.
+///
+/// Pinned as REACH rather than as a figure, exactly as
+/// [`a_grant_names_an_address_the_client_invented`] pins the dump's magnitude
+/// term: what bounds the count in the live system is the daemon's wire cap on
+/// a tumbler's components, and nothing in this crate refuses the shape. A
+/// corpus seed for the workspace's fuzzing tier, which is where a figure
+/// would come from.
+#[test]
+fn the_read_predicate_projects_an_address_the_client_invented() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+
+    // A DOCUMENT address under A's account whose document field is a long run
+    // of version components — T4-valid, registered nowhere, and never
+    // reachable by any mint.
+    let deep: skep_address::Address = {
+        let comps = b
+            .acct_a
+            .tumbler()
+            .iter()
+            .cloned()
+            .chain([nat(0)])
+            .chain((0..64u32).map(|_| nat(1)));
+        validate(Tumbler::new(comps).expect("nonempty")).expect("a document tier address is T4-valid")
+    };
+    // The premises, stated where they can fail: this must be a DOCUMENT — the
+    // level whose field the projection peels — with a field long enough that
+    // the peel is not one step, and it must be unregistered, so no clause
+    // below the projection can refuse it first.
+    assert_eq!(deep.level(), Level::Document);
+    assert_eq!(
+        deep.document_field().map(|field| field.len()),
+        Some(64),
+        "the projection's iteration count IS this field's length"
+    );
+    assert!(
+        !engine.kernel().snapshot().world().m3().is_registered_document(&deep),
+        "the point is an address M3 never minted"
+    );
+    // …and the projection really does run over all of it, peeling to the
+    // account's own doc 1 — which is not this address.
+    assert_eq!(trunk_of(&deep), addr(&[1, 0, 1, 0, 1]));
+
+    let w = world(&engine);
+    // The work is spent, and then the address is fail-open readable: at every
+    // class, for the guest that never authenticated as much as for the owner.
+    assert!(w.readable(None, &deep), "an unregistered address is fail-open (PUB-7.5)");
+    assert!(w.readable(Some(A), &deep));
+    assert!(w.readable(Some(B), &deep));
+    // The registration check the contract puts AHEAD of the read is the
+    // caller's, and no caller of this predicate can run it for free: M3's own
+    // read answers the other way, so the deferral is a second walk and not a
+    // cheaper first one.
+    assert!(!w.m3().is_registered_document(&deep));
 }

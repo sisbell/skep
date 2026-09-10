@@ -139,15 +139,28 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// hint family added to the tree and left out of it goes to the guest
 /// unreduced, deterministically and with nothing about it looking wrong.
 ///
-/// That statement accounts for ALL THREE LEVELS of the tree, and
+/// That statement accounts for ALL FIVE LEVELS of the tree, and
 /// `every_hints_family_is_reduced_or_kept_by_name` holds it against the
-/// builders at each: the ROOT's four sections (two reduced, two kept whole
-/// with the reason given above), the HINTS section's families (grouped by
-/// [`REDUCED_BY_HOME`], [`PREDICATE_PROJECTIONS`] and the three arms of their
-/// own), and the three entries inside a SHIPPED CLASS's own submap
-/// (`super::class_tree`'s — two slices reduced by home, one format-constant
-/// `key` kept). A level left out of that test is a level where an addition
-/// discloses.
+/// builders at each. A level left out of that test is a level where an
+/// addition discloses, so the five are named rather than counted:
+///
+/// * the ROOT's four sections — two reduced, two kept whole with the reason
+///   given above;
+/// * the AUTHORITATIVE section's four slices, one per store;
+/// * inside each of those, that STORE's own serde fields — the level whose
+///   names the four paths above end in;
+/// * the HINTS section's families, grouped by [`REDUCED_BY_HOME`],
+///   [`PREDICATE_PROJECTIONS`] and the three arms of their own; and
+/// * the three entries inside a SHIPPED CLASS's own submap
+///   (`super::class_tree`'s — two slices reduced by home, one
+///   format-constant `key` kept).
+///
+/// The THIRD is the one whose additions are not an engine edit at all, and
+/// the reason the level is held here rather than left to the builders: a
+/// store growing a serde field on its slice renders whatever that field
+/// holds to every class, with every path in this body still naming a place
+/// of the shape it expects, and — by the module doc's first obligation —
+/// with no compiler edge from that store to this file.
 ///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
@@ -158,6 +171,12 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 /// changing its key leaves the entry whole rather than empty. Both directions
 /// are the same fact about this module: it reduces what it recognizes and
 /// keeps what it does not.
+///
+/// The adjacency map has TWO shape levels and so keeps an entry on a HALF
+/// applied rule: an unrecognized value survives its key test, which is the
+/// one place a kept entry has been judged rather than merely passed over.
+/// `every_reduced_path_actually_reduces` asserts that second shape where
+/// `reduced_paths` asserts the first.
 pub(super) fn filter_tree(
     mut root: SerdeTree,
     readable: &dyn Fn(&Address) -> bool,
@@ -249,14 +268,29 @@ pub(super) fn filter_tree(
 /// fewer edges than the walk renders.
 ///
 /// Nothing in the class can exercise the difference, and the reason is a
-/// CLOSURE rather than a coincidence: `makelink` and `emit` each refuse a
-/// supersedes-classed type slot outright (`MakeLinkError::SupersessionClass`,
-/// `EmitError::SupersessionClass`), so the only deposits into the class are
-/// `assert_sup`'s and `editlink`'s, and both build the value
-/// `Link::triple(enc([old]), enc([new]), …)` — one unit-depth span a side.
-/// That is what makes the cross product below 1 × 1 per claim rather than a
-/// product of two slot widths, and it is what
-/// `the_supersession_class_is_closed_to_the_open_surfaces` pins.
+/// CLOSURE rather than a coincidence. THREE deposits could put a link in the
+/// class, and each is refused or shaped by a door of M7's:
+///
+/// * `makelink` and `emit` refuse a supersedes-classed type slot outright
+///   (`MakeLinkError::SupersessionClass`, `EmitError::SupersessionClass`), so
+///   no caller-shaped slot reaches the class through either open surface;
+/// * `assert_sup` and `editlink` each build their own CLAIM value,
+///   `Link::triple(enc([old]), enc([new]), …)` — one unit-depth span a side,
+///   by construction rather than by a check; and
+/// * `editlink` additionally deposits a SUCCESSOR that is the caller's own
+///   `Link`, so a supersedes-classed one arrives with caller-shaped
+///   endpoints. `LinkState::conforms_to_sup_schema` is the door that shapes
+///   it — `single_denoted` on each endpoint slot — refusing as
+///   `EditLinkError::DcViolation`.
+///
+/// Those three are what make the cross product below 1 × 1 per claim rather
+/// than a product of two slot widths, and
+/// `the_supersession_class_is_closed_to_the_open_surfaces` pins all three.
+/// The last is the one whose relaxation costs most quietly: M7 admitting a
+/// multi-address endpoint would leave this derivation faithful, since it
+/// mirrors `fold_hints` whatever a slot holds, and would make the walk
+/// quadratic in two slot widths bounded by `skep_links::MAX_SLOT_SPANS`,
+/// paid on every filtered dump.
 ///
 /// Read through M7's public surface alone — the class's `type_slice` under
 /// the audit view, `is_nullified` and `readlink` per claim — at filter time:
@@ -433,7 +467,9 @@ mod tests {
     use skep_address::validate;
     use skep_arrangement::Caller;
     use skep_kernel::{CheckpointPolicy, Durability, KernelConfig, TxnError};
-    use skep_links::{EmitError, MakeLinkError, ReservedAddrs, SlotArg};
+    use skep_links::{
+        enc, EditLinkError, EmitError, Link, MakeLinkError, ReservedAddrs, SlotArg,
+    };
     use skep_namespace::{HasM3, BOOTSTRAP_PRINCIPAL};
 
     use crate::dump::tests::{addr, populated_world, render_of, USER};
@@ -582,18 +618,24 @@ mod tests {
         }
     }
 
-    /// [`filter_tree`]'s statement, held against the sections the builders
-    /// write at each of the three levels — the one test that fails on an entry
-    /// the statement does not account for.
+    /// [`filter_tree`]'s statement, held against what the builders write at
+    /// each of its five levels — the one test that fails on an entry the
+    /// statement does not account for.
     ///
     /// No neighbour sees that failure. The identity tests keep everything by
     /// construction, the guest tests walk a fixed path list a new entry is not
     /// on, and `the_v5_root_and_the_filter_s_paths_exist` asks the question the
     /// other way round: whether every path names a place, not whether every
-    /// place has a path. The SHIPPED-CLASS level is beyond a family list
-    /// besides — that loop reduces two entries per class by NAME, so a fourth
-    /// added beside them goes out whole with every path in the filter still
-    /// naming a place.
+    /// place has a path. Two levels are beyond a family list besides, each for
+    /// its own reason:
+    ///
+    /// * a SHIPPED CLASS's submap, where the filter reduces two entries per
+    ///   class by NAME, so a fourth added beside them goes out whole with
+    ///   every path in the filter still naming a place; and
+    /// * an AUTHORITATIVE slice's serde fields, where the addition is not an
+    ///   engine edit at all. A store growing a field on its slice discloses
+    ///   whatever that field holds about a document the class cannot open,
+    ///   and the store author has no compiler edge to this file.
     ///
     /// What this asks of an addition is a DISPOSITION, which is why the format
     /// tests pinning the rendered text are not a substitute at any level. Those
@@ -654,6 +696,39 @@ mod tests {
             sections,
             "a root section the filter does not name is rendered whole to every class"
         );
+
+        // …the AUTHORITATIVE section's own two levels, which no family list
+        // reaches and which a change in ANOTHER CRATE moves. First its four
+        // slices, one per store.
+        let slices: BTreeSet<String> = ["namespace", "content", "arrangement", "links"]
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            keys_at(&mut tree, &["authoritative"]),
+            slices,
+            "an authoritative slice the filter does not name is rendered whole to every class"
+        );
+        // …then, inside each, that store's own serde fields — the level the
+        // filter's four authoritative paths END in. A store adding a field to
+        // its slice ships it to the guest with every path here still naming a
+        // place, and with no compiler edge from that store to this file.
+        for (slice, fields) in [
+            // M3's four, kept WHOLE with the reason in `filter_tree`'s
+            // statement — listed so a fifth is a decision and not a default.
+            ("namespace", &["frontiers", "nodes", "principals", "publication"][..]),
+            ("content", &["map"]),
+            ("arrangement", &["arrangements", "provenance"]),
+            // M7's skip-serialized hints occupy no bytes and so no key.
+            ("links", &["links"]),
+        ] {
+            let named: BTreeSet<String> = fields.iter().map(|name| (*name).to_owned()).collect();
+            assert_eq!(
+                keys_at(&mut tree, &["authoritative", slice]),
+                named,
+                "{slice}: a serde field the filter does not name is rendered whole to every class"
+            );
+        }
 
         // …and INSIDE each shipped class, the level the two family lists above
         // cannot reach: the filter reduces one slice per row of `SLICE_VIEWS`
@@ -795,6 +870,22 @@ mod tests {
     /// failure needs an entry whose disclosures STRADDLE the boundary, which
     /// is `a_guest_s_predicate_projections_hold_neither_a_draft_s_tuple_nor_its_member`'s
     /// fixture and not this one. Two failures, two tests.
+    ///
+    /// The supersession family's SECOND shape level is asserted here too, and
+    /// a path list cannot reach it: [`retain_map_of_seqs`] tests the outer map
+    /// and then each entry's VALUE, and an entry whose value it does not
+    /// recognize is kept on the KEY test ALONE — with the claim's home never
+    /// asked. Every other reduction has one shape and `reduced_paths` asserts
+    /// it; this is the one with two, and the second is what a class's own
+    /// edges turn on.
+    ///
+    /// It is the SHAPE claim that is completed here, not an unwatched
+    /// disclosure: reshaping that family reddens
+    /// `a_draft_homed_supersession_claim_over_public_links_leaves_the_guest_s_edges`
+    /// too, which counts a guest's edges over exactly the world where the
+    /// key test passes and the claim's does not. What this adds is the
+    /// failure that names the reshaped entry instead of a guest's edge count,
+    /// over a fixture that need not straddle the boundary to have one.
     #[test]
     fn every_reduced_path_actually_reduces() {
         let world = every_reduced_family_in_a_draft();
@@ -810,6 +901,22 @@ mod tests {
                 0,
                 "{path:?}: a guest is owed nothing of a draft, and this path reduces nothing"
             );
+        }
+        // The one entry whose reduction has a SECOND shape level: an edge's
+        // value must be a sequence, or the pair test — and with it the claim's
+        // home — never runs on it.
+        match at_path(&mut full, &["hints", "supersession"]) {
+            Some(SerdeTree::Map(entries)) => {
+                assert!(!entries.is_empty(), "the fixture must render an edge");
+                for (old, succs) in entries.iter() {
+                    assert!(
+                        matches!(succs, SerdeTree::Seq(_)),
+                        "hints.supersession {old}: an edge's successors are a sequence, and \
+                         a value of any other shape is kept on its KEY alone"
+                    );
+                }
+            }
+            other => panic!("hints.supersession is a map, got {other:?}"),
         }
         // …and the reduction is still the identity under the total predicate
         // over this much richer world, which is what the two re-derivations'
@@ -866,15 +973,22 @@ mod tests {
 
     /// The CLOSURE [`sup_edge_claims`]' unguarded `Endset::addrs` reading
     /// rests on, and with it the 1 × 1 cross product the filter's cost is
-    /// stated at: the supersession class admits no deposit from either open
-    /// surface, so every claim in it was built by the managed one with a
-    /// single denoted address a side.
+    /// stated at — all THREE of its doors, because a slot reaches the class
+    /// three ways and the third is not an open surface at all:
     ///
-    /// The derivation would still be faithful without this — it mirrors
-    /// `fold_hints`' own unguarded read, so the two agree whatever a slot
-    /// holds — but the COST would not: a surface that admitted a wide-slotted
-    /// supersedes-classed deposit would make the walk below a product of two
-    /// slot widths per claim, paid on every filtered dump.
+    /// * `makelink` refuses a supersedes-classed type slot;
+    /// * `emit` refuses it too; and
+    /// * `editlink` deposits a caller-supplied SUCCESSOR beside its own
+    ///   claim, so a supersedes-classed successor is a caller-shaped slot
+    ///   arriving in the class through the MANAGED surface. M7's
+    ///   `conforms_to_sup_schema` is what shapes it, and a two-address
+    ///   endpoint is refused there.
+    ///
+    /// The derivation would still be faithful without any of the three — it
+    /// mirrors `fold_hints`' own unguarded read, so the two agree whatever a
+    /// slot holds — but the COST would not: a door that admitted a
+    /// wide-slotted supersedes-classed deposit would make the walk below a
+    /// product of two slot widths per claim, paid on every filtered dump.
     #[test]
     fn the_supersession_class_is_closed_to_the_open_surfaces() {
         let (engine, world) = populated_world();
@@ -908,8 +1022,7 @@ mod tests {
             "emit must refuse the supersession class"
         );
 
-        // …so what IS in the class was built by the managed surface: one
-        // denoted address a side, which is the 1 × 1 the derivation walks.
+        // Two ordinary links of the draft, to be the endpoints below.
         let link = |n: u32| {
             writer
                 .makelink(
@@ -923,15 +1036,49 @@ mod tests {
                 .0
         };
         let (old, new) = (link(41), link(42));
+
+        // The THIRD door, and the one no open surface guards: `editlink`
+        // deposits the caller's own successor beside its claim, so a
+        // supersedes-classed successor carries a CALLER-SHAPED endpoint into
+        // the class. M7's `conforms_to_sup_schema` refuses a slot that
+        // denotes more than one address, and that refusal is what keeps the
+        // walk's cross product at 1 × 1.
+        let wide = Link::triple(enc([&old, &new]), enc([&new]), enc([&sup_addr]));
+        assert!(
+            matches!(
+                writer.editlink(caller, &old, wide, &draft, &draft),
+                Err(TxnError::Rejected(EditLinkError::DcViolation))
+            ),
+            "editlink must refuse a supersedes-classed successor with a two-address endpoint"
+        );
+
+        // …while the same successor narrowed to ONE address a side is
+        // ADMITTED, which is what makes the refusal above the WIDTH's rather
+        // than the successor's shape or its endpoints' residence — the two
+        // other ways `conforms_to_sup_schema` can answer no. Its endpoints run
+        // the other way round from the managed claim below so that the two are
+        // distinct VALUES: `assert_sup` deposits through the managed gate,
+        // which dedups on the value, and an identical successor sitting in the
+        // class already would absorb it.
+        let narrow = Link::triple(enc([&new]), enc([&old]), enc([&sup_addr]));
+        writer
+            .editlink(caller, &old, narrow, &draft, &draft)
+            .expect("a schema-conforming supersedes-classed successor deposits");
+
+        // …and the managed surface's own claim, built rather than accepted.
         writer.assert_sup(caller, &draft, &old, &new).expect("the managed claim deposits");
 
+        // So what IS in the class is what those doors let through — the
+        // admitted successor, `editlink`'s own claim over it, and
+        // `assert_sup`'s — and every one of them is the 1 × 1 the derivation
+        // walks.
         let world = engine.kernel().snapshot().world().clone();
         let claims = world.links.type_slice(&sup, View::Audit);
-        assert_eq!(claims.len(), 1, "the two refusals left exactly the managed claim");
+        assert_eq!(claims.len(), 3, "the refusals left exactly what the three doors admit");
         for claim in &claims {
             let value = world.links.readlink(claim).expect("a slice key is resident");
             for slot in [value.from_slot(), value.to_slot()] {
-                assert!(slot.is_address_denoting(), "a managed claim's endpoints are addresses");
+                assert!(slot.is_address_denoting(), "a class member's endpoints are addresses");
                 assert_eq!(slot.addrs().count(), 1, "one denoted address a side: the 1 × 1");
             }
         }

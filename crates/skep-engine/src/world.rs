@@ -290,6 +290,15 @@ impl WorldState for World {
     /// turn. A base that cannot DECODE is the other case, and the one this
     /// method never sees: `FormatStamp` and M3's own field order refuse it
     /// before any rebuild, and M2's fallback chain does get its turn.
+    ///
+    /// COST is the two seeds', each stated at its own: `publication::seed`'s
+    /// is a whole transcode of M3's slice and a pair of M3 reads per
+    /// registered document, `grants::seed`'s is a walk of the whole grants
+    /// class. Both are the STORE's size rather than a caller's, and both are
+    /// what M2's `Kernel::world_at` means where its own cost names this
+    /// method and does not size it — so a caller reading that figure for a
+    /// historical reconstruction reads these two for the rest of it. The
+    /// three store rebuilds above are M3's, M5's and M7's to state.
     fn rebuild_derived(self) -> Self {
         let World { format, namespace, content, arrangement, links, drafts: _, grants: _ } = self;
         // M3, then M4: neither rebuilds — both slices are fully serialized, so

@@ -66,6 +66,33 @@ impl World {
     ///   probe, so both fall through, but the ANY-PRINCIPAL grants still
     ///   reach it — being a principal at all is that tier's whole membership
     ///   test (PUB-5.8), and an unseated one is still not `None`.
+    ///
+    /// COST, per call, uncached, in two walks — and the CALLER chooses the
+    /// first while the STORE chooses the second, so this figure is not one
+    /// number:
+    ///
+    /// * The PROJECTION runs ahead of every clause, so `doc` pays it before
+    ///   anything here can refuse it — an address M3 never registered
+    ///   included, which the published clause then answers `true` two lines
+    ///   later. `trunk_of` peels one component per iteration and each peel
+    ///   COPIES the whole remaining address, M1's `parent` rebuilding its
+    ///   prefix and re-walking T4 to mint it, so the work is the argument's
+    ///   own document-field length TIMES its component count. A component is
+    ///   a `Nat` besides, so a copy is an allocation apiece rather than a
+    ///   word. Nothing in this crate bounds either count: `Address` carries
+    ///   no depth limit, and this predicate is answered once per doc-argument
+    ///   of every read a front door admits, so what bounds the term in the
+    ///   live system is the CALLER's — the daemon's wire cap on a tumbler's
+    ///   components, whose budget is written where that number is.
+    /// * The GRANT clause then walks the projected document's ancestors,
+    ///   `parent` again per level, with one probe of the principal-exact
+    ///   index and one of the ANY-PRINCIPAL index at each. That walk is over
+    ///   a document the exception set HOLDS — it is reached only past a set
+    ///   hit — so its length is a registered document's depth, which is the
+    ///   store's history rather than the request's.
+    ///
+    /// Nothing is memoized, and this gates neither admission nor
+    /// concurrency.
     pub fn readable(&self, principal: Option<PrincipalId>, doc: &Address) -> bool {
         let trunk = trunk_of(doc);
         // Published clause — a published document (or member) is readable by

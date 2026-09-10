@@ -285,8 +285,39 @@ fn shipped_label(ty: ShippedType) -> &'static str {
     }
 }
 
-/// One type class's observable projection: its key endset and its
-/// audit/active slices (both already address-ordered `OrdSet`s).
+/// M9's definition registry as this format projects it: one hints family per
+/// (shipped class, view), each rendering `LinkState::members` — the SUBJECTS
+/// those tuples denote, never the tuples themselves.
+///
+/// The family name, the class it is read off and the view it is read under
+/// are one piece of format knowledge, so they are declared together and once.
+/// The builder ([`hints_tree`]) writes these families off this table and the
+/// per-class filter reduces them off the same one, which is what keeps a
+/// family's entries from being judged at a class or a view other than the one
+/// they were rendered under — a disagreement two separate declarations could
+/// hold without contradicting either.
+///
+/// The names are the dump's own wire vocabulary, as [`shipped_label`]'s are,
+/// and the ORDER is free: `render` sorts a map's entries, so the section's
+/// bytes do not depend on it.
+const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
+    ("predicates.defs.audit", ShippedType::PredDef, View::Audit),
+    ("predicates.defs.active", ShippedType::PredDef, View::Active),
+    ("predicates.stable.audit", ShippedType::PredStable, View::Audit),
+    ("predicates.stable.active", ShippedType::PredStable, View::Active),
+];
+
+/// One type class's observable projection: the THREE entries a class submap
+/// holds — its key endset and its audit and active slices (both already
+/// address-ordered `OrdSet`s).
+///
+/// That entry set is format, and it is the third level of the tree the
+/// per-class filter's completeness statement is held against: `audit` and
+/// `active` are sequences of link addresses and reduce by home, while `key` is
+/// a compiled format constant and stays at every class. A fourth entry added
+/// here and left out of that statement would be rendered whole to every
+/// reader, which is why `every_hints_family_is_reduced_or_kept_by_name` holds
+/// this set as well as the two above it.
 ///
 /// `ty` carries M7's stated precondition — address-denoting or
 /// `iextent`-built, else `type_slice` panics naming it — and the one caller
@@ -334,19 +365,11 @@ fn hints_tree(world: &World) -> SerdeTree {
     entries.push((key("supersession"), SerdeTree::Map(edges)));
 
     // M9's definition registry, projected: `pdef`/`pd_stable` membership
-    // (M9 owns no slice; its registry IS these M7 tuples).
-    let pred_def = links.reserved_type(ShippedType::PredDef);
-    let pred_stable = links.reserved_type(ShippedType::PredStable);
-    entries.push((key("predicates.defs.audit"), addr_seq(&links.members(pred_def, View::Audit))));
-    entries.push((key("predicates.defs.active"), addr_seq(&links.members(pred_def, View::Active))));
-    entries.push((
-        key("predicates.stable.audit"),
-        addr_seq(&links.members(pred_stable, View::Audit)),
-    ));
-    entries.push((
-        key("predicates.stable.active"),
-        addr_seq(&links.members(pred_stable, View::Active)),
-    ));
+    // (M9 owns no slice; its registry IS these M7 tuples). One family per row
+    // of the format's own table, which the per-class filter reduces off too.
+    for (family, ty, view) in PREDICATE_PROJECTIONS {
+        entries.push((key(family), addr_seq(&links.members(links.reserved_type(ty), view))));
+    }
 
     // The engine's own derived index: the exception set (PUB-7.5), a map
     // draft → owner account. Collected in the set's hash order; `render`

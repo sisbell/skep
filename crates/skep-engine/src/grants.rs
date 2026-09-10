@@ -157,8 +157,9 @@ pub(crate) struct GrantRecord {
 /// WHICH query index a grant belongs in, and where in it: the `grantee`
 /// selects the index (`None` ⟹ the ANY-PRINCIPAL one), the `content_prefix`
 /// keys it, and the `issuer` is the member its set holds. The three fields
-/// [`Grants::index_add`] and [`Grants::index_remove`] read, named, so that
-/// the two operations and their argument agree about what is being indexed.
+/// [`Grants::insert`] and [`Grants::withdraw`] project a record onto, named,
+/// so that the two index steps and their argument agree about what is being
+/// indexed.
 ///
 /// A VALUE, and that is the distinction it draws against the record it comes
 /// from. A [`GrantRecord`] has an IDENTITY — the grant link's own address,
@@ -186,6 +187,13 @@ impl GrantRecord {
 /// projected into. All `im` persistent structures, so `World::clone` on the
 /// commit path is one more root clone. `#[serde(skip)]` at the World: derived,
 /// never checkpointed (the module docs' hint discipline).
+///
+/// The three structures must agree, and [`Grants::insert`] and
+/// [`Grants::withdraw`] are the only two transitions that move any of them —
+/// each doing the record edit and the index edit as ONE step. So the
+/// projection this type's fields describe is performed here rather than at a
+/// caller, and a fold arm that moved the set without its index would have to
+/// be written past those two rather than beside them.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Grants {
     /// Admitted, unsuperseded grants, keyed by the grant link's OWN address —
@@ -321,8 +329,34 @@ impl Grants {
             .collect()
     }
 
-    /// Add `entry` to the query index its grantee names: the PRINCIPAL-EXACT
-    /// one keyed by the grantee, or the ANY-PRINCIPAL one.
+    /// ADMIT `grant`, deposited at link address `addr`: it joins the operative
+    /// set under its own address and its [`GrantIndexEntry`] joins the query
+    /// index that entry names. One transition, so the set and its projection
+    /// cannot part.
+    fn insert(&mut self, addr: Address, grant: GrantRecord) {
+        self.index_add(grant.index_entry());
+        self.records.insert(addr, grant);
+    }
+
+    /// WITHDRAW the grant deposited at `addr`: it leaves the operative set and
+    /// its [`GrantIndexEntry`] leaves the query index it was added to. One
+    /// transition, and one lookup, since the removal hands the record back.
+    /// Naming no admitted grant is a no-op.
+    ///
+    /// The indexes are SETS and hold no count, so an entry is withdrawn by the
+    /// first record that names it: where two admitted grants share an entry —
+    /// one issuer, one content-prefix, one grantee — withdrawing either takes
+    /// the entry both contributed, while the other record stays in the
+    /// operative set the dump's grant section renders.
+    fn withdraw(&mut self, addr: &Address) {
+        if let Some(grant) = self.records.remove(addr) {
+            self.index_remove(grant.index_entry());
+        }
+    }
+
+    /// [`Grants::insert`]'s index step: add `entry` to the query index its
+    /// grantee names — the PRINCIPAL-EXACT one keyed by the grantee, or the
+    /// ANY-PRINCIPAL one.
     fn index_add(&mut self, entry: GrantIndexEntry<'_>) {
         let index = match entry.grantee {
             Some(g) => self.by_grantee.entry(g.clone()).or_default(),
@@ -331,15 +365,10 @@ impl Grants {
         set_insert(index, entry.content_prefix, entry.issuer.clone());
     }
 
-    /// Withdraw `entry` from the index it was added to, dropping a grantee
-    /// whose last entry this was — so `by_grantee` holds no empty prefix map,
-    /// as `set_remove` leaves no empty issuer set.
-    ///
-    /// The indexes are SETS and hold no count, so an entry is withdrawn by the
-    /// first record that names it: where two admitted grants share an entry —
-    /// one issuer, one content-prefix, one grantee — revoking either withdraws
-    /// the entry both contributed, while the other record stays in the
-    /// operative set the dump's grant section renders.
+    /// [`Grants::withdraw`]'s index step: take `entry` out of the index it was
+    /// added to, dropping a grantee whose last entry this was — so
+    /// `by_grantee` holds no empty prefix map, as `set_remove` leaves no empty
+    /// issuer set.
     fn index_remove(&mut self, entry: GrantIndexEntry<'_>) {
         let Some(g) = entry.grantee else {
             set_remove(&mut self.universal, entry.content_prefix, entry.issuer);
@@ -458,18 +487,9 @@ fn fold_one(
     let mut next = prev.clone();
     match classify(prev, &home, value) {
         Kind::Grant { content_prefix, grantee } => {
-            let grant = GrantRecord { home, issuer, content_prefix, grantee };
-            next.index_add(grant.index_entry());
-            next.records.insert(addr.clone(), grant);
+            next.insert(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
-        Kind::Revoke { old } => {
-            // The record leaves the operative set and its entry leaves the
-            // index it was added to — one lookup, since the removal hands
-            // the record back.
-            if let Some(grant) = next.records.remove(&old) {
-                next.index_remove(grant.index_entry());
-            }
-        }
+        Kind::Revoke { old } => next.withdraw(&old),
         Kind::Ignore => {}
     }
     next

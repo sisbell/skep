@@ -50,7 +50,7 @@ use skep_links::{Endset, LinkState, ShippedType, View};
 
 use crate::canon::{SerdeTree, TreeDe};
 
-use super::shipped_label;
+use super::{shipped_label, PREDICATE_PROJECTIONS};
 
 /// The hint families reduced BY HOME: each is a sequence of dotted LINK
 /// addresses, and an entry stays where the class reads the document its own
@@ -63,37 +63,33 @@ use super::shipped_label;
 /// only where some path below names it, so a family `super::hints_tree` adds
 /// and this list omits is rendered WHOLE to every class — the guest included.
 /// The other families are reduced by an arm of their own rather than here:
-/// [`REDUCED_BY_TUPLE`]'s four (a member is not a link, so its asserting
-/// tuple is judged too), `types` (per shipped class, per view),
-/// `supersession` (the three-test arm) and `publication.drafts` (a map, keyed
-/// by the draft). `every_hints_family_is_reduced_or_kept_by_name` holds this
-/// list plus those against the section the builder writes.
+/// the PREDICATE PROJECTIONS ([`PREDICATE_PROJECTIONS`], a member being no
+/// link, so its asserting tuple is judged too), `types` (per shipped class,
+/// per view), `supersession` (the three-test arm) and `publication.drafts` (a
+/// map, keyed by the draft). `every_hints_family_is_reduced_or_kept_by_name`
+/// holds this list plus those against the sections the builders write.
+///
+/// Which families group under which rule is THIS module's knowledge, which is
+/// why the list is here; the predicate projections' names are the FORMAT's, so
+/// that table is the builder's and is read from there.
 const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullified"];
 
-/// The hint families reduced BY THE ASSERTING TUPLE as well as by home: each
-/// is a sequence of dotted MEMBER addresses — the subjects `LinkState::members`
-/// denotes, never the tuples that denote them — so an entry here discloses
-/// TWO things and takes a test apiece.
-///
-/// A member's own document is one of them, judged as everywhere else. The
-/// other is the REGISTRATION: that some `pred_def`/`pred_stable` tuple names
-/// this member is a fact deposited in that tuple's home, and a link's home
-/// governs what a class learns of it (PUB-6.13) exactly as it does for the
-/// supersession claims below. A tuple homed in a private draft over a public
-/// member would otherwise put the draft's content in the guest's dump beside
-/// an EMPTY `types` slice for the same class — the walk's two renderings of
-/// one deposit, disagreeing.
-///
-/// Each row carries the class and the view the builder read the family under,
-/// so the re-derivation ([`member_tuples`]) walks the slice the entries came
-/// from: an audit entry is asserted by an audit-view tuple, an active entry by
-/// an active-view one.
-const REDUCED_BY_TUPLE: [(&str, ShippedType, View); 4] = [
-    ("predicates.defs.audit", ShippedType::PredDef, View::Audit),
-    ("predicates.defs.active", ShippedType::PredDef, View::Active),
-    ("predicates.stable.audit", ShippedType::PredStable, View::Audit),
-    ("predicates.stable.active", ShippedType::PredStable, View::Active),
-];
+// ── the hint families reduced BY THE ASSERTING TUPLE as well as by home ──
+//
+// `PREDICATE_PROJECTIONS`, read off the builder's own table so that a family's
+// entries are judged at the class and the view they were rendered under. Each
+// is a sequence of dotted MEMBER addresses — the subjects
+// `LinkState::members` denotes, never the tuples that denote them — so an
+// entry there discloses TWO things and takes a test apiece.
+//
+// A member's own document is one of them, judged as everywhere else. The other
+// is the REGISTRATION: that some `pred_def`/`pred_stable` tuple names this
+// member is a fact deposited in that tuple's home, and a link's home governs
+// what a class learns of it (PUB-6.13) exactly as it does for the supersession
+// claims. A tuple homed in a private draft over a public member would
+// otherwise put the draft's content in the guest's dump beside an EMPTY
+// `types` slice for the same class — the walk's two renderings of one deposit,
+// disagreeing.
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
 /// the entries it reaches drop and keep, applied before render so the harness
@@ -134,7 +130,7 @@ const REDUCED_BY_TUPLE: [(&str, ShippedType, View); 4] = [
 ///   section is. Two families are not link addresses and take a second test
 ///   apiece, because the entry and the deposit that put it there are two
 ///   things:
-///     * The PREDICATE PROJECTIONS ([`REDUCED_BY_TUPLE`]) are MEMBER
+///     * The PREDICATE PROJECTIONS ([`PREDICATE_PROJECTIONS`]) are MEMBER
 ///       addresses — `LinkState::members` denotes the subjects, not the
 ///       tuples — so an entry stays where the class reads the member's own
 ///       document AND some `pred_def`/`pred_stable` tuple asserting it, at
@@ -160,20 +156,27 @@ const REDUCED_BY_TUPLE: [(&str, ShippedType, View); 4] = [
 /// statement above is this reduction's COMPLETENESS as well as its content,
 /// and the gap it admits is the one nothing else here catches: a section or a
 /// hint family added to the tree and left out of it goes to the guest
-/// unreduced, deterministically and with nothing about it looking wrong. The
-/// hint families carry their own lists ([`REDUCED_BY_HOME`],
-/// [`REDUCED_BY_TUPLE`]) so that the sum can be held against what the builders
-/// write.
+/// unreduced, deterministically and with nothing about it looking wrong.
+///
+/// That statement accounts for ALL THREE LEVELS of the tree, and
+/// `every_hints_family_is_reduced_or_kept_by_name` holds it against the
+/// builders at each: the ROOT's four sections (two reduced, two kept whole
+/// with the reason given above), the HINTS section's families (grouped by
+/// [`REDUCED_BY_HOME`], [`PREDICATE_PROJECTIONS`] and the three arms of their
+/// own), and the three entries inside a SHIPPED CLASS's own submap
+/// (`super::class_tree`'s — two slices reduced by home, one format-constant
+/// `key` kept). A level left out of that test is a level where an addition
+/// discloses.
 ///
 /// A key that fails to decode is DROPPED (fail-closed): every key here was
 /// rendered from an address a moment earlier, so none does, and a filter
 /// that met one would rather omit a line than judge it readable. The SHAPE
-/// tests run the other way — [`retain_map`] and [`retain_seq`] do nothing
-/// where the node at a path is not the shape they expect, and the
-/// supersession arm keeps a successor list it does not recognize — so a
-/// builder that changed an entry's shape without changing its key leaves the
-/// entry whole rather than empty. Both directions are the same fact about
-/// this module: it reduces what it recognizes and keeps what it does not.
+/// tests run the other way — [`retain_map`], [`retain_seq`] and
+/// [`retain_map_of_seqs`] each do nothing where the node at a path is not the
+/// shape they expect — so a builder that changed an entry's shape without
+/// changing its key leaves the entry whole rather than empty. Both directions
+/// are the same fact about this module: it reduces what it recognizes and
+/// keeps what it does not.
 pub(super) fn filter_tree(
     mut root: SerdeTree,
     readable: &dyn Fn(&Address) -> bool,
@@ -205,7 +208,7 @@ pub(super) fn filter_tree(
     for family in REDUCED_BY_HOME {
         retain_seq(&mut root, &["hints", family], &keep_dotted);
     }
-    for (family, ty, view) in REDUCED_BY_TUPLE {
+    for (family, ty, view) in PREDICATE_PROJECTIONS {
         // A MEMBER, judged at its own document and then at the homes of the
         // tuples asserting it under this entry's own view.
         let asserted_by = member_tuples(links, links.reserved_type(ty), view);
@@ -224,29 +227,15 @@ pub(super) fn filter_tree(
             retain_seq(&mut root, &["hints", "types", shipped_label(ty), view], &keep_dotted);
         }
     }
-    if let Some(SerdeTree::Map(edges)) = at_path(&mut root, &["hints", "supersession"]) {
-        edges.retain_mut(|(old, succs)| {
-            // The OLD endpoint's home (fail-closed on a key that does not
-            // decode, as everywhere here).
-            let Some(old) = dotted_address(old).filter(|a| document_readable(a)) else {
-                return false;
-            };
-            match succs {
-                SerdeTree::Seq(items) => {
-                    // Each successor by ITS home, and then by the CLAIM's:
-                    // the edge `old → new` stays only where a claim asserting
-                    // it is homed readably (PUB-6.22).
-                    items.retain(|s| {
-                        dotted_address(s).is_some_and(|new| {
-                            document_readable(&new) && edge_claimed_readably(&old, &new)
-                        })
-                    });
-                    !items.is_empty() // the walk renders no empty successor list
-                }
-                _ => true,
-            }
-        });
-    }
+    // An EDGE `old → new`: the two endpoints by their own homes, and then by
+    // the CLAIM's — the edge stays only where a claim asserting it is homed
+    // readably (PUB-6.22).
+    retain_map_of_seqs(
+        &mut root,
+        &["hints", "supersession"],
+        &document_readable,
+        &|old, new| document_readable(new) && edge_claimed_readably(old, new),
+    );
     retain_map(&mut root, &["hints", "publication.drafts"], &keep_dotted);
     root
 }
@@ -323,7 +312,7 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 
 /// The tuples of class `ty` under `view` that ASSERT each member, keyed by the
 /// denoted member — for the per-class filter over the dump's predicate
-/// projections ([`REDUCED_BY_TUPLE`]).
+/// projections ([`PREDICATE_PROJECTIONS`]).
 ///
 /// `LinkState::members` publishes the members and not the tuples behind them,
 /// so the derivation is RESTATED here, and the STANDING OBLIGATION is that it
@@ -344,7 +333,7 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
 ///   does; and
 /// * a view of this function's own choosing. `members` subtracts the filtered
 ///   roots under `View::Default` alone, and the builder reads `Audit` and
-///   `Active`, so each row of [`REDUCED_BY_TUPLE`] carries the view its own
+///   `Active`, so each row of [`PREDICATE_PROJECTIONS`] carries the view its own
 ///   entries were rendered under.
 ///
 /// The reverse direction is free: keying a member the walk did NOT render
@@ -373,7 +362,7 @@ fn member_tuples(links: &LinkState, ty: &Endset, view: View) -> BTreeMap<Tumbler
 
 /// The entry at `path` — a chain of string keys through nested maps — if the
 /// tree holds one there.
-pub(super) fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTree> {
+fn at_path<'t>(tree: &'t mut SerdeTree, path: &[&str]) -> Option<&'t mut SerdeTree> {
     let Some((name, rest)) = path.split_first() else {
         return Some(tree);
     };
@@ -400,6 +389,42 @@ fn retain_seq(tree: &mut SerdeTree, path: &[&str], keep: &dyn Fn(&SerdeTree) -> 
     if let Some(SerdeTree::Seq(items)) = at_path(tree, path) {
         items.retain(|item| keep(item));
     }
+}
+
+/// Keep the PAIRS of the adjacency map at `path` — a map from a dotted key to
+/// a sequence of dotted items — that both predicates admit: an entry stays
+/// where `keep_key` admits its key, and each of that entry's items stays where
+/// `keep_pair` admits it with the key. An entry whose sequence empties LEAVES,
+/// because the walk renders no empty one.
+///
+/// Both addresses re-enter through [`dotted_address`] here rather than at the
+/// caller, so this helper holds the fail-closed key rule itself: what does not
+/// decode is dropped, on either side of a pair. The SHAPE direction is its
+/// siblings' — a node that is not a map at `path`, or an entry whose value is
+/// not a sequence, is left whole rather than emptied.
+fn retain_map_of_seqs(
+    tree: &mut SerdeTree,
+    path: &[&str],
+    keep_key: &dyn Fn(&Address) -> bool,
+    keep_pair: &dyn Fn(&Address, &Address) -> bool,
+) {
+    let Some(SerdeTree::Map(entries)) = at_path(tree, path) else {
+        return;
+    };
+    entries.retain_mut(|(key, items)| {
+        let Some(key) = dotted_address(key).filter(|a| keep_key(a)) else {
+            return false;
+        };
+        match items {
+            SerdeTree::Seq(items) => {
+                items.retain(|item| {
+                    dotted_address(item).is_some_and(|item| keep_pair(&key, &item))
+                });
+                !items.is_empty()
+            }
+            _ => true,
+        }
+    });
 }
 
 /// An address in a STORE's own serde form — a bare tumbler, which is how
@@ -464,7 +489,7 @@ mod tests {
         for family in REDUCED_BY_HOME {
             paths.push((owned(&["hints", family]), Shape::Seq));
         }
-        for (family, _, _) in REDUCED_BY_TUPLE {
+        for (family, _, _) in PREDICATE_PROJECTIONS {
             paths.push((owned(&["hints", family]), Shape::Seq));
         }
         for ty in ShippedType::ALL {
@@ -513,16 +538,37 @@ mod tests {
     }
 
     /// [`filter_tree`]'s COMPLETENESS, held against the sections the builders
-    /// write: an entry no path in the filter names is rendered whole at every
-    /// class, so a family added to `super::hints_tree` and left off
-    /// [`REDUCED_BY_HOME`] is disclosed to the guest. That is the one failure
+    /// write at EVERY LEVEL of the tree: an entry no path in the filter names
+    /// is rendered whole at every class, so an addition the filter's statement
+    /// does not account for is disclosed to the guest. That is the one failure
     /// neither the fail-closed key rule nor the path-exists test can catch,
     /// and no other test here sees it — the identity tests keep everything by
-    /// construction, and the guest tests walk a fixed path list a new family
-    /// is not on.
+    /// construction, and the guest tests walk a fixed path list a new entry is
+    /// not on.
+    ///
+    /// Three levels, because the tree has three and an addition at any of them
+    /// discloses: the ROOT's sections, the HINTS section's families, and the
+    /// entries inside a shipped CLASS's own submap (`super::class_tree`'s —
+    /// two slices reduced by home, one format-constant `key` kept). The third
+    /// is the level a family list cannot reach: the shipped-class loop reduces
+    /// two entries per class by name, so a fourth entry added beside them goes
+    /// out whole with every path in the filter still naming a place.
+    ///
+    /// What this asks of an addition is a DISPOSITION, which is why the format
+    /// tests pinning the rendered text are not a substitute at any level. Those
+    /// fire on the new bytes and are answered by updating the expected bytes —
+    /// the ordinary move when a format moves on purpose — and the entry ships
+    /// unreduced. This one is answered only by reducing the entry or by listing
+    /// it among those kept.
+    ///
+    /// The predicate projections' four names reach both sides of the hints
+    /// comparison from `super::PREDICATE_PROJECTIONS`, the builder's own table,
+    /// so for that group the assertion is not that two lists agree — they are
+    /// one list. What it still catches there is a family written into
+    /// `super::hints_tree` beside the table rather than into it.
     ///
     /// Asked of GENESIS, because the section keys are FORMAT rather than
-    /// content: both builders push every key whatever the world holds, so an
+    /// content: every builder pushes every key whatever the world holds, so an
     /// empty world carries the whole set and the assertion is over the format
     /// and not over a fixture.
     #[test]
@@ -546,7 +592,7 @@ mod tests {
         let named: BTreeSet<String> = REDUCED_BY_HOME
             .iter()
             .copied()
-            .chain(REDUCED_BY_TUPLE.iter().map(|(family, _, _)| *family))
+            .chain(PREDICATE_PROJECTIONS.iter().map(|(family, _, _)| *family))
             .chain(["types", "supersession", "publication.drafts"])
             .map(|name| name.to_owned())
             .collect();
@@ -556,8 +602,8 @@ mod tests {
             "a hints family the filter does not name is rendered whole to every class"
         );
 
-        // …and the root, where each section has a disposition in the filter's
-        // one statement: two reduced, two kept whole with the reason given.
+        // …the root, where each section has a disposition in the filter's one
+        // statement: two reduced, two kept whole with the reason given.
         let sections: BTreeSet<String> = ["authoritative", "publication", "grants", "hints"]
             .iter()
             .map(|name| (*name).to_owned())
@@ -567,6 +613,22 @@ mod tests {
             sections,
             "a root section the filter does not name is rendered whole to every class"
         );
+
+        // …and INSIDE each shipped class, the level the two family lists above
+        // cannot reach: the filter reduces `audit` and `active` by name and
+        // keeps `key` as the format constant it is, so a fourth entry the
+        // builder added here would be rendered whole to the guest with every
+        // path in the filter still naming a place.
+        let class_entries: BTreeSet<String> =
+            ["key", "audit", "active"].iter().map(|name| (*name).to_owned()).collect();
+        for ty in ShippedType::ALL {
+            let label = shipped_label(ty);
+            assert_eq!(
+                keys_at(&mut tree, &["hints", "types", label]),
+                class_entries,
+                "{label}: a class entry the filter does not name is rendered whole to every class"
+            );
+        }
     }
 
     /// Lane 3.4 §4: the per-class filter under the TOTAL predicate is the

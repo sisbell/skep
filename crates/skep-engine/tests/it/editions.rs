@@ -152,6 +152,41 @@ fn a_superseded_claim_and_a_foreign_type_leave_the_class() {
     assert!(w.links().readlink(&foreign).is_some(), "the foreign-typed link is resident, and not in the class");
 }
 
+/// Class admission is over EVERY denoted address: a type slot naming the
+/// edition class AND a foreign class is no member, though it OVERLAPS the
+/// class range and the `to`-range lookup does return it for judgement. The
+/// wholly foreign type above never reaches admission at all — it sits outside
+/// the range, so the lookup never hands it over — which is why the quantifier
+/// takes a claim of its own.
+#[test]
+fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let good = claim(&engine, &b.e1, &b.target, &t_edition());
+    let caller = Caller::Principal(A);
+    let (dual, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(
+            caller,
+            &b.e2,
+            SlotArg::Addrs(vec![b.e2.clone()]),
+            SlotArg::Addrs(vec![b.target.clone()]),
+            SlotArg::Addrs(vec![t_edition(), t_grant()]),
+        )
+        .unwrap_or_else(|_| panic!("a dual-typed link deposits through the open surface"));
+
+    let w = world(&engine);
+    assert_eq!(
+        w.edition_claims(&b.target),
+        vec![row(&good, &b.e1, &b.target, true)],
+        "a slot that merely overlaps the class range is no member of it"
+    );
+    assert!(
+        w.links().readlink(&dual).is_some(),
+        "the dual-typed link is resident, and not in the class"
+    );
+}
+
 /// A DRAFT edition's claim is in the class the world answers — the world
 /// answers the class, unfiltered — and its home is unreadable to the guest,
 /// which is the row M10's home rule drops for a stranger and keeps for the

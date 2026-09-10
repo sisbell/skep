@@ -12,7 +12,7 @@ use common::*;
 use skep_arrangement::Caller;
 use skep_engine::{Engine, IssuerGrant, UniversalGrant, World};
 use skep_links::{HasLinks, ShippedType, SlotArg};
-use skep_namespace::{HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
+use skep_namespace::{first_document_address, HasM3, PrincipalId, BOOTSTRAP_PRINCIPAL};
 use tempfile::tempdir;
 
 /// The GRANTS class type address (COMMONS DECISION 5 — 1.1.0.1.0.1.0.3.90).
@@ -63,6 +63,40 @@ fn two_accounts(engine: &Engine) -> Board {
     Board { acct_a, home_a, draft_a, acct_b, b: PrincipalId(2) }
 }
 
+/// The principal whose account's doc 1 is a DRAFT ([`draft_home_account`]).
+const D: PrincipalId = PrincipalId(4);
+
+/// An account whose DOC 1 IS A DRAFT — the first mint with an explicit
+/// `false`, which the daemon's door refuses (PUB-8.20) and the engine mints —
+/// plus a later private document for a grant to name. Returns
+/// `(the draft doc 1, that later document)`.
+///
+/// The ONE shape that isolates admission's PUBLISHED clause. Every other
+/// draft-homed record fails the DOC-1 clause as well, so a fold that skipped
+/// the publication test answers those the same way and only this one
+/// differently.
+fn draft_home_account(engine: &Engine) -> (skep_address::Address, skep_address::Address) {
+    let ns = engine.namespace();
+    let prefix = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&node1())
+        .expect("prefix D");
+    let (acct, _) =
+        ns.delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), D).expect("delegate D");
+    let (home, _) =
+        ns.create_new_document(D, &acct, Some(false)).expect("an explicit-false FIRST mint");
+    let (secret, _) = ns.create_new_document(D, &acct, None).expect("a later mint, private");
+    assert_eq!(
+        first_document_address(&acct).as_ref(),
+        Some(&home),
+        "the home must BE doc 1, or the doc-1 clause refuses it and the tests below prove nothing"
+    );
+    (home, secret)
+}
+
 /// Deposit a grant-typed link, as A, in one of A's documents: `ty` = T_grant,
 /// `from` = the content-prefix, `to` = the grantee (empty ⟹ ANY-PRINCIPAL).
 /// Returns the link's address. Whether the record is ADMITTED is the fold's
@@ -73,16 +107,42 @@ fn grant(
     from: &skep_address::Address,
     to: Vec<skep_address::Address>,
 ) -> skep_address::Address {
-    let issuer = Caller::Principal(PrincipalId(1));
-    match engine.linkstore(&World::visible_to(issuer)).makelink(
-        issuer,
+    grant_as(engine, PrincipalId(1), home, from, to)
+}
+
+/// [`grant`] by any ISSUER — the principal that deposits, whose account is
+/// the one admission reads as ω of the home.
+fn grant_as(
+    engine: &Engine,
+    issuer: PrincipalId,
+    home: &skep_address::Address,
+    from: &skep_address::Address,
+    to: Vec<skep_address::Address>,
+) -> skep_address::Address {
+    grant_slots(engine, issuer, home, vec![from.clone()], to)
+}
+
+/// The deposit itself, both caller-shaped slots as SEQUENCES. A well-formed
+/// record denotes exactly one address in `from` and one or none in `to`;
+/// anything else is the MALFORMED shape the fold ignores, and this is the one
+/// way to build one.
+fn grant_slots(
+    engine: &Engine,
+    issuer: PrincipalId,
+    home: &skep_address::Address,
+    from: Vec<skep_address::Address>,
+    to: Vec<skep_address::Address>,
+) -> skep_address::Address {
+    let caller = Caller::Principal(issuer);
+    match engine.linkstore(&World::visible_to(caller)).makelink(
+        caller,
         home,
-        SlotArg::Addrs(vec![from.clone()]),
+        SlotArg::Addrs(from),
         SlotArg::Addrs(to),
         SlotArg::Addrs(vec![t_grant()]),
     ) {
         Ok((addr, _)) => addr,
-        Err(_) => panic!("the grant link deposits into A's own document"),
+        Err(_) => panic!("the grant link deposits into the issuer's own document"),
     }
 }
 
@@ -218,17 +278,24 @@ fn a_grant_to_an_account_excludes_its_sub_accounts() {
 }
 
 /// The residence pin (PUB-5.17) and the class law (PUB-5.2): a grant record is
-/// a fold input only when homed in the issuer's OWN doc 1, published. The same
-/// record deposited in A's draft (a private home) or in a published edition of
-/// A's that is not doc 1 opens nothing; deposited in doc 1 it admits.
+/// a fold input only when homed in the issuer's OWN doc 1, published. Both
+/// homes below sit OUTSIDE doc 1 — A's second document, and a published
+/// edition of A's — so each isolates the DOC-1 clause; deposited in doc 1 the
+/// same record admits. The PUBLISHED clause is reached by one home shape
+/// alone, a draft that IS doc 1, and its witness is
+/// [`a_grant_homed_in_a_draft_doc_1_is_inert`].
 #[test]
 fn a_grant_homed_anywhere_but_the_issuer_s_published_doc_1_is_inert() {
     let engine = mem_engine();
     let b = two_accounts(&engine);
 
-    // In the draft itself — a private home entitles nowhere.
+    // In A's second document, which is a draft — but it is the position in the
+    // chain, not the bit, that refuses this one.
     grant(&engine, &b.draft_a, &b.draft_a, vec![b.acct_b.clone()]);
-    assert!(!world(&engine).readable(Some(b.b), &b.draft_a), "a draft-homed grant is inert");
+    assert!(
+        !world(&engine).readable(Some(b.b), &b.draft_a),
+        "A's second document is not its doc 1, so the record is inert"
+    );
 
     // In a published edition of A's that is not the account's doc 1.
     let (edition, _) = engine
@@ -244,6 +311,55 @@ fn a_grant_homed_anywhere_but_the_issuer_s_published_doc_1_is_inert() {
     // In doc 1: the one home the class law names.
     grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
     assert!(world(&engine).readable(Some(b.b), &b.draft_a), "the doc-1 record admits");
+}
+
+/// Admission's PUBLISHED clause (I4, PUB-5.19), isolated: grants are born
+/// published, so a record homed in an UNPUBLISHED doc 1 is no grant. The home
+/// here satisfies every other clause — it is the issuer's own doc 1, and the
+/// issuer is ω of the document granted — so the publication bit is the only
+/// thing standing between this record and an entitlement.
+#[test]
+fn a_grant_homed_in_a_draft_doc_1_is_inert() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let (dhome, secret) = draft_home_account(&engine);
+
+    grant_as(&engine, D, &dhome, &secret, vec![b.acct_b.clone()]);
+
+    let w = world(&engine);
+    assert!(!w.readable(Some(b.b), &secret), "an unpublished home admits no grant");
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…and the fold holds no record of it");
+    engine.check_hints().expect("the seed refuses it for the reason the fold did");
+}
+
+/// The recovery ORDER, from the far end (PUB-7.7, `World::rebuild_derived`):
+/// the exception set is seeded before the grant fold, so the seed asks
+/// admission's published clause the question the fold asked. A grant the live
+/// fold refused for an unpublished home must be refused again at load — a
+/// grant seed handed an empty set would admit it, and the restart would open a
+/// private document that was closed the moment before.
+///
+/// The checkpoint sits at HEAD, so the reopened base IS the checkpoint and
+/// nothing replays onto it: what answers below is the seed alone.
+#[test]
+fn a_restart_does_not_admit_a_grant_the_live_fold_refused() {
+    let dir = tempdir().expect("tempdir");
+    let (secret, grantee) = {
+        let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
+        let b = two_accounts(&engine);
+        let (dhome, secret) = draft_home_account(&engine);
+        grant_as(&engine, D, &dhome, &secret, vec![b.acct_b.clone()]);
+        assert!(!world(&engine).readable(Some(b.b), &secret), "live: the fold refuses it");
+        engine.kernel().checkpoint().expect("checkpoint at head");
+        (secret, b.b)
+    };
+
+    let engine = Engine::open(fsync_cfg(dir.path())).expect("reopen over the checkpoint");
+    assert!(
+        !world(&engine).readable(Some(grantee), &secret),
+        "the seed admitted what the fold refused: a restart opened a private document"
+    );
+    engine.check_hints().expect("the recovered fold equals a from-authoritative rebuild");
 }
 
 /// A grant issued by an account that is NOT the draft's owner cannot open it
@@ -276,6 +392,67 @@ fn a_grant_from_a_non_owner_opens_nothing() {
     );
 }
 
+/// The fold IGNORES a malformed record: `from` must denote exactly one address
+/// and `to` exactly one or none, so a record naming two grantees grants to
+/// NEITHER and one naming two prefixes shares NEITHER. That is the fail-closed
+/// direction, and it is the one a fold reaching for a slot's FIRST denoted
+/// address would reverse — the weakening M7 names beside `single_denoted`
+/// itself, and the natural shape of a later "several grantees" change.
+#[test]
+fn a_grant_record_with_a_multi_address_slot_grants_nothing() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    // A second grantee ACCOUNT, seated: the grant clause probes the
+    // principal-exact index with the principal's own account, so a principal
+    // with no account could not answer this question either way.
+    let prefix_c = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&node1())
+        .expect("prefix C");
+    let (acct_c, _) = engine
+        .namespace()
+        .delegate(BOOTSTRAP_PRINCIPAL, prefix_c.tumbler().clone(), PrincipalId(3))
+        .expect("delegate C");
+    let (draft_two, _) = engine
+        .namespace()
+        .create_new_document(PrincipalId(1), &b.acct_a, None)
+        .expect("A's second draft");
+
+    // Two grantees in `to`, then two content-prefixes in `from` — each record
+    // well-formed in every other respect, homed in A's published doc 1.
+    grant_slots(
+        &engine,
+        PrincipalId(1),
+        &b.home_a,
+        vec![b.draft_a.clone()],
+        vec![b.acct_b.clone(), acct_c.clone()],
+    );
+    grant_slots(
+        &engine,
+        PrincipalId(1),
+        &b.home_a,
+        vec![b.draft_a.clone(), draft_two.clone()],
+        vec![b.acct_b.clone()],
+    );
+
+    // Every entitlement either record would have carried had its slot been
+    // read one address at a time: both grantees of the first, both prefixes
+    // of the second.
+    let w = world(&engine);
+    let carried = [(b.b, &b.draft_a), (PrincipalId(3), &b.draft_a), (b.b, &draft_two)];
+    for (principal, doc) in carried {
+        assert!(!w.readable(Some(principal), doc), "a malformed record opened {doc} to {principal:?}");
+    }
+    assert!(
+        w.issuers_for(&b.acct_b).is_empty() && w.issuers_for(&acct_c).is_empty(),
+        "neither malformed record entered the fold"
+    );
+    engine.check_hints().expect("the seed ignores them for the reason the fold did");
+}
+
 /// Revocation by supersession (PUB-5.13): a later admitted grant naming the
 /// earlier grant's own link address in `from` removes it.
 #[test]
@@ -291,6 +468,42 @@ fn a_superseding_record_revokes_the_grant_it_names() {
         !world(&engine).readable(Some(b.b), &b.draft_a),
         "the superseding record revoked the grant"
     );
+}
+
+/// …and revocation reads the grants class of ONE HOME (PUB-5.13): a record
+/// naming an earlier grant's link address from a home of its own is a fresh
+/// grant, never a revocation of what it names. Same home ⟹ same ω owner is
+/// the whole of the issuer restriction, and without it any account could
+/// retire any other account's grants by depositing one link in its own doc 1.
+///
+/// The predicate is the only witness. Both halves of the discipline drive one
+/// classification, so a fold that dropped the home comparison and a seed that
+/// dropped it agree with each other, and the faithfulness check stays green.
+#[test]
+fn a_record_homed_elsewhere_revokes_no_grant_it_names() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let g = grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
+    assert!(world(&engine).readable(Some(b.b), &b.draft_a), "granted");
+
+    // B's own published doc 1, and a record of B's naming A's grant.
+    let (home_b, _) = engine
+        .namespace()
+        .create_new_document(b.b, &b.acct_b, None)
+        .expect("B's published home");
+    grant_as(&engine, b.b, &home_b, &g, vec![b.acct_b.clone()]);
+
+    let w = world(&engine);
+    assert!(
+        w.readable(Some(b.b), &b.draft_a),
+        "a record homed in B's doc 1 retired A's grant: any account could retire any other's"
+    );
+    assert_eq!(
+        w.issuers_for(&b.acct_b).len(),
+        2,
+        "A's grant stands, and B's record is a fresh grant of B's own"
+    );
+    engine.check_hints().expect("both halves agree, which is why only the predicate sees this");
 }
 
 /// RETRACTION IS NOT REVOCATION (PUB-5.13): the fold has no nullification

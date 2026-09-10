@@ -9,6 +9,11 @@
 //! (the predicate reaches M9 on both paths, and it is the publication read);
 //! the refusal's own order is M9's suite, the filtered lookup M7's.
 //!
+//! The caller-to-class mapping has a second arm, and it is here because this
+//! is where a dedup hit can be read: a PRINCIPAL writes at its own class, so
+//! its writer sees an incumbent homed in its own draft where the System
+//! caller's does not (PUB-6.25).
+//!
 //! And the TRIGGER side (lane 4.1, PUB-6.28's other half): the rule's LOOK —
 //! the evaluator's link reads and the domain enumeration — runs at the same
 //! guest class, filtered at link HOME by the same predicate, so a draft-homed
@@ -135,6 +140,45 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
         }
         other => panic!("expected Deduped against the published marker, got {other:?}"),
     }
+}
+
+/// The PRINCIPAL arm of the same mapping (PUB-6.25), which the System arm
+/// above is the complement of: a principal writes at ITS OWN class, so
+/// `emit`'s idempotency gate reads the incumbents that principal can read —
+/// including one homed in a private draft of its own. A writer built at guest
+/// class instead cannot see that incumbent, and mints a second tuple beside
+/// it: two active tuples of one identity in one document, with nothing about
+/// either looking wrong.
+///
+/// Every other write in this crate's suite runs through the principal arm and
+/// asserts nothing about it, because visibility gates the dedup LOOKUP and
+/// never the deposit — a writer at the wrong class still writes to the same
+/// place. The dedup hit is the one answer that moves.
+#[test]
+fn a_principal_s_writer_dedups_against_its_own_draft_homed_incumbent() {
+    let engine = mem_engine();
+    // `setup_doc`'s explicit-`false` FIRST mint: the account's doc 1, private.
+    let (_acct, draft) = setup_doc(&engine);
+    assert!(
+        !engine.kernel().snapshot().world().readable(None, &draft),
+        "the home must be a draft, or guest class reads it too and this proves nothing"
+    );
+    let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
+    let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
+    let visibility = World::visible_to(OWNER);
+
+    let (first, _) = engine
+        .linkstore(&visibility)
+        .emit(OWNER, &draft, &retired, &member, &[])
+        .expect("the owner marks the member in its own draft");
+    let head = engine.kernel().current_seq();
+    let (again, _) = engine
+        .linkstore(&visibility)
+        .emit(OWNER, &draft, &retired, &member, &[])
+        .expect("the same tuple, emitted again");
+
+    assert_eq!(again, first, "the owner reads its own draft: the second emit is a dedup hit");
+    assert_eq!(engine.kernel().current_seq(), head, "…and a hit commits nothing");
 }
 
 /// A Marker whose HOME is the private draft: refused at the draft boundary,

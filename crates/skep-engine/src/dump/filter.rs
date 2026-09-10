@@ -1023,7 +1023,7 @@ mod tests {
         );
 
         // Two ordinary links of the draft, to be the endpoints below.
-        let link = |n: u32| {
+        let ghost_typed_link = |n: u32| {
             writer
                 .makelink(
                     caller,
@@ -1035,7 +1035,7 @@ mod tests {
                 .expect("a link in the owner's own draft")
                 .0
         };
-        let (old, new) = (link(41), link(42));
+        let (old, new) = (ghost_typed_link(41), ghost_typed_link(42));
 
         // The THIRD door, and the one no open surface guards: `editlink`
         // deposits the caller's own successor beside its claim, so a

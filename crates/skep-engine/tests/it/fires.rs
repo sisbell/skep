@@ -40,10 +40,10 @@ use skep_engine::{Engine, World};
 use skep_links::{Caller, HasLinks, ShippedType, View};
 
 /// An always-true one-Addr-parameter trigger.
-fn always(c: &Coordinator<World>) -> TriggerRef {
+fn always(coord: &Coordinator<World>) -> TriggerRef {
     let x = VarId::new(1).expect("a test variable below the watershed");
     TriggerRef::Inline(
-        c.type_check_trigger(vec![(x, Sort::Addr)], Term::Lit(Lit::True))
+        coord.type_check_trigger(vec![(x, Sort::Addr)], Term::Lit(Lit::True))
             .expect("an always-true trigger type-checks"),
     )
 }
@@ -51,12 +51,12 @@ fn always(c: &Coordinator<World>) -> TriggerRef {
 /// A Marker rule over the members of the shipped `pred_stable` class, marking
 /// them `retired` (the one cataloged Unary idem⊤ class outside the PredLayer
 /// pair) in `home`.
-fn marker_rule(engine: &Engine, c: &Coordinator<World>, home: Address) -> Rule {
+fn marker_rule(engine: &Engine, coord: &Coordinator<World>, home: Address) -> Rule {
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
     Rule {
         domain: Dom::MembersDom(TypeRef::Concrete(TypeKey(pred_stable))),
-        trigger: always(c),
+        trigger: always(coord),
         view: View::Audit,
         action: FireAction::Marker { home, ty: TypeKey(retired) },
     }
@@ -113,10 +113,10 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
         "the class holds the tuple already — in the draft"
     );
 
-    let mut c = engine.coordinator();
-    let rule = marker_rule(&engine, &c, home.clone());
-    let id = c.register_rule(rule).expect("a well-formed rule registers");
-    match c.step(&engine.kernel().snapshot()) {
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, home.clone());
+    let id = coord.register_rule(rule).expect("a well-formed rule registers");
+    match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Fired { rule, arg, effect, .. } => {
             assert_eq!(rule, id);
             assert_eq!(arg, member);
@@ -129,11 +129,11 @@ fn a_fire_is_never_absorbed_by_a_draft_homed_incumbent() {
         }
         other => panic!("expected Fired (a fresh mint), got {other:?}"),
     }
-    assert_eq!(c.fire_count(id, &member), 1, "one real fire, homed where the rule fires");
+    assert_eq!(coord.fire_count(id, &member), 1, "one real fire, homed where the rule fires");
 
     // The guest-visible marker is now the incumbent the fire's class can
     // read: the next step is a dedup hit on it, and never on the draft's.
-    match c.step(&engine.kernel().snapshot()) {
+    match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Deduped { effect, .. } => {
             assert_ne!(effect, incumbent);
             assert_eq!(document_of(&effect), Some(home));
@@ -188,10 +188,10 @@ fn a_fire_into_a_draft_home_is_refused_before_any_deposit() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]); // a position of the published home
     let (_home, draft) = board(&engine, &member);
-    let mut c = engine.coordinator();
-    let rule = marker_rule(&engine, &c, draft.clone());
-    let id = c.register_rule(rule).expect("a well-formed rule registers");
-    match c.step(&engine.kernel().snapshot()) {
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, draft.clone());
+    let id = coord.register_rule(rule).expect("a well-formed rule registers");
+    match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Failed { rule, arg, err: FireError::DraftBoundary(d) } => {
             assert_eq!(rule, id);
             assert_eq!(arg, member);
@@ -213,10 +213,10 @@ fn a_fire_on_a_draft_s_content_is_refused_before_any_deposit() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 2, 0, 1, 1]); // a position of the draft
     let (home, draft) = board(&engine, &member);
-    let mut c = engine.coordinator();
-    let rule = marker_rule(&engine, &c, home);
-    c.register_rule(rule).expect("a well-formed rule registers");
-    match c.step(&engine.kernel().snapshot()) {
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, home);
+    coord.register_rule(rule).expect("a well-formed rule registers");
+    match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Failed { arg, err: FireError::DraftBoundary(d), .. } => {
             assert_eq!(arg, member);
             assert_eq!(d, draft, "the refusal names the argument's draft");
@@ -232,10 +232,10 @@ fn a_fire_within_the_published_world_lands() {
     let engine = mem_engine();
     let member = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let (home, _draft) = board(&engine, &member);
-    let mut c = engine.coordinator();
-    let rule = marker_rule(&engine, &c, home);
-    let id = c.register_rule(rule).expect("a well-formed rule registers");
-    match c.step(&engine.kernel().snapshot()) {
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, home);
+    let id = coord.register_rule(rule).expect("a well-formed rule registers");
+    match coord.step(&engine.kernel().snapshot()) {
         StepOutcome::Fired { rule, arg, .. } => {
             assert_eq!(rule, id);
             assert_eq!(arg, member);
@@ -244,7 +244,7 @@ fn a_fire_within_the_published_world_lands() {
     }
     let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
     assert!(engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()));
-    assert_eq!(c.fire_count(id, &member), 1);
+    assert_eq!(coord.fire_count(id, &member), 1);
 }
 
 // ───────────────── the trigger's look at guest class (lane 4.1) ─────────────────
@@ -276,18 +276,18 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
         "M7's class-free read holds the tuple — it is the rule's look that must not"
     );
 
-    let mut c = engine.coordinator();
-    let rule = marker_rule(&engine, &c, home);
-    let id = c.register_rule(rule).expect("a well-formed rule registers");
+    let mut coord = engine.coordinator();
+    let rule = marker_rule(&engine, &coord, home);
+    let id = coord.register_rule(rule).expect("a well-formed rule registers");
     let snap = engine.kernel().snapshot();
-    assert!(c.next_enabled(&snap).is_none(), "the draft's tuple seeds no domain");
-    assert!(c.quiescent(&snap));
-    match c.step(&snap) {
+    assert!(coord.next_enabled(&snap).is_none(), "the draft's tuple seeds no domain");
+    assert!(coord.quiescent(&snap));
+    match coord.step(&snap) {
         StepOutcome::Quiescent => {}
         other => panic!("expected Quiescent (an empty visible domain), got {other:?}"),
     }
     assert_eq!(
-        c.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
+        coord.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
             .expect("a fire out of the visible domain is a NoOp, not an error"),
         FireOutcome::NoOp,
         "out of the visible domain: the removed discharge, never a draft-boundary refusal"
@@ -296,7 +296,7 @@ fn a_rule_whose_only_matching_tuple_is_draft_homed_does_not_fire() {
         !engine.kernel().snapshot().world().links().is_k(&retired, member.tumbler()),
         "nothing was deposited"
     );
-    assert_eq!(c.fire_count(id, &member), 0);
+    assert_eq!(coord.fire_count(id, &member), 0);
 }
 
 /// PUB-6.28's second sentence, as a test: "a fire commits byte-identically to
@@ -322,8 +322,8 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
         let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
         let retired = engine.registry().reserved_type(ShippedType::Retired).clone();
         if with_draft_tuples {
-            let owner_class = World::visible_to(OWNER);
-            let owner = engine.linkstore(&owner_class);
+            let visibility = World::visible_to(OWNER);
+            let owner = engine.linkstore(&visibility);
             owner
                 .emit(OWNER, &draft, &retired, &member, &[])
                 .expect("the draft's own marker on the member");
@@ -331,9 +331,9 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
                 .emit(OWNER, &draft, &pred_stable, &other, &[])
                 .expect("the draft's own relation on another member");
         }
-        let mut c = engine.coordinator();
+        let mut coord = engine.coordinator();
         let trigger = TriggerRef::Inline(
-            c.type_check_trigger(
+            coord.type_check_trigger(
                 vec![(x.clone(), Sort::Addr)],
                 Term::Not(Arc::new(Term::Atom(Atom::IsK(
                     TypeRef::Concrete(TypeKey(retired.clone())),
@@ -342,7 +342,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
             )
             .expect("¬is_K(retired, x) type-checks"),
         );
-        let id = c
+        let id = coord
             .register_rule(Rule {
                 domain: Dom::MembersDom(TypeRef::Concrete(TypeKey(pred_stable))),
                 trigger,
@@ -352,7 +352,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
             .expect("a well-formed rule registers");
         let mut commits = Vec::new();
         loop {
-            match c.step(&engine.kernel().snapshot()) {
+            match coord.step(&engine.kernel().snapshot()) {
                 StepOutcome::Fired { effect, .. } => {
                     let snap = engine.kernel().snapshot();
                     let link = snap
@@ -367,7 +367,7 @@ fn a_fire_commits_byte_identically_to_a_world_with_no_drafts() {
                 other => panic!("expected Fired or Quiescent, got {other:?}"),
             }
         }
-        (commits, c.fire_count(id, &member))
+        (commits, coord.fire_count(id, &member))
     };
 
     let (with_drafts, count_with) = run(true);
@@ -394,8 +394,8 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let member_1 = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
     let member_2 = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);
     let member_3 = addr(&[1, 0, 1, 0, 1, 0, 1, 3]);
-    let system_class = World::visible_to(Caller::System);
-    let system = engine.linkstore(&system_class);
+    let visibility = World::visible_to(Caller::System);
+    let system = engine.linkstore(&visibility);
     let (p1, _) = system
         .emit(Caller::System, &home, &pred_stable, &member_1, &[])
         .expect("p1 in the published home");
@@ -411,34 +411,34 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
         .expect("q in the owner's draft");
     assert_eq!(document_of(&q), Some(draft));
 
-    let mut c = engine.coordinator();
+    let mut coord = engine.coordinator();
     let snap = engine.kernel().snapshot();
     let t = VarId::new(1).expect("a test variable below the watershed");
     let k = TypeRef::Concrete(TypeKey(pred_stable));
 
     // ∃ t ∈ D :: addr(t) = a — over a tuple domain through the V-TUP
     // projection, over L_dom (an address domain) by the bound address.
-    let holds = |c: &Coordinator<World>, dom: Dom, a: &Address, tuple_dom: bool| -> bool {
+    let holds = |coord: &Coordinator<World>, dom: Dom, a: &Address, tuple_dom: bool| -> bool {
         let lhs = if tuple_dom { Term::Atom(Atom::TupAddr(t.clone())) } else { Term::Var(t.clone()) };
         let body = Term::Prim(Prim::AddrEq(Arc::new(lhs), Arc::new(Term::Lit(Lit::Addr(a.clone())))));
         let term = Term::Exists { var: t.clone(), dom: Arc::new(dom), body: Arc::new(body) };
-        let tt = c.type_check(vec![], term).expect("a closed Bool term type-checks");
-        c.decide(&tt, &Env::empty(), View::Audit, &snap)
+        let tt = coord.type_check(vec![], term).expect("a closed Bool term type-checks");
+        coord.decide(&tt, &Env::empty(), View::Audit, &snap)
     };
     // AuditSlice: the retracted p2 stays; the draft's q never enters.
-    assert!(holds(&c, Dom::AuditSlice(k.clone()), &p1, true));
-    assert!(holds(&c, Dom::AuditSlice(k.clone()), &p2, true));
-    assert!(!holds(&c, Dom::AuditSlice(k.clone()), &q, true));
+    assert!(holds(&coord, Dom::AuditSlice(k.clone()), &p1, true));
+    assert!(holds(&coord, Dom::AuditSlice(k.clone()), &p2, true));
+    assert!(!holds(&coord, Dom::AuditSlice(k.clone()), &q, true));
     // ActiveSlice: the view drops p2, the class drops q.
-    assert!(holds(&c, Dom::ActiveSlice(k.clone()), &p1, true));
-    assert!(!holds(&c, Dom::ActiveSlice(k.clone()), &p2, true));
-    assert!(!holds(&c, Dom::ActiveSlice(k.clone()), &q, true));
+    assert!(holds(&coord, Dom::ActiveSlice(k.clone()), &p1, true));
+    assert!(!holds(&coord, Dom::ActiveSlice(k.clone()), &p2, true));
+    assert!(!holds(&coord, Dom::ActiveSlice(k.clone()), &q, true));
     // L_dom (audit, over every cataloged class): p1 and p2 in, q out.
-    assert!(holds(&c, Dom::LinkDom, &p1, false));
-    assert!(holds(&c, Dom::LinkDom, &p2, false));
-    assert!(!holds(&c, Dom::LinkDom, &q, false));
+    assert!(holds(&coord, Dom::LinkDom, &p1, false));
+    assert!(holds(&coord, Dom::LinkDom, &p2, false));
+    assert!(!holds(&coord, Dom::LinkDom, &q, false));
     // The count agrees: two visible audit tuples of the class.
-    let two = c
+    let two = coord
         .type_check(
             vec![],
             Term::Prim(Prim::NatEq(
@@ -447,14 +447,14 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
             )),
         )
         .expect("a closed Bool term type-checks");
-    assert!(c.decide(&two, &Env::empty(), View::Audit, &snap));
+    assert!(coord.decide(&two, &Env::empty(), View::Audit, &snap));
 
     // The rule engine's own enumeration: a Tup-domained rule whose trigger
     // names the draft's tuple peeks nothing; one naming the retracted tuple
     // of the published home peeks it.
-    let names = |c: &Coordinator<World>, a: &Address| -> TriggerRef {
+    let names = |coord: &Coordinator<World>, a: &Address| -> TriggerRef {
         TriggerRef::Inline(
-            c.type_check_trigger(
+            coord.type_check_trigger(
                 vec![(t.clone(), Sort::Tup)],
                 Term::Prim(Prim::AddrEq(
                     Arc::new(Term::Atom(Atom::TupAddr(t.clone()))),
@@ -464,16 +464,16 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
             .expect("a one-Tup-parameter Bool trigger type-checks"),
         )
     };
-    let names_q = names(&c, &q);
-    let names_p2 = names(&c, &p2);
-    c.register_rule(Rule {
+    let names_q = names(&coord, &q);
+    let names_p2 = names(&coord, &p2);
+    coord.register_rule(Rule {
         domain: Dom::AuditSlice(k.clone()),
         trigger: names_q,
         view: View::Audit,
         action: FireAction::Nullify { home: home.clone() },
     })
     .expect("a well-formed rule registers");
-    let p2_rule = c
+    let p2_rule = coord
         .register_rule(Rule {
             domain: Dom::AuditSlice(k),
             trigger: names_p2,
@@ -481,7 +481,8 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
             action: FireAction::Nullify { home },
         })
         .expect("a well-formed rule registers");
-    let e = c.next_enabled(&snap).expect("the retracted tuple of the published home is enabled");
+    let e =
+        coord.next_enabled(&snap).expect("the retracted tuple of the published home is enabled");
     assert_eq!(e.rule, p2_rule, "the draft's tuple enabled nothing: the first enabled occurrence is the second rule's");
     match e.arg {
         Value::Tuple(tuple) => assert_eq!(tuple.addr, p2),
@@ -510,7 +511,7 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         .emit(OWNER, &draft, &retired, &member, &[])
         .expect("the owner's marker in its own draft");
 
-    let mut c = engine.coordinator();
+    let mut coord = engine.coordinator();
     let x = VarId::new(1).expect("a test variable below the watershed");
     let body = Term::Atom(Atom::IsK(
         TypeRef::Concrete(TypeKey(retired.clone())),
@@ -518,10 +519,12 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
     ));
     // T(x) = is_K(retired, x), defined into the draft and registered there
     // (class-free — a pdef tuple in a draft home is still ever-registered).
-    let checked = c.type_check(vec![(x.clone(), Sort::Addr)], body.clone()).expect("T type-checks");
-    let (start, _) = c.define_predicate(&draft, checked).expect("a def is defined into a draft");
+    let checked =
+        coord.type_check(vec![(x.clone(), Sort::Addr)], body.clone()).expect("T type-checks");
+    let (start, _) =
+        coord.define_predicate(&draft, checked).expect("a def is defined into a draft");
     let inline = TriggerRef::Inline(
-        c.type_check_trigger(vec![(x, Sort::Addr)], body).expect("the same body as a trigger"),
+        coord.type_check_trigger(vec![(x, Sort::Addr)], body).expect("the same body as a trigger"),
     );
     let mk = |trigger: TriggerRef| Rule {
         domain: Dom::MembersDom(TypeRef::Concrete(TypeKey(pred_stable.clone()))),
@@ -529,10 +532,10 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         view: View::Audit,
         action: FireAction::Marker { home: home.clone(), ty: TypeKey(retired.clone()) },
     };
-    let def_rule = c
+    let def_rule = coord
         .register_rule(mk(TriggerRef::Def(start.clone())))
         .expect("a Def trigger over an ever-registered Boolean def registers");
-    let inline_rule = c.register_rule(mk(inline)).expect("a well-formed rule registers");
+    let inline_rule = coord.register_rule(mk(inline)).expect("a well-formed rule registers");
 
     // Pinned after the def's registration commit (the freshness precondition).
     let snap = engine.kernel().snapshot();
@@ -541,15 +544,15 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         "M7's class-free read holds the draft's marker"
     );
     assert_eq!(
-        c.evaluate_def(&start, &[Value::Addr(member.clone())], View::Audit, &snap),
+        coord.evaluate_def(&start, &[Value::Addr(member.clone())], View::Audit, &snap),
         Ok(Value::Bool(false)),
         "the def's look is at guest class"
     );
-    assert!(c.next_enabled(&snap).is_none(), "neither trigger sees the draft's marker");
-    assert!(c.quiescent(&snap));
+    assert!(coord.next_enabled(&snap).is_none(), "neither trigger sees the draft's marker");
+    assert!(coord.quiescent(&snap));
     for id in [def_rule, inline_rule] {
         assert_eq!(
-            c.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
+            coord.fire(&Enabled { rule: id, arg: Value::Addr(member.clone()) })
                 .expect("a falsified fire is a NoOp"),
             FireOutcome::NoOp,
             "the member is in the visible domain; the trigger, Def or Inline, reads no draft-homed marker"
@@ -564,11 +567,11 @@ fn a_def_trigger_sees_the_same_filtered_store_as_an_inline_one() {
         .expect("a public marker on the member");
     let snap = engine.kernel().snapshot();
     assert_eq!(
-        c.evaluate_def(&start, &[Value::Addr(member.clone())], View::Audit, &snap),
+        coord.evaluate_def(&start, &[Value::Addr(member.clone())], View::Audit, &snap),
         Ok(Value::Bool(true))
     );
-    let e = c.next_enabled(&snap).expect("the public marker enables both rules");
+    let e = coord.next_enabled(&snap).expect("the public marker enables both rules");
     assert_eq!(e.rule, def_rule);
     assert_eq!(e.arg, Value::Addr(member));
-    assert!(!c.quiescent(&snap));
+    assert!(!coord.quiescent(&snap));
 }

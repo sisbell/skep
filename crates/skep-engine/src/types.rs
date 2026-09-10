@@ -80,14 +80,19 @@ pub fn t_successor_of() -> &'static Address {
     &ADDR
 }
 
-/// The succession pair's delegator ENDORSEMENT type — the `endorse` type,
-/// `1.1.0.1.0.1.0.3.42` (PUB-7.63; PUB-6.64's member).
+/// The ENDORSE class type address — `1.1.0.1.0.1.0.3.42`, the succession
+/// pair's endorsement half (PUB-7.63; PUB-6.64's member).
 ///
 /// commons-seeding.md's seeded vocabulary: "3.42 | endorse | + .1 expertise
 /// .2 trust .3 collaboration" (the social range 3.40–3.45); commons-map.md:
-/// "endorse already 3.42". Not provisional. Its subtypes are members by
-/// prefix (L10).
-pub fn t_delegator_endorsement() -> &'static Address {
+/// "endorse already 3.42". Not provisional.
+///
+/// The CLASS, and no narrower: the address denotes every endorsement, and
+/// its three subtypes are members by prefix (L10). So the write path's
+/// refusal at this pin withholds a `nullify` from all of them and not from a
+/// delegator's alone — which is what the succession pair happens to read it
+/// for, not what it names.
+pub fn t_endorse() -> &'static Address {
     static ADDR: LazyLock<Address> = LazyLock::new(|| commons_type(42));
     &ADDR
 }
@@ -157,7 +162,7 @@ mod tests {
             t_grant(),
             t_edition(),
             t_successor_of(),
-            t_delegator_endorsement(),
+            t_endorse(),
             t_consumption_marker(),
             t_journal_designation(),
             t_rail_record(),
@@ -184,7 +189,7 @@ mod tests {
             (t_grant(), 90u32),
             (t_edition(), 14),
             (t_successor_of(), 59),
-            (t_delegator_endorsement(), 42),
+            (t_endorse(), 42),
             (t_consumption_marker(), 91),
             (t_journal_designation(), 22),
             (t_rail_record(), 60),
@@ -205,7 +210,7 @@ mod tests {
             (t_grant(), t_grant()),
             (t_edition(), t_edition()),
             (t_successor_of(), t_successor_of()),
-            (t_delegator_endorsement(), t_delegator_endorsement()),
+            (t_endorse(), t_endorse()),
             (t_consumption_marker(), t_consumption_marker()),
             (t_journal_designation(), t_journal_designation()),
             (t_rail_record(), t_rail_record()),

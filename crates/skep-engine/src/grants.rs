@@ -282,22 +282,22 @@ impl Grants {
         grantee: Option<&Address>,
         doc: &Address,
     ) -> bool {
-        let mut anc: Option<Address> = Some(doc.clone());
-        while let Some(a) = anc {
-            if let Some(g) = grantee {
+        let mut next: Option<Address> = Some(doc.clone());
+        while let Some(ancestor) = next {
+            if let Some(grantee) = grantee {
                 if self
                     .by_grantee
-                    .get(g)
-                    .and_then(|prefixes| prefixes.get(&a))
+                    .get(grantee)
+                    .and_then(|prefixes| prefixes.get(&ancestor))
                     .is_some_and(|issuers| issuers.contains(owner))
                 {
                     return true;
                 }
             }
-            if self.universal.get(&a).is_some_and(|issuers| issuers.contains(owner)) {
+            if self.universal.get(&ancestor).is_some_and(|issuers| issuers.contains(owner)) {
                 return true;
             }
-            anc = parent(&a);
+            next = parent(&ancestor);
         }
         false
     }

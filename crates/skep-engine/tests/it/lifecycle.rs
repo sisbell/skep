@@ -16,8 +16,12 @@ use skep_links::{HasLinks, SlotArg};
 use skep_retrieval::{Query, Spec};
 use tempfile::tempdir;
 
+/// The drivers, folds, lifts and accessors compose over ONE world, and the
+/// observable state that composition produced comes back after the journal is
+/// reopened: the same content, the same version, the same link, and the same
+/// log position, replayed rather than remembered.
 #[test]
-fn cross_store_lifecycle_under_fsync() {
+fn a_cross_store_lifecycle_survives_a_journal_reopen() {
     let dir = tempdir().expect("tempdir");
     let expected = vec![b"x".to_vec(), b"y".to_vec(), b"z".to_vec()];
 

@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use skep_address::{document_of, ordinal, parent, validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::trunk_of;
 use skep_engine::types::{
-    t_consumption_marker, t_delegator_endorsement, t_grant, t_journal_designation, t_rail_record,
+    t_consumption_marker, t_endorse, t_grant, t_journal_designation, t_rail_record,
     t_steward_classification, t_successor_of,
 };
 use skep_febe::Op;
@@ -126,7 +126,7 @@ pub(crate) fn write_types() -> &'static WriteTypes {
             t_grant().clone(),
             [
                 (AuditClass::SuccessorOf, t_successor_of().clone()),
-                (AuditClass::DelegatorEndorsement, t_delegator_endorsement().clone()),
+                (AuditClass::DelegatorEndorsement, t_endorse().clone()),
                 (AuditClass::ConsumptionMarker, t_consumption_marker().clone()),
                 (AuditClass::JournalDesignation, t_journal_designation().clone()),
                 (AuditClass::RailRecord, t_rail_record().clone()),
@@ -1200,7 +1200,7 @@ mod tests {
         assert_eq!(types.write_class(&unit(t_grant())), Some(WriteClass::Grant));
         for (class, addr) in [
             (AuditClass::SuccessorOf, t_successor_of()),
-            (AuditClass::DelegatorEndorsement, t_delegator_endorsement()),
+            (AuditClass::DelegatorEndorsement, t_endorse()),
             (AuditClass::ConsumptionMarker, t_consumption_marker()),
             (AuditClass::JournalDesignation, t_journal_designation()),
             (AuditClass::RailRecord, t_rail_record()),

@@ -414,7 +414,7 @@ fn hints_tree(world: &World) -> SerdeTree {
     let mut entries: Vec<(SerdeTree, SerdeTree)> = vec![
         (key("links.audit"), addr_seq(audit.iter())),
         (key("links.active"), addr_seq(active.iter())),
-        (key("links.nullified"), addr_seq(audit.iter().filter(|a| links.is_nullified(a)))),
+        (key("links.nullified"), addr_seq(audit.iter().filter(|addr| links.is_nullified(addr)))),
     ];
 
     // Per-class typed slices: the shipped classes off M7's own one list.
@@ -428,10 +428,10 @@ fn hints_tree(world: &World) -> SerdeTree {
     // `[K_sup]` class — the public projection of M7's `sup_fwd` hint).
     let sup = links.reserved_type(ShippedType::Supersedes);
     let mut edges: Vec<(SerdeTree, SerdeTree)> = Vec::new();
-    for a in audit.iter() {
-        let succs = links.succs(sup, a);
+    for addr in audit.iter() {
+        let succs = links.succs(sup, addr);
         if !succs.is_empty() {
-            edges.push((SerdeTree::Str(a.to_string()), addr_seq(&succs)));
+            edges.push((SerdeTree::Str(addr.to_string()), addr_seq(&succs)));
         }
     }
     entries.push((key("supersession"), SerdeTree::Map(edges)));

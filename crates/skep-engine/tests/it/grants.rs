@@ -23,10 +23,9 @@ fn t_grant() -> skep_address::Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
 }
 
-/// A commons type OUTSIDE the grants class — the EDITION class,
-/// `1.1.0.1.0.1.0.3.14`. For the record that names the grants class among
-/// others.
-fn t_other() -> skep_address::Address {
+/// The EDITION class — `1.1.0.1.0.1.0.3.14`, a commons type OUTSIDE the
+/// grants class. For the record that names the grants class among others.
+fn t_edition() -> skep_address::Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14])
 }
 
@@ -374,9 +373,9 @@ fn a_grant_homed_anywhere_but_the_issuer_s_published_doc_1_is_inert() {
 fn a_grant_homed_in_a_draft_doc_1_is_inert() {
     let engine = mem_engine();
     let b = two_accounts(&engine);
-    let (dhome, secret) = draft_home_account(&engine);
+    let (draft_home, secret) = draft_home_account(&engine);
 
-    grant_as(&engine, D, &dhome, &secret, vec![b.acct_b.clone()]);
+    grant_as(&engine, D, &draft_home, &secret, vec![b.acct_b.clone()]);
 
     let w = world(&engine);
     assert!(!w.readable(Some(B), &secret), "an unpublished home admits no grant");
@@ -399,8 +398,8 @@ fn a_restart_does_not_admit_a_grant_the_live_fold_refused() {
     let (secret, grantee) = {
         let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
         let b = two_accounts(&engine);
-        let (dhome, secret) = draft_home_account(&engine);
-        grant_as(&engine, D, &dhome, &secret, vec![b.acct_b.clone()]);
+        let (draft_home, secret) = draft_home_account(&engine);
+        grant_as(&engine, D, &draft_home, &secret, vec![b.acct_b.clone()]);
         assert!(!world(&engine).readable(Some(B), &secret), "live: the fold refuses it");
         engine.kernel().checkpoint().expect("checkpoint at head");
         (secret, B)
@@ -498,7 +497,7 @@ fn a_link_typed_the_grants_class_and_another_grants_nothing() {
         &b.home_a,
         vec![b.draft_a.clone()],
         vec![b.acct_b.clone()],
-        vec![t_grant(), t_other()],
+        vec![t_grant(), t_edition()],
     );
 
     let w = world(&engine);

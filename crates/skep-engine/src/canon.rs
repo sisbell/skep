@@ -117,9 +117,9 @@ impl fmt::Display for SerdeTree {
             SerdeTree::F64Bits(bits) => write!(f, "f64:0x{bits:016x}"),
             SerdeTree::Char(ch) => write!(f, "{ch:?}"),
             SerdeTree::Str(s) => write!(f, "{s:?}"),
-            SerdeTree::Bytes(b) => {
+            SerdeTree::Bytes(bytes) => {
                 f.write_str("0x")?;
-                for byte in b {
+                for byte in bytes {
                     write!(f, "{byte:02x}")?;
                 }
                 Ok(())
@@ -333,7 +333,7 @@ impl ser::Serializer for TreeSer {
         Ok(VariantSeqBuild { variant, items: Vec::with_capacity(len) })
     }
     fn serialize_map(self, len: Option<usize>) -> Result<MapBuild, CanonError> {
-        Ok(MapBuild { entries: Vec::with_capacity(len.unwrap_or(0)), pending: None })
+        Ok(MapBuild { entries: Vec::with_capacity(len.unwrap_or(0)), pending_key: None })
     }
     fn serialize_struct(self, _name: &'static str, len: usize) -> Result<StructBuild, CanonError> {
         Ok(StructBuild(Vec::with_capacity(len)))
@@ -406,19 +406,20 @@ impl ser::SerializeTupleVariant for VariantSeqBuild {
 
 struct MapBuild {
     entries: Vec<(SerdeTree, SerdeTree)>,
-    pending: Option<SerdeTree>,
+    /// The key serde collected, waiting for the value it pairs with.
+    pending_key: Option<SerdeTree>,
 }
 
 impl ser::SerializeMap for MapBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), CanonError> {
-        self.pending = Some(key.serialize(TreeSer)?);
+        self.pending_key = Some(key.serialize(TreeSer)?);
         Ok(())
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
         let key = self
-            .pending
+            .pending_key
             .take()
             .ok_or_else(|| ser::Error::custom("map value serialized before its key"))?;
         self.entries.push((key, value.serialize(TreeSer)?));
@@ -515,7 +516,7 @@ impl<'de> Deserializer<'de> for TreeDe<'de> {
             SerdeTree::F64Bits(bits) => visitor.visit_f64(f64::from_bits(*bits)),
             SerdeTree::Char(ch) => visitor.visit_char(*ch),
             SerdeTree::Str(s) => visitor.visit_borrowed_str(s),
-            SerdeTree::Bytes(b) => visitor.visit_borrowed_bytes(b),
+            SerdeTree::Bytes(bytes) => visitor.visit_borrowed_bytes(bytes),
             SerdeTree::Null => visitor.visit_none(),
             SerdeTree::Opt(inner) => visitor.visit_some(TreeDe(inner)),
             SerdeTree::Seq(items) => {

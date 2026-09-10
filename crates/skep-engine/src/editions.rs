@@ -104,10 +104,10 @@ impl World {
         let links = &self.links;
         let edition_class = t_edition();
         let to_range = Endset::from_spans([subtree_of(target.tumbler())]);
-        let class_range = Endset::from_spans([subtree_of(edition_class.tumbler())]);
+        let type_range = Endset::from_spans([subtree_of(edition_class.tumbler())]);
         let supersedes = links.reserved_type(ShippedType::Supersedes);
         links
-            .match_links(&[(TO, &to_range), (TYPE, &class_range)], View::Audit)
+            .match_links(&[(TO, &to_range), (TYPE, &type_range)], View::Audit)
             .into_iter()
             .filter_map(|claim| {
                 // RESIDENCY is M7's stated postcondition on `match_links` —

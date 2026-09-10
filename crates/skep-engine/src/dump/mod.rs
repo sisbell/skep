@@ -13,58 +13,31 @@
 //! pair a rendering with, and the per-class sections are the shipped five in
 //! their one declaration order.
 //!
-//! What each section holds, per the contract:
-//! * **authoritative** — M3's four serde fields (the node registry, the
-//!   principals, the per-namespace frontier counts and the publication map),
-//!   M4's content
-//!   map, M5's arrangements (their resident form IS the canonical
-//!   maximally-merged decomposition, maintained by M5's fold) and provenance
-//!   R, M7's link store. M3 and M4
-//!   expose no enumeration API, so their slices (and, uniformly, M5's and
-//!   M7's) are rendered through their serde checkpoint forms — the same
-//!   bytes-level seam M2's checkpoints already depend on, down to serde's
-//!   human-readable flag, which the transcode answers the way bincode does so
-//!   a branching `Serialize` impl renders the branch the journal stores. M7's
-//!   `#[serde(skip)]` registry/hints are thereby excluded, exactly as the
-//!   section demands.
-//! * **publication** (v5, PUB round 2, lane 3.4 §3) — M3's AUTHORITATIVE
-//!   publication slice reduced to its DRAFT entries, in address order: the
-//!   state the exception set is a derived index over, rendered apart from
-//!   the hints' copy of it (`hints.publication.drafts`, which STAYS — it is
-//!   the faithfulness check's subject, this section the authority it is
-//!   checked against). A projection: the map itself is one of M3's four
-//!   serde fields and travels whole in the authoritative section above.
-//! * **grants** (v5) — the grant fold's OPERATIVE set: every admitted,
-//!   unsuperseded grant by its link address, with its home, issuer,
-//!   content-prefix and grantee. Derived from the fold (the engine keeps no
-//!   grant slice), so the faithfulness check covers the fold through it.
-//! * **hints** — M7's recomputable state, read through its public surfaces
-//!   (`match_links`, `type_slice`, `members`, `succs`): the audit and active
-//!   slices, the nullified members of the audit slice, the five shipped
-//!   classes' type slices, the supersession forward edges (the BH2 walk),
-//!   and M9's definition registry projected as `pdef`/`pd_stable`
-//!   membership — and the engine's OWN derived index, the exception set
-//!   (`publication.drafts`: draft document → owner account, PUB-7.5),
-//!   address-ordered at render. M3/M4 hold no hints of their own; M5's
-//!   rebuild is the identity in v1.
+//! A slice reaches the authoritative section through its SERDE CHECKPOINT
+//! FORM rather than through an enumeration: M3 and M4 publish none, and M5's
+//! and M7's go the same way so that one seam serves all four. It is the
+//! bytes-level seam M2's checkpoints already depend on, down to serde's
+//! human-readable flag, which the transcode answers the way bincode does — so
+//! a branching `Serialize` impl renders the branch the journal stores, and a
+//! `#[serde(skip)]` field is excluded here exactly as the checkpoint excludes
+//! it.
 //!
-//!   THREE of M7's hint families sit outside that reach, so the section — and
-//!   the faithfulness check built on it — is an oracle over what it renders
-//!   and nothing more. `dedup` has no public read surface at all.
-//!   `home_frontier` has one, `LinkState::age`, which is that hint less a
-//!   link's own ordinal — so its omission is a decision about this format
-//!   rather than a consequence of M7's surface, and closing it would move
-//!   bytes the harnesses pin. And M7's fold indexes a type slice for EVERY
-//!   coverage class while this section names only the shipped five, so the
-//!   typed slice an ordinary content-typed link lands in is never rendered.
-//!   Each is exercised by M7's own write-path tests instead.
-//!
-//!   `links.nullified` renders the nullified members of the audit slice,
-//!   which is the whole tombstone set only because `nullify`'s P-tgt gate
-//!   admits no target but a resident link or the address the retraction tuple
-//!   itself will occupy. M7's fold inserts every denoted to-root of an `[R]`
-//!   link, so a root that is not itself a link would sit in the hint and
-//!   outside this rendering.
+//! The four sections, each stated in full at the builder that writes it:
+//! * **authoritative** (`authoritative_tree`) — one entry per store slice,
+//!   each the slice's own serde form.
+//! * **publication** (`publication_tree`, v5, PUB round 2, lane 3.4 §3) —
+//!   M3's AUTHORITATIVE publication slice projected to its drafts: the state
+//!   the exception set is a derived index over, rendered apart from the
+//!   hints' copy of it (`hints.publication.drafts`, which STAYS — it is the
+//!   faithfulness check's subject, this section the authority it is checked
+//!   against).
+//! * **grants** (`grants_tree`, v5) — the grant fold's OPERATIVE set. The
+//!   engine keeps no grant slice, so this section is derived, and the
+//!   faithfulness check reaches the fold's records through it.
+//! * **hints** (`hints_tree`) — M7's recomputable state through its public
+//!   read surfaces, M9's definition registry projected, and the engine's own
+//!   exception set. What that walk does NOT reach — and so what the
+//!   faithfulness check does not certify — is that builder's own statement.
 //!
 //! ## The per-class filter (lane 3.4 §4)
 //!
@@ -181,6 +154,16 @@ fn dump_visible(world: &World, readable: &dyn Fn(&Address) -> bool) -> WorldDump
 /// serde form through the canonicalizing transcode. Every slice is rendered,
 /// so a world differing in any one of them dumps differently — which is what
 /// makes the harnesses' byte comparison an oracle over the whole state.
+///
+/// What each entry carries is that slice's checkpoint form and nothing else:
+/// M3's four serde fields (the node registry, the principals, the
+/// per-namespace frontier counts and the publication map), M4's content map,
+/// M5's arrangements — whose resident form IS the canonical maximally-merged
+/// decomposition, maintained by M5's fold — and its provenance R, and M7's
+/// link store. M7's `#[serde(skip)]` registry and hints are thereby excluded,
+/// exactly as this section demands: they are the [`hints_tree`] section's
+/// subject, and rendering them here would compare a derived structure against
+/// itself.
 ///
 /// The section keys are the dump's own wire vocabulary, exactly as
 /// [`shipped_label`]'s are: they name each slice for the store it belongs to
@@ -332,6 +315,42 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
     ])
 }
 
+/// The HINTS section: the recomputable state, read through PUBLIC surfaces
+/// alone over already-ordered results — never off a store's private hint.
+/// M7's is most of it (`match_links`, `type_slice`, `members`, `succs`): the
+/// audit and active slices, the nullified members of the audit slice, the
+/// five shipped classes' type slices, and the supersession forward edges (the
+/// BH2 walk). Beside them, M9's definition registry — which is no slice of
+/// M9's but these M7 tuples — projected one family per row of
+/// [`PREDICATE_PROJECTIONS`]; and the engine's OWN derived index, the
+/// exception set (`publication.drafts`: draft document → owner account,
+/// PUB-7.5). M3 and M4 hold no hints of their own, and M5's rebuild is the
+/// identity in v1, so neither store appears.
+///
+/// THREE of M7's hint families sit outside that reach, which is what bounds
+/// [`hints_faithful`] to an oracle over what this renders and nothing more:
+///
+/// * `dedup` has no public read surface at all.
+/// * `home_frontier` has one, `LinkState::age`, which is that hint less a
+///   link's own ordinal — so its omission is a decision about this FORMAT
+///   rather than a consequence of M7's surface, and closing it would move
+///   bytes the harnesses pin.
+/// * M7's fold indexes a type slice for EVERY coverage class while this
+///   section names only the shipped five, so the typed slice an ordinary
+///   content-typed link lands in is never rendered.
+///
+/// Each is exercised by M7's own write-path tests instead.
+///
+/// `links.nullified` renders the nullified members of the audit slice, which
+/// is the whole tombstone set only because `nullify`'s P-tgt gate admits no
+/// target but a resident link or the address the retraction tuple itself will
+/// occupy. M7's fold inserts every denoted to-root of an `[R]` link, so a
+/// root that is not itself a link would sit in the hint and outside this
+/// rendering.
+///
+/// The family names are format, so a family added here is a family the
+/// per-class filter must be given a disposition for; `filter_tree`'s
+/// statement is where that is held against this builder.
 fn hints_tree(world: &World) -> SerdeTree {
     let links = &world.links;
     // Empty constraints ⇒ the whole view slice (M7 §G) — the one public
@@ -398,13 +417,23 @@ fn drafts_tree(world: &World) -> SerdeTree {
 
 /// The PUBLICATION section: M3's AUTHORITATIVE publication slice reduced to
 /// its DRAFT entries — the documents whose minting record journaled
-/// `published: false` — as dotted addresses in address order. Read off M3's
-/// own serde form exactly as the exception set's seed reads it
-/// (`crate::publication::publication_map`), so the section and the seed
-/// cannot disagree about what M3 holds; the hints' `publication.drafts` is
-/// the FOLD's copy, and [`hints_faithful`] compares that copy against the
+/// `published: false` — as dotted addresses in address order. Off the same
+/// read of M3's serde form the exception set's seed uses
+/// (`crate::publication::publication_map`); the hints' `publication.drafts`
+/// is the FOLD's copy, and [`hints_faithful`] compares that copy against the
 /// seed. A SEQUENCE — `render` sorts maps alone — in the `OrdMap`'s own
 /// address order, which is the order the filter preserves.
+///
+/// One read, TWO RULES over it, and the two agree on an invariant of M3's
+/// rather than on a shared test. This section keeps an entry whose stored
+/// value is `false`. The seed discards the values and asks M3 itself, per
+/// KEY, whether the address is a registered document and what its bit is —
+/// which is what keeps the load path's fail-stop off an unregistered address.
+/// The rules coincide because M3 writes the publication entry and the
+/// registration in one fold step, and only for a document-tier mint, so the
+/// map's keys ARE the registered documents. A store that registered a
+/// document without an entry, or wrote an entry for anything else, would
+/// separate them.
 ///
 /// This section is a PROJECTION of the map, not the only rendering of it: the
 /// same authoritative map travels whole inside `authoritative.namespace`, as

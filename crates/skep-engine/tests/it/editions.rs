@@ -9,7 +9,7 @@
 use crate::common;
 
 use common::*;
-use skep_address::{document_of, parent, validate, Address, Nat, Tumbler};
+use skep_address::{document_of, parent, Address};
 use skep_arrangement::Caller;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
@@ -290,13 +290,8 @@ fn a_row_carries_the_to_slot_as_deposited_however_wide() {
     // A `to` slot naming the target and 63 ghost addresses of the edition's
     // own never-minted subspace 3 — one address of the request, 64 of the
     // answer.
-    let ghost = |n: u32| {
-        let mut comps: Vec<Nat> = b.e1.tumbler().iter().cloned().collect();
-        comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
-        validate(Tumbler::new(comps).expect("nonempty")).expect("a subspace-3 element is T4-valid")
-    };
     let mut to: Vec<Address> = vec![b.target.clone()];
-    to.extend((1..64u32).map(ghost));
+    to.extend((1..64u32).map(|n| element(&b.e1, 3, n)));
     let (wide, _) = engine
         .linkstore(&World::visible_to(caller))
         .makelink(

@@ -58,38 +58,12 @@ use super::{shipped_label, PREDICATE_PROJECTIONS};
 /// entry is the link — the thing whose existence the entry discloses is the
 /// thing being judged.
 ///
-/// The list is the reduction's COMPLETENESS as well as its content — what it
-/// accounts for as well as what it does. [`filter_tree`] touches an entry
-/// only where some path below names it, so a family `super::hints_tree` adds
-/// and this list omits is rendered WHOLE to every class — the guest included.
-/// The other families are reduced by an arm of their own rather than here:
-/// the PREDICATE PROJECTIONS ([`PREDICATE_PROJECTIONS`], a member being no
-/// link, so its asserting tuple is judged too), `types` (per shipped class,
-/// per view), `supersession` (the three-test arm) and `publication.drafts` (a
-/// map, keyed by the draft). `every_hints_family_is_reduced_or_kept_by_name`
-/// holds this list plus those against the sections the builders write.
-///
 /// Which families group under which rule is THIS module's knowledge, which is
 /// why the list is here; the predicate projections' names are the FORMAT's, so
-/// that table is the builder's and is read from there.
+/// that table is the builder's and is read from there. What the reduction as a
+/// whole reaches, and what it therefore leaves whole, is [`filter_tree`]'s
+/// statement.
 const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullified"];
-
-// ── the hint families reduced BY THE ASSERTING TUPLE as well as by home ──
-//
-// `PREDICATE_PROJECTIONS`, read off the builder's own table so that a family's
-// entries are judged at the class and the view they were rendered under. Each
-// is a sequence of dotted MEMBER addresses — the subjects
-// `LinkState::members` denotes, never the tuples that denote them — so an
-// entry there discloses TWO things and takes a test apiece.
-//
-// A member's own document is one of them, judged as everywhere else. The other
-// is the REGISTRATION: that some `pred_def`/`pred_stable` tuple names this
-// member is a fact deposited in that tuple's home, and a link's home governs
-// what a class learns of it (PUB-6.13) exactly as it does for the supersession
-// claims. A tuple homed in a private draft over a public member would
-// otherwise put the draft's content in the guest's dump beside an EMPTY
-// `types` slice for the same class — the walk's two renderings of one deposit,
-// disagreeing.
 
 /// The per-class post-filter over the dump tree — the ONE statement of what
 /// the entries it reaches drop and keep, applied before render so the harness
@@ -134,10 +108,11 @@ const REDUCED_BY_HOME: [&str; 3] = ["links.audit", "links.active", "links.nullif
 ///       addresses — `LinkState::members` denotes the subjects, not the
 ///       tuples — so an entry stays where the class reads the member's own
 ///       document AND some `pred_def`/`pred_stable` tuple asserting it, at
-///       that entry's own view, is readably homed. Either test alone leaks
-///       one way: the member's alone puts a draft-homed registration in the
-///       guest's dump, the tuple's alone puts a draft's content position
-///       there.
+///       that entry's own view, is readably homed. The REGISTRATION is a fact
+///       deposited in that tuple's home, and a link's home governs what a
+///       class learns of it (PUB-6.13). Either test alone leaks one way: the
+///       member's alone puts a draft-homed registration in the guest's dump,
+///       the tuple's alone puts a draft's content position there.
 ///     * A SUPERSESSION EDGE takes a third test beside its two endpoints'
 ///       homes (lane 4.2, F4; PUB-6.13, PUB-6.22, PUB-6.27): the edge stays
 ///       only where some operative CLAIM asserting it — the `[K_sup]` link
@@ -473,32 +448,84 @@ mod tests {
         Seq,
     }
 
+    /// An element of `doc`'s subspace `s` at ordinal `n` — NEVER MINTED,
+    /// which neither a link slot nor an `emit` member requires. Subspace 1 is
+    /// a document's content space, so an element there is a position a
+    /// projection can name; subspace 3 is a space nothing ever mints into, so
+    /// a type slot filled from it lands in a coverage class of its own and
+    /// the shipped slices hold exactly what was deposited under them.
+    fn element(doc: &Address, s: u32, n: u32) -> Address {
+        let comps =
+            doc.tumbler().iter().cloned().chain([Nat::from(0u32), Nat::from(s), Nat::from(n)]);
+        validate(Tumbler::new(comps).expect("nonempty"))
+            .expect("an element of a document is T4-valid")
+    }
+
+    /// An account with a PUBLISHED home and a PRIVATE draft, and the engine
+    /// that minted them: the account's first flagless mint is its home
+    /// (PUB-8.21) and a later one is a draft. The two fixtures below deposit
+    /// ACROSS that boundary, so it is established and asserted once here and
+    /// each of them states only what it deposits.
+    fn a_published_home_and_a_private_draft() -> (Engine, Address, Address) {
+        let cfg = KernelConfig {
+            durability: Durability::InMemory,
+            checkpoint: CheckpointPolicy::Manual,
+        };
+        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
+        let prefix = engine
+            .kernel()
+            .snapshot()
+            .world()
+            .m3()
+            .next_account_prefix(&addr(&[1]))
+            .expect("the genesis node has a delegable next-form prefix");
+        let (acct, _) = engine
+            .namespace()
+            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
+            .expect("delegation of the peeked prefix succeeds");
+        let (home, _) =
+            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
+        let (draft, _) = engine
+            .namespace()
+            .create_new_document(USER, &acct, None)
+            .expect("a later mint, private");
+        {
+            let snap = engine.kernel().snapshot();
+            let world = snap.world();
+            assert!(world.readable(None, &home), "the first flagless mint is published");
+            assert!(!world.readable(None, &draft), "a later flagless mint is a draft");
+        }
+        (engine, home, draft)
+    }
+
     /// EVERY path [`filter_tree`] reduces, with the shape its reduction
-    /// expects there — built from the filter's own two family lists and the
-    /// one shipped-class table, so a family added to either is walked by the
-    /// tests below without an edit here.
-    fn reduced_paths() -> Vec<(Vec<String>, Shape)> {
-        let owned = |path: &[&str]| path.iter().map(|c| (*c).to_owned()).collect::<Vec<String>>();
+    /// expects there — built from the filter's own family list, the format's
+    /// projection table and the one shipped-class table, so a family added to
+    /// any of them is walked by the tests below without an edit here. Every
+    /// component of every path is a compiled string: the section names are
+    /// literals, the family names are the two tables' own, and
+    /// [`shipped_label`] answers with the format's.
+    fn reduced_paths() -> Vec<(Vec<&'static str>, Shape)> {
         let mut paths = vec![
-            (owned(&["authoritative", "content", "map"]), Shape::Map),
-            (owned(&["authoritative", "arrangement", "arrangements"]), Shape::Map),
-            (owned(&["authoritative", "arrangement", "provenance"]), Shape::Map),
-            (owned(&["authoritative", "links", "links"]), Shape::Map),
-            (owned(&["publication"]), Shape::Seq),
+            (vec!["authoritative", "content", "map"], Shape::Map),
+            (vec!["authoritative", "arrangement", "arrangements"], Shape::Map),
+            (vec!["authoritative", "arrangement", "provenance"], Shape::Map),
+            (vec!["authoritative", "links", "links"], Shape::Map),
+            (vec!["publication"], Shape::Seq),
         ];
         for family in REDUCED_BY_HOME {
-            paths.push((owned(&["hints", family]), Shape::Seq));
+            paths.push((vec!["hints", family], Shape::Seq));
         }
         for (family, _, _) in PREDICATE_PROJECTIONS {
-            paths.push((owned(&["hints", family]), Shape::Seq));
+            paths.push((vec!["hints", family], Shape::Seq));
         }
         for ty in ShippedType::ALL {
             for view in ["audit", "active"] {
-                paths.push((owned(&["hints", "types", shipped_label(ty), view]), Shape::Seq));
+                paths.push((vec!["hints", "types", shipped_label(ty), view], Shape::Seq));
             }
         }
-        paths.push((owned(&["hints", "supersession"]), Shape::Map));
-        paths.push((owned(&["hints", "publication.drafts"]), Shape::Map));
+        paths.push((vec!["hints", "supersession"], Shape::Map));
+        paths.push((vec!["hints", "publication.drafts"], Shape::Map));
         paths
     }
 
@@ -509,10 +536,6 @@ mod tests {
             Some(SerdeTree::Seq(items)) => (Shape::Seq, items.len()),
             other => panic!("{path:?}: expected a map or a sequence, got {other:?}"),
         }
-    }
-
-    fn borrowed(path: &[String]) -> Vec<&str> {
-        path.iter().map(String::as_str).collect()
     }
 
     /// The v5 root: the two publication-round sections sit beside the
@@ -526,7 +549,6 @@ mod tests {
         let (_engine, world) = populated_world();
         let mut tree = dump_tree(&world);
         for (path, want) in reduced_paths() {
-            let path = borrowed(&path);
             let (found, _) = shape_and_len(&mut tree, &path);
             assert_eq!(found, want, "{path:?}: the reduction's shape is not what the builder wrote");
         }
@@ -537,22 +559,18 @@ mod tests {
         }
     }
 
-    /// [`filter_tree`]'s COMPLETENESS, held against the sections the builders
-    /// write at EVERY LEVEL of the tree: an entry no path in the filter names
-    /// is rendered whole at every class, so an addition the filter's statement
-    /// does not account for is disclosed to the guest. That is the one failure
-    /// neither the fail-closed key rule nor the path-exists test can catch,
-    /// and no other test here sees it — the identity tests keep everything by
-    /// construction, and the guest tests walk a fixed path list a new entry is
-    /// not on.
+    /// [`filter_tree`]'s statement, held against the sections the builders
+    /// write at each of the three levels — the one test that fails on an entry
+    /// the statement does not account for.
     ///
-    /// Three levels, because the tree has three and an addition at any of them
-    /// discloses: the ROOT's sections, the HINTS section's families, and the
-    /// entries inside a shipped CLASS's own submap (`super::class_tree`'s —
-    /// two slices reduced by home, one format-constant `key` kept). The third
-    /// is the level a family list cannot reach: the shipped-class loop reduces
-    /// two entries per class by name, so a fourth entry added beside them goes
-    /// out whole with every path in the filter still naming a place.
+    /// No neighbour sees that failure. The identity tests keep everything by
+    /// construction, the guest tests walk a fixed path list a new entry is not
+    /// on, and `the_v5_root_and_the_filter_s_paths_exist` asks the question the
+    /// other way round: whether every path names a place, not whether every
+    /// place has a path. The SHIPPED-CLASS level is beyond a family list
+    /// besides — that loop reduces two entries per class by NAME, so a fourth
+    /// added beside them goes out whole with every path in the filter still
+    /// naming a place.
     ///
     /// What this asks of an addition is a DISPOSITION, which is why the format
     /// tests pinning the rendered text are not a substitute at any level. Those
@@ -700,14 +718,6 @@ mod tests {
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);
-        // An element of the draft's subspace `s` — never minted, which
-        // neither a slot nor an `emit` member requires.
-        let element = |s: u32, n: u32| {
-            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
-            comps.extend([Nat::from(0u32), Nat::from(s), Nat::from(n)]);
-            validate(Tumbler::new(comps).expect("nonempty"))
-                .expect("an element of a document is T4-valid")
-        };
         let ghost_typed_link = |n: u32| {
             writer
                 .makelink(
@@ -715,7 +725,7 @@ mod tests {
                     &draft,
                     SlotArg::Addrs(Vec::new()),
                     SlotArg::Addrs(Vec::new()),
-                    SlotArg::Addrs(vec![element(3, n)]),
+                    SlotArg::Addrs(vec![element(&draft, 3, n)]),
                 )
                 .expect("a link in the owner's own draft")
                 .0
@@ -731,7 +741,7 @@ mod tests {
         for ty in [ShippedType::Retired, ShippedType::PredDef, ShippedType::PredStable] {
             let class = engine.registry().reserved_type(ty).clone();
             writer
-                .emit(caller, &draft, &class, &element(1, 9), &[])
+                .emit(caller, &draft, &class, &element(&draft, 1, 9), &[])
                 .unwrap_or_else(|_| panic!("a {ty:?} tuple in the owner's own draft"));
         }
         engine.kernel().snapshot().world().clone()
@@ -762,7 +772,6 @@ mod tests {
         let mut guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
         for (path, want) in reduced_paths() {
-            let path = borrowed(&path);
             let (shape, len) = shape_and_len(&mut full, &path);
             assert_eq!(shape, want, "{path:?}: the reduction's shape is not the builder's");
             assert!(len > 0, "{path:?}: the fixture must populate every reduced family");
@@ -794,12 +803,7 @@ mod tests {
             world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
-        let element = |n: u32| {
-            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
-            comps.extend([Nat::from(0u32), Nat::from(1u32), Nat::from(n)]);
-            validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid")
-        };
-        let members: Vec<Address> = (10..26u32).map(element).collect();
+        let members: Vec<Address> = (10..26u32).map(|n| element(&draft, 1, n)).collect();
         // ONE link, sixteen denoted members, through the OPEN surface — a
         // shape `emit`'s `enc({from})` could never build.
         engine
@@ -879,16 +883,13 @@ mod tests {
         // …so what IS in the class was built by the managed surface: one
         // denoted address a side, which is the 1 × 1 the derivation walks.
         let link = |n: u32| {
-            let mut comps: Vec<Nat> = draft.tumbler().iter().cloned().collect();
-            comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
-            let ty = validate(Tumbler::new(comps).expect("nonempty")).expect("T4-valid");
             writer
                 .makelink(
                     caller,
                     &draft,
                     SlotArg::Addrs(Vec::new()),
                     SlotArg::Addrs(Vec::new()),
-                    SlotArg::Addrs(vec![ty]),
+                    SlotArg::Addrs(vec![element(&draft, 3, n)]),
                 )
                 .expect("a link in the owner's own draft")
                 .0
@@ -910,43 +911,14 @@ mod tests {
 
     /// A world holding ONE supersession edge, whose claim is homed in a
     /// private DRAFT while both endpoints are public links of a published
-    /// home. Returns the world and the account's principal, for the two tests
-    /// that read the edge from opposite ends.
+    /// home — so the edge's three tests disagree, and the claim's is what
+    /// governs.
     fn a_draft_homed_claim_over_public_links() -> World {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
-        let prefix = engine
-            .kernel()
-            .snapshot()
-            .world()
-            .m3()
-            .next_account_prefix(&addr(&[1]))
-            .expect("the genesis node has a delegable next-form prefix");
-        let (acct, _) = engine
-            .namespace()
-            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-            .expect("delegation of the peeked prefix succeeds");
-        // The account's FIRST flagless mint is its published home (PUB-8.21);
-        // a later flagless mint is a private draft.
-        let (home, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
-        let (draft, _) = engine
-            .namespace()
-            .create_new_document(USER, &acct, None)
-            .expect("a later mint, private");
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         // Two public links in the home under ghost types of its own
         // never-minted subspace 3 (address-form slots, empty endsets).
-        let ghost = |n: u32| {
-            let mut comps: Vec<Nat> = home.tumbler().iter().cloned().collect();
-            comps.extend([Nat::from(0u32), Nat::from(3u32), Nat::from(n)]);
-            validate(Tumbler::new(comps).expect("nonempty"))
-                .expect("a subspace-3 element of a document is T4-valid")
-        };
         let public_link = |n: u32| {
             engine
                 .linkstore(&visibility)
@@ -955,7 +927,7 @@ mod tests {
                     &home,
                     SlotArg::Addrs(Vec::new()),
                     SlotArg::Addrs(Vec::new()),
-                    SlotArg::Addrs(vec![ghost(n)]),
+                    SlotArg::Addrs(vec![element(&home, 3, n)]),
                 )
                 .expect("a public link in the home")
                 .0
@@ -966,11 +938,7 @@ mod tests {
             .linkstore(&visibility)
             .assert_sup(caller, &draft, &l1, &l2)
             .expect("a draft-homed supersession claim over public links");
-
-        let world = engine.kernel().snapshot().world().clone();
-        assert!(world.readable(None, &home), "the endpoints' home is published");
-        assert!(!world.readable(None, &draft), "the claim's home is a draft");
-        world
+        engine.kernel().snapshot().world().clone()
     }
 
     fn edge_count(tree: &mut SerdeTree) -> usize {
@@ -994,41 +962,12 @@ mod tests {
     ///
     /// Returns the world, then the public member and the private one.
     fn predicate_tuples_across_the_draft_boundary() -> (World, Address, Address) {
-        let cfg = KernelConfig {
-            durability: Durability::InMemory,
-            checkpoint: CheckpointPolicy::Manual,
-        };
-        let engine = Engine::open(cfg).expect("in-memory open cannot fail");
-        let prefix = engine
-            .kernel()
-            .snapshot()
-            .world()
-            .m3()
-            .next_account_prefix(&addr(&[1]))
-            .expect("the genesis node has a delegable next-form prefix");
-        let (acct, _) = engine
-            .namespace()
-            .delegate(BOOTSTRAP_PRINCIPAL, prefix.tumbler().clone(), USER)
-            .expect("delegation of the peeked prefix succeeds");
-        // The account's FIRST flagless mint is its published home (PUB-8.21);
-        // a later flagless mint is a private draft.
-        let (home, _) =
-            engine.namespace().create_new_document(USER, &acct, None).expect("the home mint");
-        let (draft, _) = engine
-            .namespace()
-            .create_new_document(USER, &acct, None)
-            .expect("a later mint, private");
+        let (engine, home, draft) = a_published_home_and_a_private_draft();
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
-        // A content position of a document — never minted, which `emit` does
-        // not require of a member and which keeps the two slices empty.
-        let position = |doc: &Address| {
-            let mut comps: Vec<Nat> = doc.tumbler().iter().cloned().collect();
-            comps.extend([Nat::from(0u32), Nat::from(1u32), Nat::from(1u32)]);
-            validate(Tumbler::new(comps).expect("nonempty"))
-                .expect("a content element of a document is T4-valid")
-        };
-        let (public_member, private_member) = (position(&home), position(&draft));
+        // A content position of each — never minted, which `emit` does not
+        // require of a member and which keeps the two slices empty.
+        let (public_member, private_member) = (element(&home, 1, 1), element(&draft, 1, 1));
         let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
         // The draft-homed registration OF the public member…
         engine
@@ -1040,10 +979,7 @@ mod tests {
             .linkstore(&visibility)
             .emit(caller, &home, &pred_stable, &private_member, &[])
             .expect("a home-homed registration over a draft's member");
-
         let world = engine.kernel().snapshot().world().clone();
-        assert!(world.readable(None, &home), "the home is published");
-        assert!(!world.readable(None, &draft), "the other document is a draft");
         (world, public_member, private_member)
     }
 

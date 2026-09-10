@@ -153,6 +153,14 @@ pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
 /// across everything above the base. The two halves agree because they are
 /// one rule under two enumerations, and `Engine::check_hints` is the standing
 /// check that the enumerations reach the same documents.
+///
+/// The KEYS alone are the enumeration, and that is complete for the same
+/// reason the fold's is: M3 writes a publication entry and the registration
+/// in one fold step, and only for a document-tier mint, so the map's keys are
+/// exactly the registered documents and no draft can sit outside them. The
+/// values are not read here — the bit comes back through M3's own
+/// `published`, which is what makes this walk and the fold ONE rule rather
+/// than two that happen to agree.
 pub(crate) fn seed(namespace: &M3State) -> Drafts {
     publication_map(namespace).keys().filter_map(|doc| draft_entry(namespace, doc)).collect()
 }

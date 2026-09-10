@@ -22,9 +22,15 @@
 //! engine reads a store slice it has no enumeration API for
 //! (`crate::publication::seed` walks M3's publication map this way): the
 //! coupling is to the serde data model and a field NAME, never to a private
-//! layout or to any library's on-the-wire encoding. This module is compiled
-//! whatever the `dump` feature says; only the text rendering ([`render`]) is
-//! the dump's own.
+//! layout or to any library's on-the-wire encoding.
+//!
+//! That way back is why this module is compiled whatever the `dump` feature
+//! says: the exception set's seed reads a store slice through it at every
+//! load, dump or no dump. The deterministic TEXT is compiled unconditionally
+//! too — it is [`SerdeTree`]'s `Display`, and the sort rule that makes it a
+//! comparable rendering is stated there. What the feature gates is
+//! [`render`], the three-line adapter that appends that text to a caller's
+//! buffer, because the dump module holds its only callers.
 
 use std::fmt;
 
@@ -154,7 +160,10 @@ impl fmt::Display for SerdeTree {
 }
 
 /// Append a tree's deterministic text to `out`, for a caller assembling one
-/// rendering out of several pieces — the dump's, and only the dump's.
+/// rendering out of several pieces — the dump's, and only the dump's. That
+/// is what the feature gates: the text itself is [`SerdeTree`]'s `Display`
+/// and is compiled either way, so with the dump off this adapter would be a
+/// function no caller has.
 #[cfg(feature = "dump")]
 pub(crate) fn render(tree: &SerdeTree, out: &mut String) {
     use std::fmt::Write as _;

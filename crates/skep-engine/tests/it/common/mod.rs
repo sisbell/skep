@@ -51,6 +51,17 @@ pub fn vspec(doc: &Address, ordinal: u32, width: u32) -> VSpec {
     VSpec { source: doc.clone(), span: vspan(1, ordinal, width) }
 }
 
+/// An element of `doc`'s subspace `s` at ordinal `n` — NEVER MINTED, which
+/// neither a link slot nor an `emit` member requires. Subspace 1 is a
+/// document's content space, so an element there is a position a read can
+/// name; subspace 3 is a space nothing ever mints into, so a type slot filled
+/// from it lands in a coverage class of its own.
+pub fn element(doc: &Address, s: u32, n: u32) -> Address {
+    let comps = doc.tumbler().iter().cloned().chain([nat(0), nat(s), nat(n)]);
+    validate(Tumbler::new(comps).expect("test element tumblers are nonempty"))
+        .unwrap_or_else(|_| panic!("an element of a document is T4-valid"))
+}
+
 pub fn mem_cfg() -> KernelConfig {
     KernelConfig {
         durability: Durability::InMemory,

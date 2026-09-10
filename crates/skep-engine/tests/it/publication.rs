@@ -83,17 +83,38 @@ fn remove_checkpoints(dir: &Path) {
     fs::remove_file(checkpoint_file(dir)).expect("remove the checkpoint");
 }
 
+/// M2's checkpoint layout, at the two offsets the pair below reads and writes
+/// it at: `[magic 4][seq u64 LE][crc32c(body) u32 LE][body_len u64 LE][body]`.
+/// The magic and the seq are carried across a rewrite unchanged, so
+/// [`CKPT_KEPT_PREFIX`] ends where the crc begins and [`CKPT_HEADER_LEN`] is
+/// where the body does. Both constants are here rather than at their uses, so
+/// the read and the write cannot drift apart.
+const CKPT_KEPT_PREFIX: usize = 12;
+const CKPT_HEADER_LEN: usize = 24;
+
+/// The checkpoint's BODY — the bytes past M2's header.
+fn checkpoint_body(dir: &Path) -> Vec<u8> {
+    let data = fs::read(checkpoint_file(dir)).expect("read the checkpoint");
+    data[CKPT_HEADER_LEN..].to_vec()
+}
+
 /// Replace the checkpoint's BODY under a VALID header, so the DECODE is what
-/// refuses it and never the checksum. M2's layout, kept as written for the
-/// first two fields: `[magic 4][seq u64 LE][crc32c(body) u32 LE]
-/// [body_len u64 LE][body]`. Should M2 ever move its header, this rewrite
-/// degrades to a checksum failure — which M2's chain refuses the same way, so
-/// the tests below still pass but stop exercising the decode route; the
-/// coupling is stated here so that a header change knows to look.
+/// refuses it and never the checksum: the magic and the seq are carried over,
+/// and the checksum and the length are recomputed for the body written.
+///
+/// The header this rebuilds is M2's, and nothing in M2 forces the offsets
+/// above to follow it. A rewrite that reconstructed them wrongly would leave
+/// a base M2 discards for its CHECKSUM, which its fallback chain answers
+/// exactly as it answers a failed decode — so both tests below would still
+/// pass while testing neither. The CONTROL CASE in
+/// `an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open` is
+/// what refuses that: it puts a checkpoint's own body back through this
+/// function over a journal that cannot reach genesis, where a base M2 no
+/// longer loads is the difference between an open and a refusal.
 fn rewrite_checkpoint_body(dir: &Path, body: &[u8]) {
     let path = checkpoint_file(dir);
     let data = fs::read(&path).expect("read the checkpoint");
-    let mut out = data[..12].to_vec();
+    let mut out = data[..CKPT_KEPT_PREFIX].to_vec();
     out.extend_from_slice(&crc32c::crc32c(body).to_le_bytes());
     out.extend_from_slice(&(body.len() as u64).to_le_bytes());
     out.extend_from_slice(body);
@@ -308,10 +329,17 @@ fn an_undecodable_checkpoint_replays_from_genesis_and_never_serves_an_empty_set(
 /// never serves the empty set. Genesis is made unreachable the way M2's own
 /// suite does it: the journal rotates into a second segment and the
 /// checkpoint's reclamation drops the first.
+///
+/// That unreachability is also what makes this the one test that can hold
+/// [`rewrite_checkpoint_body`] to its own claim, so the CONTROL CASE below
+/// runs here: with the sole base rewritten and genesis out of reach, an open
+/// succeeds only off a header M2 still reads. Its sibling above cannot ask —
+/// there the journal reaches genesis, so both a valid header and a botched
+/// one replay the same history to the same answer.
 #[test]
 fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
     let dir = tempdir().expect("tempdir");
-    {
+    let head = {
         let engine = Engine::open(fsync_cfg(dir.path())).expect("fsync open");
         let docs = mint_docs(&engine);
         // One content value past M2's segment rotation size (1 MiB), then one
@@ -324,12 +352,25 @@ fn an_undecodable_checkpoint_with_no_older_start_point_refuses_to_open() {
         engine.namespace().create_new_document(USER, &docs.acct, None).expect("the rotating commit");
         // The checkpoint at head reclaims the closed first segment below it.
         engine.kernel().checkpoint().expect("checkpoint at head");
-    }
+        engine.kernel().current_seq()
+    };
     assert!(
         !dir.path().join("seg-1.wal").exists(),
         "the fixture must reclaim the first segment — otherwise genesis still stands in and \
          this test proves nothing"
     );
+
+    // The CONTROL: the checkpoint's OWN body, back through the same rewrite.
+    // The substitution below is only a decode failure if what surrounds the
+    // body is a header M2 reads, and with genesis unreachable an open is the
+    // one question whose answer turns on that. A rewrite that rebuilt M2's
+    // header wrongly refuses HERE, where the base is this build's own.
+    rewrite_checkpoint_body(dir.path(), &checkpoint_body(dir.path()));
+    {
+        let engine = Engine::open(fsync_cfg(dir.path()))
+            .expect("a rewritten header M2 no longer reads: the layout constants have moved");
+        assert_eq!(engine.kernel().current_seq(), head, "…and the base is the one it was taken at");
+    }
 
     rewrite_checkpoint_body(dir.path(), &pre_stamp_body());
 

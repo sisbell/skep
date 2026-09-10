@@ -195,8 +195,24 @@ fn hints_faithful(world: &World) -> Result<(), HintDivergence> {
     }
 }
 
-/// The two disagreeing dumps, with a byte-offset localization in `Display`.
-#[derive(Debug)]
+/// The two disagreeing dumps, LOCALIZED by both renderings: `Display` and
+/// `Debug` alike name the byte the two first differ at and show a bounded
+/// window of each side around it. Neither writes a dump whole, and that is
+/// what makes this type printable at all — a rendering costs a tree node per
+/// content byte ([`Engine::dump_of`]'s cost), so a world of any size is
+/// megabytes of text and two of them is what a caller would otherwise get on
+/// one line. A caller that wants a whole rendering reads the field.
+///
+/// The two carriers exist because a caller reaches this type through both:
+/// an operator reads `Display`, and `Result::expect`/`unwrap` print `Debug`.
+///
+/// `#[non_exhaustive]`, because the assembler may find more of a divergence
+/// worth carrying: a receiver reads both fields either way, and nothing
+/// outside this crate can build one, since a [`WorldDump`] exists only
+/// because an engine rendered it.
+///
+/// [`Engine::dump_of`]: crate::Engine::dump_of
+#[non_exhaustive]
 pub struct HintDivergence {
     pub live: WorldDump,
     pub rebuilt: WorldDump,
@@ -205,8 +221,7 @@ pub struct HintDivergence {
 impl fmt::Display for HintDivergence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (live, rebuilt) = (self.live.as_str(), self.rebuilt.as_str());
-        let shorter = live.len().min(rebuilt.len());
-        let i = live.bytes().zip(rebuilt.bytes()).position(|(x, y)| x != y).unwrap_or(shorter);
+        let i = divergence_offset(live, rebuilt);
         write!(
             f,
             "hint dump diverges at byte {i}: live …{:?}… vs rebuilt …{:?}…",
@@ -216,7 +231,26 @@ impl fmt::Display for HintDivergence {
     }
 }
 
+impl fmt::Debug for HintDivergence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (live, rebuilt) = (self.live.as_str(), self.rebuilt.as_str());
+        let i = divergence_offset(live, rebuilt);
+        f.debug_struct("HintDivergence")
+            .field("at_byte", &i)
+            .field("live", &window(live, i))
+            .field("rebuilt", &window(rebuilt, i))
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::error::Error for HintDivergence {}
+
+/// The byte the two renderings first differ at — or, where one is a strict
+/// prefix of the other, the shorter one's length, which is where it ran out.
+fn divergence_offset(live: &str, rebuilt: &str) -> usize {
+    let shorter = live.len().min(rebuilt.len());
+    live.bytes().zip(rebuilt.bytes()).position(|(x, y)| x != y).unwrap_or(shorter)
+}
 
 /// A char-boundary-safe window around byte `i`, for divergence display.
 fn window(s: &str, i: usize) -> &str {
@@ -233,8 +267,12 @@ fn window(s: &str, i: usize) -> &str {
 
 // ── the hints section, from public reads only ──
 
-fn key(s: impl Into<String>) -> SerdeTree {
-    SerdeTree::Str(s.into())
+/// A section key — a string node, the one shape a key in this format takes.
+/// Every caller hands a compiled `&str`: the section names are literals, and
+/// the family and class names are the format's own tables ([`SLICE_VIEWS`],
+/// [`PREDICATE_PROJECTIONS`], [`shipped_label`]).
+fn key(s: &str) -> SerdeTree {
+    SerdeTree::Str(s.to_owned())
 }
 
 /// A sequence of dotted TUMBLERS, for the one entry whose values are not
@@ -423,7 +461,9 @@ fn drafts_tree(world: &World) -> SerdeTree {
     SerdeTree::Map(
         world
             .drafts()
-            .map(|(doc, owner)| (SerdeTree::Str(doc.to_string()), SerdeTree::Str(owner.to_string())))
+            .map(|d| {
+                (SerdeTree::Str(d.document.to_string()), SerdeTree::Str(d.owner.to_string()))
+            })
             .collect(),
     )
 }
@@ -896,5 +936,35 @@ mod tests {
 
         let rendered = divergence("ab", &format!("abx{}", "🌍".repeat(20))).to_string();
         assert!(rendered.contains("byte 2"), "a prefix diverges at its own end: {rendered}");
+    }
+
+    /// …and the OTHER carrier localizes too. `Result::expect` and `unwrap`
+    /// print `Debug`, which is how every caller of `check_hints` in this
+    /// workspace meets a divergence, and a rendering costs a tree node per
+    /// content byte — so a `Debug` that carried the two dumps would put two
+    /// whole worlds of escaped text on one line. The size assertion is the
+    /// claim: the report is smaller than ONE rendering, where carrying them
+    /// would make it larger than two.
+    #[test]
+    fn a_hint_divergence_debugs_as_its_localization_and_not_as_two_worlds() {
+        let filler = "a, ".repeat(4096);
+        let (live, rebuilt) = (format!("hints: [{filler}b]"), format!("hints: [{filler}c]"));
+        let at = "hints: [".len() + filler.len();
+
+        let rendered = format!("{:?}", divergence(&live, &rebuilt));
+        assert!(
+            rendered.contains(&format!("at_byte: {at}")),
+            "the offset must be named: {rendered:.160}"
+        );
+        assert!(
+            rendered.contains("b]") && rendered.contains("c]"),
+            "both sides must be shown around it: {rendered:.160}"
+        );
+        assert!(
+            rendered.len() < live.len(),
+            "the report carried the renderings: {} bytes for two dumps of {} each",
+            rendered.len(),
+            live.len()
+        );
     }
 }

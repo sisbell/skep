@@ -7,6 +7,8 @@
 //! (`crate::publication`). M6/M8/M9/M10 contribute no slice and no record
 //! variant, so nothing of theirs appears here.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use skep_arrangement::{HasM5, M5Rec, M5State};
 use skep_content::{ContentStore, ContentWrite, HasContent};
@@ -99,6 +101,24 @@ pub struct World {
     pub(crate) grants: Grants,
 }
 
+/// OPAQUE — the type name and nothing of the state. A world's rendering is a
+/// `WorldDump` (`crate::dump`, behind its feature): deterministic,
+/// byte-comparable and asked for. This is what a caller's own
+/// `#[derive(Debug)]` gets for holding a world, as `Engine`'s is for holding
+/// an engine, and every public type in this crate answers one.
+///
+/// Opaque rather than structural for a reason that is M4's and not a matter of
+/// volume: `ContentStore` carries no `Debug` at all, because `Val` carries
+/// none on purpose so that content blobs never render into a log. So there is
+/// nothing here to derive, and writing the fields out by hand would be
+/// reaching around that decision — while `namespace` and `links` would put
+/// whole registries into a `dbg!`.
+impl fmt::Debug for World {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("World").finish_non_exhaustive()
+    }
+}
+
 /// The World checkpoint FORMAT — the version the layout of [`World`]'s bytes
 /// is. The high 32 bits spell `SKPW`; the low 32 count the layouts this
 /// crate has written. `1` is the layout that carries M3's publication bit
@@ -168,7 +188,14 @@ impl<'de> Deserialize<'de> for FormatStamp {
 /// slice adds a variant here, and `match` exhaustiveness over a public enum
 /// is a promise the assembler has no reason to make to a caller that only
 /// ever lifts and folds.
-#[derive(Clone, Serialize, Deserialize)]
+///
+/// `Debug` is the whole of what a holder can read a record BY, and it is the
+/// four stores' own: each writes its variant's account of itself, and M4's is
+/// written by hand for exactly this reader — it reports a byte length where
+/// the payload is, so a content blob never renders into a log. A journal
+/// inspector or a harness holding a central record has no accessor to reach
+/// past it, by design, since a store's record is that store's to describe.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Record {
     Namespace(M3Rec),

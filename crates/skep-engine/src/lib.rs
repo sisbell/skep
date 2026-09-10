@@ -34,7 +34,8 @@
 //!   publication bit (PUB-7.5; owner ruling D1, 2026-09-05: ONE publication
 //!   definition), seeded at load and folded on every document-minting
 //!   record (PUB-7.7). The daemon's every publication read answers
-//!   `doc ∉ exception_set` and nothing else.
+//!   `doc ∉ exception_set` and nothing else, and the set's one enumeration
+//!   ([`World::drafts`]) hands its entries out as [`Draft`] rows.
 //! * **The read predicate** ([`World::readable`]; the `readable` module) —
 //!   the one function `readable(doc, principal) = published(doc) ∨ subtree ∨
 //!   grant_exists` (PUB-1.31, lane 3.3, §1), composing the exception set's
@@ -87,6 +88,7 @@ pub mod dump;
 
 pub use engine::{Engine, EngineError, EngineStores};
 pub use grants::{IssuerGrant, UniversalGrant};
+pub use publication::Draft;
 pub use world::{Record, World};
 
 // The KERNEL types the engine's own signatures name, re-exported so a binary

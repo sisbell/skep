@@ -26,7 +26,7 @@ use tempfile::tempdir;
 /// has no order of its own.
 fn drafts_of(world: &World) -> Vec<(Address, Address)> {
     let mut pairs: Vec<(Address, Address)> =
-        world.drafts().map(|(doc, owner)| (doc.clone(), owner.clone())).collect();
+        world.drafts().map(|d| (d.document.clone(), d.owner.clone())).collect();
     pairs.sort();
     pairs
 }

@@ -283,6 +283,8 @@ mod tests {
 
     use skep_kernel::{CheckpointPolicy, Durability};
 
+    use crate::Record;
+
     use super::*;
 
     fn mem_engine() -> Engine {
@@ -294,23 +296,38 @@ mod tests {
     }
 
     /// What a missing `Debug` costs is not the print, it is the wall: a
-    /// caller's own type holding an assembled engine derives its own.
+    /// caller's own type holding an assembled engine derives its own. Held of
+    /// every type this crate exports that a caller can hold, the world and the
+    /// central record included — the record through a bound rather than a
+    /// value, since each store's record is that store's to construct.
     #[test]
     fn a_holder_of_the_assembled_types_derives_debug() {
+        fn assert_debug<T: fmt::Debug>() {}
+        assert_debug::<Record>();
+
         #[derive(Debug)]
         #[allow(dead_code)]
         struct Holder {
             engine: Engine,
             stores: EngineStores,
+            world: World,
         }
 
         let engine = mem_engine();
-        let holder = Holder { stores: engine.stores(), engine };
+        let world = engine.kernel().snapshot().world().clone();
+        let holder = Holder { stores: engine.stores(), engine, world };
         let rendered = format!("{holder:?}");
         assert!(rendered.contains("Engine"), "the engine renders as itself: {rendered}");
         assert!(
             rendered.contains("seq"),
             "the kernel's head is the one thing worth reading here: {rendered}"
+        );
+        // …and the world renders as ITSELF and nothing of its slices: its
+        // rendering is a `WorldDump`, asked for.
+        assert!(rendered.contains("World"), "the world renders as itself: {rendered}");
+        assert!(
+            !rendered.contains("namespace"),
+            "a world's slices are not a debug form: {rendered}"
         );
     }
 

@@ -724,7 +724,7 @@ mod tests {
     fn every_reduced_family_in_a_draft() -> World {
         let (engine, world) = populated_world();
         let draft =
-            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);
@@ -810,7 +810,7 @@ mod tests {
     fn one_open_surface_deposit_puts_many_members_in_a_projection() {
         let (engine, world) = populated_world();
         let draft =
-            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let members: Vec<Address> = (10..26u32).map(|n| element(&draft, 1, n)).collect();
@@ -860,7 +860,7 @@ mod tests {
     fn the_supersession_class_is_closed_to_the_open_surfaces() {
         let (engine, world) = populated_world();
         let draft =
-            world.drafts().next().map(|(doc, _)| doc.clone()).expect("the fixture's one draft");
+            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);

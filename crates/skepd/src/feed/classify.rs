@@ -130,9 +130,9 @@ pub(crate) fn parse_dotted(s: &str) -> Option<Address> {
 pub(crate) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
     let mut docs: BTreeSet<Address> = BTreeSet::new();
     // 1. Drafts minted by this commit.
-    for (draft, _owner) in after.drafts() {
-        if before.owner_account(draft).is_none() {
-            docs.insert(draft.clone());
+    for draft in after.drafts() {
+        if before.owner_account(draft.document).is_none() {
+            docs.insert(draft.document.clone());
         }
     }
     // 2. Links deposited by this commit: each one's home, and a retraction's
@@ -161,14 +161,15 @@ pub(crate) fn derived_docs(before: &World, after: &World) -> Vec<Address> {
     // 3. Drafts whose arrangement this commit moved. Skipped whole when the
     //    arrangement slice is unchanged (a mint, a delegate, an `emit`).
     if before.m5() != after.m5() {
-        for (draft, _owner) in after.drafts() {
-            if before.owner_account(draft).is_none() {
+        for draft in after.drafts() {
+            let doc = draft.document;
+            if before.owner_account(doc).is_none() {
                 continue; // minted by this commit — named by witness 1
             }
-            if before.m5().content_runs(draft) != after.m5().content_runs(draft)
-                || before.m5().link_runs(draft) != after.m5().link_runs(draft)
+            if before.m5().content_runs(doc) != after.m5().content_runs(doc)
+                || before.m5().link_runs(doc) != after.m5().link_runs(doc)
             {
-                docs.insert(draft.clone());
+                docs.insert(doc.clone());
             }
         }
     }

@@ -217,9 +217,17 @@ pub(crate) struct Grants {
 // the index a [`GrantIndexEntry`] belongs in and hand it here, and
 // [`Grants::issuers_for`]'s inversion builds a third map of that same shape.
 // The decision at those sites is which index; the bookkeeping is here.
+//
+// That ONE shape is why the two below are spelled concretely rather than over
+// a key and a member type: every map they edit is a map of addresses to sets
+// of addresses, and a signature that admitted a second pairing would be
+// claiming a generality the fold has no use for. What the two sides MEAN
+// differs by index — prefix to issuers one way, issuer to prefixes the other
+// — and no type could carry that, which is what the named [`UniversalGrant`]
+// and [`IssuerGrant`] rows exist to say at the surface.
 
 /// `map[key] ∪= {member}`, adding the key where it is absent.
-fn set_insert<K: Ord + Clone, V: Ord + Clone>(map: &mut OrdMap<K, OrdSet<V>>, key: &K, member: V) {
+fn set_insert(map: &mut OrdMap<Address, OrdSet<Address>>, key: &Address, member: Address) {
     match map.get_mut(key) {
         Some(members) => {
             members.insert(member);
@@ -233,7 +241,7 @@ fn set_insert<K: Ord + Clone, V: Ord + Clone>(map: &mut OrdMap<K, OrdSet<V>>, ke
 /// `map[key] −= {member}`, DROPPING the key where its set empties — so no
 /// index ever holds an empty set, and an empty map means "nothing granted"
 /// rather than "nothing granted, or one revocation ago".
-fn set_remove<K: Ord + Clone, V: Ord + Clone>(map: &mut OrdMap<K, OrdSet<V>>, key: &K, member: &V) {
+fn set_remove(map: &mut OrdMap<Address, OrdSet<Address>>, key: &Address, member: &Address) {
     let Some(members) = map.get_mut(key) else {
         return;
     };
@@ -467,15 +475,22 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// been applied to the store. Both [`fold`] (per journal record) and [`seed`]
 /// (the whole-map load pass) drive this ONE path, so the seed reproduces the
 /// fold. Only a `t_grant` deposit that ADMITS moves the fold.
+///
+/// The accumulator arrives OWNED because that is what both callers have: the
+/// seed threads its own across the walk, and the fold gives a clone of the
+/// world's. The three paths that move nothing hand it straight back, so a
+/// link deposit that is not an admitted grant — which is nearly all of them —
+/// costs no copy at all. [`classify`] reads it before the move, since a
+/// revocation is recognized by the operative set it is about to leave.
 fn fold_one(
-    prev: &Grants,
+    prev: Grants,
     namespace: &M3State,
     drafts: &Drafts,
     addr: &Address,
     value: &Link,
 ) -> Grants {
     if !is_grant_typed(value, t_grant()) {
-        return prev.clone();
+        return prev;
     }
     // A link address is ELEMENT-LEVEL, so it has a home document — M7's own
     // hint fold asserts exactly this of every stored link key, so a record
@@ -485,10 +500,11 @@ fn fold_one(
     let home = document_of(addr)
         .expect("a link address is element-level, so its home document exists");
     let Some(issuer) = admitted_issuer(namespace, drafts, &home) else {
-        return prev.clone(); // unadmitted: neither grant nor revocation
+        return prev; // unadmitted: neither grant nor revocation
     };
-    let mut next = prev.clone();
-    match classify(prev, &home, value) {
+    let kind = classify(&prev, &home, value);
+    let mut next = prev;
+    match kind {
         Kind::Grant { content_prefix, grantee } => {
             next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
@@ -524,7 +540,7 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
     // the previous fold would silently drop a grant the store did accept.
     let link_addr = validate(addr.clone())
         .expect("a staged link address is T4-valid (M7's fold asserted it a moment ago)");
-    fold_one(prev, namespace, drafts, &link_addr, value)
+    fold_one(prev.clone(), namespace, drafts, &link_addr, value)
 }
 
 /// The SEED half (PUB-7.7): the grant fold a from-scratch walk of the GRANTS
@@ -567,9 +583,8 @@ pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> G
         // what the live fold had closed.
         let value = links
             .readlink(&addr)
-            .cloned()
             .expect("a type_slice key names a resident link (M7's postcondition)");
-        grants = fold_one(&grants, namespace, drafts, &addr, &value);
+        grants = fold_one(grants, namespace, drafts, &addr, value);
     }
     grants
 }

@@ -53,6 +53,25 @@ use crate::world::World;
 /// enumerates it.
 pub(crate) type Drafts = im::HashMap<Address, Address>;
 
+/// One entry of the exception set, as [`World::drafts`] enumerates it: a
+/// DRAFT document, and the ACCOUNT that owned it at its mint — the same memo
+/// [`World::owner_account`] answers with.
+///
+/// A named row rather than a pair, for the reason [`crate::UniversalGrant`]
+/// is one: both halves are addresses, so a consumer that read them the other
+/// way round would still compile, and would go on to ask whether an ACCOUNT
+/// is a draft. That is always no, so every entry would read as one the commit
+/// just minted, and nothing about the answer would look wrong. The field
+/// names are what make the swap fail to compile instead.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Draft<'a> {
+    /// The draft document — a member of the set, so `published` is false for
+    /// it (PUB-7.5).
+    pub document: &'a Address,
+    /// Its owner account, fixed at the mint and never re-derived by a walk.
+    pub owner: &'a Address,
+}
+
 impl World {
     /// `published(doc)` — THE daemon-side publication read (owner ruling D1):
     /// `doc ∉ exception_set`, a membership miss, and nothing else. Takes the
@@ -82,12 +101,12 @@ impl World {
         self.drafts.get(doc)
     }
 
-    /// Every draft in the set with its owner account, in NO particular order
-    /// (the map is hash-keyed; sort before comparing or rendering). The
-    /// harnesses' enumeration; the spec's own consumers of the set are point
-    /// reads.
-    pub fn drafts(&self) -> impl Iterator<Item = (&Address, &Address)> + '_ {
-        self.drafts.iter()
+    /// Every draft in the set with its owner account, as [`Draft`] rows, in NO
+    /// particular order (the map is hash-keyed; sort before comparing or
+    /// rendering). The harnesses' enumeration; the spec's own consumers of the
+    /// set are point reads.
+    pub fn drafts(&self) -> impl Iterator<Item = Draft<'_>> + '_ {
+        self.drafts.iter().map(|(document, owner)| Draft { document, owner })
     }
 }
 

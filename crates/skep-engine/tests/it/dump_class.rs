@@ -82,6 +82,12 @@ fn board(engine: &Engine) -> Board {
 
 /// A grant of `content_prefix` to `grantee`, issued by A from its doc 1.
 fn grant(engine: &Engine, b: &Board, content_prefix: &Address, grantee: &Address) -> Address {
+    grant_to(engine, b, content_prefix, vec![grantee.clone()])
+}
+
+/// [`grant`] with the `to` slot as DEPOSITED — empty for the ANY-PRINCIPAL
+/// form (PUB-5.8), whose record has no grantee to name.
+fn grant_to(engine: &Engine, b: &Board, content_prefix: &Address, to: Vec<Address>) -> Address {
     let issuer = Caller::Principal(A);
     engine
         .linkstore(&World::visible_to(issuer))
@@ -89,7 +95,7 @@ fn grant(engine: &Engine, b: &Board, content_prefix: &Address, grantee: &Address
             issuer,
             &b.home_a,
             SlotArg::Addrs(vec![content_prefix.clone()]),
-            SlotArg::Addrs(vec![grantee.clone()]),
+            SlotArg::Addrs(to),
             SlotArg::Addrs(vec![t_grant()]),
         )
         .map(|(addr, _)| addr)
@@ -128,6 +134,33 @@ fn the_v5_format_names_the_publication_slice_and_the_grant_fold() {
     );
     assert!(text.contains(&grants), "expected {grants} in:\n{text}");
     engine.check_hints().expect("the grant fold's seed equals its fold, through the section");
+}
+
+/// …and the section's OTHER rendered shape: the ANY-PRINCIPAL form (PUB-5.8)
+/// has no grantee, and the record renders `none` in that field.
+///
+/// A shape the dump never renders is a hole in the oracle the crash and
+/// conformance harnesses read it as, and one no comparison between two dumps
+/// can see — both sides are rendered by the same builder, so both carry the
+/// same hole. The section's four fields are the format, so each shape a
+/// record can take is stated here rather than left to whichever world a
+/// harness happens to run.
+#[test]
+fn the_grant_section_renders_an_any_principal_grant_with_no_grantee() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let g = grant_to(&engine, &b, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+    let text = engine.world_dump().into_string();
+
+    let grants = format!(
+        "\"grants\": {{{}: {{\"content_prefix\": {}, \"grantee\": none, \"home\": {}, \"issuer\": {}}}}}",
+        quoted(&g),
+        quoted(&b.draft_a),
+        quoted(&b.home_a),
+        quoted(&b.acct_a),
+    );
+    assert!(text.contains(&grants), "expected {grants} in:\n{text}");
+    engine.check_hints().expect("the fold and its seed agree over a grantee-less record");
 }
 
 /// The filter under the TOTAL predicate is the harness-only walk, byte for

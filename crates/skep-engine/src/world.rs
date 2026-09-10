@@ -367,7 +367,83 @@ impl From<LinkRec> for Record {
 
 #[cfg(test)]
 mod tests {
+    use skep_address::{validate, Address, Nat, Tumbler};
+    use skep_content::Val;
+
     use super::*;
+
+    fn addr(comps: &[u32]) -> Address {
+        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c)))
+            .unwrap_or_else(|_| panic!("test tumblers are nonempty"));
+        validate(t).unwrap_or_else(|_| panic!("test addresses are T4-valid"))
+    }
+
+    /// [`Record`]'s VARIANT ORDER is what M2's replay decodes by: bincode
+    /// encodes a variant as its INDEX, positionally and with no name, so a
+    /// rename is byte-neutral for replay and a reordering silently mis-reads
+    /// every journal and checkpoint on disk.
+    /// `the_world_serializes_its_slices_in_declaration_order` holds the same
+    /// obligation for [`World`]'s fields; this holds it here, where the enum
+    /// is `#[non_exhaustive]` because the set grows with the decomposition —
+    /// and the next state-contributing store's variant would sit most
+    /// naturally in the MIDDLE of this list, which is the edit that costs.
+    ///
+    /// Three payloads come from their own stores' public constructors, so
+    /// each index is read off a record a store really built. M7 seals its
+    /// `Deposit` variant, so no crate but M7 can construct a [`LinkRec`] —
+    /// the fourth index is pinned by what the decoder REFUSES instead. A bare
+    /// tag naming a variant gets past the tag and runs out of payload (an
+    /// I/O end-of-file), where one naming none is refused as a value serde
+    /// has no variant for. So index 3 NAMES a variant and index 4 names the
+    /// end of the list, and with the first three pinned that says `Links` is
+    /// at 3.
+    ///
+    /// A variant APPENDED after `Links` is byte-safe for replay and still
+    /// reddens the second refusal. That is the intent: the enum is expected
+    /// to grow, and an addition should be made to state where it landed here
+    /// rather than to land anywhere in silence.
+    #[test]
+    fn the_central_record_lifts_each_store_to_its_own_variant_index() {
+        let doc = addr(&[1, 0, 1, 0, 1]);
+        let namespace = M3Rec::Allocate { addr: doc.clone(), published: false };
+        let content = skep_content::stage_write(
+            &ContentStore::default(),
+            &addr(&[1, 0, 1, 0, 1, 0, 1, 1]),
+            Val::new(vec![b'x']),
+        )
+        .expect("a fresh content address stages a write");
+        let arrangement = skep_arrangement::stage_seat_link(
+            &M5State::genesis(),
+            &doc,
+            &addr(&[1, 0, 1, 0, 1, 0, 2, 1]),
+        )
+        .expect("an unseated link of the document stages a seat");
+
+        let tag_of = |r: Record| {
+            let bytes = bincode::serialize(&r).expect("a record serializes");
+            u32::from_le_bytes(
+                bytes[..4].try_into().expect("bincode writes a four-byte variant tag"),
+            )
+        };
+        assert_eq!(tag_of(namespace.into()), 0, "Namespace is variant 0");
+        assert_eq!(tag_of(content.into()), 1, "Content is variant 1");
+        assert_eq!(tag_of(arrangement.into()), 2, "Arrangement is variant 2");
+
+        let refuses = |tag: u32| -> bincode::ErrorKind {
+            *bincode::deserialize::<Record>(&tag.to_le_bytes())
+                .expect_err("a bare tag is not a whole record")
+        };
+        assert!(
+            matches!(refuses(3), bincode::ErrorKind::Io(_)),
+            "index 3 names no variant, so Links is not there: {}",
+            refuses(3)
+        );
+        assert!(
+            matches!(refuses(4), bincode::ErrorKind::Custom(_)),
+            "index 4 names a variant, so Links is not the last: {}",
+            refuses(4)
+        );
+    }
 
     /// The stamp leads the encoding, and it is eight bytes of a value no
     /// pre-stamp checkpoint's first word can equal: that word is M3's

@@ -467,6 +467,23 @@ mod tests {
             .expect("an element of a document is T4-valid")
     }
 
+    /// [`populated_world`]'s ONE draft — the document its content, its
+    /// arrangement and its link are all homed in, which is what makes a guest
+    /// owed nothing of any of them.
+    ///
+    /// The exception set is HASH-KEYED and its enumeration has no order of
+    /// its own, so taking the first entry is deterministic only while there
+    /// is one entry to take. A fixture that grew a second document would
+    /// leave the three tests below choosing a draft per process — passing or
+    /// failing on the hasher's seed, which is worse than either. The count is
+    /// asserted here so that growth is an immediate and legible failure
+    /// instead.
+    fn the_one_draft(world: &World) -> Address {
+        let drafts: Vec<&Address> = world.drafts().map(|d| d.document).collect();
+        assert_eq!(drafts.len(), 1, "the fixture must hold exactly one draft: {drafts:?}");
+        drafts[0].clone()
+    }
+
     /// An account with a PUBLISHED home and a PRIVATE draft, and the engine
     /// that minted them: the account's first flagless mint is its home
     /// (PUB-8.21) and a later one is a draft. The two fixtures below deposit
@@ -702,7 +719,11 @@ mod tests {
             assert!(len_at(&mut full, path) > 0, "{path:?}: the fixture must populate it");
             assert_eq!(len_at(&mut guest, path), 0, "{path:?}: a guest reads nothing of a draft");
         }
-        // The identity and grant sections are untouched.
+        // The identity section is untouched. The GRANT section is kept whole
+        // too, but this fixture deposits no grant, so what the loop below
+        // compares there is one empty map against another — the integration
+        // suite's guest tests are what hold that section's content against a
+        // world that has one.
         for path in [&["authoritative", "namespace"][..], &["grants"]] {
             let a = render_of(at_path(&mut full, path).expect("present"));
             let b = render_of(at_path(&mut guest, path).expect("present"));
@@ -723,8 +744,7 @@ mod tests {
     /// the tuples deposited under them.
     fn every_reduced_family_in_a_draft() -> World {
         let (engine, world) = populated_world();
-        let draft =
-            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
+        let draft = the_one_draft(&world);
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);
@@ -809,8 +829,7 @@ mod tests {
     #[test]
     fn one_open_surface_deposit_puts_many_members_in_a_projection() {
         let (engine, world) = populated_world();
-        let draft =
-            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
+        let draft = the_one_draft(&world);
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let members: Vec<Address> = (10..26u32).map(|n| element(&draft, 1, n)).collect();
@@ -859,8 +878,7 @@ mod tests {
     #[test]
     fn the_supersession_class_is_closed_to_the_open_surfaces() {
         let (engine, world) = populated_world();
-        let draft =
-            world.drafts().next().map(|d| d.document.clone()).expect("the fixture's one draft");
+        let draft = the_one_draft(&world);
         let caller = Caller::Principal(USER);
         let visibility = World::visible_to(caller);
         let writer = engine.linkstore(&visibility);

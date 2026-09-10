@@ -11,6 +11,7 @@ use crate::common;
 use common::*;
 use skep_address::{document_of, parent, Address};
 use skep_arrangement::Caller;
+use skep_content::Val;
 use skep_engine::{Engine, World};
 use skep_febe::EditionClaim;
 use skep_links::{enc, Endset, HasLinks, SlotArg, View};
@@ -240,6 +241,63 @@ fn the_to_range_is_the_target_s_subtree() {
     );
     assert_eq!(w.edition_claims(&b.other_target), vec![row(&on_other, &b.e1, &b.other_target, true)]);
     assert!(w.edition_claims(&b.e1).is_empty(), "an edition is claimed by nothing");
+}
+
+/// The `to` test is M7's OVERLAP regime and NOT denotation — and this is the
+/// one shape where the two readings part. A slot resolved over a RANGE of the
+/// target's content is a single non-unit span: it lies inside the target's
+/// subtree, so it overlaps, and it denotes NO address at all, so a denotation
+/// reading returns nothing. Every other claim in this file carries
+/// address-form slots, where the two readings agree on every row.
+///
+/// The distinction is the containment the lookup exists for, and it is what
+/// M10's `ReadableWorld::edition_claims` describes the other way round. A
+/// narrowing of this side to match that text drops a whole class of claim
+/// from every reader's answer, and this is the row that would go with it.
+#[test]
+fn a_to_slot_that_denotes_nothing_under_the_target_is_still_a_row() {
+    let engine = mem_engine();
+    let b = board(&engine);
+    let caller = Caller::Principal(A);
+    // Claimed here is `other_target`, the published document with NO version:
+    // a declared deposit into a published document lands in its HEAD member's
+    // arrangement (PUB-2.66), and this one is its own head, so the content it
+    // takes is content the resolve below can name in its own V-space.
+    engine
+        .vstream()
+        .insert(
+            caller,
+            &b.other_target,
+            vp(1, 1),
+            vec![Val::new(vec![b'a']), Val::new(vec![b'b'])],
+            true,
+        )
+        .unwrap_or_else(|_| panic!("a declared deposit at fresh positions (PUB-2.59)"));
+    let (ranged, _) = engine
+        .linkstore(&World::visible_to(caller))
+        .makelink(
+            caller,
+            &b.e1,
+            SlotArg::Addrs(vec![b.e1.clone()]),
+            // TWO positions wide, so the resolved span is not unit-depth.
+            SlotArg::Resolve(vec![vspec(&b.other_target, 1, 2)]),
+            SlotArg::Addrs(vec![t_edition()]),
+        )
+        .unwrap_or_else(|_| panic!("a claim over a RANGE of the target's content deposits"));
+
+    let w = world(&engine);
+    let rows = w.edition_claims(&b.other_target);
+    assert_eq!(rows.len(), 1, "the ranged claim is a row of the target's class: {rows:?}");
+    assert_eq!(rows[0].claim, ranged);
+    assert_eq!(rows[0].home, b.e1);
+    // The premise, stated where it can fail: this slot must DENOTE nothing,
+    // or the two readings agree here and the test says nothing about either.
+    assert!(
+        rows[0].to.addrs().next().is_none(),
+        "the fixture must deposit a `to` slot that denotes no address: {:?}",
+        rows[0].to
+    );
+    assert!(!rows[0].to.is_empty(), "…while still covering the target's own subtree");
 }
 
 /// The COST paragraph's BREADTH term, pinned: the lookup ranges over

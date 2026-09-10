@@ -22,6 +22,21 @@ fn t_grant() -> skep_address::Address {
     addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90])
 }
 
+/// A commons type OUTSIDE the grants class — the EDITION class,
+/// `1.1.0.1.0.1.0.3.14`. For the record that names the grants class among
+/// others.
+fn t_other() -> skep_address::Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 14])
+}
+
+/// A SUBTYPE beneath the grants class — `1.1.0.1.0.1.0.3.90.1`. The daemon's
+/// write path recognizes a class's subtypes BY PREFIX; the fold recognizes
+/// its class by the ADDRESS. The two rules differ on purpose, and this is the
+/// address that tells them apart.
+fn t_grant_subtype() -> skep_address::Address {
+    addr(&[1, 1, 0, 1, 0, 1, 0, 3, 90, 1])
+}
+
 /// The ISSUER: owner of the published home every grant below is deposited
 /// in, and of the private draft those grants open.
 const A: PrincipalId = PrincipalId(1);
@@ -71,6 +86,10 @@ fn two_accounts(engine: &Engine) -> Board {
 
 /// The principal whose account's doc 1 is a DRAFT ([`draft_home_account`]).
 const D: PrincipalId = PrincipalId(4);
+
+/// A SECOND ISSUER, for the feed enumerations: an account that grants beside
+/// [`A`] so each enumeration's row list carries more than one entry.
+const C: PrincipalId = PrincipalId(5);
 
 /// An account whose DOC 1 IS A DRAFT — the first mint with an explicit
 /// `false`, which the daemon's door refuses (PUB-8.20) and the engine mints —
@@ -128,7 +147,7 @@ fn grant_as(
     grant_slots(engine, issuer, home, vec![from.clone()], to)
 }
 
-/// The deposit itself, both caller-shaped slots as SEQUENCES. A well-formed
+/// [`grant_as`] with both caller-shaped slots as SEQUENCES. A well-formed
 /// record denotes exactly one address in `from` and one or none in `to`;
 /// anything else is the MALFORMED shape the fold ignores, and this is the one
 /// way to build one.
@@ -139,16 +158,31 @@ fn grant_slots(
     from: Vec<skep_address::Address>,
     to: Vec<skep_address::Address>,
 ) -> skep_address::Address {
+    grant_typed(engine, issuer, home, from, to, vec![t_grant()])
+}
+
+/// The deposit itself, all three slots as SEQUENCES — including the TYPE,
+/// which is what the fold recognizes a grant record by. A well-formed record
+/// names exactly the grants class there; anything else is a link the fold
+/// must not read as a grant, and this is the one way to build one.
+fn grant_typed(
+    engine: &Engine,
+    issuer: PrincipalId,
+    home: &skep_address::Address,
+    from: Vec<skep_address::Address>,
+    to: Vec<skep_address::Address>,
+    ty: Vec<skep_address::Address>,
+) -> skep_address::Address {
     let caller = Caller::Principal(issuer);
     match engine.linkstore(&World::visible_to(caller)).makelink(
         caller,
         home,
         SlotArg::Addrs(from),
         SlotArg::Addrs(to),
-        SlotArg::Addrs(vec![t_grant()]),
+        SlotArg::Addrs(ty),
     ) {
         Ok((addr, _)) => addr,
-        Err(_) => panic!("the grant link deposits into the issuer's own document"),
+        Err(_) => panic!("the link deposits into the issuer's own document"),
     }
 }
 
@@ -409,6 +443,98 @@ fn a_grant_from_a_non_owner_opens_nothing() {
     );
 }
 
+/// Coverage's ISSUER clause on the ANY-PRINCIPAL index (PUB-5.19) — the arm
+/// the test above cannot reach: that record names a grantee, so it lands in
+/// the PRINCIPAL-EXACT index and leaves the universal one empty. A record has
+/// a grantee or it has none, so the predicate's two probes take two tests.
+/// Here B grants A's draft to EVERY principal, from B's own published doc 1.
+#[test]
+fn an_any_principal_grant_from_a_non_owner_opens_nothing() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let (home_b, _) = engine
+        .namespace()
+        .create_new_document(B, &b.acct_b, None)
+        .expect("B's published home");
+    grant_as(&engine, B, &home_b, &b.draft_a, vec![]); // empty `to` ⟹ ANY-PRINCIPAL
+
+    // The record IS admitted, so the probe reaches its issuer clause — without
+    // this the assertions below would pass for want of a grant rather than for
+    // want of an owner.
+    let w = world(&engine);
+    assert_eq!(
+        w.universal_grants(),
+        vec![UniversalGrant {
+            content_prefix: b.draft_a.clone(),
+            issuers: vec![b.acct_b.clone()],
+        }],
+        "the deposit must enter the universal index, or this test proves nothing"
+    );
+    assert!(
+        !w.readable(Some(B), &b.draft_a),
+        "the grant's issuer (B) is not the draft's ω owner (A), so it opens nothing"
+    );
+    assert!(
+        !w.readable(Some(PrincipalId(3)), &b.draft_a),
+        "…and no other principal reads it either, though the grant names them all"
+    );
+    engine.check_hints().expect("the seed refuses it for the reason the fold did");
+}
+
+/// The fold keys on the grants class by DENOTATION EQUALITY, so a type slot
+/// naming that class AMONG OTHERS is no grant record. `single_denoted`
+/// refuses a slot denoting several addresses; a fold reaching for a slot's
+/// first denoted address, or asking whether ANY of them is the class, would
+/// admit this one and share a draft on the strength of a link typed something
+/// else as well.
+#[test]
+fn a_link_typed_the_grants_class_and_another_grants_nothing() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let link = grant_typed(
+        &engine,
+        A,
+        &b.home_a,
+        vec![b.draft_a.clone()],
+        vec![b.acct_b.clone()],
+        vec![t_grant(), t_other()],
+    );
+
+    let w = world(&engine);
+    assert!(
+        w.links().readlink(&link).is_some(),
+        "the deposit itself succeeds — the open surface fences neither class"
+    );
+    assert!(!w.readable(Some(B), &b.draft_a), "a dual-typed link is no grant record");
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…and nothing of it entered the fold");
+    engine.check_hints().expect("the seed refuses it for the reason the fold did");
+}
+
+/// …and by the ADDRESS, never by prefix: a `3.90.k` SUBTYPE is the daemon's
+/// write-path class (PUB-6.30 recognizes a class's subtypes by prefix) and is
+/// not the fold's. The two rules differ on purpose — the engine's type ledger
+/// states both — and this is the case that keeps them apart, so a later
+/// reconciliation of the fold to the door's rule cannot land unnoticed.
+#[test]
+fn a_link_typed_a_grants_subtype_grants_nothing() {
+    let engine = mem_engine();
+    let b = two_accounts(&engine);
+    let link = grant_typed(
+        &engine,
+        A,
+        &b.home_a,
+        vec![b.draft_a.clone()],
+        vec![b.acct_b.clone()],
+        vec![t_grant_subtype()],
+    );
+
+    let w = world(&engine);
+    assert!(w.links().readlink(&link).is_some(), "the deposit itself succeeds");
+    assert!(!w.readable(Some(B), &b.draft_a), "a subtype-typed link is no grant record");
+    assert!(w.issuers_for(&b.acct_b).is_empty(), "…and nothing of it entered the fold");
+    engine.check_hints().expect("the seed refuses it for the reason the fold did");
+}
+
 /// The fold IGNORES a malformed record: `from` must denote exactly one address
 /// and `to` exactly one or none, so a record naming two grantees grants to
 /// NEITHER and one naming two prefixes shares NEITHER. That is the fail-closed
@@ -629,6 +755,13 @@ fn the_fold_re_seeds_across_a_restart_and_an_empty_map_grants_nothing() {
 /// union of covered prefixes — both read off the fold's own indexes, both
 /// agreeing with the predicate they are the inside-out of, and both moving
 /// with a superseding record at once (revocation is immediate, PUB-7.23).
+///
+/// Each enumeration is ordered at TWO levels — the rows by their key, then
+/// each row's own list — and this fixture carries at least two entries at
+/// every one of the four, deposited in the REVERSE of the order asserted. A
+/// build that iterated in deposit order, or off a hash-keyed structure, would
+/// answer a different vector here; with one entry per level every order
+/// coincides and no assertion can tell them apart.
 #[test]
 fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     let engine = mem_engine();
@@ -637,26 +770,57 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
         .namespace()
         .create_new_document(A, &b.acct_a, None)
         .expect("A's second draft");
+    // A SECOND ISSUER, seated after A and B, so its account address sorts
+    // last: `acct_c` is the row every deposit below puts FIRST.
+    let prefix_c = engine
+        .kernel()
+        .snapshot()
+        .world()
+        .m3()
+        .next_account_prefix(&node1())
+        .expect("prefix C");
+    let (acct_c, _) = engine
+        .namespace()
+        .delegate(BOOTSTRAP_PRINCIPAL, prefix_c.tumbler().clone(), C)
+        .expect("delegate C");
+    let (home_c, _) =
+        engine.namespace().create_new_document(C, &acct_c, None).expect("C's published home");
+    assert!(b.acct_a < acct_c, "the fixture wants A's account to sort before C's");
+    assert!(b.draft_a < draft_two, "…and A's first draft before its second");
 
     // Empty fold: nothing enumerates.
     let w = world(&engine);
     assert!(w.universal_grants().is_empty(), "no universal grant yet");
     assert!(w.issuers_for(&b.acct_b).is_empty(), "B holds no grant yet");
 
-    // Two grants to B from A — the draft and the whole account — and one
-    // ANY-PRINCIPAL grant of the second draft.
+    // C's deposits first, and within them the later prefix first — so every
+    // list below is asserted in the reverse of the order it was written in.
+    // C owns neither draft, so none of these opens anything; they are index
+    // entries, which is what the enumerations answer with.
+    grant_as(&engine, C, &home_c, &draft_two, vec![]);
+    grant_as(&engine, C, &home_c, &draft_two, vec![b.acct_b.clone()]);
+    grant_as(&engine, C, &home_c, &b.draft_a, vec![b.acct_b.clone()]);
+    // Then A's: two to B — the draft and the whole account — and two
+    // ANY-PRINCIPAL, the second draft before the first.
     grant(&engine, &b.home_a, &b.draft_a, vec![b.acct_b.clone()]);
     grant(&engine, &b.home_a, &b.acct_a, vec![b.acct_b.clone()]);
     let g_any = grant(&engine, &b.home_a, &draft_two, vec![]);
+    grant(&engine, &b.home_a, &b.draft_a, vec![]);
 
     let w = world(&engine);
     assert_eq!(
         w.issuers_for(&b.acct_b),
-        vec![IssuerGrant {
-            issuer: b.acct_a.clone(),
-            content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
-        }],
-        "B's one issuer is A, with the UNION of A's prefixes to B in address order"
+        vec![
+            IssuerGrant {
+                issuer: b.acct_a.clone(),
+                content_prefixes: vec![b.acct_a.clone(), b.draft_a.clone()],
+            },
+            IssuerGrant {
+                issuer: acct_c.clone(),
+                content_prefixes: vec![b.draft_a.clone(), draft_two.clone()],
+            },
+        ],
+        "B's issuers in address order, each with the UNION of its prefixes in address order"
     );
     assert!(
         w.issuers_for(&b.acct_a).is_empty(),
@@ -664,24 +828,44 @@ fn the_two_feed_enumerations_read_the_fold_s_live_state() {
     );
     assert_eq!(
         w.universal_grants(),
-        vec![UniversalGrant {
-            content_prefix: draft_two.clone(),
-            issuers: vec![b.acct_a.clone()],
-        }],
-        "the live any-principal set lists the second draft under its issuer"
+        vec![
+            UniversalGrant {
+                content_prefix: b.draft_a.clone(),
+                issuers: vec![b.acct_a.clone()],
+            },
+            UniversalGrant {
+                content_prefix: draft_two.clone(),
+                issuers: vec![b.acct_a.clone(), acct_c.clone()],
+            },
+        ],
+        "the live any-principal set in prefix order, each issuer list in address order"
     );
-    // The enumerations are the predicate turned inside out.
+    // The enumerations are the predicate turned inside out — and an entry
+    // whose issuer is not the document's owner is listed and opens nothing.
     assert!(w.readable(Some(B), &b.draft_a));
     assert!(w.readable(Some(PrincipalId(9)), &draft_two), "any principal reads draft two");
     assert!(!w.readable(None, &draft_two), "the guest never does");
 
     // A superseding record leaves the enumeration at the commit that carries
-    // it — no restart, no lag.
+    // it — no restart, no lag: A's entry leaves `draft_two`, C's stays.
     grant(&engine, &b.home_a, &g_any, vec![]);
     let w = world(&engine);
-    assert!(w.universal_grants().is_empty(), "the revoked universal grant is gone at once");
-    assert!(!w.readable(Some(PrincipalId(9)), &draft_two), "and the predicate agrees");
-    assert_eq!(w.issuers_for(&b.acct_b).len(), 1, "B's grants are untouched by it");
+    assert_eq!(
+        w.universal_grants(),
+        vec![
+            UniversalGrant {
+                content_prefix: b.draft_a.clone(),
+                issuers: vec![b.acct_a.clone()],
+            },
+            UniversalGrant { content_prefix: draft_two.clone(), issuers: vec![acct_c.clone()] },
+        ],
+        "the revoked entry is gone at once, and only that entry"
+    );
+    assert!(
+        !w.readable(Some(PrincipalId(9)), &draft_two),
+        "and the predicate agrees: C's surviving entry is not the owner's"
+    );
+    assert_eq!(w.issuers_for(&b.acct_b).len(), 2, "B's grants are untouched by it");
 }
 
 /// The fold's query indexes are keyed by a grant's ISSUER, CONTENT-PREFIX and

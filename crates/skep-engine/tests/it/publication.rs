@@ -414,3 +414,57 @@ fn the_dump_renders_the_exception_set_as_a_hint() {
     let section = format!("\"publication\": [{}]", drafts.join(", "));
     assert!(text.contains(&section), "expected {section} in the dump:\n{text}");
 }
+
+/// The set's two renderings are ordered by two different rules, and this is
+/// the fixture where they part. The SECTION is a SEQUENCE in M3's own map
+/// order — ADDRESS order, which `render` leaves alone because it sorts maps
+/// and nothing else. The HINT is a MAP, whose entries `render` sorts by their
+/// RENDERED TEXT. A tumbler component is a number and a dotted rendering is
+/// decimal, so the two orders agree only while every ordinal has the same
+/// digit count.
+///
+/// Ten drafts in one account cross that boundary at 9 → 10. Its neighbour
+/// above builds one expectation by sorting STRINGS and reads it against both
+/// renderings, which is right for the hint and right for the section only by
+/// the coincidence of its three single-digit ordinals; here the two lists are
+/// asserted to differ before either is read against the dump, so neither can
+/// be checked against the other's rule.
+#[cfg(feature = "dump")]
+#[test]
+fn the_publication_section_is_address_ordered_where_its_hint_is_text_ordered() {
+    fn quoted(a: &Address) -> String {
+        format!("{:?}", a.to_string())
+    }
+
+    let engine = mem_engine();
+    let (acct, _home) = setup_home(&engine);
+    let drafts: Vec<Address> = (0..10)
+        .map(|_| {
+            engine
+                .namespace()
+                .create_new_document(USER, &acct, Some(false))
+                .expect("the owner mints a draft")
+                .0
+        })
+        .collect();
+
+    let mut by_address = drafts.clone();
+    by_address.sort();
+    let by_address: Vec<String> = by_address.iter().map(quoted).collect();
+    let mut by_text: Vec<String> = drafts.iter().map(quoted).collect();
+    by_text.sort();
+    assert_ne!(
+        by_address, by_text,
+        "the fixture must cross a digit boundary, or the two orders coincide and neither \
+         assertion below says which rule it read"
+    );
+
+    let text = engine.world_dump().into_string();
+    let section = format!("\"publication\": [{}]", by_address.join(", "));
+    assert!(text.contains(&section), "the section is in ADDRESS order: expected {section}\n{text}");
+    let owner = quoted(&acct);
+    let entries: Vec<String> = by_text.iter().map(|d| format!("{d}: {owner}")).collect();
+    let hint = format!("\"publication.drafts\": {{{}}}", entries.join(", "));
+    assert!(text.contains(&hint), "the hint is in RENDERED-TEXT order: expected {hint}\n{text}");
+    engine.check_hints().expect("the set's fold equals its seed over ten drafts");
+}

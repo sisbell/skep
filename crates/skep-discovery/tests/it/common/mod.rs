@@ -1,7 +1,8 @@
 //! Shared test scaffolding: a minimal engine-side world (the composition
 //! contract's assembler role, in miniature) over M3 + M4 + M5 + M7 — exactly
-//! the bound M8 queries under, plus M4 so INSERT can arrange content — and
-//! address/type fixtures. Addresses follow M3's minted shapes: account
+//! the bound M8 queries under, plus M4 so INSERT can arrange content — its
+//! address/type fixtures, and the window law and wide endset more than one
+//! family reads. Addresses follow M3's minted shapes: account
 //! `[1,0,1]`, documents `[1,0,1,0,d]`, content elements `[doc·0·1·k]`, link
 //! elements `[doc·0·2·k]`; the five reserved type addresses are the compiled
 //! ghost tumblers (`ReservedAddrs::format` — owner ruling, 2026-08-26).
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use skep_address::{validate, Address, Nat, Span, Tumbler};
 use skep_arrangement::{reading_surface, HasM5, M5Rec, M5State, Run, VPos, VSpec};
 use skep_content::{ContentStore, ContentWrite, HasContent, Val};
+use skep_discovery::{Cursor, Window};
 use skep_kernel::{CheckpointPolicy, Durability, Kernel, KernelConfig, WorldState};
 use skep_links::{
     enc, Endset, HasLinks, LinkRec, LinkState, LinkWriter, SlotArg,
@@ -356,4 +358,71 @@ pub fn seed_published_content(k: &Kernel<World>, doc: &Address, count: u32) {
             true,
         )
         .expect("a declared deposit at the fresh end is admitted into a published document");
+}
+
+/// The published fixture, and the one shape where head-float decides an
+/// answer: `pdoc` takes two positions while memberless — they land in its
+/// OWN arrangement — then VERSION mints its head member, which shares that
+/// arrangement, and two more deposits land in the HEAD alone. So pdoc's own
+/// arrangement is frozen at its pre-chain state (`pca(1..=2)`) while every
+/// reader of pdoc answers from the head (`pca(1..=4)`).
+pub fn published_world() -> Kernel<World> {
+    let k = kernel();
+    seed_published_content(&k, &pdoc(), 2); // memberless: pdoc's own V 1..2
+    let (head, _) = skep_arrangement::Vstream::new(&k)
+        .version(PrincipalId(1), &pdoc(), None)
+        .expect("the owner versions its published document");
+    assert_eq!(head, phead(), "the chain's first member");
+    seed_published_content(&k, &pdoc(), 2); // the head's V 3..4, and nowhere else
+    k
+}
+
+// ───────────────────── the window law and a wide endset ─────────────────────
+
+/// Drain one window read to exhaustion at batch size `n`, holding EVERY page
+/// to what a returned `Window` promises — `batch` strictly ascending and no
+/// longer than the clamped `n`, `next` its ≺-max or else the cursor
+/// unchanged, `exhausted` iff the batch is short — and answer the
+/// concatenation. A post-filter moved after the slice keeps the concatenation
+/// and breaks a page, so the pages are where it shows. Bounded by `limit`
+/// pages, so a window that never reports exhaustion fails rather than hangs.
+pub fn drain_window(n: usize, limit: usize, page: impl Fn(Cursor) -> Window) -> Vec<Address> {
+    let clamped = n.max(1);
+    let mut drained = Vec::new();
+    let mut cur: Cursor = None;
+    for _ in 0..limit {
+        let w = page(cur.clone());
+        assert!(
+            w.batch.windows(2).all(|p| p[0] < p[1]),
+            "batch strictly ascending: {w:?}"
+        );
+        assert!(w.batch.len() <= clamped, "at most n = {n} links: {w:?}");
+        assert_eq!(
+            w.exhausted,
+            w.batch.len() < clamped,
+            "exhausted iff short, n = {n}: {w:?}"
+        );
+        assert_eq!(
+            w.next,
+            w.batch.last().cloned().or(cur),
+            "next is the batch's max, else the cursor: {w:?}"
+        );
+        drained.extend(w.batch);
+        if w.exhausted {
+            return drained;
+        }
+        cur = w.next;
+    }
+    panic!("the window never reported exhaustion within {limit} pages at n = {n}");
+}
+
+/// A FROM endset of `spans` addresses touching doc1's position 1: `ca(1)` is
+/// the span a region naming that position touches, and the rest name
+/// unarranged positions of doc1. Endsets collapse by VALUE, so the filler is
+/// keyed: the same `key` gives the same endset, distinct keys give distinct
+/// ones.
+pub fn wide_from(key: u32, spans: u32) -> Vec<Address> {
+    let mut addrs = vec![ca(1)];
+    addrs.extend((1..spans).map(|j| ca(1000 + key * spans + j)));
+    addrs
 }

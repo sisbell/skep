@@ -37,8 +37,8 @@ use skep_arrangement::reading_surface;
 use skep_kernel::Snapshot;
 use skep_links::Endset;
 
-use crate::helpers::home_readable;
-use crate::region::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::budget::{MAX_IMAGE_RUNS, MAX_JOIN_STEPS};
+use crate::home::home_readable;
 use crate::types::QueryError;
 use crate::DiscoveryWorld;
 

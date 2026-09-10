@@ -10,8 +10,10 @@ use skep_address::{content_subspace, Address, Nat, Span};
 use skep_arrangement::VPos;
 use skep_kernel::Snapshot;
 
-use crate::helpers::{home_readable, stab_runs};
-use crate::region::{content_vspan, MAX_IMAGE_RUNS};
+use crate::budget::MAX_IMAGE_RUNS;
+use crate::home::home_readable;
+use crate::region::content_vspan;
+use crate::sets::stab_runs;
 use crate::types::{OrphanError, OrphanReport};
 use crate::DiscoveryWorld;
 

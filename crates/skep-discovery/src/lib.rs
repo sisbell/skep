@@ -73,8 +73,9 @@
 //! may read its HOME. M8 takes the reader as the caller's DOCUMENT
 //! predicate, `readable`, and never sees a principal, a grant or the read
 //! predicate's clauses. It composes that predicate with the home projection
-//! in ONE crate-internal element, because asked of a link instead of its
-//! home the predicate answers true and the rule admits every link.
+//! in ONE crate-internal element, `home_readable`, because asked of a link
+//! instead of its home the predicate answers true and the rule admits every
+//! link.
 //!
 //! It is orthogonal to `View::Active`, and to the descriptor's own `home`
 //! slot, which is a COVERAGE constraint (CN-STAB) and not an authorization.
@@ -131,18 +132,18 @@
 //!
 //! A HARNESS caller — one answering for no reader class, as the engine's
 //! cross-store lifecycle test and this crate's suite do — passes the TOTAL
-//! predicate, admitting every home, visibly at its call site, and
-//! [`LinkQuery`], which names no reader class, does so in all twelve. Naming
-//! no reader class is not reading as the guest: a request that carries no
-//! principal reads at the GUEST class (PUB-1.31 with no principal —
-//! published documents alone) and passes that class's predicate, as M10 does
-//! for every unbound session. The total predicate is never a request's.
+//! predicate, admitting every home, visibly at its call site: to a `*_on`
+//! read, or to [`LinkQuery::new`], which binds the reader its caller names as
+//! M7's `LinkWriter` binds its visibility class. Naming no reader class is
+//! not reading as the guest: a request that carries no principal reads at
+//! the GUEST class (PUB-1.31 with no principal — published documents alone)
+//! and passes that class's predicate, as M10 does for every unbound session.
+//! The total predicate is never a request's.
 //!
 //! ## Budgets
 //!
-//! Two, both in the region file that owns the shape they price, and both
-//! REFUSALS rather than truncations — a short answer silently drops links,
-//! and no caller can tell one from a true answer.
+//! Two, both REFUSALS rather than truncations — a short answer silently drops
+//! links, and no caller can tell one from a true answer.
 //! [`MAX_IMAGE_RUNS`] is one constant held at the four reads of a document's
 //! runs, each over the run count its own work multiplies; the constant states
 //! the four counts and how their refusals relate. Its SQUARE holds the two
@@ -225,13 +226,12 @@
 //! names neither `World` nor `Record` — a pure consumer of
 //! [`DiscoveryWorld`], generic over `W` (Engine Composition Contract).
 //! Consumed only by M10, which reaches every read through the pure `*_on`
-//! twins: M10 pins ONE snapshot per request, reports its position as
-//! `as_of`, and answers at the request's reader class — none of which the
-//! self-snapshotting [`LinkQuery`] handle can serve, since its snapshot is
-//! taken and dropped inside the call, so the answer could not be labelled
-//! with the state it came from, and it names no reader class. The handle
-//! serves callers reading current state without naming it, under the total
-//! predicate.
+//! twins: M10 pins ONE snapshot per request and reports its position as
+//! `as_of`, neither of which the self-snapshotting [`LinkQuery`] handle can
+//! serve, since its snapshot is taken and dropped inside the call, so the
+//! answer could not be labelled with the state it came from. The handle
+//! serves callers reading current state without naming it, under the reader
+//! they bind it to.
 //!
 //! The twins are free functions over a borrowed `&Snapshot<W>` — the dialect
 //! M1, M4 and M5 use for pure reads over borrowed state, and the one that
@@ -241,22 +241,24 @@
 
 #![forbid(unsafe_code)]
 
+mod budget;
 mod descriptor;
 mod handle;
-mod helpers;
+mod home;
 mod lineage;
 mod pointwise;
 mod region;
+mod sets;
 mod survival;
 mod types;
 
+pub use budget::{MAX_ENDSET_SPANS, MAX_IMAGE_RUNS};
 pub use descriptor::{count_ftt_on, findlinks_ftt_on, window_ftt_on};
 pub use handle::LinkQuery;
 pub use lineage::{in_claims_on, out_claims_on};
 pub use pointwise::{addressably_discoverable_from_on, project_on};
 pub use region::{
     content_vspan, count_v_on, findlinks_v_on, image_on, retrieve_endsets_on, window_v_on,
-    MAX_ENDSET_SPANS, MAX_IMAGE_RUNS,
 };
 pub use survival::delete_orphans_on;
 pub use types::{
@@ -294,8 +296,8 @@ impl<W: WorldState + HasLinks + HasM5 + HasM3> DiscoveryWorld for W {}
 /// to build. This is where that fails to compile instead.
 ///
 /// [`Cursor`] is an alias for `Option<Address>` — M1's promise, not M8's — and
-/// [`LinkQuery`] is generic over `W` and borrows the kernel, so it is neither
-/// `'static` nor a concrete witness to assert.
+/// [`LinkQuery`] is generic over `W` and borrows the kernel and its reader, so
+/// it is neither `'static` nor a concrete witness to assert.
 const _: fn() = || {
     fn owed<T: Send + Sync + 'static>() {}
     owed::<FourSet>();

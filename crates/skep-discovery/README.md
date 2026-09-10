@@ -18,9 +18,11 @@ Part of [skep](https://github.com/sisbell/skep), an open-source hypertext substr
 - **Answers for a reader** — every link read takes the caller's
   reader predicate and reveals no link homed where that reader
   may not read.
-- **Pure `*_on` twins** — every read has a form taking an explicit
-  snapshot, so callers own the consistency point and can report
-  as-of positions.
+- **Reads over a snapshot you hold** — every read is a free `*_on`
+  function over an explicit snapshot and the caller's reader
+  predicate, so the caller owns the consistency point and can report
+  as-of positions. `LinkQuery` is a convenience that takes a fresh
+  snapshot per call, under the reader it is bound to.
 
 Presents the link store's matcher — never reimplements it; binds one
 snapshot per operation and writes nothing.

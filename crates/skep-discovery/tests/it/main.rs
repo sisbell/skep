@@ -3,4 +3,12 @@
 //! instead of once per file. Nothing but module declarations belongs here.
 
 mod common;
-mod discovery;
+mod consumer;
+mod descriptor;
+mod endsets;
+mod home_rule;
+mod lineage;
+mod pointwise;
+mod region;
+mod survival;
+mod window;

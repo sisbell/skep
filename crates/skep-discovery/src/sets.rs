@@ -1,7 +1,8 @@
-//! §Internal design — the shared free helpers every family composes: the
-//! run-set stab that turns an arrangement image into matched links, the home
-//! attribution and the home rule built on it, and the one windowing
-//! combinator. All pure over borrowed state; nothing here snapshots (callers
+//! §Internal design — M7's link sets as every read here builds and walks
+//! them: the run-set stab that turns arrangement runs into the links touching
+//! them — one stab per v1 slot, kept apart for slot attribution and OR'd into
+//! the selection index — and the one windowing combinator that pages such a
+//! set by key. All pure over borrowed state; nothing here snapshots (callers
 //! thread ONE snapshot per operation).
 //!
 //! Every read walks M7's `OrdSet`s by reference — `iter`, `range`,
@@ -16,7 +17,7 @@
 use std::ops::Bound::{Excluded, Unbounded};
 
 use im::OrdSet;
-use skep_address::{document_of, Address};
+use skep_address::Address;
 use skep_arrangement::Run;
 use skep_links::{Endset, LinkState, View};
 
@@ -75,31 +76,6 @@ pub(crate) fn union_slots(by_slot: &[(usize, OrdSet<Address>); 3]) -> OrdSet<Add
 /// the selection index every run-anchored family reads.
 pub(crate) fn stab_runs(l: &LinkState, runs: &[Run]) -> OrdSet<Address> {
     union_slots(&stab_runs_by_slot(l, runs))
-}
-
-/// `home(a)`: the origin Document of a link address — M1's `document_of`
-/// projection (EL8b), spelled once so the descriptor family's home filter and
-/// the lineage read-out attribute a link the same way.
-pub(crate) fn home_of(a: &Address) -> Address {
-    document_of(a).expect("a link address has zeros = 3, so its origin Document exists")
-}
-
-/// THE HOME RULE (§3, PUB-6.13): may the reader read `a`'s home? The home
-/// projection composed with the caller's predicate, in one place, because
-/// `readable` answers about a DOCUMENT and every question the rule answers
-/// here is asked about a LINK. Asked directly of the link it would answer
-/// TRUE: an element address is absent from the publication index exactly as
-/// a published document is, so the rule would admit every link. That is why
-/// the composition is an element and not an idiom.
-///
-/// Total on every address, because the pointwise pair asks it of a
-/// caller's `a` before anything establishes that `a` is a link: an address
-/// with no document field — a node or an account — lives under no home and
-/// has nothing to withhold, so the rule admits it and the store's own answer
-/// about it stands. Every link has a home, so on a result set this is
-/// exactly `readable(home(a))`.
-pub(crate) fn home_readable(readable: &dyn Fn(&Address) -> bool, a: &Address) -> bool {
-    document_of(a).is_none_or(|home| readable(&home))
 }
 
 /// The one windowing combinator (ASN-0108) driving both `window_v` and

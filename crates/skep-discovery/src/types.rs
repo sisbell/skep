@@ -11,7 +11,7 @@ use std::fmt;
 use skep_address::Address;
 use skep_links::Endset;
 
-use crate::helpers::home_of;
+use crate::home::home_of;
 use crate::{FROM, TO, TYPE};
 
 /// Per-slot request component for the four-set descriptor query — the
@@ -100,14 +100,8 @@ impl FourSet {
     /// `Any` and silently widen the query. Every endset in a `Some` list is
     /// non-empty.
     ///
-    /// ORDERED SMALLEST FIRST, which is a cost decision and not a semantic
-    /// one: M7 drives one whole-store scan with the FIRST constraint and
-    /// narrows the survivors with the rest, at `|query spans| × |slot spans|`
-    /// per link tested, so the conjunct that pays the store-sized factor
-    /// should be the cheapest one to test. An AND is order-free, so this
-    /// moves work and never the answer — and the sort is stable, so equal
-    /// spellings keep FROM/TO/TYPE order and one descriptor still names one
-    /// constraint list.
+    /// In FROM/TO/TYPE order: the descriptor answers what its slots say; the
+    /// order M7 is asked in is `candidates`' to decide, beside its call to M7.
     pub(crate) fn link_constraints(&self) -> Option<Vec<(usize, &Endset)>> {
         if self.is_unsatisfiable() {
             return None;
@@ -118,7 +112,6 @@ impl FourSet {
                 constraints.push((slot, e)); // e non-empty: a satisfiable descriptor has no empty Spans
             }
         }
-        constraints.sort_by_key(|(_, e)| e.len());
         Some(constraints)
     }
 
@@ -364,3 +357,34 @@ impl fmt::Display for OrphanError {
     }
 }
 impl Error for OrphanError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skep_address::{validate, Nat, Tumbler};
+    use skep_links::enc;
+
+    fn a(comps: &[u32]) -> Address {
+        let t = Tumbler::new(comps.iter().map(|&c| Nat::from(c))).expect("nonempty");
+        validate(t).expect("test addresses are T4-valid")
+    }
+
+    /// The descriptor answers what its slots say, in slot order: which
+    /// constraint M7 is asked with first is `candidates`' decision, beside its
+    /// call to M7, so a wide FROM beside a narrow TO comes back FROM first.
+    #[test]
+    fn link_constraints_answer_in_slot_order_whatever_their_size() {
+        let wide = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 1]), a(&[1, 0, 1, 0, 1, 0, 1, 5])]);
+        let narrow = enc(&[a(&[1, 0, 1, 0, 1, 0, 1, 2])]);
+        assert!(wide.len() > narrow.len(), "a size order would reverse them");
+        let q = FourSet {
+            from: SlotSpec::Spans(wide.clone()),
+            to: SlotSpec::Spans(narrow.clone()),
+            ..FourSet::any()
+        };
+        assert_eq!(
+            q.link_constraints(),
+            Some(vec![(FROM, &wide), (TO, &narrow)])
+        );
+    }
+}

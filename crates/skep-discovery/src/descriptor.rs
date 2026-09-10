@@ -11,7 +11,8 @@ use skep_address::Address;
 use skep_kernel::Snapshot;
 use skep_links::{LinkState, View};
 
-use crate::helpers::{home_readable, window_over};
+use crate::home::home_readable;
+use crate::sets::window_over;
 use crate::types::{Cursor, FourSet, Window};
 use crate::DiscoveryWorld;
 
@@ -26,10 +27,22 @@ use crate::DiscoveryWorld;
 /// the same way if it could be asked — `stab(slot, ⟨⟩, ·) = ∅` empties the
 /// AND — but an `Empty` slot carries no endset to ask WITH, so this is where
 /// FL-EMP is answered for the link slots, not merely where it is anticipated.
+///
+/// The constraints are handed to M7 SMALLEST FIRST, which is a cost decision
+/// and not a semantic one, and this element's because it is the one that asks
+/// M7: `match_links` drives one whole-store scan with the FIRST constraint and
+/// narrows the survivors with the rest, at `|query spans| × |slot spans|` per
+/// link tested, so the conjunct that pays the store-sized factor should be the
+/// cheapest one to test. An AND is order-free, so this moves work and never
+/// the answer — and the sort is stable, so equal spellings keep FROM/TO/TYPE
+/// order and one descriptor still names one constraint list.
 pub(crate) fn candidates(l: &LinkState, q: &FourSet) -> OrdSet<Address> {
     match q.link_constraints() {
         None => OrdSet::new(), // FL-EMP: some slot is the zero
-        Some(constraints) => l.match_links(&constraints, View::Active),
+        Some(mut constraints) => {
+            constraints.sort_by_key(|(_, e)| e.len()); // the cheapest conjunct drives M7's scan
+            l.match_links(&constraints, View::Active)
+        }
     }
 }
 

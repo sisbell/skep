@@ -357,8 +357,8 @@ enum Kind {
 /// Whether a link value is a `t_grant`-typed record — denotation equality on
 /// the type slot (the fold keys on `t_grant` as a VALUE, never through M7's
 /// registry).
-fn is_grant_typed(value: &Link, t_grant: &Address) -> bool {
-    value.type_slot().single_denoted() == Some(t_grant.tumbler())
+fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
+    value.type_slot().single_denoted() == Some(grants_class.tumbler())
 }
 
 /// Admission (I4): the grant's home must be the issuer's OWN doc 1, PUBLISHED.
@@ -367,14 +367,14 @@ fn is_grant_typed(value: &Link, t_grant: &Address) -> bool {
 /// `home` is a registered document (a deposit lands in no unregistered home,
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
 /// `home ∉ drafts`.
-fn admit(m3: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
+fn admit(namespace: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
     // Published: an exception-set miss (grants are born published). The
     // polarity is `crate::publication`'s to hold, not this module's.
     if !is_published(drafts, home) {
         return None;
     }
     // The issuer — ω of the home, an account.
-    let issuer = m3.effective_owner_prefix(home)?.clone();
+    let issuer = namespace.effective_owner_prefix(home)?.clone();
     // The home is the issuer's own doc 1.
     if first_document_address(&issuer).as_ref() != Some(home) {
         return None;
@@ -417,14 +417,20 @@ fn classify(prev: &Grants, home: &Address, value: &Link) -> Kind {
 /// been applied to the store. Both [`fold`] (per journal record) and [`seed`]
 /// (the whole-map load pass) drive this ONE path, so the seed reproduces the
 /// fold. Only a `t_grant` deposit that ADMITS moves the fold.
-fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value: &Link) -> Grants {
+fn fold_one(
+    prev: &Grants,
+    namespace: &M3State,
+    drafts: &Drafts,
+    addr: &Address,
+    value: &Link,
+) -> Grants {
     if !is_grant_typed(value, t_grant()) {
         return prev.clone();
     }
     let Some(home) = document_of(addr) else {
         return prev.clone();
     };
-    let Some(issuer) = admit(m3, drafts, &home) else {
+    let Some(issuer) = admit(namespace, drafts, &home) else {
         return prev.clone(); // unadmitted: neither grant nor revocation
     };
     let mut next = prev.clone();
@@ -448,9 +454,9 @@ fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value:
 }
 
 /// The FOLD half (PUB-7.7): the grant fold after `rec` has been applied to the
-/// link store. `rec` is the record just folded; `m3`/`drafts` are the world's
-/// slices as of this commit (a link deposit changes neither, so both are the
-/// authoritative state a query would read).
+/// link store. `rec` is the record just folded; `namespace`/`drafts` are the
+/// world's slices as of this commit (a link deposit changes neither, so both
+/// are the authoritative state a query would read).
 ///
 /// ONLY A DEPOSIT moves the fold, and that is a premise [`seed`] rests on
 /// rather than a convenience. `LinkRec` is `#[non_exhaustive]`, so the early
@@ -462,14 +468,14 @@ fn fold_one(prev: &Grants, m3: &M3State, drafts: &Drafts, addr: &Address, value:
 /// deposits a successor rather than touching its original. A record that
 /// changed a resident link's slots would split the halves, and it would have
 /// to be answered here.
-pub(crate) fn fold(prev: &Grants, m3: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
+pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &LinkRec) -> Grants {
     let LinkRec::Deposit { addr, value, .. } = rec else {
         return prev.clone();
     };
     let Ok(link_addr) = validate(addr.clone()) else {
         return prev.clone();
     };
-    fold_one(prev, m3, drafts, &link_addr, value)
+    fold_one(prev, namespace, drafts, &link_addr, value)
 }
 
 /// The SEED half (PUB-7.7): the grant fold a from-scratch walk of the GRANTS
@@ -501,14 +507,14 @@ pub(crate) fn fold(prev: &Grants, m3: &M3State, drafts: &Drafts, rec: &LinkRec) 
 /// the issuer and of no state at all. A store change that made any of the
 /// three time-varying splits the halves, and `Engine::check_hints` is where
 /// that shows.
-pub(crate) fn seed(m3: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {
+pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {
     let ty = skep_links::enc([t_grant()]);
     let mut grants = Grants::new();
     for addr in links.type_slice(&ty, View::Audit) {
         let Some(value) = links.readlink(&addr).cloned() else {
             continue; // type-slice keys are resident by construction
         };
-        grants = fold_one(&grants, m3, drafts, &addr, &value);
+        grants = fold_one(&grants, namespace, drafts, &addr, &value);
     }
     grants
 }

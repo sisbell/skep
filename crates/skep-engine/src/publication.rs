@@ -127,23 +127,23 @@ fn draft_entry(namespace: &M3State, doc: &Address) -> Option<(Address, Address)>
 }
 
 /// The FOLD half (PUB-7.7): the set after `rec` has been folded into M3,
-/// given the set before it. `namespace` is M3's slice AFTER `apply_m3(rec)`,
-/// so [`draft_entry`]'s questions are M3's own answers about the record M3
-/// just folded: a document-tier `Allocate` carrying `published: false` joins
-/// the set, one carrying `true` does not, and an account or element
-/// `Allocate` touches nothing. `RegisterNode`/`RegisterPrincipal` mint no
-/// document, so they take the early return.
+/// given `prev`, the set before it. `namespace` is M3's slice AFTER
+/// `apply_m3(rec)`, so [`draft_entry`]'s questions are M3's own answers about
+/// the record M3 just folded: a document-tier `Allocate` carrying `published:
+/// false` joins the set, one carrying `true` does not, and an account or
+/// element `Allocate` touches nothing. `RegisterNode`/`RegisterPrincipal`
+/// mint no document, so they take the early return.
 ///
 /// This runs INSIDE `World::apply`, so the membership and the registration
 /// land in the ONE commit that carries the record (PUB-7.7 as RES-209 states
 /// it): a reader's head snapshot holds both or neither.
-pub(crate) fn fold(drafts: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
+pub(crate) fn fold(prev: &Drafts, namespace: &M3State, rec: &M3Rec) -> Drafts {
     let M3Rec::Allocate { addr, .. } = rec else {
-        return drafts.clone();
+        return prev.clone();
     };
     match draft_entry(namespace, addr) {
-        Some((doc, owner)) => drafts.update(doc, owner),
-        None => drafts.clone(),
+        Some((doc, owner)) => prev.update(doc, owner),
+        None => prev.clone(),
     }
 }
 

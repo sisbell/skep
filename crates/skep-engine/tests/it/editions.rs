@@ -39,12 +39,14 @@ struct Board {
     target: Address,
     /// `target.1` — the target's first version member.
     member: Address,
-    /// Two published editions, one draft edition, and one unrelated
-    /// published document (a `to`-range miss).
+    /// Two published editions — alike in every respect a test turns on.
     e1: Address,
     e2: Address,
-    e3: Address,
-    other: Address,
+    /// A third edition, PRIVATE: the one home a guest cannot read.
+    draft_edition: Address,
+    /// A second published TARGET, outside `target`'s subtree — so a claim
+    /// denoting it is the `to`-range miss.
+    other_target: Address,
 }
 
 fn board(engine: &Engine) -> Board {
@@ -57,13 +59,13 @@ fn board(engine: &Engine) -> Board {
     let target = mint(Some(true));
     let e1 = mint(Some(true));
     let e2 = mint(Some(true));
-    let e3 = mint(Some(false));
-    let other = mint(Some(true));
+    let draft_edition = mint(Some(false));
+    let other_target = mint(Some(true));
     let (member, _) = engine
         .vstream()
         .version(A, &target, None)
         .unwrap_or_else(|_| panic!("a version of the published target mints"));
-    Board { target, member, e1, e2, e3, other }
+    Board { target, member, e1, e2, draft_edition, other_target }
 }
 
 /// Deposit a claim in `home`: `from` = the home (the edition), `to` = the
@@ -201,11 +203,14 @@ fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
 fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
     let engine = mem_engine();
     let b = board(&engine);
-    let c3 = claim(&engine, &b.e3, &b.target, &t_edition());
+    let c3 = claim(&engine, &b.draft_edition, &b.target, &t_edition());
     let w = world(&engine);
-    assert_eq!(w.edition_claims(&b.target), vec![row(&c3, &b.e3, &b.target, true)]);
-    assert!(!w.readable(None, &b.e3), "the draft edition is the home the guest cannot read");
-    assert!(w.readable(Some(A), &b.e3), "…and the owner can");
+    assert_eq!(w.edition_claims(&b.target), vec![row(&c3, &b.draft_edition, &b.target, true)]);
+    assert!(
+        !w.readable(None, &b.draft_edition),
+        "the draft edition is the home the guest cannot read"
+    );
+    assert!(w.readable(Some(A), &b.draft_edition), "…and the owner can");
 }
 
 /// The `to`-RANGE is the target's subtree: a claim denoting the target's
@@ -219,7 +224,7 @@ fn the_to_range_is_the_target_s_subtree() {
     let b = board(&engine);
     let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
     let on_member = claim(&engine, &b.e2, &b.member, &t_edition());
-    let on_other = claim(&engine, &b.e1, &b.other, &t_edition());
+    let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
 
     let w = world(&engine);
     assert_eq!(
@@ -232,7 +237,7 @@ fn the_to_range_is_the_target_s_subtree() {
         vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.member, true)],
         "a member names the claims denoting it and those denoting its document"
     );
-    assert_eq!(w.edition_claims(&b.other), vec![row(&on_other, &b.e1, &b.other, true)]);
+    assert_eq!(w.edition_claims(&b.other_target), vec![row(&on_other, &b.e1, &b.other_target, true)]);
     assert!(w.edition_claims(&b.e1).is_empty(), "an edition is claimed by nothing");
 }
 
@@ -247,7 +252,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     let b = board(&engine);
     let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
     let on_member = claim(&engine, &b.e2, &b.member, &t_edition());
-    let on_other = claim(&engine, &b.e1, &b.other, &t_edition());
+    let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
 
     let w = world(&engine);
     // The account tier: every claim on any document A owns.
@@ -258,7 +263,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
         w.edition_claims(&account),
         vec![
             row(&on_doc, &b.e1, &b.target, true),
-            row(&on_other, &b.e1, &b.other, true),
+            row(&on_other, &b.e1, &b.other_target, true),
             row(&on_member, &b.e2, &b.member, true),
         ],
         "an account address ranges over every document under it"

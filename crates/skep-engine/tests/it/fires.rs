@@ -391,23 +391,23 @@ fn domain_enumeration_excludes_the_draft_tuple_and_keeps_a_retracted_one() {
     let engine = mem_engine();
     let (home, draft) = docs(&engine);
     let pred_stable = engine.registry().reserved_type(ShippedType::PredStable).clone();
-    let m1 = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
-    let m2 = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);
-    let m3 = addr(&[1, 0, 1, 0, 1, 0, 1, 3]);
+    let member_1 = addr(&[1, 0, 1, 0, 1, 0, 1, 1]);
+    let member_2 = addr(&[1, 0, 1, 0, 1, 0, 1, 2]);
+    let member_3 = addr(&[1, 0, 1, 0, 1, 0, 1, 3]);
     let system_class = World::visible_to(Caller::System);
     let system = engine.linkstore(&system_class);
     let (p1, _) = system
-        .emit(Caller::System, &home, &pred_stable, &m1, &[])
+        .emit(Caller::System, &home, &pred_stable, &member_1, &[])
         .expect("p1 in the published home");
     let (p2, _) = system
-        .emit(Caller::System, &home, &pred_stable, &m2, &[])
+        .emit(Caller::System, &home, &pred_stable, &member_2, &[])
         .expect("p2 in the published home");
     system
         .nullify(Caller::System, &home, &p2)
         .expect("p2 retracted — a public home's audit history");
     let (q, _) = engine
         .linkstore(&World::visible_to(OWNER))
-        .emit(OWNER, &draft, &pred_stable, &m3, &[])
+        .emit(OWNER, &draft, &pred_stable, &member_3, &[])
         .expect("q in the owner's draft");
     assert_eq!(document_of(&q), Some(draft));
 

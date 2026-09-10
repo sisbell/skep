@@ -90,7 +90,7 @@ pub(crate) enum SerdeTree {
 /// Fail-stop is right for an oracle and for a seed alike; the point is that
 /// the change which breaks it should land beside this sentence.
 pub(crate) fn to_tree<T: Serialize + ?Sized>(v: &T) -> SerdeTree {
-    v.serialize(SerdeTreeSer).expect("canonical transcode is total over the world's serde forms")
+    v.serialize(TreeSer).expect("canonical transcode is total over the world's serde forms")
 }
 
 /// The deterministic text is the tree's `Display`: maps render `{k: v, …}`
@@ -107,7 +107,7 @@ impl fmt::Display for SerdeTree {
             SerdeTree::U64(v) => write!(f, "{v}"),
             SerdeTree::I128(v) => write!(f, "{v}"),
             SerdeTree::U128(v) => write!(f, "{v}"),
-            SerdeTree::F64Bits(b) => write!(f, "f64:0x{b:016x}"),
+            SerdeTree::F64Bits(bits) => write!(f, "f64:0x{bits:016x}"),
             SerdeTree::Char(ch) => write!(f, "{ch:?}"),
             SerdeTree::Str(s) => write!(f, "{s:?}"),
             SerdeTree::Bytes(b) => {
@@ -190,9 +190,9 @@ impl de::Error for CanonError {
 
 // ── the way in: Serialize → SerdeTree ──
 
-struct SerdeTreeSer;
+struct TreeSer;
 
-impl ser::Serializer for SerdeTreeSer {
+impl ser::Serializer for TreeSer {
     type Ok = SerdeTree;
     type Error = CanonError;
     type SerializeSeq = SeqBuild;
@@ -267,7 +267,7 @@ impl ser::Serializer for SerdeTreeSer {
         Ok(SerdeTree::Null)
     }
     fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<SerdeTree, CanonError> {
-        Ok(SerdeTree::Opt(Box::new(value.serialize(SerdeTreeSer)?)))
+        Ok(SerdeTree::Opt(Box::new(value.serialize(TreeSer)?)))
     }
     fn serialize_unit(self) -> Result<SerdeTree, CanonError> {
         Ok(SerdeTree::Unit)
@@ -289,7 +289,7 @@ impl ser::Serializer for SerdeTreeSer {
         value: &T,
     ) -> Result<SerdeTree, CanonError> {
         // Transparent, matching the serde data model.
-        value.serialize(SerdeTreeSer)
+        value.serialize(TreeSer)
     }
     fn serialize_newtype_variant<T: Serialize + ?Sized>(
         self,
@@ -298,7 +298,7 @@ impl ser::Serializer for SerdeTreeSer {
         variant: &'static str,
         value: &T,
     ) -> Result<SerdeTree, CanonError> {
-        Ok(SerdeTree::Named(variant, Box::new(value.serialize(SerdeTreeSer)?)))
+        Ok(SerdeTree::Named(variant, Box::new(value.serialize(TreeSer)?)))
     }
     fn serialize_seq(self, len: Option<usize>) -> Result<SeqBuild, CanonError> {
         Ok(SeqBuild(Vec::with_capacity(len.unwrap_or(0))))
@@ -345,7 +345,7 @@ impl ser::SerializeSeq for SeqBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(SerdeTreeSer)?);
+        self.0.push(value.serialize(TreeSer)?);
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -357,7 +357,7 @@ impl ser::SerializeTuple for SeqBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_element<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(SerdeTreeSer)?);
+        self.0.push(value.serialize(TreeSer)?);
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -369,7 +369,7 @@ impl ser::SerializeTupleStruct for SeqBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.0.push(value.serialize(SerdeTreeSer)?);
+        self.0.push(value.serialize(TreeSer)?);
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -386,7 +386,7 @@ impl ser::SerializeTupleVariant for VariantSeqBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_field<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
-        self.items.push(value.serialize(SerdeTreeSer)?);
+        self.items.push(value.serialize(TreeSer)?);
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -403,7 +403,7 @@ impl ser::SerializeMap for MapBuild {
     type Ok = SerdeTree;
     type Error = CanonError;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), CanonError> {
-        self.pending = Some(key.serialize(SerdeTreeSer)?);
+        self.pending = Some(key.serialize(TreeSer)?);
         Ok(())
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), CanonError> {
@@ -411,7 +411,7 @@ impl ser::SerializeMap for MapBuild {
             .pending
             .take()
             .ok_or_else(|| ser::Error::custom("map value serialized before its key"))?;
-        self.entries.push((key, value.serialize(SerdeTreeSer)?));
+        self.entries.push((key, value.serialize(TreeSer)?));
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -429,7 +429,7 @@ impl ser::SerializeStruct for StructBuild {
         key: &'static str,
         value: &T,
     ) -> Result<(), CanonError> {
-        self.0.push((SerdeTree::Str(key.to_owned()), value.serialize(SerdeTreeSer)?));
+        self.0.push((SerdeTree::Str(key.to_owned()), value.serialize(TreeSer)?));
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -450,7 +450,7 @@ impl ser::SerializeStructVariant for VariantStructBuild {
         key: &'static str,
         value: &T,
     ) -> Result<(), CanonError> {
-        self.fields.push((SerdeTree::Str(key.to_owned()), value.serialize(SerdeTreeSer)?));
+        self.fields.push((SerdeTree::Str(key.to_owned()), value.serialize(TreeSer)?));
         Ok(())
     }
     fn end(self) -> Result<SerdeTree, CanonError> {
@@ -488,7 +488,7 @@ impl<'de> IntoDeserializer<'de, CanonError> for TreeDe<'de> {
 impl<'de> Deserializer<'de> for TreeDe<'de> {
     type Error = CanonError;
 
-    /// The way in answered `false` ([`SerdeTreeSer::is_human_readable`]), so
+    /// The way in answered `false` ([`TreeSer::is_human_readable`]), so
     /// a `Deserialize` impl that branches reads the branch the tree holds.
     fn is_human_readable(&self) -> bool {
         false

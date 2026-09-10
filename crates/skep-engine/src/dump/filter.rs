@@ -304,11 +304,11 @@ fn sup_edge_claims(links: &LinkState) -> BTreeMap<Tumbler, BTreeMap<Tumbler, Vec
         let Some(link) = links.readlink(&claim) else {
             continue; // type-slice keys are resident by construction
         };
-        let olds: BTreeSet<&Tumbler> = link.from_slot().addrs().collect();
-        let news: BTreeSet<&Tumbler> = link.to_slot().addrs().collect();
-        for &old in &olds {
+        let old_ends: BTreeSet<&Tumbler> = link.from_slot().addrs().collect();
+        let new_ends: BTreeSet<&Tumbler> = link.to_slot().addrs().collect();
+        for &old in &old_ends {
             let by_new = by_edge.entry(old.clone()).or_default();
-            for &new in &news {
+            for &new in &new_ends {
                 by_new.entry(new.clone()).or_default().push(claim.clone());
             }
         }
@@ -902,7 +902,7 @@ mod tests {
         world
     }
 
-    fn edges(tree: &mut SerdeTree) -> usize {
+    fn edge_count(tree: &mut SerdeTree) -> usize {
         match at_path(tree, &["hints", "supersession"]) {
             Some(SerdeTree::Map(entries)) => entries.len(),
             other => panic!("hints.supersession is a map, got {other:?}"),
@@ -1030,16 +1030,16 @@ mod tests {
         // then names neither member, because the public tuple's member is the
         // draft's. A guest reads that a registration exists in the published
         // home and not what it registers.
-        let slice = |tree: &mut SerdeTree, view: &str| {
+        let slice_count = |tree: &mut SerdeTree, view: &str| {
             match at_path(tree, &["hints", "types", "shipped.pred_stable", view]) {
                 Some(SerdeTree::Seq(items)) => items.len(),
                 other => panic!("the shipped.pred_stable {view} slice is a sequence, got {other:?}"),
             }
         };
         for view in ["audit", "active"] {
-            assert_eq!(slice(&mut full, view), 2, "the fixture deposits two registrations");
+            assert_eq!(slice_count(&mut full, view), 2, "the fixture deposits two registrations");
             assert_eq!(
-                slice(&mut guest, view),
+                slice_count(&mut guest, view),
                 1,
                 "the {view} slice keeps the public registration and drops the draft-homed one"
             );
@@ -1076,23 +1076,23 @@ mod tests {
     fn a_draft_homed_supersession_claim_over_public_links_leaves_the_guest_s_edges() {
         let world = a_draft_homed_claim_over_public_links();
         let mut full = dump_tree(&world);
-        assert_eq!(edges(&mut full), 1, "the fixture asserts exactly one edge");
+        assert_eq!(edge_count(&mut full), 1, "the fixture asserts exactly one edge");
         let mut owner = filter_tree(
             dump_tree(&world),
             &|doc: &Address| world.readable(Some(USER), doc),
             &world.links,
         );
-        assert_eq!(edges(&mut owner), 1, "the owner reads the claim's home, so the edge stays");
+        assert_eq!(edge_count(&mut owner), 1, "the owner reads the claim's home, so the edge stays");
         let mut guest =
             filter_tree(dump_tree(&world), &|doc: &Address| world.readable(None, doc), &world.links);
-        assert_eq!(edges(&mut guest), 0, "no readably-homed claim asserts it: the edge leaves");
+        assert_eq!(edge_count(&mut guest), 0, "no readably-homed claim asserts it: the edge leaves");
         // …while the two public links themselves stay in the guest's slices.
-        let audit = |tree: &mut SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
+        let audit_count = |tree: &mut SerdeTree| match at_path(tree, &["hints", "links.audit"]) {
             Some(SerdeTree::Seq(items)) => items.len(),
             other => panic!("hints.links.audit is a sequence, got {other:?}"),
         };
-        assert_eq!(audit(&mut guest), 2, "the two public links; the draft-homed claim left");
-        assert_eq!(audit(&mut full), 3, "…where the unfiltered walk carries the claim too");
+        assert_eq!(audit_count(&mut guest), 2, "the two public links; the draft-homed claim left");
+        assert_eq!(audit_count(&mut full), 3, "…where the unfiltered walk carries the claim too");
     }
 
     /// [`sup_edge_claims`]'s standing obligation, over a world that HAS an
@@ -1106,7 +1106,7 @@ mod tests {
     #[test]
     fn the_filter_over_a_supersession_edge_is_the_identity_under_the_total_predicate() {
         let world = a_draft_homed_claim_over_public_links();
-        assert_eq!(edges(&mut dump_tree(&world)), 1, "the fixture asserts exactly one edge");
+        assert_eq!(edge_count(&mut dump_tree(&world)), 1, "the fixture asserts exactly one edge");
         assert_eq!(
             dump_visible(&world, &|_: &Address| true),
             dump(&world),

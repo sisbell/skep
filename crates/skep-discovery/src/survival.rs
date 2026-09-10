@@ -64,24 +64,29 @@ fn content_vspan_at(ordinal: &Nat, count: &Nat) -> Span {
 ///
 /// And ONE refusal is the preview's own, which DELETE has no word for
 /// because DELETE stabs nothing: `ImageTooLarge`, asked last, when the runs
-/// the two stabs below would join — the deleted range's and the retained,
-/// `d`'s own arrangement split at most twice — are past
-/// [`crate::MAX_IMAGE_RUNS`]. Every stab walks the whole link store testing
-/// each query span against every slot span of every link, so these runs are
-/// the side of that join the preview supplies, held to the number the region
-/// family holds its image to. It is a fact about `d` rather than the range —
-/// a `d` past the budget is refused every preview — and a faulty request
-/// names its own fault first. The runs are resolved before they are counted,
-/// M5 publishing no count, so a refused preview has paid for reading them and
-/// for no stab.
+/// the two stabs below would join are past [`crate::MAX_IMAGE_RUNS`]. Every
+/// stab walks the whole link store testing each query span against every
+/// slot span of every link, so these runs are the side of that join the
+/// preview supplies, held to the number the region family holds its image
+/// to. The runs counted are `d`'s own, content and link, plus one for each
+/// end of the range that falls INSIDE a run: M5's `resolve` clips a run to
+/// the span asked, so the prefix, the deleted range and the suffix each take
+/// a piece of a run the range cuts. So a `d` whose own runs are past the
+/// budget is refused every range; a `d` that one or two cut runs would carry
+/// past it — at the budget, or one run under — is refused exactly the ranges
+/// that cut that many; and every other `d` is answered for every range. A
+/// faulty request names its own fault first. The runs are resolved before
+/// they are counted, M5 publishing no count, so a refused preview has paid
+/// for reading them and for no stab.
 ///
 /// The accepted set is M5's DELETE admission minus those two gates, and minus
-/// every `d` past the run budget. Two LABELS differ within it, both where M5
-/// would say `NotArranged` (`p ∉ [1, n_C]`): this reports `OutOfBounds` when
-/// `width ≥ 1`, and `EmptyWidth` when `width = 0`, because the width check
-/// runs ahead of the bounds check here and behind it in M5. A caller relaying
-/// a refusal verbatim relays a different word for the same refusal, never a
-/// different verdict.
+/// every request whose runs, as its range splits them, are past the run
+/// budget. Two LABELS differ within it, both where M5 would say `NotArranged`
+/// (`p ∉ [1, n_C]`): this reports `OutOfBounds` when `width ≥ 1`, and
+/// `EmptyWidth` when `width = 0`, because the width check runs ahead of the
+/// bounds check here and behind it in M5. A caller relaying a refusal
+/// verbatim relays a different word for the same refusal, never a different
+/// verdict.
 ///
 /// The report's `orphaned` is in ascending address order — the permanent key
 /// every enumeration here reads out by, inherited from walking the links that

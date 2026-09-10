@@ -1,9 +1,10 @@
 //! §3 — the four-set descriptor family (ASN-0121/0132): address-keyed,
 //! conjunctive, link-store-local (FL-LOC — no document gate), monotone absent
-//! retraction (FL-MON/CN-MONO). Not a restriction of the region family and
-//! not built on it (ASN-0121 is explicit; Conflicts #2) — the same per-slot
-//! `stab` combined oppositely (AND vs OR), with the AND owned by M7's
-//! `match_links` (Conflicts #1: M8 implements no combiner).
+//! retraction under one predicate held fixed (FL-MON/CN-MONO; the crate
+//! header states what a reader does to each law). Not a restriction of the
+//! region family and not built on it (ASN-0121 is explicit; Conflicts #2) —
+//! the same per-slot `stab` combined oppositely (AND vs OR), with the AND
+//! owned by M7's `match_links` (Conflicts #1: M8 implements no combiner).
 
 use im::OrdSet;
 use skep_address::Address;
@@ -53,9 +54,10 @@ pub(crate) fn satisfying<'c>(
 
 /// FINDLINKS over the four-set descriptor (ASN-0121): the links satisfying
 /// the descriptor, in address order. Total — no doc gate (FL-LOC).
-/// `(∗,∗,∗,∗)` = the whole addressable slice (FL-WILD); any constrained-empty
-/// slot ⇒ `[]` (FL-EMP). Monotone absent retraction (FL-MON): a found link
-/// stays found unless nullified.
+/// `(∗,∗,∗,∗)` = the whole addressable slice (FL-WILD) — under a reader, the
+/// part of it homed where the reader may read; any constrained-empty slot ⇒
+/// `[]` (FL-EMP). Monotone absent retraction (FL-MON): under one predicate
+/// held fixed, a found link stays found unless nullified.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): every satisfying link
 /// whose HOME `readable` refuses is dropped at its identity. The descriptor's
@@ -74,20 +76,25 @@ pub fn findlinks_ftt_on<W: DiscoveryWorld>(
 }
 
 /// The count operation over the descriptor family (ASN-0132 CN-*): the
-/// existence census — monotone absent retraction (CN-MONO). The cardinality
-/// of the same `sat` set [`findlinks_ftt_on`] enumerates, so CN-ENUM's
-/// `count = |enumeration|` holds by construction rather than by promise.
+/// existence census — monotone absent retraction (CN-MONO, under one
+/// predicate held fixed). The cardinality of the same `sat` set
+/// [`findlinks_ftt_on`] enumerates, so CN-ENUM's `count = |enumeration|`
+/// holds by construction rather than by promise.
 ///
-/// CN-ZERO: a returned `0` is a verdict over the WHOLE addressable store —
-/// no addressable link satisfies `q` — never present unreachability (which is
-/// [`crate::count_v_on`]'s D-ZERO) and never an exhaustion artefact of a scan
-/// that gave up. The third zero, the degenerate request that names nothing,
-/// is answerable off the descriptor alone through
-/// [`FourSet::is_unsatisfiable`]: same number, different assertion.
+/// CN-ZERO: a returned `0` is a verdict over the WHOLE addressable store as
+/// the reader sees it — no addressable link homed where `readable` admits
+/// satisfies `q`, and under the total predicate none at all — never present
+/// unreachability (which is [`crate::count_v_on`]'s D-ZERO) and never an
+/// exhaustion artefact of a scan that gave up. The third zero, the
+/// degenerate request that names nothing, is answerable off the descriptor
+/// alone through [`FourSet::is_unsatisfiable`]: same number, different
+/// assertion.
 ///
 /// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3; PUB-6.19):
 /// of the satisfying links the home rule admits, by ENUMERATION — the same
-/// set [`findlinks_ftt_on`] returns under the same `readable`.
+/// set [`findlinks_ftt_on`] returns under the same `readable`, given a
+/// predicate that answers each home the same way in both calls (the crate
+/// header states the predicate's contract).
 pub fn count_ftt_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     q: &FourSet,
@@ -102,7 +109,8 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// Windowed enumeration over the descriptor family (ASN-0108, the
 /// `Match = findlinks_FTT` reading — the same cursor mechanism as `window_v`
 /// instantiated over the conjunctive family). `n = 0` is clamped to 1 (total
-/// API, W9).
+/// API, W9); a window holds at most `max(n, 1)` links, and [`Window`] states
+/// what a window and a pass return.
 ///
 /// EVERY `Address` IS A LEGAL CURSOR, and none is checked: resume is a
 /// key-cut strictly past `cur`, never a lookup of it, so a cursor naming a
@@ -116,7 +124,8 @@ pub fn count_ftt_on<W: DiscoveryWorld>(
 /// supports and [`satisfying`]'s filtered sequence does not, so it walks
 /// [`candidates`] itself and applies the same residence post-filter LAZILY in
 /// its `keep`. The links this pages over are exactly the ones
-/// [`findlinks_ftt_on`] returns under the same `readable`.
+/// [`findlinks_ftt_on`] returns under the same `readable`, given the
+/// predicate's contract the crate header states.
 ///
 /// The home rule (PUB round 2, lane 3.3, §3) joins the residence post-filter
 /// in the lazy `keep`, so a link it refuses is skipped before the window

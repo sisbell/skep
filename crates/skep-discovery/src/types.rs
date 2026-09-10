@@ -75,10 +75,10 @@ impl FourSet {
     ///
     /// This is what separates the two zeros ASN-0132 keeps apart: a `0` from
     /// [`crate::count_ftt_on`] over a satisfiable descriptor asserts that no
-    /// addressable link satisfies `q` (CN-ZERO), while a `0` over an
-    /// unsatisfiable one says only that the REQUEST names nothing. Same
-    /// number, different assertion — and this answers the second off the
-    /// descriptor's own slots, with no store read at all.
+    /// addressable link the reader may see satisfies `q` (CN-ZERO), while a
+    /// `0` over an unsatisfiable one says only that the REQUEST names
+    /// nothing. Same number, different assertion — and this answers the
+    /// second off the descriptor's own slots, with no store read at all.
     pub fn is_unsatisfiable(&self) -> bool {
         [&self.home, &self.from, &self.to, &self.ty]
             .into_iter()
@@ -163,12 +163,29 @@ pub type Cursor = Option<Address>;
 /// One window of an enumeration (ASN-0108). A plain record: its fields are
 /// public and independent, and a caller may build one freely.
 ///
-/// The windowing operations RETURN values with three relations among those
-/// fields — `batch` in ascending address order; `next` the ≺-max of the
-/// batch, else the cursor unchanged; `exhausted` iff the batch is shorter
-/// than the `n` asked for, which is the terminal signal (W9). Those are
-/// postconditions of `window_v_on`/`window_ftt_on`, so a value that came
-/// from either holds them.
+/// The windowing operations RETURN values that satisfy these relations,
+/// where `n′ = max(n, 1)` is what the `n` asked for is clamped to (W9):
+///
+/// * `batch` is the first `min(n′, k)` links, in ascending address order, of
+///   the read's answer strictly past the cursor, `k` being how many remain —
+///   so it never holds more than `n′`;
+/// * `next` is the ≺-max of the batch, or the cursor unchanged if the batch
+///   is empty;
+/// * `exhausted` holds iff `batch.len() < n′`, the terminal signal.
+///
+/// They are stated against `n′`, not the `n` asked for: at `n = 0` a window
+/// holds at most one link, and an empty one reports exhaustion — the terminal
+/// signal the clamp exists to keep. They are postconditions of
+/// [`crate::window_v_on`]/[`crate::window_ftt_on`], not properties of this
+/// type.
+///
+/// A PASS — windows drained from `None` to `exhausted`, each at its own
+/// state — returns every link that matches throughout it, under one
+/// predicate held fixed, exactly once (W4/W5). A link that begins to match
+/// during the pass is returned only if it sorts past the cursor at the
+/// moment it begins to match. Link addresses grow within a home but not
+/// across homes, so a link minted mid-pass in a home that sorts behind the
+/// cursor is not returned by that pass.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Window {
     pub batch: Vec<Address>,
@@ -210,14 +227,28 @@ pub struct OrphanReport {
 }
 
 /// The typed rejection of the QUERY surface — the region and pointwise
-/// families. Exactly these five can arise there, so a caller matching them
-/// exhaustively writes no unreachable arm; the delete-orphan preview refuses
-/// on its own preconditions and carries its own [`OrphanError`].
+/// families. Exactly these five arise on the surface as a whole, so a caller
+/// matching the whole surface — as M10's lowering does — writes no
+/// unreachable arm. Each read states which of them it raises, and a match
+/// over one read's result carries the rest as unreachable arms. The
+/// delete-orphan preview refuses on its own preconditions and carries its
+/// own [`OrphanError`].
 ///
 /// The last two are M8's own BUDGET refusals, and they are refusals rather
 /// than truncations for the reason every read here exists: a short answer
 /// silently drops links, and a caller cannot tell a short answer from a true
-/// one. A caller past a budget splits the request.
+/// one. Each is permanent for the request that drew it (M10 lowers both as
+/// `Permanent`); whether a caller can reshape its way past one depends on
+/// the read:
+///
+/// * a region-family `ImageTooLarge` splits: the budgets are per call, so
+///   the region can be asked in parts, down to single positions, and the
+///   parts recomposed by UNION — a count by counting the union, never by
+///   adding counts. A single position is refused only over a reading surface
+///   of more than `MAX_IMAGE_RUNS²` content runs;
+/// * a pointwise `ImageTooLarge` — a fact about `d`'s runs and `a`'s
+///   coverage — and an `EndsetsTooLarge` over one position do not: those
+///   questions cannot be answered through this surface at this state.
 ///
 /// **The exhaustiveness is promised, not merely current.** A downstream match
 /// over these variants is a COMPLETENESS check — M10 must give every refusal
@@ -291,10 +322,11 @@ impl Error for QueryError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrphanError {
     /// `d` is not a registered document (M3). A registered-but-empty `d` is
-    /// refused too, but for range — `EmptyWidth` at width 0 and
-    /// `OutOfBounds` otherwise, since `n_C = 0` admits no range — so what
-    /// this variant buys a caller is WHICH fault is named, as M5's DELETE
-    /// likewise refuses every request on an empty document.
+    /// refused too, but for its request's shape — `NotContentSubspace` off
+    /// `s_C`, then `EmptyWidth` at width 0, and `OutOfBounds` otherwise,
+    /// since `n_C = 0` admits no range — so what this variant buys a caller
+    /// is WHICH fault is named, as M5's DELETE likewise refuses every request
+    /// on an empty document.
     DocNotRegistered,
     /// `p.subspace ≠ s_C` (mirror of M5's variant).
     NotContentSubspace,
@@ -303,12 +335,14 @@ pub enum OrphanError {
     /// Out-of-range `(p, width)` — folds M5's `NotArranged` (start outside
     /// the arranged content) and `OutOfBounds` (range overrun).
     OutOfBounds,
-    /// The runs the preview's two stabs would join — the deleted range's and
-    /// the retained, `d`'s own arrangement split at most twice — are past
+    /// The runs the preview's two stabs would join — `d`'s own arrangement as
+    /// the range splits it, at most two runs more than `d` holds — are past
     /// [`crate::MAX_IMAGE_RUNS`]: the query surface's run budget
     /// ([`QueryError::ImageTooLarge`]), held on the preview's own work and
-    /// named as the query surface names it. A fact about `d`, so no range
-    /// asked of it is answered.
+    /// named as the query surface names it. So a `d` whose own runs are past
+    /// the budget is refused every range, and a `d` at the budget or one run
+    /// under it only the ranges whose ends cut enough runs to carry the count
+    /// past it.
     ImageTooLarge,
 }
 

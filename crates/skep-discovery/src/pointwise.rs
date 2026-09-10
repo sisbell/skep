@@ -204,11 +204,13 @@ fn touches(e: &Endset, extents: &[Span]) -> bool {
 ///
 /// REFUSES, IN THIS ORDER: `DocNotRegistered`, then — for an admitted `a`
 /// only — `NotALink`, then `ImageTooLarge`. An absent `a` answers `Ok(false)`
-/// between the first and the second, and reaches neither. Every argument
-/// about `d` is settled before any argument about `a`, so an unregistered `d`
-/// with a non-link `a` names the document fault. Given the document gate
-/// passes and `a` is admitted, `Err(NotALink)` iff `a ∉ dom(L)` (aligned with
-/// `project`'s non-link handling).
+/// between the first and the second, and reaches neither. A retracted `a`
+/// answers `Ok(false)` between the second and the third, and never reaches
+/// the budget: the addressable half is settled before any run of `d` is
+/// read. Every argument about `d` is settled before any argument about `a`,
+/// so an unregistered `d` with a non-link `a` names the document fault.
+/// Given the document gate passes and `a` is admitted, `Err(NotALink)` iff
+/// `a ∉ dom(L)` (aligned with `project`'s non-link handling).
 ///
 /// A *nullified* link is still a link: it is still resident, so the
 /// resident-link read admits it, and it returns `Ok(false)` through the

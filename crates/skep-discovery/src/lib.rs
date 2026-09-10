@@ -90,15 +90,44 @@
 //!   neither answer names a link: an `a` the rule refuses is ABSENT, which
 //!   [`project_on`] answers `Err(NotALink)` and
 //!   [`addressably_discoverable_from_on`] `Ok(false)` — after the document
-//!   gate, and ahead of the resident-link read so a refused link and an
-//!   address naming nothing answer alike.
+//!   gate, and ahead of the resident-link read, so that under one unreadable
+//!   document a refused link and an address naming nothing answer alike.
 //!
 //! Neither is the PER-RUN MASK (PUB-6.41, M6's `retrieve_v_masked`), which
 //! withholds in place; nothing here applies it. [`image_on`] alone takes no
-//! predicate: its answer names I-runs and no link. The division of labour is
-//! the same everywhere: a NAMED document's own readability is the caller's
-//! consult, before dispatch, and the homes of the links M8 names or is asked
-//! about are M8's.
+//! predicate: its answer names I-runs and no link. The division of labour: a
+//! NAMED document's own readability is the caller's consult, before
+//! dispatch; the homes of the links M8 names, and of the pointwise pair's
+//! `a`, are M8's; and the lineage pair's KEY is neither — `y`/`x` is a
+//! filter VALUE, never consulted (PUB-6.12), so a key homed where the reader
+//! may not read is answered with every claim naming it that the rule admits.
+//!
+//! THE PREDICATE'S CONTRACT. M8 asks `readable` only about DOCUMENT
+//! addresses: the home of each candidate link a result-set read admits past
+//! its other filters, and the home of the pointwise pair's `a`, asked before
+//! anything has established that `a` is a link. It asks at most ONCE per
+//! candidate — a window no further than it walks — and never to judge a
+//! named `d`; collapsing repeated homes is the caller's (PUB-7.15,
+//! PUB-7.16). In return, `readable` must answer each document the same way
+//! for as long as a law here compares its answers: every identity stated
+//! "under the same `readable`" — `count = |findlinks|`, a window that drains
+//! `findlinks` — holds exactly that far. M8 cannot check it, since a `Fn`
+//! may consult state that moves, so it is written here, where the laws that
+//! rest on it are. A predicate closed over one committed state meets it;
+//! which state is the caller's to choose — M10 closes it over the read's own
+//! snapshot, or over the head's for a historical read (PUB-6.48).
+//!
+//! THE FAMILIES' LAWS UNDER A READER. ASN-0121/0127/0132 state their laws of
+//! the unfiltered answer, which is what the total predicate reads; a
+//! filtered answer keeps each law only relative to its reader. A descriptor
+//! `0` (CN-ZERO) says that no addressable link homed where the reader may
+//! read satisfies `q`, and a region `0` (D-ZERO) that no such link reaches
+//! the region — neither says that no link does. FL-MON and CN-MONO hold
+//! across two states only under ONE predicate held fixed across them. A
+//! predicate rebuilt per state, as M10's is, narrows whenever its reader's
+//! readable set does, and a principal's set shrinks when a later grant
+//! revokes the one that opened a home — so a found link can leave a filtered
+//! answer with nothing nullified.
 //!
 //! A HARNESS caller — one answering for no reader class, as the engine's
 //! cross-store lifecycle test and this crate's suite do — passes the TOTAL
@@ -155,7 +184,7 @@
 //!   narrows nothing M7 walks.
 //! * [`delete_orphans_on`] — six `stab`s: three over the deleted runs, three
 //!   over the retained (none when nothing is retained), and none at all for a
-//!   `d` past the run budget.
+//!   request past the run budget.
 //! * the lineage pair ([`in_claims_on`], [`out_claims_on`]) — one
 //!   `readlink`, which answers `[]` for a non-link key and stops there;
 //!   otherwise one `match_links` at a one-span query and one `type_slice`,

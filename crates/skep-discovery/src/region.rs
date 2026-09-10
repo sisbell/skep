@@ -43,9 +43,10 @@ use crate::DiscoveryWorld;
 /// * [`crate::addressably_discoverable_from_on`] counts
 ///   `#content_runs(d) + #link_runs(d)`, because LP12 ranges over both
 ///   subspaces and every one of those extents is tested;
-/// * [`crate::delete_orphans_on`] counts the runs its two stabs join — the
-///   deleted range's and the retained, `d`'s own arrangement split at most
-///   twice — so it refuses a `d` whatever range the preview is asked about.
+/// * [`crate::delete_orphans_on`] counts the runs its two stabs join — `d`'s
+///   own arrangement as the range splits it, at most two runs more than `d`
+///   holds — so its verdict depends on `d` and, at the budget or one run
+///   under it, on where the range's ends fall.
 ///
 /// So the four refuse DIFFERENT documents, and the inclusions run only one
 /// way: the pointwise pair's counts differ by `d`'s link runs, so a `d`
@@ -66,7 +67,10 @@ use crate::DiscoveryWorld;
 /// budget both). It is also M7's `MAX_SLOT_SPANS`, the ceiling a STORED slot
 /// is held to — a query endset costs more than a stored one, never less — and
 /// M10's per-array wire cap, so a FLAT region of 4096 spans each resolving to
-/// one run, the largest region the transport admits, is admitted unchanged.
+/// one run — the largest region the transport admits — passes the run count
+/// unchanged. It passes the walk (below) too over any reading surface of at
+/// most 4096 content runs; over a more fragmented surface the walk decides,
+/// and it refuses such a region when its spans lie deep in the run-list.
 ///
 /// What it refuses is the shape no wire cap prices: the region×image product,
 /// where each admitted span resolves to the whole of a fragmented document.
@@ -137,10 +141,12 @@ pub const MAX_ENDSET_SPANS: usize = 1 << 16;
 /// V-position still names a region M8 refuses.
 ///
 /// The constructing half of the region gate's verdict, so a caller building a
-/// request and the gate that judges it cannot come apart: what this builds is
-/// accepted, what it declines would be [`QueryError::BadRegion`]. M5's
-/// `ordinal_vspan` does the building; the content-subspace clause is the one
-/// M8 adds.
+/// request and the gate that judges it cannot come apart: what this builds
+/// the region gate accepts, and what it declines would be
+/// [`QueryError::BadRegion`]. That is the gate's verdict alone — the budgets
+/// still judge the request the spans form, so a region built wholly here can
+/// still be refused `ImageTooLarge`. M5's `ordinal_vspan` does the building;
+/// the content-subspace clause is the one M8 adds.
 pub fn content_vspan(at: &VPos, count: &Nat) -> Option<Span> {
     if at.subspace != content_subspace() {
         return None;
@@ -295,9 +301,12 @@ pub(crate) fn findlinks_v_set_on<W: DiscoveryWorld>(
 /// never surface; diverges from ASN-0127's `findlinks_V` over all of
 /// `dom(L)` (Conflicts #8).
 ///
-/// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
-/// `BadRegion`, `ImageTooLarge`. There is no fourth refusal — a registered
-/// `d` with a well-formed region always answers, ∅ included.
+/// REFUSES what [`image_on`] refuses, in its order — `DocNotRegistered`,
+/// `BadRegion`, `ImageTooLarge` — and nothing else: a request none of the
+/// three refuses is answered, ∅ included. A registered `d` and a well-formed
+/// region (one built through [`content_vspan`] included) get past only the
+/// first two; the budgets still judge what the region asks of `d`'s surface,
+/// so a caller that has checked both must still handle `ImageTooLarge`.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3; PUB-6.13): every link
 /// whose HOME `readable` refuses is DROPPED, at link IDENTITY, before the
@@ -315,9 +324,9 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
 
 /// Present-tense census of region-reaching links; the cardinality of
 /// `findlinks_V ∩ addressable`. Non-monotone (ASN-0127 D-NONMONO); a `0`
-/// asserts present unreachability over the active view, not history (D-ZERO)
-/// — the region family's zero, distinct from [`crate::count_ftt_on`]'s
-/// store-wide CN-ZERO.
+/// asserts that, over the active view, no link the reader may see is
+/// presently reachable — not history (D-ZERO) — the region family's zero,
+/// distinct from [`crate::count_ftt_on`]'s store-wide CN-ZERO.
 ///
 /// REFUSES what [`image_on`] refuses, in its order: `DocNotRegistered`,
 /// `BadRegion`, `ImageTooLarge`. The zero above is therefore a census and
@@ -328,7 +337,9 @@ pub fn findlinks_v_on<W: DiscoveryWorld>(
 /// The cardinality is the FILTERED one (PUB round 2, lane 3.3, §3;
 /// PUB-6.19): of the links the home rule admits, by ENUMERATION — the same
 /// set [`findlinks_v_on`] returns under the same `readable`, counted rather
-/// than collected, so the two cannot disagree.
+/// than collected, so the two cannot disagree given a predicate that answers
+/// each home the same way in both calls (the crate header states the
+/// predicate's contract).
 pub fn count_v_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     d: &Address,
@@ -342,7 +353,8 @@ pub fn count_v_on<W: DiscoveryWorld>(
 /// Windowed enumeration of the region family (ASN-0108, the
 /// `Match = findlinks_V` reading); result = `findlinks_V ∩ addressable` —
 /// nullified links never surface. `n = 0` is clamped to 1 (the API is total,
-/// W9).
+/// W9); a window holds at most `max(n, 1)` links, and [`Window`] states what
+/// a window and a pass return.
 ///
 /// EVERY `Address` IS A LEGAL CURSOR, and none is checked: resume is a
 /// key-cut strictly past `cur`, never a lookup of it, so a cursor naming a

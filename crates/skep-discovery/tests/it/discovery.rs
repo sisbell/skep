@@ -6,44 +6,47 @@
 //! every read lifting it answers over; disjunctive + active-filtered region
 //! discovery, and the trunk head every region read resolves a published
 //! document through; the stateless key-cut windowing — the clamp, and every
-//! drained page held to
-//! the batch order, `next` and exhaustion a returned window promises — whose
-//! cursor survives its link's orphaning, its retraction, and a state that
-//! never minted it, over the one selection index its three read-outs share;
-//! RETRIEVEENDSETS' identity-withholding whole-endset read-out in its total
-//! pinned order; the FTT unit/zero/conjunction algebra over all three link
-//! slots, the home address-projection filter and its prefix-coverage reach;
-//! the two families' zeros and their two stabilities; projection, its
-//! content-subspace-only narrowing, addressable discoverability, the defined
-//! answer both give a registered-but-empty document, the precedence that
-//! settles their document argument before their address one and both ahead
-//! of the budget, the trunk head both read a published document through, and
-//! the absence rule both apply to a link the home rule refuses; the
-//! delete-orphan preview measured against the DELETE it previews, over that
-//! operation's whole accepted domain, against M5's own admission, and at the
-//! ω and publication gates and the run budget where the two part, with a
-//! registered-but-empty document refused for range; the flipped lineage
-//! probes with the resident-key gate, `Default` read as `Active` where the
-//! two views part,
-//! the supersession class they restrict to, the claim's own home
-//! attribution, the endpoints it reads out as recorded and the write-surface
-//! fences that read-out rests on; every result-set read dropping exactly the
-//! links homed where its reader may not read, whichever end of the address
-//! order they sit at — filtered at a link's home and whole at its endsets'
-//! origins, and asked of a claim rather than of its endpoints; the two
-//! budgets, each refused one past its boundary and on every entry point that
-//! inherits it, held at the numbers their docs give them, over the quantities
-//! the run constant is held to and the collapsed answer the span budget
-//! prices, and the run constant's square over the two joins no run count
-//! shows — the run-list walk a region asks of M5 and the touch test of a
+//! drained page held to the batch order, `next` and exhaustion a returned
+//! window promises — whose cursor survives its link's orphaning, its
+//! retraction, and a state that never minted it, and whose pass misses a
+//! link minted behind its cursor, over the one selection index its three
+//! read-outs share; RETRIEVEENDSETS' identity-withholding whole-endset
+//! read-out in its total pinned order; the FTT unit/zero/conjunction algebra
+//! over all three link slots, the home address-projection filter and its
+//! prefix-coverage reach; the two families' zeros and their two
+//! stabilities; projection, its content-subspace-only narrowing, addressable
+//! discoverability, the defined answer both give a registered-but-empty
+//! document, the precedence that settles their document argument before
+//! their address one and both ahead of the budget — a retracted link
+//! answered ahead of it where retraction narrows — the trunk head both read
+//! a published document through, and the absence rule both apply to a link
+//! the home rule refuses; the delete-orphan preview measured against the
+//! DELETE it previews, over that operation's whole accepted domain, against
+//! M5's own admission, and at the ω and publication gates and the run
+//! budget — counted over the runs its range splits — where the two part,
+//! with a registered-but-empty document refused for range; the flipped
+//! lineage probes with the resident-key gate, `Default` read as `Active`
+//! where the two views part, the supersession class they restrict to, the
+//! claim's own home attribution, the endpoints it reads out as recorded and
+//! the write-surface fences that read-out rests on; every result-set read
+//! dropping exactly the links homed where its reader may not read, whichever
+//! end of the address order they sit at — filtered at a link's home and
+//! whole at its endsets' origins, and asked of a claim rather than of its
+//! endpoints or its key — with the predicate asked only of homes and once
+//! per candidate; the two budgets, each refused one past its boundary and on
+//! every entry point that inherits it, held at the numbers their docs give
+//! them, over the quantities the run constant is held to and the collapsed
+//! answer the span budget prices, and the run constant's square over the two
+//! joins no run count shows — the run-list walk a region asks of M5, flat
+//! regions deep in a fragmented surface included, and the touch test of a
 //! link's whole coverage; the snapshot twins; and — because this file is a
 //! crate of its own — the promises M8 makes to a consumer rather than to
-//! itself: one named
-//! world bound, the standard traits its values carry, and rejection enums
-//! that stay exhaustively matchable and name their surface.
+//! itself: one named world bound, the standard traits its values carry, and
+//! rejection enums that stay exhaustively matchable and name their surface.
 
 use crate::common;
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 
 use common::*;
@@ -361,7 +364,9 @@ fn the_region_family_answers_over_an_image_that_mixes_address_lengths() {
 /// gate: the whole region is judged before any span resolves. The constant is
 /// the number its doc gives it, which a symbolic boundary cannot see: the
 /// largest FLAT region the transport admits — one span per wire slot, each
-/// resolving to one run — is admitted unchanged.
+/// resolving to one run — is admitted unchanged over a document within the
+/// run budget, as this one is. Deep in a document past the budget the walk
+/// decides, and the walk's own test pins that.
 #[test]
 fn the_region_family_refuses_an_image_past_the_run_budget() {
     let k = kernel();
@@ -413,9 +418,11 @@ fn the_region_family_refuses_an_image_past_the_run_budget() {
 /// runs and are refused on every entry point, while the same region over a
 /// one-run document — the same depth, a different run count — is answered,
 /// because the walk is priced in runs and never in positions. Beside those:
-/// one span that deep over the fragmented document is one walk and answered,
-/// a flat region at its front is the run budget's own case and answered, and
-/// the region gate still speaks first.
+/// one span that deep over the fragmented document is one walk and answered;
+/// a flat region at its front is the run budget's own case and answered,
+/// while a FLAT region deep in the surface — each span resolving one run, so
+/// the run count admits it — is the walk's to refuse; and the region gate
+/// still speaks first.
 #[test]
 fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     let k = kernel();
@@ -438,6 +445,11 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
     let deep_then_malformed: Vec<Span> =
         deep.iter().cloned().chain([vspan(2, 1, 1)]).collect();
     let flat: Vec<Span> = vec![vspan(1, 1, 1); MAX_IMAGE_RUNS];
+    // A FLAT region deep in the fragmented surface: every span names doc2's
+    // last position and resolves exactly one run, so the run count admits it;
+    // the walk — MAX × (MAX + 1) runs — does not.
+    let flat_deep: Vec<Span> = vec![vspan(1, MAX_IMAGE_RUNS as u32 + 1, 1); MAX_IMAGE_RUNS];
+    assert_eq!(lq.image(&doc2(), &flat_deep[..1]), Ok(vec![run(&ca(1), 1)]));
     assert_eq!(
         lq.image(&doc2(), &deep[..1]),
         Ok(vec![]),
@@ -471,6 +483,11 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
             None,
             "{name}: a flat region at the front is the run budget's own case"
         );
+        assert_eq!(
+            refusal(&doc2(), &flat_deep),
+            Some(QueryError::ImageTooLarge),
+            "{name}: a flat region deep in a surface past the run budget is the walk's to refuse"
+        );
     }
 }
 
@@ -483,7 +500,9 @@ fn the_region_family_holds_the_run_list_walk_to_the_square_of_the_run_budget() {
 /// fixture seats every link in doc1, leaving doc2's link runs at zero, where
 /// the two quantities coincide and the wrong rule passes. Once `d` is past
 /// the budget it also shows each read's refusal ORDER, which no in-budget
-/// `d` can: every argument about `a` is refused ahead of the budget.
+/// `d` can: every argument about `a` is refused ahead of the budget, and a
+/// retracted `a` gets its answer from `addressably_discoverable_from` before
+/// the budget, while `project`, which no retraction narrows, still meets it.
 #[test]
 fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     let k = kernel();
@@ -559,6 +578,15 @@ fn the_pointwise_pair_holds_one_run_constant_over_two_quantities() {
     assert_eq!(
         project_on(&snap, &e1, FROM, &doc2(), &cannot_read_doc1),
         Err(QueryError::NotALink)
+    );
+    // A RETRACTED `a` answers `addressably_discoverable_from` between its
+    // `NotALink` and its budget, so it never meets the budget; `project`,
+    // which no retraction narrows, still does.
+    store.nullify(SYS, &doc2(), &e1).expect("nullify succeeds");
+    assert_eq!(lq.addressably_discoverable_from(&e1, &doc2()), Ok(false));
+    assert_eq!(
+        lq.project(&e1, FROM, &doc2()),
+        Err(QueryError::ImageTooLarge)
     );
 }
 
@@ -866,6 +894,34 @@ fn a_window_resumes_past_a_cursor_its_state_never_minted() {
     assert_eq!(
         window_ftt_on(&earlier, &FourSet::any(), Some(doc2()), 5, &every_home).batch,
         vec![theirs]
+    );
+}
+
+/// §2 — what a PASS returns under concurrent writes: a link that begins to
+/// match mid-pass is returned only if it sorts past the cursor. Link
+/// addresses grow within a home and not across homes, so a link minted in
+/// doc1 after the pass has moved on to doc2's links is never seen by it —
+/// the blind spot `Window` states, and the one W4/W5 do not cover, since
+/// they speak of links that match throughout.
+#[test]
+fn a_pass_misses_a_link_minted_behind_its_cursor() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    let lq = LinkQuery::new(&k);
+    let first = link(&store, &doc1(), &[ca(1)], &[ca(101)]); // la(1)
+    let theirs = link(&store, &doc2(), &[ca(1)], &[ca(102)]); // la2(1)
+    let page = lq.window_ftt(&FourSet::any(), None, 2);
+    assert_eq!(page.batch, vec![first, theirs.clone()]);
+    assert!(!page.exhausted);
+
+    let behind = link(&store, &doc1(), &[ca(1)], &[ca(103)]); // la(2)
+    assert!(behind < theirs, "minted after the page, sorted behind its cursor");
+    let rest = lq.window_ftt(&FourSet::any(), page.next, 2);
+    assert!(rest.batch.is_empty() && rest.exhausted, "the pass ends: {rest:?}");
+    assert!(
+        lq.findlinks_ftt(&FourSet::any()).contains(&behind),
+        "it exists when the pass ends"
     );
 }
 
@@ -1998,9 +2054,10 @@ fn delete_orphans_keeps_a_link_witnessed_in_the_link_subspace_a_text_delete_neve
 /// doc1 and doc2 are private — because a published `d` is the second place
 /// the two sets part: a gap §6 states, pinned by a test of its own rather
 /// than added here, where it would fail the very equality this grid holds.
-/// Its documents are within the run budget too, the third place: a `d` past
-/// it is one DELETE edits and the preview refuses, pinned by its own test as
-/// well. Verdicts only here: the two vocabularies label one refusal
+/// Its requests are within the run budget too, the third place: a request
+/// whose runs, as its range splits them, are past it is one DELETE admits and
+/// the preview refuses, pinned by tests of its own as well. Verdicts only
+/// here: the two vocabularies label one refusal
 /// differently by design, and the example test above is what pins WHICH
 /// word.
 #[test]
@@ -2165,6 +2222,40 @@ fn delete_orphans_refuses_a_document_past_the_run_budget() {
     );
     // And the DELETE it previews, which stabs nothing, admits the request.
     assert!(vs.delete(SYS, &doc2(), vp(1, 1), n(1)).is_ok());
+}
+
+/// §6 — the preview's budget counts `d`'s runs AS THE RANGE SPLITS THEM: each
+/// end of the range that falls inside a run adds one. `d` here holds
+/// `MAX − 1` runs, so a range cutting one run at both ends is refused, while
+/// a range cutting it at one end, and a range taking a run whole, are
+/// answered — the budget is a fact about the request, not about `d` alone.
+#[test]
+fn the_preview_budget_counts_the_runs_the_range_splits() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 3); // one run: ca(1..3)
+    // doc2: one width-3 run, then `MAX − 2` width-1 runs, none abutting the
+    // next — `MAX − 1` in all.
+    let mut specs = vec![spec(&doc1(), 1, 1, 3)];
+    specs.extend(vec![spec(&doc1(), 1, 1, 1); MAX_IMAGE_RUNS - 2]);
+    Vstream::new(&k)
+        .copy(SYS, &doc2(), vp(1, 1), &specs)
+        .expect("copy succeeds");
+    assert_eq!(
+        k.snapshot().world().m5().content_runs(&doc2()).len(),
+        MAX_IMAGE_RUNS - 1
+    );
+    let lq = LinkQuery::new(&k);
+
+    // Position 2 is the width-3 run's middle: both ends cut it, so `MAX + 1`
+    // runs to stab.
+    assert_eq!(
+        lq.delete_orphans(&doc2(), &vp(1, 2), &n(1)),
+        Err(OrphanError::ImageTooLarge)
+    );
+    // Position 1 is its first: one end cuts it, `MAX` runs — the budget itself.
+    assert!(lq.delete_orphans(&doc2(), &vp(1, 1), &n(1)).is_ok());
+    // Position 4 is a whole width-1 run: no end cuts one, `MAX − 1` runs.
+    assert!(lq.delete_orphans(&doc2(), &vp(1, 4), &n(1)).is_ok());
 }
 
 // ─────────────── §7 — archival supersession lineage ───────────────
@@ -2632,6 +2723,61 @@ fn every_result_set_read_drops_exactly_the_links_homed_where_the_reader_may_not_
     }
 }
 
+/// The home rule's contract with its predicate: asked only of a candidate's
+/// HOME, at most once per candidate (PUB-7.15, PUB-7.16) — a window asks no
+/// further than it walks — and of the pointwise pair's `a` alone, never of a
+/// named `d`. Under the pure predicates every other test passes, a read that
+/// asked a link, asked twice, or asked the named document answers exactly as
+/// the right one does; a predicate that records what it is asked is where
+/// each shows.
+#[test]
+fn the_home_rule_asks_its_predicate_once_per_candidate_and_only_of_homes() {
+    let k = kernel();
+    seed_content(&k, &doc1(), 1);
+    let store = LinkWriter::new(&k, &EVERYONE);
+    for home in [doc1(), doc1(), doc2()] {
+        link(&store, &home, &[ca(1)], &[ca(101)]); // la(1), la(2), la2(1)
+    }
+    let snap = k.snapshot();
+    let asked: RefCell<Vec<Address>> = RefCell::new(Vec::new());
+    let recorder = |d: &Address| {
+        asked.borrow_mut().push(d.clone());
+        true
+    };
+    let homes_of = |links: &[Address]| -> Vec<Address> {
+        links
+            .iter()
+            .map(|l| document_of(l).expect("a link has a home"))
+            .collect()
+    };
+    let sorted = |mut v: Vec<Address>| {
+        v.sort();
+        v
+    };
+
+    let found = findlinks_v_on(&snap, &doc1(), &[vspan(1, 1, 1)], &recorder)
+        .expect("findlinks_v");
+    assert_eq!(found.len(), 3);
+    assert_eq!(sorted(asked.take()), sorted(homes_of(&found)));
+    let found = findlinks_ftt_on(&snap, &FourSet::any(), &recorder);
+    assert_eq!(found.len(), 3);
+    assert_eq!(sorted(asked.take()), sorted(homes_of(&found)));
+    // A window of one asks of the one candidate it admits, and stops.
+    assert_eq!(
+        window_ftt_on(&snap, &FourSet::any(), None, 1, &recorder).batch,
+        vec![la(1)]
+    );
+    assert_eq!(asked.take(), vec![doc1()]);
+    // The pointwise pair asks `a`'s home once, and of a homeless `a` nothing.
+    assert!(project_on(&snap, &la2(1), FROM, &doc1(), &recorder).is_ok());
+    assert_eq!(asked.take(), vec![doc2()]);
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &a(&[1, 0, 1]), &doc1(), &recorder),
+        Err(QueryError::NotALink)
+    );
+    assert_eq!(asked.take(), vec![]);
+}
+
 /// §4 — PUB-6.15: filtered at link HOME, UNFILTERED at origin. The home rule
 /// decides which links contribute a pair and never reaches into a surviving
 /// link's endset. The result-set law cannot see this: every link its readers
@@ -2662,8 +2808,10 @@ fn retrieve_endsets_filters_at_the_links_home_and_ships_its_endset_whole_at_orig
 /// claim's endpoints read out as recorded, whatever the reader may read. The
 /// result-set law's claims each share a home with their `new`, so a read that
 /// asked `new`'s home would answer exactly as the right one there; here the
-/// two part. The probe keys are homed where the reader may read, so nothing
-/// here turns on the key's own home.
+/// two part. One probe key, `theirs`, is homed where the reader may not read:
+/// the key is a filter value (PUB-6.12), so the claims naming it are listed
+/// under the same result-set filter, while the pointwise pair reads the same
+/// address as absent (PUB-6.6).
 #[test]
 fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_recorded() {
     let k = kernel();
@@ -2693,6 +2841,23 @@ fn the_lineage_pair_asks_the_home_rule_of_the_claim_and_reads_its_endpoints_as_r
     );
 
     let cannot_read_doc2 = |d: &Address| *d != doc2();
+    // The KEY is a filter value (PUB-6.12), never consulted: `theirs` is homed
+    // in doc2, which this reader may not read, and the claim naming it —
+    // homed in doc1 — is listed all the same. As an ARGUMENT, the same address
+    // is absent (PUB-6.6): discoverable from doc1 in truth, `false` to this
+    // reader.
+    assert_eq!(
+        claims_of(out_claims_on(&snap, &theirs, View::Active, &cannot_read_doc2)),
+        vec![kept.clone()]
+    );
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &theirs, &doc1(), &every_home),
+        Ok(true)
+    );
+    assert_eq!(
+        addressably_discoverable_from_on(&snap, &theirs, &doc1(), &cannot_read_doc2),
+        Ok(false)
+    );
     assert_eq!(
         in_claims_on(&snap, &e1, View::Active, &cannot_read_doc2),
         vec![SupClaim {

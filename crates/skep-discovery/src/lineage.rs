@@ -124,7 +124,11 @@ fn claims_on<W: DiscoveryWorld>(
 /// caller that needs the endpoints' activity asks M7's `is_active` for them.
 ///
 /// The result-set filter (PUB round 2, lane 3.3, §3): claims homed in a
-/// document `readable` refuses are dropped.
+/// document `readable` refuses are dropped. The KEY takes no rule: `y` is a
+/// filter value, never consulted (PUB-6.12), so a `y` homed where `readable`
+/// refuses is answered with every claim naming it that the rule admits. The
+/// pointwise pair, asked about the same address as an argument, reads it as
+/// absent (PUB-6.6).
 pub fn in_claims_on<W: DiscoveryWorld>(
     s: &Snapshot<W>,
     y: &Address,

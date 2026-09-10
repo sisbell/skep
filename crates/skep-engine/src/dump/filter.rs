@@ -50,13 +50,19 @@ use skep_links::{Endset, LinkState, ShippedType, View};
 
 use crate::canon::{SerdeTree, TreeDe};
 
-use super::{shipped_label, PREDICATE_PROJECTIONS};
+use super::{shipped_label, PREDICATE_PROJECTIONS, SLICE_VIEWS};
 
-/// The hint families reduced BY HOME: each is a sequence of dotted LINK
-/// addresses, and an entry stays where the class reads the document its own
-/// address is homed in. That one test is the whole rule here BECAUSE the
-/// entry is the link — the thing whose existence the entry discloses is the
-/// thing being judged.
+/// The by-home hint families that have NO TABLE OF THEIR OWN: each is a
+/// sequence of dotted LINK addresses, and an entry stays where the class reads
+/// the document its own address is homed in. That one test is the whole rule
+/// here BECAUSE the entry is the link — the thing whose existence the entry
+/// discloses is the thing being judged.
+///
+/// The rule governs more families than this list names, so the list is not
+/// the reduction's by-home reach: each shipped class's two slices are link
+/// addresses and reduce by the same test, walked off `ShippedType::ALL` and
+/// [`SLICE_VIEWS`] because their names are the format's rather than this
+/// module's.
 ///
 /// Which families group under which rule is THIS module's knowledge, which is
 /// why the list is here; the predicate projections' names are the FORMAT's, so
@@ -198,8 +204,8 @@ pub(super) fn filter_tree(
         retain_seq(&mut root, &["hints", family], &keep_member);
     }
     for ty in ShippedType::ALL {
-        for view in ["audit", "active"] {
-            retain_seq(&mut root, &["hints", "types", shipped_label(ty), view], &keep_dotted);
+        for (label, _) in SLICE_VIEWS {
+            retain_seq(&mut root, &["hints", "types", shipped_label(ty), label], &keep_dotted);
         }
     }
     // An EDGE `old → new`: the two endpoints by their own homes, and then by
@@ -520,8 +526,8 @@ mod tests {
             paths.push((vec!["hints", family], Shape::Seq));
         }
         for ty in ShippedType::ALL {
-            for view in ["audit", "active"] {
-                paths.push((vec!["hints", "types", shipped_label(ty), view], Shape::Seq));
+            for (label, _) in SLICE_VIEWS {
+                paths.push((vec!["hints", "types", shipped_label(ty), label], Shape::Seq));
             }
         }
         paths.push((vec!["hints", "supersession"], Shape::Map));
@@ -633,12 +639,16 @@ mod tests {
         );
 
         // …and INSIDE each shipped class, the level the two family lists above
-        // cannot reach: the filter reduces `audit` and `active` by name and
-        // keeps `key` as the format constant it is, so a fourth entry the
+        // cannot reach: the filter reduces one slice per row of `SLICE_VIEWS`
+        // and keeps `key` as the format constant it is, so a fourth entry the
         // builder added here would be rendered whole to the guest with every
         // path in the filter still naming a place.
-        let class_entries: BTreeSet<String> =
-            ["key", "audit", "active"].iter().map(|name| (*name).to_owned()).collect();
+        let class_entries: BTreeSet<String> = SLICE_VIEWS
+            .iter()
+            .map(|(label, _)| *label)
+            .chain(["key"])
+            .map(|name| name.to_owned())
+            .collect();
         for ty in ShippedType::ALL {
             let label = shipped_label(ty);
             assert_eq!(
@@ -1037,18 +1047,20 @@ mod tests {
         // then names neither member, because the public tuple's member is the
         // draft's. A guest reads that a registration exists in the published
         // home and not what it registers.
-        let slice_count = |tree: &mut SerdeTree, view: &str| {
-            match at_path(tree, &["hints", "types", "shipped.pred_stable", view]) {
+        let slice_count = |tree: &mut SerdeTree, label: &str| {
+            match at_path(tree, &["hints", "types", "shipped.pred_stable", label]) {
                 Some(SerdeTree::Seq(items)) => items.len(),
-                other => panic!("the shipped.pred_stable {view} slice is a sequence, got {other:?}"),
+                other => {
+                    panic!("the shipped.pred_stable {label} slice is a sequence, got {other:?}")
+                }
             }
         };
-        for view in ["audit", "active"] {
-            assert_eq!(slice_count(&mut full, view), 2, "the fixture deposits two registrations");
+        for (label, _) in SLICE_VIEWS {
+            assert_eq!(slice_count(&mut full, label), 2, "the fixture deposits two registrations");
             assert_eq!(
-                slice_count(&mut guest, view),
+                slice_count(&mut guest, label),
                 1,
-                "the {view} slice keeps the public registration and drops the draft-homed one"
+                "the {label} slice keeps the public registration and drops the draft-homed one"
             );
         }
 

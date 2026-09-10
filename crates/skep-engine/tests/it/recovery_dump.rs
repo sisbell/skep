@@ -125,9 +125,10 @@ fn seq_of(addrs: &[&Address]) -> String {
     format!("[{}]", rendered.join(", "))
 }
 
-/// One type class's rendering: its audit and active slices and its key.
-fn class_of(members: &[&Address], key: &str) -> String {
-    let m = seq_of(members);
+/// One type class's rendering: its audit and active slices — LINK addresses,
+/// which is what a typed slice holds — and its key.
+fn class_of(links: &[&Address], key: &str) -> String {
+    let m = seq_of(links);
     format!("{{\"active\": {m}, \"audit\": {m}, \"key\": [{:?}]}}", key)
 }
 
@@ -163,14 +164,14 @@ fn the_dump_carries_the_supersession_forward_edges() {
 #[test]
 fn the_dump_names_every_shipped_class_with_its_typed_slices() {
     let (text, deposited) = populated_dump();
-    for (label, ordinal, members) in [
+    for (label, ordinal, links) in [
         ("shipped.pred_def", 1, vec![&deposited.emitted]),
         ("shipped.pred_stable", 2, Vec::new()),
         ("shipped.retired", 3, Vec::new()),
         ("shipped.supersedes", 4, vec![&deposited.sup_claim]),
         ("shipped.retraction", 5, vec![&deposited.retraction]),
     ] {
-        assert_entry(&text, label, &class_of(&members, &format!("1.1.0.1.0.1.0.1.{ordinal}")));
+        assert_entry(&text, label, &class_of(&links, &format!("1.1.0.1.0.1.0.1.{ordinal}")));
     }
 }
 

@@ -37,8 +37,9 @@ const A: PrincipalId = PrincipalId(1);
 struct Board {
     /// A's published target document.
     target: Address,
-    /// `target.1` — the target's first version member.
-    member: Address,
+    /// `target.1` — the target's first VERSION MEMBER, which is a version of
+    /// the document and never a member of a class.
+    version_member: Address,
     /// Two published editions — alike in every respect a test turns on.
     e1: Address,
     e2: Address,
@@ -61,11 +62,11 @@ fn board(engine: &Engine) -> Board {
     let e2 = mint(Some(true));
     let draft_edition = mint(Some(false));
     let other_target = mint(Some(true));
-    let (member, _) = engine
+    let (version_member, _) = engine
         .vstream()
         .version(A, &target, None)
         .unwrap_or_else(|_| panic!("a version of the published target mints"));
-    Board { target, member, e1, e2, draft_edition, other_target }
+    Board { target, version_member, e1, e2, draft_edition, other_target }
 }
 
 /// Deposit a claim in `home`: `from` = the home (the edition), `to` = the
@@ -121,7 +122,7 @@ fn row_to(claim: &Address, home: &Address, to: Endset, active: bool) -> EditionC
 /// with its home and its retraction stated — where M7's active view holds
 /// one. The subtype's claim is in the class by prefix.
 #[test]
-fn the_lookup_lists_admitted_claims_retracted_or_not_with_their_homes() {
+fn the_lookup_lists_the_class_s_claims_retracted_or_not_with_their_homes() {
     let engine = mem_engine();
     let b = board(&engine);
     let c1 = claim(&engine, &b.e1, &b.target, &t_edition());
@@ -160,12 +161,12 @@ fn a_superseded_claim_and_a_foreign_type_leave_the_class() {
     assert!(w.links().readlink(&foreign).is_some(), "the foreign-typed link is resident, and not in the class");
 }
 
-/// Class admission is over EVERY denoted address: a type slot naming the
+/// Class MEMBERSHIP is over EVERY denoted address: a type slot naming the
 /// edition class AND a foreign class is no member, though it OVERLAPS the
 /// class range and the `to`-range lookup does return it for judgement. The
-/// wholly foreign type above never reaches admission at all — it sits outside
-/// the range, so the lookup never hands it over — which is why the quantifier
-/// takes a claim of its own.
+/// wholly foreign type above never reaches the membership test at all — it
+/// sits outside the range, so the lookup never hands it over — which is why
+/// the quantifier takes a claim of its own.
 #[test]
 fn a_type_slot_denoting_the_class_and_a_foreign_class_is_no_member() {
     let engine = mem_engine();
@@ -214,28 +215,28 @@ fn a_draft_edition_s_claim_is_in_the_class_the_world_answers() {
 }
 
 /// The `to`-RANGE is the target's subtree: a claim denoting the target's
-/// VERSION answers for the document (containment) and for the member; a
-/// claim on the document answers for its member too (the document's subtree
-/// contains the member's); a claim on another document never answers for
-/// this one, and answers for its own.
+/// VERSION answers for the document (containment) and for the version member;
+/// a claim on the document answers for its version member too (the document's
+/// subtree contains the member's); a claim on another document never answers
+/// for this one, and answers for its own.
 #[test]
 fn the_to_range_is_the_target_s_subtree() {
     let engine = mem_engine();
     let b = board(&engine);
     let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
-    let on_member = claim(&engine, &b.e2, &b.member, &t_edition());
+    let on_member = claim(&engine, &b.e2, &b.version_member, &t_edition());
     let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
 
     let w = world(&engine);
     assert_eq!(
         w.edition_claims(&b.target),
-        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.member, true)],
+        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.version_member, true)],
         "the document names every claim denoting it or a version of it"
     );
     assert_eq!(
-        w.edition_claims(&b.member),
-        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.member, true)],
-        "a member names the claims denoting it and those denoting its document"
+        w.edition_claims(&b.version_member),
+        vec![row(&on_doc, &b.e1, &b.target, true), row(&on_member, &b.e2, &b.version_member, true)],
+        "a version member names the claims denoting it and those denoting its document"
     );
     assert_eq!(w.edition_claims(&b.other_target), vec![row(&on_other, &b.e1, &b.other_target, true)]);
     assert!(w.edition_claims(&b.e1).is_empty(), "an edition is claimed by nothing");
@@ -251,7 +252,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
     let engine = mem_engine();
     let b = board(&engine);
     let on_doc = claim(&engine, &b.e1, &b.target, &t_edition());
-    let on_member = claim(&engine, &b.e2, &b.member, &t_edition());
+    let on_member = claim(&engine, &b.e2, &b.version_member, &t_edition());
     let on_other = claim(&engine, &b.e1, &b.other_target, &t_edition());
 
     let w = world(&engine);
@@ -264,7 +265,7 @@ fn the_lookup_ranges_over_whatever_tier_the_caller_names() {
         vec![
             row(&on_doc, &b.e1, &b.target, true),
             row(&on_other, &b.e1, &b.other_target, true),
-            row(&on_member, &b.e2, &b.member, true),
+            row(&on_member, &b.e2, &b.version_member, true),
         ],
         "an account address ranges over every document under it"
     );

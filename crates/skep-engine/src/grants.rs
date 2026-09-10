@@ -157,7 +157,7 @@ pub(crate) struct GrantRecord {
 /// WHICH query index a grant belongs in, and where in it: the `grantee`
 /// selects the index (`None` ⟹ the ANY-PRINCIPAL one), the `content_prefix`
 /// keys it, and the `issuer` is the member its set holds. The three fields
-/// [`Grants::insert`] and [`Grants::withdraw`] project a record onto, named,
+/// [`Grants::admit`] and [`Grants::withdraw`] project a record onto, named,
 /// so that the two index steps and their argument agree about what is being
 /// indexed.
 ///
@@ -188,7 +188,7 @@ impl GrantRecord {
 /// commit path is one more root clone. `#[serde(skip)]` at the World: derived,
 /// never checkpointed (the module docs' hint discipline).
 ///
-/// The three structures must agree, and [`Grants::insert`] and
+/// The three structures must agree, and [`Grants::admit`] and
 /// [`Grants::withdraw`] are the only two transitions that move any of them —
 /// each doing the record edit and the index edit as ONE step. So the
 /// projection this type's fields describe is performed here rather than at a
@@ -252,8 +252,9 @@ impl Grants {
 
     /// The operative set — every admitted, unsuperseded grant with the grant
     /// link's own address — in the map's hash order (the world dump's grant
-    /// section renders it, and `render` sorts). The fold's one enumeration;
-    /// the predicate's consumers are the point probes above.
+    /// section renders it, and the dump's rendering sorts a map's entries).
+    /// The fold's one enumeration; the predicate's consumers are the point
+    /// probes above.
     pub(crate) fn records(&self) -> impl Iterator<Item = (&Address, &GrantRecord)> + '_ {
         self.records.iter()
     }
@@ -332,8 +333,8 @@ impl Grants {
     /// ADMIT `grant`, deposited at link address `addr`: it joins the operative
     /// set under its own address and its [`GrantIndexEntry`] joins the query
     /// index that entry names. One transition, so the set and its projection
-    /// cannot part.
-    fn insert(&mut self, addr: Address, grant: GrantRecord) {
+    /// cannot part. [`admitted_issuer`] is the test this acts on.
+    fn admit(&mut self, addr: Address, grant: GrantRecord) {
         self.index_add(grant.index_entry());
         self.records.insert(addr, grant);
     }
@@ -354,7 +355,7 @@ impl Grants {
         }
     }
 
-    /// [`Grants::insert`]'s index step: add `entry` to the query index its
+    /// [`Grants::admit`]'s index step: add `entry` to the query index its
     /// grantee names — the PRINCIPAL-EXACT one keyed by the grantee, or the
     /// ANY-PRINCIPAL one.
     fn index_add(&mut self, entry: GrantIndexEntry<'_>) {
@@ -408,13 +409,15 @@ fn is_grant_typed(value: &Link, grants_class: &Address) -> bool {
     value.type_slot().single_denoted() == Some(grants_class.tumbler())
 }
 
-/// Admission (I4): the grant's home must be the issuer's OWN doc 1, PUBLISHED.
-/// Returns the issuer (ω of home) when admitted, else `None`.
+/// Admission (I4), asked of a record's home: the ISSUER (ω of `home`) where
+/// the home is that issuer's OWN doc 1 and PUBLISHED, else `None`. A QUERY,
+/// which is why it is named for its answer — [`Grants::admit`] is the
+/// transition that acts on it.
 ///
 /// `home` is a registered document (a deposit lands in no unregistered home,
 /// M7's HomeNotRegistered gate). `published(home)` is the exception-set miss —
 /// `home ∉ drafts`.
-fn admit(namespace: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
+fn admitted_issuer(namespace: &M3State, drafts: &Drafts, home: &Address) -> Option<Address> {
     // Published: an exception-set miss (grants are born published). The
     // polarity is `crate::publication`'s to hold, not this module's.
     if !is_published(drafts, home) {
@@ -481,13 +484,13 @@ fn fold_one(
     // halves would part at the next restart with nothing looking wrong.
     let home = document_of(addr)
         .expect("a link address is element-level, so its home document exists");
-    let Some(issuer) = admit(namespace, drafts, &home) else {
+    let Some(issuer) = admitted_issuer(namespace, drafts, &home) else {
         return prev.clone(); // unadmitted: neither grant nor revocation
     };
     let mut next = prev.clone();
     match classify(prev, &home, value) {
         Kind::Grant { content_prefix, grantee } => {
-            next.insert(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
+            next.admit(addr.clone(), GrantRecord { home, issuer, content_prefix, grantee });
         }
         Kind::Revoke { old } => next.withdraw(&old),
         Kind::Ignore => {}
@@ -542,17 +545,17 @@ pub(crate) fn fold(prev: &Grants, namespace: &M3State, drafts: &Drafts, rec: &Li
 ///
 /// The halves also read the world at different TIMES: [`fold`] is handed M3
 /// and the exception set as of the deposit's own commit, this walk as of the
-/// end of history. [`admit`]'s three questions answer alike at both, each for
-/// its own reason. The BIT: M3 writes it once, at the record that registers
-/// the document, and the exception set only ever GAINS entries — so a home
-/// published when its grant landed is published still, and a draft-homed one
-/// was unadmitted at both readings. The OWNER: no account-tier prefix longer
-/// than a document's own account can cover it (`crate::publication`'s
-/// `owner_account_of` states M3's half of that), so no later delegation moves
-/// ω of a home. The DOC-1 test is `first_document_address`, a pure function of
-/// the issuer and of no state at all. A store change that made any of the
-/// three time-varying splits the halves, and `Engine::check_hints` is where
-/// that shows.
+/// end of history. [`admitted_issuer`]'s three questions answer alike at
+/// both, each for its own reason. The BIT: M3 writes it once, at the record
+/// that registers the document, and the exception set only ever GAINS
+/// entries — so a home published when its grant landed is published still,
+/// and a draft-homed one was unadmitted at both readings. The OWNER: no
+/// account-tier prefix longer than a document's own account can cover it
+/// (`crate::publication`'s `owner_account_of` states M3's half of that), so
+/// no later delegation moves ω of a home. The DOC-1 test is
+/// `first_document_address`, a pure function of the issuer and of no state at
+/// all. A store change that made any of the three time-varying splits the
+/// halves, and `Engine::check_hints` is where that shows.
 pub(crate) fn seed(namespace: &M3State, links: &LinkState, drafts: &Drafts) -> Grants {
     let ty = skep_links::enc([t_grant()]);
     let mut grants = Grants::new();

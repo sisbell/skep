@@ -268,6 +268,23 @@ fn shipped_label(ty: ShippedType) -> &'static str {
     }
 }
 
+/// The dump's own name for each VIEW a class's slice is rendered under, with
+/// the view it is read at — [`class_tree`]'s two slice entries, in the order
+/// it writes them.
+///
+/// TWO rows and not a total function over `View`: this format renders the
+/// audit and active slices and no third, so a view M7 has beside them is
+/// absent from a class's submap until a row here says otherwise.
+///
+/// The label and the view it names are one piece of format knowledge, so
+/// they are declared together and once, exactly as [`PREDICATE_PROJECTIONS`]
+/// is. The builder writes a class's slices off this table and the per-class
+/// filter reduces them off the same one, so a slice's entries cannot be
+/// judged at a view other than the one they were rendered under. The labels
+/// are the dump's own wire vocabulary, as [`shipped_label`]'s are — they are
+/// wire-visible and outlive any rename of the variant.
+const SLICE_VIEWS: [(&str, View); 2] = [("audit", View::Audit), ("active", View::Active)];
+
 /// M9's definition registry as this format projects it: one hints family per
 /// (shipped class, view), each rendering `LinkState::members` — the SUBJECTS
 /// those tuples denote, never the tuples themselves.
@@ -291,34 +308,32 @@ const PREDICATE_PROJECTIONS: [(&str, ShippedType, View); 4] = [
 ];
 
 /// One type class's observable projection: the THREE entries a class submap
-/// holds — its key endset and its audit and active slices (both already
-/// address-ordered `OrdSet`s).
+/// holds — its key endset, then one slice per row of [`SLICE_VIEWS`], each
+/// already an address-ordered `OrdSet`.
 ///
 /// That entry set is format, and it is the third level of the tree the
-/// per-class filter's completeness statement is held against: `audit` and
-/// `active` are sequences of link addresses and reduce by home, while `key` is
-/// a compiled format constant and stays at every class. A fourth entry added
-/// here and left out of that statement would be rendered whole to every
-/// reader, which is why `every_hints_family_is_reduced_or_kept_by_name` holds
-/// this set as well as the two above it.
+/// per-class filter's completeness statement is held against: the slices are
+/// sequences of link addresses and reduce by home, while `key` is a compiled
+/// format constant and stays at every class. A fourth entry added here and
+/// left out of that statement would be rendered whole to every reader, which
+/// is why `every_hints_family_is_reduced_or_kept_by_name` holds this set as
+/// well as the two above it.
 ///
 /// `ty` carries M7's stated precondition — address-denoting or
 /// `iextent`-built, else `type_slice` panics naming it — and the one caller
 /// below is inside it: a reserved endset is M7's own.
 fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
-    let audit = links.type_slice(ty, View::Audit);
-    let active = links.type_slice(ty, View::Active);
-    SerdeTree::Map(vec![
-        (key("key"), tum_seq(ty.addrs())),
-        (key("audit"), addr_seq(audit.iter())),
-        (key("active"), addr_seq(active.iter())),
-    ])
+    let mut entries = vec![(key("key"), tum_seq(ty.addrs()))];
+    for (label, view) in SLICE_VIEWS {
+        entries.push((key(label), addr_seq(links.type_slice(ty, view).iter())));
+    }
+    SerdeTree::Map(entries)
 }
 
 /// The HINTS section: the recomputable state, read through PUBLIC surfaces
 /// alone over already-ordered results — never off a store's private hint.
 /// M7's is most of it (`match_links`, `type_slice`, `members`, `succs`): the
-/// audit and active slices, the nullified members of the audit slice, the
+/// audit and active slices, the nullified LINKS of the audit slice, the
 /// five shipped classes' type slices, and the supersession forward edges (the
 /// BH2 walk). Beside them, M9's definition registry — which is no slice of
 /// M9's but these M7 tuples — projected one family per row of
@@ -341,7 +356,7 @@ fn class_tree(links: &LinkState, ty: &Endset) -> SerdeTree {
 ///
 /// Each is exercised by M7's own write-path tests instead.
 ///
-/// `links.nullified` renders the nullified members of the audit slice, which
+/// `links.nullified` renders the nullified LINKS of the audit slice, which
 /// is the whole tombstone set only because `nullify`'s P-tgt gate admits no
 /// target but a resident link or the address the retraction tuple itself will
 /// occupy. M7's fold inserts every denoted to-root of an `[R]` link, so a
@@ -606,7 +621,7 @@ impl crate::Engine {
     ///
     /// The hints half adds two whole-store link scans
     /// (`match_links` under the empty constraint set, each lifting every key
-    /// it walks), one `is_nullified` and one `succs` per audit member, and two
+    /// it walks), one `is_nullified` and one `succs` per audit LINK, and two
     /// typed-slice walks per class. Nothing here is memoized, and peak memory
     /// is that figure times the number of calls in flight. Admission and
     /// concurrency are the caller's to gate; this method gates neither.
@@ -628,7 +643,7 @@ impl crate::Engine {
     /// [`crate::Engine::check_hints`] over any world this engine produced.
     ///
     /// `Ok(())` certifies EXACTLY what the dump renders: the audit and active
-    /// slices, the nullified members of the audit slice, the shipped classes'
+    /// slices, the nullified LINKS of the audit slice, the shipped classes'
     /// typed slices, the supersession forward edges, the predicate
     /// projections, the exception set and — through the v5 grant section —
     /// the grant fold's operative set each agree with a rebuild from

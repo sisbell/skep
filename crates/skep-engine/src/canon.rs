@@ -42,7 +42,8 @@ use serde::Deserializer;
 /// The serde data model, flattened to the shapes the world's serde forms
 /// actually use, as a value a transcode can collect into. It holds entries
 /// and elements in the order the `Serialize` impl produced them; canonical
-/// order is [`render`]'s doing, established as the text is written.
+/// order is this type's own `Display`, established as the text is written and
+/// so present in every build, whatever the `dump` feature says.
 ///
 /// So this type is deliberately NOT comparable. Two trees with equal contents
 /// in different collection order are equal only once rendered, and comparing
@@ -71,9 +72,9 @@ pub(crate) enum SerdeTree {
     Null,
     Opt(Box<SerdeTree>),
     Seq(Vec<SerdeTree>),
-    /// Entries as collected; [`render`] sorts them by the rendered (key,
-    /// value) PAIR. The value belongs in the sort key because the order must
-    /// be TOTAL: `sort` is stable, so entries whose keys render alike would
+    /// Entries as collected; the tree's `Display` sorts them by the rendered
+    /// (key, value) PAIR. The value belongs in the sort key because the order
+    /// must be TOTAL: `sort` is stable, so entries whose keys render alike would
     /// otherwise keep their collection order and leak back exactly the
     /// instance-specific iteration this transcode exists to remove.
     Map(Vec<(SerdeTree, SerdeTree)>),

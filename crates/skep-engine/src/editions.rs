@@ -34,7 +34,7 @@
 //!
 //! Three per-hit checks then hold:
 //!
-//! * ADMITTED to the class — the type slot address-denoting and non-empty,
+//! * A MEMBER of the class — the type slot address-denoting and non-empty,
 //!   every denoted address under [`t_edition`] by prefix. A slot that merely
 //!   OVERLAPS the class range (a non-unit span across it) is no member.
 //! * UNSUPERSEDED — no operative ⟦supersedes⟧ successor (`succs` over the
@@ -58,11 +58,13 @@ use crate::types::t_edition;
 use crate::world::World;
 
 impl World {
-    /// Every admitted, unsuperseded edition claim whose `to` slot overlaps
+    /// Every unsuperseded edition claim OF THE CLASS whose `to` slot overlaps
     /// `target`'s subtree — retracted or not — in link-address order (M7's
     /// `OrdSet`), each row its home (the edition), its `to` endset as
     /// deposited and its active-view membership. The class, unfiltered; the
-    /// caller applies the home rule (see the module docs).
+    /// caller applies the home rule (see the module docs). No test of a
+    /// claim's HOME runs here — not its publication state, not its issuer —
+    /// so this answer is not the grant fold's kind of admitted set.
     ///
     /// TOTAL over every `target` — no input can refuse it, and an empty
     /// answer is the answer for a target nothing claims. What it does not
@@ -85,12 +87,13 @@ impl World {
     ///   regime that makes a document name its versions' claims is the same
     ///   arithmetic at every tier.
     /// * `match_links` under the two constraints, then per HIT one `readlink`,
-    ///   one `admitted` walk, one `succs` over the shipped supersession
-    ///   class and one `document_of`. `admitted` tests EVERY address the
-    ///   type slot denotes and short-circuits only on a non-member, so a slot
-    ///   filled with subtypes of the class runs to completion and keeps its
-    ///   row; its bound is `skep_links::MAX_SLOT_SPANS`, which is a slot's
-    ///   bound and not a request's.
+    ///   one `in_edition_class` walk, one `succs` over the shipped
+    ///   supersession class and one `document_of`. That walk tests EVERY
+    ///   address the type slot denotes and short-circuits only on a
+    ///   non-member, so a slot filled with subtypes of the class runs to
+    ///   completion and keeps its row; its bound is
+    ///   `skep_links::MAX_SLOT_SPANS`, which is a slot's bound and not a
+    ///   request's.
     /// * A surviving row carries the `to` endset AS DEPOSITED, so the size of
     ///   the ANSWER is the depositor's choice too — a row matched on one
     ///   address may carry a slot of `MAX_SLOT_SPANS` spans.
@@ -116,7 +119,7 @@ impl World {
                 let link = links
                     .readlink(&claim)
                     .expect("a match_links key names a resident link (M7's postcondition)");
-                if !admitted(link.type_slot(), edition_class) {
+                if !in_edition_class(link.type_slot(), edition_class) {
                     return None; // overlaps the class range without denoting a member
                 }
                 if !links.succs(supersedes, &claim).is_empty() {
@@ -138,11 +141,17 @@ impl World {
     }
 }
 
-/// Class ADMISSION by prefix: the type slot denotes addresses (every span
+/// Class MEMBERSHIP by prefix: the type slot denotes addresses (every span
 /// unit-depth, at least one), each under the edition class — `3.14` itself or
 /// a descriptive subtype `3.14.k` (commons-seeding.md's row).
-fn admitted(ty: &Endset, edition_class: &Address) -> bool {
-    ty.is_address_denoting()
-        && !ty.is_empty()
-        && ty.addrs().all(|t| is_prefix(edition_class.tumbler(), t))
+///
+/// MEMBERSHIP and not admission, which in this crate is the grant fold's I4
+/// test over a record's home (`crate::grants`). Nothing about a claim's home,
+/// its issuer or its publication state is asked here or anywhere in this
+/// module: PUB-3.19 places that test on the client, and the home rule is
+/// M10's.
+fn in_edition_class(type_slot: &Endset, edition_class: &Address) -> bool {
+    type_slot.is_address_denoting()
+        && !type_slot.is_empty()
+        && type_slot.addrs().all(|t| is_prefix(edition_class.tumbler(), t))
 }

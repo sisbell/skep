@@ -151,9 +151,10 @@ impl skep_febe::ReadableWorld for World {
     /// lookup is for — it is what makes a document name its versions' claims
     /// — and it is the same arithmetic at every tier, so a caller sizing this
     /// answer reads `World::edition_claims`'s cost and not the word
-    /// "denotes". The type slot is the other way: admission there is over
-    /// every DENOTED address, so a slot that merely overlaps the class range
-    /// is refused.
+    /// "denotes". The type slot is the other way: class MEMBERSHIP there is
+    /// over every DENOTED address, so a slot that merely overlaps the class
+    /// range is refused. Membership is the whole of what a row is tested for
+    /// — no home, issuer or publication test runs on this side of the seam.
     fn edition_claims(&self, target: &Address) -> Vec<skep_febe::EditionClaim> {
         World::edition_claims(self, target)
     }

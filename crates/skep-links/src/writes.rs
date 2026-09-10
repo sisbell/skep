@@ -72,8 +72,8 @@ pub type Visibility<'a, W> = dyn Fn(&W, &Address) -> bool + Send + Sync + 'a;
 ///
 /// The handle holds no links either. `Σ.L` — the append-only store itself — is
 /// [`crate::LinkState`]'s map, reached through [`crate::HasLinks`] and read
-/// by `readlink`; this type is the write half, the counterpart to M8's
-/// `LinkQuery`.
+/// by `readlink`; this type is the write half, and M8's `*_on` reads, each
+/// naming its reader, are the query half.
 ///
 /// A `LinkWriter` with NO visibility class does not exist: every
 /// construction names the class its writes run at ([`LinkWriter::new`]), and
